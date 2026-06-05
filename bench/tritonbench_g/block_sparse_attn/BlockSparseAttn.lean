@@ -1079,6 +1079,41 @@ theorem bsaStreaming_eq_bsaAttn {M D Bk : Nat} (hBk : 0 < Bk)
   rw [mul_div_mul_left _ _ (Real.exp_ne_zero _)]
   exact oFree_div_lFree_eq_bsaAttn qStart gpos Q Kg Vg scale idx
 
+/-- **Bridge: gathered closed form = block-sparse closed form.** Instantiating
+the gathered `bsaAttn` with the CSR-selected keys/values (`Kg = kRowBSA ∘
+selKeyGlobal`, `Vg = vRowBSA ∘ selKeyGlobal` at the chosen D-block channels,
+`gpos = selKeyGlobal`, `qStart = pids 0 · BLOCK_M`) yields exactly
+`blockSparseAttnClosedForm`. The streaming math (`bsaStreaming_eq_bsaAttn`) thus
+computes the genuine block-sparse closed form. -/
+theorem bsaAttn_eq_blockSparseAttnClosedForm
+    (s : BlockState) (Q K V : RegionName) (layoutCols : Region .nat)
+    (num_heads num_kv_heads
+      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+      stride_vb stride_vh stride_vn
+      layout_h stride_col start_l numSelBlocks
+      HEAD_DIM BLOCK_M BLOCK_N dBlockBase : Nat)
+    (softmax_scale : ℝ)
+    (i : Fin BLOCK_M) (d : Fin HEAD_DIM) :
+    BSAMathCausal.bsaAttn (M := BLOCK_M) (D := HEAD_DIM)
+        (Bk := numSelBlocks) (N := BLOCK_N)
+        (s.pids 0 * BLOCK_M)
+        (fun r => selKeyGlobal s layoutCols layout_h stride_col start_l BLOCK_N r.val)
+        (fun idx => qTileBSA s Q num_heads stride_qb stride_qh stride_qm BLOCK_M
+          idx.1 idx.2.1.val)
+        (fun idx => kRowBSA s K num_heads num_kv_heads stride_kb stride_kh stride_kn
+          (selKeyGlobal s layoutCols layout_h stride_col start_l BLOCK_N idx.1.val)
+          idx.2.1.val)
+        (fun idx => vRowBSA s V num_heads num_kv_heads stride_vb stride_vh stride_vn
+          (selKeyGlobal s layoutCols layout_h stride_col start_l BLOCK_N idx.1.val)
+          (dBlockBase + idx.2.1.val))
+        softmax_scale (i, d, PUnit.unit)
+      = blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
+          stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+          stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
+          HEAD_DIM BLOCK_M BLOCK_N dBlockBase softmax_scale i d.val := by
+  unfold BSAMathCausal.bsaAttn blockSparseAttnClosedForm
+  simp only [BSAMathCausal.gScore, rawScoreBSA, mIndex]
+
 end BSAMathCausal
 
 /-- Algorithm-layer correctness for the first block-sparse output store. -/
