@@ -2167,6 +2167,39 @@ theorem nopadFoldUpto_zero
     nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel 0 i d = (⊥, 0, 0) := by
   rw [nopadFoldUpto, ctxNopadKeysUptoM_zero]; rfl
 
+/-- **Masked one-block advance**: the `osNormStepBot` masked fold through `c+1`
+blocks is block `c`'s `osNormStepBot`-fold applied to the fold through `c` blocks. -/
+theorem nopadFoldUptoM_succ
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel c : Nat) (i : Fin 128) (d : Fin 128) :
+    nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel ((c + 1) * 128) i d
+      = (nopadBlockM s Q K V B_Start_Loc sm_scale 128 S bel c i d).foldl osNormStepBot
+          (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel (c * 128) i d) := by
+  rw [nopadFoldUpto, nopadFoldUpto, ctxNopadKeysUptoM_succ, List.foldl_append]
+
+/-- The running max / denom / accum of the masked fold, expressed via the batch
+denominator `L_c = Σ exp(score)` and numerator `T_c = Σ exp(score)·v` over the
+streamed prefix (consistency from the `(⊥,0,0)` seed). -/
+theorem nopadFoldUpto_anchor
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel hi : Nat) (i : Fin 128) (d : Fin 128) :
+    let st := nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d
+    let L := ((ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map
+                (fun p => Real.exp p.1)).sum
+    let T := ((ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map
+                (fun p => Real.exp p.1 * p.2)).sum
+    st.2.1 = (st.1.elim 0 (fun r => Real.exp (-r))) * L
+      ∧ st.2.2 * L = T
+      ∧ 0 ≤ L
+      ∧ (st.1 = ⊥ → L = 0)
+      ∧ (st.1 = ⊥ → T = 0)
+      ∧ (0 < L → st.2.1 ≠ 0) := by
+  have h := osNormStepBot_foldl_consistent
+    (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d) ⊥ 0 0 0 0
+    (le_refl 0) (fun _ _ => trivial) (by simp) (by ring) (fun _ => rfl) (fun _ => rfl)
+    (by intro h; exact absurd h (lt_irrefl 0))
+  simpa only [nopadFoldUpto, zero_add] using h
+
 /-- The loop invariant after `c` `128`-blocks at the Python test shape. Binds the
 running `m_i`/`l_i`/`acc` registers to `nopadFoldUpto … (c·128)` and preserves every
 preLoop-seeded register. `S = ctxNopadWindow`, `bel = seqLen`, scale =
