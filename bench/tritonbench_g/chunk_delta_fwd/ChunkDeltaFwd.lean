@@ -1048,6 +1048,109 @@ noncomputable def cdfBvNewCell (s : BlockState) (v d : RegionName)
         (if (i_t * 32 + c < 128 ∧ e.val < 64) then
             dElem s d 8192 128 1 32 i_t c e.val else 0) * fbh e.val p)
 
+/-- `b_k` load equals `cdfBkTile` (memory matched to `s`). -/
+theorem cdfLoad_bk_eq (s sin : BlockState) (k : RegionName) (i_t : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hpk : sin.regs .blockPtr [64, 32] "p_k" = some
+      ⟨fun _ => BlockPtr.mk k (s.pids 2 * 8192) [64, 128] [64, 32] [1, 128]
+        [0 * 64, i_t * 32 + 0 * 32]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 32] "p_k") [0, 1]) .none) sin
+      = some (cdfBkTile s k i_t) := by
+  rw [load_bp_2d_ref k sin "p_k" (s.pids 2 * 8192) 64 128 64 32 1 128 (0 * 64) (i_t * 32 + 0 * 32) hpk]
+  refine congrArg some ?_
+  ext idx; obtain ⟨e, c, u⟩ := idx
+  simp only [cdfBkTile, kElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+
+/-- `b_d` load equals `cdfBdTile`. -/
+theorem cdfLoad_bd_eq (s sin : BlockState) (d : RegionName) (i_t : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hpd : sin.regs .blockPtr [32, 64] "p_d" = some
+      ⟨fun _ => BlockPtr.mk d (s.pids 2 * 8192) [128, 64] [32, 64] [128, 1]
+        [i_t * 32 + 0 * 32, 0 * 64]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "p_d") [0, 1]) .none) sin
+      = some (cdfBdTile s d i_t) := by
+  rw [load_bp_2d_ref d sin "p_d" (s.pids 2 * 8192) 128 64 32 64 128 1 (i_t * 32 + 0 * 32) (0 * 64) hpd]
+  refine congrArg some ?_
+  ext idx; obtain ⟨c, e, u⟩ := idx
+  simp only [cdfBdTile, dElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+
+/-- `b_v` load equals `cdfBvTile`. -/
+theorem cdfLoad_bv_eq (s sin : BlockState) (v : RegionName) (i_t : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hpv : sin.regs .blockPtr [32, 64] "p_v" = some
+      ⟨fun _ => BlockPtr.mk v (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
+        [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "p_v") [0, 1]) .none) sin
+      = some (cdfBvTile s v i_t) := by
+  rw [load_bp_2d_ref v sin "p_v" (s.pids 2 * 8192) 128 64 32 64 64 1 (i_t * 32 + 0 * 32) (s.pids 1 * 64) hpv]
+  refine congrArg some ?_
+  ext idx; obtain ⟨c, p, u⟩ := idx
+  simp only [cdfBvTile, vElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+
+/-- The corrected `b_v` tile `[32,64]`: data `(c,p) ↦ cdfBvNewCell`. -/
+noncomputable def cdfBvNewTile (s : BlockState) (v d : RegionName)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [32, 64] :=
+  ⟨fun idx => some (cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)⟩
+
+/-- Eval of `b_v - dot(b_d, b_h)` = `cdfBvNewTile`. -/
+theorem cdfCorrect_bv_eq (s sin : BlockState) (v d : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+    (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvTile s v i_t))
+    (hbd : sin.regs .real [32, 64] "b_d" = some (cdfBdTile s d i_t))
+    (hbh : sin.regs .real [64, 64] "b_h" = some bhT) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [32, 64] "b_v")
+        (Op.dot (batch := []) (Op.ref .real [32, 64] "b_d") (Op.ref .real [64, 64] "b_h"))) sin
+      = some (cdfBvNewTile s v d fbh i_t) := by
+  rw [cdfSubDot_op_eval sin "b_v" "b_d" "b_h" (cdfBvTile s v i_t) (cdfBdTile s d i_t) bhT
+    (fun c p => if (i_t * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64) then
+        vElem s v 8192 64 1 32 64 i_t c.val p.val else 0)
+    (fun c e => if (i_t * 32 + c.val < 128 ∧ e.val < 64) then
+        dElem s d 8192 128 1 32 i_t c.val e.val else 0)
+    (fun e p => fbh e.val p.val)
+    hbv hbd hbh
+    (fun c p => by simp only [cdfBvTile]; split <;> rfl)
+    (fun c e => by simp only [cdfBdTile]; split <;> rfl)
+    (fun e p => hbhf e p)]
+  refine congrArg some ?_
+  ext idx; obtain ⟨c, p, u⟩ := idx
+  simp only [cdfBvNewTile, cdfBvNewCell]
+
+/-- The accumulated `b_h_cumsum` tile `[64,64]`: data `(e,p) ↦ Σ_c kElem·vNewCell`. -/
+noncomputable def cdfCumsumTile (s : BlockState) (k v d : RegionName)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [64, 64] :=
+  ⟨fun idx : TileIndex [64, 64] =>
+    some (Finset.univ.sum fun c : Fin 32 =>
+      (if (idx.1.val < 64 ∧ i_t * 32 + c.val < 128) then
+          kElem s k 8192 128 1 32 i_t idx.1.val c.val else 0)
+        * cdfBvNewCell s v d fbh i_t c.val idx.2.1.val)⟩
+
+/-- Eval of `b_h_cumsum + dot(b_k, b_v)` (from a zero `b_h_cumsum`) = `cdfCumsumTile`. -/
+theorem cdfAccum_cumsum_eq (s sin : BlockState) (k v d : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ)
+    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
+        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64]))
+    (hbk : sin.regs .real [64, 32] "b_k" = some (cdfBkTile s k i_t))
+    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvNewTile s v d fbh i_t)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "b_h_cumsum")
+        (Op.dot (batch := []) (Op.ref .real [64, 32] "b_k") (Op.ref .real [32, 64] "b_v"))) sin
+      = some (cdfCumsumTile s k v d fbh i_t) := by
+  rw [cdfAccDot_op_eval sin "b_h_cumsum" "b_k" "b_v"
+    (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64]) (cdfBkTile s k i_t) (cdfBvNewTile s v d fbh i_t)
+    (fun _ _ => (0:ℝ))
+    (fun e c => if (e.val < 64 ∧ i_t * 32 + c.val < 128) then
+        kElem s k 8192 128 1 32 i_t e.val c.val else 0)
+    (fun c p => cdfBvNewCell s v d fbh i_t c.val p.val)
+    hcs hbk hbv
+    (fun e p => rfl)
+    (fun e c => by simp only [cdfBkTile]; split <;> rfl)
+    (fun c p => by simp only [cdfBvNewTile])]
+  refine congrArg some ?_
+  ext idx; obtain ⟨e, p, u⟩ := idx
+  simp only [cdfCumsumTile, zero_add]
+
 /-! ## Per-Python-shape offset injectivity
 
 `chunk_delta_fwd.py`'s checked tests use `B = 2`, `H = 4`, `T = 128`,
