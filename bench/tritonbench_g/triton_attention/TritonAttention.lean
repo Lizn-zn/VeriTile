@@ -3722,7 +3722,8 @@ open VeriTile.Examples.FA1MathCausal in
 `lrcp_r · oPartial 1 (r,d)` (the `Σ_jL (exp(maskedScore−mPartial1)).unbotD · V`
 block, scaled by the row's `l_rcp`). -/
 theorem ta_pv_dot_block (qT kT vT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat)
-    (r : Fin 128) (d : Fin 64) (lrcpVal : ℝ) :
+    (r : Fin 128) (d : Fin 64) (lrcpT : Tile .real [128]) (lrcpVal : ℝ)
+    (hlrcp : lrcpT.data (r, PUnit.unit) = some lrcpVal) :
     (Tile.dot []
         (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
           (Tile.uop WithBot.realExp
@@ -3738,8 +3739,7 @@ theorem ta_pv_dot_block (qT kT vT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS 
                 else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
               (Tile.expandDim ⟨1, by decide⟩
                 (⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ : Tile .real [128]))))
-          (Tile.expandDim ⟨1, by decide⟩
-            (⟨fun _ : TileIndex [128] => some lrcpVal⟩ : Tile .real [128])))
+          (Tile.expandDim ⟨1, by decide⟩ lrcpT))
         (⟨fun idx => some (vT idx)⟩ : Tile .real [128, 64])).data (r, d, PUnit.unit)
       = some (lrcpVal * (Finset.univ : Finset (Fin 128)).sum (fun jLocal =>
           (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
@@ -3757,6 +3757,7 @@ theorem ta_pv_dot_block (qT kT vT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS 
   · rw [Tile.bop_data]
     simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
       TileShape.dropInsertedIndex, NumericDType.mul]
+    rw [hlrcp]
     rw [Tile.uop_data, Tile.bop_data]
     simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
       TileShape.dropInsertedIndex, NumericDType.sub]
@@ -3766,6 +3767,257 @@ theorem ta_pv_dot_block (qT kT vT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS 
     simp only [WithBot.realMul, Option.map₂_some_some]
     refine congrArg some ?_; ring
   · rw [WithBot.sum_someTerm_eq_some, ← Finset.mul_sum]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **Step lemma.** One loop iteration advances `taInvariant` by one block. The
+test shape has a single KV block (`numKVBlocks = 1`), so the only reachable
+counter is `i = 0` (`c = 0`); the body's `m_curr`/`l_curr`/`l_rcp`-normalized
+`acc` cells advance the running registers to `mPartial 1` / `lPartial 1` /
+`oPartial 1 / lPartial 1`, read off via the FA1 succ bridges. -/
+theorem ta_attn_step (Q K V Out : RegionName) (s0 : BlockState) (sc : ℝ)
+    (i : Nat) (s : BlockState) (hilt : i < 128)
+    (hpid1 : ∀ j : Fin 128, s0.pids 1 * 128 + j.val < 1024)
+    (hinv : taInvariant Q K V Out s0 sc i s) :
+    ∃ s', stepStmts (taLoopBody sc) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ taInvariant Q K V Out s0 sc (i + 128) s' := by
+  simp only [taInvariant] at hinv
+  obtain ⟨hpids, hmod, hile, hmp, hlp, hacc, hq, hoffm, hoffn, hkp, hvp, hop, hoh, hundef, hmem⟩ := hinv
+  -- single block: i = 0
+  have hi0 : i = 0 := by omega
+  subst hi0
+  set qS := s0.pids 0 * 128 with hqS
+  set qT := fwdQTile s0 Q with hqT
+  set kT := fwdKTile s0 K with hkT
+  set vT := fwdVTile s0 V with hvT
+  -- entry-state registers (after setReg start_n) feed taLoopBody_steps
+  have hpids1 : (s.setReg "start_n" .nat [] (Tile.scalar 0)).pids 1 = s0.pids 1 := by
+    rw [BlockState.setReg_pids, hpids]
+  have hrow : ∀ j : Fin 128, s0.pids 1 * 128 + j.val < 1024 := hpid1
+  -- the loaded q/k/v tiles read s0's memory (setReg preserves mem/pids)
+  obtain ⟨rmaxT, qk0, qk1, hrm, hqk0eq, hqk1eq, sF, hchain, hpidsF, hmemF, hundefF,
+      mcurrT, lcurrT, lrcpT, pT, acc1T, hmcd, hpTd, hlcd, hlrd, hacc1d,
+      hmF, hlF, haccF, hkpF, hvpF, hqF, hoffmF, hoffnF, hohF, hopF⟩ :=
+    taLoopBody_steps K V (s0.pids 1) sc (s.setReg "start_n" .nat [] (Tile.scalar 0))
+      (⟨fun idx : TileIndex [128, 64] => some (qT idx)⟩)
+      (⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩)
+      (⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩)
+      (⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩)
+      (fun r : Fin 128 => qS + r.val)
+      hpids1 hrow
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffm)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffn)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hmp]; refine congrArg some ?_; ext r; rfl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hlp]; refine congrArg some ?_; ext r; rfl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hacc]; refine congrArg some ?_; ext idx
+          show ((oPartial 128 qS qT 1 kT vT sc (0 / 128) idx
+              / lPartial 128 qS qT 1 kT sc (0 / 128) idx.1 : ℝ) : WithBot ℝ) = some (0 : ℝ)
+          rw [show (0 / 128 : Nat) = 0 from rfl,
+              show oPartial 128 qS qT 1 kT vT sc 0 idx = 0 from rfl,
+              show lPartial 128 qS qT 1 kT sc 0 idx.1 = 0 from rfl, div_zero]; rfl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hkp]; simp only [Nat.add_zero, hpids])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hvp]; simp only [Nat.add_zero, hpids])
+      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
+  refine ⟨sF, hchain, ?_⟩
+  -- the chain's k/v load tiles read s.mem = s0.mem, so they equal fwdKTile/fwdVTile s0
+  -- (taLoopBody_steps already returns them as fwdKTile/fwdVTile of the entry state,
+  --  which has mem = s.mem = s0.mem and pids = s0.pids)
+  have hentryK : fwdKTile (s.setReg "start_n" .nat [] (Tile.scalar 0)) K = kT := by
+    funext idx; simp only [hkT, fwdKTile, BlockState.setReg_readMem, BlockState.setReg_pids, hpids]
+    unfold BlockState.readMem; rw [hmem]
+  have hentryV : fwdVTile (s.setReg "start_n" .nat [] (Tile.scalar 0)) V = vT := by
+    funext idx; simp only [hvT, fwdVTile, BlockState.setReg_readMem, BlockState.setReg_pids, hpids]
+    unfold BlockState.readMem; rw [hmem]
+  -- rmaxT cell = mPartial 1
+  -- the qk1 cell of the chain equals `maskedScore` (entry tiles read s0's mem)
+  have hqk1cell : ∀ r j : Fin 128, qk1.data (r, j, PUnit.unit) = maskedScore qS qT kT sc r j := by
+    intro r j
+    rw [hqk1eq]
+    simp only [hqk0eq, hentryK]
+    exact ta_qk1_cell qT kT sc qS r j
+  have hrmaxCell : ∀ r : Fin 128, rmaxT.data (r, PUnit.unit) = mPartial 128 qS qT 1 kT sc 1 r := by
+    intro r
+    unfold Tile.reduceMaxDrop at hrm
+    rw [dif_pos (show 0 < TileShape.axisDim [128, 128] (⟨1, by decide⟩ : Fin [128, 128].length) from by decide)] at hrm
+    rw [← Option.some.inj hrm]
+    show (Finset.univ : Finset (Fin 128)).sup'
+        ⟨⟨0, by decide⟩, Finset.mem_univ _⟩ (fun k =>
+        qk1.data ((r, k, PUnit.unit) : TileIndex [128, 128])) = _
+    rw [← ta_rmax_eq_mPartial1 qT kT sc qS r]
+    refine Finset.sup'_congr _ rfl ?_
+    intro j _
+    rw [hqk1cell r j]
+    exact (ta_qk1_cell qT kT sc qS r j).symm
+  -- mPartial 1 ≠ ⊥ (single nonempty block)
+  have hmne : ∀ r : Fin 128, mPartial 128 qS qT 1 kT sc 1 r ≠ ⊥ := by
+    intro r
+    exact mPartial_succ_ne_bot (Bk := 128) (by norm_num) qS qT 1 kT sc 0 (by norm_num) r
+  -- mcurrT = the mPartial 1 tile
+  have hmcurrCell : ∀ r : Fin 128,
+      mcurrT.data (r, PUnit.unit) = mPartial 128 qS qT 1 kT sc 1 r := by
+    intro r
+    rw [hmcd, Tile.select_data, Tile.cop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hrmaxCell r]
+    have hgt : (mPartial 128 qS qT 1 kT sc 1 r > (⊥ : WithBot ℝ)) :=
+      lt_of_le_of_ne bot_le (Ne.symm (hmne r))
+    rw [decide_eq_true hgt]; simp
+  have hmcurrTile : mcurrT = ⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ := by
+    ext r; exact hmcurrCell r.1
+  -- lcurrT = some (lPartial 1)
+  have hlcurrCell : ∀ r : Fin 128,
+      lcurrT.data (r, PUnit.unit) = some (lPartial 128 qS qT 1 kT sc 1 r) := by
+    intro r
+    rw [hlcd, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add]
+    -- reduce qk1 → if-form and mcurrT → mPartial1-tile inside the reduceSum
+    rw [show qk1 = (⟨fun idx : TileIndex [128, 128] =>
+          if 0 + idx.2.1.val ≤ qS + idx.1.val then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                  (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+              (Tile.scalar (some sc : WithBot ℝ))).data idx
+          else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128]) from by
+      rw [hqk1eq]; ext idx; simp only [hqk0eq, hentryK]]
+    rw [hmcurrTile]
+    -- the lprev1 term: ltile (some 0) * alpha = some 0
+    erw [ta_pexp_block_sum qT kT sc qS r]
+    rw [show (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+          (⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩ : Tile .real [128])
+          (Tile.uop WithBot.realExp
+            (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil)
+              (⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩ : Tile .real [128])
+              ⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩))).data (r, PUnit.unit)
+        = some (0 : ℝ) from by
+      rw [Tile.bop_data, Tile.uop_data, Tile.bop_data]
+      simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.sub]
+      rw [WithBot.realSub_bot_left, WithBot.realExp_bot]
+      show WithBot.realMul (some 0) ((0 : ℝ) : WithBot ℝ) = some 0
+      rw [WithBot.realMul, Option.map₂_some_coe, mul_zero]]
+    simp only [NumericDType.add, WithBot.realAdd, Option.map₂_some_some]
+    refine congrArg some ?_
+    rw [show mPartial 128 qS qT 1 kT sc 1 r = mPartial 128 qS qT 1 kT sc (0 + 1) r from rfl]
+    rw [lPartial_succ_of_lt (Bk := 128) qS qT 1 kT sc 0 (by norm_num) r]
+    simp only
+    rw [show lPartial 128 qS qT 1 kT sc 0 r = (0 : ℝ) from rfl]
+    ring
+  -- lrcp cell = some (1 / lPartial 1)
+  have hlrcpCell : ∀ r : Fin 128,
+      lrcpT.data (r, PUnit.unit) = some (1 / lPartial 128 qS qT 1 kT sc 1 r) := by
+    intro r
+    rw [hlrd, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarL, Tile.scalar_data,
+      NumericDType.div]
+    rw [hlcurrCell r]
+    show WithBot.realDiv (some (1.0 : ℝ)) (some (lPartial 128 qS qT 1 kT sc 1 r))
+      = some (1 / lPartial 128 qS qT 1 kT sc 1 r)
+    rw [WithBot.realDiv, Option.map₂_some_some]; norm_num
+  -- oPartial 1 numerator block sum = oPartial 1
+  have hoPartial1 : ∀ (r : Fin 128) (d : Fin 64),
+      (Finset.univ : Finset (Fin 128)).sum (fun jLocal =>
+        (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal))
+          (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0
+          * vT (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal, d, PUnit.unit))
+        = oPartial 128 qS qT 1 kT vT sc 1 (r, d, PUnit.unit) := by
+    intro r d
+    -- unfold oPartial at iteration 1 directly (literal `1` keeps `mPartial 1`, not `0+1`)
+    have hm01 : ∀ rr : Fin 128,
+        mPartial 128 qS qT 1 kT sc (0 + 1) rr = mPartial 128 qS qT 1 kT sc 1 rr := fun _ => rfl
+    conv_rhs => rw [oPartial]
+    rw [dif_pos (show (0 : Nat) + 1 ≤ 1 by decide)]
+    simp only [hm01, show oPartial 128 qS qT 1 kT vT sc 0 (r, d, PUnit.unit) = 0 from rfl,
+      mul_zero, zero_add]
+  -- final acc cell = some (oPartial 1 / lPartial 1)
+  have haccCell : ∀ idx : TileIndex [128, 64],
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        acc1T (Tile.dot [] pT (⟨fun idx => some (vT idx)⟩ : Tile .real [128, 64]))).data idx
+        = some (oPartial 128 qS qT 1 kT vT sc 1 idx
+            / lPartial 128 qS qT 1 kT sc 1 idx.1) := by
+    intro idx
+    obtain ⟨r, d, u⟩ := idx; cases u
+    rw [Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add]
+    -- acc1T cell = some 0 (acctile/ltile = some 0, alpha = exp(⊥-_) = some 0)
+    rw [show acc1T.data (r, d, PUnit.unit) = some (0 : ℝ) from by
+      rw [hacc1d, Tile.bop_data]
+      simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.sub,
+        Tile.expandDim_data, TileShape.dropInsertedIndex, Tile.bop_data, Tile.uop_data]
+      rw [hlrcpCell r]
+      show WithBot.realMul (some (0:ℝ))
+        (WithBot.realMul (WithBot.realMul (some (0:ℝ))
+          (WithBot.realExp (WithBot.realSub (⊥ : WithBot ℝ) (mcurrT.data (r, PUnit.unit)))))
+          (some (1 / lPartial 128 qS qT 1 kT sc 1 r))) = some 0
+      rw [WithBot.realSub_bot_left, WithBot.realExp_bot]
+      show WithBot.realMul (some (0:ℝ))
+        (WithBot.realMul (WithBot.realMul (some (0:ℝ)) ((0:ℝ) : WithBot ℝ))
+          (some (1 / lPartial 128 qS qT 1 kT sc 1 r))) = some 0
+      simp only [WithBot.realMul, Option.map₂_some_coe, Option.map₂_some_some, zero_mul, mul_zero]]
+    -- dot pT vT cell via ta_pv_dot_block (rewrite qk1, mcurrT, lrcp)
+    rw [show pT = (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Tile.uop WithBot.realExp
+            (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (⟨fun idx : TileIndex [128, 128] =>
+                if 0 + idx.2.1.val ≤ qS + idx.1.val then
+                  (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                      (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                        (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+                    (Tile.scalar (some sc : WithBot ℝ))).data idx
+                else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
+              (Tile.expandDim ⟨1, by decide⟩
+                (⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ : Tile .real [128]))))
+          (Tile.expandDim ⟨1, by decide⟩ lrcpT)) from by
+      rw [hpTd, hmcurrTile, hqk1eq]
+      congr 2
+      ext idx; simp only [hqk0eq, hentryK]]
+    erw [ta_pv_dot_block qT kT vT sc qS r d lrcpT (1 / lPartial 128 qS qT 1 kT sc 1 r)
+      (hlrcpCell r)]
+    rw [hoPartial1 r d]
+    simp only [WithBot.realAdd, Option.map₂_some_some]
+    refine congrArg some ?_
+    rw [zero_add]
+    ring
+  -- assemble the invariant at i + 128 = 128 (c = 1)
+  have hcdiv : (0 + 128) / 128 = 1 := by norm_num
+  refine ⟨?_, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids, hpids]
+  · -- m_prev = mPartial 1
+    rw [hmF, hmcurrTile, hcdiv]
+  · -- l_prev = lPartial 1
+    rw [hlF, hcdiv]; refine congrArg some ?_; ext r; rw [hlcurrCell r.1]; rfl
+  · -- acc = oPartial 1 / lPartial 1
+    rw [haccF, hcdiv]; refine congrArg some ?_; ext idx
+    simp only [hentryV]; rw [haccCell idx]; rfl
+  · -- q preserved
+    rw [hqF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq
+  · -- offs_m preserved
+    rw [hoffmF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffm
+  · -- offs_n preserved
+    rw [hoffnF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffn
+  · -- k_tile_ptr advanced
+    rw [hkpF]
+  · -- v_tile_ptr advanced
+    rw [hvpF]
+  · -- out_tile_ptr preserved
+    rw [hopF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hop
+  · -- off_hz preserved
+    rw [hohF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoh
+  · -- undef
+    exact hundefF
+  · -- mem
+    rw [hmemF]; funext region offset; rw [BlockState.setReg_mem]
+    exact congrFun (congrFun hmem region) offset
 
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
