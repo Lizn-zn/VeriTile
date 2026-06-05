@@ -3000,11 +3000,6 @@ theorem nopadBlockM_ne_nil
   rw [if_pos ⟨by omega, by omega, by omega⟩] at this
   exact absurd this (by simp)
 
-/- WIP (compiles through all 22 loop-body statement steps; the per-block math
-   bridge `hbridge` + invariant readback have `set`/`simp` tactic friction still
-   being polished — wrapped out to keep the file sorry-free and compiling). The
-   supporting math (`osNormStepBot_block_eq`, `nopadBlockM_*`, `nopadBlockM_ne_nil`,
-   `nopadBlockM_fst_channel_indep`, `nopad_realExp_eq_some_unbotD`) is all live above.
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **One loop-body step advances the invariant by one block.** Mirror of #307's
@@ -3035,6 +3030,13 @@ theorem nopad_attn_step
       have : c < s0.pids 2 + 1 := by omega
       nlinarith
     · rw [hSmul, if_neg hbm] at hilt; omega
+  -- causal-active for block c's first key: c ≤ start_m
+  have hcS : c ≤ s0.pids 2 := by
+    have hSmul : S = (if 128 * s0.pids 2 < bel then 1 else 0) * (s0.pids 2 + 1) * 128 := by
+      simp only [hSdef, ctxNopadWindow, hbeldef]
+    by_cases hbm : 128 * s0.pids 2 < bel
+    · rw [hSmul, if_pos hbm, one_mul] at hwin; nlinarith
+    · rw [hSmul, if_neg hbm] at hwin; omega
   obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
   -- the row-and-channel-indexed fold-so-far state (at c*128)
   set fold0 : Fin 128 → Fin 128 → WithBot ℝ × ℝ × ℝ := fun ir dd =>
@@ -3398,40 +3400,62 @@ theorem nopad_attn_step
   set pReal : Fin 128 → Fin 128 → ℝ := fun ir jL =>
     (WithBot.realExp (WithBot.realSub (qkW ir jL) (mijFn ir))).unbotD 0 with hpReal
   have hpFnSome : ∀ ir jL : Fin 128, pFn ir jL = some (pReal ir jL) := by
-    intro ir jL; simp only [hpFn, hpReal]; exact nopad_realExp_eq_some_unbotD _
+    intro ir jL
+    show WithBot.realExp (WithBot.realSub (qkW ir jL) (mijFn ir))
+      = some ((WithBot.realExp (WithBot.realSub (qkW ir jL) (mijFn ir))).unbotD 0)
+    exact nopad_realExp_eq_some_unbotD _
   -- lijFn ir = some (lijReal ir) ;   lijReal = block-lij bridge value
   have hlijSome : ∀ ir : Fin 128, lijFn ir = some (Finset.univ.sum (fun jL : Fin 128 => pReal ir jL)) := by
-    intro ir; simp only [hlijFn]
-    rw [show (fun jL : Fin 128 => pFn ir jL) = (fun jL : Fin 128 => ((pReal ir jL : ℝ) : WithBot ℝ)) from by
-      funext jL; rw [hpFnSome ir jL]]
-    rw [WithBot.sum_some_eq_some]
+    intro ir
+    show Finset.univ.sum (fun jL : Fin 128 => pFn ir jL) = some (Finset.univ.sum (fun jL : Fin 128 => pReal ir jL))
+    rw [show (fun jL : Fin 128 => pFn ir jL) = (fun jL : Fin 128 => (some (pReal ir jL) : WithBot ℝ)) from by
+      funext jL; exact hpFnSome ir jL]
+    rw [WithBot.sum_someTerm_eq_some]
   set lijReal : Fin 128 → ℝ := fun ir => Finset.univ.sum (fun jL : Fin 128 => pReal ir jL) with hlijReal
   -- miFn = fold0.1 ; liFn = some(fold0.2.1) ; accFn = some(fold0.2.2)
   -- α, β real
   set αReal : Fin 128 → ℝ := fun ir => (WithBot.realExp (WithBot.realSub (miFn ir) (minewFn ir))).unbotD 0 with hαReal
   set βReal : Fin 128 → ℝ := fun ir => (WithBot.realExp (WithBot.realSub (mijFn ir) (minewFn ir))).unbotD 0 with hβReal
-  have hαSome : ∀ ir, alphaFn ir = some (αReal ir) := by intro ir; simp only [halphaFn, hαReal]; exact nopad_realExp_eq_some_unbotD _
-  have hβSome : ∀ ir, betaFn ir = some (βReal ir) := by intro ir; simp only [hbetaFn, hβReal]; exact nopad_realExp_eq_some_unbotD _
-  have hliSome : ∀ ir, liFn ir = some ((fold0 ir ⟨0, by norm_num⟩).2.1) := by intro ir; simp only [hliFn]
+  have hαSome : ∀ ir, alphaFn ir = some (αReal ir) := by
+    intro ir
+    show WithBot.realExp (WithBot.realSub (miFn ir) (minewFn ir))
+      = some ((WithBot.realExp (WithBot.realSub (miFn ir) (minewFn ir))).unbotD 0)
+    exact nopad_realExp_eq_some_unbotD _
+  have hβSome : ∀ ir, betaFn ir = some (βReal ir) := by
+    intro ir
+    show WithBot.realExp (WithBot.realSub (mijFn ir) (minewFn ir))
+      = some ((WithBot.realExp (WithBot.realSub (mijFn ir) (minewFn ir))).unbotD 0)
+    exact nopad_realExp_eq_some_unbotD _
+  have hliSome : ∀ ir, liFn ir = some ((fold0 ir ⟨0, by norm_num⟩).2.1) := by intro ir; rfl
   -- linewFn ir = some (linewReal ir)
   set linewReal : Fin 128 → ℝ := fun ir => αReal ir * (fold0 ir ⟨0, by norm_num⟩).2.1 + βReal ir * lijReal ir with hlinewReal
   have hlinewSome : ∀ ir, linewFn ir = some (linewReal ir) := by
-    intro ir; simp only [hlinewFn, hαSome, hliSome, hβSome, hlijSome, hlinewReal]
-    simp only [WithBot.realMul_coe_coe, WithBot.realAdd_coe_coe, lijReal]
+    intro ir
+    show WithBot.realAdd (WithBot.realMul (alphaFn ir) (liFn ir)) (WithBot.realMul (betaFn ir) (lijFn ir))
+      = some (linewReal ir)
+    rw [hαSome, hliSome, hβSome, hlijSome]; rfl
   -- psFn ir = some (βReal ir / linewReal ir)
   set psReal : Fin 128 → ℝ := fun ir => βReal ir / linewReal ir with hpsReal
   have hpsSome : ∀ ir, psFn ir = some (psReal ir) := by
-    intro ir; simp only [hpsFn, hβSome, hlinewSome, hpsReal, WithBot.realDiv_coe_coe]
+    intro ir
+    show WithBot.realDiv (betaFn ir) (linewFn ir) = some (psReal ir)
+    rw [hβSome, hlinewSome]; rfl
   -- pFinal ir jL = some (pReal ir jL * psReal ir)
   have hpFinalSome : ∀ ir jL, pFinal ir jL = some (pReal ir jL * psReal ir) := by
-    intro ir jL; simp only [hpFinal, hpFnSome, hpsSome, WithBot.realMul_coe_coe]
+    intro ir jL
+    show WithBot.realMul (pFn ir jL) (psFn ir) = some (pReal ir jL * psReal ir)
+    rw [hpFnSome, hpsSome]; rfl
   -- accFn ir dd = some (fold0.2.2) ;  asFn ir = some (asReal ir) ;  accMul = some(...)
   set asReal : Fin 128 → ℝ := fun ir => (fold0 ir ⟨0, by norm_num⟩).2.1 / linewReal ir * αReal ir with hasReal
   have hasSome : ∀ ir, asFn ir = some (asReal ir) := by
-    intro ir; simp only [hasFn, hliSome, hlinewSome, hαSome, hasReal, WithBot.realDiv_coe_coe, WithBot.realMul_coe_coe]
-  have haccFnSome : ∀ ir dd, accFn ir dd = some ((fold0 ir dd).2.2) := by intro ir dd; simp only [haccFn]
+    intro ir
+    show WithBot.realMul (WithBot.realDiv (liFn ir) (linewFn ir)) (alphaFn ir) = some (asReal ir)
+    rw [hliSome, hlinewSome, hαSome]; rfl
+  have haccFnSome : ∀ ir dd, accFn ir dd = some ((fold0 ir dd).2.2) := by intro ir dd; rfl
   have haccMulSome : ∀ ir dd, accMul ir dd = some ((fold0 ir dd).2.2 * asReal ir) := by
-    intro ir dd; simp only [haccMul, haccFnSome, hasSome, WithBot.realMul_coe_coe]
+    intro ir dd
+    show WithBot.realMul (accFn ir dd) (asFn ir) = some ((fold0 ir dd).2.2 * asReal ir)
+    rw [haccFnSome, hasSome]; rfl
   -- p / v as `some` for the acc dot recipe
   rw [show (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128])
         = (⟨fun idx : TileIndex [128, 128] => some (pReal idx.1 idx.2.1 * psReal idx.1)⟩ : Tile .real [128, 128]) from by
@@ -3450,7 +3474,10 @@ theorem nopad_attn_step
           (some (Finset.univ.sum (fun jL : Fin 128 => (pReal idx.1 jL * psReal idx.1) * vFn jL idx.2.1)))⟩ : Tile .real [128, 128])
       = (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
     refine Tile.ext (fun idx => ?_); obtain ⟨ir, dd, u⟩ := idx
-    rw [haccFinal, WithBot.realAdd_coe_coe]]
+    show WithBot.realAdd (some ((fold0 ir dd).2.2 * asReal ir))
+        (some (Finset.univ.sum (fun jL : Fin 128 => (pReal ir jL * psReal ir) * vFn jL dd)))
+      = some (accFinal ir dd)
+    rfl]
   set s21 := s20.setReg "acc" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) with hs21d
   have e21 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
       nm ≠ "acc" → s20.regs dt sh nm = some t → s21.regs dt sh nm = some t := by
@@ -3486,7 +3513,7 @@ theorem nopad_attn_step
     rw [nopadFoldUptoM_succ s0 Q K V B_Start_Loc sc S bel c ir dd]
     -- block list non-empty (causal key c*128)
     have hbne : nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd ≠ [] :=
-      nopadBlockM_ne_nil s0 Q K V B_Start_Loc sc S bel c ir dd hwin (by rw [hpids]; omega)
+      nopadBlockM_ne_nil s0 Q K V B_Start_Loc sc S bel c ir dd hwin (by have := hcS; omega)
     -- anchor at (ir, dd)
     obtain ⟨ha_l, ha_acc, ha_L0, ha_botL, ha_botT, ha_ne⟩ :=
       nopadFoldUpto_anchor s0 Q K V B_Start_Loc sc S bel (c * 128) ir dd
@@ -3504,10 +3531,10 @@ theorem nopad_attn_step
     -- mijFn ir = bsupDD (channel-indep scores)
     have hmijEq : mijFn ir = bsupDD := by
       simp only [hmijFn, hbsupDD, hblk]
-      rw [show (nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir ⟨0, by norm_num⟩).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
-            = ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir ⟨0, by norm_num⟩).map Prod.fst).map (fun r : ℝ => ((r : ℝ) : WithBot ℝ)) from by rw [List.map_map]; rfl,
-        nopadBlockM_fst_channel_indep s0 Q K V B_Start_Loc sc S bel c ir ⟨0, by norm_num⟩ dd,
-        ← List.map_map]
+      congr 1
+      rw [show (fun p : ℝ × ℝ => ((p.1 : ℝ) : WithBot ℝ)) = (fun r : ℝ => ((r : ℝ) : WithBot ℝ)) ∘ Prod.fst from rfl,
+        ← List.map_map, ← List.map_map,
+        nopadBlockM_fst_channel_indep s0 Q K V B_Start_Loc sc S bel c ir ⟨0, by norm_num⟩ dd]
     -- m = (fold0 ir dd).1 = (fold0 ir ⟨0⟩).1 = miFn ir
     have hmiEq : miFn ir = (fold0 ir dd).1 := by simp only [hmiFn]; exact hci1.symm
     -- minewFn ir = (fold0 ir dd).1 ⊔ bsupDD
@@ -3520,6 +3547,12 @@ theorem nopad_attn_step
     have hβEqB : βReal ir = (WithBot.realExp (WithBot.realSub bsupDD (minewFn ir))).unbotD 0 := by
       simp only [hβReal]; rw [hmijEq]
     -- lijReal ir = block_eq's lij = Σ blk exp(p.1 - bsupDD.unbotD)
+    -- bsupDD ≠ ⊥ (block non-empty) ⟹ bsupDD = ↑(bsupDD.unbotD 0)
+    have hbsupNe : bsupDD ≠ ⊥ := fun h => hbne ((foldr_sup_coe_bot_iff _).mp h)
+    have hbsupCoe : bsupDD = ((bsupDD.unbotD 0 : ℝ) : WithBot ℝ) := by
+      cases hb : bsupDD with
+      | bot => exact absurd hb hbsupNe
+      | coe r => rfl
     have hlijEqB : lijReal ir = ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0))).sum := by
       have hMr := nopadBlockM_lij_sum s0 Q K V B_Start_Loc sc 128 S bel c ir dd (bsupDD.unbotD 0) hwin
       -- pReal ir jL = realExp(realSub qkW mij).unbotD ; lijReal = Σ pReal
@@ -3530,13 +3563,14 @@ theorem nopad_attn_step
                     ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit)
                       * ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
                else (⊥ : WithBot ℝ)) ((bsupDD.unbotD 0 : ℝ) : WithBot ℝ))).unbotD 0 := by
-        intro jL; simp only [hpReal, hqkW, hrawSum, hmijEq]
+        intro jL; simp only [hpReal, hqkW, hrawSum, hmijEq]; rw [← hbsupCoe]
       -- Σ pReal = (Σ over lanes realExp(...)).unbotD ;  bridge gives some(Σ blk ...)
       have hsum : ((Finset.univ.sum (fun jL : Fin 128 => pReal ir jL) : ℝ) : WithBot ℝ)
           = some (((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0))).sum) := by
         rw [← hMr, ← WithBot.sum_some_eq_some]
         apply Finset.sum_congr rfl; intro jL _
-        rw [hpRealEq jL, nopad_realExp_eq_some_unbotD]
+        rw [hpRealEq jL]
+        exact (nopad_realExp_eq_some_unbotD _).symm
       simp only [hlijReal]
       exact WithBot.coe_inj.mp hsum
     -- assemble the tuple equality, then trans with hblockEq
@@ -3544,7 +3578,7 @@ theorem nopad_attn_step
     refine Prod.ext ?_ (Prod.ext ?_ ?_)
     · show minewFn ir = (fold0 ir dd).1 ⊔ bsupDD; exact hMnew
     · show linewReal ir = _
-      simp only [hlinewReal]; rw [hαEqB, hβEqB, hlijEqB, hliEq]
+      simp only [hlinewReal]; rw [hαEqB, hβEqB, hlijEqB, hliEq, hMnew]
     · show accFinal ir dd = _
       simp only [haccFinal]
       -- asReal ir = (fold0 ir dd).2.1 / l' * α  (block_eq's l/l'·α)
@@ -3554,7 +3588,11 @@ theorem nopad_attn_step
       have hvEq : ∀ jL : Fin 128, vFn jL dd
           = ctxVTileM s0 V B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, dd, PUnit.unit) := by
         intro jL
-        rw [hvFn, ctxVTileM, ctxVTile, hs18seqB, hs18slB, hs18pids1,
+        show (if i + jL.val < seqLen s18 B_Seqlen then
+            s18.readMem V ((startLoc s18 B_Start_Loc + (i + jL.val)) * 768 + s18.pids 1 * 128 + dd.val)
+          else (0.0 : ℝ))
+          = ctxVTileM s0 V B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, dd, PUnit.unit)
+        rw [ctxVTileM, ctxVTile, hs18seqB, hs18slB, hs18pids1,
           show i + jL.val = c * 128 + jL.val from by rw [hi]]
         by_cases hlt : c * 128 + jL.val < bel
         · rw [if_pos hlt, if_pos hlt]; simp only [BlockState.readMem, hs18mem]
@@ -3562,7 +3600,6 @@ theorem nopad_attn_step
       -- Σ_jL (pReal·psReal)·vFn = psReal · Σ_blk exp(p.1-bs)·v  (via nopadBlockM_acc_sum)
       have haccsum : Finset.univ.sum (fun jL : Fin 128 => (pReal ir jL * psReal ir) * vFn jL dd)
           = psReal ir * ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0) * p.2)).sum := by
-        rw [Finset.mul_sum]
         have hbr := nopadBlockM_acc_sum s0 Q K V B_Start_Loc sc 128 S bel c ir dd (bsupDD.unbotD 0) hwin
           (fun jL => vFn jL dd) (fun jL _ => hvEq jL)
         -- coerce: Σ realMul(realExp(realSub qkW' bs))(coe(vFn)) = some(Σ blk ...)
@@ -3570,15 +3607,35 @@ theorem nopad_attn_step
             = some (((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0) * p.2)).sum) := by
           rw [← hbr, ← WithBot.sum_some_eq_some]
           apply Finset.sum_congr rfl; intro jL _
+          rw [show WithBot.realExp (WithBot.realSub
+                (if c * 128 + jL.val ≤ s0.pids 2 * 128 + ir.val then
+                  ((sc * Finset.univ.sum (fun e : Fin 128 =>
+                      ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit)
+                        * ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+                 else (⊥ : WithBot ℝ)) ((bsupDD.unbotD 0 : ℝ) : WithBot ℝ))
+              = ((pReal ir jL : ℝ) : WithBot ℝ) from by
+            have : pReal ir jL = (WithBot.realExp (WithBot.realSub
+                (if c * 128 + jL.val ≤ s0.pids 2 * 128 + ir.val then
+                  ((sc * Finset.univ.sum (fun e : Fin 128 =>
+                      ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit)
+                        * ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+                 else (⊥ : WithBot ℝ)) ((bsupDD.unbotD 0 : ℝ) : WithBot ℝ))).unbotD 0 := by
+              simp only [hpReal, hqkW, hrawSum, hmijEq]; rw [← hbsupCoe]
+            rw [this]; exact nopad_realExp_eq_some_unbotD _]
           rw [WithBot.realMul_coe_coe]
-          congr 1
-          simp only [hpReal, hqkW, hrawSum, hmijEq]
-          rw [nopad_realExp_eq_some_unbotD]
         rw [show (fun jL : Fin 128 => pReal ir jL * psReal ir * vFn jL dd)
               = (fun jL : Fin 128 => psReal ir * (pReal ir jL * vFn jL dd)) from by funext jL; ring]
         rw [← Finset.mul_sum, WithBot.coe_inj.mp hcoe]
-      rw [hasEqB, haccsum]; simp only [hpsReal]; rw [hβEqB]; simp only [hlijReal]
-      ring
+      -- rewrite block_eq's M' (= max m blockSup) into minewFn, then α/β/l' into αReal/βReal/linewReal
+      rw [hasEqB, haccsum, ← hMnew, ← hαEqB, ← hβEqB, ← hlijEqB]
+      rw [show αReal ir * (fold0 ir dd).2.1 + βReal ir * lijReal ir = linewReal ir from by
+        simp only [hlinewReal]; rw [hliEq]]
+      -- remaining: acc·(...) + psReal·Σ(exp·p.2) = acc·(...) + Σ(exp·βReal/linewReal·p.2)
+      congr 1
+      rw [show ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0) * βReal ir / linewReal ir * p.2)).sum
+            = ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => (Real.exp (p.1 - bsupDD.unbotD 0) * p.2) * psReal ir)).sum from by
+        apply congrArg; apply List.map_congr_left; intro p _; rw [hpsReal]; ring]
+      rw [List.sum_map_mul_right]; ring
   -- ======= reconstruct the invariant =======
   -- e23 for the final m_i setReg
   have e23 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
@@ -3591,7 +3648,7 @@ theorem nopad_attn_step
       → nm ≠ "acc_scale" → nm ≠ "acc" → nm ≠ "v" → nm ≠ "l_i" → nm ≠ "m_i"
       → s.regs dt sh nm = some t → s23.regs dt sh nm = some t := by
     intro dt sh nm t h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h
-    exact e23 h16 (e22 h15 (e21 h13 (e20 h5 (e19 h14 (e18 h13 (e17 h12 (e16 h5 (e15 h11 (e14 h10 (e13 h9 (e12 h8 (e11 h7 (e10 h6 (e9 h5 (e8 h4 (e7 h3 (e6 h3 (e5 h3 (e4 h3 (e3 h2 (e2 h1 (e1 h1 h)))))))))))))))))))))))
+    exact e23 h16 (e22 h15 (e21 h13 (e20 h5 (e19 h14 (e18 h13 (e17 h12 (e16 h5 (e15 h11 (e14 h10 (e13 h9 (e12 h8 (e11 h7 (e10 h6 (e9 h5 (e8 h4 (e7 h3 (e6 h3 (e5 h3 (e4 h3 (e3 h2 (e2 h1 (e1 h1 h))))))))))))))))))))))
   -- pids / mem / undef
   have hs23pids : s23.pids = s0.pids := by
     rw [hs23d, BlockState.setReg_pids, hs22d, BlockState.setReg_pids, hs21d, BlockState.setReg_pids,
@@ -3640,6 +3697,5 @@ theorem nopad_attn_step
     refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨ir, dd, u⟩ := idx
     show some (accFinal ir dd) = ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) ((c + 1) * 128) ir dd).2.2 : WithBot ℝ)
     exact congrArg (fun p => ((p.2.2 : ℝ) : WithBot ℝ)) (hbridge ir dd)
--/
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
