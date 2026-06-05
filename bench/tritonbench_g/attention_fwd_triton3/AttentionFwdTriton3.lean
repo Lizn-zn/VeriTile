@@ -1425,4 +1425,158 @@ theorem attentionFwdTriton3Case3OutSpec_eq_unmasked
     VeriTile.Triton.attentionRealBase2PerKeyScalePred_noWindow_eq
       (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 idx
 
+/-! ## Forward-loop per-statement op-eval recipes (RECIPE LAYER)
+
+The streaming inner loop of `attention_fwd_triton3.py`'s `_attn_fwd_inner` is
+expressed as a `forRangeDyn` body whose statement order (extracted from the
+lowered surface AST at the Python test shape, `BLOCK_M=BLOCK_N=BLOCK_DMODEL=64`,
+`IS_EVEN_N=1` so the boundary `tl.where` branches are dead) is:
+
+```
+ 1  k    = tl.load(K_block_ptr)                              -- block-ptr load (col offset)
+ 2  qk   = tl.zeros([64,64])                                 -- neutral dot seed
+ 3  qk  += tl.dot(q, k)                                      -- q·k
+ 4  qk   = qk * qk_scale                                     -- scalar scale (= keyScale3)
+ 5  dist = arange[:,None] - arange[None,:] + start_m·64
+                                        - start_n + 0        -- sliding-window distance (nat)
+ 6  mask = (dist >= 0) & (dist < 64)                         -- case-1 sliding-window keep
+ 7  qk   = tl.where(mask, qk, -inf)                          -- non-kept lanes → -inf
+ 8  m_ij = tl.maximum(m_i, tl.max(qk, 1))                    -- running max (reduceMax)
+ 9  qk   = qk - m_ij[:,None]                                 -- max-shift
+10  p    = tl.math.exp2(qk)                                  -- base-2 softmax weights
+11  p    = tl.where(mask, p, 0)                              -- zero non-kept lanes
+12  l_ij = tl.sum(p, 1)                                      -- denominator increment (reduceSum)
+13  tmp  = m_i - m_ij                                        -- log-domain correction
+14  alpha = tl.math.exp2(tmp)                                -- rescale factor
+15  l_i  = l_i * alpha + l_ij                                -- denominator carry
+16  acc  = acc * alpha[:,None]                               -- accumulator rescale
+17  v    = tl.load(V_block_ptr)                              -- block-ptr load (row offset)
+18  acc += tl.dot(p, v)                                      -- numerator accumulation
+19  m_i  = m_ij                                              -- max carry
+20  V_block_ptr = tl.advance(V_block_ptr, [64, 0])           -- V steps down the key axis
+21  K_block_ptr = tl.advance(K_block_ptr, [0, 64])           -- K steps along the key axis
+```
+
+Case 2 replaces line 6's `mask` with `dist >= 64`
+(`complementSlidingWindowKeep`); case 3 drops lines 6/7/11 entirely
+(`noWindowKeep`). Each recipe below is a standalone `evalOp` reduction with
+abstract register-readback hypotheses over a symbolic `BlockState`, so the
+eventual step lemma threads them through `stepStmts.cons_some` without reducing a
+nested `setReg` literal. ASSEMBLY (invariant / `attn_step` / pre+post-loop) is
+the NEXT stage and is intentionally NOT attempted here. -/
+
+/-- `evalOp` helper for `tl.math.exp2` (`Op.exp2`) → `Tile.uop realExp2`. -/
+theorem aft3_evalOp_exp2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
+  simp [evalOp]
+
+/-- `evalOp` helper for the `>=` predicate (`Op.ge`), which has no `@[simp]` form. -/
+theorem aft3_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L1: `k = tl.load(K_block_ptr)`** (no boundary check). K's block ptr has
+`order=(0,1)`: parent `(BLOCK_DMODEL, NKV_CTX)`, strides `(stride_kk, stride_kn)`,
+offsets `[0, colOff]` (column advances by `BLOCK_N` per block). Each lane reads
+`readMem` at `base + e·strideT + (colOff + j)·strideS`. With `K`'s
+`strides=(1, 64)` this is head-lane `e`, key `colOff + j` — exactly a `kTile3`
+read after `colOff` column advances. -/
+theorem aft3_load_k_eval
+    (region : RegionName) (base rows cols BT BS strideT strideS colOff : Nat)
+    (ptrOp : Op .blockPtr [BT, BS]) (s : BlockState)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [0, colOff] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [BT, BS] =>
+          some (s.readMem region
+            (base + idx.1.val * strideT + (colOff + idx.2.1.val) * strideS))⟩ := by
+  simp only [evalOp, hp, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil,
+    BlockPtr.address_2d_zero_row_offset, BlockState.readMemValue_real, if_true]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L17: `v = tl.load(V_block_ptr)`** (no boundary check). V's block ptr has
+`order=(1,0)`: parent `(NKV_CTX, BLOCK_DMODEL)`, strides `(stride_vk, stride_vn)`,
+offsets `[rowOff, 0]` (row advances by `BLOCK_N` per block). Each lane reads
+`base + (rowOff + j)·strideT + d·strideS`. With `V`'s `strides=(64, 1)` this is
+key `rowOff + j`, head-lane `d` — exactly a `vTile3` read after `rowOff` row
+advances. -/
+theorem aft3_load_v_eval
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
+    (ptrOp : Op .blockPtr [BT, BS]) (s : BlockState)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff, 0] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [BT, BS] =>
+          some (s.readMem region
+            (base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS))⟩ := by
+  simp only [evalOp, hp, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  have haddr : BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, 0] }
+      [idx.1.val, idx.2.1.val]
+      = base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS := by
+    show base + ((rowOff + idx.1.val) * strideT + (0 + idx.2.1.val) * strideS) = _
+    rw [Nat.zero_add, Nat.add_assoc]
+  simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil,
+    haddr, BlockState.readMemValue_real, if_true]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L21: `K_block_ptr = tl.advance(K_block_ptr, [0, BLOCK_N])`** — advance the
+column offset of a `[0, colOff]` block pointer by `BLOCK_N`. -/
+theorem aft3_advance_k_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS colOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [0, colOff] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [0, colOff + d] }⟩) := by
+  simp only [evalOp, evalOp_ref, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L20: `V_block_ptr = tl.advance(V_block_ptr, [BLOCK_N, 0])`** — advance the
+row offset of a `[rowOff, 0]` block pointer by `BLOCK_N`. -/
+theorem aft3_advance_v_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS rowOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff, 0] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff + d, 0] }⟩) := by
+  simp only [evalOp, evalOp_ref, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  rfl
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
