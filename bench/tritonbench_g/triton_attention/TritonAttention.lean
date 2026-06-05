@@ -2623,6 +2623,355 @@ theorem ta_load_q_eval
   congr 1
   simp only [fwdQTile, hpids0, hpids1, Nat.zero_add, Nat.mul_one]
 
+/-- `evalOp` helper for the `>=` causal predicate (`Op.ge`), which has no
+dedicated `@[simp]` form. Mirror of `flash_attn`'s `evalOp_ge`. -/
+theorem ta_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk = tl.zeros([128,128])` statement eval** (loop body L2): the all-`0`
+tile, the neutral pre-dot accumulator. -/
+theorem ta_qkzeros_eval (s : BlockState) (BM BN : Nat) :
+    evalOp (Op.full [BM, BN] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk += tl.dot(q, tl.trans(k))` statement eval** (loop body L3): adds the
+`q · kᵀ` dot to the (zero-seeded) `qk` tile. Both `q` and `k` are `.real` here
+(the diagonal-block transcription casts later). -/
+theorem ta_qk_dot_eval (s : BlockState) (BM BN BD : Nat)
+    (qktile : Tile .real [BM, BN]) (qtile : Tile .real [BM, BD]) (ktile : Tile .real [BN, BD])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq : s.regs .real [BM, BD] "q" = some qtile)
+    (hk : s.regs .real [BN, BD] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] "q")
+          (Op.transpose (batch := []) (Op.ref .real [BN, BD] "k")))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qktile (Tile.dot [] qtile (Tile.transpose [] ktile))) := by
+  have hkr : evalOp (Op.ref .real [BN, BD] "k") s = some ktile := by rw [evalOp_ref, hk]
+  have hqkr : evalOp (Op.ref .real [BM, BD] "q") s = some qtile := by rw [evalOp_ref, hq]
+  have htr : evalOp (Op.transpose (batch := []) (Op.ref .real [BN, BD] "k")) s
+      = some (Tile.transpose [] ktile) := by
+    erw [evalOp_transpose [] (Op.ref .real [BN, BD] "k"), hkr]; rfl
+  have hdot : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.ref .real [BM, BD] "q")
+        (Op.transpose (batch := []) (Op.ref .real [BN, BD] "k"))) s
+      = some (Tile.dot [] qtile (Tile.transpose [] ktile)) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BD] "q")
+      (Op.transpose (batch := []) (Op.ref .real [BN, BD] "k")), hqkr, htr]; rfl
+  rw [evalOp_add]
+  simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk *= sm_scale` statement eval** (loop body L4): scale by the scalar
+`(√64)⁻¹` (broadcast on the right). -/
+theorem ta_qk_scale_eval (s : BlockState) (BM BN : Nat) (sc : ℝ)
+    (qktile : Tile .real [BM, BN]) (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BM, BN] "qk") (Op.const sc)) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qktile
+          (Tile.scalar (some sc : WithBot ℝ))) := by
+  rw [evalOp_mul]; simp [evalOp_ref, evalOp_const, hqk]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Causal `where` statement eval** (loop body L5): `qk = tl.where(offs_m[:,None]
+≥ start_n + offs_n[None,:], qk, -inf)`. Given the `offs_m`/`offs_n` index vectors,
+`start_n = SN`, and the running `qk`, the masked tile keeps `qk` where
+`SN + j ≤ offs_m_i` and `⊥` (`-inf`) on future keys. Triton-attention analogue of
+`flash_where_op_eval`. -/
+theorem ta_where_eval (s : BlockState) (BM BN SN : Nat)
+    (gm : Fin BM → Nat) (qktile : Tile .real [BM, BN])
+    (hom : s.regs .nat [BM] "offs_m" = some (Tile.vec gm))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))))
+        (Op.ref .real [BM, BN] "qk") (Op.broadcast Op.negInf [BM, BN])) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          if SN + idx.2.1.val ≤ gm idx.1 then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
+  have hexpM : @evalOp TileDType.nat [BM, 1]
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) s
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec gm)) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hom
+  have hexpN : @evalOp TileDType.nat [1, BN]
+      (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) s
+        = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val))) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hon
+  have haddN : @evalOp TileDType.nat [1, BN]
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))) s
+        = some (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+            (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val)))) := by
+    rw [evalOp_add]
+    rw [show evalOp (Op.ref .nat [] "start_n") s = some (Tile.scalar SN) from by
+      rw [evalOp_ref, hsn]]
+    rw [hexpN]; rfl
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast Op.negInf [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where, ta_evalOp_ge]
+  simp only [evalOp_ref, hexpM, haddN, hqk, hbcast,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, Tile.scalar, Tile.vec,
+    ComparableDType.nat, NumericDType.add]
+  by_cases h : SN + idx.2.1.val ≤ gm idx.1
+  · rw [if_pos (by simpa using h)]; simp [h]
+  · rw [if_neg (by simpa using h)]; simp [h]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`m_curr = tl.maximum(tl.max(qk,1), m_prev)` statement eval** (loop body L6):
+lowered to `where(reduceMax(qk,1) > m_prev, reduceMax(qk,1), m_prev)`. `reduceMax`'s
+result-shape `eraseAxis` blocks `simp`/`rw` matching, so the reduced row is proven
+naturally then defeq-coerced to `[BM]`. -/
+theorem ta_mij_eval (s : BlockState) (BM BN : Nat)
+    (mtile : Tile .real [BM]) (qktile : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hmp : s.regs .real [BM] "m_prev" = some mtile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk"))
+          (Op.ref .real [BM] "m_prev"))
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk"))
+        (Op.ref .real [BM] "m_prev")) s
+      = some (Tile.select
+          (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) rmaxT mtile)
+          rmaxT mtile) := by
+  have hrmaxN : evalOp (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false
+      (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  have hrmax : @evalOp TileDType.real [BM]
+      (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false
+        (Op.ref .real [BM, BN] "qk")) s = some rmaxT := hrmaxN
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmp, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_prev *= tl.exp(m_prev - m_curr)` statement eval** (loop body L7): the
+`alpha = exp(m_prev - m_curr)` rescale of `l_prev` (NATURAL exp). This is the
+cross-block correction factor applied to the running denominator. -/
+theorem ta_alpha_eval (s : BlockState) (BM : Nat) (ltile mp mc : Tile .real [BM])
+    (hl : s.regs .real [BM] "l_prev" = some ltile)
+    (hmp : s.regs .real [BM] "m_prev" = some mp)
+    (hmc : s.regs .real [BM] "m_curr" = some mc) :
+    evalOp (Op.mul .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "l_prev")
+        (Op.exp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "m_prev") (Op.ref .real [BM] "m_curr")))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile
+          (Tile.uop WithBot.realExp
+            (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mp mc))) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_exp, evalOp_sub, hl, hmp, hmc,
+    Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p = tl.exp(qk - m_curr[:, None])` statement eval** (loop body L8): the
+NATURAL-exp numerator shift. `expandDim`'s `insertAxis` shape gets normalized to
+`[BM,1]` by `sub`; the operand eval is proven naturally then defeq-coerced. -/
+theorem ta_p_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (qktile : Tile .real [BM, BN]) (mc : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hmc : s.regs .real [BM] "m_curr" = some mc) :
+    evalOp (Op.exp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_curr")))) s
+      = some (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            qktile (Tile.expandDim ⟨1, hax⟩ mc))) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_curr")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmc
+  rw [evalOp_exp, evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_curr = tl.sum(p, 1) + l_prev` statement eval** (loop body L9): the row
+sum of `p` added to the (alpha-rescaled) `l_prev`. -/
+theorem ta_lij_eval (s : BlockState) (BM BN : Nat)
+    (ptile : Tile .real [BM, BN]) (ltile : Tile .real [BM])
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hl : s.regs .real [BM] "l_prev" = some ltile) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "p"))
+        (Op.ref .real [BM] "l_prev")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ptile) ltile) := by
+  have hpr : evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by rw [evalOp_ref, hp]
+  have hsum : @evalOp TileDType.real [BM]
+      (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ptile) := by
+    erw [evalOp_reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false
+      (Op.ref .real [BM, BN] "p"), hpr]; rfl
+  rw [evalOp_add]; simp only [evalOp_ref, hl, hsum, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_rcp = 1.0 / l_curr` statement eval** (loop body L10): the per-row
+reciprocal of the running denominator (broadcast on the left). This is the in-loop
+`l_rcp` the kernel multiplies into `p`/`acc`; it never touches the stored
+`l_prev`. -/
+theorem ta_lrcp_eval (s : BlockState) (BM : Nat) (lc : Tile .real [BM])
+    (hlc : s.regs .real [BM] "l_curr" = some lc) :
+    evalOp (Op.div .real Broadcast.scalarL (Op.const (1.0 : ℝ)) (Op.ref .real [BM] "l_curr")) s
+      = some (Tile.bop NumericDType.real.div Broadcast.scalarL
+          (Tile.scalar (some (1.0 : ℝ) : WithBot ℝ)) lc) := by
+  rw [evalOp_div]; simp [evalOp_const, evalOp_ref, hlc]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p *= l_rcp[:, None]` statement eval** (loop body L11): rescale `p` by the
+per-row reciprocal `l_rcp`. -/
+theorem ta_p_rcp_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (ptile : Tile .real [BM, BN]) (lr : Tile .real [BM])
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hlr : s.regs .real [BM] "l_rcp" = some lr) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "p") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "l_rcp"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          ptile (Tile.expandDim ⟨1, hax⟩ lr)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "l_rcp")) s
+      = some (Tile.expandDim ⟨1, hax⟩ lr) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hlr
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hp, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc *= (l_prev * l_rcp)[:, None]` statement eval** (loop body L12): rescale
+the output accumulator by the per-row factor `l_prev · l_rcp` (the running-`l`
+correction that telescopes to the FA1 end-normalization). -/
+theorem ta_acc_rescale_eval (s : BlockState) (BM BD : Nat) (hax : 1 < [BM].length.succ)
+    (acctile : Tile .real [BM, BD]) (lp lr : Tile .real [BM])
+    (hacc : s.regs .real [BM, BD] "acc" = some acctile)
+    (hlp : s.regs .real [BM] "l_prev" = some lp)
+    (hlr : s.regs .real [BM] "l_rcp" = some lr) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.expandDim ⟨1, hax⟩
+          (Op.mul .real (Broadcast.consSame Broadcast.nil)
+            (Op.ref .real [BM] "l_prev") (Op.ref .real [BM] "l_rcp")))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acctile
+          (Tile.expandDim ⟨1, hax⟩
+            (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) lp lr))) := by
+  have haccr : evalOp (Op.ref .real [BM, BD] "acc") s = some acctile := by rw [evalOp_ref, hacc]
+  have hlpr : evalOp (Op.ref .real [BM] "l_prev") s = some lp := by rw [evalOp_ref, hlp]
+  have hlrr : evalOp (Op.ref .real [BM] "l_rcp") s = some lr := by rw [evalOp_ref, hlr]
+  have hmul : @evalOp TileDType.real [BM]
+      (Op.mul .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "l_prev") (Op.ref .real [BM] "l_rcp")) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) lp lr) := by
+    rw [evalOp_mul]; simp only [hlpr, hlrr, Option.bind_eq_bind, Option.bind_some]
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "l_prev") (Op.ref .real [BM] "l_rcp"))) s
+      = some (Tile.expandDim ⟨1, hax⟩
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) lp lr)) := by
+    erw [evalOp_expandDim ⟨1, hax⟩ (Op.mul .real (Broadcast.consSame Broadcast.nil)
+      (Op.ref .real [BM] "l_prev") (Op.ref .real [BM] "l_rcp")), hmul]; rfl
+  rw [evalOp_mul]; simp only [haccr, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p = (p).to(tl.float16)` statement eval** (loop body L13): the `p` fp16
+round-trip before the value dot (pointwise float cast). -/
+theorem ta_pfp16_eval (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM, BN])
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM, BN] "p")) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ : Tile .fp16 [BM, BN]) := by
+  rw [evalOp_castFloat]; simp [hp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc += tl.dot(p, v)` statement eval** (loop body L15): the numerator
+accumulation. The `p` fp16 round-trip (`castFloat fp16 (castFloat real fp16 p)`)
+reduces to `p` (cast identity in the model); the dot accumulates the value
+contribution. Triton-attention analogue of `acc2_op_eval`. -/
+theorem ta_acc_eval (s : BlockState) (BM BN BD : Nat)
+    (acctile : Tile .real [BM, BD]) (ptile : Tile .real [BM, BN]) (vtile : Tile .real [BN, BD])
+    (hacc : s.regs .real [BM, BD] "acc" = some acctile)
+    (hpf16 : s.regs .fp16 [BM, BN] "p" = some
+      (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ : Tile .fp16 [BM, BN]))
+    (hv : s.regs .real [BN, BD] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "p"))
+          (Op.ref .real [BN, BD] "v"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acctile
+          (Tile.dot [] ptile vtile)) := by
+  have haccr : evalOp (Op.ref .real [BM, BD] "acc") s = some acctile := by rw [evalOp_ref, hacc]
+  have hvr : evalOp (Op.ref .real [BN, BD] "v") s = some vtile := by rw [evalOp_ref, hv]
+  have hpr : evalOp (Op.ref .fp16 [BM, BN] "p") s = some
+      (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ : Tile .fp16 [BM, BN]) := by
+    rw [evalOp_ref, hpf16]
+  have hcb : @evalOp TileDType.real [BM, BN]
+      (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "p")) s = some ptile := by
+    erw [evalOp_castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "p"), hpr]
+    refine congrArg some ?_; ext i; simp [FloatDType.cast]
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "p"))
+        (Op.ref .real [BN, BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := by
+    erw [evalOp_dot [] (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "p"))
+      (Op.ref .real [BN, BD] "v"), hcb, hvr]; rfl
+  rw [evalOp_add]; simp only [haccr, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_prev = l_curr` / `m_prev = m_curr` statement eval** (loop body L16/L17):
+the running-state carry (a bare register read). -/
+theorem ta_reg_carry_eval (s : BlockState) (BM : Nat) (name : RegName)
+    (t : Tile .real [BM]) (h : s.regs .real [BM] name = some t) :
+    evalOp (Op.ref .real [BM] name) s = some t := by
+  rw [evalOp_ref, h]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`k_tile_ptr = tl.advance(k_tile_ptr, [BLOCK_N, 0])`** / `v_tile_ptr` (loop
+body L18/L19): advances the ROW offset of a `[rowOff, 0]` block pointer by
+`BLOCK_N` (the K/V tiles step down the key axis). Triton-attention analogue of
+`flash_advance_row_eval`. -/
+theorem ta_advance_row_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS rowOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff, 0] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff + d, 0] }⟩) := by
+  rw [advanceBlockPtr_eval]
+  simp only [evalOp, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockPtr.advance_2d_offsets]
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
