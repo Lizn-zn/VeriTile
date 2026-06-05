@@ -2498,6 +2498,33 @@ private theorem gated_mul_exp2 (s : BlockState) (a b : TileIndex [4] → ℝ) :
     show Option.map₂ (·*·) (some (0:ℝ)) (WithBot.realExp2 (some 0)) = some 0
     rw [WithBot.realExp2_some, Option.map₂_some_some]; norm_num
 
+/-- The all-`some 0` tile (prologue `tl.zeros`) is the `gated` tile of the zero
+function (inactive lanes are also `some 0 = 0`). -/
+private theorem gated_const0 (s : BlockState) :
+    (⟨fun _ => some 0⟩ : Tile .real [4]) = gated s (fun _ => 0) := by
+  apply Tile.ext; intro i
+  simp only [gated]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true]
+  · simp only [hc, Bool.false_eq_true, if_false]; rfl
+
+/-- `gated`/`ldR` depend on the state only through `pids` and `readMem`, so they
+agree across states with equal pids and memory reads. -/
+private theorem gated_ldR_state_eq (s1 s2 : BlockState) (region : RegionName) (R : Nat)
+    (hpid : s1.pids = s2.pids) (hread : ∀ r a, s1.readMem r a = s2.readMem r a) :
+    gated s1 (ldR s1 region R) = gated s2 (ldR s2 region R) := by
+  apply Tile.ext; intro i
+  simp only [gated, ldR, hpid, hread]
+
+/-- The head-state `g_val` tile (`ldVal`) equals the `gated` load tile of `region`
+at row offset `R`, evaluated against any state with the same pids/memory. -/
+private theorem ldVal_eq_gated (sin s : BlockState) (region : RegionName) (R : Nat)
+    (hpid : sin.pids = s.pids) (hread : ∀ r a, sin.readMem r a = s.readMem r a) :
+    (⟨fun i => ldVal sin region R i⟩ : Tile .real [4]) = gated s (ldR s region R) := by
+  have : (⟨fun i => ldVal sin region R i⟩ : Tile .real [4])
+      = gated sin (ldR sin region R) := rfl
+  rw [this, gated_ldR_state_eq sin s region R hpid hread]
+
 /-- Plain real mul over two `gated` tiles. -/
 private theorem gated_mul (s : BlockState) (a b : TileIndex [4] → ℝ) :
     Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
@@ -3334,6 +3361,173 @@ theorem bwd_iter_core
   · -- p_dg (set at c23)
     rw [hc23]
     exact BlockState.setReg_same _ _ _ _ _
+
+/-- The prologue post-state shape: pointers at row offset `R`, mask, and the
+zero-initialized `cum_grad_dg` / `last_g` accumulators. Reused by both iteration
+wrappers. `R` is the row offset of the relevant time row. -/
+structure BwdPrologueShape (s s0 : BlockState)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (R : Nat) : Prop where
+  pid : s0.pids = s.pids
+  mem : s0.mem = s.mem
+  mask : s0.regs .bool [4] "mask" = some
+    (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)))
+  cum : s0.regs .real [4] "cum_grad_dg" = some (⟨fun _ => some 0⟩ : Tile .real [4])
+  lastg : s0.regs .real [4] "last_g" = some (⟨fun _ => some 0⟩ : Tile .real [4])
+  pg : s0.regs .ptr [4] "p_g" = some
+    (Tile.vec (fun e : Fin 4 => (G.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pk : s0.regs .ptr [4] "p_k" = some
+    (Tile.vec (fun e : Fin 4 => (K.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pq : s0.regs .ptr [4] "p_q" = some
+    (Tile.vec (fun e : Fin 4 => (Q.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pdqi : s0.regs .ptr [4] "p_dq_inner" = some
+    (Tile.vec (fun e : Fin 4 => (DQInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pdki : s0.regs .ptr [4] "p_dk_inner" = some
+    (Tile.vec (fun e : Fin 4 => (DKInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pdqt : s0.regs .ptr [4] "p_dq_inter" = some
+    (Tile.vec (fun e : Fin 4 => (DQInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pdkt : s0.regs .ptr [4] "p_dk_inter" = some
+    (Tile.vec (fun e : Fin 4 => (DKInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+  pdg : s0.regs .ptr [4] "p_dg" = some
+    (Tile.vec (fun e : Fin 4 => (DG.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Iteration 0 (`__rev_t = 0`, time row `t = BT-1 = 1`).** From the post-prologue
+state `s0` (shape `BwdPrologueShape` at row offset `R`), the first reverse-loop
+iteration captures `last_g = g[row BT-1]` (the `t == BT-1` branch fires), then
+runs the straight-line body. The captured `last_g` per lane is `ldR s G R`; the
+incoming reverse accumulator is `0`. We reduce the head two statements + the
+`last_g` capture via `bwdIterBody_head_eval` + `bwdEval_ifThen_true`, then chain
+the remaining 22 statements via `bwd_iter_core`. -/
+theorem bwd_iter0_eval
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (s s0 : BlockState) (R : Nat)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
+    (hsh : BwdPrologueShape s s0 DQInner DQInter DKInner DKInter Q K G DG R) :
+    ∃ s1, stepStmts bwdIterBody (s0.setReg "__rev_t" .nat [] (Tile.scalar 0)) = some s1
+      ∧ s1.pids = s.pids
+      ∧ s1.mem =
+          (stMem s DG R (fun i =>
+              dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G R) i)
+            (stMem s DKInter R (dkOut s DKInner DKInter G R (ldR s G R))
+              (stMem s DQInter R (dqOut s DQInner DQInter G R) s0))).mem
+      ∧ s1.regs .bool [4] "mask" = some
+          (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)))
+      ∧ s1.regs .real [4] "last_g" = some (gated s (ldR s G R))
+      ∧ s1.regs .real [4] "cum_grad_dg" = some
+          (gated s (fun i =>
+            dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G R) i))
+      ∧ s1.regs .ptr [4] "p_g" = some (ptrDec G s R)
+      ∧ s1.regs .ptr [4] "p_k" = some (ptrDec K s R)
+      ∧ s1.regs .ptr [4] "p_q" = some (ptrDec Q s R)
+      ∧ s1.regs .ptr [4] "p_dq_inner" = some (ptrDec DQInner s R)
+      ∧ s1.regs .ptr [4] "p_dk_inner" = some (ptrDec DKInner s R)
+      ∧ s1.regs .ptr [4] "p_dq_inter" = some (ptrDec DQInter s R)
+      ∧ s1.regs .ptr [4] "p_dk_inter" = some (ptrDec DKInter s R)
+      ∧ s1.regs .ptr [4] "p_dg" = some (ptrDec DG s R) := by
+  set sin := s0.setReg "__rev_t" .nat [] (Tile.scalar 0) with hsin
+  -- pids / memory reads of `sin` agree with `s`.
+  have hsinpid : sin.pids = s.pids := by rw [hsin, BlockState.setReg_pids]; exact hsh.pid
+  have hsinread : ∀ (r : RegionName) (a : Nat), sin.readMem r a = s.readMem r a := by
+    intro r a; rw [hsin, BlockState.setReg_readMem]
+    simp only [BlockState.readMem, hsh.mem]
+  have hsinmask : sin.regs .bool [4] "mask" = some
+      (Tile.vec (fun e : Fin 4 => decide (sin.pids 0 * 4 + e.val < 8))) := by
+    rw [hsinpid, hsin, BlockState.setReg_ne_name (h := by decide)]; exact hsh.mask
+  have hsinpg : sin.regs .ptr [4] "p_g" = some
+      (Tile.vec (fun e : Fin 4 => (G.cast, sin.pids 2 * 64 + sin.pids 0 * 4 + e.val + R))) := by
+    rw [hsinpid, hsin, BlockState.setReg_ne_name (h := by decide)]; exact hsh.pg
+  -- Head: `t = 1`, `g_val = load p_g`; reduces to the post-head state.
+  rw [bwdIterBody_head_eval G sin 0 R
+      (by rw [hsin]; exact BlockState.setReg_same _ _ _ _ _) hsinmask hsinpg]
+  -- `bwdIterBody.drop 2 = ifThen :: bwdIterBody.drop 3`; run the `last_g` capture.
+  rw [show bwdIterBody.drop 2 =
+        Stmt.ifThen
+          (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+            (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+          [Stmt.assign .real [4] "last_g" (Op.ref .real [4] "g_val")]
+        :: bwdIterBody.drop 3 from rfl]
+  -- ifThen condition: `t = 1 = BT-1`, so it fires; capture `last_g = g_val`.
+  have hcond : evalOp (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+      (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+      (bwdIterHeadState G sin 0 R) = some (Tile.scalar Bool.true) := by
+    rw [bwdEval_eqNat (bwdIterHeadState G sin 0 R) _ _ (Tile.scalar (2 - 1 - 0 * 1))
+        (Tile.scalar (2 - 1))
+        (by rw [evalOp_ref, bwdIterHeadState, BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_same])
+        (by simp [evalOp, Tile.bop, NumericDType.sub])]
+    rfl
+  have hif : stepStmt (Stmt.ifThen
+      (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+        (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+      [Stmt.assign .real [4] "last_g" (Op.ref .real [4] "g_val")])
+      (bwdIterHeadState G sin 0 R)
+      = some ((bwdIterHeadState G sin 0 R).setReg "last_g" .real [4]
+          (gated s (ldR s G R))) := by
+    rw [bwdEval_ifThen_true (bwdIterHeadState G sin 0 R) _ _ hcond]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.ref .real [4] "g_val") (bwdIterHeadState G sin 0 R)
+            = some (gated s (ldR s G R)) by
+          rw [evalOp_ref, bwdIterHeadState, BlockState.setReg_same,
+            ldVal_eq_gated sin s G R hsinpid hsinread]))]
+    rw [stepStmts.nil]
+  rw [stepStmts.cons_some hif]
+  -- The remaining 22 statements via `bwd_iter_core`.
+  set s3 := (bwdIterHeadState G sin 0 R).setReg "last_g" .real [4]
+    (gated s (ldR s G R)) with hs3
+  have hs3pid : s3.pids = s.pids := by
+    rw [hs3, BlockState.setReg_pids, bwdIterHeadState, BlockState.setReg_pids,
+        BlockState.setReg_pids]; exact hsinpid
+  have hs3mem : s3.mem = s.mem := by
+    rw [hs3, bwdIterHeadState]
+    simp only [BlockState.setReg]
+    rw [hsin]; simp only [BlockState.setReg]; exact hsh.mem
+  have hpeel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "last_g" → n ≠ "g_val" → n ≠ "t" → n ≠ "__rev_t" →
+      s3.regs d sh n = s0.regs d sh n := by
+    intro d sh n h0 h1 h2 h3
+    rw [hs3, BlockState.setReg_ne_name (h := h0), bwdIterHeadState,
+        BlockState.setReg_ne_name (h := h1), BlockState.setReg_ne_name (h := h2),
+        hsin, BlockState.setReg_ne_name (h := h3)]
+  obtain ⟨sout, hstep, hpids, hmemo, hmasko, hlasto, hcumo,
+      hpgo, hpko, hpqo, hpdqio, hpdkio, hpdqto, hpdkto, hpdgo⟩ :=
+    bwd_iter_core DQInner DQInter DKInner DKInter Q K G DG s s3 R
+      (ldR s G R) (fun _ => 0)
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+      hs3pid hs3mem
+      (by rw [hpeel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)]
+          exact hsh.mask)
+      (by rw [hs3, BlockState.setReg_ne_name (h := by decide), bwdIterHeadState,
+            BlockState.setReg_same, ldVal_eq_gated sin s G R hsinpid hsinread])
+      (by rw [hs3]; exact BlockState.setReg_same _ _ _ _ _)
+      (by rw [hpeel .real [4] "cum_grad_dg" (by decide) (by decide) (by decide) (by decide),
+            hsh.cum, gated_const0 s])
+      (by rw [hpeel .ptr [4] "p_g" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pg)
+      (by rw [hpeel .ptr [4] "p_k" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pk)
+      (by rw [hpeel .ptr [4] "p_q" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pq)
+      (by rw [hpeel .ptr [4] "p_dq_inner" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pdqi)
+      (by rw [hpeel .ptr [4] "p_dk_inner" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pdki)
+      (by rw [hpeel .ptr [4] "p_dq_inter" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pdqt)
+      (by rw [hpeel .ptr [4] "p_dk_inter" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pdkt)
+      (by rw [hpeel .ptr [4] "p_dg" (by decide) (by decide) (by decide) (by decide)]; exact hsh.pdg)
+  -- Simplify `0 + dgSum = dgSum` and `... s0` vs `... s3` in the memory output.
+  have hzero : (fun i => (0 : ℝ) +
+      dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G R) i)
+      = fun i => dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G R) i := by
+    funext i; rw [zero_add]
+  have hmemeq : sout.mem =
+      (stMem s DG R (fun i =>
+          dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G R) i)
+        (stMem s DKInter R (dkOut s DKInner DKInter G R (ldR s G R))
+          (stMem s DQInter R (dqOut s DQInner DQInter G R) s0))).mem := by
+    rw [hmemo, hzero]
+    refine stMem_mem_congr s DG R _ _ _ ?_
+    refine stMem_mem_congr s DKInter R _ _ _ ?_
+    refine stMem_mem_congr s DQInter R _ s3 s0 ?_
+    rw [hs3mem]; exact hsh.mem.symm
+  exact ⟨sout, hstep, hpids, hmemeq, hmasko, hlasto, by rw [hcumo, hzero],
+    hpgo, hpko, hpqo, hpdqio, hpdkio, hpdqto, hpdkto, hpdgo⟩
 
 end BwdAssembly
 
