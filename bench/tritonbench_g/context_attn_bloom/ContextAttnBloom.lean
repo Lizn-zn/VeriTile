@@ -1215,6 +1215,90 @@ theorem ctx_evalOp_load_region_maskOther {dtype : TileDType} {shape : TileShape}
   simp only [evalOp, hoff, hmask, hother, Option.bind_eq_bind, Option.bind_some]
   rfl
 
+/-! ### Bloom `Req_to_tokens` gather recipes (constants: stride_req_b = 7500,
+stride_kbs/vbs = 576, stride_kh/vh = 96, stride_kd/vd = 1) -/
+
+/-- **`kv_loc` masked nat-gather recipe**: lane `j` reads physical token
+`Req_to_tokens[7500·rqi + (SN+j)]` when active (`SN+j < bel`), else `0`. -/
+theorem bloom_kvloc_gather_eval {BN : Nat} (s : BlockState)
+    (Req_to_tokens : RegionName) (rqi SN bel : Nat)
+    (hrqi : s.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat 7500) (Op.ref .nat [] "cur_batch_req_idx"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat 1)
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n")))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+            (Op.ref .nat [] "block_end_loc"))
+          (Op.broadcast (Op.constNat 0) [BN]))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          if decide (SN + idx.1.val < bel) then
+            s.readMemValue .nat (Region.cast Req_to_tokens) (7500 * rqi + (SN + idx.1.val))
+          else 0⟩ : Tile .nat [BN]) := by
+  simp only [evalOp, hrqi, hsn, hn, hbel, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.scalar_data, Tile.scalar_data_index, Tile.vec_data,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, Region.cast_cast]
+  by_cases h : SN + idx.1.val < bel
+  · simp only [h, decide_true, if_true]
+    congr 1; omega
+  · simp only [h, decide_false, Bool.false_eq_true, if_false]
+
+/-- **Gathered `off_k` recipe** (`kv_loc[None,:]·576 + cur_kv_head·96 + offs_d[:,None]·1`,
+shape `[D, BN]`): lane `(e,j)` is `kvloc(j)·576 + ckvh·96 + e`. -/
+theorem bloom_offk_gather_eval {BN D : Nat} (s : BlockState) (ckvh : Nat)
+    (kvf : Fin BN → Nat)
+    (hkvloc : s.regs .nat [BN] "kv_loc" = some (Tile.vec kvf))
+    (hckvh : s.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "kv_loc"))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [D, BN] =>
+          kvf idx.2.1 * 576 + ckvh * 96 + idx.1.val * 1⟩ : Tile .nat [D, BN]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+    ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hkvloc, hckvh, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- **Gathered `off_v` recipe** (`kv_loc[:,None]·576 + cur_kv_head·96 + offs_d[None,:]·1`,
+shape `[BN, D]`): lane `(j,e)` is `kvloc(j)·576 + ckvh·96 + e`. -/
+theorem bloom_offv_gather_eval {BN D : Nat} (s : BlockState) (ckvh : Nat)
+    (kvf : Fin BN → Nat)
+    (hkvloc : s.regs .nat [BN] "kv_loc" = some (Tile.vec kvf))
+    (hckvh : s.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "kv_loc"))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [BN, D] =>
+          kvf idx.1 * 576 + ckvh * 96 + idx.2.1.val * 1⟩ : Tile .nat [BN, D]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+    ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hkvloc, hckvh, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
 /-! ### Bloom-specific per-key data + boundary-masked exact fold
 
 The bloom kernel feeds the generic base-2 machinery the per-key pair
