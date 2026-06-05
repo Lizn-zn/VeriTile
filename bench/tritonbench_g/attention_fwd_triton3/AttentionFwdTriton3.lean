@@ -1623,4 +1623,109 @@ theorem aft3_qk_scale_eval (s : BlockState) (BM BN : Nat) (sc : ℝ)
           (Tile.scalar (some sc : WithBot ℝ))) := by
   rw [evalOp_mul]; simp [evalOp_ref, evalOp_const, hqk]
 
+/-- `evalOp` helper for `Op.boolAnd` (no `@[simp]` form). -/
+theorem aft3_evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
+    (x : Op .bool a) (y : Op .bool b) (s : BlockState) :
+    evalOp (.boolAnd bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s;
+      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
+  simp [evalOp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L5: `dist = arange[:,None] - arange[None,:] + start_m·BLOCK_M
+- start_n + offset`** (here `offset = 0`). With `start_m = SM`, `start_n = SN`,
+each cell `(i, j)` is the truncated-nat distance
+`((i - j) + SM·64 - SN) + 0` — the per-lane sliding-window position. -/
+theorem aft3_dist_eval (s : BlockState) (SM SN : Nat)
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.add .nat Broadcast.scalarR
+        (Op.sub .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR
+            (Op.sub .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.expandDim ⟨1, by simp⟩ (Op.arange 64))
+              (Op.expandDim ⟨0, by simp⟩ (Op.arange 64)))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64)))
+          (Op.ref .nat [] "start_n"))
+        (Op.constNat 0)) s
+      = some ⟨fun idx : TileIndex [64, 64] =>
+          ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩ := by
+  simp only [evalOp.eq_def, hsm, hsn, Option.bind_eq_bind, Option.bind_some, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.sub]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L6 (case 1, sliding window non-complement): `mask = (dist >= 0) &
+(dist < SLIDING_WINDOW_SIZE)`** (`= 64`). Cell `(i, j)` is kept iff the distance
+is in `[0, 64)` — exactly `slidingWindowKeep`'s in-window condition. -/
+theorem aft3_mask_case1_eval (s : BlockState) (disttile : Tile .nat [64, 64])
+    (hd : s.regs .nat [64, 64] "dist" = some disttile) :
+    evalOp (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
+          (Op.constNat 0))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
+          (Op.constNat 64))) s
+      = some ⟨fun idx : TileIndex [64, 64] =>
+          ComparableDType.nat.ge (disttile.data idx) 0
+            && ComparableDType.nat.lt (disttile.data idx) 64⟩ := by
+  rw [aft3_evalOp_boolAnd, aft3_evalOp_ge, evalOp_lt]
+  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L6 (case 2, complement sliding window): `mask = (dist >= SLIDING_WINDOW_SIZE)`**
+(`= 64`). Cell `(i, j)` is kept iff the distance is `≥ 64` — exactly
+`complementSlidingWindowKeep`'s condition. -/
+theorem aft3_mask_case2_eval (s : BlockState) (disttile : Tile .nat [64, 64])
+    (hd : s.regs .nat [64, 64] "dist" = some disttile) :
+    evalOp (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
+        (Op.constNat 64)) s
+      = some ⟨fun idx : TileIndex [64, 64] =>
+          ComparableDType.nat.ge (disttile.data idx) 64⟩ := by
+  rw [aft3_evalOp_ge]
+  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.cop_data, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L7: `qk = tl.where(mask, qk, -inf)`** — keep `qk` on lanes the case
+predicate selects, set non-kept lanes to `⊥` (`-inf`) so they vanish under
+`exp2`. Works for any case `mask` tile (`slidingWindowKeep` /
+`complementSlidingWindowKeep`). -/
+theorem aft3_where_eval (s : BlockState) (masktile : Tile .bool [64, 64])
+    (qktile : Tile .real [64, 64])
+    (hmask : s.regs .bool [64, 64] "mask" = some masktile)
+    (hqk : s.regs .real [64, 64] "qk" = some qktile) :
+    evalOp (Op.where (Op.ref .bool [64, 64] "mask")
+        (Op.ref .real [64, 64] "qk") (Op.broadcast Op.negInf [64, 64])) s
+      = some ⟨fun idx : TileIndex [64, 64] =>
+          if masktile.data idx then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
+  have hbcast : @evalOp TileDType.real [64, 64] (Op.broadcast Op.negInf [64, 64]) s
+      = some (⟨fun _ : TileIndex [64, 64] => (⊥ : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where]
+  simp only [evalOp_ref, hmask, hqk, hbcast, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.scalar]
+
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
