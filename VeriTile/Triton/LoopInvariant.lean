@@ -278,4 +278,32 @@ theorem forRangeDyn_single_step
   rw [stepForRangeAux.step_lt hstep hlt, hBody]
   simp [Option.bind, stepForRangeAux.step_ge hstep hle]
 
+/-- Invariant-driven evaluation for `forRangeDyn` with runtime-resolved bounds.
+Given a step relation that advances a predicate `P` by `step` per iteration from
+a base case at `start`, the whole dynamic loop executes to a final state at some
+counter `final ≥ stop` still satisfying `P`. This is the streaming-loop driver
+used by the attention exec assemblies. -/
+theorem forRangeDyn_inv
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simpa using h_aux
+
 end VeriTile.Triton
