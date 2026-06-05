@@ -4054,5 +4054,48 @@ theorem bsa_mij_eq_sup_maskedScore
   exact bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c hc gpos Qg Kg scale SN gm
     qkScaled i jL (hMask jL) (hScore jL)
 
+/-! ## `bsa_attn_step`: loop-body advances the invariant by one CSR block
+
+Given `bsaInvariant … c`, the lowered `bsaLoopBody` (executed via the banked
+`bsaLoopBody_steps`) advances the live `m_i`/`l_i`/`acc`/`acc2` accumulators to
+`bsaInvariant … (c+1)`. The execution is `bsaLoopBody_steps`; the remainder is the
+WithBot↔ℝ math bridge of the exposed symbolic tiles onto `bsaMPartial`/`bsaLPartial`/
+`bsaOPartial` at `c+1`, mirroring `nopad_attn_step`. -/
+
+open BSAMathCausal in
+/-- `tl.maximum` lowered to `where(m_i > m_ij, m_i, m_ij)` is the WithBot max. -/
+theorem bsa_select_gt_eq_max (a b : WithBot ℝ) :
+    (if (ComparableDType.real.gt a b = Bool.true) then a else b) = max a b := by
+  by_cases h : a > b
+  · rw [if_pos (by simpa using h)]; exact (max_eq_left (le_of_lt h)).symm
+  · rw [if_neg (by simpa using h)]; exact (max_eq_right (le_of_not_gt h)).symm
+
+open BSAMathCausal in
+/-- Per-summand exp telescoping: `β·p0 = exp(score − m_new)` in `WithBot ℝ`,
+where `β = exp(m_ij − m_new)`, `p0 = exp(score − m_ij)`. Handles the masked
+(`score = ⊥`) lane (both sides `0`) and the visible lane (`m_ij`, `m_new` are
+finite). -/
+theorem bsa_beta_p0_eq_exp (A B Mn : WithBot ℝ)
+    (hB : A ≠ ⊥ → ∃ b : ℝ, B = (b : WithBot ℝ))
+    (hMn : A ≠ ⊥ → ∃ n : ℝ, Mn = (n : WithBot ℝ)) :
+    WithBot.realMul (WithBot.realExp (WithBot.realSub B Mn))
+        (WithBot.realExp (WithBot.realSub A B))
+      = WithBot.realExp (WithBot.realSub A Mn) := by
+  cases hA : A with
+  | bot =>
+    rw [realExp_eq_some_unbotD (WithBot.realSub B Mn)]
+    simp only [WithBot.realSub_bot_left, WithBot.realExp_bot]
+    show WithBot.realMul (some _) (some (0:ℝ)) = some (0:ℝ)
+    rw [show (WithBot.realMul (some ((WithBot.realExp (WithBot.realSub B Mn)).unbotD 0))
+        (some (0:ℝ)) : WithBot ℝ) = some (((WithBot.realExp (WithBot.realSub B Mn)).unbotD 0) * 0) from rfl,
+      mul_zero]
+  | coe a =>
+    obtain ⟨b, hb⟩ := hB (by simp [hA])
+    obtain ⟨n, hn⟩ := hMn (by simp [hA])
+    subst hb; subst hn
+    simp only [WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.realMul_coe_coe,
+      WithBot.coe_inj]
+    rw [← Real.exp_add]; ring_nf
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
