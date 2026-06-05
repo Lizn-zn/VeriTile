@@ -4069,6 +4069,88 @@ theorem bsa_mij_eq_sup_maskedScore {Dk : Nat}
   exact bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c hc gpos Qg Kg scale SN gm
     qkScaled i jL (hMask jL) (hScore jL)
 
+/-- Fused-channel head dot identity: a 32-channel `gScore` over the fused
+query `q‖q2` and key `k‖k2` equals the kernel's two-D-block dot
+`((0 + dot(q,k)) + dot(q2,k2))·1.0`. This is what discharges `hScore` at exec
+assembly: the kernel computes the head score as two 16-channel `tl.dot`s
+(one per D-block), and their sum is the genuine 32-channel head dot. -/
+theorem bsa_fused_hScore
+    (qf q2f kf k2f : Fin 16 → Fin 16 → ℝ) (i jL : Fin 16) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (⟨fun _ : TileIndex [16, 16] => some (0 : ℝ)⟩ : Tile .real [16, 16])
+          (Tile.dot []
+            (⟨fun ix : TileIndex [16, 16] => (some (qf ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])
+            (⟨fun ix : TileIndex [16, 16] => (some (kf ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])))
+        (Tile.dot []
+          (⟨fun ix : TileIndex [16, 16] => (some (q2f ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])
+          (⟨fun ix : TileIndex [16, 16] => (some (k2f ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])))
+      (Tile.scalar (some (1.0 : ℝ) : WithBot ℝ))).data (i, jL, PUnit.unit)
+    = (some ((1.0 : ℝ) * Finset.univ.sum (fun d : Fin 32 =>
+        (if h : d.val < 16 then qf i ⟨d.val, h⟩ else q2f i ⟨d.val - 16, by omega⟩) *
+        (if h : d.val < 16 then kf ⟨d.val, h⟩ jL else k2f ⟨d.val - 16, by omega⟩ jL))) : WithBot ℝ) := by
+  -- each 16-channel dot cell = some of the clean real sum
+  have hdot1 : (Tile.dot []
+      (⟨fun ix : TileIndex [16, 16] => (some (qf ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])
+      (⟨fun ix : TileIndex [16, 16] => (some (kf ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])).data
+        (i, jL, PUnit.unit)
+      = (some (Finset.univ.sum (fun e : Fin 16 => qf i e * kf e jL)) : WithBot ℝ) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+          (fun k => Option.map₂ (· * ·) (some (qf i k) : WithBot ℝ) (some (kf k jL) : WithBot ℝ)))
+        = @Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+            (fun k => (some (qf i k * kf k jL) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun k _ => by rw [Option.map₂_some_some])]
+    rw [WithBot.sum_someTerm_eq_some]
+  have hdot2 : (Tile.dot []
+      (⟨fun ix : TileIndex [16, 16] => (some (q2f ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])
+      (⟨fun ix : TileIndex [16, 16] => (some (k2f ix.1 ix.2.1) : WithBot ℝ)⟩ : Tile .real [16,16])).data
+        (i, jL, PUnit.unit)
+      = (some (Finset.univ.sum (fun e : Fin 16 => q2f i e * k2f e jL)) : WithBot ℝ) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+          (fun k => Option.map₂ (· * ·) (some (q2f i k) : WithBot ℝ) (some (k2f k jL) : WithBot ℝ)))
+        = @Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+            (fun k => (some (q2f i k * k2f k jL) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun k _ => by rw [Option.map₂_some_some])]
+    rw [WithBot.sum_someTerm_eq_some]
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.scalar_data_index, NumericDType.mul, NumericDType.add, hdot1, hdot2,
+    Option.map₂_some_some]
+  refine congrArg some ?_
+  -- split Fin 32 sum into d<16 and d≥16
+  have hsplit : Finset.univ.sum (fun d : Fin 32 =>
+      (if h : d.val < 16 then qf i ⟨d.val, h⟩ else q2f i ⟨d.val - 16, by omega⟩) *
+      (if h : d.val < 16 then kf ⟨d.val, h⟩ jL else k2f ⟨d.val - 16, by omega⟩ jL))
+      = Finset.univ.sum (fun e : Fin 16 => qf i e * kf e jL)
+        + Finset.univ.sum (fun e : Fin 16 => q2f i e * k2f e jL) := by
+    rw [Fin.sum_univ_add (a := 16) (b := 16)
+      (f := fun d : Fin (16 + 16) =>
+        (if h : d.val < 16 then qf i ⟨d.val, h⟩ else q2f i ⟨d.val - 16, by omega⟩) *
+        (if h : d.val < 16 then kf ⟨d.val, h⟩ jL else k2f ⟨d.val - 16, by omega⟩ jL))]
+    refine congr_arg₂ (· + ·) ?_ ?_
+    · refine Finset.sum_congr rfl (fun e _ => ?_)
+      have hl : ((Fin.castAdd 16 e : Fin (16 + 16)).val) < 16 := by
+        simp only [Fin.coe_castAdd]; exact e.isLt
+      rw [dif_pos hl, dif_pos hl]
+      have he : (⟨(Fin.castAdd 16 e : Fin (16 + 16)).val, hl⟩ : Fin 16) = e := by
+        apply Fin.ext; simp
+      rw [he]
+    · refine Finset.sum_congr rfl (fun e _ => ?_)
+      have hnl : ¬ ((Fin.natAdd 16 e : Fin (16 + 16)).val) < 16 := by
+        simp only [Fin.coe_natAdd]; omega
+      rw [dif_neg hnl, dif_neg hnl]
+      have he : (⟨(Fin.natAdd 16 e : Fin (16 + 16)).val - 16, by omega⟩ : Fin 16) = e := by
+        apply Fin.ext; simp
+      rw [he]
+  rw [hsplit]
+  show ((0 : ℝ) + Finset.univ.sum (fun e : Fin 16 => qf i e * kf e jL)
+      + Finset.univ.sum (fun e : Fin 16 => q2f i e * k2f e jL)) * 1.0 = _
+  rw [zero_add, mul_comm]
+
 /-! ## `bsa_attn_step`: loop-body advances the invariant by one CSR block
 
 Given `bsaInvariant … c`, the lowered `bsaLoopBody` (executed via the banked
