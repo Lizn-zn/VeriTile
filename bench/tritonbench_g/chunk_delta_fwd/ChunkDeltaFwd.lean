@@ -1907,4 +1907,127 @@ theorem cdfAdvance_active
     rw [if_pos ⟨hc, e'.isLt⟩]
   rw [hdsum]
 
+set_option maxHeartbeats 4000000 in
+/-- **State-advance linchpin (general `fbh`).** The `cdfCumsumTile` cell at active
+lane `(e,p)` built from any `fbh` that agrees with the chunk-start state on column
+`p` (all `e'`) equals the closed-form advance increment. -/
+theorem cdfAdvance_active_of
+    (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (fbh : Nat → Nat → ℝ)
+    (i_t : Nat) (hit : i_t < 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64)
+    (hcol : ∀ e' : Nat, e' < 64 →
+      fbh e' p = cdfState s k v d initial_state USE_INITIAL_STATE i_t e' p) :
+    (cdfCumsumTile s k v d fbh i_t).data (⟨e, by omega⟩, ⟨p, by omega⟩, PUnit.unit)
+      = some (cdfState s k v d initial_state USE_INITIAL_STATE (i_t + 1) e p
+          - cdfState s k v d initial_state USE_INITIAL_STATE i_t e p) := by
+  simp only [cdfCumsumTile, cdfState, stateValue]
+  refine congrArg some ?_
+  rw [add_sub_cancel_left]
+  refine Finset.sum_congr rfl (fun c _ => ?_)
+  have hc : i_t * 32 + c.val < 128 := by have := c.isLt; omega
+  rw [if_pos ⟨he, hc⟩]
+  simp only [cdfBvNewCell]
+  rw [if_pos ⟨hc, hp⟩]
+  have hdsum :
+      (Finset.univ.sum (fun e' : Fin 64 =>
+        (if (i_t * 32 + c.val < 128 ∧ e'.val < 64) then
+            dElem s d 8192 128 1 32 i_t c.val e'.val else 0) * fbh e'.val p))
+      = Finset.univ.sum (fun e' : Fin 64 =>
+          dElem s d 8192 128 1 32 i_t c.val e'.val
+            * stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+                USE_INITIAL_STATE i_t e'.val p) := by
+    refine Finset.sum_congr rfl (fun e' _ => ?_)
+    rw [if_pos ⟨hc, e'.isLt⟩, hcol e'.val e'.isLt]; rfl
+  rw [hdsum]
+
+/-! ### Outer-loop carry tile
+
+The kernel's `b_h` register holds, after `c` chunks, a *concrete* `[64,64]` tile
+`cdfCarryTile c` — the actual fold the kernel computes, defined recursively as the
+seed plus the `cdfCumsumTile` increments. On the active region it agrees with the
+genuine `stateValue` (`cdfCarry_active`), but off the active region it is whatever
+the masked update produced (the kernel never reads those lanes). This separation
+is the linchpin: the advance is exact *by construction*, while the genuine
+recurrence match holds only on active lanes (where the stores read). -/
+
+/-- The seed cell `(e,p)` of `b_h` after the prologue: `initElem` (when
+`USE_INITIAL_STATE`) else `0`. Total over all lanes. -/
+noncomputable def cdfSeedCell (s : BlockState) (initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) (e p : Nat) : ℝ :=
+  if USE_INITIAL_STATE then initElem s initial_state 64 64 64 e p else 0
+
+/-- The concrete carry cell `(e,p)` after `c` chunks: the actual fold value
+`b_h` holds (seed + Σ of `cdfCumsumTile` increments). Total over all lanes. -/
+noncomputable def cdfCarryCell (s : BlockState) (k v d initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) : Nat → Nat → Nat → ℝ
+  | 0, e, p => cdfSeedCell s initial_state USE_INITIAL_STATE e p
+  | c + 1, e, p =>
+      cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e p
+        + WithBot.unbotD 0
+            ((cdfCumsumTile s k v d
+                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e' p') c).data
+              (⟨e % 64, Nat.mod_lt _ (by norm_num)⟩, ⟨p % 64, Nat.mod_lt _ (by norm_num)⟩, PUnit.unit))
+
+/-- The concrete `[64,64]` carry tile after `c` chunks (data `(e,p) ↦ cdfCarryCell`). -/
+noncomputable def cdfCarryTile (s : BlockState) (k v d initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) (c : Nat) : Tile .real [64, 64] :=
+  ⟨fun idx => some (cdfCarryCell s k v d initial_state USE_INITIAL_STATE c idx.1.val idx.2.1.val)⟩
+
+theorem cdfCarryTile_data (s : BlockState) (k v d initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) (c : Nat) (e p : Fin 64) :
+    (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c).data (e, p, PUnit.unit)
+      = some (cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e.val p.val) := rfl
+
+set_option maxHeartbeats 4000000 in
+/-- **Advance eval.** `b_h + b_h_cumsum`, with `b_h = cdfCarryTile c` and
+`b_h_cumsum = cdfCumsumTile` (built from the `cdfCarryCell c` fn), evaluates to
+`cdfCarryTile (c+1)`. -/
+theorem cdfAdvance_eval (s sin : BlockState) (k v d initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) (c : Nat)
+    (hbh : sin.regs .real [64, 64] "b_h"
+        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c))
+    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
+        = some (cdfCumsumTile s k v d
+            (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e' p') c)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "b_h")
+        (Op.ref .real [64, 64] "b_h_cumsum")) sin
+      = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE (c + 1)) := by
+  rw [evalOp_add]
+  simp only [evalOp_ref, hbh, hcs, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx; obtain ⟨e, p, u⟩ := idx
+  simp only [Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
+    cdfCarryTile, NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map,
+    cdfCarryCell, cdfCumsumTile, WithBot.unbotD_some]
+  rw [Nat.mod_eq_of_lt e.isLt, Nat.mod_eq_of_lt p.isLt]
+
+/-- **Carry-active match.** On the active region (`e < 64`, `s.pids 1 * 64 + p < 64`)
+and for `c ≤ 4`, the concrete carry cell `cdfCarryCell c` agrees with the genuine
+`stateValue c`. Proven by induction on `c` via `cdfAdvance_active_of`. -/
+theorem cdfCarry_active
+    (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (c : Nat) (hc : c ≤ 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64) :
+    cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e p
+      = cdfState s k v d initial_state USE_INITIAL_STATE c e p := by
+  induction c generalizing e with
+  | zero =>
+      simp only [cdfCarryCell, cdfSeedCell, cdfState, stateValue, initElem]
+  | succ n ih =>
+      have hn4 : n < 4 := by omega
+      have hnle : n ≤ 4 := by omega
+      simp only [cdfCarryCell]
+      have hcell := cdfAdvance_active_of s k v d initial_state USE_INITIAL_STATE
+        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE n e' p')
+        n hn4 e p he hp
+        (fun e' he' => ih hnle e' he')
+      rw [show (⟨e % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨e, by omega⟩ : Fin 64) from
+            by simp [Nat.mod_eq_of_lt he],
+          show (⟨p % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨p, by omega⟩ : Fin 64) from
+            by simp [Nat.mod_eq_of_lt (by omega : p < 64)]]
+      rw [hcell, WithBot.unbotD_some]
+      rw [ih (by omega) e he]
+      -- cdfState n + (cdfState (n+1) - cdfState n) = cdfState (n+1)
+      ring
+
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
