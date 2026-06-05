@@ -1788,6 +1788,39 @@ theorem bsa_colidx_gather_eval (s : BlockState)
   simp [Tile.bop_data, Tile.scalar_data, Tile.scalar_data_index,
     Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`start_l = tl.load(layout_ptr).to(tl.int32)` statement eval** (CSR loop
+bound, pre-loop L_start): the data-dependent lower loop bound, an unmasked `.nat`
+ptr-load of the precomputed `layout_ptr` scalar (= CSR row-pointer base). With
+`layout_ptr` holding the pointer `(lpReg, lpOff)`, `start_l` reads
+`layout_ptr_region[lpOff]`. The `forRangeDyn`'s `start` operand is `ref "start_l"`. -/
+theorem bsa_startl_eval (s : BlockState) (lpReg : RegionName) (lpOff : Nat)
+    (hlp : s.regs .ptr [] "layout_ptr" = some (Tile.scalar (lpReg, lpOff))) :
+    evalOp (Op.load .nat (MemAccess.ptr (Op.ref .ptr [] "layout_ptr")) MaskOpt.none) s
+      = some (Tile.scalar (s.readMemValue .nat lpReg lpOff)) := by
+  simp only [evalOp, evalOp_ref, hlp, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.scalar, Tile.scalar_data_index, if_true, if_pos]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`end_l = tl.load(layout_ptr + 1).to(tl.int32)` statement eval** (CSR loop
+bound, pre-loop L_end): the data-dependent upper loop bound, an unmasked `.nat`
+ptr-load of `layout_ptr + 1` (the next CSR row-pointer). With `layout_ptr` holding
+`(lpReg, lpOff)`, `end_l` reads `layout_ptr_region[lpOff + 1]`. The `forRangeDyn`'s
+`stop` operand is `ref "end_l"`. -/
+theorem bsa_endl_eval (s : BlockState) (lpReg : RegionName) (lpOff : Nat)
+    (hlp : s.regs .ptr [] "layout_ptr" = some (Tile.scalar (lpReg, lpOff))) :
+    evalOp (Op.load .nat
+        (MemAccess.ptr (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "layout_ptr") (Op.constNat 1)))
+        MaskOpt.none) s
+      = some (Tile.scalar (s.readMemValue .nat lpReg (lpOff + 1))) := by
+  simp only [evalOp, evalOp_ref, hlp, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.ptrAdd_data, Tile.scalar, Tile.scalar_data_index, Broadcast.leftIndex,
+    Broadcast.rightIndex, if_true, if_pos]
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
