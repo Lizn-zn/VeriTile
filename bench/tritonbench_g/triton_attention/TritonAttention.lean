@@ -2972,6 +2972,149 @@ theorem ta_advance_row_eval (s : BlockState) (region : RegionName)
   ext i
   simp [BlockPtr.advance_2d_offsets]
 
+/-- The 13 lowered preLoop statements of the Python-shape triton-attention
+forward body. -/
+def taPreLoop (Q K V Out : RegionName) (sc : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [128] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
+    Stmt.assign .nat [128] "offs_n" (Op.arange 128),
+    Stmt.assign .real [128] "m_prev"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [128] "l_prev" (Op.full [128] (Op.const 0)),
+    Stmt.assign .real [128, 64] "acc" (Op.full [128, 64] (Op.const 0)),
+    Stmt.assign .nat [] "stride_qh_2d"
+      (Op.floorDiv .nat Broadcast.nil
+        (Op.floorDiv .nat Broadcast.nil (Op.constNat 8192) (Op.constNat 64)) (Op.constNat 1)),
+    Stmt.assign .blockPtr [128, 64] "q_tile_ptr"
+      (Op.makeBlockPtrDynOffsets Q (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+        [Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)), Op.constNat 0]),
+    Stmt.assign .blockPtr [128, 64] "k_tile_ptr"
+      (Op.makeBlockPtrDynOffsets K (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+          Op.constNat 0]),
+    Stmt.assign .blockPtr [128, 64] "v_tile_ptr"
+      (Op.makeBlockPtrDynOffsets V (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+          Op.constNat 0]),
+    Stmt.assign .blockPtr [128, 64] "out_tile_ptr"
+      (Op.makeBlockPtrDynOffsets Out (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+        [Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)), Op.constNat 0]),
+    Stmt.assign .real [128, 64] "q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") []) MaskOpt.none) ]
+
+/-- The 19 lowered loop-body statements of the Python-shape triton-attention
+forward `forRangeDyn` body (STAGE=3 diagonal causal block). -/
+def taLoopBody (sc : ℝ) : List Stmt :=
+  [ Stmt.assign .real [128, 64] "k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [128, 128] "qk" (Op.full [128, 128] (Op.const 0)),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 128] "qk")
+        (Op.dot (batch := []) (Op.ref .real [128, 64] "q")
+          (Op.transpose (batch := []) (Op.ref .real [128, 64] "k")))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 128] "qk") (Op.const sc)),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n"))))
+        (Op.ref .real [128, 128] "qk") (Op.broadcast Op.negInf [128, 128])),
+    Stmt.assign .real [128] "m_curr"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 128].length) Bool.false (Op.ref .real [128, 128] "qk"))
+          (Op.ref .real [128] "m_prev"))
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 128].length) Bool.false (Op.ref .real [128, 128] "qk"))
+        (Op.ref .real [128] "m_prev")),
+    Stmt.assign .real [128] "l_prev"
+      (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "l_prev")
+        (Op.exp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [128] "m_prev") (Op.ref .real [128] "m_curr")))),
+    Stmt.assign .real [128, 128] "p"
+      (Op.exp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 128] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_curr")))),
+    Stmt.assign .real [128] "l_curr"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 128].length) Bool.false (Op.ref .real [128, 128] "p"))
+        (Op.ref .real [128] "l_prev")),
+    Stmt.assign .real [128] "l_rcp"
+      (Op.div .real Broadcast.scalarL (Op.const (1.0 : ℝ)) (Op.ref .real [128] "l_curr")),
+    Stmt.assign .real [128, 128] "p"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 128] "p") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "l_rcp"))),
+    Stmt.assign .real [128, 64] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "acc")
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.mul .real (Broadcast.consSame Broadcast.nil)
+            (Op.ref .real [128] "l_prev") (Op.ref .real [128] "l_rcp")))),
+    Stmt.assign .fp16 [128, 128] "p"
+      (Op.castFloat .real .fp16 (Op.ref .real [128, 128] "p")),
+    Stmt.assign .real [128, 64] "v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [128, 64] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 64] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [128, 128] "p"))
+          (Op.ref .real [128, 64] "v"))),
+    Stmt.assign .real [128] "l_prev" (Op.ref .real [128] "l_curr"),
+    Stmt.assign .real [128] "m_prev" (Op.ref .real [128] "m_curr"),
+    Stmt.assign .blockPtr [128, 64] "k_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [128, 0]),
+    Stmt.assign .blockPtr [128, 64] "v_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [128, 0]) ]
+
+/-- The 8 lowered postLoop statements of the Python-shape triton-attention
+forward body: recompute `start_m`/`offs_m`, the L/M row pointers, the dual L/M
+stores, the final `acc` fp16 cast, and the boundary-checked `Out` store. -/
+def taPostLoop (L M Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [128] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
+    Stmt.assign .ptr [128] "l_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 128))
+          (Op.ref .nat [128] "offs_m"))),
+    Stmt.assign .ptr [128] "m_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 128))
+          (Op.ref .nat [128] "offs_m"))),
+    Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "l_ptrs"))
+      (Op.ref .real [128] "l_prev") MaskOpt.none,
+    Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "m_ptrs"))
+      (Op.ref .real [128] "m_prev") MaskOpt.none,
+    Stmt.assign .fp16 [128, 64] "acc"
+      (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "acc")),
+    Stmt.store .fp16 [128, 64] (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "out_tile_ptr") [0, 1])
+      (Op.ref .fp16 [128, 64] "acc") MaskOpt.none ]
+
+set_option maxRecDepth 8000 in
+/-- The lowered forward body is exactly `taPreLoop ++ forRangeDyn :: taPostLoop`. -/
+theorem ta_body_split (Q K V L M Out : RegionName) (sc : ℝ) :
+    (triton_attention_fwd_kernel Q K V L M Out sc
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      2 4 128 1024 128 64 128).toAlgKernel.body
+      = taPreLoop Q K V Out sc
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+              (Op.constNat 128) (taLoopBody sc)
+            :: taPostLoop L M Out) := by
+  rfl
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
