@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
 
 /-!
 # `attention_fwd_triton3` — strict per-kernel correctness
@@ -1300,5 +1301,128 @@ theorem attention_fwd_triton3_python_test_shape_complete_summary
   · exact attention_fwd_triton3_python_end_output_formula_summary Acc LPre Out s
   · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
       MPre LPre M off_hz s
+
+/-! ## Genuine closed-form attention spec for cases 1/2/3
+
+The `producedAttentionFwdTriton3CaseN{Out,M}Value` definitions above are the
+single-program *surface* values (`exec … |> readMem`). The genuine, non-self-
+referential closed form for the `END=True` normalized output `acc / l_i` is the
+predicate-masked base-2 per-key-scale attention `attentionRealBase2PerKeyScalePred`
+(STAGE 1, `VeriTile/Triton/Math/Attention.lean`), instantiated at the kernel's
+block-ptr tile layout and per-case sliding-window `keep` predicate:
+
+* case 1 (`SLIDING_WINDOW`, non-complement) → `slidingWindowKeep qStart 0 64`,
+* case 2 (`COMPLEMENT_SLIDING_WINDOW`)       → `complementSlidingWindowKeep qStart 0 64`,
+* case 3 (no window)                          → `noWindowKeep` (= unmasked softmax).
+
+These definitions and their streaming bridges are sorry-free. Linking the
+kernel's `producedAttentionFwdTriton3CaseN OutValue` to these closed forms is the
+remaining exec-side realization (per-statement block-ptr/where/exp2 recipes +
+`attnInvariant`/`preLoop`/`attn_step`/`postLoop` over `forRangeDyn_inv`, as in
+`VeriTile/Examples/AttentionForwardClosedForm.lean`). -/
+
+open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
+  slidingWindowKeep complementSlidingWindowKeep noWindowKeep pow2)
+
+/-- Base address of the `(off_z, off_h)` plane for the Python test shape
+(strides `qz = 32768`, `qh = 8192`, `H = 4`). Q and Out share this plane; K and V
+share it too (`off_hkv = off_h` since `H_KV = H = 4`). -/
+def baseOffset3 (s : BlockState) : Nat :=
+  s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192
+
+/-- Query tile at the block-ptr layout: row `i` = global query `start_m·64 + i`,
+head lane `e`, contiguous head dim (`stride_qm = 64`, `stride_qk = 1`). -/
+noncomputable def qTile3 (s : BlockState) (Q : RegionName) :
+    TileIndex [64, 64] → ℝ :=
+  fun (i, e, _) => s.readMem Q (baseOffset3 s + (s.pids 0 * 64 + i.val) * 64 + e.val)
+
+/-- Key tile at the block-ptr layout: column `j` (global key), head lane `e`. -/
+noncomputable def kTile3 (s : BlockState) (K : RegionName) :
+    TileIndex [128, 64] → ℝ :=
+  fun (j, e, _) => s.readMem K (baseOffset3 s + j.val * 64 + e.val)
+
+/-- Value tile at the block-ptr layout: row `j` (global key), head lane `d`. -/
+noncomputable def vTile3 (s : BlockState) (V : RegionName) :
+    TileIndex [128, 64] → ℝ :=
+  fun (j, d, _) => s.readMem V (baseOffset3 s + j.val * 64 + d.val)
+
+/-- The kernel's scalar score scale `qk_scale = sm_scale · log2e = (1/8)·log2e`,
+applied uniformly to every key. The `exp2(qk·qk_scale)` softmax weight is exactly
+`pow2 (keyScale3 · raw)`. -/
+noncomputable def keyScale3 : Fin 128 → ℝ :=
+  fun _ => (1 / 8 : ℝ) * 1.4426950408889634
+
+/-- Global query row for output tile-row `i` in this program. -/
+def qStart3 (s : BlockState) : Nat := s.pids 0 * 64
+
+/-- **Genuine closed form, case 1** (sliding window, non-complement): the
+normalized `END` output is predicate-masked base-2 attention with the
+`slidingWindowKeep qStart 0 64` mask. -/
+noncomputable def attentionFwdTriton3Case1OutSpec
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+    keyScale3 (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) idx
+
+/-- **Genuine closed form, case 2** (complement sliding window). -/
+noncomputable def attentionFwdTriton3Case2OutSpec
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+    keyScale3 (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) idx
+
+/-- **Genuine closed form, case 3** (no sliding window) — plain base-2 softmax. -/
+noncomputable def attentionFwdTriton3Case3OutSpec
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+    keyScale3 (fun i j => noWindowKeep i j) idx
+
+/-- Streaming bridge, case 1: the closed form equals the `osStep` online-softmax
+fold over the masked key list — the form the exec loop realizes. -/
+theorem attentionFwdTriton3Case1OutSpec_eq_streaming
+    (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
+    attentionFwdTriton3Case1OutSpec s Q K V (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+            keyScale3 (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) i d).foldl
+              osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case1OutSpec] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+      (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) i d
+
+/-- Streaming bridge, case 2. -/
+theorem attentionFwdTriton3Case2OutSpec_eq_streaming
+    (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
+    attentionFwdTriton3Case2OutSpec s Q K V (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+            keyScale3 (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) i d).foldl
+              osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case2OutSpec] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+      (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) i d
+
+/-- Streaming bridge, case 3 — also equals the plain (unmasked) base-2 softmax. -/
+theorem attentionFwdTriton3Case3OutSpec_eq_streaming
+    (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
+    attentionFwdTriton3Case3OutSpec s Q K V (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
+            keyScale3 (fun i j => noWindowKeep i j) i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case3OutSpec] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+      (fun i j => noWindowKeep i j) i d
+
+/-- Case 3's masked closed form is the plain unmasked base-2 per-key-scale
+softmax (`attentionRealBase2PerKeyScale`). -/
+theorem attentionFwdTriton3Case3OutSpec_eq_unmasked
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) :
+    attentionFwdTriton3Case3OutSpec s Q K V idx
+      = VeriTile.Triton.attentionRealBase2PerKeyScale
+          (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 idx := by
+  simpa [attentionFwdTriton3Case3OutSpec] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_noWindow_eq
+      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 idx
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
