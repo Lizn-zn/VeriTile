@@ -223,6 +223,30 @@ theorem addMulMul_eval (s : BlockState) (nameA nameB : RegName) (valA cA valB cB
   simp only [Option.bind_eq_bind, Option.bind_some]
   rfl
 
+/-- Scalar nested mul `(name * cB) * cC` evaluates to `scalar (val*cB*cC)`. -/
+theorem mulMulConst_eval (s : BlockState) (name : RegName) (val cB cC : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat cB)) (Op.constNat cC)) s
+      = some (Tile.scalar (val * cB * cC)) := by
+  rw [evalOp_mul, mulConst_eval s name val cB hr, evalOp_constNat]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Offset op `nameA * cA + (nameB * cB) * cC` (the `h`/`final` block base) evaluates
+to `scalar (valA*cA + valB*cB*cC)`. -/
+theorem addMulMulMul_eval (s : BlockState) (nameA nameB : RegName) (valA cA valB cB cC : Nat)
+    (hA : s.regs .nat [] nameA = some (Tile.scalar valA))
+    (hB : s.regs .nat [] nameB = some (Tile.scalar valB)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] nameA) (Op.constNat cA))
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] nameB) (Op.constNat cB)) (Op.constNat cC))) s
+      = some (Tile.scalar (valA * cA + valB * cB * cC)) := by
+  rw [evalOp_add, mulConst_eval s nameA valA cA hA, mulMulConst_eval s nameB valB cB cC hB]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  rfl
+
 /-- **Dynamic-range carry-invariant driver.** When the start/stop/step ops of a
 `forRangeDyn` evaluate to fixed `Nat`s `start`/`stop`/`step` (`step ≠ 0`), an
 entry invariant `P start s_init` together with a single-iteration step obligation
@@ -1351,6 +1375,80 @@ theorem chunkDeltaInnerBody_step
   · -- v_new other offset
     intro off hoff; simp only [BlockState.setReg_readMem]
     rw [hoff9 off hoff]; simp [BlockState.setReg_readMem]
+
+/-- The explicit post-store state of the `h[i_t]` block-ptr store of a `[64,64]`
+tile `bhT` (cell fn `fbh`) over input state `sin`, value built from `s`. -/
+noncomputable def cdfHStoreState (s sin : BlockState) (h : RegionName)
+    (i_t : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [64, 64]).foldl
+    (fun acc i => if (s.pids 0 * 64 + i.1.val < 64 ∧ s.pids 1 * 64 + i.2.1.val < 64)
+        then acc.writeMem h (hOffset s i_t 16384 64 64 64 64 64 i)
+          (fbh i.1.val i.2.1.val) else acc) sin
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **`h[i_t]` block-ptr store step (eq).** Stepping the masked block-ptr store of
+the carry tile `bhT` (cell fn `fbh`) through `p_h` yields `cdfHStoreState`. -/
+theorem cdfStore_h_step_eq (s sin : BlockState) (h : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+    (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
+    (hph : sin.regs .blockPtr [64, 64] "p_h" = some
+      ⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
+        [s.pids 0 * 64, s.pids 1 * 64]⟩) :
+    stepStmt (Stmt.store .real [64, 64]
+        (.blockPtr (Op.ref .blockPtr [64, 64] "p_h") [0, 1])
+        (Op.ref .real [64, 64] "b_h") .none) sin
+      = some (cdfHStoreState s sin h i_t fbh) := by
+  unfold stepStmt cdfHStoreState
+  simp only [evalOp_ref, hbh, hph, Option.bind, Option.map]
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [64, 64])) ?_)
+  funext acc i
+  obtain ⟨e, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+    Bool.true_and, hOffset, kIndex, vIndex]
+  by_cases hb : s.pids 0 * 64 + e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+  · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real, hbhf, Nat.mul_one]
+    rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false, if_neg hb]
+
+set_option maxHeartbeats 4000000 in
+/-- **`h[i_t]` store readback properties.** `cdfHStoreState` writes `fbh` at every
+active lane and leaves all other addresses unchanged. -/
+theorem cdfStore_h_step_props (s sin : BlockState) (h : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [64, 64] => hOffset s i_t 16384 64 64 64 64 64 idx)) :
+    (cdfHStoreState s sin h i_t fbh).pids = sin.pids
+      ∧ (cdfHStoreState s sin h i_t fbh).regs = sin.regs
+      ∧ (∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+          (cdfHStoreState s sin h i_t fbh).readMem h (hOffset s i_t 16384 64 64 64 64 64 idx)
+            = fbh idx.1.val idx.2.1.val)
+      ∧ (∀ rg off, rg ≠ h →
+          (cdfHStoreState s sin h i_t fbh).readMem rg off = sin.readMem rg off)
+      ∧ (∀ off, (∀ idx : TileIndex [64, 64], off ≠ hOffset s i_t 16384 64 64 64 64 64 idx) →
+          (cdfHStoreState s sin h i_t fbh).readMem h off = sin.readMem h off) := by
+  classical
+  unfold cdfHStoreState
+  set offFn : TileIndex [64, 64] → Nat := fun idx => hOffset s i_t 16384 64 64 64 64 64 idx with hoffFn
+  set Pmask : TileIndex [64, 64] → Prop :=
+    fun idx => s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64 with hPmask
+  set valFn : TileIndex [64, 64] → ℝ := fun idx => fbh idx.1.val idx.2.1.val with hvalFn
+  have hinj : Function.Injective offFn := hInj
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+  · funext dtype shape name; rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro idx hidx
+    have h := BlockState.scatter_readback_prop_masked_nd (region := h) sin offFn valFn Pmask hinj idx
+    simp only [hoffFn] at h ⊢
+    rw [h, if_pos (show Pmask idx from by
+      obtain ⟨ka, va⟩ := hidx; exact ⟨by simpa [kIndex] using ka, by simpa [vIndex] using va⟩)]
+  · intro rg off hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      h offFn valFn Pmask _ sin rg off hrg
+  · intro off hoff
+    exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+      h offFn valFn Pmask _ sin off (fun i _ _ => hoff i)
 
 /-! ## Per-Python-shape offset injectivity
 
