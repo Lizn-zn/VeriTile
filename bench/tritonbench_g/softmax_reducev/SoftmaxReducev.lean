@@ -1517,4 +1517,47 @@ theorem sr_acc_eval (s : BlockState) (α : WithBot ℝ) (accFn pFn : Fin 64 → 
     Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
   rfl
 
+/-! ### Loop invariant and exec-side stepping
+
+`srInvariant … c s` states that, after streaming `c` `BLOCK_N`-blocks, the live
+registers `e_max`/`e_sum`/`acc` hold the ⊥-seeded online-softmax state
+`srRunningMax`/`srStateBot` over the valid tokens `Fin (srSeqLen s0 BSeqLen)`, with
+the per-token data `srQk`/`srV`, and every prelude-seeded register is preserved. -/
+
+/-- Per-token logit over the valid tokens `Fin (srSeqLen s0 BSeqLen)`. -/
+noncomputable def srQkF (s0 : BlockState) (Logics BStartLoc BSeqLen : RegionName) :
+    Fin (srSeqLen s0 BSeqLen) → ℝ := fun n => srQk s0 Logics BStartLoc n.val
+
+/-- Per-token gathered V-row over the valid tokens and `BLOCK_DMODEL = 64`. -/
+noncomputable def srVF (s0 : BlockState) (V : RegionName) (BLoc : Region .int)
+    (BSeqLen : RegionName) : Fin (srSeqLen s0 BSeqLen) → Fin 64 → ℝ :=
+  fun n d => srV s0 V BLoc BSeqLen n.val d.val
+
+/-- The loop invariant after `c` `BLOCK_N`-blocks. -/
+noncomputable def srInvariant
+    (Logics V : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : RegionName)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (srSeqLen s0 BSeqLen))
+  ∧ s.regs .nat [] "cur_batch_start_loc" = some (Tile.scalar (srStartLoc s0 BStartLoc))
+  ∧ s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+  ∧ s.regs .nat [64] "offs_d" = some (Tile.vec (fun e : Fin 64 => e.val))
+  ∧ s.regs .nat [] "off_b_loc" = some (Tile.scalar (srOffBLoc s0 BSeqLen))
+  ∧ s.regs .ptr [1, 64] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, 64] => (V, s0.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64])
+  ∧ s.regs .real [] "e_max" =
+      some (Tile.scalar (srRunningMax (srQkF s0 Logics BStartLoc BSeqLen)
+        (srVF s0 V BLoc BSeqLen) (c * 64) ⟨0, by norm_num⟩))
+  ∧ s.regs .real [] "e_sum" =
+      some (Tile.scalar ((srStateBot (srQkF s0 Logics BStartLoc BSeqLen)
+        (srVF s0 V BLoc BSeqLen) (c * 64) ⟨0, by norm_num⟩).2.1 : WithBot ℝ))
+  ∧ s.regs .real [64] "acc" =
+      some (⟨fun idx : TileIndex [64] =>
+        ((srStateBot (srQkF s0 Logics BStartLoc BSeqLen) (srVF s0 V BLoc BSeqLen)
+          (c * 64) idx.1).2.2 : WithBot ℝ)⟩ : Tile .real [64])
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
