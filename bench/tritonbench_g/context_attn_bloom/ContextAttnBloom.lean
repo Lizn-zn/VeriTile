@@ -1083,6 +1083,49 @@ theorem gStateBot_succ_explicit (S BN c : Nat) (g : Fin S → ℝ × ℝ) (hwin 
       from gBlock_map_sum S BN c g hwin (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)] at hstep
   exact hstep.symm
 
+/-! ### Block-causal-guarded normalized accumulator (faithfulness layer)
+
+The bloom kernel normalizes `acc` *in loop* (`acc_scale = (lᵢ/lᵢⁿᵉʷ)·α`, `p_scale
+= β/lᵢⁿᵉʷ`) **and** guards the rescale: `acc_scale = tl.where(offs_m + plen ≥
+start_n, (lᵢ/lᵢⁿᵉʷ)·α, 1.0)`. For row `i`, a block `c` whose start `c·BN >
+qpos = gᵢ+plen` is entirely causally-future (all keys get the `-1e8` sentinel), so
+the kernel applies `acc_scale = 1` — it does **not** rescale `acc`, dropping the
+sentinel residue from the normalization. `gAccN` is the faithful per-row
+normalized accumulator: it tracks exactly the kernel's `acc` register, applying the
+same block-level guard, so guard-fail blocks add only the (negligible) dot residue
+without the spurious denominator rescale. The running `(max, l)` (`= gStateBot`)
+are unaffected by the guard — the kernel's `m_i_new`/`l_i_new` carry no guard. -/
+
+/-- **Faithful normalized accumulator** after `c` blocks for a row with causal
+limit `qpos`. Mirrors the kernel's `acc` register: `acc_new = acc·acc_scale +
+dot(p,v)`, with `acc_scale = (lᵢ/lᵢⁿᵉʷ)·α` on guard-pass blocks (`c·BN ≤ qpos`)
+and `1` on guard-fail blocks, and `dot(p,v) = (numerⁿᵉʷ − numer·α)/lᵢⁿᵉʷ`. -/
+noncomputable def gAccN (S BN qpos : Nat) (g : Fin S → ℝ × ℝ) : Nat → ℝ
+  | 0 => 0
+  | c + 1 =>
+    let st := gStateBot S (c * BN) g
+    let stn := gStateBot S ((c + 1) * BN) g
+    let α := (WithBot.realExp2 (WithBot.realSub st.1 stn.1)).unbotD 0
+    let accScale := if c * BN ≤ qpos then (st.2.1 / stn.2.1) * α else 1
+    gAccN S BN qpos g c * accScale + (stn.2.2 - st.2.2 * α) / stn.2.1
+
+@[simp] theorem gAccN_zero (S BN qpos : Nat) (g : Fin S → ℝ × ℝ) :
+    gAccN S BN qpos g 0 = 0 := rfl
+
+theorem gAccN_succ (S BN qpos c : Nat) (g : Fin S → ℝ × ℝ) :
+    gAccN S BN qpos g (c + 1)
+      = gAccN S BN qpos g c
+          * (if c * BN ≤ qpos then
+              ((gStateBot S (c * BN) g).2.1 / (gStateBot S ((c + 1) * BN) g).2.1)
+                * (WithBot.realExp2 (WithBot.realSub (gStateBot S (c * BN) g).1
+                    (gStateBot S ((c + 1) * BN) g).1)).unbotD 0
+            else 1)
+        + ((gStateBot S ((c + 1) * BN) g).2.2
+            - (gStateBot S (c * BN) g).2.2
+                * (WithBot.realExp2 (WithBot.realSub (gStateBot S (c * BN) g).1
+                    (gStateBot S ((c + 1) * BN) g).1)).unbotD 0)
+          / (gStateBot S ((c + 1) * BN) g).2.1 := rfl
+
 /-! ### Tile-cell bridges (shape-generic) -/
 
 theorem ctxg_reduceMaxDrop_data_row {M N : Nat} (hN : 0 < N) (qk : Tile .real [M, N])
@@ -2162,15 +2205,19 @@ noncomputable def bloomKVM
     else (0.0 - 10e7 : ℝ)) / Real.log 2,
     bloomVTileM s V Req_to_tokens B_req_idx stride_req_b stride_req_s S bel (j, d, PUnit.unit))
 
-/-- **The faithful kernel value** at output lane `(i,d)`: `acc/l` of the ⊥-seeded
-online-softmax fold over `bloomKVM` for the full streamed window `[0, S)`. -/
+/-- **The faithful kernel value** at output lane `(i,d)`: the block-causal-guarded
+normalized accumulator `gAccN` of the ⊥-seeded online-softmax fold over `bloomKVM`
+for the full streamed window `[0, S)` (`S / BLOCK_N` blocks of `BLOCK_N = 128`),
+with this row's causal limit `qpos = gᵢ + plen`. Guard-fail blocks (`c·128 >
+qpos`) contribute via `acc_scale = 1`, exactly matching the kernel's `tl.where`. -/
 noncomputable def contextAttnBloomExactFoldM
     (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens
       B_req_idx : RegionName) (sm_scale : ℝ)
     (stride_req_b stride_req_s BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
-  let st := gStateBot S S (bloomKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+  gAccN S 128 (s.pids 2 * BLOCK_M + idx.1.val + promptLen s B_Prompt_Cache_Len)
+    (bloomKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
       Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S bel idx.1 idx.2.1)
-  st.2.2 / st.2.1
+    (S / 128)
 
 /-! ### Bloom preLoop + streaming-loop invariant (Milestone 2) -/
 
@@ -2293,7 +2340,7 @@ noncomputable def bloomInvariant
   (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
       some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩) ∧
   (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
-      some ((gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2 / (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.1)⟩) ∧
+      some (gAccN S 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) c)⟩) ∧
   (c * 128 ≤ S)
 
 /-- `q`/store-mask eval: `(offs_m[:,None] < sl) & (offs_d[None,:] < 96)`, shape
@@ -2612,9 +2659,9 @@ theorem bloomPostLoop_eval
   simp only [bloomInvariant] at hinv
   obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
       hq, hmi, hli, hacc, hcle⟩ := hinv
-  -- the acc tile already holds the ratio numer/denom
+  -- the acc tile already holds the guarded normalized accumulator gAccN
   set accTile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
-      some ((gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.2 / (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.1)⟩
+      some (gAccN (c * 128) 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) c)⟩
     with haccTile
   have haccref0 : s.regs .real [128, 128] "acc" = some accTile := by
     rw [hacc]
@@ -2725,13 +2772,12 @@ theorem bloomPostLoop_eval
   · rw [if_pos hac, if_pos (hactive_iff.mpr hac)]
     -- accTile cell = contextAttnBloomExactFoldM
     simp only [haccTile, contextAttnBloomExactFoldM, WithBot.unbotD_coe]
-    show (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.2
-        / (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.1 = _
     have hkvm : g idx.1 idx.2.1
         = bloomKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
             Req_to_tokens B_req_idx sm_scale_bloom 7500 1 128 (c * 128) bel idx.1 idx.2.1 := by
       rw [hgd]; rfl
-    rw [hkvm]
+    rw [hkvm, Nat.mul_div_cancel c (show 0 < 128 by norm_num), hplend]
+    rfl
   · rw [if_neg hac, if_neg (fun hcon => hac (hactive_iff.mp hcon))]
     show (s2.readMem Out (offoTile.data idx)) = _
     have hreadeq : s2.readMem Out (offoTile.data idx) = s.readMem Out (offoTile.data idx) := by
