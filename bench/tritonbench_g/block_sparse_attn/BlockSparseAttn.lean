@@ -552,11 +552,12 @@ noncomputable def bsaLPartial {M D : Nat} (Bk : Nat)
 
 /-- Running causal unnormalized output accumulator over the gathered value
 stream `Vg`. The two D-blocks differ only by which `Vg` is supplied. -/
-noncomputable def bsaOPartial {M D : Nat} (Bk : Nat)
+noncomputable def bsaOPartial {M D Dv : Nat} (Bk : Nat)
     (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
-    Nat → TileIndex [M, D] → ℝ
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ) :
+    Nat → TileIndex [M, Dv] → ℝ
   | 0, _ => 0
   | k + 1, idx =>
       if h : k + 1 ≤ numKVBlocks then
@@ -613,11 +614,12 @@ theorem bsaLPartial_succ_of_lt {M D Bk : Nat}
   rw [dif_pos (Nat.succ_le_iff.mpr hk)]
 
 /-- Recurrence unfold for `bsaOPartial` at iteration `k+1`, when `k < N`. -/
-theorem bsaOPartial_succ_of_lt {M D Bk : Nat}
+theorem bsaOPartial_succ_of_lt {M D Dv Bk : Nat}
     (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, Dv]) :
     bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale (k + 1) idx =
       let alpha :=
         (WithBot.realExp
@@ -650,11 +652,12 @@ noncomputable def lFree {M D Bk N : Nat}
       0))
 
 /-- Gathered-causal m-free unnormalized output over the first `k` KV blocks. -/
-noncomputable def oFree {M D Bk N : Nat}
+noncomputable def oFree {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
     (scale : ℝ) (k : Nat) (hk : k ≤ N)
-    (idx : TileIndex [M, D]) : ℝ :=
+    (idx : TileIndex [M, Dv]) : ℝ :=
   Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
     let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
     (if gpos j ≤ qStart + idx.1.val then
@@ -670,10 +673,11 @@ noncomputable def oFree {M D Bk N : Nat}
   unfold lFree
   simp
 
-@[simp] theorem oFree_zero {M D Bk N : Nat}
+@[simp] theorem oFree_zero {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
-    (scale : ℝ) (idx : TileIndex [M, D]) :
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, Dv]) :
     oFree qStart gpos Q Kg Vg scale 0 (Nat.zero_le _) idx = 0 := by
   unfold oFree
   simp
@@ -696,11 +700,12 @@ theorem lFree_succ {M D Bk N : Nat}
   simp [Fin.val_last]
 
 /-- Recurrence for gathered-causal `oFree`. -/
-theorem oFree_succ {M D Bk N : Nat}
+theorem oFree_succ {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
     (scale : ℝ) (k : Nat) (hk : k + 1 ≤ N)
-    (idx : TileIndex [M, D]) :
+    (idx : TileIndex [M, Dv]) :
     oFree qStart gpos Q Kg Vg scale (k + 1) hk idx =
       oFree qStart gpos Q Kg Vg scale k (Nat.le_of_succ_le hk) idx +
       Finset.univ.sum (fun jL : Fin Bk =>
@@ -732,10 +737,11 @@ theorem lFree_eq_flat {M D Bk N : Nat}
     rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 /-- Flat form of the final gathered-causal output accumulator. -/
-theorem oFree_eq_flat {M D Bk N : Nat}
+theorem oFree_eq_flat {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
-    (scale : ℝ) (idx : TileIndex [M, D]) :
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, Dv]) :
     oFree qStart gpos Q Kg Vg scale N (le_refl N) idx =
       Finset.univ.sum (fun j : Fin (Bk * N) =>
         (if gpos j ≤ qStart + idx.1.val then
@@ -893,12 +899,13 @@ theorem bsaLPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
 
 /-- Gathered-causal streaming output accumulator equals the gathered m-free
 output accumulator times the final exponential shift. -/
-theorem bsaOPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
+theorem bsaOPartial_eq_mShifted {M D Dv Bk : Nat} (hBk : 0 < Bk)
     (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
     (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D])
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, Dv])
     (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
     bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx =
       Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1).unbotD 0) *
@@ -998,10 +1005,11 @@ theorem bsaOPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
 This is the `attentionRealCausalBlock` analog with the causal predicate on the
 gathered global position `gpos`. It is exactly the shape of
 `blockSparseAttnClosedForm` (gathered keys/values, global-position causal mask). -/
-noncomputable def bsaAttn {M D Bk N : Nat}
+noncomputable def bsaAttn {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
-    (scale : ℝ) : TileIndex [M, D] → ℝ :=
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
+    (scale : ℝ) : TileIndex [M, Dv] → ℝ :=
   fun (i, d, _) =>
     let weight := fun j : Fin (Bk * N) =>
       if gpos j ≤ qStart + i.val then Real.exp (gScore Q Kg scale i j) else 0
@@ -1010,10 +1018,11 @@ noncomputable def bsaAttn {M D Bk N : Nat}
     numer / denom
 
 /-- Gathered m-free ratio is exactly the gathered closed-form attention. -/
-theorem oFree_div_lFree_eq_bsaAttn {M D Bk N : Nat}
+theorem oFree_div_lFree_eq_bsaAttn {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
-    (scale : ℝ) (idx : TileIndex [M, D]) :
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, Dv]) :
     oFree qStart gpos Q Kg Vg scale N (le_refl N) idx /
         lFree qStart gpos Q Kg scale N (le_refl N) idx.1
       = bsaAttn qStart gpos Q Kg Vg scale idx := by
@@ -1059,10 +1068,11 @@ theorem bsaLPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
 /-- If the gathered m-free normalizer `lFree` vanishes, so does the m-free output
 `oFree` (no causally-visible key is selected, so every output summand carries a
 zero weight). -/
-theorem oFree_eq_zero_of_lFree_eq_zero {M D Bk N : Nat}
+theorem oFree_eq_zero_of_lFree_eq_zero {M D Dv Bk N : Nat}
     (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
-    (scale : ℝ) (k : Nat) (hk : k ≤ N) (idx : TileIndex [M, D])
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (Vg : TileIndex [Bk * N, Dv] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k ≤ N) (idx : TileIndex [M, Dv])
     (hl : lFree qStart gpos Q Kg scale k hk idx.1 = 0) :
     oFree qStart gpos Q Kg Vg scale k hk idx = 0 := by
   -- every summand of `lFree` is nonneg, so the sum is 0 ⟹ each is 0 ⟹ each weight 0
@@ -1102,12 +1112,13 @@ theorem oFree_eq_zero_of_lFree_eq_zero {M D Bk N : Nat}
 even when `L_c = 0` (then `O_c = 0` too, by `oFree_eq_zero_of_lFree_eq_zero`). This
 is the load-bearing fact making the FA2 normalized acc-rescale advance the
 `O / L` invariant. -/
-theorem bsaOPartial_div_mul_self {M D Bk : Nat} (hBk : 0 < Bk)
+theorem bsaOPartial_div_mul_self {M D Dv Bk : Nat} (hBk : 0 < Bk)
     (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
     (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D])
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, Dv])
     (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
     bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx /
         bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 *
@@ -1148,12 +1159,13 @@ ratio equals the gathered closed-form attention `bsaAttn` — i.e. the online
 softmax over the CSR-selected (non-contiguous, global-causal) key stream computes
 exactly the closed-form attention. This is the block-sparse analog of
 `FA1MathCausal.streaming_eq_attentionRealCausalBlock`. -/
-theorem bsaStreaming_eq_bsaAttn {M D Bk : Nat} (hBk : 0 < Bk)
+theorem bsaStreaming_eq_bsaAttn {M D Dv Bk : Nat} (hBk : 0 < Bk)
     (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
     (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (idx : TileIndex [M, D])
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, Dv])
     (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
     bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale numKVBlocks idx /
         bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale numKVBlocks idx.1
@@ -1179,10 +1191,10 @@ theorem bsaAttn_eq_blockSparseAttnClosedForm
       stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
       stride_vb stride_vh stride_vn
       layout_h stride_col start_l numSelBlocks
-      HEAD_DIM BLOCK_M BLOCK_N dBlockBase : Nat)
+      HEAD_DIM BLOCK_M BLOCK_N BLOCK_D dBlockBase : Nat)
     (softmax_scale : ℝ)
-    (i : Fin BLOCK_M) (d : Fin HEAD_DIM) :
-    BSAMathCausal.bsaAttn (M := BLOCK_M) (D := HEAD_DIM)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_D) :
+    BSAMathCausal.bsaAttn (M := BLOCK_M) (D := HEAD_DIM) (Dv := BLOCK_D)
         (Bk := numSelBlocks) (N := BLOCK_N)
         (s.pids 0 * BLOCK_M)
         (fun r => selKeyGlobal s layoutCols layout_h stride_col start_l BLOCK_N r.val)
@@ -2932,8 +2944,9 @@ open BSAMathCausal in
 noncomputable def bsaInvariant
     (Out Q K V : RegionName) (R C : Region .nat)
     (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
   s.pids = s0.pids
   ∧ s.mem = s0.mem
@@ -2993,8 +3006,9 @@ at `c = 0` the accumulators are data-independent. -/
 theorem bsaPreLoop_eval
     (s : BlockState) (Out Q K V : RegionName) (R C : Region .nat)
     (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ s0, stepStmts (bsaPreLoop Out Q K V R C) s = some s0
       ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s 0 s0 := by
@@ -3999,11 +4013,11 @@ gathered-causal `maskedScore` at the block-`c` lane, given the additive-causal
 mask predicate (`hMask`) and the scaled-dot-equals-`gScore` hypothesis
 (`hScore`). The kernel applies the additive `where` (0 / ⊥), while `maskedScore`
 selects the score or ⊥ on the same predicate. -/
-theorem bsa_qkM_cell_eq_maskedScore
+theorem bsa_qkM_cell_eq_maskedScore {Dk : Nat}
     (qStart numKVBlocks c : Nat) (hc : c + 1 ≤ numKVBlocks)
     (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, Dk] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, Dk] → ℝ) (scale : ℝ)
     (SN : Nat) (gm : Fin 16 → Nat)
     (qkScaled : Tile .real [16, 16])
     (i jL : Fin 16)
@@ -4029,11 +4043,11 @@ open BSAMathCausal in
 `sup`-of-`maskedScore` over the block-`c` lanes (the inner term of
 `bsaMPartial_succ_of_lt`). Built from the per-cell `bsa_qkM_cell_eq_maskedScore`
 bridge plus `Finset.sup'_eq_sup`. -/
-theorem bsa_mij_eq_sup_maskedScore
+theorem bsa_mij_eq_sup_maskedScore {Dk : Nat}
     (qStart numKVBlocks c : Nat) (hc : c + 1 ≤ numKVBlocks)
     (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, Dk] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, Dk] → ℝ) (scale : ℝ)
     (SN : Nat) (gm : Fin 16 → Nat)
     (qkScaled : Tile .real [16, 16])
     (i : Fin 16)
@@ -4104,11 +4118,11 @@ open BSAMathCausal in
 /-- **`bsa_step_mi`** (standalone m_i conjunct). The loop body's
 `m_i_new = where(m_i > m_ij, m_i, m_ij)` tile, with `m_i` holding `bsaMPartial c`
 (invariant) and `m_ij = sup' (qkM row)`, equals `bsaMPartial (c+1)`. -/
-theorem bsa_step_mi
+theorem bsa_step_mi {Dk : Nat}
     (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks)
     (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, Dk] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, Dk] → ℝ) (scale : ℝ)
     (SN : Nat) (gm : Fin 16 → Nat)
     (qkScaled : Tile .real [16, 16])
     (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
@@ -4152,11 +4166,11 @@ open BSAMathCausal in
 /-- **`bsa_step_li`** (standalone l_i conjunct). The loop body's
 `l_i_new = alpha·l_i + beta·l_ij` tile equals `bsaLPartial (c+1)` per cell, given
 `m_i = bsaMPartial c`, `l_i = some (bsaLPartial c)`, and the score/mask bridges. -/
-theorem bsa_step_li
+theorem bsa_step_li {Dk : Nat}
     (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks)
     (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, Dk] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, Dk] → ℝ) (scale : ℝ)
     (SN : Nat) (gm : Fin 16 → Nat)
     (qkScaled : Tile .real [16, 16])
     (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
@@ -4370,11 +4384,12 @@ theorem bsaLPartial_nonneg {M D Bk : Nat}
 open BSAMathCausal in
 /-- If `bsaLPartial k = 0` then `bsaOPartial k = 0` (every causal weight vanishes,
 so each value contribution vanishes). No first-key-visibility hypothesis needed. -/
-theorem bsaOPartial_eq_zero_of_bsaLPartial_eq_zero {M D Bk : Nat}
+theorem bsaOPartial_eq_zero_of_bsaLPartial_eq_zero {M D Dv Bk : Nat}
     (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
     (Q : TileIndex [M, D] → ℝ)
-    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (k : Nat) (idx : TileIndex [M, D])
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
+    (k : Nat) (idx : TileIndex [M, Dv])
     (hL : bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 = 0) :
     bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx = 0 := by
   induction k with
@@ -4437,11 +4452,12 @@ open BSAMathCausal in
 /-- **`bsa_step_acc`** (standalone acc conjunct). The loop body's
 `acc = acc·acc_scale + tl.dot(p, v)` tile equals `bsaOPartial(c+1)/bsaLPartial(c+1)`
 per cell, given the invariant register values and the score/mask/value bridges. -/
-theorem bsa_step_acc
+theorem bsa_step_acc {Dk : Nat}
     (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks) (hBkN : 0 < 16 * numKVBlocks)
     (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, Dk] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, Dk] → ℝ)
+    (Vg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (SN : Nat) (gm : Fin 16 → Nat)
     (qkScaled vt : Tile .real [16, 16])
     (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
@@ -4713,8 +4729,9 @@ two D-blocks); all seeded registers are preserved by `bsaLoopBody_steps`. -/
 theorem bsa_attn_step
     (Out Q K V : RegionName) (R C : Region .nat)
     (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (s0 : BlockState) (c : Nat) (hc : c < numKVBlocks) (s : BlockState)
     (hinv : bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 c s)
     (idx : Nat)
@@ -4857,8 +4874,9 @@ runs to a final state at counter `final ≥ end_l` satisfying `bsaInvariant …
 theorem bsa_csr_loop
     (Out Q K V : RegionName) (R C : Region .nat)
     (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (s0 : BlockState) (start_l end_l : Nat)
     (hbound : end_l - start_l = numKVBlocks) (hsle : start_l ≤ end_l)
     (sEntry : BlockState)
@@ -4935,8 +4953,9 @@ in-loop. The two stores hit disjoint output channels (`outOffset` vs
 theorem bsaPostLoop_eval
     (Out Q K V : RegionName) (R C : Region .nat)
     (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
-    (Qg : TileIndex [16, 16] → ℝ)
-    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (s0 : BlockState) (s : BlockState)
     (hinv : bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 numKVBlocks s) :
     ∃ sP, stepStmts (bsaPostLoop Out) s = some sP
