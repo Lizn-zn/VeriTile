@@ -917,4 +917,210 @@ theorem context_attn_nopad_python_test_shape_output_summary
   exact context_attn_nopad_surface_python_test_shape_compute_correct Q K V
     B_Start_Loc B_Seqlen Out s
 
+/-! ## Genuine exec assembly (mirrors triton_attention #308 structure)
+
+The streaming loop is decoded statement-by-statement and bound to the banked
+`osNormStepBot` online-normalized recurrence. Unlike triton_attention (block
+pointers, single diagonal block, `boundary_check`), `context_attn_nopad` uses
+explicit 3D-packed pointer arithmetic, a true `float("-inf")` causal `where`
+sentinel, natural `tl.exp`, and an *in-loop* normalize (`p_scale`/`acc_scale`),
+so `acc` already holds the normalized ratio at every block (no post-loop divide).
+The loop runs `block_mask·(start_m+1)·128` keys = `start_m+1` blocks. -/
+
+/-- The 19 lowered preLoop statements of the Python-shape `context_attn_nopad`
+forward body (program ids, the loaded seq-len/start-loc scalars, the index
+vectors, the 3D-packed `off_q/off_k/off_v` offset tiles, the masked `q` load, the
+`k_ptrs/v_ptrs` base pointers, the `m_i = ⊥`/`l_i = 0`/`acc = 0` running init, and
+`block_mask`). -/
+def nopadPreLoop (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) : List Stmt :=
+  [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+    Stmt.assign .nat [] "cur_head" (Op.programId 1),
+    Stmt.assign .nat [] "start_m" (Op.programId 2),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_in_all_start_index"
+      (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "block_start_loc"
+      (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_m")),
+    Stmt.assign .nat [128] "offs_n" (Op.arange 128),
+    Stmt.assign .nat [128] "offs_d" (Op.arange 128),
+    Stmt.assign .nat [128] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128))
+        (Op.arange 128)),
+    Stmt.assign .nat [128, 128] "off_q"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .nat [128, 128] "off_k"
+      (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n"))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .nat [128, 128] "off_v"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n"))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "q"
+      (Op.load .real (MemAccess.region Q (Op.ref .nat [128, 128] "off_q"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))),
+    Stmt.assign .ptr [128, 128] "k_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K) (Op.ref .nat [128, 128] "off_k")),
+    Stmt.assign .ptr [128, 128] "v_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V) (Op.ref .nat [128, 128] "off_v")),
+    Stmt.assign .real [128] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [128] "l_i" (Op.full [128] (Op.const 0)),
+    Stmt.assign .real [128, 128] "acc" (Op.full [128, 128] (Op.const 0)),
+    Stmt.assign .nat [] "block_mask"
+      ((Op.lt ComparableDType.nat Broadcast.nil (Op.ref .nat [] "block_start_loc")
+            (Op.ref .nat [] "cur_batch_seq_len")).where
+        (Op.constNat 1) (Op.constNat 0)) ]
+
+/-- The 21 lowered loop-body statements of the Python-shape `context_attn_nopad`
+forward `forRangeDyn` body (online-normalized streaming softmax over one KV
+block). `start_n = start_n` and `p = p` are the lowered `tl.multiple_of` /
+`p.to(v.dtype)` no-ops. -/
+def nopadLoopBody (sc : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .real [128, 128] "k"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 128] "k_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat 768))))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consSame.consL.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "qk" (Op.full [128, 128] (Op.const 0)),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "qk")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k"))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 128] "qk") (Op.const sc)),
+    Stmt.assign .real [128, 128] "qk"
+      ((Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))).where
+        (Op.ref .real [128, 128] "qk") (Op.negInf.broadcast [128, 128])),
+    Stmt.assign .real [128] "m_ij" (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "qk")),
+    Stmt.assign .real [128, 128] "p"
+      (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "qk")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))).exp,
+    Stmt.assign .real [128] "l_ij" (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "p")),
+    Stmt.assign .real [128] "m_i_new"
+      ((Op.gt ComparableDType.real Broadcast.nil.consSame (Op.ref .real [128] "m_i")
+            (Op.ref .real [128] "m_ij")).where
+        (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij")),
+    Stmt.assign .real [128] "alpha"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_i")
+          (Op.ref .real [128] "m_i_new")).exp,
+    Stmt.assign .real [128] "beta"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_ij")
+          (Op.ref .real [128] "m_i_new")).exp,
+    Stmt.assign .real [128] "l_i_new"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "alpha")
+          (Op.ref .real [128] "l_i"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "beta")
+          (Op.ref .real [128] "l_ij"))),
+    Stmt.assign .real [128] "p_scale"
+      (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "beta")
+        (Op.ref .real [128] "l_i_new")),
+    Stmt.assign .real [128, 128] "p"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "p_scale"))),
+    Stmt.assign .real [128] "acc_scale"
+      (Op.mul .real Broadcast.nil.consSame
+        (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "l_i")
+          (Op.ref .real [128] "l_i_new"))
+        (Op.ref .real [128] "alpha")),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "acc_scale"))),
+    Stmt.assign .real [128, 128] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 128] "v_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat 768))))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "p" (Op.ref .real [128, 128] "p"),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "acc")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v"))),
+    Stmt.assign .real [128] "l_i" (Op.ref .real [128] "l_i_new"),
+    Stmt.assign .real [128] "m_i" (Op.ref .real [128] "m_i_new") ]
+
+/-- The 3 lowered postLoop statements of the Python-shape `context_attn_nopad`
+forward body: the 3D-packed `off_o` offset tile, the `out_ptrs` base pointer, and
+the masked `Out` store of `acc` (already the normalized ratio — no `acc /= l_i`). -/
+def nopadPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [128, 128] "off_o"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .ptr [128, 128] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [128, 128] "off_o")),
+    Stmt.store .real [128, 128] (MemAccess.ptr (Op.ref .ptr [128, 128] "out_ptrs"))
+      (Op.ref .real [128, 128] "acc")
+      (MaskOpt.mask
+        (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len")))) ]
+
+set_option maxRecDepth 8000 in
+/-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
+theorem nopad_body_split
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName) (sc : ℝ) :
+    (context_attn_nopad_fwd_kernel_surface Q K V sc B_Start_Loc B_Seqlen Out
+      768 128 1 768 128 1 768 128 1 768 128 1 128 128 128).toAlgKernel.body
+      = nopadPreLoop Q K V B_Start_Loc B_Seqlen
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+                  (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+                (Op.constNat 128))
+              (Op.constNat 128) (nopadLoopBody sc)
+            :: nopadPostLoop Out) := by
+  rfl
+
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
