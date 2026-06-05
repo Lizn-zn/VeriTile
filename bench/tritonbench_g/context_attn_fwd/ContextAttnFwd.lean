@@ -2390,7 +2390,8 @@ noncomputable def ctxInvariant
   (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
       some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩) ∧
   (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
-      some (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2⟩)
+      some (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2⟩) ∧
+  (c * 128 ≤ S)
 
 /-! ### generic tile-arithmetic bridges (kernel-agnostic; reused in `ctx_attn_step`) -/
 
@@ -2655,7 +2656,7 @@ theorem ctx_attn_step
     ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python S bel i d with hgd
   simp only [ctxInvariant] at hinv
   obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hom, hon, hod,
-      hq, hmi, hli, hacc⟩ := hinv
+      hq, hmi, hli, hacc, hcle⟩ := hinv
   -- the loaded q tile of the invariant (row-masked) equals ctxQTileM at every cell
   set qtile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
       if decide (128 * s0.pids 0 + idx.1.val < sl) then
@@ -2837,7 +2838,7 @@ theorem ctx_attn_step
       ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python S bel a d = g a d :=
     fun a d => rfl
   simp only [ctxInvariant, hgapp]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpidsF, BlockState.setReg_pids]; exact hpids
   · rw [hmemF]; exact hmem
   · exact hundefF
@@ -2924,6 +2925,8 @@ theorem ctx_attn_step
     show WithBot.realAdd (some _) (WithBot.realMul (some _) (some _)) = _
     simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
     rw [add_comm, mul_comm ((st (g idx.1 idx.2.1)).2.2)]
+  · -- (c+1)*128 ≤ S
+    exact hwin
 
 theorem ctxOut_offset_injective_128
     (s : BlockState) (B_Start_Loc : RegionName) :
@@ -2962,7 +2965,7 @@ theorem ctxPostLoop_eval
     ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python (c * 128) bel i d with hgd
   simp only [ctxInvariant] at hinv
   obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hom, hon, hod,
-      hq, hmi, hli, hacc⟩ := hinv
+      hq, hmi, hli, hacc, hcle⟩ := hinv
   -- the divided acc tile cell = (gStateBot S (c*128)).2.2 / .2.1 = contextAttnExactFoldM
   set accDiv : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
       some ((gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.2 / (gStateBot (c * 128) (c * 128) (g idx.1 ⟨0, by decide⟩)).2.1)⟩
