@@ -4851,6 +4851,78 @@ theorem msaE_scoreLaneB_eq
   · rw [if_neg hgate, if_neg hgate]
     rfl
 
+/-- The block-A value lane equals `mixedSparseAttnClosedForm`'s `vBlock` term. -/
+theorem msaVblkA0_eq
+    (V : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (s0 : BlockState) (c : Nat) (j d : Fin 64) :
+    msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 c j d
+      = (if msaSN0 s0 Blocks BlockOffsets c + j.val < seqLen s0 4 (Region.cast Seqlens)
+            ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0) then
+          vRow s0 V 4 32768 8192 64
+            (msaSN0 s0 Blocks BlockOffsets c + j.val) d else 0) := by
+  unfold msaVblkA0 msaVLaneA msaVPtr vRow qoBase offZ offH
+  by_cases hin : msaSN0 s0 Blocks BlockOffsets c + j.val < seqLen s0 4 (Region.cast Seqlens)
+      ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin, if_pos hin]
+    rw [show ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + d.val
+        + (msaSN0 s0 Blocks BlockOffsets c + j.val) * 64
+      = (s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192
+        + (msaSN0 s0 Blocks BlockOffsets c + j.val) * 64 + d.val from by ring]
+    simp [BlockState.readMemValue_real]
+  · rw [if_neg hin, if_neg hin]; norm_num
+
+/-- The column-B value lane equals the gathered-column `vRow`. -/
+theorem msaVblkB0_eq
+    (V : RegionName) (Blocks ColCounts : Region .nat)
+    (s0 : BlockState) (sv : Nat) (gcol : Fin 64 → Nat) (j d : Fin 64) :
+    (msaVLaneB Blocks ColCounts (msaVPtr V s0) s0 sv gcol j d).unbotD 0
+      = (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+            ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) then
+          vRow s0 V 4 32768 8192 64 (gcol j) d else 0) := by
+  unfold msaVLaneB msaVPtr vRow qoBase offZ offH
+  by_cases hin : sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+      ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin, if_pos hin]
+    rw [show ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + d.val + gcol j * 64
+      = (s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192 + gcol j * 64 + d.val from by ring]
+    simp [BlockState.readMemValue_real]
+  · rw [if_neg hin, if_neg hin]; norm_num
+
+/-- A `Fin 64`-sum of column terms that vanish for `j ≥ numCols` collapses to the
+`Fin numCols` sum (given `numCols ≤ 64`). The terms depend on `j` only via `j.val`,
+so they are presented as a `Nat → ℝ` function `f`. -/
+theorem msa_col_sum_collapse (numCols : Nat) (h : numCols ≤ 64)
+    (f : Nat → ℝ) (hz : ∀ j, numCols ≤ j → f j = 0) :
+    (∑ j : Fin 64, f j.val) = ∑ c : Fin numCols, f c.val := by
+  rw [Fin.sum_univ_eq_sum_range (fun k => f k) 64,
+      Fin.sum_univ_eq_sum_range (fun k => f k) numCols]
+  rw [← Finset.sum_range_add_sum_Ico (fun k => f k) h]
+  rw [Finset.sum_Ico_eq_sum_range]
+  rw [show (∑ k ∈ Finset.range (64 - numCols), f (numCols + k)) = 0 from
+    Finset.sum_eq_zero (fun k _ => hz _ (by omega))]
+  rw [add_zero]
+
+/-- `msaSN0` (the kernel's masked block start) equals the closed form's
+`blockStartN` at the python `(NUM_ROWS, NNZ_S) = (2, 4)` layout. -/
+theorem msaSN0_eq_blockStartN (s0 : BlockState) (Blocks BlockOffsets : Region .nat) (c : Nat) :
+    msaSN0 s0 Blocks BlockOffsets c
+      = blockStartN s0 BlockOffsets 2 4
+          (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)) c := by
+  unfold msaSN0 blockStartN; rfl
+
+/-- The gathered column at sv=0, lane `j < numCols`, is `colKeyGlobal j`. -/
+theorem msaGcol0_eq_colKeyGlobal (s0 : BlockState) (Cols ColCounts : Region .nat)
+    (j : Nat) (hj : j < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+    (hj64 : j < 64) :
+    msaGcol0 s0 Cols ColCounts 0 ⟨j, hj64⟩
+      = colKeyGlobal s0 Cols 2 8 j := by
+  unfold msaGcol0 msaColLaneB colKeyGlobal
+  have h0 : (0 : Nat) < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) :=
+    by omega
+  rw [if_pos h0]
+  rw [show (s0.pids 1 * 2 + s0.pids 0) * 8 + 0 + j = (s0.pids 1 * 2 + s0.pids 0) * 8 + j
+    from by omega]
+
 end MSAFoundation
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
