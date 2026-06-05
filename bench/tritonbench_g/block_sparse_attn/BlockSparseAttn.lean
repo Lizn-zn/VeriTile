@@ -3011,7 +3011,11 @@ theorem bsaPreLoop_eval
     (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ s0, stepStmts (bsaPreLoop Out Q K V R C) s = some s0
-      ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s 0 s0 := by
+      ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s 0 s0
+      ∧ s0.regs .nat [] "start_l" =
+          some (Tile.scalar (s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0)))
+      ∧ s0.regs .nat [] "end_l" =
+          some (Tile.scalar (s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0 + 1))) := by
   unfold bsaPreLoop
   -- stmt 0: static_print marker `ifThen false []` is a no-op
   rw [stepStmts.cons_some (stepStmt_ifThen_false (by simp [evalOp]))]
@@ -3287,22 +3291,30 @@ theorem bsaPreLoop_eval
       (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
         String.reduceEq, not_false_eq_true])))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_⟩
-  unfold bsaInvariant
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · simp only [BlockState.setReg_pids]
-  · funext rg o; simp only [BlockState.setReg_mem]
-  · intro rg o; simp [hundef]
-  all_goals
-    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
-        not_false_eq_true]
-  all_goals
-    first
-    | rfl
-    | -- acc / acc2 at c = 0: full-zero tile = `some (0/0)` pointwise
-      (refine congrArg some (Tile.ext (fun idx => ?_));
-       refine congrArg some ?_;
-       rw [BSAMathCausal.bsaOPartial, BSAMathCausal.bsaLPartial, zero_div])
+  refine ⟨_, rfl, ?_, ?_, ?_⟩
+  · unfold bsaInvariant
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp only [BlockState.setReg_pids]
+    · funext rg o; simp only [BlockState.setReg_mem]
+    · intro rg o; simp [hundef]
+    all_goals
+      simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true]
+    all_goals
+      first
+      | rfl
+      | -- acc / acc2 at c = 0: full-zero tile = `some (0/0)` pointwise
+        (refine congrArg some (Tile.ext (fun idx => ?_));
+         refine congrArg some ?_;
+         rw [BSAMathCausal.bsaOPartial, BSAMathCausal.bsaLPartial, zero_div])
+  · -- start_l register value (innermost-but-one setReg); mem preserved by setReg
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same]
+    refine congrArg some (congrArg Tile.scalar ?_)
+    simp only [BlockState.readMemValue, BlockState.readMemTyped, BlockState.setReg_mem]
+  · -- end_l register value (innermost setReg); mem preserved by setReg
+    rw [BlockState.setReg_same]
+    refine congrArg some (congrArg Tile.scalar ?_)
+    simp only [BlockState.readMemValue, BlockState.readMemTyped, BlockState.setReg_mem]
 
 /-! ## CSR loop-body execution chain (`bsaLoopBody_steps`)
 
