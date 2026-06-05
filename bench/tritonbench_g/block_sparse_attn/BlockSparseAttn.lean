@@ -1124,6 +1124,24 @@ theorem bsaOPartial_div_mul_self {M D Bk : Nat} (hBk : 0 < Bk)
         oFree_eq_zero_of_lFree_eq_zero qStart gpos Q Kg Vg scale k hk idx hlFree, mul_zero]
   · rw [div_mul_cancel₀ _ hL]
 
+/-- **FA2 normalized acc-rescale step (real arithmetic).** Given the running ratio
+`Rc` with `Rc · Lc = Oc`, the new normalizer `Lnew = α·Lc + Σ w` (nonzero), and the
+new unnormalized output `Onew = α·Oc + Σ w·v`, the kernel's normalized update
+`Rc·(Lc/Lnew·α) + Σ (w/Lnew)·v` equals the new ratio `Onew/Lnew`. -/
+theorem fa2_acc_step_real {ι : Type*} [Fintype ι]
+    (Rc Lc Oc α Lnew : ℝ) (w v : ι → ℝ)
+    (hRO : Rc * Lc = Oc)
+    (hLnew : Lnew = α * Lc + Finset.univ.sum w)
+    (hLnz : Lnew ≠ 0) :
+    Rc * (Lc / Lnew * α) + Finset.univ.sum (fun j => w j / Lnew * v j)
+      = (α * Oc + Finset.univ.sum (fun j => w j * v j)) / Lnew := by
+  rw [add_div, ← hRO]
+  rw [Finset.sum_div]
+  congr 1
+  · field_simp
+  · refine Finset.sum_congr rfl (fun j _ => ?_)
+    field_simp
+
 /-- **Load-bearing streaming-eq bridge.** The final gathered-causal streaming
 ratio equals the gathered closed-form attention `bsaAttn` — i.e. the online
 softmax over the CSR-selected (non-contiguous, global-causal) key stream computes
