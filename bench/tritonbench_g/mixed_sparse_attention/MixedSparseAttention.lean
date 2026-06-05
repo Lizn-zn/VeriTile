@@ -1934,6 +1934,44 @@ theorem msa_load_k_eval (s : BlockState) (BM BN SKN : Nat)
   simp only [Tile.scalar_data_index]
   rfl
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`v = tl.load(v_ptrs + cols[:,None]·stride_vn, mask=n_mask[:,None], other=0.0)`
+(A6/B5)**: the masked V-tile load. `v_ptrs` is the `[1,BLOCK_N]` pointer tile broadcast
+across the `BLOCK_M` query rows; the per-row offset is `cols·stride_vn` (with `cols`
+on the row axis, `[:,None]`), masked by `n_mask[:,None]`. Symbolic result kept for the
+assembly layer. With `stride_vn = SVN`. -/
+theorem msa_load_v_eval (s : BlockState) (BN BD SVN : Nat)
+    (hax1 : 1 < [BN].length.succ)
+    (vp : Tile .ptr [1, BD]) (ct : Tile .nat [BN]) (nm : Tile .bool [BN])
+    (hv : s.regs .ptr [1, BD] "v_ptrs" = some vp)
+    (hcols : s.regs .nat [BN] "cols" = some ct)
+    (hnm : s.regs .bool [BN] "n_mask" = some nm) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, BD] "v_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, hax1⟩ (Op.ref .nat [BN] "cols")) (Op.constNat SVN))))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+            (Op.expandDim ⟨1, hax1⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BN, BD]))) s
+      = some (⟨fun idx : TileIndex [BN, BD] =>
+          let ptrs := Tile.ptrAdd Broadcast.nil.consR.consL vp
+            (Tile.bop NumericDType.nat.mul Broadcast.scalarR
+              (Tile.expandDim ⟨1, hax1⟩ ct) (Tile.scalar SVN))
+          if (Tile.remap Broadcast.nil.consL.consSame.leftIndex
+                (Tile.expandDim ⟨1, hax1⟩ nm)).data idx then
+            s.readMemValue .real (ptrs.data idx).1 (ptrs.data idx).2
+          else (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BN, BD]) := by
+  simp only [evalOp, hv]
+  erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, hax1⟩ "cols" s _ hcols,
+    evalOp_expandDim_ref_of_regs .bool [BN] ⟨1, hax1⟩ "n_mask" s _ hnm]
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.scalar_data_index]
+  rfl
+
 end MSARecipes
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
