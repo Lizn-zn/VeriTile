@@ -3305,6 +3305,163 @@ theorem taLoopBody_steps (K V : RegionName) (off_hz : Nat) (sc : ℝ) (sin : Blo
   · simp [taKVPtrTile]
   · simp [taKVPtrTile]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution.** The 13 deterministic preLoop statements step a clean
+state to the loop-entry state, exposing all register readbacks the loop body / the
+invariant at counter 0 need: the index vectors, the `m_prev = ⊥`/`l_prev = 0`/
+`acc = 0` running-state init, the loaded `q = fwdQTile`, the K/V/Out block pointers
+at offset `[off_hz·128 (+start_m·128 for Q/Out), 0]`, and `off_hz`. -/
+theorem taPreLoop_eval (s : BlockState) (Q K V L M Out : RegionName) (sc : ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (taPreLoop Q K V Out sc) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val))
+      ∧ s0.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
+      ∧ s0.regs .real [128] "m_prev" = some ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [128] "l_prev" = some ⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [128, 64] "acc" = some ⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [128, 64] "q" = some ⟨fun idx : TileIndex [128, 64] => some (fwdQTile s Q idx)⟩
+      ∧ s0.regs .blockPtr [128, 64] "k_tile_ptr" = some (taKVPtrTile K (s.pids 1 * 128))
+      ∧ s0.regs .blockPtr [128, 64] "v_tile_ptr" = some (taKVPtrTile V (s.pids 1 * 128))
+      ∧ s0.regs .blockPtr [128, 64] "out_tile_ptr" = some
+          (⟨fun _ : TileIndex [128, 64] =>
+            { region := Out, baseOffset := 0, parentShape := [1024, 64],
+              blockShape := [128, 64], strides := [64, 1],
+              offsets := [s.pids 1 * 128 + s.pids 0 * 128, 0] }⟩) := by
+  unfold taPreLoop
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: off_hz = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: offs_m = start_m*128 + arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)) _
+        = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val)) from by
+      rw [evalOp_add, evalOp_arange]
+      simp only [evalOp_mul, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_pids, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, castTile_self, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 3: offs_n = arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange 128 _))]
+  -- stmt 4: m_prev = zeros + (-inf) = ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩ : Tile .real [128]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r
+      simp only [Tile.bop_data, Tile.scalar_data, castTile_self, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, WithBot.realAdd, Option.map₂_none_right]
+      rfl))]
+  -- stmt 5: l_prev = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩ : Tile .real [128]) from by
+      simp only [evalOp_full, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r; rfl))]
+  -- stmt 6: acc = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩ : Tile .real [128, 64]) from by
+      simp only [evalOp_full, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r; rfl))]
+  -- stmt 7: stride_qh_2d = 8192//64//1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil
+        (Op.floorDiv .nat Broadcast.nil (Op.constNat 8192) (Op.constNat 64)) (Op.constNat 1)) _
+        = some (Tile.scalar 128) from by
+      simp only [evalOp, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext i
+      simp only [Tile.bop_data, Tile.scalar_data, castTile_self, Broadcast.leftIndex,
+        Broadcast.rightIndex]
+      rfl))]
+  -- stmt 8: q_tile_ptr = makeBlockPtrDynOffsets
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets Q (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+          [Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)), Op.constNat 0]) _
+        = some (⟨fun _ : TileIndex [128, 64] =>
+            { region := Q, baseOffset := 0, parentShape := [1024, 64],
+              blockShape := [128, 64], strides := [64, 1],
+              offsets := [s.pids 1 * 128 + s.pids 0 * 128, 0] }⟩) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_constNat, evalOp_add, evalOp_mul, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_pids, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, List.mapM_cons, List.mapM_nil,
+        Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]
+      refine congrArg some ?_; ext idx; rfl))]
+  -- stmt 9: k_tile_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets K (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+          [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+            Op.constNat 0]) _
+        = some (taKVPtrTile K (s.pids 1 * 128)) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_constNat, evalOp_mul, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_pids, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, List.mapM_cons, List.mapM_nil,
+        Tile.bop_data, Tile.scalar_data, NumericDType.mul]
+      refine congrArg some ?_; ext idx; rfl))]
+  -- stmt 10: v_tile_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets V (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+          [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+            Op.constNat 0]) _
+        = some (taKVPtrTile V (s.pids 1 * 128)) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_constNat, evalOp_mul, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_pids, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, List.mapM_cons, List.mapM_nil,
+        Tile.bop_data, Tile.scalar_data, NumericDType.mul]
+      refine congrArg some ?_; ext idx; rfl))]
+  -- stmt 11: out_tile_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets Out (Op.constNat 0) [1024, 64] [128, 64] [64, 1]
+          [Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)), Op.constNat 0]) _
+        = some (⟨fun _ : TileIndex [128, 64] =>
+            { region := Out, baseOffset := 0, parentShape := [1024, 64],
+              blockShape := [128, 64], strides := [64, 1],
+              offsets := [s.pids 1 * 128 + s.pids 0 * 128, 0] }⟩) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_constNat, evalOp_add, evalOp_mul, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_pids, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, List.mapM_cons, List.mapM_nil,
+        Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]
+      refine congrArg some ?_; ext idx; rfl))]
+  -- stmt 12: q = load(q_tile_ptr)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ta_load_q_eval Q (s.pids 1) (s.pids 0) (Op.ref .blockPtr [128, 64] "q_tile_ptr") _
+      (by simp [BlockState.setReg_pids]) (by simp [BlockState.setReg_pids])
+      (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · funext region offset; simp
+  · intro rg o; simp [hundef]
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · refine congrArg some ?_; ext idx
+    simp only [fwdQTile, BlockState.setReg_readMem, BlockState.setReg_pids, castTile_self]
+  · simp
+  · simp
+  · simp
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
