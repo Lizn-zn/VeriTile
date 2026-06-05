@@ -1771,6 +1771,13 @@ theorem bsa_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
   simp [evalOp]
 
+/-- Local `evalOp` unfolding for `.remap` (mirrors ctx-attn's `ctx_evalOp_remap`). -/
+theorem bsa_evalOp_remap {dtype inShape outShape}
+    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
+    evalOp (.remap outShape map a) s = (do
+      let va ← evalOp a s; some (Tile.remap map va)) := by
+  simp [evalOp]
+
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **`col_idx = tl.load(layout_csr_col_indices + layout_h·stride_col + col_idx_idx)`
@@ -2343,6 +2350,103 @@ theorem bsa_offhkv_eval (s : BlockState) (OH HG : Nat)
   refine congrArg some ?_; ext idx
   simp only [Tile.bop_data, Tile.scalar, Tile.scalar_data_index, Broadcast.leftIndex,
     Broadcast.rightIndex, IntegralDType.floorDiv]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Masked first-D-block K load** (CSR loop body L3, `EVEN_N = false` else-branch):
+`k = tl.load(k_ptrs + start_n·stride_kn, mask=offs_n[None,:] + start_n < total_seq_len)`.
+Out-of-`total_seq_len` key columns read the (undefined) carrier rather than crashing;
+since the address is always in-region (`ok = true`), inactive lanes read
+`s.undef`. Lane `(a,b)` is active iff `b + SN < TSL`. -/
+theorem bsa_load_k_masked_eval {BM BN : Nat} (s : BlockState) (SN SKN TSL : Nat)
+    (kpf : TileIndex [BM, BN] → RegionName × Nat)
+    (hk : s.regs .ptr [BM, BN] "k_ptrs" = some ⟨kpf⟩)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BN] "k_ptrs")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SKN))))
+        (MaskOpt.mask
+          (Op.remap [BM, BN] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarR
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
+              (Op.constNat TSL))))) s
+      = some (⟨fun idx : TileIndex [BM, BN] =>
+          if idx.2.1.val + SN < TSL then
+            s.readMemValue .real (kpf idx).1 ((kpf idx).2 + SN * SKN)
+          else some (s.undef (kpf idx).1 ((kpf idx).2 + SN * SKN))⟩ : Tile .real [BM, BN]) := by
+  have hmask : evalOp
+      (Op.remap [BM, BN] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
+          (Op.constNat TSL))) s
+      = some (⟨fun idx : TileIndex [BM, BN] => decide (idx.2.1.val + SN < TSL)⟩
+          : Tile .bool [BM, BN]) := by
+    rw [bsa_evalOp_remap, evalOp_lt, evalOp_add]
+    erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨0, by simp⟩ "offs_n" s _ hon]
+    simp only [evalOp_ref, evalOp_constNat, hsn, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_; ext idx
+    simp [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.expandDim, Tile.scalar_data_index,
+      Tile.vec, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+  simp only [evalOp, hmask, evalOp_ref, evalOp_mul, evalOp_constNat, hk, hsn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
+  by_cases h : idx.2.1.val + SN < TSL
+  · simp [h]
+  · simp [h]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Masked first-D-block V load** (CSR loop body L22, `EVEN_N = false` else-branch):
+`v = tl.load(v_ptrs + start_n·stride_vn, mask=offs_n[:,None] + start_n < total_seq_len)`.
+The V mask puts `offs_n` on the **row** axis (`[:,None]`), so lane `(a,b)` is active iff
+`a + SN < TSL`. -/
+theorem bsa_load_v_masked_eval {BN BD : Nat} (s : BlockState) (SN SVN TSL : Nat)
+    (vpf : TileIndex [BN, BD] → RegionName × Nat)
+    (hv : s.regs .ptr [BN, BD] "v_ptrs" = some ⟨vpf⟩)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN, BD] "v_ptrs")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SVN))))
+        (MaskOpt.mask
+          (Op.remap [BN, BD] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
+              (Op.constNat TSL))))) s
+      = some (⟨fun idx : TileIndex [BN, BD] =>
+          if idx.1.val + SN < TSL then
+            s.readMemValue .real (vpf idx).1 ((vpf idx).2 + SN * SVN)
+          else some (s.undef (vpf idx).1 ((vpf idx).2 + SN * SVN))⟩ : Tile .real [BN, BD]) := by
+  have hmask : evalOp
+      (Op.remap [BN, BD] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
+          (Op.constNat TSL))) s
+      = some (⟨fun idx : TileIndex [BN, BD] => decide (idx.1.val + SN < TSL)⟩
+          : Tile .bool [BN, BD]) := by
+    rw [bsa_evalOp_remap, evalOp_lt, evalOp_add]
+    erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, by simp⟩ "offs_n" s _ hon]
+    simp only [evalOp_ref, evalOp_constNat, hsn, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_; ext idx
+    simp [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.expandDim, Tile.scalar_data_index,
+      Tile.vec, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+  simp only [evalOp, hmask, evalOp_ref, evalOp_mul, evalOp_constNat, hv, hsn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
+  by_cases h : idx.1.val + SN < TSL
+  · simp [h]
+  · simp [h]
 
 end BSARecipes
 
