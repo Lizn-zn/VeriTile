@@ -1107,6 +1107,72 @@ def nopadPostLoop (Out : RegionName) : List Stmt :=
           (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
             (Op.ref .nat [] "cur_batch_seq_len")))) ]
 
+/-! ### Per-statement loop-body op-eval recipes
+
+Mirror of #307's `sr_*_eval` recipes but in 2D (`BLOCK_M = BLOCK_N = BLOCK_DMODEL =
+128`). The kernel's per-block registers are decoded *per query row* `i`: the
+`qk`/`p` matrices are `[128, 128]` (row `i`, key lane `jL`), the running
+`m_i`/`l_i` vectors are `[128]` (row `i`), and `acc` is `[128, 128]` (row `i`,
+channel `d`). The causal `where(offs_m ≥ start_n+offs_n, qk, -inf)` makes future
+keys carry the genuine `⊥` sentinel; the `k`/`v` loads carry `other=0` boundary
+masks. -/
+
+/-- The decoded `q` tile register value, lane `(i, e)`: `ctxQTile` (= `Q[start_loc
++ start_m·128 + i, cur_head, e]`). A pure function of memory. -/
+noncomputable def nopadQReg (s : BlockState) (Q B_Start_Loc : RegionName)
+    (i : Fin 128) (e : Fin 128) : ℝ :=
+  ctxQTile s Q B_Start_Loc 128 (i, e, PUnit.unit)
+
+set_option maxHeartbeats 1600000 in
+/-- **`k` masked-load recipe.** `tl.load(k_ptrs + (start_loc+start_n)·768,
+mask=(start_n+offs_n)<seqlen, other=0)`, shape `[128,128]`, lane `(e, jL)`
+(`e`=channel axis, `jL`=key axis): `some (K[start_loc+start_n+jL, cur_head, e])`
+if `start_n+jL < seqlen`, else `some 0`. -/
+theorem nopad_k_load_eval (s : BlockState) (K B_Start_Loc B_Seqlen : RegionName) (SN : Nat)
+    (hkp : s.regs .ptr [128, 128] "k_ptrs" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        (K, idx.2.1.val * 768 + s.pids 1 * 128 + idx.1.val)⟩
+        : Tile .ptr [128, 128]))
+    (hsl : s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s B_Start_Loc)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hseq : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s B_Seqlen))) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 128] "k_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat 768))))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consSame.consL.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          if SN + idx.2.1.val < seqLen s B_Seqlen then
+            some (s.readMem K ((startLoc s B_Start_Loc + (SN + idx.2.1.val)) * 768
+              + s.pids 1 * 128 + idx.1.val))
+          else some (0.0 : ℝ)⟩ : Tile .real [128, 128]) := by
+  have hexp : @evalOp .nat [1, 128] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")) s
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin 128 => j.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [128] ⟨0, by simp⟩ "offs_n" s _ hn
+  simp only [evalOp, hkp, hsl, hsn, hexp, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, jL, u⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim,
+    Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real, Region.cast_id,
+    BlockState.readMem, TileShape.dropInsertedIndex]
+  by_cases hlt : SN + jL.val < seqLen s B_Seqlen
+  · simp only [hlt, decide_true, if_true, if_pos hlt, BlockState.readMem]
+    rw [show jL.val * 768 + s.pids 1 * 128 + e.val + (startLoc s B_Start_Loc + SN) * 768
+        = (startLoc s B_Start_Loc + (SN + jL.val)) * 768 + s.pids 1 * 128 + e.val from by ring]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+
 set_option maxRecDepth 8000 in
 /-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
 theorem nopad_body_split
