@@ -652,4 +652,60 @@ def slice4DFlat {B H S D : Nat} (Bk numKVBlocks : Nat)
       have := j.isLt
       omega⟩, d, PUnit.unit)
 
+/-! ### Sliding-window keep predicates (attention_fwd_triton3 cases 1/2/3)
+
+`attention_fwd_triton3` masks scores with a `dist`-based `tl.where(mask, qk, -inf)`,
+where for global query row `qg = qStart + i` and global key column
+`kg = j` (`qStart = start_m · BLOCK_M`),
+`dist = qg − kg + sliding_window_offset`. The three Python test cases instantiate
+`keep` (the STAGE-1 predicate mask) as follows:
+
+* **case 1** (`SLIDING_WINDOW`, not complement): keep ⟺ `0 ≤ dist < size`.
+* **case 2** (`COMPLEMENT_SLIDING_WINDOW`): keep ⟺ `dist ≥ size`.
+* **case 3** (no sliding window): keep ⟺ `True` (every key).
+
+Each is a decidable `keep : Fin M → Fin S → Prop`, so the masked closed form is
+exactly `attentionRealBase2PerKeyScalePred … (keep …)` and the streaming bridge
+`attentionRealBase2PerKeyScalePred_eq_streaming` applies directly. -/
+
+/-- Case-1 sliding-window keep predicate: `0 ≤ dist ∧ dist < size`, where
+`dist = (qStart + i) − j + offset` over ℤ. -/
+def slidingWindowKeep (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Prop :=
+  0 ≤ ((qStart : ℤ) + i.val - j.val + offset)
+    ∧ ((qStart : ℤ) + i.val - j.val + offset) < size
+
+instance slidingWindowKeepDecidable (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Decidable (slidingWindowKeep qStart offset size i j) := by
+  unfold slidingWindowKeep; infer_instance
+
+/-- Case-2 complement sliding-window keep predicate: `dist ≥ size`. -/
+def complementSlidingWindowKeep (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Prop :=
+  (size : ℤ) ≤ ((qStart : ℤ) + i.val - j.val + offset)
+
+instance complementSlidingWindowKeepDecidable (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) :
+    Decidable (complementSlidingWindowKeep qStart offset size i j) := by
+  unfold complementSlidingWindowKeep; infer_instance
+
+/-- Case-3 no-window keep predicate: every key is kept. -/
+def noWindowKeep {M S : Nat} (_i : Fin M) (_j : Fin S) : Prop := True
+
+instance noWindowKeepDecidable {M S : Nat} (i : Fin M) (j : Fin S) :
+    Decidable (noWindowKeep i j) := by unfold noWindowKeep; infer_instance
+
+/-- **The unmasked base-2 per-key-scale attention is the no-window predicate
+instance.** Case 3 (`SLIDING_WINDOW = 0`) of `attention_fwd_triton3` reduces to
+the plain `attentionRealBase2PerKeyScale` closed form. -/
+theorem attentionRealBase2PerKeyScalePred_noWindow_eq {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (idx : TileIndex [M, D]) :
+    attentionRealBase2PerKeyScalePred Q K V keyScale
+        (fun (i : Fin M) (j : Fin S) => noWindowKeep i j) idx
+      = attentionRealBase2PerKeyScale Q K V keyScale idx := by
+  obtain ⟨i, d, u⟩ := idx; cases u
+  simp [attentionRealBase2PerKeyScalePred, attentionRealBase2PerKeyScale,
+    noWindowKeep, pow2]
+
 end VeriTile.Triton
