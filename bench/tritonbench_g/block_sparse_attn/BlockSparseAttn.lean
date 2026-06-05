@@ -4097,5 +4097,53 @@ theorem bsa_beta_p0_eq_exp (A B Mn : WithBot ℝ)
       WithBot.coe_inj]
     rw [← Real.exp_add]; ring_nf
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **`bsa_step_mi`** (standalone m_i conjunct). The loop body's
+`m_i_new = where(m_i > m_ij, m_i, m_ij)` tile, with `m_i` holding `bsaMPartial c`
+(invariant) and `m_ij = sup' (qkM row)`, equals `bsaMPartial (c+1)`. -/
+theorem bsa_step_mi
+    (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks)
+    (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (SN : Nat) (gm : Fin 16 → Nat)
+    (qkScaled : Tile .real [16, 16])
+    (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)
+        ≤ qStart + i.val))
+    (hScore : ∀ (i jL : Fin 16), qkScaled.data (i, jL, PUnit.unit) =
+      (some (gScore Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)) : WithBot ℝ)) :
+    (Tile.select
+      (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil)
+        (⟨fun i : TileIndex [16] => bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1⟩ : Tile .real [16])
+        (⟨fun outIdx : TileIndex [16] =>
+          (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+            (fun k : Fin 16 =>
+              NumericDType.real.add (qkScaled.data (outIdx.1, k, PUnit.unit))
+                (if SN + k.val ≤ gm outIdx.1 then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)))⟩
+          : Tile .real [16]))
+      (⟨fun i : TileIndex [16] => bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1⟩ : Tile .real [16])
+      (⟨fun outIdx : TileIndex [16] =>
+        (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+          (fun k : Fin 16 =>
+            NumericDType.real.add (qkScaled.data (outIdx.1, k, PUnit.unit))
+              (if SN + k.val ≤ gm outIdx.1 then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)))⟩
+        : Tile .real [16]))
+    = (Tile.vec (fun i : Fin 16 =>
+        bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i)) := by
+  refine Tile.ext (fun outIdx => ?_)
+  obtain ⟨i, u⟩ := outIdx
+  simp only [Tile.select_data, Tile.cop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.vec, Tile.scalar_data_index]
+  rw [bsaMPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg scale c hc i]
+  have hbridge := bsa_mij_eq_sup_maskedScore qStart numKVBlocks c (Nat.succ_le_iff.mpr hc)
+    gpos Qg Kg scale SN gm qkScaled i (hMask i) (hScore i)
+  split_ifs with h
+  · rw [← hbridge]; exact (max_eq_left (le_of_lt (by simpa using h))).symm
+  · rw [← hbridge]; exact (max_eq_right (le_of_not_gt (by simpa using h))).symm
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
