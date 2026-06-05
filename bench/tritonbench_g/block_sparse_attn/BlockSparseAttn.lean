@@ -1763,6 +1763,14 @@ section BSARecipes
 
 open VeriTile.Triton
 
+/-- Local `evalOp` unfolding for `.ge` (no global simp lemma exists; mirrors
+triton-attention's `ta_evalOp_ge`). -/
+theorem bsa_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **`col_idx = tl.load(layout_csr_col_indices + layout_h·stride_col + col_idx_idx)`
@@ -1980,6 +1988,77 @@ theorem bsa_qk2_dot_eval (s : BlockState) (BM BN BD : Nat)
     erw [evalOp_dot [] (Op.ref .real [BM, BD] "q2") (Op.ref .real [BD, BN] "k"), hqr, hkr]; rfl
   rw [evalOp_add]
   simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk *= softmax_scale` statement eval** (CSR loop body L7): scale the raw score
+by the scalar `softmax_scale` (broadcast on the right). Block-sparse analogue of
+`ta_qk_scale_eval`. -/
+theorem bsa_qk_scale_eval (s : BlockState) (BM BN : Nat) (sc : ℝ)
+    (qktile : Tile .real [BM, BN]) (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BM, BN] "qk") (Op.const sc)) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qktile
+          (Tile.scalar (some sc : WithBot ℝ))) := by
+  rw [evalOp_mul]; simp [evalOp_ref, evalOp_const, hqk]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Causal additive `where` statement eval** (CSR loop body L8): block-sparse uses
+`qk += tl.where(offs_m[:,None] ≥ start_n + offs_n[None,:], 0, -inf)` — an *additive*
+causal mask (`0` for visible keys, `-inf` for future), unlike triton-attention's
+selecting `where(cond, qk, -inf)`. Given `offs_m = gm`, `offs_n = id`, `start_n = SN`,
+and running `qk`, lane `(a,b)` becomes `qk(a,b) + (if SN+b ≤ gm a then 0 else ⊥)`. -/
+theorem bsa_where_eval (s : BlockState) (BM BN SN : Nat)
+    (gm : Fin BM → Nat) (qktile : Tile .real [BM, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hom : s.regs .nat [BM] "offs_m" = some (Tile.vec gm))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.where
+          (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))))
+          (Op.broadcast (Op.const 0) [BM, BN]) (Op.broadcast Op.negInf [BM, BN]))) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          NumericDType.real.add (qktile.data idx)
+            (if SN + idx.2.1.val ≤ gm idx.1 then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))⟩ := by
+  have hexpM : @evalOp TileDType.nat [BM, 1]
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) s
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec gm)) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hom
+  have hexpN : @evalOp TileDType.nat [1, BN]
+      (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) s
+        = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val))) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hon
+  have haddN : @evalOp TileDType.nat [1, BN]
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))) s
+        = some (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+            (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val)))) := by
+    rw [evalOp_add]
+    rw [show evalOp (Op.ref .nat [] "start_n") s = some (Tile.scalar SN) from by
+      rw [evalOp_ref, hsn]]
+    rw [hexpN]; rfl
+  have hzero : @evalOp TileDType.real [BM, BN] (Op.broadcast (Op.const 0) [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (some (0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_const, Option.bind_eq_bind, Option.bind_some]; rfl
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast Op.negInf [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_add, evalOp_where, bsa_evalOp_ge]
+  simp only [evalOp_ref, hexpM, haddN, hqk, hzero, hbcast,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.bop_data, Tile.select_data, Tile.cop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, Tile.scalar, Tile.vec,
+    ComparableDType.nat]
+  congr 1
+  by_cases h : SN + idx.2.1.val ≤ gm idx.1
+  · rw [if_pos (by simpa [ComparableDType.ge] using h)]; simp [h]
+  · rw [if_neg (by simpa [ComparableDType.ge] using h)]; simp [h]
 
 end BSARecipes
 
