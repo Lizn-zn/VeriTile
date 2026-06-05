@@ -81,6 +81,7 @@ namespace VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-! ## Reusable execution primitives (recipe architecture)
 
