@@ -2108,6 +2108,158 @@ theorem bsa_lij_eval (s : BlockState) (BM BN : Nat)
   erw [evalOp_reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
     (Op.ref .real [BM, BN] "p"), hpr]; rfl
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`m_i_new = tl.maximum(m_i, m_ij)` statement eval** (CSR loop body L12): the
+running max merge, lowered to `where(m_i > m_ij, m_i, m_ij)`. -/
+theorem bsa_minew_eval (s : BlockState) (BM : Nat)
+    (mp mij : Tile .real [BM])
+    (hmp : s.regs .real [BM] "m_i" = some mp)
+    (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij"))
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.select
+          (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mp mij) mp mij) := by
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmp, hmij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`alpha = tl.exp(m_i - m_i_new)` statement eval** (CSR loop body L13): the
+running-denominator/accumulator rescale factor `exp(m_i - m_i_new)` (NATURAL exp). -/
+theorem bsa_alpha_eval (s : BlockState) (BM : Nat) (mp mn : Tile .real [BM])
+    (hmp : s.regs .real [BM] "m_i" = some mp)
+    (hmn : s.regs .real [BM] "m_i_new" = some mn) :
+    evalOp (Op.exp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_i_new"))) s
+      = some (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mp mn)) := by
+  rw [evalOp_exp, evalOp_sub]
+  simp only [evalOp_ref, hmp, hmn, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`beta = tl.exp(m_ij - m_i_new)` statement eval** (CSR loop body L14): the
+current-block numerator rescale factor `exp(m_ij - m_i_new)` (NATURAL exp). -/
+theorem bsa_beta_eval (s : BlockState) (BM : Nat) (mij mn : Tile .real [BM])
+    (hmij : s.regs .real [BM] "m_ij" = some mij)
+    (hmn : s.regs .real [BM] "m_i_new" = some mn) :
+    evalOp (Op.exp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "m_ij") (Op.ref .real [BM] "m_i_new"))) s
+      = some (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mij mn)) := by
+  rw [evalOp_exp, evalOp_sub]
+  simp only [evalOp_ref, hmij, hmn, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_i_new = alpha·l_i + beta·l_ij` statement eval** (CSR loop body L15): the
+online-softmax running-denominator update combining the rescaled old denominator and
+the current block's contribution. -/
+theorem bsa_linew_eval (s : BlockState) (BM : Nat)
+    (al li be lij : Tile .real [BM])
+    (hal : s.regs .real [BM] "alpha" = some al)
+    (hli : s.regs .real [BM] "l_i" = some li)
+    (hbe : s.regs .real [BM] "beta" = some be)
+    (hlij : s.regs .real [BM] "l_ij" = some lij) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "alpha") (Op.ref .real [BM] "l_i"))
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "beta") (Op.ref .real [BM] "l_ij"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) al li)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) be lij)) := by
+  rw [evalOp_add, evalOp_mul, evalOp_mul]
+  simp only [evalOp_ref, hal, hli, hbe, hlij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p_scale = beta / l_i_new` statement eval** (CSR loop body L16): the per-row
+factor folding the current-block numerator rescale into the final normalization. -/
+theorem bsa_pscale_eval (s : BlockState) (BM : Nat) (be ln : Tile .real [BM])
+    (hbe : s.regs .real [BM] "beta" = some be)
+    (hln : s.regs .real [BM] "l_i_new" = some ln) :
+    evalOp (Op.div .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "beta") (Op.ref .real [BM] "l_i_new")) s
+      = some (Tile.bop NumericDType.real.div (Broadcast.consSame Broadcast.nil) be ln) := by
+  rw [evalOp_div]
+  simp only [evalOp_ref, hbe, hln, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p *= p_scale[:, None]` statement eval** (CSR loop body L17): apply the per-row
+`p_scale` to the softmax numerator `p`. -/
+theorem bsa_p_rescale_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (ptile : Tile .real [BM, BN]) (ps : Tile .real [BM])
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hps : s.regs .real [BM] "p_scale" = some ps) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "p") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "p_scale"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          ptile (Tile.expandDim ⟨1, hax⟩ ps)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "p_scale")) s
+      = some (Tile.expandDim ⟨1, hax⟩ ps) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hps
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hp, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc_scale = l_i / l_i_new * alpha` statement eval** (CSR loop body L18): the
+per-row output-accumulator rescale factor `(l_i / l_i_new)·alpha`. -/
+theorem bsa_accscale_eval (s : BlockState) (BM : Nat) (li ln al : Tile .real [BM])
+    (hli : s.regs .real [BM] "l_i" = some li)
+    (hln : s.regs .real [BM] "l_i_new" = some ln)
+    (hal : s.regs .real [BM] "alpha" = some al) :
+    evalOp (Op.mul .real (Broadcast.consSame Broadcast.nil)
+        (Op.div .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "l_i_new"))
+        (Op.ref .real [BM] "alpha")) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.div (Broadcast.consSame Broadcast.nil) li ln) al) := by
+  rw [evalOp_mul, evalOp_div]
+  simp only [evalOp_ref, hli, hln, hal, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc *= acc_scale[:, None]` statement eval** (CSR loop body L19, first D-block):
+rescale the first output accumulator by the per-row `acc_scale`. -/
+theorem bsa_acc_rescale_eval (s : BlockState) (BM BD : Nat) (hax : 1 < [BM].length.succ)
+    (acctile : Tile .real [BM, BD]) (asc : Tile .real [BM])
+    (hacc : s.regs .real [BM, BD] "acc" = some acctile)
+    (hasc : s.regs .real [BM] "acc_scale" = some asc) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "acc_scale"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acctile (Tile.expandDim ⟨1, hax⟩ asc)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "acc_scale")) s
+      = some (Tile.expandDim ⟨1, hax⟩ asc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hasc
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc2 *= acc_scale[:, None]` statement eval** (CSR loop body L20, second
+D-block): rescale the second output accumulator by the **same** per-row `acc_scale`
+(both D-blocks share the softmax recurrence). -/
+theorem bsa_acc2_rescale_eval (s : BlockState) (BM BD : Nat) (hax : 1 < [BM].length.succ)
+    (acc2tile : Tile .real [BM, BD]) (asc : Tile .real [BM])
+    (hacc2 : s.regs .real [BM, BD] "acc2" = some acc2tile)
+    (hasc : s.regs .real [BM] "acc_scale" = some asc) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc2") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "acc_scale"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acc2tile (Tile.expandDim ⟨1, hax⟩ asc)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "acc_scale")) s
+      = some (Tile.expandDim ⟨1, hax⟩ asc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hasc
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hacc2, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
