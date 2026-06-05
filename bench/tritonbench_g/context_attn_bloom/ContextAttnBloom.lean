@@ -1149,6 +1149,99 @@ theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Ti
     TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk, hmij,
     NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
 
+/-! ### Bloom natural-exp cell bridges (analogues with `WithBot.realExp`)
+
+The bloom loop body uses **natural** `tl.exp` (`WithBot.realExp`), feeding the
+base-2 `osStep` fold via the invariant's log2-scaling (`m_i = log2·(running max)`,
+so `realExp((Mc − Mc₊₁)·log2) = realExp2(Mc − Mc₊₁) = pow2(Mc − Mc₊₁)`). -/
+
+/-- `realExp (x · log 2) = realExp2 x` on the carrier: natural `exp` of a
+log2-scaled value is the base-2 `realExp2`. -/
+theorem ctxg_realExp_log2 (x : ℝ) :
+    WithBot.realExp (((x * Real.log 2 : ℝ) : WithBot ℝ)) = WithBot.realExp2 ((x : ℝ) : WithBot ℝ) := by
+  rfl
+
+/-- `WithBot.realExp` of a `some`-cell is `some (Real.exp …)` (shape-generic). -/
+theorem ctxg_exp_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N])
+    (r : Fin M) (jL : Fin N) (hx : x.data (r, jL, PUnit.unit) = some (h r jL)) :
+    (Tile.uop WithBot.realExp x).data (r, jL, PUnit.unit) = some (Real.exp (h r jL)) := by
+  show WithBot.realExp (x.data (r, jL, PUnit.unit)) = _
+  rw [hx]; rfl
+
+/-- `realExp` is total (never `⊥`). -/
+theorem ctxg_realExp_eq_some_unbotD (z : WithBot ℝ) :
+    WithBot.realExp z = some ((WithBot.realExp z).unbotD 0) := by
+  cases z <;> rfl
+
+/-- The `q·k` dot cell is the (unscaled) score (shape-generic `[BM,D]·[D,BN]`). -/
+theorem ctx_dot_score_cell {BM BN D : Nat}
+    (qtile : Tile .real [BM, D]) (ktile : Tile .real [D, BN]) (i : Fin BM) (j : Fin BN)
+    (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ)
+    (hq : ∀ e : Fin D, qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ e : Fin D, ktile.data (e, j, PUnit.unit) = some (kf j e)) :
+    (Tile.dot [] qtile ktile).data (i, j, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin D => qf i e * kf j e)) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (qf i e * kf j e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [hq e, hk e]; rfl)]
+  rw [show (fun e : Fin D => (some (qf i e * kf j e) : WithBot ℝ))
+        = (fun e : Fin D => ((qf i e * kf j e : ℝ) : WithBot ℝ)) from rfl,
+    ← WithBot.coe_sum]; rfl
+
+/-- The bloom kernel's masked `qk` cell at lane `(i,j)`: active lane gets the
+scaled dot `sm·Σ_e qf·kf`; future lane gets the `-1e8` sentinel. -/
+noncomputable def bloomQkCell {BM BN D : Nat} (sm : ℝ) (SN plen : Nat) (gOM : Fin BM → Nat)
+    (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ) (i : Fin BM) (j : Fin BN) : ℝ :=
+  if SN + j.val ≤ gOM i + plen then
+    sm * Finset.univ.sum (fun e : Fin D => qf i e * kf j e)
+  else (0.0 - 100000000.0 : ℝ)
+
+/-- **The bloom kernel's `qkT` cell is `some (bloomQkCell …)`** (shape-generic).
+The `tl.where(mask, (0 + dot)·sm, -1e8)` register (the bloom `+0` from
+`qk = tl.zeros; qk += dot`) reads `qf`/`kf` and has cell `(i,j) = bloomQkCell`. -/
+theorem bloom_qkT_cell {BM BN D : Nat} (sm : ℝ) (SN plen : Nat) (gOM : Fin BM → Nat)
+    (qtile : Tile .real [BM, D]) (kloadT : Tile .real [D, BN]) (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ)
+    (hq : ∀ (i : Fin BM) (e : Fin D), qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ (j : Fin BN) (e : Fin D), kloadT.data (e, j, PUnit.unit) = some (kf j e))
+    (i : Fin BM) (j : Fin BN) :
+    (Tile.select
+        (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN])
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+            (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN])
+            (Tile.dot [] qtile kloadT))
+          (Tile.scalar (some sm)))
+        (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 100000000.0 : ℝ)⟩ : Tile .real [BM, BN])).data
+      (i, j, PUnit.unit)
+      = some (bloomQkCell sm SN plen gOM qf kf i j) := by
+  rw [Tile.select_data, bloomQkCell]
+  have hsel : (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN]).data (i, j, PUnit.unit)
+      = decide (SN + j.val ≤ gOM i + plen) := rfl
+  by_cases h : SN + j.val ≤ gOM i + plen
+  · rw [hsel, if_pos h]
+    simp only [decide_eq_true_eq.mpr h, if_true]
+    rw [Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
+    have hadd : (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+        (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN])
+        (Tile.dot [] qtile kloadT)).data (i, j, PUnit.unit)
+        = some (Finset.univ.sum (fun e : Fin D => qf i e * kf j e)) := by
+      rw [Tile.bop_data]
+      simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add]
+      rw [ctx_dot_score_cell qtile kloadT i j qf kf (hq i) (hk j)]
+      show WithBot.realAdd (some 0) (some _) = _
+      simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rw [zero_add]
+    rw [hadd]
+    show Option.map₂ (· * ·) _ _ = _
+    simp only [Tile.scalar_data, Option.map₂]
+    refine congrArg some ?_; ring
+  · rw [hsel, if_neg h]
+    simp only [decide_eq_false_iff_not.mpr h, Bool.false_eq_true, if_false]
+
 /-! ### Per-statement `evalOp` helpers (parametric) -/
 
 /-- Axis-0 `expandDim` over a `nat` register (`offs_n[None, :]` row broadcast). -/
