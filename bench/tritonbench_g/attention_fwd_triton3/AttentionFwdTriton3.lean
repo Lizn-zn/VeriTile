@@ -1579,4 +1579,48 @@ theorem aft3_advance_v_eval (s : BlockState) (region : RegionName)
   ext i
   rfl
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L2: `qk = tl.zeros([BLOCK_M, BLOCK_N])`** — the all-`0` neutral dot seed. -/
+theorem aft3_qkzeros_eval (s : BlockState) (BM BN : Nat) :
+    evalOp (Op.full [BM, BN] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L3: `qk += tl.dot(q, k)`** — adds the `q·k` dot to the zero-seeded `qk`
+tile. Both `q` and `k` are `.real` (K is loaded transposed by the block-ptr
+`order=(0,1)`, so no `tl.trans` appears in the AST). -/
+theorem aft3_qk_dot_eval (s : BlockState) (BM BN BD : Nat)
+    (qktile : Tile .real [BM, BN]) (qtile : Tile .real [BM, BD]) (ktile : Tile .real [BD, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq : s.regs .real [BM, BD] "q" = some qtile)
+    (hk : s.regs .real [BD, BN] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qktile (Tile.dot [] qtile ktile)) := by
+  have hqr : evalOp (Op.ref .real [BM, BD] "q") s = some qtile := by rw [evalOp_ref, hq]
+  have hkr : evalOp (Op.ref .real [BD, BN] "k") s = some ktile := by rw [evalOp_ref, hk]
+  have hdot : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k")) s
+      = some (Tile.dot [] qtile ktile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"), hqr, hkr]; rfl
+  rw [evalOp_add]; simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L4: `qk = qk * qk_scale`** — scale by the scalar `qk_scale = keyScale3`
+(`(1/8)·log2e`), broadcast on the right. Each lane's `exp2(qk·qk_scale)` weight is
+exactly `pow2 (keyScale3 · raw)`. -/
+theorem aft3_qk_scale_eval (s : BlockState) (BM BN : Nat) (sc : ℝ)
+    (qktile : Tile .real [BM, BN]) (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BM, BN] "qk") (Op.const sc)) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qktile
+          (Tile.scalar (some sc : WithBot ℝ))) := by
+  rw [evalOp_mul]; simp [evalOp_ref, evalOp_const, hqk]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
