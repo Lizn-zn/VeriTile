@@ -1,5 +1,6 @@
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Semantics.StreamingAccumulator
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
@@ -443,6 +444,642 @@ noncomputable def blockSparseAttnClosedForm
     w r * vRowBSA s V num_heads num_kv_heads stride_vb stride_vh stride_vn
       (n r) (dBlockBase + d))
   numer / denom
+
+/-! ## Gathered global-causal streaming math (`BSAMathCausal`)
+
+This is the analog of `VeriTile.Examples.FA1MathCausal`, but the causal predicate
+is evaluated on the **gathered global key position** `gpos r` rather than on the
+flat streaming index `r`. The block-sparse kernel walks a CSR-selected,
+non-contiguous set of `BLOCK_N`-key blocks; after gathering, the `r`-th streamed
+key sits at global position `gpos r = selKeyGlobal r`, and the online-softmax
+masks key `r` exactly when `gpos r ≤ qStart + i` (the Python
+`tl.where(offs_m ≥ start_n + offs_n, 0, -inf)`).
+
+The streaming accumulators (`bsaMPartial`/`bsaLPartial`/`bsaOPartial`) run over
+the **gathered** key/value stream `Kg`/`Vg : TileIndex [Bk * N, D] → ℝ`
+(`Kg (r, e)` is the `e`-th channel of the key gathered at flat index `r`). Only
+the mask predicate consults `gpos`; the scores/values read the gathered tile at
+`r` directly. This is a strict generalization of `FA1MathCausal` (recover FA1 by
+`gpos = fun j => j.val`), so every lemma mirrors it line-for-lemma, substituting
+the gathered-global predicate.
+
+The two output D-blocks share the **same** accumulator recurrence (same scores,
+same softmax weights); they differ only in which V projection is read (`Vg` for
+block 0, a second `Vg2`/channel offset for block 1). Hence one accumulator
+family suffices; the second D-block is obtained by re-instantiating `bsaOPartial`
+with the second value tile. -/
+
+namespace BSAMathCausal
+
+open VeriTile.Triton
+
+/-- Gathered scaled score: `scale · Σ_e Q[i,e] · Kg[r,e]`, reading the gathered
+key tile at flat stream index `r` (no global remap on the score itself). -/
+noncomputable def gScore {M N D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (r : Fin (Bk * N)) : ℝ :=
+  scale * Finset.univ.sum (fun d : Fin D =>
+    Q (i, d, PUnit.unit) * Kg (r, d, PUnit.unit))
+
+/-- Causal masked score under the **gathered global position** predicate.
+Returns `⊥` when the gathered key's global position `gpos r` is in the future
+(`> qStart + i`), otherwise the ordinary gathered scaled score. -/
+noncomputable def maskedScore {M N D Bk : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (r : Fin (Bk * N)) : WithBot ℝ :=
+  if gpos r ≤ qStart + i.val then
+    ((gScore Q Kg scale i r : ℝ) : WithBot ℝ)
+  else
+    ⊥
+
+@[simp] theorem maskedScore_of_le {M N D Bk : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (r : Fin (Bk * N)) (h : gpos r ≤ qStart + i.val) :
+    maskedScore qStart gpos Q Kg scale i r =
+      ((gScore Q Kg scale i r : ℝ) : WithBot ℝ) := by
+  simp [maskedScore, h]
+
+@[simp] theorem maskedScore_of_not_le {M N D Bk : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (r : Fin (Bk * N)) (h : ¬ gpos r ≤ qStart + i.val) :
+    maskedScore qStart gpos Q Kg scale i r = (⊥ : WithBot ℝ) := by
+  simp [maskedScore, h]
+
+/-- Running per-row max of gathered causal masked scores over the first `k`
+KV blocks. Future (gathered-global) keys enter as `⊥`. -/
+noncomputable def bsaMPartial {M D : Nat} (Bk : Nat)
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        max (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i)
+          ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+            maskedScore qStart gpos Q Kg scale i
+              (StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal))
+      else
+        bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i
+
+/-- Running causal softmax normalizer, shifted by the running max. -/
+noncomputable def bsaLPartial {M D : Nat} (Bk : Nat)
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        let alpha :=
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i)
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0
+        alpha * bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k i +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (maskedScore qStart gpos Q Kg scale i
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal))
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0)
+      else
+        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k i
+
+/-- Running causal unnormalized output accumulator over the gathered value
+stream `Vg`. The two D-blocks differ only by which `Vg` is supplied. -/
+noncomputable def bsaOPartial {M D : Nat} (Bk : Nat)
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → TileIndex [M, D] → ℝ
+  | 0, _ => 0
+  | k + 1, idx =>
+      if h : k + 1 ≤ numKVBlocks then
+        let alpha :=
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0
+        alpha * bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            let j := StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal
+            (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (maskedScore qStart gpos Q Kg scale idx.1 j)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+              Vg (j, idx.2.1, PUnit.unit))
+      else
+        bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx
+
+/-- Recurrence unfold for `bsaMPartial` at iteration `k+1`, when `k < N`. -/
+theorem bsaMPartial_succ_of_lt {M D Bk : Nat}
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i =
+      max (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          maskedScore qStart gpos Q Kg scale i
+            (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal)) := by
+  conv_lhs => rw [bsaMPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+/-- Recurrence unfold for `bsaLPartial` at iteration `k+1`, when `k < N`. -/
+theorem bsaLPartial_succ_of_lt {M D Bk : Nat}
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i =
+      let alpha :=
+        (WithBot.realExp
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i)
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0
+      alpha * bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k i +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (maskedScore qStart gpos Q Kg scale i
+                (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal))
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0) := by
+  conv_lhs => rw [bsaLPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+/-- Recurrence unfold for `bsaOPartial` at iteration `k+1`, when `k < N`. -/
+theorem bsaOPartial_succ_of_lt {M D Bk : Nat}
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale (k + 1) idx =
+      let alpha :=
+        (WithBot.realExp
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0
+      alpha * bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          let j := StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (maskedScore qStart gpos Q Kg scale idx.1 j)
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+            Vg (j, idx.2.1, PUnit.unit)) := by
+  conv_lhs => rw [bsaOPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+/-! ### Gathered m-free reference sums -/
+
+/-- Gathered-causal m-free normalizer over the first `k` KV blocks. -/
+noncomputable def lFree {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k ≤ N) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+    if gpos j ≤ qStart + i.val then
+      Real.exp (gScore Q Kg scale i j)
+    else
+      0))
+
+/-- Gathered-causal m-free unnormalized output over the first `k` KV blocks. -/
+noncomputable def oFree {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k ≤ N)
+    (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+    (if gpos j ≤ qStart + idx.1.val then
+      Real.exp (gScore Q Kg scale idx.1 j)
+    else
+      0) * Vg (j, idx.2.1, PUnit.unit)))
+
+@[simp] theorem lFree_zero {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M) :
+    lFree qStart gpos Q Kg scale 0 (Nat.zero_le _) i = 0 := by
+  unfold lFree
+  simp
+
+@[simp] theorem oFree_zero {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFree qStart gpos Q Kg Vg scale 0 (Nat.zero_le _) idx = 0 := by
+  unfold oFree
+  simp
+
+/-- Recurrence for gathered-causal `lFree`. -/
+theorem lFree_succ {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k + 1 ≤ N) (i : Fin M) :
+    lFree qStart gpos Q Kg scale (k + 1) hk i =
+      lFree qStart gpos Q Kg scale k (Nat.le_of_succ_le hk) i +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        let j := StreamingAccumulator.blockIndex Bk N k hk jL
+        if gpos j ≤ qStart + i.val then
+          Real.exp (gScore Q Kg scale i j)
+        else
+          0) := by
+  unfold lFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- Recurrence for gathered-causal `oFree`. -/
+theorem oFree_succ {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k + 1 ≤ N)
+    (idx : TileIndex [M, D]) :
+    oFree qStart gpos Q Kg Vg scale (k + 1) hk idx =
+      oFree qStart gpos Q Kg Vg scale k (Nat.le_of_succ_le hk) idx +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        let j := StreamingAccumulator.blockIndex Bk N k hk jL
+        (if gpos j ≤ qStart + idx.1.val then
+          Real.exp (gScore Q Kg scale idx.1 j)
+        else
+          0) * Vg (j, idx.2.1, PUnit.unit)) := by
+  unfold oFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- Flat form of the final gathered-causal normalizer. -/
+theorem lFree_eq_flat {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M) :
+    lFree qStart gpos Q Kg scale N (le_refl N) i =
+      Finset.univ.sum (fun j : Fin (Bk * N) =>
+        if gpos j ≤ qStart + i.val then
+          Real.exp (gScore Q Kg scale i j)
+        else
+          0) := by
+  unfold lFree
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk N) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
+
+/-- Flat form of the final gathered-causal output accumulator. -/
+theorem oFree_eq_flat {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFree qStart gpos Q Kg Vg scale N (le_refl N) idx =
+      Finset.univ.sum (fun j : Fin (Bk * N) =>
+        (if gpos j ≤ qStart + idx.1.val then
+          Real.exp (gScore Q Kg scale idx.1 j)
+        else
+          0) * Vg (j, idx.2.1, PUnit.unit)) := by
+  unfold oFree
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk N) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
+
+/-- `bsaMPartial (k+1) i` is non-`⊥` whenever `0 < Bk`, `k+1 ≤ numKVBlocks`,
+and the first gathered key (flat index `0`) is causally visible
+(`gpos 0 ≤ qStart + i`). For block-sparse attention the first CSR-selected
+block has global base `col_idx · BLOCK_N` and the kernel only selects blocks at
+or before the query (so the first selected key is visible); this is supplied as
+`hVis0`. -/
+theorem bsaMPartial_succ_ne_bot {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k + 1 ≤ numKVBlocks) (i : Fin M)
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + i.val) :
+    bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i ≠ ⊥ := by
+  induction k with
+  | zero =>
+      rw [bsaMPartial_succ_of_lt qStart numKVBlocks gpos Q Kg scale 0
+            (Nat.lt_of_succ_le hk) i]
+      have hidx0 : (StreamingAccumulator.blockIndex Bk numKVBlocks 0
+                (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk))
+                (⟨0, hBk⟩ : Fin Bk)) = ⟨0, Nat.mul_pos hBk hN⟩ := by
+        apply Fin.ext; simp [StreamingAccumulator.blockIndex]
+      have h0 : maskedScore qStart gpos Q Kg scale i
+              (StreamingAccumulator.blockIndex Bk numKVBlocks 0
+                (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk))
+                (⟨0, hBk⟩ : Fin Bk)) ≠ ⊥ := by
+        rw [maskedScore_of_le qStart gpos Q Kg scale i _ (by rw [hidx0]; exact hVis0)]
+        exact WithBot.coe_ne_bot
+      show bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale 0 i ⊔ _ ≠ ⊥
+      change ⊥ ⊔ _ ≠ ⊥
+      rw [bot_sup_eq]
+      simp [Finset.sup_eq_bot_iff]
+      exact ⟨⟨0, hBk⟩, h0⟩
+  | succ k' ih =>
+      have hk' : k' + 1 ≤ numKVBlocks := by omega
+      rw [bsaMPartial_succ_of_lt qStart numKVBlocks gpos Q Kg scale (k' + 1)
+            (Nat.lt_of_succ_le hk) i]
+      intro hcontra
+      have h_left : bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k' + 1) i ≤ ⊥ := by
+        rw [← hcontra]; exact le_max_left _ _
+      exact ih hk' (le_bot_iff.mp h_left)
+
+/-- Gathered-causal streaming normalizer equals the gathered m-free normalizer
+times the final exponential shift. Mirrors `FA1MathCausal.lPartial_eq_mShifted`
+with the global-position predicate. -/
+theorem bsaLPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (i : Fin M)
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + i.val) :
+    bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k i =
+      Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i).unbotD 0) *
+        lFree qStart gpos Q Kg scale k hk i := by
+  induction k with
+  | zero =>
+      show (0 : ℝ) =
+        Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+          lFree qStart gpos Q Kg scale 0 hk i
+      rw [lFree_zero]
+      ring
+  | succ k ih =>
+      have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+      rw [bsaLPartial_succ_of_lt qStart numKVBlocks gpos Q Kg scale k
+        (Nat.lt_of_succ_le hk) i]
+      rw [ih hk']
+      rw [lFree_succ qStart gpos Q Kg scale k hk i, mul_add]
+      have hSumB :
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (maskedScore qStart gpos Q Kg scale i
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal))
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0)
+          =
+          Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i).unbotD 0) *
+            (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+              let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
+              if gpos j ≤ qStart + i.val then
+                Real.exp (gScore Q Kg scale i j)
+              else
+                0) := by
+        rw [Finset.mul_sum]
+        apply Finset.sum_congr rfl
+        intro jLocal _
+        let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
+        have hjEq :
+            StreamingAccumulator.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal = j := by
+          rfl
+        rw [hjEq]
+        by_cases hvis : gpos j ≤ qStart + i.val
+        · rw [maskedScore_of_le qStart gpos Q Kg scale i j hvis]
+          obtain ⟨m, hm⟩ := WithBot.ne_bot_iff_exists.mp
+            (bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale k hk i
+              hVis0)
+          rw [← hm]
+          simp [hvis]
+          rw [show gScore Q Kg scale i j - m = -m + gScore Q Kg scale i j by ring,
+              Real.exp_add]
+        · rw [maskedScore_of_not_le qStart gpos Q Kg scale i j hvis]
+          rw [show (Option.map₂ (fun x y : ℝ => x - y) (⊥ : WithBot ℝ)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))
+              = (⊥ : WithBot ℝ) from rfl]
+          rw [if_neg hvis]
+          show (WithBot.realExp (⊥ : WithBot ℝ)).unbotD 0 = _
+          simp [WithBot.realExp]
+      have hSumA :
+          (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i))).unbotD 0 *
+            (Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k i).unbotD 0) *
+              lFree qStart gpos Q Kg scale k hk' i)
+          =
+          Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) i).unbotD 0) *
+            lFree qStart gpos Q Kg scale k hk' i := by
+        rcases Nat.eq_zero_or_pos k with hkz | hkpos
+        · subst hkz
+          rw [lFree_zero]
+          ring
+        · obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+          have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+          have hmk_ne := bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale k' hk_succ i hVis0
+          have hmk1_ne := bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale (k' + 1) hk i hVis0
+          obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+          obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+          rw [← hrk, ← hrk1]
+          simp [WithBot.realExp]
+          rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+            rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+          rw [show Real.exp (-rk1) * Real.exp rk *
+                    (Real.exp (-rk) * lFree qStart gpos Q Kg scale (k' + 1) hk' i)
+                = Real.exp (-rk1) *
+                    (Real.exp rk * Real.exp (-rk) *
+                      lFree qStart gpos Q Kg scale (k' + 1) hk' i) by ring]
+          rw [show Real.exp rk * Real.exp (-rk) = 1 by
+            rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+          ring
+      linarith [hSumA, hSumB]
+
+/-- Gathered-causal streaming output accumulator equals the gathered m-free
+output accumulator times the final exponential shift. -/
+theorem bsaOPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D])
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
+    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx =
+      Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1).unbotD 0) *
+        oFree qStart gpos Q Kg Vg scale k hk idx := by
+  induction k with
+  | zero =>
+      show (0 : ℝ) =
+        Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+          oFree qStart gpos Q Kg Vg scale 0 hk idx
+      rw [oFree_zero]
+      ring
+  | succ k ih =>
+      have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+      rw [bsaOPartial_succ_of_lt qStart numKVBlocks gpos Q Kg Vg scale k
+        (Nat.lt_of_succ_le hk) idx]
+      rw [ih hk']
+      rw [oFree_succ qStart gpos Q Kg Vg scale k hk idx, mul_add]
+      have hSumB :
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            let j := StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal
+            (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (maskedScore qStart gpos Q Kg scale idx.1 j)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+              Vg (j, idx.2.1, PUnit.unit))
+          =
+          Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1).unbotD 0) *
+            (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+              let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
+              (if gpos j ≤ qStart + idx.1.val then
+                Real.exp (gScore Q Kg scale idx.1 j)
+              else
+                0) * Vg (j, idx.2.1, PUnit.unit)) := by
+        rw [Finset.mul_sum]
+        apply Finset.sum_congr rfl
+        intro jLocal _
+        let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
+        have hjEq :
+            StreamingAccumulator.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal = j := by
+          rfl
+        rw [hjEq]
+        dsimp only
+        by_cases hvis : gpos j ≤ qStart + idx.1.val
+        · rw [maskedScore_of_le qStart gpos Q Kg scale idx.1 j hvis]
+          obtain ⟨m, hm⟩ := WithBot.ne_bot_iff_exists.mp
+            (bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale k hk idx.1
+              hVis0)
+          rw [← hm]
+          simp [hvis]
+          rw [show gScore Q Kg scale idx.1 j - m =
+                -m + gScore Q Kg scale idx.1 j by ring,
+              Real.exp_add]
+          ring
+        · rw [maskedScore_of_not_le qStart gpos Q Kg scale idx.1 j hvis]
+          rw [show (Option.map₂ (fun x y : ℝ => x - y) (⊥ : WithBot ℝ)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))
+              = (⊥ : WithBot ℝ) from rfl]
+          rw [if_neg hvis]
+          show (WithBot.realExp (⊥ : WithBot ℝ)).unbotD 0 * Vg (j, idx.2.1, PUnit.unit) = _
+          simp [WithBot.realExp]
+      have hSumA :
+          (WithBot.realExp
+              (Option.map₂ (fun x y : ℝ => x - y)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+                (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+            (Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1).unbotD 0) *
+              oFree qStart gpos Q Kg Vg scale k hk' idx)
+          =
+          Real.exp (-(bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1).unbotD 0) *
+            oFree qStart gpos Q Kg Vg scale k hk' idx := by
+        rcases Nat.eq_zero_or_pos k with hkz | hkpos
+        · subst hkz
+          rw [oFree_zero]
+          ring
+        · obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+          have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+          have hmk_ne := bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale k' hk_succ idx.1 hVis0
+          have hmk1_ne := bsaMPartial_succ_ne_bot hBk qStart numKVBlocks hN gpos Q Kg scale (k' + 1) hk idx.1 hVis0
+          obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+          obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+          rw [← hrk, ← hrk1]
+          simp [WithBot.realExp]
+          rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+            rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+          rw [show Real.exp (-rk1) * Real.exp rk *
+                    (Real.exp (-rk) * oFree qStart gpos Q Kg Vg scale (k' + 1) hk' idx)
+                = Real.exp (-rk1) *
+                    (Real.exp rk * Real.exp (-rk) *
+                      oFree qStart gpos Q Kg Vg scale (k' + 1) hk' idx) by ring]
+          rw [show Real.exp rk * Real.exp (-rk) = 1 by
+            rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+          ring
+      linarith [hSumA, hSumB]
+
+/-- Gathered-causal attention closed form over the flat selected-key stream.
+This is the `attentionRealCausalBlock` analog with the causal predicate on the
+gathered global position `gpos`. It is exactly the shape of
+`blockSparseAttnClosedForm` (gathered keys/values, global-position causal mask). -/
+noncomputable def bsaAttn {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let weight := fun j : Fin (Bk * N) =>
+      if gpos j ≤ qStart + i.val then Real.exp (gScore Q Kg scale i j) else 0
+    let denom := Finset.univ.sum (fun j => weight j)
+    let numer := Finset.univ.sum (fun j => weight j * Vg (j, d, PUnit.unit))
+    numer / denom
+
+/-- Gathered m-free ratio is exactly the gathered closed-form attention. -/
+theorem oFree_div_lFree_eq_bsaAttn {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFree qStart gpos Q Kg Vg scale N (le_refl N) idx /
+        lFree qStart gpos Q Kg scale N (le_refl N) idx.1
+      = bsaAttn qStart gpos Q Kg Vg scale idx := by
+  rw [oFree_eq_flat, lFree_eq_flat]
+  unfold bsaAttn
+  rfl
+
+/-- The final gathered-causal m-free normalizer is positive, **given** the first
+gathered key is causally visible (`hVis0`). This is the block-sparse analog of
+`FA1MathCausal.lFree_final_pos`; in the dense FA1 case `gpos 0 = 0` makes
+visibility automatic, but with CSR gathering it is supplied as a hypothesis
+(discharged at exec-assembly time from the CSR selection schedule). -/
+theorem lFree_final_pos {M D Bk N : Nat} (hBk : 0 < Bk) (hN : 0 < N)
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M)
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + i.val) :
+    0 < lFree qStart gpos Q Kg scale N (le_refl N) i := by
+  rw [lFree_eq_flat]
+  apply Finset.sum_pos'
+  · intro j _
+    by_cases h : gpos j ≤ qStart + i.val
+    · simp [h, le_of_lt (Real.exp_pos _)]
+    · simp [h]
+  · refine ⟨⟨0, Nat.mul_pos hBk hN⟩, Finset.mem_univ _, ?_⟩
+    simp [hVis0, Real.exp_pos]
+
+/-- The final gathered-causal streaming normalizer is nonzero under non-empty
+KV scope and first-key visibility. -/
+theorem bsaLPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (i : Fin M)
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + i.val) :
+    bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale numKVBlocks i ≠ 0 := by
+  rw [bsaLPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg scale numKVBlocks
+      (le_refl _) i hVis0]
+  exact mul_ne_zero (Real.exp_ne_zero _)
+    (ne_of_gt (lFree_final_pos hBk hN qStart gpos Q Kg scale i hVis0))
+
+/-- **Load-bearing streaming-eq bridge.** The final gathered-causal streaming
+ratio equals the gathered closed-form attention `bsaAttn` — i.e. the online
+softmax over the CSR-selected (non-contiguous, global-causal) key stream computes
+exactly the closed-form attention. This is the block-sparse analog of
+`FA1MathCausal.streaming_eq_attentionRealCausalBlock`. -/
+theorem bsaStreaming_eq_bsaAttn {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D])
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
+    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale numKVBlocks idx /
+        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale numKVBlocks idx.1
+      = bsaAttn qStart gpos Q Kg Vg scale idx := by
+  have hl : bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale numKVBlocks idx.1 ≠ 0 :=
+    bsaLPartial_final_ne_zero hBk qStart numKVBlocks hN gpos Q Kg scale idx.1 hVis0
+  rw [bsaOPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg Vg scale numKVBlocks
+        (le_refl _) idx hVis0,
+      bsaLPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg scale numKVBlocks
+        (le_refl _) idx.1 hVis0]
+  rw [mul_div_mul_left _ _ (Real.exp_ne_zero _)]
+  exact oFree_div_lFree_eq_bsaAttn qStart gpos Q Kg Vg scale idx
+
+end BSAMathCausal
 
 /-- Algorithm-layer correctness for the first block-sparse output store. -/
 theorem block_sparse_attn_output_store_slice_correct
