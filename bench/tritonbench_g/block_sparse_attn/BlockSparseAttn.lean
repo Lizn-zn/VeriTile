@@ -2060,6 +2060,54 @@ theorem bsa_where_eval (s : BlockState) (BM BN SN : Nat)
   · rw [if_pos (by simpa [ComparableDType.ge] using h)]; simp [h]
   · rw [if_neg (by simpa [ComparableDType.ge] using h)]; simp [h]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`m_ij = tl.max(qk, 1)` statement eval** (CSR loop body L9): the per-row max of
+the masked score tile (the *current-block* max, before merging with the running
+`m_i`). `reduceMax false`'s `eraseAxis` result-shape blocks `rw` matching, so the
+reduced row is supplied as `hrm` and defeq-coerced to `[BM]`. -/
+theorem bsa_mij_eval (s : BlockState) (BM BN : Nat)
+    (qktile : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qktile = some rmaxT) :
+    evalOp (Op.reduceMax (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+        (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+  rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p = tl.exp(qk - m_ij[:, None])` statement eval** (CSR loop body L10): the
+NATURAL-exp (`tl.exp`, not `exp2`) softmax numerator shift by the current-block max
+`m_ij`. `expandDim`'s `insertAxis` shape is normalized to `[BM,1]` by `sub`. -/
+theorem bsa_p_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (qktile : Tile .real [BM, BN]) (mij : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.exp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij")))) s
+      = some (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            qktile (Tile.expandDim ⟨1, hax⟩ mij))) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mij) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmij
+  rw [evalOp_exp, evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_ij = tl.sum(p, 1)` statement eval** (CSR loop body L11): the per-row sum of
+the (current-block, `m_ij`-shifted) softmax numerator `p`. -/
+theorem bsa_lij_eval (s : BlockState) (BM BN : Nat)
+    (ptile : Tile .real [BM, BN])
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+        (Op.ref .real [BM, BN] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) ptile) := by
+  have hpr : evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by rw [evalOp_ref, hp]
+  erw [evalOp_reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+    (Op.ref .real [BM, BN] "p"), hpr]; rfl
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
