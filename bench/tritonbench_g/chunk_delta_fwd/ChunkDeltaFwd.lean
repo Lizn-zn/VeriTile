@@ -2079,7 +2079,9 @@ theorem cdfOuterBody_step
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
     (hInjV : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
     (hInjH : Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t idx))
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
+    (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
+    (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
     (hpids : sin.pids = s.pids)
     (hik : sin.regs .nat [] "i_k" = some (Tile.scalar 0))
     (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
@@ -2154,10 +2156,11 @@ theorem cdfOuterBody_step
   have hsP_mem : ∀ rg off, sP.readMem rg off = sin.readMem rg off := by
     intro rg off; rw [← hsP, BlockState.setReg_readMem]
   -- memory of sIn: regions ≠ h match s (h-store only touches h)
-  have hmemIn : ∀ rg, rg ≠ h → ∀ off, sIn.readMem rg off = s.readMem rg off := by
-    intro rg hrg off
+  have hmemIn : ∀ rg, rg ≠ h → (∀ off, sin.readMem rg off = s.readMem rg off) →
+      ∀ off, sIn.readMem rg off = s.readMem rg off := by
+    intro rg hrg hrgmem off
     rw [hsIn, BlockState.setReg_readMem, hotherH rg off hrg, hsP_mem]
-    exact hmem rg off
+    exact hrgmem off
   -- sIn register/pids facts (peel b_h_cumsum setReg, h-store regs = sP regs, p_h setReg)
   have hsIn_pids : sIn.pids = s.pids := by
     rw [hsIn, BlockState.setReg_pids, hpidsH, hsP_pids]; exact hpids
@@ -2172,7 +2175,7 @@ theorem cdfOuterBody_step
       i_t fbh (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)
       (fun e p => by rw [cdfCarryTile_data])
       hVk hVv hVd hInjV
-      (hmemIn k hHk.symm) (hmemIn v hHv2.symm) (hmemIn d hHd.symm)
+      (hmemIn k hHk.symm hmemK) (hmemIn v hHv2.symm hmemV) (hmemIn d hHd.symm hmemD)
       hsIn_pids
       (by rw [hsIn_regs "i_k" (by decide) (by decide)]; exact hik)
       (by rw [hsIn_regs "i_v" (by decide) (by decide)]; exact hiv)
@@ -2216,5 +2219,151 @@ theorem cdfOuterBody_step
   · -- v_new off unchanged
     intro off hoff; rw [BlockState.setReg_readMem, hothI off hoff, hsIn,
       BlockState.setReg_readMem, hotherH v_new off hHv.symm, hsP_mem]
+
+/-! ### Cross-chunk block disjointness
+
+Distinct time chunks `j ≠ c` write disjoint `[64,64]` blocks of `h` (block size
+`64*64 = 4096`) and disjoint `[32,64]` blocks of `v_new` (block size `32*64 =
+2048`, stride `64`), so chunk `c`'s store leaves chunk `j`'s readback intact. -/
+
+theorem cdfHAddr_chunk_disjoint (s : BlockState) (hpids0 : s.pids 0 = 0)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [64, 64]) :
+    cdfHAddr s j idxj ≠ cdfHAddr s c idxc := by
+  obtain ⟨⟨ej, hej⟩, ⟨pj, hpj⟩, _⟩ := idxj
+  obtain ⟨⟨ec, hec⟩, ⟨pc, hpc⟩, _⟩ := idxc
+  simp only [cdfHAddr, hOffset, kIndex, vIndex, hpids0]
+  intro heq
+  -- pids2*16384 + j*4096 + (0*64+ej)*64 + (pids1*64+pj) = ... c ...
+  -- in-block offset ej*64+pj < 4096; blocks at j*4096 vs c*4096 are disjoint
+  apply hjc
+  nlinarith [hej, hpj, hec, hpc]
+
+theorem cdfVNewAddr_chunk_disjoint (s : BlockState)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [32, 64]) :
+    cdfVNewAddr s j idxj ≠ cdfVNewAddr s c idxc := by
+  obtain ⟨⟨cj, hcj⟩, ⟨pj, hpj⟩, _⟩ := idxj
+  obtain ⟨⟨cc, hcc⟩, ⟨pc, hpc⟩, _⟩ := idxc
+  simp only [cdfVNewAddr]
+  intro heq
+  apply hjc
+  -- (j*32+cj)*64 + (pids1*64+pj) = (c*32+cc)*64 + (pids1*64+pc); cj,cc<32, pj,pc<64
+  nlinarith [hcj, hpj, hcc, hpc]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Outer-loop carry.** Driving the static `forRange "i_t" 0 4 1 cdfOuterBody`
+from the post-prologue state `s0` (b_h = seed = `cdfCarryTile 0`) folds the state
+across all 4 chunks: every chunk `j < 4` has its chunk-start carry cell stored into
+`h[j]` and its corrected value into `v_new[j]` (at active lanes), with `b_h`
+holding `cdfCarryTile 4` at the end, and the `k`/`v`/`d` regions preserved. -/
+theorem cdfOuterLoop_run
+    (k v d v_new h initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s s0 : BlockState) (hpids0 : s.pids 0 = 0)
+    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
+    (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
+    (hInjV : ∀ i_t : Fin 4,
+      Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t.val idx))
+    (hInjH : ∀ i_t : Fin 4,
+      Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t.val idx))
+    (hmem : ∀ rg off, s0.readMem rg off = s.readMem rg off)
+    (hpids : s0.pids = s.pids)
+    (hik : s0.regs .nat [] "i_k" = some (Tile.scalar 0))
+    (hiv : s0.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hbh : s0.regs .real [64, 64] "b_h"
+        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 0)) :
+    ∃ s', stepStmt (Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)) s0 = some s'
+      ∧ s'.pids = s.pids
+      ∧ s'.regs .real [64, 64] "b_h"
+          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)
+      ∧ (∀ off, s'.readMem k off = s.readMem k off)
+      ∧ (∀ off, s'.readMem v off = s.readMem v off)
+      ∧ (∀ off, s'.readMem d off = s.readMem d off)
+      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+          s'.readMem h (cdfHAddr s j.val idx)
+            = cdfCarryCell s k v d initial_state USE_INITIAL_STATE j.val idx.1.val idx.2.1.val)
+      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64],
+          (j.val * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
+          s'.readMem v_new (cdfVNewAddr s j.val idx)
+            = cdfBvNewCell s v d
+                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE j.val e' p')
+                j.val idx.1.val idx.2.1.val) := by
+  obtain ⟨final, s', hstep, hfinal, hP⟩ :=
+    forRange_inv (idx := "i_t") (start := 0) (stop := 4) (step := 1)
+      (s_init := s0)
+      (P := fun c st =>
+        c ≤ 4
+        ∧ st.pids = s.pids
+        ∧ st.regs .nat [] "i_k" = some (Tile.scalar 0)
+        ∧ st.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+        ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+        ∧ st.regs .real [64, 64] "b_h"
+            = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c)
+        ∧ (∀ off, st.readMem k off = s.readMem k off)
+        ∧ (∀ off, st.readMem v off = s.readMem v off)
+        ∧ (∀ off, st.readMem d off = s.readMem d off)
+        ∧ (∀ j, j < c → ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+            st.readMem h (cdfHAddr s j idx)
+              = cdfCarryCell s k v d initial_state USE_INITIAL_STATE j idx.1.val idx.2.1.val)
+        ∧ (∀ j, j < c → ∀ idx : TileIndex [32, 64],
+            (j * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
+            st.readMem v_new (cdfVNewAddr s j idx)
+              = cdfBvNewCell s v d
+                  (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE j e' p')
+                  j idx.1.val idx.2.1.val))
+      (by norm_num)
+      ⟨by norm_num, hpids, hik, hiv, hibh, hbh, hmem k, hmem v, hmem d,
+        fun j hj => absurd hj (Nat.not_lt_zero j), fun j hj => absurd hj (Nat.not_lt_zero j)⟩
+      (fun c st hlt hPc => by
+        obtain ⟨hcle, hpidsC, hikC, hivC, hibhC, hbhC, hkC, hvC, hdC, hhC, hvnC⟩ := hPc
+        have hc4 : c < 4 := hlt
+        -- step the outer body for chunk c
+        set sc := st.setReg "i_t" .nat [] (Tile.scalar c) with hsc
+        obtain ⟨s', hbody, hpidsB, hikB, hivB, hibhB, hbhB,
+          hkB, hvB, hdB, hhActB, hhOffB, hvnActB, hvnOffB⟩ :=
+          cdfOuterBody_step k v d v_new h initial_state USE_INITIAL_STATE s sc c hc4 hpids0
+            hVk hVv hVd hHv hHk hHv2 hHd (hInjV ⟨c, hc4⟩) (hInjH ⟨c, hc4⟩)
+            (by intro off; rw [hsc, BlockState.setReg_readMem]; exact hkC off)
+            (by intro off; rw [hsc, BlockState.setReg_readMem]; exact hvC off)
+            (by intro off; rw [hsc, BlockState.setReg_readMem]; exact hdC off)
+            (by rw [hsc, BlockState.setReg_pids]; exact hpidsC)
+            (by rw [hsc, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hikC)
+            (by rw [hsc, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hivC)
+            (by rw [hsc, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hibhC)
+            (by rw [hsc, BlockState.setReg_same])
+            (by rw [hsc, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbhC)
+        refine ⟨s', hbody, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · omega
+        · rw [hpidsB, hsc, BlockState.setReg_pids]; exact hpidsC
+        · exact hikB
+        · exact hivB
+        · exact hibhB
+        · exact hbhB
+        · intro off; rw [hkB]
+        · intro off; rw [hvB]
+        · intro off; rw [hdB]
+        · -- h readback for chunks < c+1
+          intro j hj idx hact
+          rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
+          · -- j < c: preserved (chunk c's store off chunk j's block)
+            rw [hhOffB (cdfHAddr s j idx) (fun idxc =>
+              cdfHAddr_chunk_disjoint s hpids0 j c (by omega) idx idxc)]
+            rw [hsc, BlockState.setReg_readMem]
+            exact hhC j hjlt idx hact
+          · subst hjeq; exact hhActB idx hact
+        · -- v_new readback for chunks < c+1
+          intro j hj idx hact
+          rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
+          · rw [hvnOffB (cdfVNewAddr s j idx) (fun idxc =>
+              cdfVNewAddr_chunk_disjoint s j c (by omega) idx idxc)]
+            rw [hsc, BlockState.setReg_readMem]
+            exact hvnC j hjlt idx hact
+          · subst hjeq; exact hvnActB idx hact)
+  obtain ⟨hcleF, hpidsF, _, _, _, hbhF, hkF, hvF, hdF, hhF, hvnF⟩ := hP
+  have hfinalEq : final = 4 := le_antisymm hcleF hfinal
+  subst hfinalEq
+  exact ⟨s', hstep, hpidsF, hbhF, hkF, hvF, hdF,
+    fun j idx hact => hhF j.val j.isLt idx hact,
+    fun j idx hact => hvnF j.val j.isLt idx hact⟩
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
