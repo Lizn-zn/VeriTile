@@ -404,6 +404,73 @@ theorem softmax_reducev_final_store_slice_weighted_sum_correct {S : Nat}
   rw [hExpEq] at hbase
   exact hbase
 
+/-! ## ⊥-seeded online-softmax recurrence (faithful kernel register model)
+
+These definitions mirror the FlashAttention exec-assembly's ⊥-seed pattern
+(`osStepBot` / `flashStateBot` / `flashRunningMax`), retargeted to
+`softmax_reducev`'s base-`e` online softmax (`tl.exp`, not `exp2`) and its paged-V
+gather. They are the faithful model of the kernel's three live registers across
+the dynamic `forRangeDyn` loop:
+
+* `e_max` — seeded `float("-inf")` (= `⊥` in `WithBot ℝ`), the running maximum;
+* `e_sum` — seeded `0.0`, the rescaled running denominator;
+* `acc[d]` — seeded `0.0`, the rescaled running V-weighted accumulator.
+
+For a *fixed* output channel `d`, the per-key data the loop streams is the pair
+`(qk[n], v[n][d])`, so the running state lives in `WithBot ℝ × ℝ × ℝ` exactly as
+in flash. The key list `srKeysUpto` over the streamed window `[0, hi)` is the
+prefix of valid tokens; at the full window `hi = S` it is the full token list,
+where the ⊥-seeded fold reads off the genuine closed form
+`softmaxReducevAcc / softmaxReducevDenom`. -/
+
+/-- One ⊥-seeded online-softmax step for `softmax_reducev` (base-`e`). The running
+max lives in `WithBot ℝ` (seeded `⊥`), so the rescale factor
+`old_scale = exp(m ⊖ m')` is `0` on the first block — faithful to the kernel's
+`e_max` register (`float("-inf")`) and `e_sum`/`acc` (seeded `0`). `sv = (qk, v)`
+is one streamed token's logit and gathered V-row entry. -/
+noncomputable def srOsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) :
+    WithBot ℝ × ℝ × ℝ :=
+  let m := st.1; let l := st.2.1; let acc := st.2.2
+  let q := sv.1; let v := sv.2
+  let m' := m ⊔ ((q : ℝ) : WithBot ℝ)
+  let α := (WithBot.realExp (WithBot.realSub m m')).unbotD 0
+  let p := Real.exp (q - m'.unbotD 0)
+  (m', l * α + p, acc * α + p * v)
+
+/-- Per-channel streamed key list over the window `[0, hi)`: the valid tokens
+`n < hi`, in index order, each carrying `(qk[n], v[n][d])`. After `c` blocks
+`hi = c · BLOCK_N`, this is the prefix the kernel has streamed for channel `d`. -/
+noncomputable def srKeysUpto {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun n : Fin S =>
+    if n.val < hi then some (qk n, v n d) else none)
+
+/-- `srStateBot` — the ⊥-seeded running `(max, e_sum, acc[d])` after streaming the
+window `[0, hi)` for channel `d`. Faithful to the kernel's register recurrence
+(`e_max` seeded `⊥`, `e_sum`/`acc` seeded `0`). -/
+noncomputable def srStateBot {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) : WithBot ℝ × ℝ × ℝ :=
+  (srKeysUpto qk v hi d).foldl srOsStepBot (⊥, 0, 0)
+
+/-- **⊥-seeded running max** of the streamed key prefix `[0, hi)`, exactly the
+value the kernel carries in its `e_max` register (`float("-inf")` seeds at `⊥`).
+The `WithBot` `⊔`-fold of the coerced per-key logits; `⊥` on the empty / `hi = 0`
+window (the kernel's preLoop init). -/
+noncomputable def srRunningMax {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) : WithBot ℝ :=
+  ((srKeysUpto qk v hi d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+/-- Block-`c` per-channel key list: valid tokens with `c·BLOCK_N ≤ n < (c+1)·BLOCK_N`
+— the tokens the loop's `c`-th iteration streams. -/
+noncomputable def srBlock {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (BLOCK_N c : Nat)
+    (d : Fin BLOCK_DMODEL) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun n : Fin S =>
+    if c * BLOCK_N ≤ n.val ∧ n.val < (c + 1) * BLOCK_N then some (qk n, v n d) else none)
+
 /-! ## Python test-shape wrappers
 
 `test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
