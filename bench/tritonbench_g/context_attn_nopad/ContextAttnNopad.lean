@@ -1380,6 +1380,109 @@ theorem nopad_beta_eval (s : BlockState) (mijFn minewFn : Fin 128 → WithBot �
   simp only [Tile.uop_data, Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
     NumericDType.sub]
 
+set_option maxHeartbeats 1600000 in
+/-- **`l_i_new = alpha*l_i + beta*l_ij` recipe** (per-row online denominator).
+Row `i`: `realAdd (realMul α[i] l_i[i]) (realMul β[i] l_ij[i])`. -/
+theorem nopad_linew_eval (s : BlockState) (alphaFn liFn betaFn lijFn : Fin 128 → WithBot ℝ)
+    (halpha : s.regs .real [128] "alpha" = some (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128]))
+    (hli : s.regs .real [128] "l_i" = some (⟨fun idx : TileIndex [128] => liFn idx.1⟩ : Tile .real [128]))
+    (hbeta : s.regs .real [128] "beta" = some (⟨fun idx : TileIndex [128] => betaFn idx.1⟩ : Tile .real [128]))
+    (hlij : s.regs .real [128] "l_ij" = some (⟨fun idx : TileIndex [128] => lijFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "alpha") (Op.ref .real [128] "l_i"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "beta") (Op.ref .real [128] "l_ij"))) s
+      = some (⟨fun idx : TileIndex [128] =>
+          WithBot.realAdd (WithBot.realMul (alphaFn idx.1) (liFn idx.1))
+            (WithBot.realMul (betaFn idx.1) (lijFn idx.1))⟩ : Tile .real [128]) := by
+  rw [evalOp_add, evalOp_mul, evalOp_mul]
+  simp only [evalOp_ref, halpha, hli, hbeta, hlij, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, NumericDType.mul]
+
+set_option maxHeartbeats 1600000 in
+/-- **`p_scale = beta / l_i_new` recipe** (per-row), `realDiv β[i] l_i_new[i]`. -/
+theorem nopad_pscale_eval (s : BlockState) (betaFn linewFn : Fin 128 → WithBot ℝ)
+    (hbeta : s.regs .real [128] "beta" = some (⟨fun idx : TileIndex [128] => betaFn idx.1⟩ : Tile .real [128]))
+    (hlinew : s.regs .real [128] "l_i_new" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "beta")
+        (Op.ref .real [128] "l_i_new")) s
+      = some (⟨fun idx : TileIndex [128] => WithBot.realDiv (betaFn idx.1) (linewFn idx.1)⟩ : Tile .real [128]) := by
+  rw [evalOp_div, evalOp_ref, hbeta, evalOp_ref, hlinew]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div]
+
+set_option maxHeartbeats 1600000 in
+/-- **`p = p * p_scale[:, None]` recipe** (per-row rescale of the `[128,128]` `p`
+matrix by the `[128]` row factor).  `p` lane `(i, jL)`: `realMul p[i,jL] p_scale[i]`. -/
+theorem nopad_pmul_eval (s : BlockState) (pFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (psFn : Fin 128 → WithBot ℝ)
+    (hp : s.regs .real [128, 128] "p"
+      = some (⟨fun idx : TileIndex [128, 128] => pFn idx.1 idx.2.1⟩ : Tile .real [128, 128]))
+    (hps : s.regs .real [128] "p_scale" = some (⟨fun idx : TileIndex [128] => psFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "p_scale"))) s
+      = some (⟨fun idx : TileIndex [128, 128] => WithBot.realMul (pFn idx.1 idx.2.1) (psFn idx.1)⟩
+          : Tile .real [128, 128]) := by
+  have hexp : @evalOp .real [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "p_scale")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [128] => psFn idx.1⟩ : Tile .real [128])) :=
+    evalOp_expandDim_ref_of_regs .real [128] ⟨1, by simp⟩ "p_scale" s _ hps
+  rw [evalOp_mul, evalOp_ref, hp, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1600000 in
+/-- **`acc_scale = l_i / l_i_new * alpha` recipe** (per-row), `realMul (realDiv
+l_i[i] l_i_new[i]) α[i]`. -/
+theorem nopad_accscale_eval (s : BlockState) (liFn linewFn alphaFn : Fin 128 → WithBot ℝ)
+    (hli : s.regs .real [128] "l_i" = some (⟨fun idx : TileIndex [128] => liFn idx.1⟩ : Tile .real [128]))
+    (hlinew : s.regs .real [128] "l_i_new" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]))
+    (halpha : s.regs .real [128] "alpha" = some (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.mul .real Broadcast.nil.consSame
+        (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "l_i") (Op.ref .real [128] "l_i_new"))
+        (Op.ref .real [128] "alpha")) s
+      = some (⟨fun idx : TileIndex [128] =>
+          WithBot.realMul (WithBot.realDiv (liFn idx.1) (linewFn idx.1)) (alphaFn idx.1)⟩ : Tile .real [128]) := by
+  rw [evalOp_mul, evalOp_div]
+  simp only [evalOp_ref, hli, hlinew, halpha, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, NumericDType.div]
+
+set_option maxHeartbeats 1600000 in
+/-- **`acc = acc * acc_scale[:, None]` recipe** (per-row rescale of the `[128,128]`
+`acc` matrix).  `acc` lane `(i, d)`: `realMul acc[i,d] acc_scale[i]`. -/
+theorem nopad_accmul_eval (s : BlockState) (accFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (asFn : Fin 128 → WithBot ℝ)
+    (hacc : s.regs .real [128, 128] "acc"
+      = some (⟨fun idx : TileIndex [128, 128] => accFn idx.1 idx.2.1⟩ : Tile .real [128, 128]))
+    (has : s.regs .real [128] "acc_scale" = some (⟨fun idx : TileIndex [128] => asFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "acc_scale"))) s
+      = some (⟨fun idx : TileIndex [128, 128] => WithBot.realMul (accFn idx.1 idx.2.1) (asFn idx.1)⟩
+          : Tile .real [128, 128]) := by
+  have hexp : @evalOp .real [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "acc_scale")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [128] => asFn idx.1⟩ : Tile .real [128])) :=
+    evalOp_expandDim_ref_of_regs .real [128] ⟨1, by simp⟩ "acc_scale" s _ has
+  rw [evalOp_mul, evalOp_ref, hacc, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, d, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, TileShape.dropInsertedIndex]
+
 set_option maxRecDepth 8000 in
 /-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
 theorem nopad_body_split
