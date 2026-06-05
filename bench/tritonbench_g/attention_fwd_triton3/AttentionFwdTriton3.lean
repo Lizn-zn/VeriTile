@@ -1727,5 +1727,184 @@ theorem aft3_where_eval (s : BlockState) (masktile : Tile .bool [64, 64])
   ext idx
   simp only [Tile.select_data, Tile.scalar]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L8: `m_ij = tl.maximum(m_i, tl.max(qk, 1))`** — lowered to
+`where(m_i > reduceMax(qk,1), m_i, reduceMax(qk,1))`, i.e. the running max keeps
+`m_i` when it already dominates the new block row-max, else takes the row-max.
+`reduceMax`'s `eraseAxis` result-shape blocks `rw`, so the reduced row is proven
+then defeq-coerced to `[64]`. -/
+theorem aft3_mij_eval (s : BlockState)
+    (mtile : Tile .real [64]) (qktile : Tile .real [64, 64]) (rmaxT : Tile .real [64])
+    (hmi : s.regs .real [64] "m_i" = some mtile)
+    (hqk : s.regs .real [64, 64] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [64] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk")))
+        (Op.ref .real [64] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk"))) s
+      = some (Tile.select
+          (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+          mtile rmaxT) := by
+  have hrmaxN : evalOp (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+      (Op.ref .real [64, 64] "qk")) s = some rmaxT := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  have hrmax : @evalOp TileDType.real [64]
+      (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+        (Op.ref .real [64, 64] "qk")) s = some rmaxT := hrmaxN
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmi, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L9: `qk = qk - m_ij[:, None]`** — the max-shift before `exp2`. -/
+theorem aft3_qk_sub_eval (s : BlockState) (hax : 1 < [64].length.succ)
+    (qktile : Tile .real [64, 64]) (mc : Tile .real [64])
+    (hqk : s.regs .real [64, 64] "qk" = some qktile)
+    (hmij : s.regs .real [64] "m_ij" = some mc) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "qk") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [64] "m_ij"))) s
+      = some (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          qktile (Tile.expandDim ⟨1, hax⟩ mc)) := by
+  have hexp : @evalOp TileDType.real [64, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [64] "m_ij")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmij
+  rw [evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L10: `p = tl.math.exp2(qk)`** — the base-2 softmax weights (`⊥`/`-inf`
+lanes collapse to `0`). -/
+theorem aft3_p_eval (s : BlockState) (qktile : Tile .real [64, 64])
+    (hqk : s.regs .real [64, 64] "qk" = some qktile) :
+    evalOp (Op.exp2 (Op.ref .real [64, 64] "qk")) s
+      = some (Tile.uop WithBot.realExp2 qktile) := by
+  rw [aft3_evalOp_exp2]; simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L11: `p = tl.where(mask, p, 0)`** — zero the non-kept lanes (redundant with
+L7's `-inf`+`exp2`, but kept for the complement/case mask). -/
+theorem aft3_p_mask_eval (s : BlockState) (masktile : Tile .bool [64, 64])
+    (ptile : Tile .real [64, 64])
+    (hmask : s.regs .bool [64, 64] "mask" = some masktile)
+    (hp : s.regs .real [64, 64] "p" = some ptile) :
+    evalOp (Op.where (Op.ref .bool [64, 64] "mask")
+        (Op.ref .real [64, 64] "p") (Op.broadcast (Op.const 0.0) [64, 64])) s
+      = some ⟨fun idx : TileIndex [64, 64] =>
+          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ := by
+  have hbcast : @evalOp TileDType.real [64, 64] (Op.broadcast (Op.const 0.0) [64, 64]) s
+      = some (⟨fun _ : TileIndex [64, 64] => (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
+    simp only [evalOp, evalOp_const, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where]
+  simp only [evalOp_ref, hmask, hp, hbcast, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.scalar]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L12: `l_ij = tl.sum(p, 1)`** — the per-row denominator increment. -/
+theorem aft3_lij_eval (s : BlockState) (ptile : Tile .real [64, 64])
+    (hp : s.regs .real [64, 64] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+        (Op.ref .real [64, 64] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) ptile) := by
+  rw [evalOp_reduceSum]; simp only [evalOp_ref, hp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L13: `tmp = m_i - m_ij`** — the log-domain correction exponent. -/
+theorem aft3_tmp_eval (s : BlockState) (mi mij : Tile .real [64])
+    (hmi : s.regs .real [64] "m_i" = some mi)
+    (hmij : s.regs .real [64] "m_ij" = some mij) :
+    evalOp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [64] "m_i") (Op.ref .real [64] "m_ij")) s
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mi mij) := by
+  rw [evalOp_sub]; simp only [evalOp_ref, hmi, hmij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L14: `alpha = tl.math.exp2(tmp)`** — the running rescale factor
+`exp2(m_i − m_ij)` (`= osStep`'s `α`; on a fresh row `m_i = −∞`, `tmp = ⊥` and
+`exp2 ⊥ = 0`). -/
+theorem aft3_alpha_eval (s : BlockState) (tmptile : Tile .real [64])
+    (htmp : s.regs .real [64] "tmp" = some tmptile) :
+    evalOp (Op.exp2 (Op.ref .real [64] "tmp")) s
+      = some (Tile.uop WithBot.realExp2 tmptile) := by
+  rw [aft3_evalOp_exp2]; simp only [evalOp_ref, htmp, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L15: `l_i = l_i * alpha + l_ij`** — the denominator carry
+(`l_i ↦ l_i·α + Σp`). -/
+theorem aft3_li_eval (s : BlockState) (li alpha lij : Tile .real [64])
+    (hli : s.regs .real [64] "l_i" = some li)
+    (halpha : s.regs .real [64] "alpha" = some alpha)
+    (hlij : s.regs .real [64] "l_ij" = some lij) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [64] "l_i") (Op.ref .real [64] "alpha"))
+        (Op.ref .real [64] "l_ij")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) li alpha) lij) := by
+  rw [evalOp_add, evalOp_mul]
+  simp only [evalOp_ref, hli, halpha, hlij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L16: `acc = acc * alpha[:, None]`** — rescale the output accumulator by the
+per-row `α` before adding the new block's value contribution. -/
+theorem aft3_acc_rescale_eval (s : BlockState) (hax : 1 < [64].length.succ)
+    (acctile : Tile .real [64, 64]) (alpha : Tile .real [64])
+    (hacc : s.regs .real [64, 64] "acc" = some acctile)
+    (halpha : s.regs .real [64] "alpha" = some alpha) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "acc") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [64] "alpha"))) s
+      = some (Tile.bop NumericDType.real.mul
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acctile (Tile.expandDim ⟨1, hax⟩ alpha)) := by
+  have hexp : @evalOp TileDType.real [64, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [64] "alpha")) s
+      = some (Tile.expandDim ⟨1, hax⟩ alpha) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ halpha
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L18: `acc += tl.dot(p, v)`** — numerator accumulation. Both `p` and `v` are
+`.real` (no fp16 round-trip in this transcription). -/
+theorem aft3_acc_eval (s : BlockState) (BM BN BD : Nat)
+    (acctile : Tile .real [BM, BD]) (ptile : Tile .real [BM, BN]) (vtile : Tile .real [BN, BD])
+    (hacc : s.regs .real [BM, BD] "acc" = some acctile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hv : s.regs .real [BN, BD] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acctile
+          (Tile.dot [] ptile vtile)) := by
+  have hpr : evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by rw [evalOp_ref, hp]
+  have hvr : evalOp (Op.ref .real [BN, BD] "v") s = some vtile := by rw [evalOp_ref, hv]
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"), hpr, hvr]; rfl
+  rw [evalOp_add]; simp only [evalOp_ref, hacc, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **L19: `m_i = m_ij`** — the running-max carry (a bare register read of the
+new `m_ij`). -/
+theorem aft3_mi_carry_eval (s : BlockState) (mij : Tile .real [64])
+    (hmij : s.regs .real [64] "m_ij" = some mij) :
+    evalOp (Op.ref .real [64] "m_ij") s = some mij := by
+  rw [evalOp_ref, hmij]
+
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
