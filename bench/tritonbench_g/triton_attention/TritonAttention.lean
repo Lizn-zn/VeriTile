@@ -3462,6 +3462,96 @@ theorem taPreLoop_eval (s : BlockState) (Q K V L M Out : RegionName) (sc : ℝ)
   · simp
   · simp
 
+/-! ## Forward loop invariant + step + postLoop + full execution
+
+The triton-attention `_fwd_kernel` streams the single (test-shape `N_CTX =
+BLOCK_N = 128`, `num_block = 1`) causal KV block. Unlike `flash_attn` (which
+defers normalization to a post-loop `out_buffer /= denom` and stores `L = max +
+log2 denom`), this kernel normalizes **in loop**: every iteration multiplies the
+running `acc`/`p` by `l_rcp = 1/l_curr`, so the register `acc` already holds the
+final-normalized ratio `oPartial / lPartial`, and the stored `L = l_prev` is the
+m-shifted normalizer `lPartial` itself (natural exp, no log).
+
+The invariant binds the kernel's running registers after `c = i / 128` blocks to
+the `FA1MathCausal` causal streaming accumulators (`Bk = 128`, `numKVBlocks = 1`,
+`scale = sc`, `qStart = pids 0 · 128`): `m_prev = mPartial c`, `l_prev = lPartial
+c`, and `acc = oPartial c / lPartial c` (the running ratio; at `c = 0` this is
+`0 / 0 = 0`, exactly the kernel's `acc = 0` init). -/
+
+open VeriTile.Examples.FA1MathCausal in
+/-- Loop invariant for the triton-attention forward streaming loop (counter
+`i = c · 128`, `c = i / 128` blocks processed). -/
+noncomputable def taInvariant
+    (Q K V Out : RegionName) (s0 : BlockState) (sc : ℝ)
+    (i : Nat) (s : BlockState) : Prop :=
+  let qS := s0.pids 0 * 128
+  let qT := fwdQTile s0 Q
+  let kT := fwdKTile s0 K
+  let vT := fwdVTile s0 V
+  s.pids = s0.pids ∧ i % 128 = 0 ∧ i ≤ 128 ∧
+  (s.regs .real [128] "m_prev" = some ⟨fun r : TileIndex [128] =>
+      mPartial 128 qS qT 1 kT sc (i / 128) r.1⟩) ∧
+  (s.regs .real [128] "l_prev" = some ⟨fun r : TileIndex [128] =>
+      ((lPartial 128 qS qT 1 kT sc (i / 128) r.1 : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [128, 64] "acc" = some ⟨fun idx : TileIndex [128, 64] =>
+      ((oPartial 128 qS qT 1 kT vT sc (i / 128) idx
+          / lPartial 128 qS qT 1 kT sc (i / 128) idx.1 : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [128, 64] "q" = some ⟨fun idx : TileIndex [128, 64] => some (qT idx)⟩) ∧
+  (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qS + r.val))) ∧
+  (s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))) ∧
+  (s.regs .blockPtr [128, 64] "k_tile_ptr" = some (taKVPtrTile K (s0.pids 1 * 128 + i))) ∧
+  (s.regs .blockPtr [128, 64] "v_tile_ptr" = some (taKVPtrTile V (s0.pids 1 * 128 + i))) ∧
+  (s.regs .blockPtr [128, 64] "out_tile_ptr" = some
+    (⟨fun _ : TileIndex [128, 64] =>
+      { region := Out, baseOffset := 0, parentShape := [1024, 64],
+        blockShape := [128, 64], strides := [64, 1],
+        offsets := [s0.pids 1 * 128 + s0.pids 0 * 128, 0] }⟩)) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **Invariant base case.** The preLoop-output state `sp` (anchor `s = sp`)
+satisfies `taInvariant … 0 sp`: at `c = 0` the running registers are
+`mPartial 0 = ⊥`, `lPartial 0 = 0`, `oPartial 0 / lPartial 0 = 0 / 0 = 0`, which
+are exactly the `m_prev = ⊥` / `l_prev = 0` / `acc = 0` preLoop inits. -/
+theorem ta_invariant_zero
+    (Q K V Out : RegionName) (sp : BlockState) (sc : ℝ)
+    (hm : sp.regs .real [128] "m_prev" = some ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩)
+    (hl : sp.regs .real [128] "l_prev" = some ⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩)
+    (hacc : sp.regs .real [128, 64] "acc" = some ⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩)
+    (hq : sp.regs .real [128, 64] "q" = some ⟨fun idx : TileIndex [128, 64] => some (fwdQTile sp Q idx)⟩)
+    (hoffm : sp.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => sp.pids 0 * 128 + r.val)))
+    (hoffn : sp.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hkp : sp.regs .blockPtr [128, 64] "k_tile_ptr" = some (taKVPtrTile K (sp.pids 1 * 128)))
+    (hvp : sp.regs .blockPtr [128, 64] "v_tile_ptr" = some (taKVPtrTile V (sp.pids 1 * 128)))
+    (hop : sp.regs .blockPtr [128, 64] "out_tile_ptr" = some
+        (⟨fun _ : TileIndex [128, 64] =>
+          { region := Out, baseOffset := 0, parentShape := [1024, 64],
+            blockShape := [128, 64], strides := [64, 1],
+            offsets := [sp.pids 1 * 128 + sp.pids 0 * 128, 0] }⟩))
+    (hoh : sp.regs .nat [] "off_hz" = some (Tile.scalar (sp.pids 1)))
+    (hundef : ∀ rg o, sp.undef rg o = 0) :
+    taInvariant Q K V Out sp sc 0 sp := by
+  unfold taInvariant
+  refine ⟨rfl, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hm]; refine congrArg some ?_; ext r; rfl
+  · rw [hl]; refine congrArg some ?_; ext r; rfl
+  · rw [hacc]; refine congrArg some ?_; ext idx
+    show some (0 : ℝ) = ((oPartial 128 (sp.pids 0 * 128) (fwdQTile sp Q) 1 (fwdKTile sp K)
+        (fwdVTile sp V) sc 0 idx / lPartial 128 (sp.pids 0 * 128) (fwdQTile sp Q) 1
+        (fwdKTile sp K) sc 0 idx.1 : ℝ) : WithBot ℝ)
+    show some (0 : ℝ) = ((0 / 0 : ℝ) : WithBot ℝ)
+    rw [div_zero]; rfl
+  · rw [hq]
+  · rw [hoffm]
+  · rw [hoffn]
+  · rw [hkp]; simp
+  · rw [hvp]; simp
+  · rw [hop]
+  · rw [hoh]
+  · exact hundef
+  · rfl
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
