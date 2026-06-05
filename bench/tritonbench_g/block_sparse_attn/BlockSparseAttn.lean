@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Semantics.StreamingAccumulator
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `block_sparse_attn` — strict per-kernel correctness
@@ -4844,6 +4845,57 @@ theorem bsa_attn_step
   · exact hpres (by decide) hvp
 
 
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **CSR loop driver.** From the loop-entry invariant (`bsaInvariant … 0`) and the
+per-block gather bridges, `forRangeDyn "col_idx_idx" start_l end_l 1 bsaLoopBody`
+runs to a final state at counter `final ≥ end_l` satisfying `bsaInvariant …
+(end_l − start_l)`. The bridges at absolute CSR index `i` are supplied for every
+`i ∈ [start_l, end_l)`; the block count there is `c = i − start_l`. -/
+theorem bsa_csr_loop
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (s0 : BlockState) (start_l end_l : Nat)
+    (hbound : end_l - start_l = numKVBlocks) (hsle : start_l ≤ end_l)
+    (sEntry : BlockState)
+    (hStartOp : evalOp (Op.ref .nat [] "start_l") sEntry = some (Tile.scalar start_l))
+    (hStopOp : evalOp (Op.ref .nat [] "end_l") sEntry = some (Tile.scalar end_l))
+    (hInit : bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 0 sEntry)
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBody C) (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0
+            (i - start_l + 1) st') :
+    ∃ final sFinal,
+      stepStmt (Stmt.forRangeDyn "col_idx_idx" (Op.ref .nat [] "start_l") (Op.ref .nat [] "end_l")
+        (Op.constNat 1) (bsaLoopBody C)) sEntry = some sFinal
+      ∧ end_l ≤ final
+      ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 numKVBlocks sFinal := by
+  obtain ⟨final, sFinal, hExec, hfin, hP⟩ :=
+    forRangeDyn_inv (idx := "col_idx_idx")
+      (P := fun i st => bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0
+        (i - start_l) st ∧ start_l ≤ i ∧ i ≤ end_l)
+      (start := start_l) (stop := end_l) (step := 1)
+      hStartOp hStopOp (evalOp_constNat 1 sEntry) (by norm_num)
+      ⟨by rw [Nat.sub_self]; exact hInit, le_refl _, by omega⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hinv, hge, hle⟩ := hPi
+        obtain ⟨st', hbody, hinv'⟩ := hstep i st hge hlt hinv
+        refine ⟨st', hbody, ?_, ?_, ?_⟩
+        · have : i + 1 - start_l = (i - start_l) + 1 := by omega
+          rw [this]; exact hinv'
+        · omega
+        · omega)
+  refine ⟨final, sFinal, hExec, hfin, ?_⟩
+  obtain ⟨hinv, _, hfle⟩ := hP
+  have hfeq : final = end_l := le_antisymm hfle hfin
+  have hsub : final - start_l = numKVBlocks := by rw [hfeq]; exact hbound
+  rw [hsub] at hinv
+  exact hinv
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
