@@ -47,7 +47,8 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init,
 `exp`, running-max rescaling, and the final division are real-valued);
 `@triton.autotune` / `num_warps` / `num_stages` are not modeled. The verified
 statement is scoped to the **final normalized store** to `Out`: the expected
-value is `acc / e_sum` (`softmaxReducevFinalSpec` / `softmaxReducevSurfaceValue`)
+value is `acc / e_sum` (`softmaxReducevFinalSpec`), and — discharging the loop —
+the genuine input-side `softmaxReducevWeightedSum` (`sr_exec`),
 read off at each `outOffset`, over a one-block output footprint with the program
 ids universally quantified. The streaming online-softmax loop (running max,
 rescale-and-accumulate, paged-V gather) feeds those `Acc`/`ESum` values; the side
@@ -919,54 +920,6 @@ theorem softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
   exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
     BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0
 
-noncomputable def softmaxReducevSurfaceValue
-    (s : BlockState) (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat)
-    (max_input_len
-      stride_logic_h stride_logic_bs
-      stride_vbs stride_vh stride_vd
-      stride_obs stride_oh stride_od
-      stride_b_loc_b stride_b_loc_s
-      BLOCK_DMODEL BLOCK_N : Nat)
-    (other_kv_index : Int) (offset : Nat) : ℝ :=
-  match exec (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
-      stride_vd stride_obs stride_oh stride_od stride_b_loc_b stride_b_loc_s
-      BLOCK_DMODEL BLOCK_N other_kv_index) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
-
-theorem softmax_reducev_surface_output_compute_correct
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat)
-    (max_input_len
-      stride_logic_h stride_logic_bs
-      stride_vbs stride_vh stride_vd
-      stride_obs stride_oh stride_od
-      stride_b_loc_b stride_b_loc_s
-      BLOCK_DMODEL BLOCK_N : Nat)
-    (other_kv_index : Int) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
-        stride_vd stride_obs stride_oh stride_od stride_b_loc_b stride_b_loc_s
-        BLOCK_DMODEL BLOCK_N other_kv_index)
-      (initialState := s)
-      (write := fun i : Fin BLOCK_DMODEL =>
-        some (Out, outOffset s stride_obs stride_oh stride_od i))
-      (expected := fun i =>
-        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
-          max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
-          stride_vd stride_obs stride_oh stride_od stride_b_loc_b
-          stride_b_loc_s BLOCK_DMODEL BLOCK_N other_kv_index
-          (outOffset s stride_obs stride_oh stride_od i)) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [softmax_reducev_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [softmaxReducevSurfaceValue, hExec]
-
 /-- Public Python case coverage summary: the full checked surface lowers for
 both sentinel choices, and the final normalized `o` vector writeback realizes
 the Python output shape. -/
@@ -1021,44 +974,6 @@ abbrev softmax_reducev_python_test_shape_store_summary
 
 
 
-theorem softmax_reducev_python_test_shape_output_summary
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1))
-      (initialState := s)
-      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
-      (expected := fun i : Fin 64 =>
-        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
-          128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)
-          (outOffset s 128 64 1 i))) ∧
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        128 256 1 8192 64 1 128 64 1 128 1 64 64 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
-      (expected := fun i : Fin 64 =>
-        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
-          128 256 1 8192 64 1 128 64 1 128 1 64 64 0
-          (outOffset s 128 64 1 i))) := by
-  constructor
-  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-  constructor
-  · exact softmax_reducev_surface_output_compute_correct Logics V Out BLoc
-      BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1) s
-  constructor
-  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-  · exact softmax_reducev_surface_output_compute_correct Logics V Out BLoc
-      BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0 s
 
 /-- The 12 lowered preLoop statements at the Python test shape. -/
 def srPreLoop (V : RegionName) (BStartLoc BSeqLen : Region .nat) : List Stmt :=
@@ -2608,7 +2523,7 @@ injective output lane. -/
 theorem srPostLoop_eval
     (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : RegionName)
     (s0 : BlockState) (c : Nat) (s : BlockState)
-    (hfull : c * 64 = srSeqLen s0 BSeqLen) (hpos : 0 < srSeqLen s0 BSeqLen)
+    (hfull : c * 64 = srSeqLen s0 BSeqLen) (_hpos : 0 < srSeqLen s0 BSeqLen)
     (hinv : srInvariant Logics V BLoc BStartLoc BSeqLen s0 c s)
     (mr : ℝ)
     (hM : srRunningMax (srQkF s0 Logics BStartLoc BSeqLen) (srVF s0 V BLoc BSeqLen)
@@ -2867,5 +2782,76 @@ theorem sr_exec
     (srVF s0 V BLoc BSeqLen.cast) (srVF s V BLoc BSeqLen.cast) d
     (fun n => by simp only [srQkF, Fin.val_cast]; rw [srQk_eq_of_mem_pids s0 s Logics BStartLoc.cast hmem0 hpids0])
     (fun n e => by simp only [srVF, Fin.val_cast]; rw [srV_eq_of_mem_pids s0 s V BLoc BSeqLen.cast hmem0 hpids0])
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine closed-form `Out`-store correctness.** Every output lane of the
+`softmax_reducev` kernel holds the genuine softmax-weighted V reduction
+`softmaxReducevWeightedSum` of the loaded logits / gathered V rows — NOT the
+self-referential executed value. The hypotheses (`srSeqLen` a positive multiple of
+`64`) are the Python test shape (`seqlen = 128`); `mr` is the streamed running max
+and `hM` records that it is finite (always true for a nonempty window). -/
+theorem softmax_reducev_genuine_output_compute_correct
+    (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : Region .nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hseqmod : srSeqLen s BSeqLen.cast % 64 = 0) (hseqpos : 0 < srSeqLen s BSeqLen.cast)
+    (mr : ℝ)
+    (hM : srRunningMax (srQkF s Logics BStartLoc.cast BSeqLen.cast) (srVF s V BLoc BSeqLen.cast)
+      (srSeqLen s BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1))
+      (initialState := s)
+      (write := fun d : Fin 64 => some (Out, outOffset s 128 64 1 d))
+      (expected := fun d : Fin 64 =>
+        softmaxReducevWeightedSum (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
+          (srVF s V BLoc BSeqLen.cast) d) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_reducev_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro d
+  obtain ⟨sF, hstep, hOut⟩ := sr_exec Logics V Out BLoc BStartLoc BSeqLen s hundef hseqmod hseqpos mr hM
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact hOut d
+
+
+/-- **Top theorem (genuine closed form).** At the Python test shape the full
+`softmax_reducev` surface lowers (both sentinel choices) and its `Out` store
+*realizes* the genuine softmax-weighted V reduction
+`softmaxReducevWeightedSum` — `out[d] = Σₙ softmax(qk)[n] · V[v_index[n], d]` — over
+the input logits / gathered value rows, with NO reference to the executed kernel
+output. The hypotheses are exactly the Python test regime (`seqlen = 128`: a
+positive multiple of `64`); `mr` is the streamed running max. -/
+theorem softmax_reducev_python_test_shape_output_summary
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hseqmod : srSeqLen s BSeqLen.cast % 64 = 0) (hseqpos : 0 < srSeqLen s BSeqLen.cast)
+    (mr : ℝ)
+    (hM : srRunningMax (srQkF s Logics BStartLoc.cast BSeqLen.cast) (srVF s V BLoc BSeqLen.cast)
+      (srSeqLen s BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)) :
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1))
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
+      (expected := fun d : Fin 64 =>
+        softmaxReducevWeightedSum (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
+          (srVF s V BLoc BSeqLen.cast) d)) ∧
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
+        Except.ok alg) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
+  · exact softmax_reducev_genuine_output_compute_correct Logics V Out BLoc BStartLoc BSeqLen
+      s hundef hseqmod hseqpos mr hM
+  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
