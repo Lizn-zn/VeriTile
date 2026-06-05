@@ -359,6 +359,181 @@ theorem mixed_sparse_attention_output_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-! ## Genuine closed-form mixed-sparse attention
+
+`_triton_mixed_sparse_attn_fwd_kernel` runs an online-softmax (`exp2`) over two
+disjoint key sets selected per query row `start_m`:
+
+* **block-sparse phase** — for each visited dense block `b < num_blks` (read from
+  `block_count`), the contiguous `BLOCK_N` keys starting at `start_n =
+  block_offset[..,b]`, masked **causally** (`cols ≤ offs_m`) and by `cols <
+  seqlen`;
+* **column-sparse phase** — the `num_cols` individual columns `column_index[..,c]`
+  (read from `column_count`), masked by `c < num_cols` (and `cols < seqlen`),
+  with **no** causal mask.
+
+The kernel scales scores by `qk_scale = sm_scale · log2(e)` and exponentiates
+with `exp2`, so `exp2(qk_scale · raw) = exp(sm_scale · raw)`: the closed form is
+the ordinary natural-exp softmax over `sm_scale · raw`, taken over the **union**
+of the masked block keys and column keys.
+
+The definitions below mirror `block_sparse_attn`'s `blockSparseAttnClosedForm`,
+generalized to the two-phase mixed-sparsity selection of this kernel. -/
+
+/-- Q/out tile base offset `off_z · stride_z + off_h · stride_h`. -/
+def qoBase (s : BlockState) (H stride_z stride_h : Nat) : Nat :=
+  offZ s H * stride_z + offH s H * stride_h
+
+/-- Q row `start_m·BLOCK_M + i`, channel `e`, at `qoBase + row·stride_qm + e`. -/
+noncomputable def qRow (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh stride_qm BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Nat) :
+    ℝ :=
+  s.readMem Q (qoBase s H stride_qz stride_qh + mIndex s BLOCK_M i * stride_qm + e)
+
+/-- K row at global key position `n`, channel `e`, at `kvBase + n·stride_kn + e`.
+The kernel reads K with `k_ptrs = K + kv_offset + offs_d·stride_kk` then
+`+ cols·stride_kn`; here `kv_offset = off_z·stride_kz + off_h·stride_kh` and
+`stride_kk = 1` (head channel `e` contiguous). -/
+noncomputable def kRow (s : BlockState) (K : RegionName)
+    (H stride_kz stride_kh stride_kn : Nat) (n e : Nat) : ℝ :=
+  s.readMem K (qoBase s H stride_kz stride_kh + n * stride_kn + e)
+
+/-- V row at global key position `n`, channel `d`, at `kvBase + n·stride_vn + d`. -/
+noncomputable def vRow (s : BlockState) (V : RegionName)
+    (H stride_vz stride_vh stride_vn : Nat) (n d : Nat) : ℝ :=
+  s.readMem V (qoBase s H stride_vz stride_vh + n * stride_vn + d)
+
+/-- Unscaled raw score `Σ_{e<BLOCK_DMODEL} Q[row,e] · K[n,e]` at global key `n`. -/
+noncomputable def rawScore (s : BlockState) (Q K : RegionName)
+    (H stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
+      BLOCK_DMODEL BLOCK_M : Nat) (i : Fin BLOCK_M) (n : Nat) : ℝ :=
+  Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+    qRow s Q H stride_qz stride_qh stride_qm BLOCK_M i e.val *
+      kRow s K H stride_kz stride_kh stride_kn n e.val)
+
+/-- Global key position of the `b`-th visited dense block's `j`-th lane:
+`block_offset[off_hz·NUM_ROWS·NNZ_S + start_m·NNZ_S + b] + j`. -/
+def blockKeyGlobal (s : BlockState) (block_offset : Region .nat)
+    (NUM_ROWS NNZ_S BLOCK_N b j : Nat) : Nat :=
+  s.readMemValue .nat (Region.cast block_offset)
+      ((s.pids 1 * NUM_ROWS + s.pids 0) * NNZ_S + b) + j
+
+/-- Global key position of the `c`-th visited sparse column:
+`column_index[off_hz·NUM_ROWS·NNZ_V + start_m·NNZ_V + c]`. -/
+def colKeyGlobal (s : BlockState) (column_index : Region .nat)
+    (NUM_ROWS NNZ_V c : Nat) : Nat :=
+  s.readMemValue .nat (Region.cast column_index)
+    ((s.pids 1 * NUM_ROWS + s.pids 0) * NNZ_V + c)
+
+/-- **Genuine closed-form mixed-sparse attention output** for one program/row.
+
+`out[i,d] = numer / denom`, where the weight of a key at global position `n`
+under predicate `keep` is `w = if keep then exp(sm_scale · rawScore i n) else 0`,
+and the sum ranges over the **union** of:
+
+* block keys `blockKeyGlobal b j` for `b < num_blks`, `j < BLOCK_N`, kept when
+  `n ≤ start_m·BLOCK_M + i` (causal) **and** `n < seqlen`;
+* column keys `colKeyGlobal c` for `c < num_cols`, kept when `n < seqlen`
+  (the kernel's `n_mask`, no causal).
+
+`denom = Σ w`, `numer = Σ w · V[n, d]`. -/
+noncomputable def mixedSparseAttnClosedForm
+    (s : BlockState) (Q K V : RegionName)
+    (block_offset column_index : Region .nat)
+    (H stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
+      stride_vz stride_vh stride_vn
+      NUM_ROWS NNZ_S NNZ_V
+      num_blks num_cols seqlen
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (sm_scale : ℝ) (i : Fin BLOCK_M) (d : Nat) : ℝ :=
+  let raw := fun n : Nat =>
+    rawScore s Q K H stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
+      BLOCK_DMODEL BLOCK_M i n
+  -- block-sparse phase weights (causal + in-seqlen)
+  let wBlock := fun (b : Fin num_blks) (j : Fin BLOCK_N) =>
+    let n := blockKeyGlobal s block_offset NUM_ROWS NNZ_S BLOCK_N b.val j.val
+    if n ≤ mIndex s BLOCK_M i ∧ n < seqlen then Real.exp (sm_scale * raw n) else 0
+  -- column-sparse phase weights (in-seqlen, no causal)
+  let wCol := fun (c : Fin num_cols) =>
+    let n := colKeyGlobal s column_index NUM_ROWS NNZ_V c.val
+    if n < seqlen then Real.exp (sm_scale * raw n) else 0
+  let denom :=
+    Finset.univ.sum (fun b : Fin num_blks =>
+      Finset.univ.sum (fun j : Fin BLOCK_N => wBlock b j)) +
+    Finset.univ.sum (fun c : Fin num_cols => wCol c)
+  let numer :=
+    Finset.univ.sum (fun b : Fin num_blks =>
+      Finset.univ.sum (fun j : Fin BLOCK_N =>
+        wBlock b j *
+          vRow s V H stride_vz stride_vh stride_vn
+            (blockKeyGlobal s block_offset NUM_ROWS NNZ_S BLOCK_N b.val j.val) d)) +
+    Finset.univ.sum (fun c : Fin num_cols =>
+      wCol c *
+        vRow s V H stride_vz stride_vh stride_vn
+          (colKeyGlobal s column_index NUM_ROWS NNZ_V c.val) d)
+  numer / denom
+
+/-- **Closed-form output-store bridge.** Given the loop-fill contract `hFill`
+(the streaming accumulator written to `Acc` equals `mixedSparseAttnClosedForm`
+on every active lane), the final `seqlens`-masked store copies the genuine
+closed-form mixed-sparse attention block to `Out` at the correct, injective
+offsets, preserving inactive lanes.
+
+This is the mixed-sparse analogue of `block_sparse_attn`'s
+`block_sparse_attn_first_output_closed_form`: it certifies that the final store
+phase faithfully transports the genuine closed form, isolating the remaining
+gap to the in-loop accumulator computation (`hFill`). -/
+theorem mixed_sparse_attention_output_store_closed_form
+    (Acc Seqlens Out Q K V : RegionName)
+    (block_offset column_index : Region .nat)
+    (H
+      stride_acc_z stride_acc_h stride_acc_m stride_acc_d
+      stride_qz stride_qh stride_om stride_ok
+      stride_qm stride_kz stride_kh stride_kn
+      stride_vz stride_vh stride_vn
+      NUM_ROWS NNZ_S NNZ_V num_blks num_cols
+      BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (sm_scale : ℝ)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx))
+    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      active s H Seqlens BLOCK_M idx →
+      s.readMem Acc
+          (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_d
+            BLOCK_M idx)
+        = mixedSparseAttnClosedForm s Q K V block_offset column_index H
+            stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
+            stride_vz stride_vh stride_vn NUM_ROWS NNZ_S NNZ_V num_blks num_cols
+            (seqLen s H Seqlens) BLOCK_DMODEL BLOCK_M BLOCK_N sm_scale idx.1
+            (dIndex idx)) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out H
+        stride_acc_z stride_acc_h stride_acc_m stride_acc_d stride_qz
+        stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s H Seqlens BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        mixedSparseAttnClosedForm s Q K V block_offset column_index H
+          stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
+          stride_vz stride_vh stride_vn NUM_ROWS NNZ_S NNZ_V num_blks num_cols
+          (seqLen s H Seqlens) BLOCK_DMODEL BLOCK_M BLOCK_N sm_scale idx.1
+          (dIndex idx)) := by
+  have hbase := mixed_sparse_attention_output_store_slice_compute_correct Acc
+    Seqlens Out H stride_acc_z stride_acc_h stride_acc_m stride_acc_d stride_qz
+    stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL s hOutInj
+  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
+  refine ⟨hbase.1, ?_⟩
+  intro s0 s' hExec hs0 idx hActive
+  have h := hbase.2 s0 s' hExec hs0 idx hActive
+  rw [h, accStoreValue, if_pos hActive]
+  simpa using hFill idx hActive
+
 /-! ## Python test-shape wrappers
 
 The checked Python tests allocate `q/k/v/o` with shape `(2, 4, 128, 64)`,
