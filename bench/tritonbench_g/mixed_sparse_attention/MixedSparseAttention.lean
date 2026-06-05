@@ -2496,6 +2496,245 @@ noncomputable def msaOPartialSeed (BM BN BD : Nat) (mA : Fin BM → WithBot ℝ)
 @[simp] theorem msaOPartial_zero (BM BN BD : Nat) (score) (vblk) (i : Fin BM) (d : Fin BD) :
     msaOPartial BM BN BD score vblk 0 i d = 0 := rfl
 
+/-! ### Online-softmax fold collapse (the genuine two-phase closed form)
+
+The streaming `msaMPartial`/`msaLPartial`/`msaOPartial` recurrences are the classic
+unnormalized FlashAttention-2 fold. We prove they collapse to the *direct*
+masked-softmax weighted sums: writing `msaE x = exp2(x)` (with `exp2(⊥) = 0`), the
+per-iteration max shift cancels, so after `k` iterations the running max-shifted
+denominator/numerator equal the unshifted direct sums times `exp2(-m_k)`. The
+post-loop divide `acc /= l_i` then yields the genuine ratio. -/
+
+/-- `msaE x = exp2(x)` with `exp2(⊥) = 0` — the per-key softmax weight carrier. -/
+noncomputable def msaE (x : WithBot ℝ) : ℝ := (WithBot.realExp2 x).unbotD 0
+
+@[simp] theorem msaE_bot : msaE ⊥ = 0 := rfl
+@[simp] theorem msaE_some (r : ℝ) : msaE (some r) = Real.exp (r * Real.log 2) := rfl
+
+/-- **Max-shift cancellation.** If `M ≥ x` in `WithBot ℝ` (so `M = ⊥ → x = ⊥`),
+then `exp2(M) · exp2(x - M) = exp2(x)`. This is the algebraic identity that makes
+the online-softmax max subtraction telescope away. -/
+theorem msaE_shift_cancel (x M : WithBot ℝ) (hle : x ≤ M) :
+    msaE M * msaE (Option.map₂ (fun a b : ℝ => a - b) x M) = msaE x := by
+  cases x with
+  | bot =>
+    have : Option.map₂ (fun a b : ℝ => a - b) (⊥ : WithBot ℝ) M = (⊥ : WithBot ℝ) := rfl
+    rw [this]; simp [msaE_bot]
+  | coe a =>
+    cases M with
+    | bot => exact absurd hle (by simp)
+    | coe b =>
+      show msaE (some b) * msaE (Option.map₂ (fun a b : ℝ => a - b) (some a) (some b)) = msaE (some a)
+      rw [show Option.map₂ (fun a b : ℝ => a - b) (some a) (some b) = some (a - b) from rfl]
+      simp only [msaE_some]
+      rw [← Real.exp_add]; ring_nf
+
+/-- Direct (unshifted) running denominator: `Σ_{l<k} Σ_j exp2(score l i j)`. -/
+noncomputable def msaDenomUpto (BM BN : Nat)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) (k : Nat) (i : Fin BM) : ℝ :=
+  (Finset.range k).sum (fun l =>
+    (Finset.univ : Finset (Fin BN)).sum (fun j => msaE (score l i j)))
+
+/-- Direct (unshifted) running numerator: `Σ_{l<k} Σ_j exp2(score)·v`. -/
+noncomputable def msaNumerUpto (BM BN BD : Nat)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) (vblk : Nat → Fin BN → Fin BD → ℝ)
+    (k : Nat) (i : Fin BM) (d : Fin BD) : ℝ :=
+  (Finset.range k).sum (fun l =>
+    (Finset.univ : Finset (Fin BN)).sum (fun j => msaE (score l i j) * vblk l j d))
+
+/-- The running max dominates the seed and every streamed score (monotone fold). -/
+theorem msaMPartial_ge_self (BM BN : Nat) (score) (k : Nat) (i : Fin BM) :
+    msaMPartial BM BN score k i ≤ msaMPartial BM BN score (k + 1) i := by
+  simp only [msaMPartial]; exact le_max_left _ _
+
+theorem msaMPartial_ge_score (BM BN : Nat) (score) (k : Nat) (i : Fin BM) (j : Fin BN) :
+    score k i j ≤ msaMPartial BM BN score (k + 1) i := by
+  simp only [msaMPartial]
+  exact le_trans (Finset.le_sup (Finset.mem_univ j)) (le_max_right _ _)
+
+/-- **Collapse (denominator).** After `k` iterations the max-shifted denominator
+`msaLPartial` equals `exp2(-m_k) · msaDenomUpto`, i.e.
+`exp2(m_k) · msaLPartial k = msaDenomUpto k`. -/
+theorem msaLPartial_collapse (BM BN : Nat) (score) (k : Nat) (i : Fin BM) :
+    msaE (msaMPartial BM BN score k i) * msaLPartial BM BN score k i
+      = msaDenomUpto BM BN score k i := by
+  induction k with
+  | zero => simp [msaLPartial, msaDenomUpto]
+  | succ k ih =>
+    rw [msaDenomUpto, Finset.sum_range_succ, ← msaDenomUpto, ← ih]
+    set mNew := msaMPartial BM BN score (k + 1) i with hmNew
+    show msaE mNew *
+        ((msaE (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN score k i) mNew))
+            * msaLPartial BM BN score k i
+          + (Finset.univ : Finset (Fin BN)).sum (fun j =>
+              msaE (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew)))
+      = msaE (msaMPartial BM BN score k i) * msaLPartial BM BN score k i
+        + (Finset.univ : Finset (Fin BN)).sum (fun j => msaE (score k i j))
+    rw [mul_add, ← mul_assoc, msaE_shift_cancel _ _ (msaMPartial_ge_self BM BN score k i),
+      Finset.mul_sum]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _
+    rw [msaE_shift_cancel _ _ (msaMPartial_ge_score BM BN score k i j)]
+
+/-- **Collapse (numerator).** `exp2(m_k) · msaOPartial k = msaNumerUpto k`. -/
+theorem msaOPartial_collapse (BM BN BD : Nat) (score) (vblk) (k : Nat) (i : Fin BM) (d : Fin BD) :
+    msaE (msaMPartial BM BN score k i) * msaOPartial BM BN BD score vblk k i d
+      = msaNumerUpto BM BN BD score vblk k i d := by
+  induction k with
+  | zero => simp [msaOPartial, msaNumerUpto]
+  | succ k ih =>
+    rw [msaNumerUpto, Finset.sum_range_succ, ← msaNumerUpto, ← ih]
+    set mNew := msaMPartial BM BN score (k + 1) i with hmNew
+    show msaE mNew *
+        ((msaE (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN score k i) mNew))
+            * msaOPartial BM BN BD score vblk k i d
+          + (Finset.univ : Finset (Fin BN)).sum (fun j =>
+              msaE (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew) * vblk k j d))
+      = msaE (msaMPartial BM BN score k i) * msaOPartial BM BN BD score vblk k i d
+        + (Finset.univ : Finset (Fin BN)).sum (fun j => msaE (score k i j) * vblk k j d)
+    rw [mul_add, ← mul_assoc, msaE_shift_cancel _ _ (msaMPartial_ge_self BM BN score k i),
+      Finset.mul_sum]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _
+    rw [← mul_assoc, msaE_shift_cancel _ _ (msaMPartial_ge_score BM BN score k i j)]
+
+/-- **Ratio collapse.** When the direct denominator is positive, the normalized
+online-softmax output `msaOPartial / msaLPartial` equals the direct softmax ratio
+`msaNumerUpto / msaDenomUpto` — the max shift cancels in the quotient. -/
+theorem msaPartial_ratio_collapse (BM BN BD : Nat) (score) (vblk) (k : Nat)
+    (i : Fin BM) (d : Fin BD)
+    (hpos : 0 < msaDenomUpto BM BN score k i) :
+    msaOPartial BM BN BD score vblk k i d / msaLPartial BM BN score k i
+      = msaNumerUpto BM BN BD score vblk k i d / msaDenomUpto BM BN score k i := by
+  have hL := msaLPartial_collapse BM BN score k i
+  have hO := msaOPartial_collapse BM BN BD score vblk k i d
+  -- exp2(m_k) > 0 since msaDenomUpto > 0 forces m_k ≠ ⊥
+  have hEpos : 0 < msaE (msaMPartial BM BN score k i) := by
+    cases hm : msaMPartial BM BN score k i with
+    | bot =>
+      exfalso
+      rw [hm] at hL; simp only [msaE_bot, zero_mul] at hL
+      rw [← hL] at hpos; exact lt_irrefl 0 hpos
+    | coe r => show 0 < msaE (some r); rw [msaE_some]; exact Real.exp_pos _
+  have hLne : msaLPartial BM BN score k i ≠ 0 := by
+    intro h; rw [h, mul_zero] at hL; rw [← hL] at hpos; exact lt_irrefl 0 hpos
+  rw [← hL, ← hO]
+  field_simp
+
+/-! ### Two-phase concatenation: seeded Loop-B fold = single fold over A ++ B
+
+Loop B does not re-seed from `⊥`/`0`; it continues Loop A's accumulators. We show
+the seeded partials (`msaSeedMax`/`msaLPartialSeed`/`msaOPartialSeed`) over `c`
+column-iterations, seeded by Loop A's `bF`-block finals, equal the plain
+(`⊥`-seeded) partials over the *concatenated* stream `catScore bF scoreA scoreB`
+run for `bF + c` iterations. This is the genuine two-phase mixed-sparsity fold. -/
+
+/-- Prefix agreement: partials depend only on the streamed prefix `[0, k)`. -/
+theorem msaMPartial_congr_prefix (BM BN : Nat) (s1 s2) (k : Nat) (i : Fin BM)
+    (h : ∀ l, l < k → ∀ j : Fin BN, s1 l i j = s2 l i j) :
+    msaMPartial BM BN s1 k i = msaMPartial BM BN s2 k i := by
+  induction k with
+  | zero => rfl
+  | succ k ih =>
+    rw [msaMPartial, msaMPartial, ih (fun l hl => h l (by omega))]
+    congr 1
+    apply Finset.sup_congr rfl; intro j _; exact h k (by omega) j
+
+theorem msaLPartial_congr_prefix (BM BN : Nat) (s1 s2) (k : Nat) (i : Fin BM)
+    (h : ∀ l, l < k → ∀ j : Fin BN, s1 l i j = s2 l i j) :
+    msaLPartial BM BN s1 k i = msaLPartial BM BN s2 k i := by
+  induction k with
+  | zero => rfl
+  | succ k ih =>
+    rw [msaLPartial, msaLPartial, ih (fun l hl => h l (by omega))]
+    simp only [msaMPartial_congr_prefix BM BN s1 s2 (k+1) i h,
+      msaMPartial_congr_prefix BM BN s1 s2 k i (fun l hl => h l (by omega))]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _; rw [h k (by omega) j]
+
+theorem msaOPartial_congr_prefix (BM BN BD : Nat) (s1 s2) (v1 v2) (k : Nat) (i : Fin BM) (d : Fin BD)
+    (h : ∀ l, l < k → ∀ j : Fin BN, s1 l i j = s2 l i j)
+    (hv : ∀ l, l < k → ∀ j : Fin BN, v1 l j d = v2 l j d) :
+    msaOPartial BM BN BD s1 v1 k i d = msaOPartial BM BN BD s2 v2 k i d := by
+  induction k with
+  | zero => rfl
+  | succ k ih =>
+    rw [msaOPartial, msaOPartial, ih (fun l hl => h l (by omega)) (fun l hl => hv l (by omega))]
+    simp only [msaMPartial_congr_prefix BM BN s1 s2 (k+1) i h,
+      msaMPartial_congr_prefix BM BN s1 s2 k i (fun l hl => h l (by omega))]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _; rw [h k (by omega) j, hv k (by omega) j]
+
+/-- Concatenated score stream: first `bF` iterations from `scoreA`, then `scoreB`. -/
+noncomputable def msaCatScore (BM BN bF : Nat)
+    (scoreA scoreB : Nat → Fin BM → Fin BN → WithBot ℝ) :
+    Nat → Fin BM → Fin BN → WithBot ℝ :=
+  fun k => if k < bF then scoreA k else scoreB (k - bF)
+
+/-- Concatenated value stream. -/
+noncomputable def msaCatVblk (BN BD bF : Nat)
+    (vblkA vblkB : Nat → Fin BN → Fin BD → ℝ) : Nat → Fin BN → Fin BD → ℝ :=
+  fun k => if k < bF then vblkA k else vblkB (k - bF)
+
+theorem msaSeedMax_eq_cat (BM BN bF : Nat) (scoreA scoreB) (c : Nat) (i : Fin BM) :
+    msaSeedMax BM BN (msaMPartial BM BN scoreA bF) scoreB c i
+      = msaMPartial BM BN (msaCatScore BM BN bF scoreA scoreB) (bF + c) i := by
+  have hpre : ∀ l, l < bF → ∀ j : Fin BN, scoreA l i j = msaCatScore BM BN bF scoreA scoreB l i j := by
+    intro l hl j; rw [msaCatScore, if_pos hl]
+  induction c with
+  | zero =>
+    simp only [msaSeedMax, Nat.add_zero]; exact msaMPartial_congr_prefix BM BN scoreA _ bF i hpre
+  | succ c ih =>
+    rw [msaSeedMax, ih, show bF + (c + 1) = (bF + c) + 1 from by ring, msaMPartial]
+    congr 1
+    apply Finset.sup_congr rfl; intro j _
+    rw [msaCatScore, if_neg (by omega), show bF + c - bF = c from by omega]
+
+theorem msaLPartialSeed_eq_cat (BM BN bF : Nat) (scoreA scoreB) (lA0 : Fin BM → ℝ) (c : Nat) (i : Fin BM)
+    (hlA : lA0 = msaLPartial BM BN scoreA bF) :
+    msaLPartialSeed BM BN (msaMPartial BM BN scoreA bF) lA0 scoreB c i
+      = msaLPartial BM BN (msaCatScore BM BN bF scoreA scoreB) (bF + c) i := by
+  have hpre : ∀ l, l < bF → ∀ j : Fin BN, scoreA l i j = msaCatScore BM BN bF scoreA scoreB l i j := by
+    intro l hl j; rw [msaCatScore, if_pos hl]
+  induction c with
+  | zero =>
+    rw [hlA]; simp only [msaLPartialSeed, Nat.add_zero]
+    exact msaLPartial_congr_prefix BM BN scoreA _ bF i hpre
+  | succ c ih =>
+    rw [msaLPartialSeed, ih, show bF + (c + 1) = (bF + c) + 1 from by ring, msaLPartial]
+    simp only [msaSeedMax_eq_cat, show bF + (c + 1) = (bF + c) + 1 from by ring]
+    have hcat : ∀ j : Fin BN, msaCatScore BM BN bF scoreA scoreB (bF + c) i j = scoreB c i j := by
+      intro j; rw [msaCatScore, if_neg (by omega), show bF + c - bF = c from by omega]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat j]
+
+theorem msaOPartialSeed_eq_cat (BM BN BD bF : Nat) (scoreA scoreB) (vblkA vblkB)
+    (lA0 : Fin BM → ℝ) (oA0 : Fin BM → Fin BD → ℝ) (c : Nat) (i : Fin BM) (d : Fin BD)
+    (hlA : lA0 = msaLPartial BM BN scoreA bF)
+    (hoA : oA0 = fun i d => msaOPartial BM BN BD scoreA vblkA bF i d) :
+    msaOPartialSeed BM BN BD (msaMPartial BM BN scoreA bF) lA0 oA0 scoreB vblkB c i d
+      = msaOPartial BM BN BD (msaCatScore BM BN bF scoreA scoreB)
+          (msaCatVblk BN BD bF vblkA vblkB) (bF + c) i d := by
+  have hpre : ∀ l, l < bF → ∀ j : Fin BN, scoreA l i j = msaCatScore BM BN bF scoreA scoreB l i j := by
+    intro l hl j; rw [msaCatScore, if_pos hl]
+  have hprev : ∀ l, l < bF → ∀ j : Fin BN, vblkA l j d = msaCatVblk BN BD bF vblkA vblkB l j d := by
+    intro l hl j; rw [msaCatVblk, if_pos hl]
+  induction c with
+  | zero =>
+    rw [hoA]; simp only [msaOPartialSeed, Nat.add_zero]
+    exact msaOPartial_congr_prefix BM BN BD scoreA _ vblkA _ bF i d hpre hprev
+  | succ c ih =>
+    rw [msaOPartialSeed, ih, show bF + (c + 1) = (bF + c) + 1 from by ring, msaOPartial]
+    simp only [msaSeedMax_eq_cat, show bF + (c + 1) = (bF + c) + 1 from by ring]
+    have hcat : ∀ j : Fin BN, msaCatScore BM BN bF scoreA scoreB (bF + c) i j = scoreB c i j := by
+      intro j; rw [msaCatScore, if_neg (by omega), show bF + c - bF = c from by omega]
+    have hcatv : ∀ j : Fin BN, msaCatVblk BN BD bF vblkA vblkB (bF + c) j d = vblkB c j d := by
+      intro j; rw [msaCatVblk, if_neg (by omega), show bF + c - bF = c from by omega]
+    congr 1
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat j, hcatv j]
+
 /-- **Loop-A invariant** after `c` block-sparse iterations. The live registers
 `m_i`/`l_i`/`acc` hold the `⊥`-seeded unnormalized base-2 online-softmax fold over
 the first `c` visited dense blocks (the block-A `scoreA`/`vblkA` stream), and every
