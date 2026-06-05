@@ -3838,5 +3838,44 @@ theorem bsaLoopBody_steps
         hs27d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
       exact hs26acc2
 
+/-! ## Block-update math bridge (`bsa_attn_step` support)
+
+These lemmas bridge the `bsaLoopBody_steps` symbolic outputs (per-cell `Tile`
+arithmetic over `WithBot ℝ`) to the gathered-causal streaming recurrences
+`bsaMPartial`/`bsaLPartial`/`bsaOPartial` at iteration `c + 1`. The score and
+value gathers are supplied as abstract per-cell hypotheses (`hScore`/`hMask`/
+`hVal`/`hVal2`), discharged by the exec assembly at instantiation time. -/
+
+open BSAMathCausal in
+/-- Per-cell score bridge: the kernel's causal-masked `qkM` tile cell equals the
+gathered-causal `maskedScore` at the block-`c` lane, given the additive-causal
+mask predicate (`hMask`) and the scaled-dot-equals-`gScore` hypothesis
+(`hScore`). The kernel applies the additive `where` (0 / ⊥), while `maskedScore`
+selects the score or ⊥ on the same predicate. -/
+theorem bsa_qkM_cell_eq_maskedScore
+    (qStart numKVBlocks c : Nat) (hc : c + 1 ≤ numKVBlocks)
+    (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (SN : Nat) (gm : Fin 16 → Nat)
+    (qkScaled : Tile .real [16, 16])
+    (i jL : Fin 16)
+    (hMask : (SN + jL.val ≤ gm i) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jL) ≤ qStart + i.val))
+    (hScore : qkScaled.data (i, jL, PUnit.unit) =
+      (some (gScore Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jL)) : WithBot ℝ)) :
+    NumericDType.real.add (qkScaled.data (i, jL, PUnit.unit))
+        (if SN + jL.val ≤ gm i then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+      = maskedScore qStart gpos Qg Kg scale i
+          (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jL) := by
+  rw [hScore]
+  by_cases h : SN + jL.val ≤ gm i
+  · rw [if_pos h, maskedScore_of_le qStart gpos Qg Kg scale i _ (hMask.mp h)]
+    show (Option.map₂ (· + ·) (some _) (some (0 : ℝ)) : WithBot ℝ) = _
+    rw [Option.map₂_some_some, add_zero]; rfl
+  · rw [if_neg h, maskedScore_of_not_le qStart gpos Qg Kg scale i _ (by rw [← hMask]; exact h)]
+    rfl
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
