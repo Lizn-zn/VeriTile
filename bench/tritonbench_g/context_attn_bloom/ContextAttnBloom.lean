@@ -1149,6 +1149,63 @@ theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Ti
     TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk, hmij,
     NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
 
+/-! ### Bloom-specific per-key data + boundary-masked exact fold
+
+The bloom kernel feeds the generic base-2 machinery the per-key pair
+`(ctxBloomScore / log 2, value)` so `pow2 score = exp (natural kernel score)`.
+The streaming loop runs to `S = ceil₁₂₈(block_end_loc)`, streaming phantom keys
+`[bel, S)` whose masked `k`/`v` are `0`; the boundary-masked tiles
+`bloomKMaskTile`/`bloomVMaskTile` capture exactly that. -/
+
+/-- `block_end_loc`-masked key tile (genuine `ctxKTile` for `j < bel`, else `0`). -/
+noncomputable def bloomKTileM
+    (s : BlockState) (K Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s S bel : Nat) : TileIndex [S, 128] → ℝ :=
+  fun (j, e, u) =>
+    if j.val < bel then ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, e, u)
+    else 0
+
+/-- `block_end_loc`-masked value tile. -/
+noncomputable def bloomVTileM
+    (s : BlockState) (V Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s S bel : Nat) : TileIndex [S, 128] → ℝ :=
+  fun (j, d, u) =>
+    if j.val < bel then ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, d, u)
+    else 0
+
+/-- Row-masked query tile: genuine `ctxQTile` on active rows, else `0`. -/
+noncomputable def bloomQTileM
+    (s : BlockState) (Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Fin 128) : ℝ :=
+  if s.pids 2 * BLOCK_M + i.val < seqLen s B_Seqlen B_Prompt_Cache_Len then
+    ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+  else 0
+
+/-- **Faithful per-key `(base-2 score, value)`** the loop folds, with the genuine
+`-1e8` sentinel and the `block_end_loc` load mask on `k`/`v`. Score is fed in
+base-2 (`/ log 2`) so `pow2 score = exp (kernel natural score)`. -/
+noncomputable def bloomKVM
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (j : Fin S) : ℝ × ℝ :=
+  ((if j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len then
+      sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+        bloomQTileM s Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len BLOCK_M i e
+          * bloomKTileM s K Req_to_tokens B_req_idx stride_req_b stride_req_s S bel (j, e, PUnit.unit))
+    else (0.0 - 10e7 : ℝ)) / Real.log 2,
+    bloomVTileM s V Req_to_tokens B_req_idx stride_req_b stride_req_s S bel (j, d, PUnit.unit))
+
+/-- **The faithful kernel value** at output lane `(i,d)`: `acc/l` of the ⊥-seeded
+online-softmax fold over `bloomKVM` for the full streamed window `[0, S)`. -/
+noncomputable def contextAttnBloomExactFoldM
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let st := gStateBot S S (bloomKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+      Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S bel idx.1 idx.2.1)
+  st.2.2 / st.2.1
+
 noncomputable def producedBloomBlock128OutValue
     (s : BlockState)
     (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
