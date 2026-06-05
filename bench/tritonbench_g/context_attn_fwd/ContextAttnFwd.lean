@@ -4499,6 +4499,173 @@ theorem ctxPostLoop_eval64
     rw [this]
     unfold BlockState.readMem; rw [hmem]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`context_attn_fwd.py` whole-kernel exec assembly (Tesla, BLOCK_M = 64).** Steps
+the entire faithful surface and reads off the genuine masked closed form
+`contextAttnExactFoldM` at every active `Out` lane (inactive lanes preserved). The
+streaming step is `BLOCK_N = 128`. -/
+theorem context_attn_fwd_exec_block64
+    (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen B_Prompt_Cache_Len : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, exec (context_attn_fwd_kernel_int8kv_surface Q K V
+        sm_scale_python Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128) s = some sF
+      ∧ ∀ idx : TileIndex [64, 128],
+          sF.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 64 idx)
+            = if active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx then
+                contextAttnExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+                  sm_scale_python 64
+                  (let plen := s.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s.pids 1 / 16)
+                   let sl := s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16) - plen
+                   let bel := (let a := 64 * s.pids 0 + 64 + plen
+                               let b := sl + plen
+                               if a < b then a else b)
+                   let bm := if 64 * s.pids 0 < sl then 1 else 0
+                   128 * ((bm * bel + 127) / 128))
+                  (let plen := s.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s.pids 1 / 16)
+                   let sl := s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16) - plen
+                   let a := 64 * s.pids 0 + 64 + plen
+                   let b := sl + plen
+                   if a < b then a else b) idx
+              else s.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 64 idx) := by
+  rw [show exec (context_attn_fwd_kernel_int8kv_surface Q K V
+        sm_scale_python Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128) s
+      = stepStmts (context_attn_fwd_kernel_int8kv_surface Q K V
+        sm_scale_python Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128).toAlgKernel.body s from rfl]
+  rw [ctxBody_split64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len]
+  obtain ⟨s0, hpre, hpids, hmem, hundef0, hstart_m, hcb, hch, hckvh, hplen, hcbsi, hsl0,
+      hbsl, hon, hod, hom, hmi, hli, hacc, hbm0, hbel0, hoffq, hq⟩ :=
+    ctxPreLoop_eval64 s Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python hundef
+  rw [stepStmts.append_some hpre]
+  set plen := s0.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s0.pids 1 / 16) with hplend
+  set slv := s0.readMemValue .nat (Region.cast B_Seqlen) (s0.pids 1 / 16) with hslvd
+  set sl := slv - plen with hsld
+  set bel := (let a := 64 * s0.pids 0 + 64 + plen
+              let b := sl + plen
+              if a < b then a else b) with hbeld
+  set bm := (if 64 * s0.pids 0 < sl then 1 else 0) with hbmd
+  set S := 128 * ((bm * bel + 127) / 128) with hSd
+  have hmemv : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .nat rg i = s0.readMemValue .nat rg i := by
+    intro rg i
+    simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  have hmemvr : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .real rg i = s0.readMemValue .real rg i := by
+    intro rg i
+    simp only [BlockState.readMemValue, BlockState.readMemAs, hmem]
+  have hbelrb : s0.regs .nat [] "block_end_loc" = some (Tile.scalar bel) := by
+    rw [hbel0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbeld, hsld, hslvd, hplend, Region.cast_cast, ← hpids, hmemv]
+  have hbmrb : s0.regs .nat [] "block_mask" = some (Tile.scalar bm) := by
+    rw [hbm0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbmd, hsld, hslvd, hplend, Region.cast_cast, ← hpids, hmemv]
+  have hinv0 : ctxInvariant64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0
+      sm_scale_python S bel 0 s0 := by
+    refine ⟨rfl, rfl, hundef0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hcb, hpids]
+    · rw [hckvh, hpids]
+    · rw [hch, hpids]
+    · rw [hplen]; simp only [Region.cast_cast, hmemv, ← hpids]
+    · rw [hsl0]; simp only [Region.cast_cast, hmemv, ← hpids]
+    · exact hbelrb
+    · rw [hcbsi]; simp only [startLoc, curBatch, Region.cast_cast, hmemv, ← hpids]
+    · rw [hom, hpids]
+    · rw [hon]
+    · rw [hod]
+    · rw [hq]; refine congrArg some ?_; ext idx
+      simp only [Region.cast_cast, hmemv, hmemvr, ← hpids]; rfl
+    · rw [hmi]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · rw [hli]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · rw [hacc]; refine congrArg some ?_; ext idx
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · omega
+  obtain ⟨final, sL, hloop, hfin, c_final, hfinaleq, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+      (stepOp := Op.constNat 128)
+      (P := fun i st => ∃ c, i = c * 128 ∧
+        ctxInvariant64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0
+          sm_scale_python S bel c st)
+      (s_init := s0)
+      (by rw [evalOp_constNat])
+      (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.ref .nat [] "block_end_loc")) s0 = some (Tile.scalar (bm * bel)) from by
+        rw [evalOp_mul, evalOp_ref, evalOp_ref, hbmrb, hbelrb]
+        simp only [Option.bind_eq_bind, Option.bind_some]; rfl)
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      ⟨0, by ring, hinv0⟩
+      (fun i st hi hP => by
+        obtain ⟨c, hic, hinvc⟩ := hP
+        have hwin : (c + 1) * 128 ≤ S := by
+          have hstop : c * 128 < bm * bel := hic ▸ hi
+          rw [hSd]; omega
+        obtain ⟨s', hs', hinv'⟩ :=
+          ctx_attn_step64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0 S bel c i st
+            hwin hic hinvc
+        exact ⟨s', hs', c + 1, by rw [hic]; ring, hinv'⟩)
+  subst hfinaleq
+  have hcle : c_final * 128 ≤ S := hinvL.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  have hScfinal : S = c_final * 128 := by
+    rw [hSd] at hcle ⊢; omega
+  obtain ⟨sP, hpostStep, hO⟩ :=
+    ctxPostLoop_eval64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0 S bel c_final sL
+      hScfinal hinvL
+  refine ⟨sP, ?_, ?_⟩
+  · rw [stepStmts.cons_some hloop]
+    exact hpostStep
+  · intro idx
+    have hOidx := hO idx
+    have houtoff : outOffset s0 16 B_Start_Loc 2048 128 1 64 idx
+        = outOffset s 16 B_Start_Loc 2048 128 1 64 idx := by
+      simp only [outOffset, startLoc, curBatch, curHead, mIndex, hpids, hmemv]
+    have hact : active s0 16 B_Seqlen B_Prompt_Cache_Len 64 idx
+        ↔ active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx := by
+      simp only [active, mIndex, seqLen, promptLen, curBatch, hpids, hmemv]
+    rw [houtoff] at hOidx
+    rw [hOidx]
+    by_cases hac : active s0 16 B_Seqlen B_Prompt_Cache_Len 64 idx
+    · rw [if_pos hac, if_pos (hact.mp hac)]
+      have hreadmem : ∀ (rg : RegionName) (o : Nat), s0.readMem rg o = s.readMem rg o := by
+        intro rg o; unfold BlockState.readMem; rw [hmem]
+      have hbeleq : bel
+          = (let plen := s.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s.pids 1 / 16)
+             let sl := s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16) - plen
+             let a := 64 * s.pids 0 + 64 + plen
+             let b := sl + plen
+             if a < b then a else b) := by
+        simp only [hbeld, hsld, hslvd, hplend, ← hpids, hmemv]
+      have hSeq : S
+          = (let plen := s.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s.pids 1 / 16)
+             let sl := s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16) - plen
+             let bel := (let a := 64 * s.pids 0 + 64 + plen
+                         let b := sl + plen
+                         if a < b then a else b)
+             let bm := if 64 * s.pids 0 < sl then 1 else 0
+             128 * ((bm * bel + 127) / 128)) := by
+        simp only [hSd, hbmd, hbeld, hsld, hslvd, hplend, ← hpids, hmemv]
+      rw [← hbeleq, ← hSeq]
+      have hkvm : ctxKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python 64 S bel idx.1 idx.2.1
+          = ctxKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python 64 S bel idx.1 idx.2.1 := by
+        funext j
+        simp only [ctxKVM, ctxQTileM, ctxKTileM, ctxVTileM, ctxQTile, ctxKTile, ctxVTile,
+          promptLen, seqLen, curBatch, curHead, hpids, hmemv, hreadmem]
+      simp only [contextAttnExactFoldM, hkvm]
+    · rw [if_neg hac, if_neg (fun h => hac (hact.mpr h))]
+      unfold BlockState.readMem; rw [hmem]
+
 /-- Self-referential executed `Out`-readback for the BLOCK_M = 64 (Tesla) branch.
 The genuine closed form `contextAttnExactFoldM` for this branch requires the full
 streaming-loop suite (`ctxLoopBody_steps`/`ctxInvariant`/`ctx_attn_step`/
