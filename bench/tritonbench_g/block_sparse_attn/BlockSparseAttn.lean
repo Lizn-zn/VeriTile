@@ -1921,6 +1921,66 @@ theorem bsa_load_v2_eval {BN BD : Nat} (s : BlockState) (SN SVN BD' : Nat)
   simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
     Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk = tl.zeros([BLOCK_M, BLOCK_N])` statement eval** (CSR loop body L4): the
+all-`0` pre-dot accumulator. Block-sparse analogue of `ta_qkzeros_eval`. -/
+theorem bsa_qkzeros_eval (s : BlockState) (BM BN : Nat) :
+    evalOp (Op.full [BM, BN] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk += tl.dot(q, k)` statement eval** (CSR loop body L5, first D-block): adds
+the `q · k` dot to the (zero-seeded) `qk` tile. Unlike triton-attention, block-sparse
+loads `k` already transposed (`off_k = offs_n[None,:]·stride_kn + offs_d[:,None]`,
+shape `[BLOCK_D, BLOCK_N]`), so the dot is `[BM,BD]·[BD,BN]` with no `tl.trans`. -/
+theorem bsa_qk_dot_eval (s : BlockState) (BM BN BD : Nat)
+    (qktile : Tile .real [BM, BN]) (qtile : Tile .real [BM, BD]) (ktile : Tile .real [BD, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq : s.regs .real [BM, BD] "q" = some qtile)
+    (hk : s.regs .real [BD, BN] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qktile (Tile.dot [] qtile ktile)) := by
+  have hqr : evalOp (Op.ref .real [BM, BD] "q") s = some qtile := by rw [evalOp_ref, hq]
+  have hkr : evalOp (Op.ref .real [BD, BN] "k") s = some ktile := by rw [evalOp_ref, hk]
+  have hdot : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k")) s
+      = some (Tile.dot [] qtile ktile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"), hqr, hkr]; rfl
+  rw [evalOp_add]
+  simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk += tl.dot(q2, k)` statement eval** (CSR loop body L6, second D-block): adds
+the `q2 · k` dot (second-D-block query against the `+BLOCK_D` key projection) into the
+running `qk` score, so both D-blocks contribute to the same softmax. -/
+theorem bsa_qk2_dot_eval (s : BlockState) (BM BN BD : Nat)
+    (qktile : Tile .real [BM, BN]) (q2tile : Tile .real [BM, BD]) (ktile : Tile .real [BD, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq2 : s.regs .real [BM, BD] "q2" = some q2tile)
+    (hk : s.regs .real [BD, BN] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] "q2") (Op.ref .real [BD, BN] "k"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qktile (Tile.dot [] q2tile ktile)) := by
+  have hqr : evalOp (Op.ref .real [BM, BD] "q2") s = some q2tile := by rw [evalOp_ref, hq2]
+  have hkr : evalOp (Op.ref .real [BD, BN] "k") s = some ktile := by rw [evalOp_ref, hk]
+  have hdot : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.ref .real [BM, BD] "q2") (Op.ref .real [BD, BN] "k")) s
+      = some (Tile.dot [] q2tile ktile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BD] "q2") (Op.ref .real [BD, BN] "k"), hqr, hkr]; rfl
+  rw [evalOp_add]
+  simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
