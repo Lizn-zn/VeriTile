@@ -28,30 +28,35 @@ statement covers every program of the grid.
 
 ```
 context_attn_nopad_python_test_shape_output_summary         ← TOP THEOREM
-  └─ context_attn_nopad_surface_python_test_shape_compute_correct   full surface, final store
-       └─ context_attn_nopad_final_store_python_test_shape_compute_correct
-            └─ context_attn_nopad_final_store_slice_compute_correct
-                 └─ context_attn_nopad_final_store_slice_correct      algorithm-layer readback per lane
-(supporting: context_attn_nopad_python_test_shape_offset_injective,
-             context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported)
+  └─ nopad_exec                              full surface exec → genuine closed form
+       ├─ nopadPreLoop_eval                  19 preLoop stmts → nopadInvariant … 0
+       ├─ forRangeDyn_inv ∘ nopad_attn_step  loop body advances nopadInvariant c → c+1
+       │    └─ osNormStepBot_block_eq + nopadBlockM_{sup,lij,acc} bridges
+       └─ nopadPostLoop_eval                 masked store → ctxNopadGenuineOutValue
+            └─ nopadFoldUpto_full_eq_genuine ∘ ctxNopad_fold_eq_exactFoldM
+(genuine spec: ctxNopadGenuineOutValue = contextAttnNopadExactFoldM, the boundary-
+ masked causal softmax; = attentionRealCausalBlock via the closed-form bridge.
+ supporting: context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported)
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The verified compute claim is scoped to the **final masked writeback**
-of the accumulated `acc` tile into `Out`: every active lane
-(`offs_m < cur_batch_seq_len`, with `offs_d < head_dim` folded into the slice)
-holds the surface-produced `acc` value (`producedContextAttnNopadOutValue`), and
-out-of-bounds lanes are preserved. The online-softmax streaming loop
-(`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal mask) is carried *inside* the
-surface kernel and reflected in the produced-value spec rather than re-proven as
-a closed-form softmax identity. Note the top theorem bundles only the
-compute-correct claim; `toAlgorithm?` lowering is available separately as
-`context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported` but is not folded
-into this summary. The summary is instantiated at the single Python test shape
-(`BLOCK_M=BLOCK_DMODEL=BLOCK_N=128`); other shapes are not covered by the top
-theorem.
+modeled. The verified compute claim is **genuine, not self-referential**: the full
+surface kernel (preLoop + the online-softmax streaming `forRangeDyn` loop +
+masked store) realizes the closed-form causal-softmax fold
+`ctxNopadGenuineOutValue` — the boundary-masked
+`numer/denom = (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ)·V[j]) / (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ))`
+of the loaded Q/K/V memory — at every active lane (`offs_m < cur_batch_seq_len`,
+with `offs_d < head_dim` folded into the slice), and preserves out-of-bounds lanes.
+The online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal
+`-inf` mask, in-loop normalization) is decoded statement-by-statement
+(`nopadPreLoop_eval`/`nopad_attn_step`/`nopadPostLoop_eval`, assembled in
+`nopad_exec`) and *proven* to collapse to this closed form, not re-stated as a
+spec. `toAlgorithm?` lowering is available separately as
+`context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported`. The summary is
+instantiated at the single Python test shape (`BLOCK_M=BLOCK_DMODEL=BLOCK_N=128`);
+other shapes are not covered by the top theorem.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ContextAttnNopad
@@ -974,65 +979,6 @@ theorem context_attn_nopad_final_store_python_test_shape_compute_correct
   exact context_attn_nopad_final_store_slice_compute_correct Acc B_Start_Loc
     B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
     (context_attn_nopad_python_test_shape_offset_injective s B_Start_Loc)
-
-noncomputable def producedContextAttnNopadOutValue
-    (s : BlockState) (Q K V : RegionName)
-    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
-    (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (context_attn_nopad_fwd_kernel_surface Q K V
-      ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-      768 128 1 768 128 1 768 128 1 768 128 1
-      128 128 128).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s B_Start_Loc 768 128 1 128 idx)
-  | none => 0.0
-
-theorem context_attn_nopad_surface_python_test_shape_compute_correct
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedContextAttnNopadOutValue s Q K V B_Start_Loc B_Seqlen Out
-          idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [context_attn_nopad_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedContextAttnNopadOutValue, hExec]
-
-/-- Public Python test-shape summary for `context_attn_nopad.py`.
-
-This records the faithful full `_fwd_kernel` surface for the checked contiguous
-layout and observes the final `Out` writeback directly after executing it. -/
-theorem context_attn_nopad_python_test_shape_output_summary
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedContextAttnNopadOutValue s Q K V B_Start_Loc B_Seqlen Out
-          idx) := by
-  exact context_attn_nopad_surface_python_test_shape_compute_correct Q K V
-    B_Start_Loc B_Seqlen Out s
 
 /-! ## Genuine exec assembly (mirrors triton_attention #308 structure)
 
@@ -2616,6 +2562,7 @@ noncomputable def nopadInvariant
   ∧ (∀ rg o, s.undef rg o = 0)
   ∧ s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))
   ∧ s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 2))
   ∧ s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s0 B_Seqlen))
   ∧ s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s0 B_Start_Loc))
   ∧ s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
@@ -2947,7 +2894,7 @@ theorem nopadPreLoop_eval
       · rw [if_neg (by simpa [seqLen, BlockState.readMemValue] using hlt), if_neg hlt]))]
   rw [stepStmts.nil]
   refine ⟨_, rfl, ?_⟩
-  refine ⟨by simp, ?_, ?_, by simp, by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec],
+  refine ⟨by simp, ?_, ?_, by simp, by simp, by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec],
     by simp [Tile.vec], ?_, by simp, by simp, by simp, ?_, ?_, ?_⟩
   · funext rg o; simp
   · intro rg o; simp [hundef]
@@ -3037,7 +2984,7 @@ theorem nopad_attn_step
     by_cases hbm : 128 * s0.pids 2 < bel
     · rw [hSmul, if_pos hbm, one_mul] at hwin; nlinarith
     · rw [hSmul, if_neg hbm] at hwin; omega
-  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hsm, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
   -- the row-and-channel-indexed fold-so-far state (at c*128)
   set fold0 : Fin 128 → Fin 128 → WithBot ℝ × ℝ × ℝ := fun ir dd =>
     nopadFoldUpto s0 Q K V B_Start_Loc sc S bel (c * 128) ir dd with hfold0
@@ -3667,9 +3614,10 @@ theorem nopad_attn_step
       hs5d, BlockState.setReg_undef, hs4d, BlockState.setReg_undef, hs3d, BlockState.setReg_undef,
       hs2d, BlockState.setReg_undef, hs1d, BlockState.setReg_undef]
     exact hundef rg o
-  refine ⟨hs23pids, hs23mem, hs23undef, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨hs23pids, hs23mem, hs23undef, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hcb
   · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hch
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hsm
   · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hseq
   · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hsl
   · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hn
@@ -3700,6 +3648,35 @@ theorem nopad_attn_step
 
 /-! ## PostLoop store and full-kernel exec assembly -/
 
+/-- `contextAttnNopadExactFoldM` at FIXED `S`/`bel` transports across mem/pids-equal
+states (no dependent-`Fin` rewrite: `S` is shared). -/
+theorem contextAttnNopadExactFoldM_eq_of_mem_pids
+    (s s0 : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ) (S bel : Nat)
+    (idx : TileIndex [128, 128]) (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) :
+    contextAttnNopadExactFoldM s Q K V B_Start_Loc sm_scale 128 S bel idx
+      = contextAttnNopadExactFoldM s0 Q K V B_Start_Loc sm_scale 128 S bel idx := by
+  have hsl : startLoc s B_Start_Loc = startLoc s0 B_Start_Loc := startLoc_eq_of_mem_pids s s0 B_Start_Loc hmem hpids
+  have hQt : ctxQTile s Q B_Start_Loc 128 = ctxQTile s0 Q B_Start_Loc 128 := by
+    funext j; simp only [ctxQTile, hsl, hpids, BlockState.readMem, hmem]
+  have hKt : ctxKTileM s K B_Start_Loc S bel = ctxKTileM s0 K B_Start_Loc S bel := by
+    funext j; simp only [ctxKTileM, ctxKTile, hsl, hpids, BlockState.readMem, hmem]
+  have hVt : ctxVTileM s V B_Start_Loc S bel = ctxVTileM s0 V B_Start_Loc S bel := by
+    funext j; simp only [ctxVTileM, ctxVTile, hsl, hpids, BlockState.readMem, hmem]
+  simp only [contextAttnNopadExactFoldM, hQt, hKt, hVt, hpids]
+
+theorem ctxNopadGenuineOutValue_eq_of_mem_pids
+    (s s0 : BlockState) (Q K V B_Start_Loc B_Seqlen : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) (idx : TileIndex [128, 128]) :
+    ctxNopadGenuineOutValue s Q K V B_Start_Loc B_Seqlen idx
+      = ctxNopadGenuineOutValue s0 Q K V B_Start_Loc B_Seqlen idx := by
+  have hseqE : seqLen s B_Seqlen = seqLen s0 B_Seqlen := seqLen_eq_of_mem_pids s s0 B_Seqlen hmem hpids
+  have hWin : ctxNopadWindow s B_Seqlen 128 = ctxNopadWindow s0 B_Seqlen 128 := by
+    simp only [ctxNopadWindow, hseqE, hpids]
+  have hBel : ctxNopadBel s B_Seqlen = ctxNopadBel s0 B_Seqlen := by simp only [ctxNopadBel, hseqE]
+  rw [ctxNopadGenuineOutValue, ctxNopadGenuineOutValue,
+    contextAttnNopadExactFoldM_eq_of_mem_pids s s0 Q K V B_Start_Loc sm_scale_python _ _ idx hmem hpids,
+    hWin, hBel]
+
 /-- **At the full window, an active row's running `acc` is the genuine closed form.**
 The invariant's masked fold `nopadFoldUpto … S` (row-masked `ctxQTileMRow`) on an
 active row (`gi < bel = seqLen`) agrees with the genuine causal key list, whose
@@ -3708,12 +3685,16 @@ active row (`gi < bel = seqLen`) agrees with the genuine causal key list, whose
 theorem nopadFoldUpto_full_eq_genuine
     (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen : RegionName)
     (idx : TileIndex [128, 128])
-    (hpos : 0 < ctxNopadWindow s0 B_Seqlen 128)
     (hact : s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen) :
     (nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
         (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen)
         (ctxNopadWindow s0 B_Seqlen 128) idx.1 idx.2.1).2.2
       = ctxNopadGenuineOutValue s0 Q K V B_Start_Loc B_Seqlen idx := by
+  -- active row ⟹ block_mask = 1 ⟹ window S > 0
+  have hpos : 0 < ctxNopadWindow s0 B_Seqlen 128 := by
+    rw [ctxNopadWindow]
+    have hbm : 128 * s0.pids 2 < seqLen s0 B_Seqlen := by have := idx.1.isLt; omega
+    rw [if_pos hbm]; omega
   set S := ctxNopadWindow s0 B_Seqlen 128 with hSdef
   set bel := seqLen s0 B_Seqlen with hbeldef
   rw [nopadFoldUpto, ctxNopadKeysUptoM_active s0 Q K V B_Start_Loc sm_scale_python 128 S bel S idx.1 idx.2.1 hact,
@@ -3735,7 +3716,6 @@ theorem nopadPostLoop_eval
     (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName) (Out : RegionName)
     (s0 : BlockState) (cF : Nat) (s : BlockState)
     (hfull : cF * 128 = ctxNopadWindow s0 B_Seqlen 128)
-    (hpos : 0 < ctxNopadWindow s0 B_Seqlen 128)
     (hinv : nopadInvariant Q K V B_Start_Loc B_Seqlen s0 cF s) :
     ∃ sP, stepStmts (nopadPostLoop Out) s = some sP
       ∧ ∀ idx : TileIndex [128, 128],
@@ -3744,7 +3724,7 @@ theorem nopadPostLoop_eval
                 ctxNopadGenuineOutValue s0 Q K V B_Start_Loc B_Seqlen idx
               else s.readMem Out (outOffset s0 B_Start_Loc 768 128 1 128 idx) := by
   set bel := seqLen s0 B_Seqlen with hbeldef
-  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hsm, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
   unfold nopadPostLoop
   -- stmt 0: off_o (same formula as off_q)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
@@ -3836,9 +3816,162 @@ theorem nopadPostLoop_eval
   · rw [if_pos hlt, if_pos hlt]
     -- the stored value = genuine closed form
     rw [show cF * 128 = ctxNopadWindow s0 B_Seqlen 128 from hfull]
-    exact nopadFoldUpto_full_eq_genuine s0 Q K V B_Start_Loc B_Seqlen idx hpos hlt
+    exact nopadFoldUpto_full_eq_genuine s0 Q K V B_Start_Loc B_Seqlen idx hlt
   · rw [if_neg hlt, if_neg hlt]
     -- out-of-bounds preserved: s2.readMem = s.readMem (mem unchanged by reg writes)
     simp only [BlockState.readMem, hs2mem, hmem]
+
+/-- The `c = 0` invariant re-anchors to `s0` itself (anchor-dependent fields read
+off `mem`/`pids`, which `s0` shares with the input `s`; the `c = 0` folds are the
+seed `(⊥, 0, 0)` regardless). -/
+theorem nopadInvariant_zero_reanchor
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName) (s s0 : BlockState)
+    (h : nopadInvariant Q K V B_Start_Loc B_Seqlen s 0 s0) :
+    nopadInvariant Q K V B_Start_Loc B_Seqlen s0 0 s0 := by
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hsm, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := h
+  have hseqEq : seqLen s0 B_Seqlen = seqLen s B_Seqlen := seqLen_eq_of_mem_pids s0 s B_Seqlen hmem hpids
+  have hslEq : startLoc s0 B_Start_Loc = startLoc s B_Start_Loc := startLoc_eq_of_mem_pids s0 s B_Start_Loc hmem hpids
+  refine ⟨rfl, rfl, hundef, ?_, ?_, ?_, ?_, ?_, hn, hd, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hcb, hpids]
+  · rw [hch, hpids]
+  · rw [hsm, hpids]
+  · rw [hseq, hseqEq]
+  · rw [hsl, hslEq]
+  · rw [hoffm, hpids]
+  · rw [hq]; refine congrArg some (Tile.ext (fun idx => ?_))
+    show some (ctxQTileMRow s Q B_Start_Loc 128 (seqLen s B_Seqlen) (idx.1, idx.2.1, PUnit.unit))
+      = some (ctxQTileMRow s0 Q B_Start_Loc 128 (seqLen s0 B_Seqlen) (idx.1, idx.2.1, PUnit.unit))
+    rw [hseqEq, ← ctxQTileMRow_eq_of_mem_pids s0 s Q B_Start_Loc (seqLen s B_Seqlen) hmem hpids idx]
+  · rw [hkp, hpids]
+  · rw [hvp, hpids]
+  · rw [hbmask, hpids, hseqEq]
+  · rw [hmi]; refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]
+  · rw [hli]; refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]
+  · rw [hacc]; refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Full-kernel execution chain.** Running the lowered Python-shape forward body
+(preLoop + `forRangeDyn` streaming-softmax loop + postLoop) from a clean state `s`
+reaches a final state whose `Out` store holds the genuine causal-softmax closed
+form `ctxNopadGenuineOutValue` at every active output lane (`gi < seq_len`) and
+preserves out-of-bounds lanes. Mirror of #307 `sr_exec`. -/
+theorem nopad_exec
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts ((context_attn_nopad_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1 128 128 128).toAlgKernel.body) s = some sF
+      ∧ ∀ idx : TileIndex [128, 128],
+          s.pids 2 * 128 + idx.1.val < seqLen s B_Seqlen →
+            sF.readMem Out (outOffset s B_Start_Loc 768 128 1 128 idx)
+              = ctxNopadGenuineOutValue s Q K V B_Start_Loc B_Seqlen idx := by
+  rw [show ((Real.sqrt (128 : ℝ))⁻¹) = sm_scale_python from rfl, nopad_body_split]
+  -- preLoop
+  obtain ⟨s0, hpre, hinv0⟩ := nopadPreLoop_eval s Q K V B_Start_Loc B_Seqlen hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨hpids0, hmem0, hundef0, hcb0, hch0, hsm0, hseq0, hsl0, hn0, hd0, hoffm0, hq0, hkp0, hvp0, hbmask0, hmi0, hli0, hacc0⟩ := hinv0
+  -- s0 pids/mem agree with s
+  have hs0seq : seqLen s0 B_Seqlen = seqLen s B_Seqlen := seqLen_eq_of_mem_pids s0 s B_Seqlen hmem0 hpids0
+  set S := ctxNopadWindow s0 B_Seqlen 128 with hSdef
+  -- block_mask register value in s0
+  have hbmS : (if 128 * s0.pids 2 < seqLen s0 B_Seqlen then 1 else 0) * (s0.pids 2 + 1) * 128 = S := by
+    rw [hSdef, ctxNopadWindow]
+  -- re-anchored invariant at 0
+  have hinv0' : nopadInvariant Q K V B_Start_Loc B_Seqlen s0 0 s0 :=
+    nopadInvariant_zero_reanchor Q K V B_Start_Loc B_Seqlen s s0 ⟨hpids0, hmem0, hundef0, hcb0, hch0, hsm0, hseq0, hsl0, hn0, hd0, hoffm0, hq0, hkp0, hvp0, hbmask0, hmi0, hli0, hacc0⟩
+  -- run the forRangeDyn loop
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+        (Op.constNat 128))
+      (stepOp := Op.constNat 128)
+      (P := fun i st => nopadInvariant Q K V B_Start_Loc B_Seqlen s0 (i / 128) st ∧ i % 128 = 0 ∧ i ≤ S)
+      (s_init := s0) (start := 0) (stop := S) (step := 128)
+      (by rw [evalOp_constNat])
+      (by
+        -- stopOp evaluates to S in s0
+        rw [evalOp_mul, evalOp_mul, evalOp_ref, hbmask0, evalOp_add, evalOp_ref, hsm0, evalOp_constNat, evalOp_constNat]
+        simp only [Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        refine Tile.ext (fun idx => ?_)
+        simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.add]
+        show (if 128 * s.pids 2 < seqLen s B_Seqlen.cast then 1 else 0) * (s.pids 2 + 1) * 128 = S
+        rw [hSdef, ctxNopadWindow, hpids0, hs0seq])
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      ⟨by rw [Nat.zero_div]; exact hinv0', by norm_num, by omega⟩
+      (fun i st hi hP => by
+        obtain ⟨hPinv, hPmod, hPle⟩ := hP
+        obtain ⟨s', hstep, hinv'⟩ := nopad_attn_step Q K V B_Start_Loc B_Seqlen s0 i st hi hPinv (by omega)
+        refine ⟨s', hstep, ?_, by omega, by omega⟩
+        rw [show (i + 128) / 128 = i / 128 + 1 from by omega]; exact hinv')
+  rw [stepStmts.cons_some hloop]
+  obtain ⟨hinvLinv, hinvLmod, hinvLle⟩ := hinvL
+  -- final = S (the streamed window, a multiple of 128)
+  have hSmul128 : S % 128 = 0 := by rw [hSdef, ctxNopadWindow]; rcases (by infer_instance : Decidable (128 * s0.pids 2 < seqLen s0 B_Seqlen)) with h | h <;> simp_all <;> omega
+  have hfinS : final = S := by omega
+  subst hfinS
+  -- postLoop
+  have hfull : (S / 128) * 128 = S := by omega
+  obtain ⟨sP, hpost, hOut⟩ := nopadPostLoop_eval Q K V B_Start_Loc B_Seqlen Out s0 (S / 128) sL
+    (by rw [hfull]) hinvLinv
+  rw [hpost]
+  refine ⟨sP, rfl, ?_⟩
+  intro idx hact
+  -- outOffset / seqLen transport s → s0
+  have hslEq0 : startLoc s B_Start_Loc = startLoc s0 B_Start_Loc :=
+    startLoc_eq_of_mem_pids s s0 B_Start_Loc hmem0.symm hpids0.symm
+  have hoeq : outOffset s B_Start_Loc 768 128 1 128 idx = outOffset s0 B_Start_Loc 768 128 1 128 idx := by
+    simp only [outOffset, mIndex, ← hpids0, hslEq0]
+  have hactS0 : s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen := by
+    rw [hs0seq, hpids0]; exact hact
+  rw [hoeq, hOut idx, if_pos hactS0]
+  -- genuine value transports s0 → s (pure memory function; mem/pids agree)
+  exact ctxNopadGenuineOutValue_eq_of_mem_pids s0 s Q K V B_Start_Loc.cast B_Seqlen.cast hmem0 hpids0 idx
+
+/-- Public Python test-shape summary for `context_attn_nopad.py`.
+
+The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`
+loop + masked store) *realizes* the genuine causal-softmax closed form
+`ctxNopadGenuineOutValue` — the boundary-masked causal-softmax fold of the loaded
+Q/K/V memory — at every active output lane (`gi = start_m·128 + i < cur_batch_seq_len`,
+`offs_d` folded into the slice). NOT a self-referential executed value: the streaming
+`m_i`/`l_i`/`acc` recurrence is decoded statement-by-statement and proven to collapse
+to the closed form. The compute-correct claim is at the checked contiguous layout
+(`H=6`, `D_HEAD=128`, `BLOCK_M=BLOCK_N=BLOCK_DMODEL=128`, strides `768,128,1`). -/
+theorem context_attn_nopad_python_test_shape_output_summary
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        ctxNopadGenuineOutValue s Q K V B_Start_Loc B_Seqlen idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_nopad_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  obtain ⟨sF, hstep, hOut⟩ := nopad_exec Q K V B_Start_Loc B_Seqlen Out s hundef
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact hOut idx hActive
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
