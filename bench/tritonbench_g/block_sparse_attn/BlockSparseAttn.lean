@@ -2493,4 +2493,332 @@ theorem bsa_load_v_masked_eval {BN BD : Nat} (s : BlockState) (SN SVN TSL : Nat)
 
 end BSARecipes
 
+/-! ## Body split (test shape `BLOCK_M=BLOCK_N=BLOCK_D=16`, `NUM_D_BLOCKS=2`,
+`EVEN_M=EVEN_N=true`, layout `(num_heads,num_kv_heads,total_seq_len)=(4,2,16)`,
+strides `(qb,qh,qm)=(2048,512,32)`, `(kb,kh,kn)=(vb,vh,vn)=(1024,512,32)`,
+`(ob,oh,om)=(2048,512,32)`, `num_layout=1`, row/col CSR strides `3`/`4`).
+
+The lowered algorithm-layer kernel body is `bsaPreLoop ++ forRangeDyn "col_idx_idx"
+(ref start_l) (ref end_l) 1 bsaLoopBody :: bsaPostLoop`, an exact transcription of
+the elaborated `block_sparse_attention_kernel` AST at this shape. `bsa_body_split`
+proves the identity by `rfl`. The loop body is `BSALoopBody`'s 26 algorithm-layer
+statements documented in `section BSARecipes`. -/
+
+/-- The 25 lowered pre-loop statements (static_print marker through `end_l`). -/
+def bsaPreLoop (Out Q K V : RegionName) (R C : Region .nat) : List Stmt :=
+  [ Stmt.ifThen (Op.constBool «false») [],
+    Stmt.assign .nat [] "q_seq_len" (Op.constNat 16),
+    Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_bh" (Op.programId 1),
+    Stmt.assign .nat [] "off_h"
+      (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_bh") (Op.constNat 4)),
+    Stmt.assign .nat [] "off_b"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_bh") (Op.constNat 4)),
+    Stmt.assign .nat [] "head_groups"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat 4) (Op.constNat 2)),
+    Stmt.assign .nat [] "off_h_kv"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_h")
+        (Op.ref .nat [] "head_groups")),
+    Stmt.assign .ptr [] "Q"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase Q)
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_b") (Op.constNat 2048))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 512)))),
+    Stmt.assign .ptr [] "K"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase K)
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_b") (Op.constNat 1024))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h_kv") (Op.constNat 512)))),
+    Stmt.assign .ptr [] "V"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase V)
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_b") (Op.constNat 1024))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h_kv") (Op.constNat 512)))),
+    Stmt.assign .nat [16] "offs_m"
+      (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 16))
+        (Op.arange 16)),
+    Stmt.assign .nat [16] "offs_n" (Op.arange 16),
+    Stmt.assign .nat [16] "offs_d" (Op.arange 16),
+    Stmt.assign .nat [16, 16] "off_q"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m")) (Op.constNat 32))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_d"))),
+    Stmt.assign .nat [16, 16] "off_k"
+      (Op.add NumericDType.nat Broadcast.nil.consR.consL
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_n")) (Op.constNat 32))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_d"))),
+    Stmt.assign .nat [16, 16] "off_v"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_n")) (Op.constNat 32))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_d"))),
+    Stmt.assign .ptr [16, 16] "q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "Q") (Op.ref .nat [16, 16] "off_q")),
+    Stmt.assign .ptr [16, 16] "k_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "K") (Op.ref .nat [16, 16] "off_k")),
+    Stmt.assign .ptr [16, 16] "v_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "V") (Op.ref .nat [16, 16] "off_v")),
+    Stmt.assign .real [16] "m_i"
+      (Op.add NumericDType.real Broadcast.scalarR (Op.full [16] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [16] "l_i" (Op.full [16] (Op.const 0)),
+    Stmt.assign .real [16, 16] "acc" (Op.full [16, 16] (Op.const 0)),
+    Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+      [Stmt.assign .real [16, 16] "acc2" (Op.full [16, 16] (Op.const 0))],
+    Stmt.ifThenElse (Op.constBool «true»)
+      [Stmt.assign .real [16, 16] "q"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [16, 16] "q_ptrs")) MaskOpt.none),
+        Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+          [Stmt.assign .real [16, 16] "q2"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "q_ptrs") (Op.constNat 16)))
+                MaskOpt.none)]]
+      [Stmt.assign .real [16, 16] "q"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [16, 16] "q_ptrs"))
+            (MaskOpt.mask
+              (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+                (Op.lt ComparableDType.nat Broadcast.scalarR
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m"))
+                  (Op.ref .nat [] "q_seq_len"))))),
+        Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+          [Stmt.assign .real [16, 16] "q2"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "q_ptrs") (Op.constNat 16)))
+                (MaskOpt.mask
+                  (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+                    (Op.lt ComparableDType.nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m"))
+                      (Op.ref .nat [] "q_seq_len")))))]],
+    Stmt.assign .nat [] "layout_h"
+      (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 1)),
+    Stmt.assign .ptr [] "layout_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase R)
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "layout_h") (Op.constNat 3))
+          (Op.ref .nat [] "start_m"))),
+    Stmt.assign .nat [] "start_l"
+      (Op.load .nat (MemAccess.ptr (Op.ref .ptr [] "layout_ptr")) MaskOpt.none),
+    Stmt.assign .nat [] "end_l"
+      (Op.load .nat
+        (MemAccess.ptr (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "layout_ptr") (Op.constNat 1)))
+        MaskOpt.none) ]
+
+/-- The 26 lowered CSR-loop-body statements (see `section BSARecipes` for the
+per-statement recipes). `EVEN_N = true` ⇒ unmasked K/V loads; `NUM_D_BLOCKS = 2`
+⇒ both `ifThen (2 ≥ 2)` D-block branches are present. -/
+def bsaLoopBody (C : Region .nat) : List Stmt :=
+  [ Stmt.assign .nat [] "col_idx"
+      (Op.load .nat
+        (MemAccess.region C
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "layout_h") (Op.constNat 4))
+            (Op.ref .nat [] "col_idx_idx")))
+        MaskOpt.none),
+    Stmt.assign .nat [] "start_n"
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "col_idx") (Op.constNat 16)),
+    Stmt.ifThenElse (Op.constBool «true»)
+      [Stmt.assign .real [16, 16] "k"
+          (Op.load .real
+            (MemAccess.ptr
+              (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "k_ptrs")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32))))
+            MaskOpt.none)]
+      [Stmt.assign .real [16, 16] "k"
+          (Op.load .real
+            (MemAccess.ptr
+              (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "k_ptrs")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32))))
+            (MaskOpt.mask
+              (Op.remap [16, 16] Broadcast.nil.consSame.consL.leftIndex
+                (Op.lt ComparableDType.nat Broadcast.scalarR
+                  (Op.add NumericDType.nat Broadcast.scalarR
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_n"))
+                    (Op.ref .nat [] "start_n"))
+                  (Op.constNat 16)))))],
+    Stmt.assign .real [16, 16] "qk" (Op.full [16, 16] (Op.const 0)),
+    Stmt.assign .real [16, 16] "qk"
+      (Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref .real [16, 16] "qk")
+        (Op.dot (batch := []) (Op.ref .real [16, 16] "q") (Op.ref .real [16, 16] "k"))),
+    Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+      [Stmt.ifThenElse (Op.constBool «true»)
+          [Stmt.assign .real [16, 16] "k"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR
+                    (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "k_ptrs")
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32)))
+                    (Op.constNat 16)))
+                MaskOpt.none)]
+          [Stmt.assign .real [16, 16] "k"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR
+                    (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "k_ptrs")
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32)))
+                    (Op.constNat 16)))
+                (MaskOpt.mask
+                  (Op.remap [16, 16] Broadcast.nil.consSame.consL.leftIndex
+                    (Op.lt ComparableDType.nat Broadcast.scalarR
+                      (Op.add NumericDType.nat Broadcast.scalarR
+                        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_n"))
+                        (Op.ref .nat [] "start_n"))
+                      (Op.constNat 16)))))],
+        Stmt.assign .real [16, 16] "qk"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref .real [16, 16] "qk")
+            (Op.dot (batch := []) (Op.ref .real [16, 16] "q2") (Op.ref .real [16, 16] "k")))],
+    Stmt.assign .real [16, 16] "qk"
+      (Op.mul NumericDType.real Broadcast.scalarR (Op.ref .real [16, 16] "qk") (Op.const 1.0)),
+    Stmt.assign .real [16, 16] "qk"
+      (Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref .real [16, 16] "qk")
+        ((Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m"))
+              (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_n")))).where
+          ((Op.const 0).broadcast [16, 16]) (Op.negInf.broadcast [16, 16]))),
+    Stmt.assign .real [16] "m_ij"
+      (Op.reduceMax ⟨1, by simp⟩ «false» (Op.ref .real [16, 16] "qk")),
+    Stmt.assign .real [16, 16] "p"
+      (Op.sub NumericDType.real Broadcast.nil.consR.consSame (Op.ref .real [16, 16] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [16] "m_ij"))).exp,
+    Stmt.assign .real [16] "l_ij"
+      (Op.reduceSum ⟨1, by simp⟩ «false» (Op.ref .real [16, 16] "p")),
+    Stmt.assign .real [16] "m_i_new"
+      ((Op.gt ComparableDType.real (Broadcast.consSame Broadcast.nil)
+            (Op.ref .real [16] "m_i") (Op.ref .real [16] "m_ij")).where
+        (Op.ref .real [16] "m_i") (Op.ref .real [16] "m_ij")),
+    Stmt.assign .real [16] "alpha"
+      (Op.sub NumericDType.real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [16] "m_i") (Op.ref .real [16] "m_i_new")).exp,
+    Stmt.assign .real [16] "beta"
+      (Op.sub NumericDType.real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [16] "m_ij") (Op.ref .real [16] "m_i_new")).exp,
+    Stmt.assign .real [16] "l_i_new"
+      (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil)
+        (Op.mul NumericDType.real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [16] "alpha") (Op.ref .real [16] "l_i"))
+        (Op.mul NumericDType.real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [16] "beta") (Op.ref .real [16] "l_ij"))),
+    Stmt.assign .real [16] "p_scale"
+      (Op.div NumericDType.real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [16] "beta") (Op.ref .real [16] "l_i_new")),
+    Stmt.assign .real [16, 16] "p"
+      (Op.mul NumericDType.real Broadcast.nil.consR.consSame (Op.ref .real [16, 16] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [16] "p_scale"))),
+    Stmt.assign .real [16] "acc_scale"
+      (Op.mul NumericDType.real (Broadcast.consSame Broadcast.nil)
+        (Op.div NumericDType.real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [16] "l_i") (Op.ref .real [16] "l_i_new"))
+        (Op.ref .real [16] "alpha")),
+    Stmt.assign .real [16, 16] "acc"
+      (Op.mul NumericDType.real Broadcast.nil.consR.consSame (Op.ref .real [16, 16] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [16] "acc_scale"))),
+    Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+      [Stmt.assign .real [16, 16] "acc2"
+          (Op.mul NumericDType.real Broadcast.nil.consR.consSame (Op.ref .real [16, 16] "acc2")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [16] "acc_scale")))],
+    Stmt.assign .real [16, 16] "p" (Op.ref .real [16, 16] "p"),
+    Stmt.ifThenElse (Op.constBool «true»)
+      [Stmt.assign .real [16, 16] "v"
+          (Op.load .real
+            (MemAccess.ptr
+              (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "v_ptrs")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32))))
+            MaskOpt.none)]
+      [Stmt.assign .real [16, 16] "v"
+          (Op.load .real
+            (MemAccess.ptr
+              (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "v_ptrs")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32))))
+            (MaskOpt.mask
+              (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+                (Op.lt ComparableDType.nat Broadcast.scalarR
+                  (Op.add NumericDType.nat Broadcast.scalarR
+                    (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_n"))
+                    (Op.ref .nat [] "start_n"))
+                  (Op.constNat 16)))))],
+    Stmt.assign .real [16, 16] "acc"
+      (Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref .real [16, 16] "acc")
+        (Op.dot (batch := []) (Op.ref .real [16, 16] "p") (Op.ref .real [16, 16] "v"))),
+    Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+      [Stmt.ifThenElse (Op.constBool «true»)
+          [Stmt.assign .real [16, 16] "v"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR
+                    (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "v_ptrs")
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32)))
+                    (Op.constNat 16)))
+                MaskOpt.none)]
+          [Stmt.assign .real [16, 16] "v"
+              (Op.load .real
+                (MemAccess.ptr
+                  (Op.ptrAdd Broadcast.scalarR
+                    (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "v_ptrs")
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 32)))
+                    (Op.constNat 16)))
+                (MaskOpt.mask
+                  (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+                    (Op.lt ComparableDType.nat Broadcast.scalarR
+                      (Op.add NumericDType.nat Broadcast.scalarR
+                        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_n"))
+                        (Op.ref .nat [] "start_n"))
+                      (Op.constNat 16)))))],
+        Stmt.assign .real [16, 16] "acc2"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref .real [16, 16] "acc2")
+            (Op.dot (batch := []) (Op.ref .real [16, 16] "p") (Op.ref .real [16, 16] "v")))],
+    Stmt.assign .real [16] "l_i" (Op.ref .real [16] "l_i_new"),
+    Stmt.assign .real [16] "m_i" (Op.ref .real [16] "m_i_new") ]
+
+/-- The 4 lowered post-loop statements (`off_o` through the two masked `out`
+stores; the second store is `ifThen (2 ≥ 2)`-gated at `+BLOCK_D`). -/
+def bsaPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [16, 16] "off_o"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_b") (Op.constNat 2048))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 512)))
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m")) (Op.constNat 32)))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [16] "offs_d"))),
+    Stmt.assign .ptr [16, 16] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [16, 16] "off_o")),
+    Stmt.store .real [16, 16] (MemAccess.ptr (Op.ref .ptr [16, 16] "out_ptrs"))
+      (Op.ref .real [16, 16] "acc")
+      (MaskOpt.mask
+        (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m"))
+            (Op.ref .nat [] "q_seq_len")))),
+    Stmt.ifThen (Op.constBool (decide (2 ≥ 2)))
+      [Stmt.store .real [16, 16]
+          (MemAccess.ptr
+            (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [16, 16] "out_ptrs") (Op.constNat 16)))
+          (Op.ref .real [16, 16] "acc2")
+          (MaskOpt.mask
+            (Op.remap [16, 16] Broadcast.nil.consL.consSame.leftIndex
+              (Op.lt ComparableDType.nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [16] "offs_m"))
+                (Op.ref .nat [] "q_seq_len"))))] ]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- The lowered test-shape `block_sparse_attention_kernel` body splits as
+`bsaPreLoop ++ forRangeDyn "col_idx_idx" (ref start_l) (ref end_l) 1 bsaLoopBody ::
+bsaPostLoop`. Pure `List Stmt` identity on the transcription (`rfl`). -/
+theorem bsa_body_split
+    (Out Q K V : RegionName) (R C : Region .nat) :
+    (block_sparse_attention_kernel Out Q K V R C
+      3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
+      4 2 16 16 16 16 2 Bool.true Bool.true).toAlgKernel.body
+      = bsaPreLoop Out Q K V R C
+        ++ (Stmt.forRangeDyn "col_idx_idx" (Op.ref .nat [] "start_l") (Op.ref .nat [] "end_l")
+              (Op.constNat 1) (bsaLoopBody C)
+            :: bsaPostLoop Out) := by
+  rfl
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
