@@ -723,6 +723,123 @@ theorem ctxNopad_fold_eq_exactFoldM
   rw [eq_div_iff (ne_of_gt hdenom_pos)]
   rw [← hL, ← hT, hacc']
 
+/-! ### Block-windowed key lists (per-block invariant advance)
+
+Mirror of #307's `srKeysUpto`/`srBlock`/`srKeysUpto_succ`/`srStateBot_succ`,
+adapted to nopad's *causal* per-key filter. The streamed prefix after `c` blocks
+is `ctxNopadKeysUpto … (c·128)` — the causal-and-window key list — and one loop
+iteration appends `nopadBlock c` (the keys in `[c·128, (c+1)·128)` that are causal
+for row `i`). -/
+
+/-- The `(score, value)` keys row `i`/channel `d` has streamed after window
+`[0, hi)`: causal (`j ≤ gi`) AND `j.val < hi`. -/
+noncomputable def ctxNopadKeysUpto
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  let gi := s.pids 2 * BLOCK_M + i.val
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ gi ∧ j.val < hi then
+      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+    else none)
+
+/-- Block-`c` causal keys for row `i`/channel `d`: causal `j ≤ gi` AND
+`c·128 ≤ j.val < (c+1)·128` — the keys the loop's `c`-th iteration streams. -/
+noncomputable def nopadBlock
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  let gi := s.pids 2 * BLOCK_M + i.val
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ gi ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then
+      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+    else none)
+
+/-- The full causal key list is the causal-window list at `hi = S`. -/
+theorem ctxNopadKeysUpto_full
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel S i d
+      = ctxNopadKeyList s Q K V B_Start_Loc sm_scale BLOCK_M S bel i d := by
+  unfold ctxNopadKeysUpto ctxNopadKeyList
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val
+  · simp [hj, j.isLt]
+  · simp [hj]
+
+/-- The causal-window key list at `hi = 0` is empty (kernel preLoop init). -/
+theorem ctxNopadKeysUpto_zero
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel 0 i d = [] := by
+  unfold ctxNopadKeysUpto
+  apply List.filterMap_eq_nil_iff.mpr
+  intro j _; simp
+
+/-- Threshold-split for a `.val`-ascending `Fin` list under a causal-and-window
+guard: `j.val < hi₂` window splits into `< t` prefix and `t ≤ j.val < hi₂` block. -/
+private theorem nopad_filterMap_window_split {n : Nat} (l : List (Fin n))
+    (hsorted : l.Pairwise (fun a b => a.val < b.val))
+    (gi t hi₂ : Nat) (g : Fin n → ℝ × ℝ) (hle : t ≤ hi₂) :
+    l.filterMap (fun j => if j.val ≤ gi ∧ j.val < hi₂ then some (g j) else none)
+      = l.filterMap (fun j => if j.val ≤ gi ∧ j.val < t then some (g j) else none)
+        ++ l.filterMap (fun j => if j.val ≤ gi ∧ t ≤ j.val ∧ j.val < hi₂ then some (g j) else none) := by
+  induction l with
+  | nil => simp
+  | cons a tl ih =>
+    have htl : tl.Pairwise (fun x y => x.val < y.val) := (List.pairwise_cons.mp hsorted).2
+    have hahead : ∀ b ∈ tl, a.val < b.val := (List.pairwise_cons.mp hsorted).1
+    rw [List.filterMap_cons, List.filterMap_cons, List.filterMap_cons]
+    by_cases hca : a.val ≤ gi
+    · by_cases hlt : a.val < t
+      · rw [ih htl]
+        rw [if_pos ⟨hca, lt_of_lt_of_le hlt hle⟩, if_pos ⟨hca, hlt⟩,
+          if_neg (fun h : a.val ≤ gi ∧ t ≤ a.val ∧ a.val < hi₂ => by omega)]
+        rfl
+      · have hge : t ≤ a.val := Nat.not_lt.mp hlt
+        have htail_prefix : tl.filterMap (fun j => if j.val ≤ gi ∧ j.val < t then some (g j) else none) = [] := by
+          apply List.filterMap_eq_nil_iff.mpr
+          intro b hb
+          have := hahead b hb
+          rw [if_neg (fun h : b.val ≤ gi ∧ b.val < t => by omega)]
+        rw [ih htl, htail_prefix, if_neg (fun h : a.val ≤ gi ∧ a.val < t => by omega)]
+        by_cases h2 : a.val < hi₂
+        · rw [if_pos ⟨hca, h2⟩, if_pos ⟨hca, hge, h2⟩]; rfl
+        · rw [if_neg (fun h => h2 h.2), if_neg (fun h => h2 h.2.2)]
+    · rw [if_neg (fun h => hca h.1), if_neg (fun h => hca h.1), if_neg (fun h => hca h.1)]
+      rw [ih htl]
+
+/-- **Window split** (`hi = c·128`): the causal keys streamed through `c+1` blocks
+are those through `c` blocks followed by block `c`. -/
+theorem ctxNopadKeysUpto_succ
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel ((c + 1) * 128) i d
+      = ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel (c * 128) i d
+        ++ nopadBlock s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d := by
+  unfold ctxNopadKeysUpto nopadBlock
+  exact nopad_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
+    (s.pids 2 * BLOCK_M + i.val) (c * 128) ((c + 1) * 128) _
+    (by nlinarith [Nat.zero_le (128 : Nat)])
+
+/-- **One-block invariant advance** (pure math): the `osNormStepBot` fold over the
+causal keys through `c+1` blocks is block `c`'s `osNormStepBot`-fold applied to the
+fold through `c` blocks. -/
+theorem nopad_fold_succ
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    (ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel ((c + 1) * 128) i d).foldl
+        osNormStepBot (⊥, 0, 0)
+      = (nopadBlock s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).foldl osNormStepBot
+          ((ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel (c * 128) i d).foldl
+            osNormStepBot (⊥, 0, 0)) := by
+  rw [ctxNopadKeysUpto_succ, List.foldl_append]
+
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_nopad_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
