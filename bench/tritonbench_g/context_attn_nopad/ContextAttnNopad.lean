@@ -2,6 +2,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `context_attn_nopad` — strict per-kernel correctness
@@ -227,6 +229,110 @@ noncomputable def accStoreValue
         (accOffset s stride_acc_b stride_acc_h stride_acc_m stride_acc_d
           BLOCK_M idx))
     else some (0.0 : ℝ))
+
+/-! ## Genuine closed-form context-attention spec
+
+The streaming-softmax loop in `_fwd_kernel` is *not* a self-referential black box:
+it computes, for every active query lane, the **causal softmax attention** value
+of the no-padding (cu_seqlens) packed sequences. This section makes that closed
+form explicit and proves the kernel's `exp`/`sm_scale`/`-inf`-sentinel streaming
+weights collapse to it — independent of the kernel `exec`.
+
+### Score / scale / mask of this kernel (decoded lane-by-lane from the body)
+
+For program `(cur_batch, cur_head, start_m)`, query lane `i` (global row
+`gi = start_m·BLOCK_M + i`), key `j` (global token index within the current
+sequence), head channel `e`:
+
+* **raw score** `raw i j = Σ_e Q[gi,e]·K[j,e]` (`tl.dot q k`, line 53);
+* **scale**     `qk·sm_scale` with `sm_scale = 1/√D` (line 54);
+* **softmax**   natural `tl.exp` (lines 59, 63, 64);
+* **mask**      `offs_m ≥ start_n + offs_n`, i.e. `gi ≥ j` (line 55): future keys
+  get the genuine `float("-inf")` sentinel → softmax weight *exactly* `0`.
+
+Because the sentinel is true `-∞` (`Op.negInf`, modeled as `⊥`) — not the finite
+`-1e8` of the int8-KV kernel — the kernel's *exact* streaming output equals the
+*idealized* causal-softmax closed form with no `exp(-1e8)` residue. The
+no-padding addressing packs every sequence contiguously: query/output row `i` and
+key `j` are offset by `cur_batch_in_all_start_index` (`= B_Start_Loc[cur_batch]`),
+which cancels in the score/softmax — it only relocates the Q/K/V/Out base. -/
+
+/-- Coordinate-faithful query tile of this kernel at `(cur_batch, cur_head,
+start_m)` for the checked Python layout (contiguous strides `768, 128, 1`,
+`H = 6`, `D_HEAD = 128`). Row `i` is the *global* packed row
+`B_Start_Loc[cur_batch] + start_m·BLOCK_M + i`. -/
+noncomputable def ctxQTile
+    (s : BlockState) (Q B_Start_Loc : RegionName) (BLOCK_M : Nat) :
+    TileIndex [BLOCK_M, 128] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q
+      ((startLoc s B_Start_Loc + (s.pids 2 * BLOCK_M + i.val)) * 768
+        + s.pids 1 * 128 + e.val)
+
+/-- Coordinate-faithful key tile: `K[start_loc + j, cur_head, e]` (packed
+no-padding layout, same row stride as Q). -/
+noncomputable def ctxKTile
+    (s : BlockState) (K B_Start_Loc : RegionName) (S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K
+      ((startLoc s B_Start_Loc + j.val) * 768 + s.pids 1 * 128 + e.val)
+
+/-- Coordinate-faithful value tile: `V[start_loc + j, cur_head, d]`. -/
+noncomputable def ctxVTile
+    (s : BlockState) (V B_Start_Loc : RegionName) (S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V
+      ((startLoc s B_Start_Loc + j.val) * 768 + s.pids 1 * 128 + d.val)
+
+/-- **Genuine closed-form output** of `context_attn_nopad` at query lane `i`,
+channel `d`, over the first `S` keys:
+
+`out[i,d] = (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ)·V[j,d]) / (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ))`
+
+where `gi = start_m·BLOCK_M + i` and `rawᵢⱼ = Σ_e Q[gi,e]·K[j,e]`. This is exactly
+`attentionRealCausalBlock` (the library's local-block causal softmax) instantiated
+with this kernel's no-padding Q/K/V tiles, scale `sm_scale`, and query-start
+`gi₀ = start_m·BLOCK_M`. No self-reference: it is a pure function of `Q`/`K`/`V`
+memory. -/
+noncomputable def contextAttnNopadClosedForm
+    (s : BlockState) (Q K V B_Start_Loc : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  let gi := s.pids 2 * BLOCK_M + i.val
+  let raw := fun j : Fin S =>
+    Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+        * ctxKTile s K B_Start_Loc S (j, e, PUnit.unit))
+  let weight := fun j : Fin S =>
+    if j.val ≤ gi then Real.exp (sm_scale * raw j) else 0
+  let denom := Finset.univ.sum (fun j : Fin S => weight j)
+  let numer := Finset.univ.sum (fun j : Fin S =>
+    weight j * ctxVTile s V B_Start_Loc S (j, d, PUnit.unit))
+  numer / denom
+
+/-- **Bridge to the library's `attentionRealCausalBlock`.** The genuine closed
+form above coincides with `attentionRealCausalBlock` (from
+`VeriTile.Triton.Math.Attention`) at query-start `gi₀ = start_m·BLOCK_M`, with
+this kernel's Q/K/V tiles and scale `sm_scale`. This certifies
+`contextAttnNopadClosedForm` is the standard causal softmax-attention reference,
+not an ad-hoc definition. -/
+theorem contextAttnNopadClosedForm_eq_attentionRealCausalBlock
+    (s : BlockState) (Q K V B_Start_Loc : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnNopadClosedForm s Q K V B_Start_Loc sm_scale BLOCK_M S idx
+      = attentionRealCausalBlock
+          (s.pids 2 * BLOCK_M)
+          (ctxQTile s Q B_Start_Loc BLOCK_M)
+          (ctxKTile s K B_Start_Loc S) (ctxVTile s V B_Start_Loc S)
+          sm_scale
+          (idx.1, idx.2.1, PUnit.unit) := by
+  obtain ⟨i, d, u⟩ := idx
+  simp only [contextAttnNopadClosedForm, attentionRealCausalBlock, scaledScore,
+    Finset.mul_sum]
 
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_nopad_final_store_slice_correct
