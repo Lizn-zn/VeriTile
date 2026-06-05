@@ -1198,8 +1198,8 @@ def srOffBLoc (s : BlockState) (BSeqLen : RegionName) : Nat :=
   s.pids 0 * 128 + (128 - srSeqLen s BSeqLen) * 1
 
 /-- The paged-KV index for token `n`: `BLoc[off_b_loc + (n)·1]` (`.int`). -/
-def srVIndex (s : BlockState) (BLoc : RegionName) (BSeqLen : RegionName) (n : Nat) : Int :=
-  s.readMemValue .int BLoc (srOffBLoc s BSeqLen + n * 1)
+def srVIndex (s : BlockState) (BLoc : Region .int) (BSeqLen : RegionName) (n : Nat) : Int :=
+  s.readMemValue .int (Region.cast BLoc) (srOffBLoc s BSeqLen + n * 1)
 
 /-- The attention logit for token `n`:
 `Logics[cur_head·256 + (cur_batch_start_loc + n)·1]`. -/
@@ -1208,8 +1208,9 @@ def srQk (s : BlockState) (Logics BStartLoc : RegionName) (n : Nat) : ℝ :=
 
 /-- The gathered V-row entry for token `n`, head-dim `d`:
 `V[v_index[n]·8192 + cur_head·64 + d·1]` (`v_index` cast to `Nat`). -/
-def srV (s : BlockState) (V BLoc BSeqLen : RegionName) (n d : Nat) : ℝ :=
-  s.readMem V ((srVIndex s BLoc BSeqLen n).toNat * 8192 + s.pids 1 * 64 + d * 1)
+def srV (s : BlockState) (V : RegionName) (BLoc : Region .int) (BSeqLen : RegionName)
+    (n d : Nat) : ℝ :=
+  s.readMem V ((srVIndex s BLoc BSeqLen n * 8192).toNat + s.pids 1 * 64 + d)
 
 /-! ### Per-statement op-eval recipes for the loop body
 
@@ -1250,7 +1251,7 @@ theorem sr_qk_load_eval (s : BlockState) (Logics BStartLoc BSeqLen : RegionName)
   obtain ⟨j, u⟩ := idx
   simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
     NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
-    BlockState.readMemValue_real, srQk]
+    BlockState.readMemValue_real, Region.cast_id, srQk]
   have haddr : s.pids 1 * 256 + (srStartLoc s BStartLoc + SN + j.val) * 1
       = s.pids 1 * 256 + (srStartLoc s BStartLoc + (SN + j.val)) * 1 := by ring
   by_cases hlt : SN + j.val < srSeqLen s BSeqLen
@@ -1263,7 +1264,7 @@ set_option maxHeartbeats 1600000 in
 /-- **`v_index` masked-gather recipe** (`tl.load(BLoc + off_b_loc + (start_n+offs_n)·1,
 mask=(start_n+offs_n)<seqlen, other=-1)`, dtype `.int`).  Lane `j`: `srVIndex (SN+j)`
 if active, else `-1`. -/
-theorem sr_vindex_gather_eval (s : BlockState) (BLoc BSeqLen : RegionName) (SN : Nat)
+theorem sr_vindex_gather_eval (s : BlockState) (BLoc : Region .int) (BSeqLen : RegionName) (SN : Nat)
     (hoff : s.regs .nat [] "off_b_loc" = some (Tile.scalar (srOffBLoc s BSeqLen)))
     (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
     (hn : s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val)))
@@ -1289,13 +1290,16 @@ theorem sr_vindex_gather_eval (s : BlockState) (BLoc BSeqLen : RegionName) (SN :
   simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
     NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
     srVIndex]
-  have haddr : srOffBLoc s BSeqLen + (SN + j.val) * 1 = srOffBLoc s BSeqLen + (SN + j.val) * 1 := rfl
   by_cases hlt : SN + j.val < srSeqLen s BSeqLen
   · simp only [hlt, decide_true, if_true, if_pos hlt]
   · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
-    rfl
 
 set_option maxHeartbeats 1600000 in
+/-- `castIntToNat` eval helper (pointwise `Int.toNat`). -/
+theorem sr_evalOp_castIntToNat {shape : TileShape} (a : Op .int shape) (s : BlockState) :
+    evalOp (.castIntToNat a) s = (do let va ← evalOp a s; some ⟨fun i => (va.data i).toNat⟩) := by
+  simp [evalOp]
+
 /-- **`v` paged-gather recipe** (`tl.load(v_ptrs + v_index[:,None]·8192)`, unmasked,
 shape `[64,64]`).  Given `v_ptrs` holds `(V, cur_head·64 + d)` and `v_index` lane `j`
 holds `vIdxFn j`, the result lane `(j,d)` is `readMem V (vIdxFn(j).toNat·8192 +
@@ -1313,21 +1317,51 @@ theorem sr_v_gather_eval (s : BlockState) (V : RegionName) (vIdxFn : Fin 64 → 
                 (Op.constNat 8192).castNatToInt).castIntToNat))
         MaskOpt.none) s
       = some (⟨fun idx : TileIndex [64, 64] =>
-          some (s.readMem V ((vIdxFn idx.1).toNat * 8192 + s.pids 1 * 64 + idx.2.1.val))⟩
+          some (s.readMem V ((vIdxFn idx.1 * 8192).toNat + s.pids 1 * 64 + idx.2.1.val))⟩
           : Tile .real [64, 64]) := by
   have hexp : @evalOp .int [64, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index")) s
       = some (Tile.expandDim ⟨1, by simp⟩
           (⟨fun idx : TileIndex [64] => vIdxFn idx.1⟩ : Tile .int [64])) :=
     evalOp_expandDim_ref_of_regs .int [64] ⟨1, by simp⟩ "v_index" s _ hvi
-  simp only [evalOp, hvp, hexp, Option.bind, Option.some.injEq]
+  -- evaluate the int offset: (v_index[:,None] * 8192).toNat
+  have hc8192 : @evalOp .int [] (Op.constNat 8192).castNatToInt s
+      = some (Tile.scalar (8192 : Int)) := by
+    simp only [evalOp, evalOp_constNat, Option.bind]; rfl
+  have hmulint : @evalOp .int [64, 1]
+        (Op.mul .int Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+          (Op.constNat 8192).castNatToInt) s
+      = some (⟨fun idx : TileIndex [64, 1] => vIdxFn idx.1 * 8192⟩ : Tile .int [64, 1]) := by
+    rw [evalOp_mul, hexp, hc8192]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    ext idx
+    obtain ⟨j, d, u⟩ := idx
+    simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.expandDim_data,
+      TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+      TileShape.dropInsertedIndex_zero_cons, NumericDType.mul, NumericDType.int_mul,
+      Broadcast.leftIndex, Broadcast.rightIndex]
+  have hoff : @evalOp .nat [64, 1]
+        (Op.mul .int Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+            (Op.constNat 8192).castNatToInt).castIntToNat s
+      = some (⟨fun idx : TileIndex [64, 1] => (vIdxFn idx.1 * 8192).toNat⟩ : Tile .nat [64, 1]) := by
+    erw [sr_evalOp_castIntToNat, hmulint]
+    rfl
+  rw [show evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .int Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+                (Op.constNat 8192).castNatToInt).castIntToNat))
+        MaskOpt.none) s = _ from rfl]
+  simp only [evalOp, hvp, hoff, Option.bind, Option.some.injEq]
   refine congrArg some ?_
   ext idx
   obtain ⟨j, d, u⟩ := idx
-  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, Tile.expandDim_data,
-    TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
-    TileShape.dropInsertedIndex_zero_cons, NumericDType.mul, IntegralDType.int_mul,
-    Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real]
-  congr 2
+  simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    BlockState.readMemValue_real]
+  refine congrArg some (congrArg (s.readMem V) ?_)
   omega
 
 set_option maxHeartbeats 1600000 in
@@ -1352,17 +1386,17 @@ theorem sr_nemax_eval (s : BlockState) (qkFn : Fin 64 → WithBot ℝ) (em : Wit
     ext idx
     simp only [Tile.scalar]
     rfl
-  have hrmaxN : @evalOp TileDType.real []
-        (Op.reduceMax (⟨0, by simp⟩ : Fin [64].length) Bool.false (Op.ref .real [64] "qk")) s
+  have hrmaxN :
+        evalOp (Op.reduceMax (⟨0, by simp⟩ : Fin [64].length) Bool.false (Op.ref .real [64] "qk")) s
       = some (Tile.scalar (Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k))) := by
-    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]
-    exact hrm
-  rw [evalOp_where]
-  simp only [evalOp_gt, evalOp_ref, hem, hrmaxN, Option.bind_eq_bind, Option.bind_some]
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  rw [evalOp_where, evalOp_gt]
+  erw [hrmaxN]
+  rw [evalOp_ref, hem]
+  simp only [Option.bind_eq_bind, Option.bind_some]
   refine congrArg some ?_
   ext idx
-  simp only [Tile.select_data, Tile.cop_data, Tile.scalar, Broadcast.leftIndex,
-    Broadcast.rightIndex, ComparableDType.gt]
+  simp only [Tile.select_data, Tile.cop_data, Tile.scalar, ComparableDType.gt]
   set rm := Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k) with hrmdef
   by_cases h : em < rm
   · rw [if_pos (by simpa using h), max_eq_right (le_of_lt h)]
@@ -1380,7 +1414,6 @@ theorem sr_oldscale_eval (s : BlockState) (em nem : WithBot ℝ)
   ext idx
   simp only [Tile.uop_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
     NumericDType.sub]
-  rfl
 
 /-- **`p` recipe** (`tl.exp(qk − n_e_max)`, broadcast `[64]−[]`).  Lane `j`:
 `realExp(qk[j] ⊖ n_e_max)`. -/
@@ -1396,6 +1429,92 @@ theorem sr_p_eval (s : BlockState) (qkFn : Fin 64 → WithBot ℝ) (nem : WithBo
   ext idx
   simp only [Tile.uop_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
     NumericDType.sub]
+
+set_option maxHeartbeats 1600000 in
+/-- **`e_sum` recipe** (`e_sum·old_scale + tl.sum(p,0)`, scalar).  Result:
+`WithBot.realAdd (WithBot.realMul l α) (Σ_j pFn j)`. -/
+theorem sr_esum_eval (s : BlockState) (l α : WithBot ℝ) (pFn : Fin 64 → WithBot ℝ)
+    (hl : s.regs .real [] "e_sum" = some (Tile.scalar l))
+    (hos : s.regs .real [] "old_scale" = some (Tile.scalar α))
+    (hp : s.regs .real [64] "p" = some (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64])) :
+    evalOp (Op.add .real Broadcast.nil
+        (Op.mul .real Broadcast.nil (Op.ref .real [] "e_sum") (Op.ref .real [] "old_scale"))
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "p"))) s
+      = some (Tile.scalar (WithBot.realAdd (WithBot.realMul l α)
+          (∑ j : Fin 64, pFn j))) := by
+  have hleft : evalOp (Op.mul .real Broadcast.nil (Op.ref .real [] "e_sum") (Op.ref .real [] "old_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.nil (Tile.scalar l) (Tile.scalar α)) := by
+    rw [evalOp_mul, evalOp_ref, hl, evalOp_ref, hos]; rfl
+  have hright : evalOp (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "p")) s
+      = some (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [64].length)
+          (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64])) := by
+    rw [evalOp_reduceSum, evalOp_ref, hp]; rfl
+  rw [evalOp_add, hleft]
+  show Option.bind (evalOp (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "p")) s) _ = _
+  rw [hright]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.reduceSumDrop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul, TileShape.insertAxisIndex,
+    TileShape.axisDim]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- **`acc` recipe** (`acc·old_scale + tl.sum(p[:,None]·v, 0)`, shape `[64]`).
+Lane `d`: `WithBot.realAdd (WithBot.realMul (accFn d) α) (Σ_j pFn j · vFn j d)`. -/
+theorem sr_acc_eval (s : BlockState) (α : WithBot ℝ) (accFn pFn : Fin 64 → WithBot ℝ)
+    (vFn : Fin 64 → Fin 64 → WithBot ℝ)
+    (hacc : s.regs .real [64] "acc" = some (⟨fun idx : TileIndex [64] => accFn idx.1⟩ : Tile .real [64]))
+    (hos : s.regs .real [] "old_scale" = some (Tile.scalar α))
+    (hp : s.regs .real [64] "p" = some (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]))
+    (hv : s.regs .real [64, 64] "v" =
+      some (⟨fun idx : TileIndex [64, 64] => vFn idx.1 idx.2.1⟩ : Tile .real [64, 64])) :
+    evalOp (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64] "acc") (Op.ref .real [] "old_scale"))
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false
+          (Op.mul .real Broadcast.nil.consL.consSame
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p"))
+            (Op.ref .real [64, 64] "v")))) s
+      = some (⟨fun idx : TileIndex [64] =>
+          WithBot.realAdd (WithBot.realMul (accFn idx.1) α)
+            (∑ j : Fin 64, WithBot.realMul (pFn j) (vFn j idx.1))⟩ : Tile .real [64]) := by
+  have hexp : @evalOp .real [64, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p")) s
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64])) :=
+    evalOp_expandDim_ref_of_regs .real [64] ⟨1, by simp⟩ "p" s _ hp
+  have hmul : evalOp (Op.mul .real Broadcast.nil.consL.consSame
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p"))
+        (Op.ref .real [64, 64] "v")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.nil.consL.consSame
+          (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]))
+          (⟨fun idx : TileIndex [64, 64] => vFn idx.1 idx.2.1⟩ : Tile .real [64, 64])) := by
+    rw [evalOp_mul, hexp, evalOp_ref, hv]; rfl
+  have hleft : evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [64] "acc") (Op.ref .real [] "old_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (⟨fun idx : TileIndex [64] => accFn idx.1⟩ : Tile .real [64]) (Tile.scalar α)) := by
+    rw [evalOp_mul, evalOp_ref, hacc, evalOp_ref, hos]; rfl
+  have hright : evalOp (Op.reduceSum ⟨0, by simp⟩ Bool.false
+        (Op.mul .real Broadcast.nil.consL.consSame
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p"))
+          (Op.ref .real [64, 64] "v"))) s
+      = some (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [64, 64].length)
+          (Tile.bop NumericDType.real.mul Broadcast.nil.consL.consSame
+            (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]))
+            (⟨fun idx : TileIndex [64, 64] => vFn idx.1 idx.2.1⟩ : Tile .real [64, 64]))) := by
+    rw [evalOp_reduceSum, hmul]; rfl
+  rw [evalOp_add, hleft]
+  show Option.bind (evalOp (Op.reduceSum ⟨0, by simp⟩ Bool.false
+      (Op.mul .real Broadcast.nil.consL.consSame
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p"))
+        (Op.ref .real [64, 64] "v"))) s) _ = _
+  rw [hright]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨d, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.reduceSumDrop_data, Tile.expandDim_data,
+    TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    TileShape.dropInsertedIndex_zero_cons, TileShape.insertAxisIndex, TileShape.axisDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
   rfl
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
