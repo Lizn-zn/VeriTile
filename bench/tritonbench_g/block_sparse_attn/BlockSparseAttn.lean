@@ -1821,6 +1821,56 @@ theorem bsa_endl_eval (s : BlockState) (lpReg : RegionName) (lpOff : Nat)
   simp only [Tile.ptrAdd_data, Tile.scalar, Tile.scalar_data_index, Broadcast.leftIndex,
     Broadcast.rightIndex, if_true, if_pos]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`k = tl.load(k_ptrs + start_n·stride_kn)` statement eval** (CSR loop body L3,
+first D-block, `EVEN_N` branch / unmasked): the pointer-arith K-tile load. Given
+`k_ptrs` holding the per-lane pointer tile `kpf` (`[BLOCK_M, BLOCK_N]`, value
+`(region, offset)`) and `start_n = SN`, lane `(a,b)` reads
+`kpf(a,b).region[kpf(a,b).offset + SN·stride_kn]`. With `stride_kn = SKN`. -/
+theorem bsa_load_k_eval {BM BN : Nat} (s : BlockState) (SN SKN : Nat)
+    (kpf : TileIndex [BM, BN] → RegionName × Nat)
+    (hk : s.regs .ptr [BM, BN] "k_ptrs" = some ⟨kpf⟩)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BN] "k_ptrs")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SKN))))
+        MaskOpt.none) s
+      = some (⟨fun idx : TileIndex [BM, BN] =>
+          s.readMemValue .real (kpf idx).1 ((kpf idx).2 + SN * SKN)⟩ : Tile .real [BM, BN]) := by
+  simp only [evalOp, evalOp_ref, evalOp_mul, evalOp_constNat, hk, hsn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`k = tl.load(k_ptrs + start_n·stride_kn + BLOCK_D)` statement eval** (CSR loop
+body L6, second D-block, `EVEN_N` branch / unmasked): the second K-tile load, at
+the `+BLOCK_D` head-channel offset (`acc2`'s key projection). Lane `(a,b)` reads
+`kpf(a,b).region[kpf(a,b).offset + SN·stride_kn + BLOCK_D]`. -/
+theorem bsa_load_k2_eval {BM BN : Nat} (s : BlockState) (SN SKN BD : Nat)
+    (kpf : TileIndex [BM, BN] → RegionName × Nat)
+    (hk : s.regs .ptr [BM, BN] "k_ptrs" = some ⟨kpf⟩)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR
+            (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BN] "k_ptrs")
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SKN)))
+            (Op.constNat BD)))
+        MaskOpt.none) s
+      = some (⟨fun idx : TileIndex [BM, BN] =>
+          s.readMemValue .real (kpf idx).1 ((kpf idx).2 + SN * SKN + BD)⟩
+            : Tile .real [BM, BN]) := by
+  simp only [evalOp, evalOp_ref, evalOp_mul, evalOp_constNat, hk, hsn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
