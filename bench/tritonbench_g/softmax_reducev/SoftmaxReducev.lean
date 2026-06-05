@@ -604,6 +604,84 @@ theorem srStateBot_snd_snd {S BLOCK_DMODEL : Nat}
     rw [srOsStepBot_fst, srRunningMax, sr_foldl_sup_bot_eq_foldr]]
   rw [zero_add]
 
+/-- At the full window `hi = S`, the streamed key list is every token in index
+order, carrying `(qk n, v n d)`. -/
+theorem srKeysUpto_full {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL) :
+    srKeysUpto qk v S d = (List.finRange S).map (fun n : Fin S => (qk n, v n d)) := by
+  unfold srKeysUpto
+  rw [← List.filterMap_eq_map]
+  apply List.filterMap_congr
+  intro n _
+  simp [n.isLt]
+
+/-- The sum of per-key weights over the full window is the closed-form numerator
+of the denominator with running-max shift `M`: `Σ exp(qk) = exp(M)·Σ exp(qk - M)`,
+so `κ(M)·Σ exp(qk) = softmaxReducevDenom qk M`. -/
+theorem srKeys_full_denom {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL) (M : ℝ) :
+    Real.exp (-M) * ((srKeysUpto qk v S d).map (fun p => Real.exp p.1)).sum
+      = softmaxReducevDenom qk M := by
+  rw [srKeysUpto_full]
+  unfold softmaxReducevDenom softmaxWeight
+  rw [List.map_map,
+    show ((List.finRange S).map ((fun p : ℝ × ℝ => Real.exp p.1) ∘ fun n => (qk n, v n d))).sum
+        = ∑ n : Fin S, Real.exp (qk n) from by
+      rw [← List.sum_ofFn (f := fun n : Fin S => Real.exp (qk n)), List.ofFn_eq_map]; rfl]
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro n _
+  rw [← Real.exp_add]; ring_nf
+
+/-- The sum of per-key weighted V over the full window: `κ(M)·Σ exp(qk)·v =
+softmaxReducevAcc qk M v d`. -/
+theorem srKeys_full_acc {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL) (M : ℝ) :
+    Real.exp (-M) * ((srKeysUpto qk v S d).map (fun p => Real.exp p.1 * p.2)).sum
+      = softmaxReducevAcc qk M v d := by
+  rw [srKeysUpto_full]
+  unfold softmaxReducevAcc softmaxWeight
+  rw [List.map_map,
+    show ((List.finRange S).map ((fun p : ℝ × ℝ => Real.exp p.1 * p.2) ∘ fun n => (qk n, v n d))).sum
+        = ∑ n : Fin S, Real.exp (qk n) * v n d from by
+      rw [← List.sum_ofFn (f := fun n : Fin S => Real.exp (qk n) * v n d), List.ofFn_eq_map]; rfl]
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro n _
+  rw [← mul_assoc, ← Real.exp_add]; ring_nf
+
+/-- **Full-window ⊥-seeded accumulator equals the closed-form numerator.** With
+running max `M = srRunningMax.unbotD 0`, the streamed `acc[d]` is exactly
+`softmaxReducevAcc qk M v d`. -/
+theorem srStateBot_full_acc {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL)
+    (mr : ℝ) (hM : srRunningMax qk v S d = (mr : WithBot ℝ)) :
+    (srStateBot qk v S d).2.2 = softmaxReducevAcc qk mr v d := by
+  rw [srStateBot_snd_snd, hM]
+  rw [show ((↑mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-mr) from rfl]
+  exact srKeys_full_acc qk v d mr
+
+/-- **Full-window ⊥-seeded denominator equals the closed-form denominator.** -/
+theorem srStateBot_full_denom {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL)
+    (mr : ℝ) (hM : srRunningMax qk v S d = (mr : WithBot ℝ)) :
+    (srStateBot qk v S d).2.1 = softmaxReducevDenom qk mr := by
+  rw [srStateBot_snd_fst, hM]
+  rw [show ((↑mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-mr) from rfl]
+  exact srKeys_full_denom qk v d mr
+
+/-- **The full-window ⊥-seeded final state reads off the genuine closed form.**
+`srStateBot.acc / srStateBot.e_sum = softmaxReducevWeightedSum`, with the running
+max `M = srRunningMax.unbotD 0`. -/
+theorem srStateBot_full_eq_weightedSum {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL)
+    (mr : ℝ) (hM : srRunningMax qk v S d = (mr : WithBot ℝ)) :
+    (let st := srStateBot qk v S d; st.2.2 / st.2.1)
+      = softmaxReducevWeightedSum qk mr v d := by
+  simp only
+  rw [srStateBot_full_acc qk v d mr hM, srStateBot_full_denom qk v d mr hM]
+  rfl
+
 /-! ## Python test-shape wrappers
 
 `test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
