@@ -1895,6 +1895,45 @@ theorem msa_nmask_col_eval (s : BlockState) (BN SN NC : Nat) (cb : Bool)
   rw [hand, evalOp_lt, evalOp_add]
   simp only [evalOp_ref, hsn, hon, hnc, hcond, Option.bind_eq_bind, Option.bind_some]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`k = tl.load(k_ptrs + cols[None,:]·stride_kn, mask=n_mask[None,:], other=0.0)`
+(A5/B4)**: the masked K-tile load. `k_ptrs` is the `[BM,1]` pointer tile, broadcast
+across the `BLOCK_N` key columns; the per-column offset is `cols·stride_kn`, and the
+`n_mask[None,:]` mask zeroes out-of-range columns. Given `k_ptrs = kp`, `cols = ct`,
+`n_mask = nm`, the result is the lane-wise `if (remapped n_mask) then read(ptrAdd) else 0`
+tile — kept symbolic for the assembly layer. With `stride_kn = SKN`. -/
+theorem msa_load_k_eval (s : BlockState) (BM BN SKN : Nat)
+    (hax0 : 0 < [BN].length.succ)
+    (kp : Tile .ptr [BM, 1]) (ct : Tile .nat [BN]) (nm : Tile .bool [BN])
+    (hk : s.regs .ptr [BM, 1] "k_ptrs" = some kp)
+    (hcols : s.regs .nat [BN] "cols" = some ct)
+    (hnm : s.regs .bool [BN] "n_mask" = some nm) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consL.consR (Op.ref .ptr [BM, 1] "k_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, hax0⟩ (Op.ref .nat [BN] "cols")) (Op.constNat SKN))))
+        (MaskOpt.maskOther
+          (Op.remap [BM, BN] Broadcast.nil.consSame.consL.leftIndex
+            (Op.expandDim ⟨0, hax0⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BM, BN]))) s
+      = some (⟨fun idx : TileIndex [BM, BN] =>
+          let ptrs := Tile.ptrAdd Broadcast.nil.consL.consR kp
+            (Tile.bop NumericDType.nat.mul Broadcast.scalarR
+              (Tile.expandDim ⟨0, hax0⟩ ct) (Tile.scalar SKN))
+          if (Tile.remap Broadcast.nil.consSame.consL.leftIndex
+                (Tile.expandDim ⟨0, hax0⟩ nm)).data idx then
+            s.readMemValue .real (ptrs.data idx).1 (ptrs.data idx).2
+          else (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp only [evalOp, hk]
+  erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨0, hax0⟩ "cols" s _ hcols,
+    evalOp_expandDim_ref_of_regs .bool [BN] ⟨0, hax0⟩ "n_mask" s _ hnm]
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.scalar_data_index]
+  rfl
+
 end MSARecipes
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
