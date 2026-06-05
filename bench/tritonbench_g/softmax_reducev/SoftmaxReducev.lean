@@ -1330,4 +1330,72 @@ theorem sr_v_gather_eval (s : BlockState) (V : RegionName) (vIdxFn : Fin 64 → 
   congr 2
   omega
 
+set_option maxHeartbeats 1600000 in
+/-- **`n_e_max` recipe** (`tl.maximum(tl.max(qk,0), e_max)`): the scalar online-softmax
+running-max update.  `where/gt` over the `[64]→[]` `reduceMax` of `qk` and the scalar
+`e_max` collapse to the `WithBot` max `e_max ⊔ sup'(qk lanes)`. -/
+theorem sr_nemax_eval (s : BlockState) (qkFn : Fin 64 → WithBot ℝ) (em : WithBot ℝ)
+    (hqk : s.regs .real [64] "qk" = some (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]))
+    (hem : s.regs .real [] "e_max" = some (Tile.scalar em)) :
+    evalOp ((Op.gt .real Broadcast.nil
+            (Op.reduceMax ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "qk"))
+            (Op.ref .real [] "e_max")).where
+        (Op.reduceMax ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "qk"))
+        (Op.ref .real [] "e_max")) s
+      = some (Tile.scalar (em ⊔ Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k))) := by
+  have hrm : Tile.reduceMaxDrop (⟨0, by simp⟩ : Fin [64].length)
+        (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64])
+      = some (Tile.scalar (Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k))) := by
+    unfold Tile.reduceMaxDrop
+    rw [dif_pos (show 0 < TileShape.axisDim [64] (⟨0, by simp⟩ : Fin [64].length) from by decide)]
+    refine congrArg some ?_
+    ext idx
+    simp only [Tile.scalar]
+    rfl
+  have hrmaxN : @evalOp TileDType.real []
+        (Op.reduceMax (⟨0, by simp⟩ : Fin [64].length) Bool.false (Op.ref .real [64] "qk")) s
+      = some (Tile.scalar (Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k))) := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]
+    exact hrm
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hem, hrmaxN, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.gt]
+  set rm := Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k) with hrmdef
+  by_cases h : em < rm
+  · rw [if_pos (by simpa using h), max_eq_right (le_of_lt h)]
+  · rw [if_neg (by simpa using h), max_eq_left (not_lt.mp h)]
+
+/-- **`old_scale` recipe** (`tl.exp(e_max − n_e_max)`, scalar). -/
+theorem sr_oldscale_eval (s : BlockState) (em nem : WithBot ℝ)
+    (hem : s.regs .real [] "e_max" = some (Tile.scalar em))
+    (hnem : s.regs .real [] "n_e_max" = some (Tile.scalar nem)) :
+    evalOp (Op.sub .real Broadcast.nil (Op.ref .real [] "e_max") (Op.ref .real [] "n_e_max")).exp s
+      = some (Tile.scalar (WithBot.realExp (WithBot.realSub em nem))) := by
+  rw [evalOp_exp]
+  simp only [evalOp_sub, evalOp_ref, hem, hnem, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.sub]
+  rfl
+
+/-- **`p` recipe** (`tl.exp(qk − n_e_max)`, broadcast `[64]−[]`).  Lane `j`:
+`realExp(qk[j] ⊖ n_e_max)`. -/
+theorem sr_p_eval (s : BlockState) (qkFn : Fin 64 → WithBot ℝ) (nem : WithBot ℝ)
+    (hqk : s.regs .real [64] "qk" = some (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]))
+    (hnem : s.regs .real [] "n_e_max" = some (Tile.scalar nem)) :
+    evalOp (Op.sub .real Broadcast.scalarR (Op.ref .real [64] "qk") (Op.ref .real [] "n_e_max")).exp s
+      = some (⟨fun idx : TileIndex [64] => WithBot.realExp (WithBot.realSub (qkFn idx.1) nem)⟩
+          : Tile .real [64]) := by
+  rw [evalOp_exp]
+  simp only [evalOp_sub, evalOp_ref, hqk, hnem, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.sub]
+  rfl
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
