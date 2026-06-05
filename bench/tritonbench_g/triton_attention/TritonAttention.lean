@@ -271,6 +271,44 @@ private theorem foldl_writeMemTyped_fp16_preserves {α : Type} {region : RegionN
         simp only [hmaskhd', if_false, Bool.false_eq_true]
         exact ih _ htl
 
+/-- A foldl of masked `fp16` typed writes into region `W` leaves `mem` at any other
+region `R ≠ W` unchanged. -/
+private theorem foldl_writeMemTyped_fp16_mask_other_region {α : Type} {W R : RegionName}
+    (mask : α → Prop) [DecidablePred mask]
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16) (o : Nat)
+    (hRW : R ≠ W) (l : List α) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k => if mask k then acc.writeMemTyped .fp16 W (offsetFn k) (valueFn k) else acc) s).mem R o)
+        = s.mem R o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih]
+      by_cases hmk : mask hd
+      · simp only [hmk, if_true]
+        unfold BlockState.writeMemTyped BlockState.writeMemAs
+        change (if R = W ∧ o = offsetFn hd then _ else s.mem R o) = s.mem R o
+        rw [if_neg (by rintro ⟨hR, _⟩; exact hRW hR)]
+      · simp only [hmk, if_false]
+
+/-- A foldl of `real` typed writes into region `W` leaves `mem` at any other
+region `R ≠ W` unchanged. -/
+private theorem foldl_writeMemTyped_real_other_region {α : Type} {W R : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.real) (o : Nat)
+    (hRW : R ≠ W) (l : List α) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k => acc.writeMemTyped .real W (offsetFn k) (valueFn k)) s).mem R o)
+        = s.mem R o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih]
+      simp only [BlockState.writeMemTyped_real]
+      show (if R = W ∧ o = offsetFn hd then _ else s.mem R o) = s.mem R o
+      rw [if_neg (by rintro ⟨hR, _⟩; exact hRW hR)]
+
 private theorem scatter_memcell_fp16_prop_masked_nd {region : RegionName} {shape : TileShape}
     (s : BlockState) (offsetFn : TileIndex shape → Nat)
     (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
@@ -4018,6 +4056,279 @@ theorem ta_attn_step (Q K V Out : RegionName) (s0 : BlockState) (sc : ℝ)
   · -- mem
     rw [hmemF]; funext region offset; rw [BlockState.setReg_mem]
     exact congrFun (congrFun hmem region) offset
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **PostLoop execution + genuine readbacks.** Stepping the 8 post-loop statements
+from a loop-end state satisfying `taInvariant … 128` (full single block, `c = 1`),
+the kernel's `L` store holds the genuine m-shifted normalizer `lPartial 1`, the `M`
+store holds the running max `(mPartial 1).unbotD 0`, and the boundary-checked `Out`
+store holds the in-loop-`l_rcp`-normalized ratio `oPartial 1 / lPartial 1` at every
+active lane. -/
+theorem ta_postLoop
+    (Q K V L M Out : RegionName) (s0 : BlockState) (sc : ℝ) (s : BlockState)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hinv : taInvariant Q K V Out s0 sc 128 s) :
+    ∃ sP, stepStmts (taPostLoop L M Out) s = some sP
+      ∧ (∀ idx : TileIndex [128, 64],
+          active s0 (s0.pids 1 * 128) 1024 128 idx →
+          sP.mem Out (outOffset s0 (s0.pids 1 * 128) 64 1 128 idx)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (oPartial 128 (s0.pids 0 * 128) (fwdQTile s0 Q) 1 (fwdKTile s0 K)
+                    (fwdVTile s0 V) sc 1 idx
+                  / lPartial 128 (s0.pids 0 * 128) (fwdQTile s0 Q) 1 (fwdKTile s0 K) sc 1 idx.1))))
+      ∧ (∀ i : Fin 128,
+          sP.readMem L (lRowOffset s0 (s0.pids 1) 128 128 i)
+            = lPartial 128 (s0.pids 0 * 128) (fwdQTile s0 Q) 1 (fwdKTile s0 K) sc 1 i)
+      ∧ (∀ i : Fin 128,
+          sP.readMem M (lRowOffset s0 (s0.pids 1) 128 128 i)
+            = (mPartial 128 (s0.pids 0 * 128) (fwdQTile s0 Q) 1 (fwdKTile s0 K) sc 1 i).unbotD 0) := by
+  simp only [taInvariant] at hinv
+  obtain ⟨hpids, _, _, hmp, hlp, hacc, hq, hoffm, hoffn, hkp, hvp, hop, hoh, hundef, hmem⟩ := hinv
+  set qS := s0.pids 0 * 128 with hqS
+  set qT := fwdQTile s0 Q with hqT
+  set kT := fwdKTile s0 K with hkT
+  set vT := fwdVTile s0 V with hvT
+  -- the running registers at c = 1 (128/128 = 1)
+  rw [show (128 : Nat) / 128 = 1 from rfl] at hmp hlp hacc
+  set mTile : Tile .real [128] := ⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ with hmTile
+  set lTile : Tile .real [128] := ⟨fun r : TileIndex [128] => ((lPartial 128 qS qT 1 kT sc 1 r.1 : ℝ) : WithBot ℝ)⟩ with hlTile
+  set accTile : Tile .real [128, 64] := ⟨fun idx : TileIndex [128, 64] =>
+      ((oPartial 128 qS qT 1 kT vT sc 1 idx / lPartial 128 qS qT 1 kT sc 1 idx.1 : ℝ) : WithBot ℝ)⟩ with haccTile
+  unfold taPostLoop
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: offs_m = start_m*128 + arange
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)) _
+        = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val)) from by
+      rw [evalOp_add, evalOp_arange]
+      simp only [evalOp_mul, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_pids, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, castTile_self, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 2: l_ptrs = L + off_hz*128 + offs_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 128))
+          (Op.ref .nat [128] "offs_m"))) _
+        = some (⟨fun r : TileIndex [128] => (Region.cast L, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+            : Tile .ptr [128]) from by
+      simp only [evalOp, evalOp.eq_def, evalOp_ref, evalOp_constNat,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same, BlockState.setReg_pids, hoh, Option.bind_eq_bind, Option.bind_some,
+        Option.map_some]
+      refine congrArg some ?_; ext r
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+          Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+          Broadcast.rightIndex_nil, NumericDType.add, NumericDType.mul, Nat.zero_add]))]
+  -- stmt 3: m_ptrs = M + off_hz*128 + offs_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 128))
+          (Op.ref .nat [128] "offs_m"))) _
+        = some (⟨fun r : TileIndex [128] => (Region.cast M, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+            : Tile .ptr [128]) from by
+      simp only [evalOp, evalOp.eq_def, evalOp_ref, evalOp_constNat,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same, BlockState.setReg_pids, hoh, Option.bind_eq_bind, Option.bind_some,
+        Option.map_some]
+      refine congrArg some ?_; ext r
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+          Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+          Broadcast.rightIndex_nil, NumericDType.add, NumericDType.mul, Nat.zero_add]))]
+  -- name the post-stmt-3 state
+  set s3 := BlockState.setReg
+      (BlockState.setReg
+        (BlockState.setReg
+          (BlockState.setReg s "start_m" .nat [] (Tile.scalar (s.pids 0)))
+          "offs_m" .nat [128] (Tile.vec fun r : Fin 128 => s.pids 0 * 128 + r.val))
+        "l_ptrs" .ptr [128] ⟨fun r : TileIndex [128] => (Region.cast L, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩)
+      "m_ptrs" .ptr [128] ⟨fun r : TileIndex [128] => (Region.cast M, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+    with hs3
+  -- register readbacks in s3
+  have hlprev3 : s3.regs .real [128] "l_prev" = some lTile := by
+    rw [hs3]; iterate 4 rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    rw [hlp]
+  have hmprev3 : s3.regs .real [128] "m_prev" = some mTile := by
+    rw [hs3]; iterate 4 rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    rw [hmp]
+  have hlptr3 : s3.regs .ptr [128] "l_ptrs"
+      = some (⟨fun r : TileIndex [128] => (Region.cast L, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+          : Tile .ptr [128]) := by
+    rw [hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same]
+  have hmptr3 : s3.regs .ptr [128] "m_ptrs"
+      = some (⟨fun r : TileIndex [128] => (Region.cast M, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+          : Tile .ptr [128]) := by
+    rw [hs3, BlockState.setReg_same]
+  -- L store offset/value functions
+  set lOffFn : TileIndex [128] → Nat := fun r => s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val) with hlOffFn
+  -- stmt 4: store L via l_ptrs (l_prev)
+  have hstore4 : stepStmt (Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "l_ptrs"))
+      (Op.ref .real [128] "l_prev") MaskOpt.none) s3
+      = some ((TileShape.allIndices [128]).foldl
+          (fun acc r => acc.writeMemTyped .real (Region.cast L) (lOffFn r) (lTile.data r)) s3) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hlprev3, hlptr3, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rfl
+  rw [stepStmts.cons_some hstore4]
+  set s4 := (TileShape.allIndices [128]).foldl
+      (fun acc r => acc.writeMemTyped .real (Region.cast L) (lOffFn r) (lTile.data r)) s3 with hs4
+  -- m_prev/m_ptrs readback in s4 (stores only touch mem)
+  have hmprev4 : s4.regs .real [128] "m_prev" = some mTile := by
+    rw [hs4]; simp only [BlockState.foldl_writeMemTyped_regs]; exact hmprev3
+  have hmptr4 : s4.regs .ptr [128] "m_ptrs"
+      = some (⟨fun r : TileIndex [128] => (Region.cast M, s0.pids 1 * 128 + (s.pids 0 * 128 + r.1.val))⟩
+          : Tile .ptr [128]) := by
+    rw [hs4]; simp only [BlockState.foldl_writeMemTyped_regs]; exact hmptr3
+  -- stmt 5: store M via m_ptrs (m_prev)
+  have hstore5 : stepStmt (Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "m_ptrs"))
+      (Op.ref .real [128] "m_prev") MaskOpt.none) s4
+      = some ((TileShape.allIndices [128]).foldl
+          (fun acc r => acc.writeMemTyped .real (Region.cast M) (lOffFn r) (mTile.data r)) s4) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hmprev4, hmptr4, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rfl
+  rw [stepStmts.cons_some hstore5]
+  set s5 := (TileShape.allIndices [128]).foldl
+      (fun acc r => acc.writeMemTyped .real (Region.cast M) (lOffFn r) (mTile.data r)) s4 with hs5
+  -- acc readback in s5
+  have hacc5 : s5.regs .real [128, 64] "acc" = some accTile := by
+    rw [hs5]; simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs4]; simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs3]; iterate 4 rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    rw [hacc]
+  have hout5 : s5.regs .blockPtr [128, 64] "out_tile_ptr"
+      = some (⟨fun _ : TileIndex [128, 64] =>
+          { region := Out, baseOffset := 0, parentShape := [1024, 64], blockShape := [128, 64],
+            strides := [64, 1], offsets := [s0.pids 1 * 128 + s0.pids 0 * 128, 0] }⟩
+          : Tile .blockPtr [128, 64]) := by
+    rw [hs5]; simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs4]; simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs3]; iterate 4 rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    rw [hop]
+  -- stmt 6: acc = castFloat real→fp16 acc
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "acc")) s5
+        = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (accTile.data idx)⟩ : Tile .fp16 [128, 64]) from by
+      rw [evalOp_castFloat]; erw [evalOp_ref, hacc5]; rfl))]
+  set s6 := s5.setReg "acc" .fp16 [128, 64]
+      ⟨fun idx => FloatDType.real.cast FloatDType.fp16 (accTile.data idx)⟩ with hs6
+  have hout6 : s6.regs .blockPtr [128, 64] "out_tile_ptr"
+      = some (⟨fun _ : TileIndex [128, 64] =>
+          { region := Out, baseOffset := 0, parentShape := [1024, 64], blockShape := [128, 64],
+            strides := [64, 1], offsets := [s0.pids 1 * 128 + s0.pids 0 * 128, 0] }⟩
+          : Tile .blockPtr [128, 64]) := by
+    rw [hs6, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hout5
+  have hacc6 : s6.regs .fp16 [128, 64] "acc"
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (accTile.data idx)⟩ : Tile .fp16 [128, 64]) := by
+    rw [hs6, BlockState.setReg_same]
+  -- Out store offset/value functions
+  set oOffFn : TileIndex [128, 64] → Nat :=
+    fun idx => (s0.pids 1 * 128 + s0.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1 with hoOffFn
+  set oValFn : TileIndex [128, 64] → TileCarrier TileDType.fp16 :=
+    fun idx => FloatDType.real.cast FloatDType.fp16 (accTile.data idx) with hoValFn
+  set oMask : TileIndex [128, 64] → Prop :=
+    fun idx => s0.pids 1 * 128 + s0.pids 0 * 128 + idx.1.val < 1024 ∧ 0 + idx.2.1.val < 64 with hoMask
+  -- stmt 7: store Out via out_tile_ptr [0,1] (boundary-checked, masked)
+  have hstore7 : stepStmt (Stmt.store .fp16 [128, 64]
+      (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "out_tile_ptr") [0, 1])
+      (Op.ref .fp16 [128, 64] "acc") MaskOpt.none) s6
+      = some ((TileShape.allIndices [128, 64]).foldl
+          (fun acc idx => if oMask idx then acc.writeMemTyped .fp16 Out (oOffFn idx) (oValFn idx) else acc) s6) := by
+    have hval : evalOp (Op.ref .fp16 [128, 64] "acc") s6 = some (⟨oValFn⟩ : Tile .fp16 [128, 64]) := by
+      rw [evalOp_ref]; exact hacc6
+    have hopval : evalOp (Op.ref .blockPtr [128, 64] "out_tile_ptr") s6
+        = some (⟨fun _ : TileIndex [128, 64] =>
+            { region := Out, baseOffset := 0, parentShape := [1024, 64], blockShape := [128, 64],
+              strides := [64, 1], offsets := [s0.pids 1 * 128 + s0.pids 0 * 128, 0] }⟩
+            : Tile .blockPtr [128, 64]) := by rw [evalOp_ref]; exact hout6
+    unfold stepStmt
+    simp only [hval, hopval, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s6 ?_
+    intro acc idx _
+    simp only [Bool.true_and, TileShape.blockPtr_inBounds_2d_offsets_index,
+      TileShape.blockPtr_address_2d_row_offset_index]
+    have hoff : (0 + (s0.pids 1 * 128 + s0.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1)
+        = oOffFn idx := by simp only [hoOffFn]; ring
+    by_cases hmk : oMask idx
+    · rw [decide_eq_true (by simpa only [hoMask] using hmk), hoff, if_pos hmk]; rfl
+    · rw [decide_eq_false (by simpa only [hoMask] using hmk), if_neg hmk]; rfl
+  erw [stepStmts.cons_some hstore7, stepStmts.nil]
+  set s7 := (TileShape.allIndices [128, 64]).foldl
+      (fun acc idx => if oMask idx then acc.writeMemTyped .fp16 Out (oOffFn idx) (oValFn idx) else acc) s6
+    with hs7
+  refine ⟨s7, rfl, ?_, ?_, ?_⟩
+  · -- Out readback
+    intro idx hActive
+    have hinjO : Function.Injective oOffFn := by
+      rw [hoOffFn]
+      rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+      simp only at h
+      have hm : ma = mb := by omega
+      have hd : da = db := by omega
+      subst mb; subst db; rfl
+    have hmaskIdx : oMask idx := by
+      rw [hoMask]; refine ⟨?_, by have := idx.2.1.isLt; omega⟩
+      simp only [active, rowIndex] at hActive
+      omega
+    rw [hs7]
+    rw [show outOffset s0 (s0.pids 1 * 128) 64 1 128 idx = oOffFn idx from by
+      simp only [outOffset, rowIndex, dIndex, hoOffFn]; ring]
+    rw [scatter_memcell_fp16_prop_masked_nd s6 oOffFn oValFn oMask hinjO idx]
+    rw [if_pos hmaskIdx]
+    simp only [hoValFn, haccTile, FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue,
+      FloatDType.ofWithBot, FloatDType.toWithBot]
+    rfl
+  · -- L readback
+    intro i
+    have hrawInj : Function.Injective (fun idx : TileIndex [128] => lOffFn idx) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hh
+      simp only [hlOffFn] at hh
+      obtain rfl : a = b := Fin.ext (by omega)
+      rfl
+    -- the Out store (region Out ≠ L) and M store (region M ≠ L) preserve L's mem
+    rw [show s7.readMem L (lRowOffset s0 (s0.pids 1) 128 128 i)
+          = s4.readMem L (lRowOffset s0 (s0.pids 1) 128 128 i) from by
+      unfold BlockState.readMem
+      rw [hs7, foldl_writeMemTyped_fp16_mask_other_region oMask oOffFn oValFn _ hLOut]
+      rw [hs6, BlockState.setReg_mem, hs5,
+        foldl_writeMemTyped_real_other_region (W := Region.cast M) (R := L) lOffFn
+          (fun r => mTile.data r) _ (by intro hc; exact hLM (by simpa using hc.symm))]]
+    rw [hs4]
+    rw [show lRowOffset s0 (s0.pids 1) 128 128 i = lOffFn (i, PUnit.unit) from by
+      simp only [lRowOffset, hlOffFn, hpids]]
+    simp only [BlockState.writeMemTyped_real]
+    erw [BlockState.scatter_readback_nd (region := Region.cast L) s3 lOffFn
+      (fun idx : TileIndex [128] => FloatDType.real.storeValue (lTile.data idx)) hrawInj (i, PUnit.unit)]
+    simp only [hlTile, FloatDType.real_storeValue, WithBot.unbotD_coe]
+  · -- M readback
+    intro i
+    have hrawInj : Function.Injective (fun idx : TileIndex [128] => lOffFn idx) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hh
+      simp only [hlOffFn] at hh
+      obtain rfl : a = b := Fin.ext (by omega)
+      rfl
+    rw [show s7.readMem M (lRowOffset s0 (s0.pids 1) 128 128 i)
+          = s5.readMem M (lRowOffset s0 (s0.pids 1) 128 128 i) from by
+      unfold BlockState.readMem
+      rw [hs7, foldl_writeMemTyped_fp16_mask_other_region oMask oOffFn oValFn _ hMOut]
+      rw [hs6, BlockState.setReg_mem]]
+    rw [hs5]
+    rw [show lRowOffset s0 (s0.pids 1) 128 128 i = lOffFn (i, PUnit.unit) from by
+      simp only [lRowOffset, hlOffFn, hpids]]
+    simp only [BlockState.writeMemTyped_real]
+    erw [BlockState.scatter_readback_nd (region := Region.cast M) s4 lOffFn
+      (fun idx : TileIndex [128] => FloatDType.real.storeValue (mTile.data idx)) hrawInj (i, PUnit.unit)]
+    simp only [hmTile, FloatDType.real_storeValue]
 
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
