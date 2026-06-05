@@ -618,6 +618,111 @@ theorem osNormStepBot_foldl_consistent
       List.map_cons, List.sum_cons, hL'd, hT'd, add_assoc, add_comm, add_left_comm,
       mul_comm, mul_left_comm] using step
 
+/-! ### Full-window readback: the loop's `acc` is the genuine closed form
+
+The kernel's `tl.where(mask, qk, −inf)` makes future keys carry softmax weight
+exactly `0`, so they are inert in both numerator and denominator. The fold the
+loop realizes is therefore `osNormStepBot` over the *active-key* list (causal
+`j ≤ gi`, value `ctxVTileM`); its final `acc` is the genuine boundary-masked
+closed form `contextAttnNopadExactFoldM`. -/
+
+/-- filterMap-sum over `Fin n` with a guard collapses into the masked `Finset.sum`. -/
+theorem ctxNopad_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- The active-key `(score, value)` list the nopad loop folds for output `(i, d)`:
+keys `j ≤ gi` (causal), score `sm_scale·Σ_e Q·K`, value `ctxVTileM`. Future keys
+(softmax weight `0` via the `−inf` sentinel) are dropped. -/
+noncomputable def ctxNopadKeyList
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  let gi := s.pids 2 * BLOCK_M + i.val
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ gi then
+      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+    else none)
+
+/-- **The nopad loop's full-window `acc` is the genuine closed form.** Folding
+`osNormStepBot` from the kernel seed `(⊥, 0, 0)` over the active-key list yields,
+in its `acc` component, exactly `contextAttnNopadExactFoldM` — provided the window
+is non-empty for this lane (key `0` causal-visible, `0 ≤ gi`). A pure-memory
+identity: the streaming loop computes the genuine causal softmax with no post-loop
+division. -/
+theorem ctxNopad_fold_eq_exactFoldM
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128])
+    (hvis : (0 : Nat) < S ∧ (0 : Nat) ≤ s.pids 2 * BLOCK_M + idx.1.val) :
+    ((ctxNopadKeyList s Q K V B_Start_Loc sm_scale BLOCK_M S bel idx.1 idx.2.1).foldl
+        osNormStepBot (⊥, 0, 0)).2.2
+      = contextAttnNopadExactFoldM s Q K V B_Start_Loc sm_scale BLOCK_M S bel idx := by
+  obtain ⟨i, d, u⟩ := idx
+  set xs := ctxNopadKeyList s Q K V B_Start_Loc sm_scale BLOCK_M S bel i d with hxs
+  -- the active-key list's score/value sums equal the closed form's masked Finset sums
+  have hL : (xs.map (fun p => Real.exp p.1)).sum
+      = Finset.univ.sum (fun j : Fin S =>
+          if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+            Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+          else 0) := by
+    rw [hxs, ctxNopadKeyList]
+    rw [ctxNopad_filterMap_finRange_sum S
+      (fun j : Fin S => j.val ≤ s.pids 2 * BLOCK_M + i.val)]
+  have hT : (xs.map (fun p => Real.exp p.1 * p.2)).sum
+      = Finset.univ.sum (fun j : Fin S =>
+          (if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+            Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+          else 0) * ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit)) := by
+    rw [hxs, ctxNopadKeyList]
+    rw [ctxNopad_filterMap_finRange_sum S
+      (fun j : Fin S => j.val ≤ s.pids 2 * BLOCK_M + i.val)]
+    apply Finset.sum_congr rfl; intro j _
+    by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val <;> simp [hj]
+  -- consistency from the kernel seed (L = T = 0)
+  have hcons := osNormStepBot_foldl_consistent xs ⊥ 0 0 0 0
+    (le_refl 0) (fun _ _ => trivial) (by simp) (by ring) (fun _ => rfl) (fun _ => rfl)
+    (by intro h; exact absurd h (lt_irrefl 0))
+  obtain ⟨_hl', hacc', _hL'0, _hbot1, _hbot2, _hne⟩ := hcons
+  -- L' = denom, T' = numer
+  simp only [zero_add] at hacc' hL hT
+  rw [contextAttnNopadExactFoldM]
+  -- denom > 0 : key 0 is causal-visible (0 ≤ gi), so its exp term is in the sum
+  have hdenom_pos : 0 < Finset.univ.sum (fun j : Fin S =>
+        if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+          Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+        else 0) := by
+    apply Finset.sum_pos'
+    · intro j _
+      by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val
+      · simp [hj, le_of_lt (Real.exp_pos _)]
+      · simp [hj]
+    · refine ⟨⟨0, hvis.1⟩, Finset.mem_univ _, ?_⟩
+      have h0 : (0 : Nat) ≤ s.pids 2 * BLOCK_M + i.val := Nat.zero_le _
+      simp only [Fin.val_mk, h0, if_true]
+      exact Real.exp_pos _
+  -- from acc' * L' = T' and L' ≠ 0 : acc' = T'/L'
+  rw [eq_div_iff (ne_of_gt hdenom_pos)]
+  rw [← hL, ← hT, hacc']
+
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_nopad_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
