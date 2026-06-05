@@ -1979,11 +1979,14 @@ the masked update produced (the kernel never reads those lanes). This separation
 is the linchpin: the advance is exact *by construction*, while the genuine
 recurrence match holds only on active lanes (where the stores read). -/
 
-/-- The seed cell `(e,p)` of `b_h` after the prologue: `initElem` (when
-`USE_INITIAL_STATE`) else `0`. Total over all lanes. -/
+/-- The seed cell `(e,p)` of `b_h` after the prologue: the *masked* initial-state
+block-ptr load (`initElem` on the active region when `USE_INITIAL_STATE`, else `0`).
+The boundary check matches the kernel's `tl.make_block_ptr` load mask exactly. -/
 noncomputable def cdfSeedCell (s : BlockState) (initial_state : RegionName)
     (USE_INITIAL_STATE : Bool) (e p : Nat) : ℝ :=
-  if USE_INITIAL_STATE then initElem s initial_state 64 64 64 e p else 0
+  if (s.pids 0 * 64 + e < 64 ∧ s.pids 1 * 64 + p < 64) then
+    (if USE_INITIAL_STATE then initElem s initial_state 64 64 64 e p else 0)
+  else 0
 
 /-- The concrete carry cell `(e,p)` after `c` chunks: the actual fold value
 `b_h` holds (seed + Σ of `cdfCumsumTile` increments). Total over all lanes. -/
@@ -2031,17 +2034,21 @@ theorem cdfAdvance_eval (s sin : BlockState) (k v d initial_state : RegionName)
     cdfCarryCell, cdfCumsumTile, WithBot.unbotD_some]
   rw [Nat.mod_eq_of_lt e.isLt, Nat.mod_eq_of_lt p.isLt]
 
-/-- **Carry-active match.** On the active region (`e < 64`, `s.pids 1 * 64 + p < 64`)
-and for `c ≤ 4`, the concrete carry cell `cdfCarryCell c` agrees with the genuine
-`stateValue c`. Proven by induction on `c` via `cdfAdvance_active_of`. -/
+/-- **Carry-active match.** On the active region (`s.pids 0 * 64 + e < 64`,
+`s.pids 1 * 64 + p < 64`) and for `c ≤ 4`, the concrete carry cell `cdfCarryCell c`
+agrees with the genuine `stateValue c`. Proven by induction on `c` via
+`cdfAdvance_active_of`. -/
 theorem cdfCarry_active
     (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (hpids0 : s.pids 0 = 0)
     (c : Nat) (hc : c ≤ 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64) :
     cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e p
       = cdfState s k v d initial_state USE_INITIAL_STATE c e p := by
   induction c generalizing e with
   | zero =>
-      simp only [cdfCarryCell, cdfSeedCell, cdfState, stateValue, initElem]
+      simp only [cdfCarryCell, cdfSeedCell, cdfState, stateValue, initElem,
+        if_pos (show s.pids 0 * 64 + e < 64 ∧ s.pids 1 * 64 + p < 64 from
+          ⟨by rw [hpids0]; omega, hp⟩)]
   | succ n ih =>
       have hn4 : n < 4 := by omega
       have hnle : n ≤ 4 := by omega
@@ -2049,7 +2056,7 @@ theorem cdfCarry_active
       have hcell := cdfAdvance_active_of s k v d initial_state USE_INITIAL_STATE
         (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE n e' p')
         n hn4 e p he hp
-        (fun e' he' => ih hnle e' he')
+        (fun e' he'' => ih hnle e' he'')
       rw [show (⟨e % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨e, by omega⟩ : Fin 64) from
             by simp [Nat.mod_eq_of_lt he],
           show (⟨p % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨p, by omega⟩ : Fin 64) from
