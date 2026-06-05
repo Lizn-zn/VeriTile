@@ -2216,4 +2216,385 @@ theorem sr_acc_reg_eq {S : Nat}
   simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
   rfl
 
+/-- `srSeqLen` depends only on `mem`/`pids`. -/
+theorem srSeqLen_eq_of_mem_pids (s s0 : BlockState) (BSeqLen : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) :
+    srSeqLen s BSeqLen = srSeqLen s0 BSeqLen := by
+  simp only [srSeqLen, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `srStartLoc` depends only on `mem`/`pids`. -/
+theorem srStartLoc_eq_of_mem_pids (s s0 : BlockState) (BStartLoc : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) :
+    srStartLoc s BStartLoc = srStartLoc s0 BStartLoc := by
+  simp only [srStartLoc, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `srVIndex` depends only on `mem`/`pids`. -/
+theorem srVIndex_eq_of_mem_pids (s s0 : BlockState) (BLoc : Region .int) (BSeqLen : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) (n : Nat) :
+    srVIndex s BLoc BSeqLen n = srVIndex s0 BLoc BSeqLen n := by
+  simp only [srVIndex, srOffBLoc, srSeqLen, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `srQk` depends only on `mem`/`pids`. -/
+theorem srQk_eq_of_mem_pids (s s0 : BlockState) (Logics BStartLoc : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) (n : Nat) :
+    srQk s Logics BStartLoc n = srQk s0 Logics BStartLoc n := by
+  simp only [srQk, srStartLoc, BlockState.readMem, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `srV` depends only on `mem`/`pids`. -/
+theorem srV_eq_of_mem_pids (s s0 : BlockState) (V : RegionName) (BLoc : Region .int)
+    (BSeqLen : RegionName) (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) (n d : Nat) :
+    srV s V BLoc BSeqLen n d = srV s0 V BLoc BSeqLen n d := by
+  simp only [srV, srVIndex, srOffBLoc, srSeqLen, BlockState.readMem, BlockState.readMemValue,
+    BlockState.readMemTyped, hmem, hpids]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Step lemma**: the loop body advances `srInvariant` by one key block. Threads
+the 8 op-eval recipes through `stepStmts.cons_some`, then bridges the kernel's
+per-block `n_e_max`/`e_sum`/`acc` register updates to `srRunningMax`/`srStateBot`
+after `c+1` blocks via `sr_nemax_reg_eq`/`sr_esum_reg_eq`/`sr_acc_reg_eq`. -/
+theorem sr_attn_step
+    (Logics V : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : RegionName)
+    (s0 : BlockState) (i : Nat) (s : BlockState)
+    (hilt : i < srSeqLen s0 BSeqLen) (hhimod : srSeqLen s0 BSeqLen % 64 = 0)
+    (hinv : srInvariant Logics V BLoc BStartLoc BSeqLen s0 (i / 64) s)
+    (hi : i = (i / 64) * 64) :
+    ∃ s', stepStmts (srLoopBody Logics BLoc) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ srInvariant Logics V BLoc BStartLoc BSeqLen s0 (i / 64 + 1) s' := by
+  set S := srSeqLen s0 BSeqLen with hSdef
+  set c := i / 64 with hc_def
+  set qk := srQkF s0 Logics BStartLoc BSeqLen with hqkdef
+  set vF := srVF s0 V BLoc BSeqLen with hvFdef
+  have hwin : (c + 1) * 64 ≤ S := by omega
+  simp only [srInvariant, ← hqkdef, ← hvFdef, ← hSdef] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoff, hvp, hemax, hesum, hacc⟩ := hinv
+  -- the post-setReg start_n state
+  set s1 := s.setReg "start_n" .nat [] (Tile.scalar i) with hs1
+  have hs1seq : s1.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar S) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hseq
+  have hs1sl : s1.regs .nat [] "cur_batch_start_loc" = some (Tile.scalar (srStartLoc s0 BStartLoc)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl
+  have hs1ch : s1.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hch
+  have hs1n : s1.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hn
+  have hs1off : s1.regs .nat [] "off_b_loc" = some (Tile.scalar (srOffBLoc s0 BSeqLen)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff
+  have hs1sn : s1.regs .nat [] "start_n" = some (Tile.scalar i) := by
+    rw [hs1, BlockState.setReg_same]
+  have hs1cb : s1.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcb
+  have hs1d : s1.regs .nat [64] "offs_d" = some (Tile.vec (fun e : Fin 64 => e.val)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hd
+  have hs1emax : s1.regs .real [] "e_max"
+      = some (Tile.scalar (srRunningMax qk vF (c * 64) (⟨0, by norm_num⟩ : Fin 64))) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hemax
+  have hs1esum : s1.regs .real [] "e_sum"
+      = some (Tile.scalar ((srStateBot qk vF (c * 64) (⟨0, by norm_num⟩ : Fin 64)).2.1 : WithBot ℝ)) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hesum
+  have hs1acc : s1.regs .real [64] "acc"
+      = some (⟨fun idx : TileIndex [64] =>
+          ((srStateBot qk vF (c * 64) idx.1).2.2 : WithBot ℝ)⟩ : Tile .real [64]) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc
+  have hs1vp : s1.regs .ptr [1, 64] "v_ptrs"
+      = some (⟨fun idx : TileIndex [1, 64] => (V, s0.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64]) := by
+    rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hvp
+  -- s1.pids = s0.pids
+  have hs1pids : s1.pids = s0.pids := by rw [hs1, BlockState.setReg_pids]; exact hpids
+  unfold srLoopBody
+  -- stmt 0: start_n = ref start_n  (rebind to same value)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") s1 = some (Tile.scalar i) from by
+      rw [evalOp_ref]; exact hs1sn))]
+  set s2 := s1.setReg "start_n" .nat [] (Tile.scalar i) with hs2
+  -- s2 = s1 with start_n rebound to same i; mem/pids preserved from s0
+  have hs2mem : s2.mem = s0.mem := by
+    funext rg o; rw [hs2, BlockState.setReg_mem, hs1, BlockState.setReg_mem]
+    exact congrFun (congrFun hmem rg) o
+  have hs2pids : s2.pids = s0.pids := by rw [hs2, BlockState.setReg_pids]; exact hs1pids
+  have hs2seqEq : srSeqLen s2 BSeqLen = S := by rw [hSdef]; exact srSeqLen_eq_of_mem_pids s2 s0 BSeqLen hs2mem hs2pids
+  have hs2offEq : srOffBLoc s2 BSeqLen = srOffBLoc s0 BSeqLen := by
+    simp only [srOffBLoc, hs2pids, srSeqLen_eq_of_mem_pids s2 s0 BSeqLen hs2mem hs2pids]
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "start_n" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2sn : s2.regs .nat [] "start_n" = some (Tile.scalar i) := by rw [hs2, BlockState.setReg_same]
+  -- stmt 1: v_index = masked gather
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_vindex_gather_eval s2 BLoc BSeqLen i
+      (by rw [hs2offEq]; exact e2 (by decide) hs1off) hs2sn (e2 (by decide) hs1n)
+      (by rw [hs2seqEq]; exact e2 (by decide) hs1seq)))]
+  set s3 := s2.setReg "v_index" .int [64]
+    (⟨fun idx : TileIndex [64] => if i + idx.1.val < srSeqLen s2 BSeqLen
+        then srVIndex s2 BLoc BSeqLen (i + idx.1.val) else (-1 : Int)⟩ : Tile .int [64]) with hs3
+  have hs3mem : s3.mem = s0.mem := by funext rg o; rw [hs3, BlockState.setReg_mem]; exact congrFun (congrFun hs2mem rg) o
+  have hs3pids : s3.pids = s0.pids := by rw [hs3, BlockState.setReg_pids]; exact hs2pids
+  have e3 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "v_index" → s2.regs dt sh nm = some t → s3.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs3seqEq : srSeqLen s3 BSeqLen = S := by rw [hSdef]; exact srSeqLen_eq_of_mem_pids s3 s0 BSeqLen hs3mem hs3pids
+  -- stmt 2: qk = masked load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_qk_load_eval s3 Logics BStartLoc BSeqLen i
+      (by rw [show srStartLoc s3 BStartLoc = srStartLoc s0 BStartLoc from
+            srStartLoc_eq_of_mem_pids s3 s0 BStartLoc hs3mem hs3pids]
+          exact e3 (by decide) (e2 (by decide) hs1sl))
+      (by rw [show s3.pids 1 = s0.pids 1 from by rw [hs3pids]]
+          exact e3 (by decide) (e2 (by decide) hs1ch))
+      (e3 (by decide) hs2sn)
+      (e3 (by decide) (e2 (by decide) hs1n))
+      (by rw [hs3seqEq]; exact e3 (by decide) (e2 (by decide) hs1seq))))]
+  rw [hs3seqEq]
+  -- qk lane fn (s0's data)
+  set qkFn : Fin 64 → WithBot ℝ := fun jL =>
+    if i + jL.val < S then some (srQk s0 Logics BStartLoc (i + jL.val)) else (⊥ : WithBot ℝ)
+    with hqkFn
+  -- convert the recipe's s3 qk tile to the s0-form qkFn tile
+  rw [show (⟨fun idx : TileIndex [64] =>
+        if i + idx.1.val < S then some (srQk s3 Logics BStartLoc (i + idx.1.val)) else (⊥ : WithBot ℝ)⟩
+        : Tile .real [64])
+      = (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]) from by
+    refine Tile.ext (fun idx => ?_)
+    simp only [hqkFn, srQk_eq_of_mem_pids s3 s0 Logics BStartLoc hs3mem hs3pids]]
+  set s4 := s3.setReg "qk" .real [64] (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]) with hs4
+  have e4 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "qk" → s3.regs dt sh nm = some t → s4.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs4, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs4qk : s4.regs .real [64] "qk" = some (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]) := by
+    rw [hs4, BlockState.setReg_same]
+  -- e_max register (preserved): = srRunningMax(c*64) ⟨0⟩
+  set emax0 := srRunningMax qk vF (c * 64) (⟨0, by norm_num⟩ : Fin 64) with hemax0
+  have hs4emax : s4.regs .real [] "e_max" = some (Tile.scalar emax0) := by
+    rw [hemax0]; exact e4 (by decide) (e3 (by decide) (e2 (by decide) hs1emax))
+  -- stmt 3: n_e_max = maximum(max qk 0, e_max)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_nemax_eval s4 qkFn emax0 hs4qk hs4emax))]
+  -- bridge n_e_max value to srRunningMax((c+1)*64)
+  set nemaxVal := emax0 ⊔ Finset.univ.sup' Finset.univ_nonempty (fun k : Fin 64 => qkFn k) with hnemaxVal
+  set s5 := s4.setReg "n_e_max" .real [] (Tile.scalar nemaxVal) with hs5
+  have e5 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "n_e_max" → s4.regs dt sh nm = some t → s5.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs5, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs5nem : s5.regs .real [] "n_e_max" = some (Tile.scalar nemaxVal) := by rw [hs5, BlockState.setReg_same]
+  have hs5emax : s5.regs .real [] "e_max" = some (Tile.scalar emax0) := e5 (by decide) hs4emax
+  -- stmt 4: old_scale = exp(e_max - n_e_max)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_oldscale_eval s5 emax0 nemaxVal hs5emax hs5nem))]
+  set αVal := WithBot.realExp (WithBot.realSub emax0 nemaxVal) with hαVal
+  set s6 := s5.setReg "old_scale" .real [] (Tile.scalar αVal) with hs6
+  have e6 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "old_scale" → s5.regs dt sh nm = some t → s6.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs6, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs6os : s6.regs .real [] "old_scale" = some (Tile.scalar αVal) := by rw [hs6, BlockState.setReg_same]
+  have hs6qk : s6.regs .real [64] "qk" = some (⟨fun idx : TileIndex [64] => qkFn idx.1⟩ : Tile .real [64]) :=
+    e6 (by decide) (e5 (by decide) hs4qk)
+  have hs6nem : s6.regs .real [] "n_e_max" = some (Tile.scalar nemaxVal) := e6 (by decide) hs5nem
+  -- stmt 5: p = exp(qk - n_e_max)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_p_eval s6 qkFn nemaxVal hs6qk hs6nem))]
+  set pFn : Fin 64 → WithBot ℝ := fun jL => WithBot.realExp (WithBot.realSub (qkFn jL) nemaxVal) with hpFn
+  set s7 := s6.setReg "p" .real [64] (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]) with hs7
+  have e7 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "p" → s6.regs dt sh nm = some t → s7.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs7, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs7p : s7.regs .real [64] "p" = some (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]) := by
+    rw [hs7, BlockState.setReg_same]
+  have hs7os : s7.regs .real [] "old_scale" = some (Tile.scalar αVal) := e7 (by decide) hs6os
+  -- e_sum register value (preserved through stmts 1-5)
+  set esum0 := ((srStateBot qk vF (c * 64) (⟨0, by norm_num⟩ : Fin 64)).2.1 : WithBot ℝ) with hesum0
+  have hs7esum : s7.regs .real [] "e_sum" = some (Tile.scalar esum0) :=
+    e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1esum)))))
+  -- stmt 6: e_sum = e_sum*old_scale + sum p
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_esum_eval s7 esum0 αVal pFn hs7esum hs7os hs7p))]
+  set esumNew := WithBot.realAdd (WithBot.realMul esum0 αVal) (∑ j : Fin 64, pFn j) with hesumNew
+  set s8 := s7.setReg "e_sum" .real [] (Tile.scalar esumNew) with hs8
+  have e8 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "e_sum" → s7.regs dt sh nm = some t → s8.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs8, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- v gather: needs v_ptrs (preserved) and v_index (from s3)
+  set vIdxFn : Fin 64 → Int := fun jL =>
+    if i + jL.val < srSeqLen s2 BSeqLen then srVIndex s2 BLoc BSeqLen (i + jL.val) else (-1 : Int)
+    with hvIdxFn
+  have hs8vp : s8.regs .ptr [1, 64] "v_ptrs"
+      = some (⟨fun idx : TileIndex [1, 64] => (V, s0.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64]) :=
+    e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide)
+      (e3 (by decide) (e2 (by decide) hs1vp))))))
+  have hs8vi : s8.regs .int [64] "v_index" = some (⟨fun idx : TileIndex [64] => vIdxFn idx.1⟩ : Tile .int [64]) :=
+    e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide)
+      (show s3.regs .int [64] "v_index" = _ from by rw [hs3, BlockState.setReg_same])))))
+  -- s8.pids 1 = s0.pids 1
+  have hs8pids : s8.pids 1 = s0.pids 1 := by
+    rw [hs8, BlockState.setReg_pids, hs7, BlockState.setReg_pids, hs6, BlockState.setReg_pids,
+      hs5, BlockState.setReg_pids, hs4, BlockState.setReg_pids, hs3pids]
+  have hs8vp' : s8.regs .ptr [1, 64] "v_ptrs"
+      = some (⟨fun idx : TileIndex [1, 64] => (V, s8.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64]) := by
+    rw [hs8pids]; exact hs8vp
+  -- stmt 7: v = gather v_ptrs + v_index[:,None]*8192
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .int Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+                (Op.constNat 8192).castNatToInt).castIntToNat)) MaskOpt.none) s8
+        = some (⟨fun idx : TileIndex [64, 64] =>
+            some (s8.readMem V ((vIdxFn idx.1 * 8192).toNat + s0.pids 1 * 64 + idx.2.1.val))⟩
+            : Tile .real [64, 64]) from by
+      have h := sr_v_gather_eval s8 V vIdxFn hs8vp' hs8vi
+      rw [hs8pids] at h; exact h))]
+  set vTileFn : Fin 64 → Fin 64 → WithBot ℝ := fun jL d =>
+    some (s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)) with hvTileFn
+  set s9 := s8.setReg "v" .real [64, 64]
+    (⟨fun idx : TileIndex [64, 64] => vTileFn idx.1 idx.2.1⟩ : Tile .real [64, 64]) with hs9
+  have e9 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "v" → s8.regs dt sh nm = some t → s9.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs9, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs9v : s9.regs .real [64, 64] "v" = some (⟨fun idx : TileIndex [64, 64] => vTileFn idx.1 idx.2.1⟩ : Tile .real [64, 64]) := by
+    rw [hs9, BlockState.setReg_same]
+  have hs9os : s9.regs .real [] "old_scale" = some (Tile.scalar αVal) := e9 (by decide) (e8 (by decide) hs7os)
+  have hs9p : s9.regs .real [64] "p" = some (⟨fun idx : TileIndex [64] => pFn idx.1⟩ : Tile .real [64]) :=
+    e9 (by decide) (e8 (by decide) hs7p)
+  -- acc register value (preserved through stmts 1-7)
+  set accFn : Fin 64 → WithBot ℝ := fun d => ((srStateBot qk vF (c * 64) d).2.2 : WithBot ℝ) with haccFn
+  have hs9acc : s9.regs .real [64] "acc" = some (⟨fun idx : TileIndex [64] => accFn idx.1⟩ : Tile .real [64]) :=
+    e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide)
+      (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1acc)))))))
+  -- stmt 8: acc = acc*old_scale + sum p[:,None]*v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (sr_acc_eval s9 αVal accFn pFn vTileFn hs9acc hs9os hs9p hs9v))]
+  set accNew : Fin 64 → WithBot ℝ := fun d =>
+    WithBot.realAdd (WithBot.realMul (accFn d) αVal) (∑ j : Fin 64, WithBot.realMul (pFn j) (vTileFn j d))
+    with haccNew
+  set s10 := s9.setReg "acc" .real [64] (⟨fun idx : TileIndex [64] => accNew idx.1⟩ : Tile .real [64]) with hs10
+  have e10 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s9.regs dt sh nm = some t → s10.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs10, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs10nem : s10.regs .real [] "n_e_max" = some (Tile.scalar nemaxVal) :=
+    e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) hs5nem))))
+  -- stmt 9: e_max = n_e_max
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [] "n_e_max") s10 = some (Tile.scalar nemaxVal) from by
+      rw [evalOp_ref]; exact hs10nem))]
+  rw [stepStmts.nil]
+  set s11 := s10.setReg "e_max" .real [] (Tile.scalar nemaxVal) with hs11
+  refine ⟨s11, rfl, ?_⟩
+  have e11 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "e_max" → s10.regs dt sh nm = some t → s11.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs11, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- qkFn = the bridge lane fn (uses qk = srQkF s0)
+  have hqkFnBridge : qkFn = fun jL : Fin 64 =>
+      if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+      else (⊥ : WithBot ℝ) := by
+    funext jL; simp only [hqkFn]
+    by_cases hj : i + jL.val < S
+    · rw [if_pos hj, if_pos (by omega)]
+      rw [show i + jL.val = c * 64 + jL.val from by rw [hi]]
+      rfl
+    · rw [if_neg hj, if_neg (by omega)]
+  -- nemaxVal = srRunningMax((c+1)*64) ⟨0⟩
+  have hnemaxBridge : nemaxVal = srRunningMax qk vF ((c + 1) * 64) (⟨0, by norm_num⟩ : Fin 64) := by
+    rw [hnemaxVal, hemax0, hqkFnBridge, ← sr_nemax_reg_eq qk vF c (⟨0, by norm_num⟩ : Fin 64) hwin]
+  -- pFn = bridge p lane fn
+  have hpFnBridge : ∀ jL : Fin 64, pFn jL = WithBot.realExp (WithBot.realSub
+        (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ))
+        (srRunningMax qk vF ((c + 1) * 64) (⟨0, by norm_num⟩ : Fin 64))) := by
+    intro jL; rw [hpFn, hqkFnBridge, hnemaxBridge]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    rw [hs11, BlockState.setReg_pids, hs10, BlockState.setReg_pids, hs9, BlockState.setReg_pids,
+      hs8, BlockState.setReg_pids, hs7, BlockState.setReg_pids, hs6, BlockState.setReg_pids,
+      hs5, BlockState.setReg_pids, hs4, BlockState.setReg_pids, hs3pids]
+  · -- mem
+    funext rg o
+    rw [hs11, BlockState.setReg_mem, hs10, BlockState.setReg_mem, hs9, BlockState.setReg_mem,
+      hs8, BlockState.setReg_mem, hs7, BlockState.setReg_mem, hs6, BlockState.setReg_mem,
+      hs5, BlockState.setReg_mem, hs4, BlockState.setReg_mem]
+    exact congrFun (congrFun hs3mem rg) o
+  · -- undef
+    intro rg o
+    rw [hs11, BlockState.setReg_undef, hs10, BlockState.setReg_undef, hs9, BlockState.setReg_undef,
+      hs8, BlockState.setReg_undef, hs7, BlockState.setReg_undef, hs6, BlockState.setReg_undef,
+      hs5, BlockState.setReg_undef, hs4, BlockState.setReg_undef, hs3, BlockState.setReg_undef,
+      hs2, BlockState.setReg_undef, hs1, BlockState.setReg_undef]
+    exact hundef rg o
+  · -- cur_batch
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1cb)))))))))
+  · -- cur_head
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1ch)))))))))
+  · -- cur_batch_seq_len
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1seq)))))))))
+  · -- cur_batch_start_loc
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1sl)))))))))
+  · -- offs_n
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1n)))))))))
+  · -- offs_d
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1d)))))))))
+  · -- off_b_loc
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1off)))))))))
+  · -- v_ptrs
+    exact e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide)
+      (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) hs1vp)))))))))
+  · -- e_max = srRunningMax((c+1)*64) ⟨0⟩
+    rw [hs11, BlockState.setReg_same, hnemaxBridge]
+  · -- e_sum = srStateBot((c+1)*64).2.1
+    rw [show s11.regs .real [] "e_sum" = some (Tile.scalar esumNew) from by
+      rw [hs11, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      rw [hs10, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      rw [hs9, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      rw [hs8, BlockState.setReg_same]]
+    refine congrArg some (congrArg Tile.scalar ?_)
+    rw [hesumNew, hesum0, hαVal, hnemaxBridge, hemax0]
+    rw [show (∑ j : Fin 64, pFn j) = (∑ j : Fin 64, WithBot.realExp (WithBot.realSub
+        (if c * 64 + j.val < S then ((qk ⟨c * 64 + j.val, by have := j.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) (srRunningMax qk vF ((c + 1) * 64) (⟨0, by norm_num⟩ : Fin 64)))) from by
+      apply Finset.sum_congr rfl; intro j _; rw [hpFnBridge j]]
+    exact sr_esum_reg_eq qk vF c (⟨0, by norm_num⟩ : Fin 64) hwin
+  · -- acc = srStateBot((c+1)*64).2.2
+    rw [show s11.regs .real [64] "acc" = some (⟨fun idx : TileIndex [64] => accNew idx.1⟩ : Tile .real [64]) from by
+      rw [hs11, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      rw [hs10, BlockState.setReg_same]]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    obtain ⟨d, u⟩ := idx
+    show accNew d = ((srStateBot qk vF ((c + 1) * 64) d).2.2 : WithBot ℝ)
+    simp only [haccNew, haccFn]
+    rw [hαVal, hnemaxBridge, hemax0]
+    -- rawV d for the acc bridge: vTileFn jL d = some(srV s0 (c*64+jL) d) on active lanes
+    have hrawV : ∀ jL : Fin 64, (hj : c * 64 + jL.val < S) →
+        s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)
+          = vF ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d := by
+      intro jL hj
+      rw [hvFdef]
+      show s8.readMem V _ = srV s0 V BLoc BSeqLen (c * 64 + jL.val) d.val
+      have hs8mem : s8.mem = s0.mem := by
+        funext rg o; rw [hs8, BlockState.setReg_mem, hs7, BlockState.setReg_mem, hs6, BlockState.setReg_mem,
+          hs5, BlockState.setReg_mem, hs4, BlockState.setReg_mem]; exact congrFun (congrFun hs3mem rg) o
+      have hreadeq : s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)
+          = s0.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val) := by
+        simp only [BlockState.readMem, hs8mem]
+      rw [hreadeq, srV]
+      -- vIdxFn jL (active) = srVIndex s0 (c*64+jL); pids 1 match
+      simp only [hvIdxFn]
+      rw [if_pos (show i + jL.val < srSeqLen s2 BSeqLen from by rw [hs2seqEq]; omega),
+        srVIndex_eq_of_mem_pids s2 s0 BLoc BSeqLen hs2mem hs2pids,
+        show i + jL.val = c * 64 + jL.val from by rw [hi]]
+    have hsumacc : (∑ j : Fin 64, WithBot.realMul (pFn j) (vTileFn j d))
+        = (∑ j : Fin 64, WithBot.realMul
+            (WithBot.realExp (WithBot.realSub
+              (if c * 64 + j.val < S then ((qk ⟨c * 64 + j.val, by have := j.isLt; omega⟩ : ℝ) : WithBot ℝ)
+               else (⊥ : WithBot ℝ)) (srRunningMax qk vF ((c + 1) * 64) (⟨0, by norm_num⟩ : Fin 64))))
+            (((fun jL => s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)) j : ℝ) : WithBot ℝ)) := by
+      apply Finset.sum_congr rfl; intro j _
+      rw [hpFnBridge j]; rfl
+    rw [hsumacc]
+    exact sr_acc_reg_eq qk vF c d
+      (fun jL => s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)) hrawV hwin
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
