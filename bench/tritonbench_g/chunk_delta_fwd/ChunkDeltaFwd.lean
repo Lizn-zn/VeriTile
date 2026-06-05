@@ -2281,6 +2281,9 @@ theorem cdfOuterLoop_run
         = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 0)) :
     ∃ s', stepStmt (Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)) s0 = some s'
       ∧ s'.pids = s.pids
+      ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
       ∧ s'.regs .real [64, 64] "b_h"
           = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
@@ -2366,10 +2369,10 @@ theorem cdfOuterLoop_run
             rw [hsc, BlockState.setReg_readMem]
             exact hvnC j hjlt idx hact
           · subst hjeq; exact hvnActB idx hact)
-  obtain ⟨hcleF, hpidsF, _, _, _, hbhF, hkF, hvF, hdF, hhF, hvnF⟩ := hP
+  obtain ⟨hcleF, hpidsF, hikF, hivF, hibhF, hbhF, hkF, hvF, hdF, hhF, hvnF⟩ := hP
   have hfinalEq : final = 4 := le_antisymm hcleF hfinal
   subst hfinalEq
-  exact ⟨s', hstep, hpidsF, hbhF, hkF, hvF, hdF,
+  exact ⟨s', hstep, hpidsF, hikF, hivF, hibhF, hbhF, hkF, hvF, hdF,
     fun j idx hact => hhF j.val j.isLt idx hact,
     fun j idx hact => hvnF j.val j.isLt idx hact⟩
 
@@ -2586,5 +2589,112 @@ theorem cdfEpilogue_run
       exact cdfStoreFinal_step_active s sPt final_state
         (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 e' p')
         hInjF idx hidx
+
+/-! ### Bridges: concrete carry cells = genuine closed forms (active lanes) -/
+
+/-- On the active region, the concrete corrected-value cell `cdfBvNewCell` built
+from the carry equals the genuine `vNewValue` (the `i_c = 0`, `BC = BT` regime). -/
+theorem cdfBvNew_eq_vNewValue
+    (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (hpids0 : s.pids 0 = 0) (i_t : Nat) (hit : i_t < 4)
+    (c p : Nat) (hc : i_t * 32 + c < 128) (hp : s.pids 1 * 64 + p < 64) :
+    cdfBvNewCell s v d
+        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p') i_t c p
+      = vNewValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          USE_INITIAL_STATE i_t c p := by
+  simp only [cdfBvNewCell, vNewValue]
+  rw [if_pos (⟨hc, hp⟩ : i_t * 32 + c < 128 ∧ s.pids 1 * 64 + p < 64)]
+  refine congrArg (vElem s v 8192 64 1 32 64 i_t c p - ·) ?_
+  refine Finset.sum_congr rfl (fun e' _ => ?_)
+  rw [if_pos ⟨hc, e'.isLt⟩,
+    cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 i_t (by omega) e'.val p
+      e'.isLt hp]
+  rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Full genuine exec.** Executing the entire `chunk_delta_rule_fwd_h_surface`
+(prologue + outer `forRange` + epilogue) at the checked Python shape writes the
+genuine delta-rule closed form into the output buffers: `h[j]` holds the
+chunk-start state `hValue j`, `v_new[j]` the corrected `vNewSpec j`, and (when
+`STORE_FINAL_STATE`) `final_state` the final state `finalValue 4`, all at every
+active lane. The full carry fold is derived from the kernel `exec`, with **no
+producer hypotheses**. -/
+theorem chunk_delta_fwd_exec_genuine
+    (k v d v_new h initial_state final_state : RegionName)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (s : BlockState) (hpids0 : s.pids 0 = 0)
+    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
+    (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
+    (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
+    (hFv2 : final_state ≠ v) (hFd : final_state ≠ d)
+    (hInjV : ∀ i_t : Fin 4,
+      Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t.val idx))
+    (hInjH : ∀ i_t : Fin 4,
+      Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t.val idx))
+    (hInjF : Function.Injective
+      (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)) :
+    ∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+        USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel s = some sF
+      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+          sF.readMem h (cdfHAddr s j.val idx)
+            = hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+                USE_INITIAL_STATE j.val idx)
+      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64],
+          vNewActive s j.val 0 128 64 32 32 64 idx →
+          sF.readMem v_new (cdfVNewAddr s j.val idx)
+            = vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+                USE_INITIAL_STATE j.val idx)
+      ∧ (STORE_FINAL_STATE = Bool.true →
+          ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+            sF.readMem final_state (finalStateOffset s 64 64 64 64 idx)
+              = finalValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+                  USE_INITIAL_STATE 4 idx) := by
+  rw [exec, chunk_delta_fwd_body_split]
+  -- prologue
+  obtain ⟨s0, hpre, hpidsP, hmemP, hikP, hivP, hibhP, hbhP⟩ :=
+    cdfPrologue_run k v d v_new h initial_state final_state USE_INITIAL_STATE s hpids0
+  -- outer loop
+  obtain ⟨sL, hloop, hpidsL, hikL, hivL, hibhL, hbhL, hkL, hvL, hdL, hhL, hvnL⟩ :=
+    cdfOuterLoop_run k v d v_new h initial_state USE_INITIAL_STATE s s0 hpids0
+      hVk hVv hVd hHv hHk hHv2 hHd hInjV hInjH hmemP hpidsP hikP hivP hibhP hbhP
+  -- epilogue
+  obtain ⟨sE, hepi, hmemE, hfinE⟩ :=
+    cdfEpilogue_run k v d v_new h initial_state final_state USE_INITIAL_STATE STORE_FINAL_STATE
+      s sL hpids0 hFh hFv hFk hFv2 hFd hInjF hpidsL hikL hivL hibhL hbhL
+  -- assemble the full body: (prologue) ++ (forRange :: epilogue)
+  rw [List.append_assoc, stepStmts.append_some hpre]
+  rw [show [Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)]
+        ++ cdfEpilogue final_state STORE_FINAL_STATE
+      = Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)
+        :: cdfEpilogue final_state STORE_FINAL_STATE from rfl,
+    stepStmts.cons_some hloop, hepi]
+  refine ⟨sE, rfl, ?_, ?_, ?_⟩
+  · -- h readback: h reads of sE = sL (epilogue only writes final_state ≠ h) = cdfCarryCell = hValue
+    intro j idx hact
+    rw [hmemE h _ hFh.symm, hhL j idx hact]
+    -- cdfCarryCell j = stateValue j = hValue j
+    obtain ⟨e, p, u⟩ := idx
+    simp only [hValue, kIndex, hpids0, Nat.zero_mul, Nat.zero_add]
+    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 j.val (by omega)
+      e.val p.val e.isLt (by
+        obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
+    rfl
+  · -- v_new readback
+    intro j idx hact
+    obtain ⟨hcT, hvV⟩ := hact
+    rw [hmemE v_new _ hFv.symm, hvnL j idx (by exact ⟨by simpa using hcT, by simpa [vIndex] using hvV⟩)]
+    obtain ⟨c, p, u⟩ := idx
+    simp only [vNewSpec, vNewActive, cIndex, vIndex] at *
+    rw [cdfBvNew_eq_vNewValue s k v d initial_state USE_INITIAL_STATE hpids0 j.val (by omega)
+      c.val p.val (by simpa using hcT) (by simpa using hvV)]
+  · -- final_state readback (STORE_FINAL_STATE = true)
+    intro hStore idx hact
+    rw [hfinE hStore idx hact]
+    obtain ⟨e, p, u⟩ := idx
+    simp only [finalValue, kIndex, hpids0, Nat.zero_mul, Nat.zero_add]
+    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 4 (by omega)
+      e.val p.val e.isLt (by obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
+    rfl
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
