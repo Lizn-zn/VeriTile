@@ -426,18 +426,53 @@ def colKeyGlobal (s : BlockState) (column_index : Region .nat)
   s.readMemValue .nat (Region.cast column_index)
     ((s.pids 1 * NUM_ROWS + s.pids 0) * NNZ_V + c)
 
-/-- **Genuine closed-form mixed-sparse attention output** for one program/row.
+/-- **Faithful exp2→exp scale.** The kernel sets `qk_scale = sm_scale ·
+1.44269504` and exponentiates with `exp2`. Since the semantics give
+`exp2(x) = exp(x · log 2)`, the per-key weight the loop computes is
+`exp2(qk_scale · raw) = exp(qk_scale · log 2 · raw)`. Hence the natural-exp
+scale to instantiate the closed form with is
+`effScale sm_scale = sm_scale · 1.44269504 · log 2`. (`1.44269504 · log 2 ≈ 1`,
+the floating-point approximation of `log2(e) · ln 2 = 1`.) -/
+noncomputable def effScale (sm_scale : ℝ) : ℝ :=
+  sm_scale * 1.44269504 * Real.log 2
 
-`out[i,d] = numer / denom`, where the weight of a key at global position `n`
-under predicate `keep` is `w = if keep then exp(sm_scale · rawScore i n) else 0`,
-and the sum ranges over the **union** of:
+/-- The masked block start `start_n` the kernel reads at block `b` (Loop A's
+`tl.load(blks_ptr + b, mask = b < num_blks)`): the real offset for a visited
+block, the masked default `0` for a spurious block `b ≥ num_blks`. -/
+noncomputable def blockStartN (s : BlockState) (block_offset : Region .nat)
+    (NUM_ROWS NNZ_S num_blks b : Nat) : Nat :=
+  if b < num_blks then
+    s.readMemValue .nat (Region.cast block_offset)
+      ((s.pids 1 * NUM_ROWS + s.pids 0) * NNZ_S + b)
+  else BlockState.defaultCarrier .nat
 
-* block keys `blockKeyGlobal b j` for `b < num_blks`, `j < BLOCK_N`, kept when
-  `n ≤ start_m·BLOCK_M + i` (causal) **and** `n < seqlen`;
-* column keys `colKeyGlobal c` for `c < num_cols`, kept when `n < seqlen`
-  (the kernel's `n_mask`, no causal).
+/-- **Genuine (FAITHFUL) closed-form mixed-sparse attention output** for one
+program/row. This mirrors *exactly* what
+`_triton_mixed_sparse_attn_fwd_kernel` computes — including the faithfulness
+quirk that **Loop A always runs `max_num_blks = 8` iterations regardless of
+`num_blks`**.
 
-`denom = Σ w`, `numer = Σ w · V[n, d]`. -/
+For each iteration `b < 8` the kernel forms `cond = b < num_blks`, the masked
+block start `start_n = blockStartN` (the masked default `0` when `cond` is
+false), then for each lane `j < BLOCK_N` the key `n = start_n + j`:
+
+* the K-load is masked by `n_mask = (n < seqlen) ∧ cond`, so the effective key
+  vector is `K[n]` when `n < seqlen ∧ cond` and the **zero vector** otherwise;
+* `qk = where(m_mask ∧ (n ≤ offs_m i), 0, -inf) + dot(q, K_masked)`, so the lane
+  contributes weight `w = exp(effScale · rawMasked)` exactly when
+  `offs_m i < seqlen ∧ n ≤ offs_m i`, and `0` otherwise. Here `rawMasked = raw n`
+  when `n < seqlen ∧ cond` and `rawMasked = 0` (so `w = exp(0) = 1`) otherwise —
+  this is the **spurious-block weight-1 path**: a block `b ≥ num_blks` has
+  `start_n = 0`, `cond = false`, hence `n = j`, `n ≤ offs_m i` and
+  (for active rows) `offs_m i < seqlen`, so it adds `exp(effScale·0) = 1` to the
+  DENOMINATOR while its V is the zero vector, leaving the numerator unchanged.
+
+Loop B (column phase) is correctly `n_mask`-guarded (its `where` masks
+non-selected lanes to `⊥`), so spurious column lanes contribute nothing.
+
+`numer/denom` is therefore the kernel's true output, **not** the naive
+`num_blks`-only union softmax. The natural-exp scale is `effScale sm_scale =
+sm_scale · 1.44269504 · log 2` (the faithful `exp2 → exp` bridge). -/
 noncomputable def mixedSparseAttnClosedForm
     (s : BlockState) (Q K V : RegionName)
     (block_offset column_index : Region .nat)
@@ -450,42 +485,38 @@ noncomputable def mixedSparseAttnClosedForm
   let raw := fun n : Nat =>
     rawScore s Q K H stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
       BLOCK_DMODEL BLOCK_M i n
-  -- block-sparse phase weights (causal + in-seqlen)
-  let wBlock := fun (b : Fin num_blks) (j : Fin BLOCK_N) =>
-    let n := blockKeyGlobal s block_offset NUM_ROWS NNZ_S BLOCK_N b.val j.val
-    if n ≤ mIndex s BLOCK_M i ∧ n < seqlen then Real.exp (sm_scale * raw n) else 0
-  -- column-sparse phase weights (in-seqlen, no causal)
+  -- block-sparse phase over ALL 8 = max_num_blks kernel iterations.
+  -- `keep` = lane kept (causal + active row); `inSeq` = K/V actually loaded.
+  let wBlock := fun (b : Fin 8) (j : Fin BLOCK_N) =>
+    let SN := blockStartN s block_offset NUM_ROWS NNZ_S num_blks b.val
+    let n := SN + j.val
+    let inSeq := n < seqlen ∧ b.val < num_blks
+    let rawMasked := if inSeq then raw n else 0
+    if mIndex s BLOCK_M i < seqlen ∧ n ≤ mIndex s BLOCK_M i then
+      Real.exp (effScale sm_scale * rawMasked) else 0
+  let vBlock := fun (b : Fin 8) (j : Fin BLOCK_N) =>
+    let SN := blockStartN s block_offset NUM_ROWS NNZ_S num_blks b.val
+    let n := SN + j.val
+    if n < seqlen ∧ b.val < num_blks then
+      vRow s V H stride_vz stride_vh stride_vn n d else 0
+  -- column-sparse phase weights (in-seqlen, no causal). Faithful because the
+  -- kernel `n_mask`-guards Loop B's `where`.
   let wCol := fun (c : Fin num_cols) =>
     let n := colKeyGlobal s column_index NUM_ROWS NNZ_V c.val
-    if n < seqlen then Real.exp (sm_scale * raw n) else 0
+    if mIndex s BLOCK_M i < seqlen ∧ n < seqlen then
+      Real.exp (effScale sm_scale * raw n) else 0
   let denom :=
-    Finset.univ.sum (fun b : Fin num_blks =>
+    Finset.univ.sum (fun b : Fin 8 =>
       Finset.univ.sum (fun j : Fin BLOCK_N => wBlock b j)) +
     Finset.univ.sum (fun c : Fin num_cols => wCol c)
   let numer :=
-    Finset.univ.sum (fun b : Fin num_blks =>
-      Finset.univ.sum (fun j : Fin BLOCK_N =>
-        wBlock b j *
-          vRow s V H stride_vz stride_vh stride_vn
-            (blockKeyGlobal s block_offset NUM_ROWS NNZ_S BLOCK_N b.val j.val) d)) +
+    Finset.univ.sum (fun b : Fin 8 =>
+      Finset.univ.sum (fun j : Fin BLOCK_N => wBlock b j * vBlock b j)) +
     Finset.univ.sum (fun c : Fin num_cols =>
       wCol c *
         vRow s V H stride_vz stride_vh stride_vn
           (colKeyGlobal s column_index NUM_ROWS NNZ_V c.val) d)
   numer / denom
-
-/-- **Faithful exp2→exp scale.** The kernel sets `qk_scale = sm_scale ·
-1.44269504` and exponentiates with `exp2`. Since the semantics give
-`exp2(x) = exp(x · log 2)`, the per-key weight the loop computes is
-`exp2(qk_scale · raw) = exp(qk_scale · log 2 · raw)`. Hence the natural-exp
-scale to instantiate `mixedSparseAttnClosedForm` with — so that its
-`exp(scale · raw)` matches the kernel exactly — is
-`effScale sm_scale = sm_scale · 1.44269504 · log 2`. (`1.44269504 · log 2 ≈ 1`,
-the floating-point approximation of `log2(e) · ln 2 = 1`; the model carries the
-literal exactly, so the faithful closed form uses `effScale`, not bare
-`sm_scale`.) -/
-noncomputable def effScale (sm_scale : ℝ) : ℝ :=
-  sm_scale * 1.44269504 * Real.log 2
 
 /-- The faithful exp2 weight equals the natural-exp weight at `effScale`:
 `exp2(qk_scale · raw) = exp(effScale · raw)`, where `qk_scale = sm_scale ·
