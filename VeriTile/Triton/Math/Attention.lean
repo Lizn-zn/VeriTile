@@ -170,6 +170,100 @@ theorem attentionRealBase2PerKeyScale_eq_streaming {M S D : Nat}
     Function.comp]
   rfl
 
+/-! ### Predicate-masked base-2 per-key-scale attention
+
+`attention_fwd_triton3` masks scores with a *sliding-window* (and its complement)
+`tl.where(mask, qk, -inf)`, where the keep/drop decision depends on both the query
+row `i` and the key column `j` via a `dist`-based predicate. This generalizes the
+causal variant (`keep i j := j.val ≤ qStart + i.val`) to an arbitrary decidable
+`keep : Fin M → Fin S → Prop`: a key `j` contributes to output row `i` exactly
+when `keep i j` holds; masked keys carry zero softmax mass (the `-inf` score).
+The three Python cases (sliding-window, complement sliding-window, no window) are
+instances of this single spec. The bridge to the same `osStep` online-softmax
+fold over a *predicate-filtered* key list is sorry-free; the exec-side loop only
+has to realize that fold. -/
+
+/-- Predicate-masked base-2 per-key-scale attention: key `j` contributes to
+output row `i` exactly when `keep i j` holds; masked keys carry zero softmax
+mass (the `-inf`-masked score). -/
+noncomputable def attentionRealBase2PerKeyScalePred {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let raw := fun j : Fin S =>
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+    let weight := fun j : Fin S =>
+      if keep i j then pow2 (keyScale j * raw j) else 0
+    let denom := Finset.univ.sum (fun j : Fin S => weight j)
+    let numer := Finset.univ.sum (fun j : Fin S => weight j * V (j, d, PUnit.unit))
+    numer / denom
+
+/-- Predicate-filtered streamed key list for output `(i, d)`: only keys with
+`keep i j` are emitted (masked keys are dropped, exactly the `-inf`-masked /
+zero-weight keys), each as a `(score, value)` pair with score
+`keyScale j · (Q row i · K row j)`. -/
+noncomputable def attnKeyListPred {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin M) (d : Fin D) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if keep i j then
+      some (keyScale j * Finset.univ.sum (fun e : Fin D =>
+              Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)),
+            V (j, d, PUnit.unit))
+    else none)
+
+/-- Sum of a `filterMap (if p then some (g·) else none)` collapses the guard into
+the summand. -/
+private theorem list_sum_filterMap_ite {α β : Type*} [AddCommMonoid β]
+    (l : List α) (p : α → Prop) [DecidablePred p] (g : α → β) :
+    ((l.filterMap (fun a => if p a then some (g a) else none))).sum
+      = (l.map (fun a => if p a then g a else 0)).sum := by
+  induction l with
+  | nil => simp
+  | cons a t ih => by_cases ha : p a <;> simp [ha, ih]
+
+/-- `h`-image sum of a predicate-filtered `finRange` list = the masked
+`Finset.sum` over `Fin n`. The list/Finset bridge for the masked numerator and
+denominator. -/
+private theorem list_sum_filterMap_finRange {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [list_sum_filterMap_ite (List.finRange n) p (fun j => h (g j))]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- **Bridge: predicate-masked base-2 per-key-scale attention IS the
+online-softmax fold over the predicate-filtered key list.** The eventual `exec`
+proof only has to show the kernel's masked loop realizes this fold; this lemma
+then delivers the masked closed form (`attentionRealBase2PerKeyScalePred`).
+Sorry-free. -/
+theorem attentionRealBase2PerKeyScalePred_eq_streaming {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin M) (d : Fin D) :
+    attentionRealBase2PerKeyScalePred Q K V keyScale keep (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred Q K V keyScale keep i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [osStep_foldl_eq_batch]
+  simp only [attentionRealBase2PerKeyScalePred, attnKeyListPred]
+  congr 1
+  · rw [list_sum_filterMap_finRange S (fun j => keep i j)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1 * p.2)]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hj : keep i j <;> simp [hj]
+  · rw [list_sum_filterMap_finRange S (fun j => keep i j)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1)]
+
 /-! ### Block-level online softmax (matching the kernel's loop)
 
 The kernel does not stream one key at a time; each loop iteration absorbs a whole
