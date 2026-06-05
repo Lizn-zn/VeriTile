@@ -768,6 +768,107 @@ theorem srStateBot_succ {S BLOCK_DMODEL : Nat}
   unfold srStateBot
   rw [srKeysUpto_succ, List.foldl_append]
 
+/-- Factor the running-max shift out of a block sum: `Σ exp(s-m')·g = exp(-m')·Σ exp(s)·g`. -/
+theorem sr_sum_map_exp_sub (m' : ℝ) (block : List (ℝ × ℝ)) (g : ℝ × ℝ → ℝ) :
+    (block.map (fun p => Real.exp (p.1 - m') * g p)).sum
+      = Real.exp (-m') * (block.map (fun p => Real.exp p.1 * g p)).sum := by
+  induction block with
+  | nil => simp
+  | cons a t ih =>
+    have e : Real.exp (a.1 - m') = Real.exp (-m') * Real.exp a.1 := by
+      rw [← Real.exp_add]; ring_nf
+    simp only [List.map_cons, List.sum_cons, ih, e]; ring
+
+/-- The `.1` (running max) of an `srOsStepBot` block-fold from `(m, l, acc)`. -/
+theorem srOsStepBot_block_fst (m : WithBot ℝ) (l acc : ℝ) (block : List (ℝ × ℝ)) :
+    (block.foldl srOsStepBot (m, l, acc)).1
+      = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [srOsStepBot_fst]
+  induction block generalizing m with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.foldl_cons, List.foldr_cons]
+    rw [ih]
+    rw [show (m ⊔ ((a.1 : ℝ) : WithBot ℝ)) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))
+          = m ⊔ (((a.1 : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))) from by
+      rw [sup_assoc]]
+
+/-- **The block-at-once update equals the key-by-key `srOsStepBot` fold** (base-`e`).
+For a block with max `M' = m ⊔ blockSup` and a state `(m, l, acc)` anchored to the
+true denominator/accumulator via `l = κ(m)·L`, `acc = κ(m)·T`, the kernel's one-shot
+rescale-and-add (`l·α + Σ exp(s−M')`, `acc·α + Σ exp(s−M')·v`, with
+`α = realExp(m ⊖ M')`) lands on `block.foldl srOsStepBot (m, l, acc)`. This is the
+loop-body bridge relating the kernel's per-iteration register update to the
+`srStateBot_succ` fold. -/
+theorem srOsStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (ℝ × ℝ))
+    (hl : l = (m.elim 0 (fun r => Real.exp (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => Real.exp (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let M' := m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+    (M',
+     l * (WithBot.realExp (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => Real.exp (p.1 - M'.unbotD 0))).sum,
+     acc * (WithBot.realExp (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => Real.exp (p.1 - M'.unbotD 0) * p.2)).sum)
+      = block.foldl srOsStepBot (m, l, acc) := by
+  intro M'
+  have hfst : (block.foldl srOsStepBot (m, l, acc)).1 = M' := by
+    rw [srOsStepBot_block_fst]
+  obtain ⟨hfold_l, hfold_acc⟩ := srOsStepBot_foldl_consistent block m l acc T L hl hacc hmL hmT
+  rw [hfst] at hfold_l hfold_acc
+  have hM'eq : M' = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := rfl
+  cases hM' : M' with
+  | bot =>
+    have hempty : block = [] := by
+      rcases block with _ | ⟨a, t⟩
+      · rfl
+      · exfalso
+        have : ((a.1 : ℝ) : WithBot ℝ) ≤ M' := by
+          rw [hM'eq]
+          exact le_sup_of_le_right (by simp only [List.map_cons, List.foldr_cons]; exact le_sup_left)
+        rw [hM'] at this
+        exact absurd (le_bot_iff.mp this) (WithBot.coe_ne_bot)
+    have hm0 : m = ⊥ := by
+      rw [hM'eq, hempty] at hM'
+      simpa only [List.map_nil, List.foldr_nil, sup_bot_eq] using hM'
+    have hl0 : l = 0 := by rw [hl, hm0]; simp [hmL hm0]
+    have hacc0 : acc = 0 := by rw [hacc, hm0]; simp [hmT hm0]
+    subst hempty
+    rw [hl0, hacc0]
+    simp only [List.foldl_nil, List.map_nil, List.sum_nil, add_zero, mul_zero, zero_mul]
+    rw [hm0]
+  | coe Mr =>
+    rw [hM'] at hfst hfold_l hfold_acc
+    have hlα : l * (WithBot.realExp (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = Real.exp (-Mr) * L := by
+      cases hm : m with
+      | bot =>
+        rw [hl, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = 0 from rfl,
+          zero_mul, hmL hm]; ring
+      | coe a =>
+        rw [hl, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+        rw [mul_right_comm, ← Real.exp_add]; ring_nf
+    have haccα : acc * (WithBot.realExp (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = Real.exp (-Mr) * T := by
+      cases hm : m with
+      | bot =>
+        rw [hacc, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = 0 from rfl,
+          zero_mul, hmT hm]; ring
+      | coe a =>
+        rw [hacc, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+        rw [mul_right_comm, ← Real.exp_add]; ring_nf
+    have hsumL : (block.map (fun p => Real.exp (p.1 - (↑Mr : WithBot ℝ).unbotD 0))).sum
+        = Real.exp (-Mr) * (block.map (fun p => Real.exp p.1)).sum := by
+      have := sr_sum_map_exp_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun _ => 1)
+      simp only [mul_one] at this
+      rw [this, WithBot.unbotD_coe]
+    have hsumT : (block.map (fun p => Real.exp (p.1 - (↑Mr : WithBot ℝ).unbotD 0) * p.2)).sum
+        = Real.exp (-Mr) * (block.map (fun p => Real.exp p.1 * p.2)).sum := by
+      rw [sr_sum_map_exp_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun p => p.2), WithBot.unbotD_coe]
+    refine Prod.ext hfst.symm (Prod.ext ?_ ?_)
+    · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-Mr) from rfl]; ring
+    · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-Mr) from rfl]; ring
+
 /-! ## Python test-shape wrappers
 
 `test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
