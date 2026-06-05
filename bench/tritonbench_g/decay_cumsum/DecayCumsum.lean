@@ -2453,6 +2453,17 @@ private def ptrDec (region : RegionName) (s : BlockState) (R : Nat) :
     Tile .ptr [4] :=
   Tile.vec (fun e : Fin 4 => (region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R - 8))
 
+/-- For `R ≥ 8`, the decremented pointer tile is the prologue-shaped pointer at
+the next-lower row offset `R - 8`. -/
+private theorem ptrDec_as_row (region : RegionName) (s : BlockState) (R : Nat)
+    (h8 : 8 ≤ R) :
+    ptrDec region s R = Tile.vec
+      (fun e : Fin 4 => (region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (R - 8))) := by
+  apply Tile.ext; intro i
+  simp only [ptrDec, Tile.vec]
+  congr 1
+  omega
+
 /-- Real add over two `gated` tiles is the `gated` tile of the pointwise sum
 (inactive lanes are `some 0 + some 0 = some 0`). -/
 private theorem gated_add (s : BlockState) (a b : TileIndex [4] → ℝ) :
@@ -2511,15 +2522,24 @@ private theorem gated_const0 (s : BlockState) :
 /-- `gated`/`ldR` depend on the state only through `pids` and `readMem`, so they
 agree across states with equal pids and memory reads. -/
 private theorem gated_ldR_state_eq (s1 s2 : BlockState) (region : RegionName) (R : Nat)
-    (hpid : s1.pids = s2.pids) (hread : ∀ r a, s1.readMem r a = s2.readMem r a) :
+    (hpid : s1.pids = s2.pids)
+    (hread : ∀ i : TileIndex [4],
+      s1.readMem region (s2.pids 2 * 64 + s2.pids 0 * 4 + i.1.val + R)
+        = s2.readMem region (s2.pids 2 * 64 + s2.pids 0 * 4 + i.1.val + R)) :
     gated s1 (ldR s1 region R) = gated s2 (ldR s2 region R) := by
   apply Tile.ext; intro i
-  simp only [gated, ldR, hpid, hread]
+  simp only [gated, ldR, hpid]
+  by_cases hc : decide (s2.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true]; rw [hread i]
+  · simp only [hc, Bool.false_eq_true, if_false]
 
 /-- The head-state `g_val` tile (`ldVal`) equals the `gated` load tile of `region`
-at row offset `R`, evaluated against any state with the same pids/memory. -/
+at row offset `R`, evaluated against any state with the same pids and row reads. -/
 private theorem ldVal_eq_gated (sin s : BlockState) (region : RegionName) (R : Nat)
-    (hpid : sin.pids = s.pids) (hread : ∀ r a, sin.readMem r a = s.readMem r a) :
+    (hpid : sin.pids = s.pids)
+    (hread : ∀ i : TileIndex [4],
+      sin.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)) :
     (⟨fun i => ldVal sin region R i⟩ : Tile .real [4]) = gated s (ldR s region R) := by
   have : (⟨fun i => ldVal sin region R i⟩ : Tile .real [4])
       = gated sin (ldR sin region R) := rfl
@@ -2619,6 +2639,20 @@ private theorem stMem_readMem_other (s : BlockState) (region region' : RegionNam
   unfold stMem
   exact BlockState.scatter_prop_masked_preserves_other_region region _ _ _
     region' h off _ c
+
+/-- `stMem` at row offset `R` leaves an offset outside the written row range
+unchanged. The writes are at `s.pids2*64+s.pids0*4+j+R` for `j < 4`. -/
+private theorem stMem_readMem_other_offset (s : BlockState) (region region' : RegionName)
+    (R : Nat) (f : TileIndex [4] → ℝ) (c : BlockState) (off : Nat)
+    (h : ∀ j : TileIndex [4], s.pids 2 * 64 + s.pids 0 * 4 + j.1.val + R ≠ off) :
+    (stMem s region R f c).readMem region' off = c.readMem region' off := by
+  unfold stMem
+  by_cases hr : region' = region
+  · rw [hr]
+    exact BlockState.scatter_prop_masked_preserves_other_offset region _ _ _ off
+      (fun j _ => h j) _ c
+  · exact BlockState.scatter_prop_masked_preserves_other_region region _ _ _
+      region' hr off _ c
 
 /-- The memory of `stMem` is determined entirely by the input state's memory. -/
 private theorem stMem_mem_congr (s : BlockState) (region : RegionName) (R : Nat)
@@ -3486,7 +3520,7 @@ theorem bwd_iter0_eval
         (show evalOp (Op.ref .real [4] "g_val") (bwdIterHeadState G sin 0 R)
             = some (gated s (ldR s G R)) by
           rw [evalOp_ref, bwdIterHeadState, BlockState.setReg_same,
-            ldVal_eq_gated sin s G R hsinpid hsinread]))]
+            ldVal_eq_gated sin s G R hsinpid (fun i => hsinread G _)]))]
     rw [stepStmts.nil]
   rw [stepStmts.cons_some hif]
   -- The remaining 22 statements via `bwd_iter_core`.
@@ -3515,7 +3549,7 @@ theorem bwd_iter0_eval
       (by rw [hpeel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)]
           exact hsh.mask)
       (by rw [hs3, BlockState.setReg_ne_name (h := by decide), bwdIterHeadState,
-            BlockState.setReg_same, ldVal_eq_gated sin s G R hsinpid hsinread])
+            BlockState.setReg_same, ldVal_eq_gated sin s G R hsinpid (fun i => hsinread G _)])
       (by rw [hs3]; exact BlockState.setReg_same _ _ _ _ _)
       (by rw [hpeel .real [4] "cum_grad_dg" (by decide) (by decide) (by decide) (by decide),
             hsh.cum, gated_const0 s])
@@ -3544,6 +3578,127 @@ theorem bwd_iter0_eval
     rw [hs3mem]; exact hsh.mem.symm
   exact ⟨sout, hstep, hpids, hmemeq, hmasko, hlasto, by rw [hcumo, hzero],
     hpgo, hpko, hpqo, hpdqio, hpdkio, hpdqto, hpdkto, hpdgo⟩
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Iteration 1 (`__rev_t = 1`, time row `t = 0`).** From the iter-0 output `s1`
+(pointers at row offset `R1 = R0 - 8`, carrying `last_g = g[row BT-1]` and the
+reverse accumulator `cum0`), the second iteration's `t == BT-1` branch does *not*
+fire (`t = 0`), so `last_g` is unchanged; the body then runs at row 0. The three
+masked stores write row 0; `cum_grad_dg` becomes `cum0 + dg-summand[row 0]`. -/
+theorem bwd_iter1_eval
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (s s1 : BlockState)
+    (R0 : Nat) (h8 : 8 ≤ R0) (lg cum0 : TileIndex [4] → ℝ)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
+    (hpid : s1.pids = s.pids)
+    (hrow : ∀ (r : RegionName) (i : TileIndex [4]),
+      s1.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8))
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8)))
+    (hmask : s1.regs .bool [4] "mask" = some
+        (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8))))
+    (hlastg : s1.regs .real [4] "last_g" = some (gated s lg))
+    (hcum : s1.regs .real [4] "cum_grad_dg" = some (gated s cum0))
+    (hpg : s1.regs .ptr [4] "p_g" = some (ptrDec G s R0))
+    (hpk : s1.regs .ptr [4] "p_k" = some (ptrDec K s R0))
+    (hpq : s1.regs .ptr [4] "p_q" = some (ptrDec Q s R0))
+    (hpdqi : s1.regs .ptr [4] "p_dq_inner" = some (ptrDec DQInner s R0))
+    (hpdki : s1.regs .ptr [4] "p_dk_inner" = some (ptrDec DKInner s R0))
+    (hpdqt : s1.regs .ptr [4] "p_dq_inter" = some (ptrDec DQInter s R0))
+    (hpdkt : s1.regs .ptr [4] "p_dk_inter" = some (ptrDec DKInter s R0))
+    (hpdg : s1.regs .ptr [4] "p_dg" = some (ptrDec DG s R0)) :
+    ∃ s2, stepStmts bwdIterBody (s1.setReg "__rev_t" .nat [] (Tile.scalar 1)) = some s2
+      ∧ s2.pids = s.pids
+      ∧ s2.mem =
+          (stMem s DG (R0 - 8) (fun i => cum0 i +
+              dgSum s DQInner DQInter DKInner DKInter Q K G (R0 - 8) lg i)
+            (stMem s DKInter (R0 - 8) (dkOut s DKInner DKInter G (R0 - 8) lg)
+              (stMem s DQInter (R0 - 8) (dqOut s DQInner DQInter G (R0 - 8)) s1))).mem
+      ∧ s2.regs .real [4] "cum_grad_dg" = some
+          (gated s (fun i => cum0 i +
+            dgSum s DQInner DQInter DKInner DKInter Q K G (R0 - 8) lg i)) := by
+  set sin := s1.setReg "__rev_t" .nat [] (Tile.scalar 1) with hsin
+  have hsinpid : sin.pids = s.pids := by rw [hsin, BlockState.setReg_pids]; exact hpid
+  have hsinrow : ∀ (r : RegionName) (i : TileIndex [4]),
+      sin.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8))
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8)) := by
+    intro r i; rw [hsin, BlockState.setReg_readMem]; exact hrow r i
+  -- The iteration row offset is `R1 = R0 - 8`.
+  have hpgR : sin.regs .ptr [4] "p_g" = some
+      (Tile.vec (fun e : Fin 4 => (G.cast, sin.pids 2 * 64 + sin.pids 0 * 4 + e.val + (R0 - 8)))) := by
+    rw [hsinpid, hsin, BlockState.setReg_ne_name (h := by decide), hpg, ptrDec_as_row G s R0 h8]
+  have hsinmask : sin.regs .bool [4] "mask" = some
+      (Tile.vec (fun e : Fin 4 => decide (sin.pids 0 * 4 + e.val < 8))) := by
+    rw [hsinpid, hsin, BlockState.setReg_ne_name (h := by decide)]; exact hmask
+  -- Head: `t = 0`, `g_val = load p_g` (at row R1).
+  rw [bwdIterBody_head_eval G sin 1 (R0 - 8)
+      (by rw [hsin]; exact BlockState.setReg_same _ _ _ _ _) hsinmask hpgR]
+  rw [show bwdIterBody.drop 2 =
+        Stmt.ifThen
+          (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+            (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+          [Stmt.assign .real [4] "last_g" (Op.ref .real [4] "g_val")]
+        :: bwdIterBody.drop 3 from rfl]
+  -- ifThen condition: `t = 0 ≠ 1 = BT-1`, so it does not fire.
+  have hcond : evalOp (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+      (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+      (bwdIterHeadState G sin 1 (R0 - 8)) = some (Tile.scalar Bool.false) := by
+    rw [bwdEval_eqNat (bwdIterHeadState G sin 1 (R0 - 8)) _ _ (Tile.scalar (2 - 1 - 1 * 1))
+        (Tile.scalar (2 - 1))
+        (by rw [evalOp_ref, bwdIterHeadState, BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_same])
+        (by simp [evalOp, Tile.bop, NumericDType.sub])]
+    rfl
+  have hif : stepStmt (Stmt.ifThen
+      (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+        (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+      [Stmt.assign .real [4] "last_g" (Op.ref .real [4] "g_val")])
+      (bwdIterHeadState G sin 1 (R0 - 8))
+      = some (bwdIterHeadState G sin 1 (R0 - 8)) :=
+    bwdEval_ifThen_false (bwdIterHeadState G sin 1 (R0 - 8)) _ _ hcond
+  rw [stepStmts.cons_some hif]
+  -- The remaining 22 statements via `bwd_iter_core`, row offset `R0 - 8`.
+  set s3 := bwdIterHeadState G sin 1 (R0 - 8) with hs3
+  have hpeel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "g_val" → n ≠ "t" → n ≠ "__rev_t" →
+      s3.regs d sh n = s1.regs d sh n := by
+    intro d sh n h1 h2 h3
+    rw [hs3, bwdIterHeadState, BlockState.setReg_ne_name (h := h1),
+        BlockState.setReg_ne_name (h := h2), hsin, BlockState.setReg_ne_name (h := h3)]
+  obtain ⟨sout, hstep, hpids, hmemo, _hmask, _hlast, hcumo, _, _, _, _, _, _, _, _⟩ :=
+    bwd_iter_core DQInner DQInter DKInner DKInter Q K G DG s s3 (R0 - 8)
+      lg cum0
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+      (by rw [hs3, bwdIterHeadState, BlockState.setReg_pids, BlockState.setReg_pids]
+          exact hsinpid)
+      (by intro r i; rw [hs3, bwdIterHeadState, BlockState.setReg_readMem,
+            BlockState.setReg_readMem]; exact hsinrow r i)
+      (by rw [hpeel .bool [4] "mask" (by decide) (by decide) (by decide)]; exact hmask)
+      (by rw [hs3, bwdIterHeadState, BlockState.setReg_same,
+            ldVal_eq_gated sin s G (R0 - 8) hsinpid (fun i => hsinrow G i)])
+      (by rw [hpeel .real [4] "last_g" (by decide) (by decide) (by decide)]; exact hlastg)
+      (by rw [hpeel .real [4] "cum_grad_dg" (by decide) (by decide) (by decide)]; exact hcum)
+      (by rw [hpeel .ptr [4] "p_g" (by decide) (by decide) (by decide), hpg, ptrDec_as_row G s R0 h8])
+      (by rw [hpeel .ptr [4] "p_k" (by decide) (by decide) (by decide), hpk, ptrDec_as_row K s R0 h8])
+      (by rw [hpeel .ptr [4] "p_q" (by decide) (by decide) (by decide), hpq, ptrDec_as_row Q s R0 h8])
+      (by rw [hpeel .ptr [4] "p_dq_inner" (by decide) (by decide) (by decide), hpdqi, ptrDec_as_row DQInner s R0 h8])
+      (by rw [hpeel .ptr [4] "p_dk_inner" (by decide) (by decide) (by decide), hpdki, ptrDec_as_row DKInner s R0 h8])
+      (by rw [hpeel .ptr [4] "p_dq_inter" (by decide) (by decide) (by decide), hpdqt, ptrDec_as_row DQInter s R0 h8])
+      (by rw [hpeel .ptr [4] "p_dk_inter" (by decide) (by decide) (by decide), hpdkt, ptrDec_as_row DKInter s R0 h8])
+      (by rw [hpeel .ptr [4] "p_dg" (by decide) (by decide) (by decide), hpdg, ptrDec_as_row DG s R0 h8])
+  have hmemeq : sout.mem =
+      (stMem s DG (R0 - 8) (fun i => cum0 i +
+          dgSum s DQInner DQInter DKInner DKInter Q K G (R0 - 8) lg i)
+        (stMem s DKInter (R0 - 8) (dkOut s DKInner DKInter G (R0 - 8) lg)
+          (stMem s DQInter (R0 - 8) (dqOut s DQInner DQInter G (R0 - 8)) s1))).mem := by
+    rw [hmemo]
+    refine stMem_mem_congr s DG (R0 - 8) _ _ _ ?_
+    refine stMem_mem_congr s DKInter (R0 - 8) _ _ _ ?_
+    refine stMem_mem_congr s DQInter (R0 - 8) _ s3 s1 ?_
+    rw [hs3, bwdIterHeadState]; simp only [BlockState.setReg]; rw [hsin]
+    simp only [BlockState.setReg]
+  exact ⟨sout, hstep, hpids, hmemeq, hcumo⟩
 
 end BwdAssembly
 
