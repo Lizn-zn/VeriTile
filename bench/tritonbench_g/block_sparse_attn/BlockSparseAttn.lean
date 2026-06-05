@@ -2870,11 +2870,13 @@ noncomputable def bsaInvariant
         (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i) : WithBot ℝ)))
   ∧ s.regs .real [16, 16] "acc" =
       some (⟨fun idx : TileIndex [16, 16] =>
-        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale c idx) : WithBot ℝ)⟩
+        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale c idx /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c idx.1) : WithBot ℝ)⟩
           : Tile .real [16, 16])
   ∧ s.regs .real [16, 16] "acc2" =
       some (⟨fun idx : TileIndex [16, 16] =>
-        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg2 scale c idx) : WithBot ℝ)⟩
+        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg2 scale c idx /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c idx.1) : WithBot ℝ)⟩
           : Tile .real [16, 16])
   ∧ s.regs .real [16, 16] "q" =
       some (⟨fun idx : TileIndex [16, 16] =>
@@ -3190,11 +3192,15 @@ theorem bsaPreLoop_eval
   · funext rg o; simp only [BlockState.setReg_mem]
   · intro rg o; simp [hundef]
   all_goals
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+  all_goals
     first
-    | (simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
-        not_false_eq_true])
     | rfl
-  all_goals rfl
+    | -- acc / acc2 at c = 0: full-zero tile = `some (0/0)` pointwise
+      (refine congrArg some (Tile.ext (fun idx => ?_));
+       refine congrArg some ?_;
+       rw [BSAMathCausal.bsaOPartial, BSAMathCausal.bsaLPartial, zero_div])
 
 /-! ## CSR loop-body execution chain (`bsaLoopBody_steps`)
 
