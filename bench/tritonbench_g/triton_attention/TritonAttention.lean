@@ -2411,6 +2411,40 @@ theorem fwdMSpec_eq_mPartial
     (fwdCausalSet_nonempty s i)]
   rfl
 
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **L closed-form bridge (stored value).** The kernel stores `l_prev` literally
+(the final, in-loop-`m`-shifted online-softmax normalizer `l_curr`), which is the
+FA1 `lPartial` over the single 128-key block — **not** the un-shifted
+`Σ exp(score)`. Its honest relation to the genuine log-sum-exp `fwdLSpec` and the
+row-max `fwdMSpec` is `lPartial = exp(fwdLSpec − fwdMSpec)`: the stored `L`
+together with the stored `M` recovers the un-shifted denominator
+`exp(fwdMSpec) · L = exp(fwdLSpec) = Σ exp(score)`, i.e.
+`fwdLSpec = fwdMSpec + log L`. (The `l_rcp` in-loop division only rescales the
+output `p`/`acc`; it does not touch the stored `l_prev`.) -/
+theorem lPartial_eq_exp_fwdLSpec_sub_fwdMSpec
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) :
+    lPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1
+        (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 i
+      = Real.exp (fwdLSpec s Q K i - fwdMSpec s Q K i) := by
+  rw [fwdMSpec_eq_mPartial s Q K i]
+  rw [lPartial_eq_mShifted (Bk := 128) (by norm_num) (s.pids 0 * 128)
+    (fwdQTile s Q) 1 (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 (le_refl 1) i]
+  have hsum_pos0 := lFree_final_pos (Bk := 128) (N := 1) (by norm_num) (by norm_num)
+    (s.pids 0 * 128) (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i
+  rw [lFree_eq_flat] at hsum_pos0
+  rw [lFree_eq_flat]
+  have hLeq : fwdLSpec s Q K i
+        = Real.log (Finset.univ.sum (fun j : Fin 128 =>
+            if j.val ≤ s.pids 0 * 128 + i.val then
+              Real.exp (StreamingAccumulator.scaledScore (fwdQTile s Q)
+                (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
+            else 0)) := by
+    unfold fwdLSpec
+    rfl
+  rw [hLeq, Real.exp_sub, Real.exp_log hsum_pos0, Real.exp_neg]
+  ring
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
