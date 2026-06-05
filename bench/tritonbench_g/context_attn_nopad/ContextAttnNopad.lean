@@ -2009,4 +2009,531 @@ theorem nopadBlock_sup_eq
   · rw [if_pos hc, if_pos hc, hF]; simp only [dif_pos hb]
   · rw [if_neg hc, if_neg hc]
 
+/-! ### Row-masked query tile (the kernel's `q` load mask `offs_m < seq_len`)
+
+The kernel loads `q` masked by `offs_m[:,None] < cur_batch_seq_len` (`other = 0`),
+so an *inactive* query row (`gi ≥ seq_len`) loads as all-zeros. Inactive rows are
+masked out of the final store, so their accumulated value is irrelevant; but to
+keep the invariant uniform we carry the row-masked query `ctxQTileMRow`. On every
+*active* row it agrees with `ctxQTile`, so the active-row fold equals the genuine
+closed form. -/
+
+/-- Row-masked query tile: `ctxQTile` on active rows (`gi < bel`), else `0`. -/
+noncomputable def ctxQTileMRow
+    (s : BlockState) (Q B_Start_Loc : RegionName) (BLOCK_M bel : Nat) :
+    TileIndex [BLOCK_M, 128] → ℝ :=
+  fun (i, e, u) =>
+    if s.pids 2 * BLOCK_M + i.val < bel then ctxQTile s Q B_Start_Loc BLOCK_M (i, e, u) else 0
+
+/-- The row-masked causal-window key list (uses `ctxQTileMRow` in the score). -/
+noncomputable def ctxNopadKeysUptoM
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  let gi := s.pids 2 * BLOCK_M + i.val
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ gi ∧ j.val < hi then
+      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+    else none)
+
+/-- Row-masked block-`c` causal key list. -/
+noncomputable def nopadBlockM
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  let gi := s.pids 2 * BLOCK_M + i.val
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ gi ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then
+      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+    else none)
+
+/-- On an active row the masked key list equals the genuine `ctxNopadKeysUpto`. -/
+theorem ctxNopadKeysUptoM_active
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel hi : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (hact : s.pids 2 * BLOCK_M + i.val < bel) :
+    ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale BLOCK_M S bel hi i d
+      = ctxNopadKeysUpto s Q K V B_Start_Loc sm_scale BLOCK_M S bel hi i d := by
+  unfold ctxNopadKeysUptoM ctxNopadKeysUpto
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ j.val < hi
+  · rw [if_pos hj, if_pos hj]
+    refine congrArg some ?_
+    refine Prod.ext ?_ rfl
+    refine congrArg (sm_scale * ·) (Finset.sum_congr rfl (fun e _ => ?_))
+    rw [show ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+          = ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) from by
+      simp only [ctxQTileMRow, hact, if_true]]
+  · rw [if_neg hj, if_neg hj]
+
+/-- Masked window split (`hi = c·128`): the masked causal keys through `c+1` blocks
+are those through `c` blocks followed by masked block `c`. -/
+theorem ctxNopadKeysUptoM_succ
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale BLOCK_M S bel ((c + 1) * 128) i d
+      = ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale BLOCK_M S bel (c * 128) i d
+        ++ nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d := by
+  unfold ctxNopadKeysUptoM nopadBlockM
+  exact nopad_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
+    (s.pids 2 * BLOCK_M + i.val) (c * 128) ((c + 1) * 128) _
+    (by nlinarith [Nat.zero_le (128 : Nat)])
+
+/-- The masked causal key list at `hi = 0` is empty. -/
+theorem ctxNopadKeysUptoM_zero
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale BLOCK_M S bel 0 i d = [] := by
+  unfold ctxNopadKeysUptoM
+  apply List.filterMap_eq_nil_iff.mpr
+  intro j _; simp
+
+/-! ### Loop invariant and exec-side stepping
+
+`nopadInvariant … c s` states that, after streaming `c` `BLOCK_N = 128`-blocks, the
+live `[128]` `m_i`/`l_i` vectors and the `[128,128]` `acc` matrix hold (per row `i`,
+channel `d`) the `osNormStepBot` fold of `ctxNopadKeysUpto … (c·128)` from the
+kernel seed `(⊥, 0, 0)` — and every preLoop-seeded register is preserved. The fold's
+`.1` (running max) / `.2.1` (running denom) are channel-independent; `.2.2` is the
+running normalized ratio for channel `d`. -/
+
+/-- Per-row/channel `osNormStepBot` fold of the *row-masked* causal-window key
+prefix `[0, hi)` at the Python shape (`BLOCK_M = 128`, window `S`, boundary `bel`),
+from the kernel seed `(⊥, 0, 0)`. -/
+noncomputable def nopadFoldUpto
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
+  (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).foldl
+    osNormStepBot (⊥, 0, 0)
+
+/-- The running max / denom (`.1` / `.2.1`) of `nopadFoldUpto` are channel
+independent (they depend only on the scores, not the value channel `d`). -/
+theorem nopadFoldUpto_channel_indep
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel hi : Nat) (i : Fin 128) (d d' : Fin 128) :
+    (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d).1
+        = (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d').1
+      ∧ (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d).2.1
+          = (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d').2.1 := by
+  have hkeys : (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map Prod.fst
+      = (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d').map Prod.fst := by
+    unfold ctxNopadKeysUptoM
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : j.val ≤ s.pids 2 * 128 + i.val ∧ j.val < hi <;> simp [hj]
+  have hfst : (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d).1
+      = (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i d').1 := by
+    rw [nopadFoldUpto, nopadFoldUpto, osNormStepBot_foldl_fst, osNormStepBot_foldl_fst]
+    congr 1
+    rw [show (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map
+            (fun p => ((p.1 : ℝ) : WithBot ℝ))
+          = ((ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map Prod.fst).map
+            (fun r : ℝ => ((r : ℝ) : WithBot ℝ)) from by rw [List.map_map]; rfl,
+        hkeys, List.map_map]
+    rfl
+  refine ⟨hfst, ?_⟩
+  have hden : ∀ dd : Fin 128, (nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i dd).2.1
+      = ((nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel hi i dd).1.elim 0 (fun r => Real.exp (-r)))
+        * ((ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i dd).map
+            (fun p => Real.exp p.1)).sum := by
+    intro dd
+    have h := (osNormStepBot_foldl_consistent
+      (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i dd) ⊥ 0 0 0 0
+      (le_refl 0) (fun _ _ => trivial) (by simp) (by ring) (fun _ => rfl) (fun _ => rfl)
+      (by intro h; exact absurd h (lt_irrefl 0))).1
+    rw [nopadFoldUpto]
+    rw [show (List.foldl osNormStepBot (⊥, 0, 0)
+          (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i dd)).2.1 = _ from h]
+    rw [zero_add]
+  rw [hden d, hden d', hfst]
+  congr 2
+  rw [show (ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map
+          (fun p => Real.exp p.1)
+        = ((ctxNopadKeysUptoM s Q K V B_Start_Loc sm_scale 128 S bel hi i d).map Prod.fst).map
+          Real.exp from by rw [List.map_map]; rfl,
+      hkeys, List.map_map]
+  rfl
+
+/-- Base case: at `hi = 0` the masked fold is the kernel seed `(⊥, 0, 0)`. -/
+theorem nopadFoldUpto_zero
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel : Nat) (i : Fin 128) (d : Fin 128) :
+    nopadFoldUpto s Q K V B_Start_Loc sm_scale S bel 0 i d = (⊥, 0, 0) := by
+  rw [nopadFoldUpto, ctxNopadKeysUptoM_zero]; rfl
+
+/-- The loop invariant after `c` `128`-blocks at the Python test shape. Binds the
+running `m_i`/`l_i`/`acc` registers to `nopadFoldUpto … (c·128)` and preserves every
+preLoop-seeded register. `S = ctxNopadWindow`, `bel = seqLen`, scale =
+`sm_scale_python`. -/
+noncomputable def nopadInvariant
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s0 B_Seqlen))
+  ∧ s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s0 B_Start_Loc))
+  ∧ s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
+  ∧ s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))
+  ∧ s.regs .nat [128] "offs_m" = some (Tile.vec (fun i : Fin 128 => s0.pids 2 * 128 + i.val))
+  ∧ s.regs .real [128, 128] "q" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        some (ctxQTileMRow s0 Q B_Start_Loc 128 (seqLen s0 B_Seqlen) (idx.1, idx.2.1, PUnit.unit))⟩
+        : Tile .real [128, 128])
+  ∧ s.regs .ptr [128, 128] "k_ptrs" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        (K, idx.2.1.val * 768 + s0.pids 1 * 128 + idx.1.val)⟩ : Tile .ptr [128, 128])
+  ∧ s.regs .ptr [128, 128] "v_ptrs" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        (V, idx.1.val * 768 + s0.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128])
+  ∧ s.regs .nat [] "block_mask" =
+      some (Tile.scalar (if 128 * s0.pids 2 < seqLen s0 B_Seqlen then 1 else 0))
+  ∧ s.regs .real [128] "m_i" =
+      some (⟨fun idx : TileIndex [128] =>
+        (nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
+          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 ⟨0, by norm_num⟩).1⟩
+        : Tile .real [128])
+  ∧ s.regs .real [128] "l_i" =
+      some (⟨fun idx : TileIndex [128] =>
+        ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
+          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 ⟨0, by norm_num⟩).2.1 : WithBot ℝ)⟩
+        : Tile .real [128])
+  ∧ s.regs .real [128, 128] "acc" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
+          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 idx.2.1).2.2 : WithBot ℝ)⟩
+        : Tile .real [128, 128])
+
+/-- `seqLen` depends only on `mem`/`pids`. -/
+theorem seqLen_eq_of_mem_pids (s s0 : BlockState) (B_Seqlen : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) :
+    seqLen s B_Seqlen = seqLen s0 B_Seqlen := by
+  simp only [seqLen, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `startLoc` depends only on `mem`/`pids`. -/
+theorem startLoc_eq_of_mem_pids (s s0 : BlockState) (B_Start_Loc : RegionName)
+    (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids) :
+    startLoc s B_Start_Loc = startLoc s0 B_Start_Loc := by
+  simp only [startLoc, BlockState.readMemValue, BlockState.readMemTyped, hmem, hpids]
+
+/-- `ctxQTileMRow` depends only on `mem`/`pids`. -/
+theorem ctxQTileMRow_eq_of_mem_pids (s s0 : BlockState) (Q B_Start_Loc : RegionName)
+    (bel : Nat) (hmem : s.mem = s0.mem) (hpids : s.pids = s0.pids)
+    (idx : TileIndex [128, 128]) :
+    ctxQTileMRow s Q B_Start_Loc 128 bel (idx.1, idx.2.1, PUnit.unit)
+      = ctxQTileMRow s0 Q B_Start_Loc 128 bel (idx.1, idx.2.1, PUnit.unit) := by
+  simp only [ctxQTileMRow, ctxQTile, startLoc, BlockState.readMem, BlockState.readMemValue,
+    BlockState.readMemTyped, hmem, hpids]
+
+set_option maxHeartbeats 1600000 in
+/-- **`off_q` recipe** (`(start_loc + offs_m[:,None])·768 + cur_head·128 +
+offs_d[None,:]·1`). -/
+theorem nopad_offq_eval (s : BlockState) (sl head pid2 : Nat)
+    (hsl : s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar sl))
+    (hch : s.regs .nat [] "cur_head" = some (Tile.scalar head))
+    (hm : s.regs .nat [128] "offs_m" = some (Tile.vec (fun i : Fin 128 => pid2 * 128 + i.val)))
+    (hd : s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          (sl + (pid2 * 128 + idx.1.val)) * 768 + head * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) := by
+  have hexpM := evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_m" s _ hm
+  have hexpD := evalOp_expandDim_ref_of_regs .nat [128] ⟨0, by simp⟩ "offs_d" s _ hd
+  rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_add, evalOp_ref, hsl]
+  erw [hexpM]
+  rw [evalOp_mul, evalOp_ref, hch, evalOp_mul]
+  erw [hexpD]
+  rw [evalOp_constNat, evalOp_constNat, evalOp_constNat]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  obtain ⟨i, e, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    TileShape.dropInsertedIndex]
+  ring
+
+set_option maxHeartbeats 1600000 in
+/-- **`off_k` recipe** (`offs_n[None,:]·768 + cur_head·128 + offs_d[:,None]·1`,
+lane `(e, jL)`). -/
+theorem nopad_offk_eval (s : BlockState) (head : Nat)
+    (hch : s.regs .nat [] "cur_head" = some (Tile.scalar head))
+    (hn : s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hd : s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n"))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          idx.2.1.val * 768 + head * 128 + idx.1.val⟩ : Tile .nat [128, 128]) := by
+  have hexpN := evalOp_expandDim_ref_of_regs .nat [128] ⟨0, by simp⟩ "offs_n" s _ hn
+  have hexpD := evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_d" s _ hd
+  rw [evalOp_add, evalOp_add, evalOp_mul]
+  erw [hexpN]
+  rw [evalOp_mul, evalOp_ref, hch, evalOp_mul]
+  erw [hexpD]
+  rw [evalOp_constNat, evalOp_constNat, evalOp_constNat]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  obtain ⟨e, jL, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    TileShape.dropInsertedIndex]
+  ring
+
+set_option maxHeartbeats 1600000 in
+/-- **`off_v` recipe** (`offs_n[:,None]·768 + cur_head·128 + offs_d[None,:]·1`,
+lane `(jL, d)`). -/
+theorem nopad_offv_eval (s : BlockState) (head : Nat)
+    (hch : s.regs .nat [] "cur_head" = some (Tile.scalar head))
+    (hn : s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hd : s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n"))
+            (Op.constNat 768))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          idx.1.val * 768 + head * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) := by
+  have hexpN := evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_n" s _ hn
+  have hexpD := evalOp_expandDim_ref_of_regs .nat [128] ⟨0, by simp⟩ "offs_d" s _ hd
+  rw [evalOp_add, evalOp_add, evalOp_mul]
+  erw [hexpN]
+  rw [evalOp_mul, evalOp_ref, hch, evalOp_mul]
+  erw [hexpD]
+  rw [evalOp_constNat, evalOp_constNat, evalOp_constNat]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  obtain ⟨jL, d, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    TileShape.dropInsertedIndex]
+  ring
+
+set_option maxHeartbeats 1600000 in
+/-- **`q` masked-load recipe.** `tl.load(Q + off_q, mask=offs_m[:,None]<seqlen,
+other=0)`, lane `(i, e)`: `ctxQTileMRow` (`ctxQTile` on active rows, else `0`). -/
+theorem nopad_q_load_eval (s : BlockState) (Q B_Start_Loc B_Seqlen : RegionName)
+    (hoffq : s.regs .nat [128, 128] "off_q" = some (⟨fun idx : TileIndex [128, 128] =>
+        (startLoc s B_Start_Loc + (s.pids 2 * 128 + idx.1.val)) * 768 + s.pids 1 * 128 + idx.2.1.val⟩
+        : Tile .nat [128, 128]))
+    (hm : s.regs .nat [128] "offs_m" = some (Tile.vec (fun i : Fin 128 => s.pids 2 * 128 + i.val)))
+    (hseq : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s B_Seqlen))) :
+    evalOp (Op.load .real (MemAccess.region Q (Op.ref .nat [128, 128] "off_q"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          some (ctxQTileMRow s Q B_Start_Loc 128 (seqLen s B_Seqlen) (idx.1, idx.2.1, PUnit.unit))⟩
+          : Tile .real [128, 128]) := by
+  have hexpM := evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_m" s _ hm
+  simp only [evalOp, hoffq, hseq, Option.bind]
+  erw [hexpM]
+  refine congrArg some ?_; ext idx
+  obtain ⟨i, e, u⟩ := idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim, Tile.vec,
+    Tile.scalar, NumericDType.add, NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex,
+    Broadcast.rightIndex, BlockState.readMemValue_real, Region.cast_id,
+    TileShape.dropInsertedIndex, ctxQTileMRow, ctxQTile]
+  by_cases hlt : s.pids 2 * 128 + i.val < seqLen s B_Seqlen
+  · rw [if_pos hlt]
+    simp only [hlt, decide_true, if_true, if_pos hlt]
+  · rw [if_neg hlt]
+    simp only [hlt, decide_false, if_false, Bool.false_eq_true]
+    norm_num
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **preLoop execution.** The 19 deterministic preLoop statements step a clean
+input state (`undef = 0`) to a state satisfying `nopadInvariant … 0` — the
+loop-entry base case (`m_i = ⊥`, `l_i = 0`, `acc = 0` via `nopadFoldUpto_zero`). -/
+theorem nopadPreLoop_eval
+    (s : BlockState) (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (nopadPreLoop Q K V B_Start_Loc B_Seqlen) s = some s0
+      ∧ nopadInvariant Q K V B_Start_Loc B_Seqlen s 0 s0 := by
+  unfold nopadPreLoop
+  -- stmt 0: cur_batch
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: cur_head
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: start_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 2 _))]
+  -- stmt 3: cur_batch_seq_len = load B_Seqlen[cur_batch]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (seqLen s B_Seqlen)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def, seqLen, BlockState.readMemValue]
+      rfl))]
+  -- stmt 4: cur_batch_in_all_start_index = load B_Start_Loc[cur_batch]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (startLoc s B_Start_Loc)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def, startLoc, BlockState.readMemValue]
+      rfl))]
+  -- stmt 5: block_start_loc = 128 * start_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_m")) _
+        = some (Tile.scalar (128 * s.pids 2)) from by
+      rw [evalOp_mul, evalOp_constNat, evalOp_ref]
+      simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 6: offs_n = arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 128) _ = some (Tile.vec (fun j : Fin 128 => j.val)) from evalOp_arange 128 _))]
+  -- stmt 7: offs_d = arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 128) _ = some (Tile.vec (fun e : Fin 128 => e.val)) from evalOp_arange 128 _))]
+  -- stmt 8: offs_m = start_m*128 + arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128))
+          (Op.arange 128)) _
+        = some (Tile.vec (fun i : Fin 128 => s.pids 2 * 128 + i.val)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_ref, evalOp_constNat, evalOp_arange]
+      simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 9: off_q
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some (⟨fun idx : TileIndex [128, 128] =>
+            (startLoc s B_Start_Loc + (s.pids 2 * 128 + idx.1.val)) * 768
+              + s.pids 1 * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) from
+      nopad_offq_eval _ (startLoc s B_Start_Loc) (s.pids 1) (s.pids 2)
+        (by simp)
+        (by simp)
+        (by simp)
+        (by simp [Tile.vec])))]
+  -- stmt 10: off_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some (⟨fun idx : TileIndex [128, 128] =>
+            idx.2.1.val * 768 + s.pids 1 * 128 + idx.1.val⟩ : Tile .nat [128, 128]) from
+      nopad_offk_eval _ (s.pids 1)
+        (by simp)
+        (by simp [Tile.vec])
+        (by simp [Tile.vec])))]
+  -- stmt 11: off_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some (⟨fun idx : TileIndex [128, 128] =>
+            idx.1.val * 768 + s.pids 1 * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) from
+      nopad_offv_eval _ (s.pids 1)
+        (by simp)
+        (by simp [Tile.vec])
+        (by simp [Tile.vec])))]
+  -- stmt 12: q = masked load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (nopad_q_load_eval _ Q B_Start_Loc B_Seqlen
+      (by simp [startLoc, BlockState.readMemValue, BlockState.readMemTyped])
+      (by simp)
+      (by simp [seqLen, BlockState.readMemValue, BlockState.readMemTyped])))]
+  -- stmt 13: k_ptrs = K + off_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K) (Op.ref .nat [128, 128] "off_k")) _
+        = some (⟨fun idx : TileIndex [128, 128] =>
+            (K, idx.2.1.val * 768 + s.pids 1 * 128 + idx.1.val)⟩ : Tile .ptr [128, 128]) from by
+      simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq,
+        String.reduceEq, not_false_eq_true, BlockState.setReg_pids, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨e, jL, u⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  -- stmt 14: v_ptrs = V + off_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V) (Op.ref .nat [128, 128] "off_v")) _
+        = some (⟨fun idx : TileIndex [128, 128] =>
+            (V, idx.1.val * 768 + s.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]) from by
+      simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq,
+        String.reduceEq, not_false_eq_true, BlockState.setReg_pids, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨jL, d, u⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  -- stmt 15: m_i = full 0 + (-inf)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩ : Tile .real [128]) from by
+      rw [evalOp_add, evalOp_full, evalOp_const, evalOp_negInf]
+      simp only [Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add]
+      rfl))]
+  -- stmt 16: l_i = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩ : Tile .real [128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 17: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 128] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 18: block_mask = where(block_start_loc < seqlen, 1, 0)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.lt ComparableDType.nat Broadcast.nil (Op.ref .nat [] "block_start_loc")
+            (Op.ref .nat [] "cur_batch_seq_len")).where (Op.constNat 1) (Op.constNat 0)) _
+        = some (Tile.scalar (if 128 * s.pids 2 < seqLen s B_Seqlen then 1 else 0)) from by
+      rw [evalOp_where, evalOp_lt, evalOp_constNat, evalOp_constNat]
+      simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+        Broadcast.rightIndex, ComparableDType.lt]
+      by_cases hlt : 128 * s.pids 2 < seqLen s B_Seqlen
+      · rw [if_pos (by simpa [seqLen, BlockState.readMemValue] using hlt), if_pos hlt]
+      · rw [if_neg (by simpa [seqLen, BlockState.readMemValue] using hlt), if_neg hlt]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp, ?_, ?_, by simp, by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec],
+    by simp [Tile.vec], ?_, by simp, by simp, by simp, ?_, ?_, ?_⟩
+  · funext rg o; simp
+  · intro rg o; simp [hundef]
+  · -- q = ctxQTileMRow s0 (mem/pids of the intermediate state agree with s0)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq,
+      String.reduceEq, not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [ctxQTileMRow, ctxQTile, seqLen, startLoc, BlockState.readMem, BlockState.readMemValue,
+      BlockState.readMemTyped, BlockState.setReg_mem, BlockState.setReg_pids]
+  · -- m_i = nopadFoldUpto 0 .1 = ⊥
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]
+  · -- l_i = nopadFoldUpto 0 .2.1 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]; rfl
+  · -- acc = nopadFoldUpto 0 .2.2 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Nat.zero_mul, nopadFoldUpto_zero]; rfl
+
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
