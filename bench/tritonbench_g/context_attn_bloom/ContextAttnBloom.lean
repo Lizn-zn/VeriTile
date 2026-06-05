@@ -1299,6 +1299,178 @@ theorem bloom_offv_gather_eval {BN D : Nat} (s : BlockState) (ckvh : Nat)
   simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
     Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
 
+/-! ### Bloom loop-body lowered statement list + body split (Milestone 1)
+
+`bloomLoopBody` is the exact lowering of `_fwd_kernel`'s `for start_n …` body at the
+Python test shape (`BLOCK_M=BLOCK_N=BLOCK_DMODEL=128`, `head_dim=96`, strides
+`576/96/1`, `stride_req_b=7500`, `stride_req_s=1`, natural-`exp` softmax with
+two-level max and in-loop `β/lᵢⁿᵉʷ`/`(lᵢ/lᵢⁿᵉʷ)·α`-where normalization). Verified
+to equal the surface's `toAlgKernel` loop body by `rfl` (`bloomBody_split`). -/
+
+/-- The kernel's chosen natural-`exp` `sm_scale` constant at the Python test shape
+(`(√96)⁻¹`, fed `/ log 2` into the base-2 fold so `pow2 (score/log2) = exp score`). -/
+noncomputable def sm_scale_bloom : ℝ := (Real.sqrt (96 : ℝ))⁻¹
+
+/-- The 24 lowered bloom loop-body statements (transcribed from
+`#print context_attn_bloom_fwd_kernel_surface`; checked by `rfl` via
+`bloomBody_split`). -/
+noncomputable def bloomLoopBody (Q K V Req_to_tokens B_req_idx : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .nat [128] "kv_loc"
+      (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat 7500) (Op.ref .nat [] "cur_batch_req_idx"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat 1)
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [128] "offs_n")))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [128] "offs_n"))
+            (Op.ref .nat [] "block_end_loc"))
+          (Op.broadcast (Op.constNat 0) [128]))),
+    Stmt.assign .nat [128, 128] "off_k"
+      (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "kv_loc"))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "k"
+      (Op.load .real (MemAccess.region K (Op.ref .nat [128, 128] "off_k"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consR.consL
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc"))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+              (Op.constNat 96)))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.full [128, 128] (Op.const (0 : ℝ))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "qk")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k"))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 128] "qk") (Op.const (sm_scale_bloom : ℝ))),
+    Stmt.assign .real [128, 128] "qk"
+      ((Op.ge .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))).where
+        (Op.ref .real [128, 128] "qk")
+        ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (100000000.0 : ℝ))).broadcast [128, 128])),
+    Stmt.assign .real [128] "m_ij"
+      (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "qk")),
+    Stmt.assign .real [128, 128] "p"
+      (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))).exp,
+    Stmt.assign .real [128] "l_ij"
+      (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "p")),
+    Stmt.assign .real [128] "m_i_new"
+      ((Op.gt .real Broadcast.nil.consSame (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij")).where
+        (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij")),
+    Stmt.assign .real [128] "alpha"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_i_new")).exp,
+    Stmt.assign .real [128] "beta"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_ij") (Op.ref .real [128] "m_i_new")).exp,
+    Stmt.assign .real [128] "l_i_new"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "alpha") (Op.ref .real [128] "l_i"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "beta") (Op.ref .real [128] "l_ij"))),
+    Stmt.assign .real [128] "p_scale"
+      (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "beta") (Op.ref .real [128] "l_i_new")),
+    Stmt.assign .real [128, 128] "p"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "p_scale"))),
+    Stmt.assign .real [128] "acc_scale"
+      (Op.mul .real Broadcast.nil.consSame
+        (Op.div .real Broadcast.nil.consSame (Op.ref .real [128] "l_i") (Op.ref .real [128] "l_i_new"))
+        (Op.ref .real [128] "alpha")),
+    Stmt.assign .real [128] "acc_scale"
+      ((Op.ge .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [128] "offs_m") (Op.ref .nat [] "prompt_cache_len"))
+          (Op.ref .nat [] "start_n")).where
+        (Op.ref .real [128] "acc_scale") ((Op.const (1.0 : ℝ)).broadcast [128])),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "acc_scale"))),
+    Stmt.assign .nat [128, 128] "off_v"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "kv_loc"))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "v"
+      (Op.load .real (MemAccess.region V (Op.ref .nat [128, 128] "off_v"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consL.consR
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc"))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+              (Op.constNat 96)))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "p" (Op.ref .real [128, 128] "p"),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "acc")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v"))),
+    Stmt.assign .real [128] "l_i" (Op.ref .real [128] "l_i_new"),
+    Stmt.assign .real [128] "m_i" (Op.ref .real [128] "m_i_new") ]
+
+/-- The 4 lowered bloom post-loop statements (NO `acc /= l_i` — bloom normalizes
+in-loop; `off_o`, `out_ptrs = Out + off_o`, masked `store`). -/
+noncomputable def bloomPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [128, 128] "off_o"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .ptr [128, 128] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [128, 128] "off_o")),
+    Stmt.store .real [128, 128] (MemAccess.ptr (Op.ref .ptr [128, 128] "out_ptrs"))
+      (Op.ref .real [128, 128] "acc")
+      (MaskOpt.mask
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+            (Op.constNat 96)))) ]
+
+/-- **Body decomposition.** The compiled Python-shape bloom body splits as
+`bloomPreLoop ++ (forRangeDyn start_n 0 (block_mask·block_end_loc) 128 bloomLoopBody
+:: bloomPostLoop)` — the loop body + post-loop tail are exactly the surface
+lowering (pure `List` identity, `rfl`). -/
+theorem bloomBody_split (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) :
+    (context_attn_bloom_fwd_kernel_surface Q K V (sm_scale_bloom : ℝ)
+        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx b_prompt_cache_len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 128 128 128).toAlgKernel.body
+      = ((context_attn_bloom_fwd_kernel_surface Q K V (sm_scale_bloom : ℝ)
+          B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx b_prompt_cache_len
+          576 96 1 576 96 1 576 96 1 576 96 1
+          7500 1 1 96 128 128 128).toAlgKernel.body.take 19)
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+              (Op.constNat 128) (bloomLoopBody Q K V Req_to_tokens B_req_idx)
+            :: bloomPostLoop Out) := by
+  rfl
+
 /-! ### Bloom-specific per-key data + boundary-masked exact fold
 
 The bloom kernel feeds the generic base-2 machinery the per-key pair
