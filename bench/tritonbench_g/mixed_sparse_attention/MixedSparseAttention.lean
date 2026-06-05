@@ -1830,6 +1830,71 @@ theorem msa_reg_carry_eval (s : BlockState) (BM : Nat) (name : RegName)
     evalOp (Op.ref .real [BM] name) s = some t := by
   rw [evalOp_ref, h]
 
+/-! ### Loop-specific load / gather recipes -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`start_n = tl.load(blks_ptr + block_index, mask=cond)` (A2, loop A)**: the
+masked `.nat` gather of the visited dense block's start column. `blks_ptr` holds a
+scalar pointer `(bpReg, bpOff)`; the address is `+ block_index`. With `cond = true`
+the lane reads `blks_ptr[bpOff + block_index]`; with `cond = false` it reads the
+`.nat` default carrier. Given `block_index = BI`, `cond = cb`. -/
+theorem msa_startn_eval (s : BlockState) (bpReg : RegionName) (bpOff BI : Nat) (cb : Bool)
+    (hbp : s.regs .ptr [] "blks_ptr" = some (Tile.scalar (bpReg, bpOff)))
+    (hbi : s.regs .nat [] "block_index" = some (Tile.scalar BI))
+    (hcond : s.regs .bool [] "cond" = some (Tile.scalar cb)) :
+    evalOp (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "blks_ptr") (Op.ref .nat [] "block_index")))
+        (MaskOpt.mask (Op.ref .bool [] "cond"))) s
+      = some (Tile.scalar
+          (if cb then s.readMemValue .nat bpReg (bpOff + BI)
+           else BlockState.defaultCarrier .nat)) := by
+  simp only [evalOp, evalOp_ref, hbp, hbi, hcond, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  by_cases h : cb
+  · simp only [Tile.ptrAdd_data, Tile.scalar_data_index, Broadcast.leftIndex,
+      Broadcast.rightIndex, h, if_true, if_pos]
+  · simp only [Tile.ptrAdd_data, Tile.scalar_data_index, Broadcast.leftIndex,
+      Broadcast.rightIndex, h, if_false, if_neg, Bool.false_eq_true, not_false_iff]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`n_mask = (start_n + offs_n < num_cols) & cond` (B2, loop B)**: the
+column-validity mask. Each lane `j` is kept iff `start_n + j < num_cols` and the
+loop guard `cond` holds. Given `start_n = SN`, `offs_n = id`, `num_cols = NC`,
+`cond = cb`. -/
+theorem msa_nmask_col_eval (s : BlockState) (BN SN NC : Nat) (cb : Bool)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hnc : s.regs .nat [] "num_cols" = some (Tile.scalar NC))
+    (hcond : s.regs .bool [] "cond" = some (Tile.scalar cb)) :
+    evalOp (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+          (Op.ref .nat [] "num_cols"))
+        (Op.ref .bool [] "cond")) s
+      = some (Tile.bop (fun x y : Bool => x && y) Broadcast.scalarR
+          (Tile.cop ComparableDType.nat.lt Broadcast.scalarR
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+              (Tile.vec (fun j : Fin BN => j.val)))
+            (Tile.scalar NC))
+          (Tile.scalar cb)) := by
+  have hand :
+      evalOp (Op.boolAnd Broadcast.scalarR
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+            (Op.ref .nat [] "num_cols"))
+          (Op.ref .bool [] "cond")) s = (do
+        let va' ← evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+          (Op.ref .nat [] "num_cols")) s
+        let vb' ← evalOp (Op.ref .bool [] "cond") s
+        some (Tile.bop (fun x y : Bool => x && y) Broadcast.scalarR va' vb')) := by
+    simp only [evalOp]
+  rw [hand, evalOp_lt, evalOp_add]
+  simp only [evalOp_ref, hsn, hon, hnc, hcond, Option.bind_eq_bind, Option.bind_some]
+
 end MSARecipes
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
