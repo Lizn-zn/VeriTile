@@ -1074,7 +1074,7 @@ noncomputable def cdfBvNewCell (s : BlockState) (v d : RegionName)
 
 /-- `b_k` load equals `cdfBkTile` (memory matched to `s`). -/
 theorem cdfLoad_bk_eq (s sin : BlockState) (k : RegionName) (i_t : Nat)
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmem : ∀ off, sin.readMem k off = s.readMem k off)
     (hpk : sin.regs .blockPtr [64, 32] "p_k" = some
       ⟨fun _ => BlockPtr.mk k (s.pids 2 * 8192) [64, 128] [64, 32] [1, 128]
         [0 * 64, i_t * 32 + 0 * 32]⟩) :
@@ -1087,7 +1087,7 @@ theorem cdfLoad_bk_eq (s sin : BlockState) (k : RegionName) (i_t : Nat)
 
 /-- `b_d` load equals `cdfBdTile`. -/
 theorem cdfLoad_bd_eq (s sin : BlockState) (d : RegionName) (i_t : Nat)
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmem : ∀ off, sin.readMem d off = s.readMem d off)
     (hpd : sin.regs .blockPtr [32, 64] "p_d" = some
       ⟨fun _ => BlockPtr.mk d (s.pids 2 * 8192) [128, 64] [32, 64] [128, 1]
         [i_t * 32 + 0 * 32, 0 * 64]⟩) :
@@ -1100,7 +1100,7 @@ theorem cdfLoad_bd_eq (s sin : BlockState) (d : RegionName) (i_t : Nat)
 
 /-- `b_v` load equals `cdfBvTile`. -/
 theorem cdfLoad_bv_eq (s sin : BlockState) (v : RegionName) (i_t : Nat)
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmem : ∀ off, sin.readMem v off = s.readMem v off)
     (hpv : sin.regs .blockPtr [32, 64] "p_v" = some
       ⟨fun _ => BlockPtr.mk v (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
         [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
@@ -1264,7 +1264,9 @@ theorem chunkDeltaInnerBody_step
     (bhT : Tile .real [64, 64]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d)
     (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
+    (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
+    (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
     (_hpids : sin.pids = s.pids)
     (hik : sin.regs .nat [] "i_k" = some (Tile.scalar 0))
     (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
@@ -1278,6 +1280,7 @@ theorem chunkDeltaInnerBody_step
         = some s'
       ∧ s'.pids = sin.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s'.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
       ∧ s'.regs .nat [] "i_t" = some (Tile.scalar i_t)
       ∧ s'.regs .real [64, 64] "b_h" = some bhT
@@ -1285,6 +1288,7 @@ theorem chunkDeltaInnerBody_step
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
+      ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
       ∧ (∀ idx : TileIndex [32, 64],
           (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
           s'.readMem v_new (cdfVNewAddr s i_t idx)
@@ -1322,13 +1326,13 @@ theorem chunkDeltaInnerBody_step
       (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [hiv]))))]
   -- b_k load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bk_eq s _ k i_t (by intro rg off; simp [hmem]) (by simp)))]
+    (cdfLoad_bk_eq s _ k i_t (by intro off; simp [hmemK]) (by simp)))]
   -- b_d load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bd_eq s _ d i_t (by intro rg off; simp [hmem]) (by simp)))]
+    (cdfLoad_bd_eq s _ d i_t (by intro off; simp [hmemD]) (by simp)))]
   -- b_v load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bv_eq s _ v i_t (by intro rg off; simp [hmem]) (by simp)))]
+    (cdfLoad_bv_eq s _ v i_t (by intro off; simp [hmemV]) (by simp)))]
   -- b_v correction
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (cdfCorrect_bv_eq s _ v d i_t fbh bhT (fun e p => by simp [hbhf])
@@ -1344,12 +1348,15 @@ theorem chunkDeltaInnerBody_step
   case hcs9 => rw [hregs9]; simp [BlockState.setReg_ne_name, hcs]
   rw [stepStmts.nil]
   -- assemble
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- pids
     simp only [BlockState.setReg_pids, hpids9]
   · -- i_k
     rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
     simpa using hik
+  · -- i_v (unchanged; regs after setReg = vnew-store regs = sin.regs)
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
+    rfl
   · -- i_bh
     rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
     simpa using hibh
@@ -1363,13 +1370,16 @@ theorem chunkDeltaInnerBody_step
     simp only [BlockState.setReg_same]
   · -- k unchanged
     intro off; simp only [BlockState.setReg_readMem]
-    rw [hother9 k off hVk.symm]; simp [hmem]
+    rw [hother9 k off hVk.symm]; simp [hmemK]
   · -- v unchanged
     intro off; simp only [BlockState.setReg_readMem]
-    rw [hother9 v off hVv.symm]; simp [hmem]
+    rw [hother9 v off hVv.symm]; simp [hmemV]
   · -- d unchanged
     intro off; simp only [BlockState.setReg_readMem]
-    rw [hother9 d off hVd.symm]; simp [hmem]
+    rw [hother9 d off hVd.symm]; simp [hmemD]
+  · -- generic non-v_new region preserved vs sin
+    intro rg off hrg; simp only [BlockState.setReg_readMem]
+    exact hother9 rg off hrg
   · -- v_new active readback
     intro idx hidx; simp only [BlockState.setReg_readMem]; exact hvnew9 idx hidx
   · -- v_new other offset
@@ -1761,7 +1771,9 @@ theorem cdfInnerLoop_run
     (bhT : Tile .real [64, 64]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d)
     (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
-    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
+    (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
+    (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
     (hpids : sin.pids = s.pids)
     (hik : sin.regs .nat [] "i_k" = some (Tile.scalar 0))
     (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
@@ -1775,6 +1787,7 @@ theorem cdfInnerLoop_run
         = some s'
       ∧ s'.pids = sin.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s'.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
       ∧ s'.regs .nat [] "i_t" = some (Tile.scalar i_t)
       ∧ s'.regs .real [64, 64] "b_h" = some bhT
@@ -1782,6 +1795,7 @@ theorem cdfInnerLoop_run
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
+      ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
       ∧ (∀ idx : TileIndex [32, 64],
           (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
           s'.readMem v_new (cdfVNewAddr s i_t idx)
@@ -1795,7 +1809,9 @@ theorem cdfInnerLoop_run
       (s_init := sin)
       (P := fun n st =>
         (n = 0 →
-          (∀ rg off, st.readMem rg off = s.readMem rg off)
+          (∀ off, st.readMem k off = s.readMem k off)
+          ∧ (∀ off, st.readMem v off = s.readMem v off)
+          ∧ (∀ off, st.readMem d off = s.readMem d off)
           ∧ st.pids = s.pids
           ∧ st.regs .nat [] "i_k" = some (Tile.scalar 0)
           ∧ st.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
@@ -1803,10 +1819,12 @@ theorem cdfInnerLoop_run
           ∧ st.regs .nat [] "i_t" = some (Tile.scalar i_t)
           ∧ st.regs .real [64, 64] "b_h" = some bhT
           ∧ st.regs .real [64, 64] "b_h_cumsum" = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64])
-          ∧ (∀ off, st.readMem v_new off = sin.readMem v_new off)) ∧
+          ∧ (∀ off, st.readMem v_new off = sin.readMem v_new off)
+          ∧ (∀ rg off, st.readMem rg off = sin.readMem rg off)) ∧
         (n ≥ 1 →
           st.pids = sin.pids
           ∧ st.regs .nat [] "i_k" = some (Tile.scalar 0)
+          ∧ st.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
           ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
           ∧ st.regs .nat [] "i_t" = some (Tile.scalar i_t)
           ∧ st.regs .real [64, 64] "b_h" = some bhT
@@ -1814,6 +1832,7 @@ theorem cdfInnerLoop_run
           ∧ (∀ off, st.readMem k off = s.readMem k off)
           ∧ (∀ off, st.readMem v off = s.readMem v off)
           ∧ (∀ off, st.readMem d off = s.readMem d off)
+          ∧ (∀ rg off, rg ≠ v_new → st.readMem rg off = sin.readMem rg off)
           ∧ (∀ idx : TileIndex [32, 64],
               (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
               st.readMem v_new (cdfVNewAddr s i_t idx)
@@ -1821,21 +1840,24 @@ theorem cdfInnerLoop_run
           ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
               st.readMem v_new off = sin.readMem v_new off)))
       (by simp [evalOp]) (cdfStopOp_eval sin) (by simp [evalOp]) (by norm_num)
-      ⟨fun _ => ⟨hmem, hpids, hik, hiv, hibh, hit, hbh, hcs, fun _ => rfl⟩,
+      ⟨fun _ => ⟨hmemK, hmemV, hmemD, hpids, hik, hiv, hibh, hit, hbh, hcs,
+          fun _ => rfl, fun _ _ => rfl⟩,
         fun h => absurd h (by norm_num)⟩
       (fun i st hlt hPi => by
         -- only i = 0 is reachable (stop = 1)
         interval_cases i
         obtain ⟨h0, _⟩ := hPi
-        obtain ⟨hmemSt, hpidsSt, hikSt, hivSt, hibhSt, hitSt, hbhSt, hcsSt, hvnSt⟩ := h0 rfl
+        obtain ⟨hmemKSt, hmemVSt, hmemDSt, hpidsSt, hikSt, hivSt, hibhSt, hitSt,
+          hbhSt, hcsSt, hvnSt, hsinSt⟩ := h0 rfl
         -- set i_c = 0, then run the inner body
         set sc := st.setReg "i_c" .nat [] (Tile.scalar 0) with hsc
-        have hmemSc : ∀ rg off, sc.readMem rg off = s.readMem rg off := by
-          intro rg off; rw [hsc]; simp [BlockState.setReg_readMem, hmemSt]
-        obtain ⟨s'', hbody, hp'', hik'', hibh'', hit'', hbh'', hcs'',
-          hk'', hv'', hd'', hvn'', hoth''⟩ :=
+        obtain ⟨s'', hbody, hp'', hik'', hiv'', hibh'', hit'', hbh'', hcs'',
+          hk'', hv'', hd'', hgen'', hvn'', hoth''⟩ :=
           chunkDeltaInnerBody_step k v d v_new s sc i_t fbh bhT hbhf hVk hVv hVd hInj
-            hmemSc (by rw [hsc]; simp [BlockState.setReg_pids, hpidsSt])
+            (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemKSt])
+            (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemVSt])
+            (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemDSt])
+            (by rw [hsc]; simp [BlockState.setReg_pids, hpidsSt])
             (by rw [hsc]; simp [BlockState.setReg_ne_name, hikSt])
             (by rw [hsc]; simp [BlockState.setReg_ne_name, hivSt])
             (by rw [hsc]; simp [BlockState.setReg_ne_name, hibhSt])
@@ -1846,18 +1868,25 @@ theorem cdfInnerLoop_run
         refine ⟨s'', hbody, ?_, ?_⟩
         · intro h; exact absurd h (by norm_num)
         · intro _
-          refine ⟨?_, hik'', hibh'', hit'', hbh'', hcs'', ?_, ?_, ?_, ?_, ?_⟩
+          refine ⟨?_, hik'', ?_, hibh'', hit'', hbh'', hcs'', ?_, ?_, ?_, ?_, ?_, ?_⟩
           · rw [hp'', hsc]; simp [BlockState.setReg_pids, hpidsSt, hpids]
+          · -- i_v: body preserves it (= sc.regs i_v = st.regs i_v = sin.regs i_v)
+            rw [hiv'', hsc, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hivSt, hiv]
           · intro off; rw [hk'']
           · intro off; rw [hv'']
           · intro off; rw [hd'']
+          · -- generic non-v_new region preserved vs sin
+            intro rg off hrg
+            rw [hgen'' rg off hrg, hsc]; simp only [BlockState.setReg_readMem]
+            exact hsinSt rg off
           · intro idx hidx; exact hvn'' idx hidx
           · intro off hoff
             rw [hoth'' off hoff, hsc]; simp only [BlockState.setReg_readMem]; exact hvnSt off)
   -- extract the post-conditions at the final counter (≥ 1)
   obtain ⟨_, hpost⟩ := hP
-  obtain ⟨hp, hik', hibh', hit', hbh', hcs', hk', hv', hd', hvn', hoth'⟩ := hpost hfinal
-  exact ⟨s', hstep, hp, hik', hibh', hit', hbh', hcs', hk', hv', hd', hvn', hoth'⟩
+  obtain ⟨hp, hik', hiv', hibh', hit', hbh', hcs', hk', hv', hd', hgen', hvn', hoth'⟩ :=
+    hpost hfinal
+  exact ⟨s', hstep, hp, hik', hiv', hibh', hit', hbh', hcs', hk', hv', hd', hgen', hvn', hoth'⟩
 
 /-- Abbreviation for the Python-shape genuine state value (`i_k = 0` regime). -/
 noncomputable def cdfState (s : BlockState) (k v d initial_state : RegionName)
@@ -2029,5 +2058,163 @@ theorem cdfCarry_active
       rw [ih (by omega) e he]
       -- cdfState n + (cdfState (n+1) - cdfState n) = cdfState (n+1)
       ring
+
+/-! ### Outer-loop body step and carry invariant -/
+
+/-- The `h[i_t]` block-ptr store offset at lane `(e,p)` (Python shape). -/
+abbrev cdfHAddr (s : BlockState) (i_t : Nat) (idx : TileIndex [64, 64]) : Nat :=
+  hOffset s i_t 16384 64 64 64 64 64 idx
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Outer-loop body step.** Stepping `cdfOuterBody` from an entry carry state
+`sin` (b_h = `cdfCarryTile c`, i_k=0, i_v/i_bh/i_t set, memory matching `s`)
+advances `b_h` to `cdfCarryTile (c+1)`, writes the chunk-start state `cdfCarryCell c`
+into `h[c]` at every active lane, writes the corrected `v_new[c]` block, and
+preserves pids / `i_k`/`i_bh` / the `k`/`v`/`d` regions. -/
+theorem cdfOuterBody_step
+    (k v d v_new h initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s sin : BlockState) (i_t : Nat) (hit : i_t < 4) (hpids0 : s.pids 0 = 0)
+    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
+    (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
+    (hInjV : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
+    (hInjH : Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t idx))
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hpids : sin.pids = s.pids)
+    (hik : sin.regs .nat [] "i_k" = some (Tile.scalar 0))
+    (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hit2 : sin.regs .nat [] "i_t" = some (Tile.scalar i_t))
+    (hbh : sin.regs .real [64, 64] "b_h"
+        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)) :
+    ∃ s', stepStmts (cdfOuterBody k v d v_new h) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s'.regs .real [64, 64] "b_h"
+          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE (i_t + 1))
+      ∧ (∀ off, s'.readMem k off = s.readMem k off)
+      ∧ (∀ off, s'.readMem v off = s.readMem v off)
+      ∧ (∀ off, s'.readMem d off = s.readMem d off)
+      -- h[i_t] active lanes hold the chunk-start carry cell
+      ∧ (∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+          s'.readMem h (cdfHAddr s i_t idx)
+            = cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t idx.1.val idx.2.1.val)
+      -- h off chunk-i_t block is unchanged
+      ∧ (∀ off, (∀ idx : TileIndex [64, 64], off ≠ cdfHAddr s i_t idx) →
+          s'.readMem h off = sin.readMem h off)
+      -- v_new[i_t] active lanes hold the corrected value
+      ∧ (∀ idx : TileIndex [32, 64],
+          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
+          s'.readMem v_new (cdfVNewAddr s i_t idx)
+            = cdfBvNewCell s v d
+                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p')
+                i_t idx.1.val idx.2.1.val)
+      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+          s'.readMem v_new off = sin.readMem v_new off) := by
+  set fbh := fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p' with hfbh
+  unfold cdfOuterBody
+  -- p_h make
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_2d_eval h sin _ _ _ [64, 64] [64, 64] [64, 1]
+      (s.pids 2 * 16384 + i_t * 64 * 64) (0 * 64) (s.pids 1 * 64)
+      (addMulMulMul_eval sin "i_bh" "i_t" (s.pids 2) 16384 i_t 64 64 hibh hit2)
+      (mulConst_eval sin "i_k" 0 64 hik)
+      (mulConst_eval sin "i_v" (s.pids 1) 64 hiv)))]
+  -- h store (offsets [0, pids1*64] = [pids0*64, pids1*64] since pids0 = 0)
+  rw [stepStmts.cons_some (cdfStore_h_step_eq s _ h i_t fbh
+      (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)
+      (fun e p => by rw [cdfCarryTile_data])
+      (by simp [BlockState.setReg_same, hbh])
+      (by simp [BlockState.setReg_same, hpids0]))]
+  obtain ⟨hpidsH, hregsH, hvnewH, hotherH, hoffH⟩ :=
+    cdfStore_h_step_props s
+      (sin.setReg "p_h" .blockPtr [64, 64]
+        (⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
+          [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]))
+      h i_t fbh hInjH
+  -- b_h_cumsum = 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64, 64] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- name the p_h-setReg state by generalizing the block-ptr tile it stores
+  generalize hsP : sin.setReg "p_h" .blockPtr [64, 64]
+      (⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
+        [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]) = sP at hpidsH hregsH hvnewH hotherH hoffH ⊢
+  set sH := cdfHStoreState s sP h i_t fbh with hsH
+  set sIn := sH.setReg "b_h_cumsum" .real [64, 64]
+      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) with hsIn
+  -- relate sP's registers/pids/memory to sin
+  have hsP_pids : sP.pids = sin.pids := by rw [← hsP]; simp [BlockState.setReg_pids]
+  have hsP_regs : ∀ {dt sh} (nm : RegName), nm ≠ "p_h" →
+      sP.regs dt sh nm = sin.regs dt sh nm := by
+    intro dt sh nm hnm; rw [← hsP, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hnm]
+  have hsP_mem : ∀ rg off, sP.readMem rg off = sin.readMem rg off := by
+    intro rg off; rw [← hsP, BlockState.setReg_readMem]
+  -- memory of sIn: regions ≠ h match s (h-store only touches h)
+  have hmemIn : ∀ rg, rg ≠ h → ∀ off, sIn.readMem rg off = s.readMem rg off := by
+    intro rg hrg off
+    rw [hsIn, BlockState.setReg_readMem, hotherH rg off hrg, hsP_mem]
+    exact hmem rg off
+  -- sIn register/pids facts (peel b_h_cumsum setReg, h-store regs = sP regs, p_h setReg)
+  have hsIn_pids : sIn.pids = s.pids := by
+    rw [hsIn, BlockState.setReg_pids, hpidsH, hsP_pids]; exact hpids
+  have hsIn_regs : ∀ {dt sh} (nm : RegName), nm ≠ "b_h_cumsum" → nm ≠ "p_h" →
+      sIn.regs dt sh nm = sin.regs dt sh nm := by
+    intro dt sh nm hnm hnm2
+    rw [hsIn, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hnm, hregsH, hsP_regs nm hnm2]
+  -- inner loop
+  obtain ⟨sInner, hInnerStep, hpidsI, hikI, hivI, hibhI, hitI, hbhI, hcsI,
+    hkI, hvI, hdI, hgenI, hvnewI, hothI⟩ :=
+    cdfInnerLoop_run k v d v_new s sIn
+      i_t fbh (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)
+      (fun e p => by rw [cdfCarryTile_data])
+      hVk hVv hVd hInjV
+      (hmemIn k hHk.symm) (hmemIn v hHv2.symm) (hmemIn d hHd.symm)
+      hsIn_pids
+      (by rw [hsIn_regs "i_k" (by decide) (by decide)]; exact hik)
+      (by rw [hsIn_regs "i_v" (by decide) (by decide)]; exact hiv)
+      (by rw [hsIn_regs "i_bh" (by decide) (by decide)]; exact hibh)
+      (by rw [hsIn_regs "i_t" (by decide) (by decide)]; exact hit2)
+      (by rw [hsIn_regs "b_h" (by decide) (by decide)]; exact hbh)
+      (by rw [hsIn, BlockState.setReg_same])
+  rw [stepStmts.cons_some hInnerStep]
+  -- advance
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfAdvance_eval s sInner k v d initial_state USE_INITIAL_STATE i_t hbhI hcsI))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    rw [BlockState.setReg_pids, hpidsI, hsIn_pids, hpids]
+  · -- i_k
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hikI
+  · -- i_v: preserved by inner loop, = sIn.regs i_v = sin.regs i_v
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hivI,
+      hsIn_regs "i_v" (by decide) (by decide)]; exact hiv
+  · -- i_bh
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hibhI
+  · -- b_h advance
+    simp only [BlockState.setReg_same]
+  · -- k unchanged
+    intro off; rw [BlockState.setReg_readMem]; exact hkI off
+  · -- v unchanged
+    intro off; rw [BlockState.setReg_readMem]; exact hvI off
+  · -- d unchanged
+    intro off; rw [BlockState.setReg_readMem]; exact hdI off
+  · -- h active readback
+    intro idx hidx
+    rw [BlockState.setReg_readMem, hgenI h (cdfHAddr s i_t idx) hHv,
+      hsIn, BlockState.setReg_readMem, hvnewH idx hidx]
+  · -- h off-block unchanged
+    intro off hoff
+    rw [BlockState.setReg_readMem, hgenI h off hHv, hsIn, BlockState.setReg_readMem,
+      hoffH off hoff, hsP_mem]
+  · -- v_new active readback
+    intro idx hidx; rw [BlockState.setReg_readMem]; exact hvnewI idx hidx
+  · -- v_new off unchanged
+    intro off hoff; rw [BlockState.setReg_readMem, hothI off hoff, hsIn,
+      BlockState.setReg_readMem, hotherH v_new off hHv.symm, hsP_mem]
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
