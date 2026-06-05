@@ -1177,4 +1177,122 @@ theorem srBody_split
             :: srPostLoop Out) := by
   rfl
 
+/-! ### Memory-side data functions (Python test shape)
+
+The per-program scalars and per-token data the kernel reads, at the test shape
+(`stride_logic_h=256, stride_logic_bs=1, stride_vbs=8192, stride_vh=64,
+stride_vd=1, stride_b_loc_b=128, stride_b_loc_s=1, max_input_len=128`).  The
+online-softmax loop streams, for valid token `n < srSeqLen`, the pair
+`(srQk n, srV n d)`. -/
+
+/-- The loop bound: `cur_batch_seq_len = BSeqLen[cur_batch]`. -/
+def srSeqLen (s : BlockState) (BSeqLen : RegionName) : Nat :=
+  s.readMemValue .nat BSeqLen (s.pids 0)
+
+/-- `cur_batch_start_loc = BStartLoc[cur_batch]`. -/
+def srStartLoc (s : BlockState) (BStartLoc : RegionName) : Nat :=
+  s.readMemValue .nat BStartLoc (s.pids 0)
+
+/-- `off_b_loc = cur_batch·128 + (128 − cur_batch_seq_len)·1`. -/
+def srOffBLoc (s : BlockState) (BSeqLen : RegionName) : Nat :=
+  s.pids 0 * 128 + (128 - srSeqLen s BSeqLen) * 1
+
+/-- The paged-KV index for token `n`: `BLoc[off_b_loc + (n)·1]` (`.int`). -/
+def srVIndex (s : BlockState) (BLoc : RegionName) (BSeqLen : RegionName) (n : Nat) : Int :=
+  s.readMemValue .int BLoc (srOffBLoc s BSeqLen + n * 1)
+
+/-- The attention logit for token `n`:
+`Logics[cur_head·256 + (cur_batch_start_loc + n)·1]`. -/
+def srQk (s : BlockState) (Logics BStartLoc : RegionName) (n : Nat) : ℝ :=
+  s.readMem Logics (s.pids 1 * 256 + (srStartLoc s BStartLoc + n) * 1)
+
+/-- The gathered V-row entry for token `n`, head-dim `d`:
+`V[v_index[n]·8192 + cur_head·64 + d·1]` (`v_index` cast to `Nat`). -/
+def srV (s : BlockState) (V BLoc BSeqLen : RegionName) (n d : Nat) : ℝ :=
+  s.readMem V ((srVIndex s BLoc BSeqLen n).toNat * 8192 + s.pids 1 * 64 + d * 1)
+
+/-! ### Per-statement op-eval recipes for the loop body
+
+Each recipe takes the loop-invariant register hypotheses and resolves one loop-body
+statement's `evalOp` to a closed form, mirroring the mistral `*_eval` recipes. -/
+
+set_option maxHeartbeats 1600000 in
+/-- **`qk` masked-load recipe** (`tl.load(Logics + cur_head·256 +
+(cur_batch_start_loc + start_n + offs_n)·1, mask=(start_n+offs_n)<seqlen,
+other=-inf)`).  Result lane `j`: `some (srQk (SN+j))` if active, else `⊥`. -/
+theorem sr_qk_load_eval (s : BlockState) (Logics BStartLoc BSeqLen : RegionName) (SN : Nat)
+    (hsl : s.regs .nat [] "cur_batch_start_loc" = some (Tile.scalar (srStartLoc s BStartLoc)))
+    (hch : s.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val)))
+    (hseq : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (srSeqLen s BSeqLen))) :
+    evalOp (Op.load .real
+        (MemAccess.region Logics
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 256))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_start_loc")
+                  (Op.ref .nat [] "start_n"))
+                (Op.ref .nat [64] "offs_n"))
+              (Op.constNat 1))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.negInf.broadcast [64]))) s
+      = some (⟨fun idx : TileIndex [64] =>
+          if SN + idx.1.val < srSeqLen s BSeqLen then some (srQk s Logics BStartLoc (SN + idx.1.val))
+          else (⊥ : WithBot ℝ)⟩ : Tile .real [64]) := by
+  simp only [evalOp, hsl, hch, hsn, hn, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, u⟩ := idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    BlockState.readMemValue_real, srQk]
+  have haddr : s.pids 1 * 256 + (srStartLoc s BStartLoc + SN + j.val) * 1
+      = s.pids 1 * 256 + (srStartLoc s BStartLoc + (SN + j.val)) * 1 := by ring
+  by_cases hlt : SN + j.val < srSeqLen s BSeqLen
+  · simp only [hlt, decide_true, if_true, if_pos hlt]
+    rw [haddr]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+    rfl
+
+set_option maxHeartbeats 1600000 in
+/-- **`v_index` masked-gather recipe** (`tl.load(BLoc + off_b_loc + (start_n+offs_n)·1,
+mask=(start_n+offs_n)<seqlen, other=-1)`, dtype `.int`).  Lane `j`: `srVIndex (SN+j)`
+if active, else `-1`. -/
+theorem sr_vindex_gather_eval (s : BlockState) (BLoc BSeqLen : RegionName) (SN : Nat)
+    (hoff : s.regs .nat [] "off_b_loc" = some (Tile.scalar (srOffBLoc s BSeqLen)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val)))
+    (hseq : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (srSeqLen s BSeqLen))) :
+    evalOp (Op.load .int
+        (MemAccess.region BLoc
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "off_b_loc")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+              (Op.constNat 1))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          ((Op.constInt (-1)).broadcast [64]))) s
+      = some (⟨fun idx : TileIndex [64] =>
+          if SN + idx.1.val < srSeqLen s BSeqLen then srVIndex s BLoc BSeqLen (SN + idx.1.val)
+          else (-1 : Int)⟩ : Tile .int [64]) := by
+  simp only [evalOp, hoff, hsn, hn, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, u⟩ := idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    srVIndex]
+  have haddr : srOffBLoc s BSeqLen + (SN + j.val) * 1 = srOffBLoc s BSeqLen + (SN + j.val) * 1 := rfl
+  by_cases hlt : SN + j.val < srSeqLen s BSeqLen
+  · simp only [hlt, decide_true, if_true, if_pos hlt]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+    rfl
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
