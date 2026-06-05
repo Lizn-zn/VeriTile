@@ -2260,6 +2260,90 @@ theorem bsa_acc2_rescale_eval (s : BlockState) (BM BD : Nat) (hax : 1 < [BM].len
   rw [evalOp_mul]
   simp only [evalOp_ref, hacc2, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`p = (p).to(Q.dtype.element_ty)` statement eval** (CSR loop body L21): the dot
+input dtype round-trip before the value accumulation. In this real model the cast is
+identity (the elaborated AST is a bare `ref "p"`), so `p` is unchanged. -/
+theorem bsa_pcast_eval (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM, BN])
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by
+  rw [evalOp_ref, hp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc += tl.dot(p, v)` statement eval** (CSR loop body L23, first D-block): the
+first-D-block numerator accumulation `acc + p·v` (`p : [BM,BN]`, `v : [BN,BD]`). -/
+theorem bsa_acc_eval (s : BlockState) (BM BN BD : Nat)
+    (acctile : Tile .real [BM, BD]) (ptile : Tile .real [BM, BN]) (vtile : Tile .real [BN, BD])
+    (hacc : s.regs .real [BM, BD] "acc" = some acctile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hv : s.regs .real [BN, BD] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acctile
+          (Tile.dot [] ptile vtile)) := by
+  have hpr : evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by rw [evalOp_ref, hp]
+  have hvr : evalOp (Op.ref .real [BN, BD] "v") s = some vtile := by rw [evalOp_ref, hv]
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"), hpr, hvr]; rfl
+  rw [evalOp_add]; simp only [evalOp_ref, hacc, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`acc2 += tl.dot(p, v)` statement eval** (CSR loop body L24, second D-block): the
+second-D-block numerator accumulation `acc2 + p·v`, with the **same** `p` and the
+second-D-block value tile `v` (loaded at `+BLOCK_D`). -/
+theorem bsa_acc2_eval (s : BlockState) (BM BN BD : Nat)
+    (acc2tile : Tile .real [BM, BD]) (ptile : Tile .real [BM, BN]) (vtile : Tile .real [BN, BD])
+    (hacc2 : s.regs .real [BM, BD] "acc2" = some acc2tile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile)
+    (hv : s.regs .real [BN, BD] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc2")
+        (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc2tile
+          (Tile.dot [] ptile vtile)) := by
+  have hpr : evalOp (Op.ref .real [BM, BN] "p") s = some ptile := by rw [evalOp_ref, hp]
+  have hvr : evalOp (Op.ref .real [BN, BD] "v") s = some vtile := by rw [evalOp_ref, hv]
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := by
+    erw [evalOp_dot [] (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, BD] "v"), hpr, hvr]; rfl
+  rw [evalOp_add]; simp only [evalOp_ref, hacc2, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`l_i = l_i_new` / `m_i = m_i_new` statement eval** (CSR loop body L25/L26): the
+running-state carry into the next CSR iteration (a bare register read). Instantiate
+`name := "l_i_new"` / `"m_i_new"`. Block-sparse analogue of `ta_reg_carry_eval`. -/
+theorem bsa_reg_carry_eval (s : BlockState) (BM : Nat) (name : RegName)
+    (t : Tile .real [BM]) (h : s.regs .real [BM] name = some t) :
+    evalOp (Op.ref .real [BM] name) s = some t := by
+  rw [evalOp_ref, h]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`off_h_kv = off_h // head_groups` statement eval** (GQA head remap, pre-loop):
+the grouped-query KV-head index `off_h // (num_heads // num_kv_heads)`. With
+`off_h = OH` and `head_groups = HG`, evaluates to `OH // HG`. This is the head map the
+K/V base offsets (`kvBase`) use. -/
+theorem bsa_offhkv_eval (s : BlockState) (OH HG : Nat)
+    (hoh : s.regs .nat [] "off_h" = some (Tile.scalar OH))
+    (hhg : s.regs .nat [] "head_groups" = some (Tile.scalar HG)) :
+    evalOp (Op.floorDiv .nat Broadcast.nil
+        (Op.ref .nat [] "off_h") (Op.ref .nat [] "head_groups")) s
+      = some (Tile.scalar (OH / HG)) := by
+  simp only [evalOp, evalOp_ref, hoh, hhg, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.bop_data, Tile.scalar, Tile.scalar_data_index, Broadcast.leftIndex,
+    Broadcast.rightIndex, IntegralDType.floorDiv]
+
 end BSARecipes
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
