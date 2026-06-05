@@ -3700,6 +3700,92 @@ theorem bwd_iter1_eval
     simp only [BlockState.setReg]
   exact ⟨sout, hstep, hpids, hmemeq, hcumo⟩
 
+set_option maxHeartbeats 1600000 in
+/-- **Full reverse-loop execution.** The complete backward surface executes to a
+final state `s2` that is the two-iteration reverse scan: row `BT-1 = 1` stores
+(`R0 = (i_c*2+1)*8`) on top of the prologue state `s0`, then row `0` stores
+(`R0-8`) on top of that. We expose `s2.mem` as the four nested masked stores
+(two per inter-region row plus the two `DG` rows) for readback. -/
+theorem bwd_full_exec
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (s : BlockState)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter) :
+    ∃ s0 s1 s2,
+      stepStmts ((bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG 64 8 2 4).toAlgKernel.body.take 15) s = some s0
+      ∧ exec (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+          Q K G DG 64 8 2 4) s = some s2
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem
+      ∧ s1.mem =
+          (stMem s DG ((s.pids 1 * 2 + 2 - 1) * 8) (fun i =>
+              dgSum s DQInner DQInter DKInner DKInter Q K G ((s.pids 1 * 2 + 2 - 1) * 8)
+                (ldR s G ((s.pids 1 * 2 + 2 - 1) * 8)) i)
+            (stMem s DKInter ((s.pids 1 * 2 + 2 - 1) * 8)
+                (dkOut s DKInner DKInter G ((s.pids 1 * 2 + 2 - 1) * 8)
+                  (ldR s G ((s.pids 1 * 2 + 2 - 1) * 8)))
+              (stMem s DQInter ((s.pids 1 * 2 + 2 - 1) * 8)
+                  (dqOut s DQInner DQInter G ((s.pids 1 * 2 + 2 - 1) * 8)) s0))).mem
+      ∧ s2.mem =
+          (stMem s DG ((s.pids 1 * 2 + 2 - 1) * 8 - 8) (fun i =>
+              dgSum s DQInner DQInter DKInner DKInter Q K G ((s.pids 1 * 2 + 2 - 1) * 8)
+                (ldR s G ((s.pids 1 * 2 + 2 - 1) * 8)) i +
+              dgSum s DQInner DQInter DKInner DKInter Q K G ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+                (ldR s G ((s.pids 1 * 2 + 2 - 1) * 8)) i)
+            (stMem s DKInter ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+                (dkOut s DKInner DKInter G ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+                  (ldR s G ((s.pids 1 * 2 + 2 - 1) * 8)))
+              (stMem s DQInter ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+                  (dqOut s DQInner DQInter G ((s.pids 1 * 2 + 2 - 1) * 8 - 8)) s1))).mem := by
+  set R0 := (s.pids 1 * 2 + 2 - 1) * 8 with hR0
+  have h8 : 8 ≤ R0 := by rw [hR0]; omega
+  -- Prologue.
+  obtain ⟨s0, hpro, hp_pid, hp_mem, hp_undef, _, _, _, _, hp_mask, hp_cum, hp_lastg,
+    hp_pq, hp_pk, hp_pg, hp_pdg, hp_pdqi, hp_pdki, hp_pdqt, hp_pdkt⟩ :=
+    bwd_prologue_eval DQInner DQInter DKInner DKInter Q K G DG s
+  have hsh : BwdPrologueShape s s0 DQInner DQInter DKInner DKInter Q K G DG R0 :=
+    { pid := hp_pid, mem := hp_mem, mask := hp_mask, cum := hp_cum, lastg := hp_lastg,
+      pg := hp_pg, pk := hp_pk, pq := hp_pq, pdqi := hp_pdqi, pdki := hp_pdki,
+      pdqt := hp_pdqt, pdkt := hp_pdkt, pdg := hp_pdg }
+  -- Iteration 0.
+  obtain ⟨s1, hstep0, h1pid, h1mem, h1mask, h1lastg, h1cum,
+    h1pg, h1pk, h1pq, h1pdqi, h1pdki, h1pdqt, h1pdkt, h1pdg⟩ :=
+    bwd_iter0_eval DQInner DQInter DKInner DKInter Q K G DG s s0 R0
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter hsh
+  -- `s1` reads at row `R0 - 8` agree with `s` (iter-0 wrote only at row `R0`).
+  have h1row : ∀ (r : RegionName) (i : TileIndex [4]),
+      s1.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8))
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8)) := by
+    intro r i
+    have hoff : ∀ j : TileIndex [4],
+        s.pids 2 * 64 + s.pids 0 * 4 + j.1.val + R0
+          ≠ s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8) := by
+      intro j; have := j.1.2; have := i.1.2; omega
+    have hrm : s1.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8))
+        = (stMem s DG R0 (fun i =>
+              dgSum s DQInner DQInter DKInner DKInter Q K G R0 (ldR s G R0) i)
+            (stMem s DKInter R0 (dkOut s DKInner DKInter G R0 (ldR s G R0))
+              (stMem s DQInter R0 (dqOut s DQInner DQInter G R0) s0))).readMem r
+            (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8)) := by
+      simp only [BlockState.readMem, h1mem]
+    rw [hrm, stMem_readMem_other_offset s DG r R0 _ _ _ hoff,
+        stMem_readMem_other_offset s DKInter r R0 _ _ _ hoff,
+        stMem_readMem_other_offset s DQInter r R0 _ _ _ hoff,
+        show s0.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8))
+            = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + (R0 - 8)) by
+          simp only [BlockState.readMem, hp_mem]]
+  -- Iteration 1.
+  obtain ⟨s2, hstep1, h2pid, h2mem, h2cum⟩ :=
+    bwd_iter1_eval DQInner DQInter DKInner DKInter Q K G DG s s1 R0 h8
+      (ldR s G R0)
+      (fun i => dgSum s DQInner DQInter DKInner DKInter Q K G R0 (ldR s G R0) i)
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+      h1pid h1row h1mask h1lastg h1cum h1pg h1pk h1pq h1pdqi h1pdki h1pdqt h1pdkt h1pdg
+  -- Assemble `exec`.
+  refine ⟨s0, s1, s2, hpro, ?_, hp_pid, hp_mem, h1mem, h2mem⟩
+  rw [exec, bwd_body_decomp, stepStmts.append_some hpro,
+    stepStmts.cons_some (bwd_loop_unroll s0 s1 s2 hstep0 hstep1), stepStmts.nil]
+
 end BwdAssembly
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
