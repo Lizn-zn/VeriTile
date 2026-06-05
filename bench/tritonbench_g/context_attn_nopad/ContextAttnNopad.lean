@@ -2093,6 +2093,221 @@ theorem ctxNopadKeysUptoM_zero
   apply List.filterMap_eq_nil_iff.mpr
   intro j _; simp
 
+/-! ### Masked-`q` (`ctxQTileMRow`) block-reduction bridges
+
+The loop body's `q` register holds the *row-masked* query tile `ctxQTileMRow` (the
+kernel's `q` load mask `offs_m < seq_len`), so the per-block `osNormStepBot` step in
+`nopad_attn_step` reduces a `Fin 128`-masked row whose score uses `ctxQTileMRow`. The
+math-side block list is `nopadBlockM` (the `ctxQTileMRow` analog of `nopadBlock`).
+These are exact copies of the banked `nopadBlock_*` bridges with
+`ctxQTile`→`ctxQTileMRow` — the proofs are structural and agnostic to which `q` tile
+seeds the score. -/
+
+/-- **`nopadBlockM` map-and-sum bridge** (`ctxQTileMRow` copy of `nopadBlock_map_sum`). -/
+theorem nopadBlockM_map_sum
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (hwin : (c + 1) * 128 ≤ S) (h : ℝ × ℝ → ℝ) :
+    ((nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).map h).sum
+      = ∑ jL : Fin 128,
+          (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + jL.val < S then
+            h (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                  ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                    * ctxKTileM s K B_Start_Loc S bel (⟨c * 128 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)),
+                ctxVTileM s V B_Start_Loc S bel (⟨c * 128 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit))
+           else 0) := by
+  classical
+  rw [nopadBlockM, nopad_filterMap_finRange_sum S
+    (fun j : Fin S => j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128)
+    (fun j => (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+              ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))) h]
+  rw [← Finset.sum_filter
+        (fun j : Fin S => j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128)
+        (fun j => h (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
+              ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit)))]
+  symm
+  rw [← Finset.sum_filter
+        (fun jL : Fin 128 => c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + jL.val < S)
+        (fun jL => h (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel (⟨c * 128 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)),
+              ctxVTileM s V B_Start_Loc S bel (⟨c * 128 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)))]
+  refine Finset.sum_bij
+    (i := fun jL (_ : jL ∈ Finset.univ.filter
+        (fun jL : Fin 128 => c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + jL.val < S)) =>
+      (⟨c * 128 + jL.val, by have := jL.isLt; omega⟩ : Fin S)) ?_ ?_ ?_ ?_
+  · intro jL hjL
+    have hmem := (Finset.mem_filter.mp hjL).2
+    rw [Finset.mem_filter]
+    refine ⟨Finset.mem_univ _, ?_⟩
+    show c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ c * 128 + jL.val ∧ c * 128 + jL.val < (c + 1) * 128
+    have := jL.isLt; exact ⟨hmem.1, by omega, by omega⟩
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * 128 + a.val = c * 128 + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 := (Finset.mem_filter.mp hj).2
+    refine ⟨⟨j.val - c * 128, by omega⟩, ?_, by apply Fin.ext; simp only; omega⟩
+    rw [Finset.mem_filter]
+    refine ⟨Finset.mem_univ _, ?_⟩
+    show c * 128 + (j.val - c * 128) ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + (j.val - c * 128) < S
+    have := j.isLt; constructor <;> omega
+  · intro jL _; rfl
+
+/-- **`nopadBlockM` `l_ij` lane-sum bridge** (`ctxQTileMRow` copy of `nopadBlock_lij_sum`). -/
+theorem nopadBlockM_lij_sum
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) (Mr : ℝ)
+    (hwin : (c + 1) * 128 ≤ S) :
+    (∑ jL : Fin 128, WithBot.realExp (WithBot.realSub
+        (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val then
+          ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel
+                    (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+      = some ((nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).map
+          (fun p => Real.exp (p.1 - Mr))).sum := by
+  have hcell : ∀ jL : Fin 128,
+      WithBot.realExp (WithBot.realSub
+        (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val then
+          ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel
+                    (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ))
+        = some (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + jL.val < S
+            then Real.exp ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel
+                    (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit))) - Mr) else 0) := by
+    intro jL
+    have hS : c * 128 + jL.val < S := nopad_lane_lt_S c S hwin jL
+    by_cases hj : c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val
+    · rw [if_pos hj, if_pos ⟨hj, hS⟩, WithBot.realSub_coe_coe, WithBot.realExp_coe]; rfl
+    · rw [if_neg hj, if_neg (fun h => hj h.1), WithBot.realSub_bot_left, WithBot.realExp_bot]; rfl
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [nopadBlockM_map_sum s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d hwin
+    (fun p => Real.exp (p.1 - Mr))]
+
+/-- **`nopadBlockM` `acc` lane-sum bridge** (`ctxQTileMRow` copy of `nopadBlock_acc_sum`). -/
+theorem nopadBlockM_acc_sum
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) (Mr : ℝ)
+    (hwin : (c + 1) * 128 ≤ S)
+    (rawV : Fin 128 → ℝ)
+    (hrawV : ∀ jL : Fin 128, c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val →
+      rawV jL = ctxVTileM s V B_Start_Loc S bel
+        (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, d, PUnit.unit)) :
+    (∑ jL : Fin 128, WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val then
+            ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel
+                      (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+        ((rawV jL : ℝ) : WithBot ℝ))
+      = some ((nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).map
+          (fun p => Real.exp (p.1 - Mr) * p.2)).sum := by
+  have hcell : ∀ jL : Fin 128,
+      WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val then
+            ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel
+                      (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+        ((rawV jL : ℝ) : WithBot ℝ)
+        = some (if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 + jL.val < S
+            then Real.exp ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel
+                    (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit))) - Mr)
+                  * ctxVTileM s V B_Start_Loc S bel
+                      (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, d, PUnit.unit)
+            else 0) := by
+    intro jL
+    have hS : c * 128 + jL.val < S := nopad_lane_lt_S c S hwin jL
+    by_cases hj : c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val
+    · rw [if_pos hj, if_pos ⟨hj, hS⟩, WithBot.realSub_coe_coe, WithBot.realExp_coe,
+        WithBot.realMul_coe_coe, hrawV jL hj]; rfl
+    · rw [if_neg hj, if_neg (fun h => hj h.1), WithBot.realSub_bot_left, WithBot.realExp_bot]
+      show WithBot.realMul ((0:ℝ):WithBot ℝ) ((rawV jL : ℝ):WithBot ℝ) = some 0
+      rw [WithBot.realMul_coe_coe, zero_mul]; rfl
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [nopadBlockM_map_sum s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d hwin
+    (fun p => Real.exp (p.1 - Mr) * p.2)]
+
+/-- **`nopadBlockM` running-sup bridge** (`ctxQTileMRow` copy of `nopadBlock_sup_eq`). -/
+theorem nopadBlockM_sup_eq
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (hwin : (c + 1) * 128 ≤ S) :
+    Finset.univ.sup (fun jL : Fin 128 =>
+        if c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val then
+          ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel
+                    (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = ((nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  classical
+  set F : Nat → WithBot ℝ := fun jg =>
+    if h : jg < S then
+      ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+          ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+            * ctxKTileM s K B_Start_Loc S bel (⟨jg, h⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+    else ⊥ with hF
+  rw [show (nopadBlockM s Q K V B_Start_Loc sm_scale BLOCK_M S bel c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+        = ((List.finRange S).filterMap (fun j : Fin S =>
+            if j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then
+              some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+                ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+                  * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+            else none)).map (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold nopadBlockM
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 <;> simp [hj]]
+  rw [nopad_filterMap_foldr_sup S
+    (fun j => j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128)
+    (fun j => sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+        ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+          * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))]
+  rw [show (Finset.univ.sup (fun j : Fin S =>
+        if j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then
+          ((sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTileMRow s Q B_Start_Loc BLOCK_M bel (i, e, PUnit.unit)
+              * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else ⊥))
+      = Finset.univ.sup (fun j : Fin S =>
+          if j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then F j.val else ⊥) from by
+    apply Finset.sup_congr rfl
+    intro j _
+    by_cases hw : j.val ≤ s.pids 2 * BLOCK_M + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+    · rw [if_pos hw, if_pos hw, hF]; simp only [dif_pos j.isLt]
+    · rw [if_neg hw, if_neg hw]]
+  rw [nopad_window_sup_reindex c S (s.pids 2 * BLOCK_M + i.val) hwin F]
+  apply Finset.sup_congr rfl
+  intro jL _
+  have hb : c * 128 + jL.val < S := nopad_lane_lt_S c S hwin jL
+  by_cases hc : c * 128 + jL.val ≤ s.pids 2 * BLOCK_M + i.val
+  · rw [if_pos hc, if_pos hc, hF]; simp only [dif_pos hb]
+  · rw [if_neg hc, if_neg hc]
+
 /-! ### Loop invariant and exec-side stepping
 
 `nopadInvariant … c s` states that, after streaming `c` `BLOCK_N = 128`-blocks, the
