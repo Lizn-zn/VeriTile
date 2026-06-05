@@ -3698,4 +3698,147 @@ theorem nopad_attn_step
     show some (accFinal ir dd) = ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) ((c + 1) * 128) ir dd).2.2 : WithBot ℝ)
     exact congrArg (fun p => ((p.2.2 : ℝ) : WithBot ℝ)) (hbridge ir dd)
 
+/-! ## PostLoop store and full-kernel exec assembly -/
+
+/-- **At the full window, an active row's running `acc` is the genuine closed form.**
+The invariant's masked fold `nopadFoldUpto … S` (row-masked `ctxQTileMRow`) on an
+active row (`gi < bel = seqLen`) agrees with the genuine causal key list, whose
+`osNormStepBot` `acc` reads off `contextAttnNopadExactFoldM` =
+`ctxNopadGenuineOutValue`. -/
+theorem nopadFoldUpto_full_eq_genuine
+    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen : RegionName)
+    (idx : TileIndex [128, 128])
+    (hpos : 0 < ctxNopadWindow s0 B_Seqlen 128)
+    (hact : s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen) :
+    (nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
+        (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen)
+        (ctxNopadWindow s0 B_Seqlen 128) idx.1 idx.2.1).2.2
+      = ctxNopadGenuineOutValue s0 Q K V B_Start_Loc B_Seqlen idx := by
+  set S := ctxNopadWindow s0 B_Seqlen 128 with hSdef
+  set bel := seqLen s0 B_Seqlen with hbeldef
+  rw [nopadFoldUpto, ctxNopadKeysUptoM_active s0 Q K V B_Start_Loc sm_scale_python 128 S bel S idx.1 idx.2.1 hact,
+    ctxNopadKeysUpto_full]
+  rw [show ((ctxNopadKeyList s0 Q K V B_Start_Loc sm_scale_python 128 S bel idx.1 idx.2.1).foldl osNormStepBot (⊥, 0, 0)).2.2
+        = contextAttnNopadExactFoldM s0 Q K V B_Start_Loc sm_scale_python 128 S bel idx from
+    ctxNopad_fold_eq_exactFoldM s0 Q K V B_Start_Loc sm_scale_python 128 S bel idx ⟨hpos, Nat.zero_le _⟩]
+  rw [ctxNopadGenuineOutValue, ctxNopadBel]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readback.** Stepping the 3 post-loop statements
+(`off_o`, `out_ptrs`, masked store of `acc`) from a loop-end state satisfying
+`nopadInvariant … cF` at the full window (`cF·128 = S = ctxNopadWindow`), the
+kernel's `Out` store holds the genuine causal-softmax closed form
+`ctxNopadGenuineOutValue` at every active output lane, and preserves out-of-bounds
+lanes. -/
+theorem nopadPostLoop_eval
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName) (Out : RegionName)
+    (s0 : BlockState) (cF : Nat) (s : BlockState)
+    (hfull : cF * 128 = ctxNopadWindow s0 B_Seqlen 128)
+    (hpos : 0 < ctxNopadWindow s0 B_Seqlen 128)
+    (hinv : nopadInvariant Q K V B_Start_Loc B_Seqlen s0 cF s) :
+    ∃ sP, stepStmts (nopadPostLoop Out) s = some sP
+      ∧ ∀ idx : TileIndex [128, 128],
+          sP.readMem Out (outOffset s0 B_Start_Loc 768 128 1 128 idx)
+            = if s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen then
+                ctxNopadGenuineOutValue s0 Q K V B_Start_Loc B_Seqlen idx
+              else s.readMem Out (outOffset s0 B_Start_Loc 768 128 1 128 idx) := by
+  set bel := seqLen s0 B_Seqlen with hbeldef
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
+  unfold nopadPostLoop
+  -- stmt 0: off_o (same formula as off_q)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (nopad_offq_eval s (startLoc s0 B_Start_Loc) (s0.pids 1) (s0.pids 2) hsl hch hoffm hd))]
+  set s1 := s.setReg "off_o" .nat [128, 128]
+    (⟨fun idx : TileIndex [128, 128] => (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) with hs1d
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "off_o" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs1offo : s1.regs .nat [128, 128] "off_o" = some
+      (⟨fun idx : TileIndex [128, 128] => (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val⟩ : Tile .nat [128, 128]) := by
+    rw [hs1d, BlockState.setReg_same]
+  -- stmt 1: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [128, 128] "off_o")) s1
+        = some (⟨fun idx : TileIndex [128, 128] =>
+            (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]) from by
+      simp only [evalOp, evalOp_ref, hs1offo, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨ir, dd, u⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  set s2 := s1.setReg "out_ptrs" .ptr [128, 128]
+    (⟨fun idx : TileIndex [128, 128] =>
+      (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]) with hs2d
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "out_ptrs" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2ptr : s2.regs .ptr [128, 128] "out_ptrs" = some
+      (⟨fun idx : TileIndex [128, 128] => (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]) := by
+    rw [hs2d, BlockState.setReg_same]
+  have hs2acc : s2.regs .real [128, 128] "acc" = some
+      (⟨fun idx : TileIndex [128, 128] =>
+        ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (cF * 128) idx.1 idx.2.1).2.2 : WithBot ℝ)⟩ : Tile .real [128, 128]) :=
+    e2 (by decide) (e1 (by decide) hacc)
+  have hs2m : s2.regs .nat [128] "offs_m" = some (Tile.vec (fun i : Fin 128 => s0.pids 2 * 128 + i.val)) :=
+    e2 (by decide) (e1 (by decide) hoffm)
+  have hs2seq : s2.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s0 B_Seqlen)) :=
+    e2 (by decide) (e1 (by decide) hseq)
+  -- mem/pids of s2 agree with s0 (only register writes since s)
+  have hs2mem : s2.mem = s0.mem := by
+    funext rg o; rw [hs2d, BlockState.setReg_mem, hs1d, BlockState.setReg_mem]; exact hmem ▸ rfl
+  have hs2pids : s2.pids = s0.pids := by rw [hs2d, BlockState.setReg_pids, hs1d, BlockState.setReg_pids]; exact hpids
+  -- stmt 2: masked store of acc
+  have hstore : stepStmt (Stmt.store .real [128, 128] (MemAccess.ptr (Op.ref .ptr [128, 128] "out_ptrs"))
+      (Op.ref .real [128, 128] "acc")
+      (MaskOpt.mask (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))))) s2
+      = some ((TileShape.allIndices [128, 128]).foldl
+          (fun acc idx =>
+            if s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen then
+              acc.writeMem Out ((startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val)
+                ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (cF * 128) idx.1 idx.2.1).2.2 : ℝ)
+            else acc) s2) := by
+    have hexpM : @evalOp .nat [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) s2
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin 128 => s0.pids 2 * 128 + i.val))) :=
+      evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_m" s2 _ hs2m
+    unfold stepStmt
+    simp only [evalOp_ref, hs2acc, hs2ptr, hs2seq, evalOp, hexpM, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim, Tile.vec,
+      Tile.scalar, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+      TileShape.dropInsertedIndex, BlockState.writeMemTyped_real, FloatDType.real_storeValue,
+      decide_eq_true_eq, WithBot.unbotD_coe]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  -- injectivity of outOffset for the scatter
+  have hinj : Function.Injective (fun idx : TileIndex [128, 128] =>
+      (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val) := by
+    rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+    simp only at h
+    have hm : ma = mb := by omega
+    have hd2 : da = db := by omega
+    subst hm; subst hd2; rfl
+  rw [show outOffset s0 B_Start_Loc 768 128 1 128 idx
+        = (fun idx : TileIndex [128, 128] => (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val) idx from by
+    simp only [outOffset, startLoc, mIndex, dIndex, mul_one]]
+  rw [BlockState.scatter_readback_prop_masked_nd s2
+    (fun idx : TileIndex [128, 128] => (startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 768 + s0.pids 1 * 128 + idx.2.1.val)
+    (fun idx : TileIndex [128, 128] =>
+      ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (cF * 128) idx.1 idx.2.1).2.2 : ℝ))
+    (fun idx : TileIndex [128, 128] => s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen) hinj idx]
+  by_cases hlt : s0.pids 2 * 128 + idx.1.val < seqLen s0 B_Seqlen
+  · rw [if_pos hlt, if_pos hlt]
+    -- the stored value = genuine closed form
+    rw [show cF * 128 = ctxNopadWindow s0 B_Seqlen 128 from hfull]
+    exact nopadFoldUpto_full_eq_genuine s0 Q K V B_Start_Loc B_Seqlen idx hpos hlt
+  · rw [if_neg hlt, if_neg hlt]
+    -- out-of-bounds preserved: s2.readMem = s.readMem (mem unchanged by reg writes)
+    simp only [BlockState.readMem, hs2mem, hmem]
+
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
