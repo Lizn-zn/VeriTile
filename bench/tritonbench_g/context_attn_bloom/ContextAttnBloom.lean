@@ -3466,18 +3466,34 @@ theorem bloom_exec
     · rw [if_neg hac, if_neg (fun h => hac (hact.mpr h))]
       unfold BlockState.readMem; rw [hmem]
 
-noncomputable def producedBloomBlock128OutValue
-    (s : BlockState)
-    (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
-      B_Prompt_Cache_Len : RegionName)
+/-- The streamed window `S = 128·⌈(block_mask·block_end_loc)/128⌉` (loop step is
+`BLOCK_N = 128`; `block_end_loc` uses the query block size `BLOCK_M`). -/
+def bloomFwdWindow (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BLOCK_M : Nat) : Nat :=
+  let plen := promptLen s B_Prompt_Cache_Len
+  let sl := seqLen s B_Seqlen B_Prompt_Cache_Len
+  let bel := (let a := (s.pids 2 + 1) * BLOCK_M + plen
+              let b := sl + plen
+              if a < b then a else b)
+  let bm := if BLOCK_M * s.pids 2 < sl then 1 else 0
+  128 * ((bm * bel + 127) / 128)
+
+/-- `block_end_loc = min((start_m+1)·BLOCK_M + plen, cur_batch_seq_len + plen)`. -/
+def bloomFwdBel (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BLOCK_M : Nat) : Nat :=
+  let plen := promptLen s B_Prompt_Cache_Len
+  let sl := seqLen s B_Seqlen B_Prompt_Cache_Len
+  let a := (s.pids 2 + 1) * BLOCK_M + plen
+  let b := sl + plen
+  if a < b then a else b
+
+/-- **Genuine closed-form `Out` value (BLOCK_M = 128)**: the block-causal-guarded
+boundary-masked online-softmax fold `contextAttnBloomExactFoldM` of the loaded
+Q/K/V memory — a pure function of memory, not the kernel's executed readback. -/
+noncomputable def bloomFwdGenuineOutValue128
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName)
     (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (context_attn_bloom_fwd_kernel_surface Q K V
-      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-      B_req_idx B_Prompt_Cache_Len
-      576 96 1 576 96 1 576 96 1 576 96 1
-      7500 1 1 96 128 128 128) s with
-  | some s' => s'.readMem Out (outOffset s B_Start_Loc 576 96 1 128 idx)
-  | none => 0.0
+  contextAttnBloomExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx
+    sm_scale_bloom 7500 1 128 (bloomFwdWindow s B_Seqlen B_Prompt_Cache_Len 128)
+    (bloomFwdBel s B_Seqlen B_Prompt_Cache_Len 128) idx
 
 noncomputable def producedBloomBlock64OutValue
     (s : BlockState)
@@ -3651,7 +3667,7 @@ theorem context_attn_bloom_final_store_python_block64_compute_correct
 
 theorem context_attn_bloom_surface_python_block128_compute_correct
     (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
-      B_Prompt_Cache_Len : RegionName) (s : BlockState) :
+      B_Prompt_Cache_Len : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := context_attn_bloom_fwd_kernel_surface Q K V
         ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
@@ -3665,7 +3681,7 @@ theorem context_attn_bloom_surface_python_block128_compute_correct
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        producedBloomBlock128OutValue s Q K V B_Start_Loc B_Seqlen Out
+        bloomFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen Out
           Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
@@ -3673,8 +3689,18 @@ theorem context_attn_bloom_surface_python_block128_compute_correct
       ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx _hActive
-  simp [producedBloomBlock128OutValue, hExec]
+  intro idx hActive
+  obtain ⟨sF, hexec, hO⟩ :=
+    bloom_exec Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
+  rw [show sm_scale_bloom = ((Real.sqrt (96 : ℝ))⁻¹) from rfl] at hexec
+  rw [hExec] at hexec
+  obtain rfl : sF = s' := (Option.some.inj hexec).symm
+  have hb := hO idx
+  simp only [ComputeCorrect.OutputReadable.read_real, Region.cast_cast, Region.cast_id]
+    at hb hActive ⊢
+  rw [if_pos hActive] at hb
+  rw [hb]
+  rfl
 
 theorem context_attn_bloom_surface_python_block64_compute_correct
     (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
@@ -3710,7 +3736,7 @@ layout and both Python launcher block-size branches, with the observable final
 `Out` writes connected directly to the produced full-surface values. -/
 theorem context_attn_bloom_python_test_shape_output_summary
     (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
-      B_Prompt_Cache_Len Out : RegionName) (s : BlockState) :
+      B_Prompt_Cache_Len Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V
       ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
       B_req_idx B_Prompt_Cache_Len
@@ -3734,7 +3760,7 @@ theorem context_attn_bloom_python_test_shape_output_summary
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        producedBloomBlock128OutValue s Q K V B_Start_Loc B_Seqlen Out
+        bloomFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen Out
           Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) ∧
     ComputeCorrect.Realizes
       (kernel := context_attn_bloom_fwd_kernel_surface Q K V
@@ -3763,7 +3789,7 @@ theorem context_attn_bloom_python_test_shape_output_summary
       7500 1 1 96 64 128 128
   constructor
   · exact context_attn_bloom_surface_python_block128_compute_correct Q K V
-      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s
+      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
   · exact context_attn_bloom_surface_python_block64_compute_correct Q K V
       B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s
 
