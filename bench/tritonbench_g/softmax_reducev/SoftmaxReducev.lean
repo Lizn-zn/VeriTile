@@ -2597,4 +2597,129 @@ theorem sr_attn_step
     exact sr_acc_reg_eq qk vF c d
       (fun jL => s8.readMem V ((vIdxFn jL * 8192).toNat + s0.pids 1 * 64 + d.val)) hrawV hwin
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readback.** Stepping the 4 post-loop statements
+(`acc /= e_sum`, `off_o`, `out_ptrs`, store) from a loop-end state satisfying
+`srInvariant … c` at the full window (`c · 64 = S`), the kernel's `Out` store holds
+the genuine softmax-weighted V reduction `softmaxReducevWeightedSum` at every
+injective output lane. -/
+theorem srPostLoop_eval
+    (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : RegionName)
+    (s0 : BlockState) (c : Nat) (s : BlockState)
+    (hfull : c * 64 = srSeqLen s0 BSeqLen) (hpos : 0 < srSeqLen s0 BSeqLen)
+    (hinv : srInvariant Logics V BLoc BStartLoc BSeqLen s0 c s)
+    (mr : ℝ)
+    (hM : srRunningMax (srQkF s0 Logics BStartLoc BSeqLen) (srVF s0 V BLoc BSeqLen)
+      (srSeqLen s0 BSeqLen) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)) :
+    ∃ sP, stepStmts (srPostLoop Out) s = some sP
+      ∧ ∀ d : Fin 64,
+          sP.readMem Out (outOffset s0 128 64 1 d)
+            = softmaxReducevWeightedSum (srQkF s0 Logics BStartLoc BSeqLen) mr
+                (srVF s0 V BLoc BSeqLen) d := by
+  set S := srSeqLen s0 BSeqLen with hSdef
+  set qk := srQkF s0 Logics BStartLoc BSeqLen with hqkdef
+  set vF := srVF s0 V BLoc BSeqLen with hvFdef
+  simp only [srInvariant, ← hqkdef, ← hvFdef, ← hSdef] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoff, hvp, hemax, hesum, hacc⟩ := hinv
+  -- denominator value
+  set denomVal := ((srStateBot qk vF (c * 64) (⟨0, by norm_num⟩ : Fin 64)).2.1 : WithBot ℝ) with hdenomVal
+  set accFn : Fin 64 → WithBot ℝ := fun d => ((srStateBot qk vF (c * 64) d).2.2 : WithBot ℝ) with haccFn
+  unfold srPostLoop
+  -- stmt 0: acc = acc / e_sum
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div .real Broadcast.scalarR (Op.ref .real [64] "acc") (Op.ref .real [] "e_sum")) s
+        = some (⟨fun idx : TileIndex [64] => WithBot.realDiv (accFn idx.1) denomVal⟩ : Tile .real [64]) from by
+      rw [evalOp_div]
+      simp only [evalOp_ref, hacc, hesum, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.div, haccFn, hdenomVal]))]
+  set s1 := s.setReg "acc" .real [64] (⟨fun idx : TileIndex [64] => WithBot.realDiv (accFn idx.1) denomVal⟩ : Tile .real [64]) with hs1
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- stmt 1: off_o = cur_batch*128 + cur_head*64 + offs_d*1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 128))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 64)))
+          (Op.mul .nat Broadcast.scalarR (Op.ref .nat [64] "offs_d") (Op.constNat 1))) s1
+        = some (⟨fun idx : TileIndex [64] => outOffset s0 128 64 1 idx.1⟩ : Tile .nat [64]) from by
+      rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat,
+        e1 (by decide) hcb, e1 (by decide) hch, e1 (by decide) hd,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul, outOffset, dIndex]))]
+  set s2 := s1.setReg "off_o" .nat [64] (⟨fun idx : TileIndex [64] => outOffset s0 128 64 1 idx.1⟩ : Tile .nat [64]) with hs2
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "off_o" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2offo : s2.regs .nat [64] "off_o" = some (⟨fun idx : TileIndex [64] => outOffset s0 128 64 1 idx.1⟩ : Tile .nat [64]) := by
+    rw [hs2, BlockState.setReg_same]
+  -- stmt 2: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [64] "off_o")) s2
+        = some (⟨fun idx : TileIndex [64] => (Out, outOffset s0 128 64 1 idx.1)⟩ : Tile .ptr [64]) from by
+      simp only [evalOp, evalOp_ref, hs2offo, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  set s3 := s2.setReg "out_ptrs" .ptr [64] (⟨fun idx : TileIndex [64] => (Out, outOffset s0 128 64 1 idx.1)⟩ : Tile .ptr [64]) with hs3
+  have hs3acc : s3.regs .real [64] "acc" = some (⟨fun idx : TileIndex [64] => WithBot.realDiv (accFn idx.1) denomVal⟩ : Tile .real [64]) := by
+    rw [hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1, BlockState.setReg_same]
+  have hs3ptr : s3.regs .ptr [64] "out_ptrs" = some (⟨fun idx : TileIndex [64] => (Out, outOffset s0 128 64 1 idx.1)⟩ : Tile .ptr [64]) := by
+    rw [hs3, BlockState.setReg_same]
+  -- stmt 3: store Out via out_ptrs (acc tile)
+  have hstore : stepStmt (Stmt.store .real [64] (MemAccess.ptr (Op.ref .ptr [64] "out_ptrs"))
+      (Op.ref .real [64] "acc") MaskOpt.none) s3
+      = some ((TileShape.allIndices [64]).foldl
+          (fun acc i => acc.writeMemTyped .real Out (outOffset s0 128 64 1 i.1)
+            ((⟨fun idx : TileIndex [64] => WithBot.realDiv (accFn idx.1) denomVal⟩ : Tile .real [64]).data i)) s3) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hs3acc, hs3ptr, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rfl
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  simp only [BlockState.writeMemTyped_real]
+  refine ⟨_, rfl, ?_⟩
+  intro d
+  -- injectivity of outOffset
+  have hinj : Function.Injective (fun i : TileIndex [64] => outOffset s0 128 64 1 i.1) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    simp only [outOffset, dIndex] at hab
+    have : a = b := Fin.ext (by omega)
+    subst this; rfl
+  rw [show outOffset s0 128 64 1 d = (fun i : TileIndex [64] => outOffset s0 128 64 1 i.1) (d, PUnit.unit) from rfl]
+  rw [BlockState.scatter_readback_nd s3 (fun i : TileIndex [64] => outOffset s0 128 64 1 i.1)
+      (fun i : TileIndex [64] => FloatDType.real.storeValue ((⟨fun idx : TileIndex [64] => WithBot.realDiv (accFn idx.1) denomVal⟩ : Tile .real [64]).data i)) ?_ (d, PUnit.unit)]
+  · -- decode the stored value: realDiv (accFn d) denomVal = acc/e_sum = weightedSum
+    simp only [FloatDType.real_storeValue]
+    rw [hdenomVal, haccFn]
+    -- at full window c*64 = S
+    rw [show c * 64 = S from hfull]
+    rw [show WithBot.realDiv ((srStateBot qk vF S d).2.2 : WithBot ℝ) ((srStateBot qk vF S (⟨0, by norm_num⟩ : Fin 64)).2.1 : WithBot ℝ)
+          = (((srStateBot qk vF S d).2.2 / (srStateBot qk vF S d).2.1 : ℝ) : WithBot ℝ) from by
+      rw [show ((srStateBot qk vF S (⟨0, by norm_num⟩ : Fin 64)).2.1 : WithBot ℝ)
+            = ((srStateBot qk vF S d).2.1 : WithBot ℝ) from by
+        rw [srStateBot_snd_fst, srStateBot_snd_fst, srRunningMax_eq qk vF S ⟨0, by norm_num⟩ d]
+        congr 2
+        unfold srKeysUpto
+        rw [List.map_filterMap, List.map_filterMap]
+        congr 1
+        apply List.filterMap_congr; intro n _; by_cases hn : n.val < S <;> simp [hn]]
+      rfl]
+    rw [WithBot.unbotD_coe]
+    rw [show (srStateBot qk vF S d).2.2 / (srStateBot qk vF S d).2.1
+          = softmaxReducevWeightedSum qk mr vF d from by
+      have hMd : srRunningMax qk vF S d = (mr : WithBot ℝ) := by
+        rw [srRunningMax_eq qk vF S d ⟨0, by norm_num⟩]; exact hM
+      have := srStateBot_full_eq_weightedSum qk vF d mr hMd; simpa using this]
+  · -- injectivity for scatter
+    exact fun a b hab => hinj hab
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
