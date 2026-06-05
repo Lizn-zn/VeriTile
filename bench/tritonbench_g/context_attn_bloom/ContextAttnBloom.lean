@@ -2458,6 +2458,194 @@ theorem bloomPreLoop_eval
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
+theorem context_attn_bloom_python_block128_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s B_Start_Loc 576 96 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_bloom_python_block64_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [64, 128] =>
+        outOffset s B_Start_Loc 576 96 1 64 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+/-- The ⊥-seeded fold over the empty window `[0, 0)` is the seed `(⊥, 0, 0)`. -/
+theorem gStateBot_zero (S : Nat) (g : Fin S → ℝ × ℝ) : gStateBot S 0 g = (⊥, 0, 0) := by
+  rw [gStateBot, show gKeysUpto S 0 g = [] from by
+    rw [gKeysUpto]; apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **M4 — `bloomPostLoop`: masked store reads off the faithful fold (NO divide).**
+At the loop exit (`c·128 = S`), the `acc` register already holds the in-loop
+normalized `acc/l` ratio (`= contextAttnBloomExactFoldM`), so the post-loop tail
+(`off_o`, `out_ptrs = Out + off_o`, masked `tl.store`) writes that genuine value
+into `Out` at every active lane (`offs_m < cur_batch_seq_len ∧ offs_d < head_dim`),
+preserving inactive lanes. The store is a scatter over the injective `outOffset`
+map. -/
+theorem bloomPostLoop_eval
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (S bel : Nat) (c : Nat) (s : BlockState) (hSc : S = c * 128)
+    (hinv : bloomInvariant Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+        sm_scale_bloom S bel c s) :
+    ∃ sP, stepStmts (bloomPostLoop Out) s = some sP
+      ∧ ∀ idx : TileIndex [128, 128],
+          sP.readMem Out (outOffset s0 B_Start_Loc 576 96 1 128 idx)
+            = if active s0 B_Seqlen B_Prompt_Cache_Len 96 128 idx then
+                contextAttnBloomExactFoldM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+                  Req_to_tokens B_req_idx sm_scale_bloom 7500 1 128 S bel idx
+              else s0.readMem Out (outOffset s0 B_Start_Loc 576 96 1 128 idx) := by
+  subst hSc
+  set plen := promptLen s0 B_Prompt_Cache_Len with hplend
+  set sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len with hsld
+  set g := fun (i d : Fin 128) =>
+    bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale_bloom (c * 128) bel i d with hgd
+  simp only [bloomInvariant] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
+      hq, hmi, hli, hacc, hcle⟩ := hinv
+  -- the acc tile already holds the ratio numer/denom
+  set accTile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      some ((gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.2 / (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.1)⟩
+    with haccTile
+  have haccref0 : s.regs .real [128, 128] "acc" = some accTile := by
+    rw [hacc]
+  unfold bloomPostLoop
+  -- off_o offset tile (= outOffset)
+  set offoTile : Tile .nat [128, 128] :=
+    ⟨fun idx : TileIndex [128, 128] => outOffset s0 B_Start_Loc 576 96 1 128 idx⟩ with hoffo
+  -- stmt 0: off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))) s = some offoTile from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+        ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+        hcbsi, hch, hom, hod, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [hoffo, outOffset, startLoc, mIndex, dIndex,
+        Tile.bop_data, Tile.scalar_data, Tile.vec_data,
+        Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]))]
+  set s1 := s.setReg "off_o" .nat [128, 128] offoTile with hs1
+  -- stmt 1: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [128, 128] "off_o")) s1
+        = some (⟨fun idx : TileIndex [128, 128] =>
+            (Out, offoTile.data idx)⟩ : Tile .ptr [128, 128]) from by
+      simp only [evalOp, hs1, BlockState.setReg_same, Region.cast_id,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+          Nat.zero_add]))]
+  set s2 := s1.setReg "out_ptrs" .ptr [128, 128]
+    (⟨fun idx : TileIndex [128, 128] => (Out, offoTile.data idx)⟩ : Tile .ptr [128, 128]) with hs2
+  -- stmt 2: masked store of acc into Out (2D boolAnd mask)
+  set P : TileIndex [128, 128] → Prop :=
+    fun idx => s0.pids 2 * 128 + idx.1.val < sl ∧ idx.2.1.val < 96 with hP
+  have hOffInj : Function.Injective (fun idx : TileIndex [128, 128] => offoTile.data idx) :=
+    context_attn_bloom_python_block128_offset_injective s0 B_Start_Loc
+  have hmaskev : evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 96))) s2
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          decide (s0.pids 2 * 128 + idx.1.val < sl) && decide (idx.2.1.val < 96)⟩ : Tile .bool [128, 128]) := by
+    exact bloomQMask_eval s2 (fun r : Fin 128 => s0.pids 2 * 128 + r.val) sl
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hod)
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+  have haccref : evalOp (Op.ref .real [128, 128] "acc") s2 = some accTile := by
+    rw [evalOp_ref, hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact haccref0
+  have hptrref : evalOp (Op.ref .ptr [128, 128] "out_ptrs") s2
+      = some (⟨fun idx : TileIndex [128, 128] => (Out, offoTile.data idx)⟩ : Tile .ptr [128, 128]) := by
+    rw [evalOp_ref, hs2, BlockState.setReg_same]
+  have hstore : stepStmt (Stmt.store .real [128, 128]
+      (MemAccess.ptr (Op.ref .ptr [128, 128] "out_ptrs"))
+      (Op.ref .real [128, 128] "acc")
+      (MaskOpt.mask
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+            (Op.constNat 96))))) s2
+      = some ((TileShape.allIndices [128, 128]).foldl
+          (fun acc idx => if P idx then acc.writeMem Out (offoTile.data idx)
+            ((accTile.data idx).unbotD 0) else acc) s2) := by
+    unfold stepStmt
+    rw [haccref]
+    simp only [hmaskev, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rw [hptrref]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s2 ?_
+    intro acc idx _
+    by_cases h1 : s0.pids 2 * 128 + idx.1.val < sl
+    · by_cases h2 : idx.2.1.val < 96
+      · rw [decide_eq_true_eq.mpr h1, decide_eq_true_eq.mpr h2, Bool.and_true]
+        simp only [if_true, BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+        rw [if_pos (show P idx from ⟨h1, h2⟩)]
+      · rw [decide_eq_false_iff_not.mpr h2, Bool.and_false]
+        simp only [Bool.false_eq_true, if_false]
+        rw [if_neg (fun hc => h2 hc.2)]
+    · rw [decide_eq_false_iff_not.mpr h1, Bool.false_and]
+      simp only [Bool.false_eq_true, if_false]
+      rw [if_neg (fun hc => h1 hc.1)]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  rw [show outOffset s0 B_Start_Loc 576 96 1 128 idx = offoTile.data idx from rfl]
+  rw [BlockState.scatter_readback_prop_masked_nd (region := Out) s2 (fun idx => offoTile.data idx)
+    (fun idx => (accTile.data idx).unbotD 0) P hOffInj idx]
+  have hactive_iff : active s0 B_Seqlen B_Prompt_Cache_Len 96 128 idx ↔ P idx := by
+    have he : mIndex s0 128 idx.1 = s0.pids 2 * 128 + idx.1.val := rfl
+    simp only [active, hP, he, hsld, dIndex]
+  by_cases hac : P idx
+  · rw [if_pos hac, if_pos (hactive_iff.mpr hac)]
+    -- accTile cell = contextAttnBloomExactFoldM
+    simp only [haccTile, contextAttnBloomExactFoldM, WithBot.unbotD_coe]
+    show (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.2
+        / (gStateBot (c * 128) (c * 128) (g idx.1 idx.2.1)).2.1 = _
+    have hkvm : g idx.1 idx.2.1
+        = bloomKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+            Req_to_tokens B_req_idx sm_scale_bloom 7500 1 128 (c * 128) bel idx.1 idx.2.1 := by
+      rw [hgd]; rfl
+    rw [hkvm]
+  · rw [if_neg hac, if_neg (fun hcon => hac (hactive_iff.mp hcon))]
+    show (s2.readMem Out (offoTile.data idx)) = _
+    have hreadeq : s2.readMem Out (offoTile.data idx) = s.readMem Out (offoTile.data idx) := by
+      unfold BlockState.readMem; rw [hs2, hs1]; simp only [BlockState.setReg_mem]
+    rw [hreadeq]
+    unfold BlockState.readMem; rw [hmem]
+
 noncomputable def producedBloomBlock128OutValue
     (s : BlockState)
     (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
@@ -2602,32 +2790,6 @@ The checked Python test uses `Z = 1`, `H = 6`, `N_CTX = 500`, `D_HEAD = 96`.
 The contiguous `q/k/v/o` layout has row/head/dimension strides `(576, 96, 1)`;
 `BLOCK_DMODEL = next_power_of_2(96) = 128`, and `BLOCK_M` is `128` on the
 regular path or `64` on the Tesla branch. -/
-
-theorem context_attn_bloom_python_block128_offset_injective
-    (s : BlockState) (B_Start_Loc : RegionName) :
-    Function.Injective
-      (fun idx : TileIndex [128, 128] =>
-        outOffset s B_Start_Loc 576 96 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, startLoc, mIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem context_attn_bloom_python_block64_offset_injective
-    (s : BlockState) (B_Start_Loc : RegionName) :
-    Function.Injective
-      (fun idx : TileIndex [64, 128] =>
-        outOffset s B_Start_Loc 576 96 1 64 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, startLoc, mIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
 
 theorem context_attn_bloom_final_store_python_block128_compute_correct
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
