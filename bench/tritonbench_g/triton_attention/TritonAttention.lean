@@ -2353,6 +2353,64 @@ theorem fwdOutSpec_eq_streaming
     (s.pids 0 * 128) (fwdQTile s Q) 1 (by norm_num) (fwdKTile s K) (fwdVTile s V)
     ((Real.sqrt (64 : ℝ))⁻¹) idx).symm
 
+/-- WithBot-ℝ `Finset.sup` of a causally-masked function (`⊥` on masked lanes),
+read out via `unbotD 0`, equals the `sup'` over the (nonempty) visible set. The
+readout lemma that turns the FA1 `mPartial` (a `WithBot ℝ` running max) into the
+real-valued causal `fwdMSpec`. -/
+private theorem withBot_sup_masked_unbotD {n : Nat} (p : Fin n → Prop)
+    [DecidablePred p] (f : Fin n → ℝ) (hne : (Finset.univ.filter p).Nonempty) :
+    ((Finset.univ : Finset (Fin n)).sup
+      (fun j => if p j then (f j : WithBot ℝ) else ⊥)).unbotD 0
+      = (Finset.univ.filter p).sup' hne f := by
+  have hsup : (Finset.univ : Finset (Fin n)).sup
+      (fun j => if p j then (f j : WithBot ℝ) else ⊥)
+      = (Finset.univ.filter p).sup (WithBot.some ∘ f) := by
+    rw [Finset.sup_ite]; simp; rfl
+  rw [hsup, ← Finset.coe_sup' hne f]
+  rfl
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **M closed-form bridge.** The FA1 running causal max `mPartial` over the
+single 128-key block, read out of `WithBot ℝ` via `unbotD 0`, equals the genuine
+`fwdMSpec` (the per-row causal score maximum over the visible key set). -/
+theorem fwdMSpec_eq_mPartial
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) :
+    fwdMSpec s Q K i =
+      (mPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1
+        (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 i).unbotD 0 := by
+  rw [show mPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1 (fwdKTile s K)
+        ((Real.sqrt (64 : ℝ))⁻¹) 1 i
+        = ((Finset.univ : Finset (Fin 128)).sup fun jLocal =>
+            maskedScore (s.pids 0 * 128) (fwdQTile s Q) (fwdKTile s K)
+              ((Real.sqrt (64 : ℝ))⁻¹) i
+              (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal)) from by
+    conv_lhs => rw [mPartial]
+    rw [dif_pos (by norm_num : (0:Nat)+1 ≤ 1)]
+    rw [show mPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1 (fwdKTile s K)
+          ((Real.sqrt (64 : ℝ))⁻¹) 0 i = (⊥ : WithBot ℝ) from rfl]
+    exact max_bot_left _]
+  -- The block-local sup is over `maskedScore` at `blockIndex 128 1 0 _ jLocal`,
+  -- which is the global index `jLocal`. Rewrite to the `if … then ↑score else ⊥`
+  -- form expected by `withBot_sup_masked_unbotD`.
+  rw [show (fun jLocal : Fin 128 =>
+        maskedScore (s.pids 0 * 128) (fwdQTile s Q) (fwdKTile s K)
+          ((Real.sqrt (64 : ℝ))⁻¹) i
+          (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal))
+      = (fun jLocal : Fin 128 =>
+          if jLocal.val ≤ s.pids 0 * 128 + i.val then
+            ((scaledScore (fwdQTile s Q) (fwdKTile s K)
+              ((Real.sqrt (64 : ℝ))⁻¹) i jLocal : ℝ) : WithBot ℝ)
+          else ⊥) from by
+    funext jLocal
+    have hidx : StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal
+        = jLocal := by
+      apply Fin.ext; simp [StreamingAccumulator.blockIndex]
+    rw [hidx]; rfl]
+  rw [withBot_sup_masked_unbotD (fun j : Fin 128 => j.val ≤ s.pids 0 * 128 + i.val)
+    (fun j => scaledScore (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
+    (fwdCausalSet_nonempty s i)]
+  rfl
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
