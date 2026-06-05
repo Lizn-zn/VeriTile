@@ -29,15 +29,12 @@ quantified, the per-program statement covers every program of the grid.
 ```
 context_attn_fwd_python_test_shape_output_summary          ← TOP THEOREM (bundles both block shapes)
   ├─ context_attn_fwd_kernel_int8kv_surface_toAlgorithm_supported   surface lowers to the algorithm layer
-  ├─ context_attn_fwd_surface_python_block128_compute_correct       full surface, BLOCK_M=128 final store
-  │    └─ context_attn_fwd_final_store_python_block128_compute_correct
-  │         └─ context_attn_fwd_final_store_slice_compute_correct
-  │              └─ context_attn_fwd_final_store_slice_correct       algorithm-layer readback per lane
-  └─ context_attn_fwd_surface_python_block64_compute_correct        full surface, BLOCK_M=64 final store
-       └─ context_attn_fwd_final_store_python_block64_compute_correct
-            └─ context_attn_fwd_final_store_slice_compute_correct
-(supporting: context_attn_fwd_python_block128_offset_injective,
-             context_attn_fwd_python_block64_offset_injective)
+  ├─ context_attn_fwd_surface_python_block128_compute_correct       full surface, BLOCK_M=128 genuine fold
+  │    └─ context_attn_fwd_exec_block128                            whole-kernel exec → contextAttnExactFoldM
+  └─ context_attn_fwd_surface_python_block64_compute_correct        full surface, BLOCK_M=64 genuine fold
+       └─ context_attn_fwd_exec_block64                             whole-kernel exec → contextAttnExactFoldM
+(both branches read off the genuine boundary-masked causal-softmax closed form
+ `contextAttnExactFoldM` of Q/K/V memory; BLOCK_N = BLOCK_DMODEL = 128, BLOCK_M ∈ {128, 64})
 ```
 
 ## Modeling boundary
@@ -46,12 +43,12 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and t
 int8 KV path are not modeled. The verified compute claim is scoped to the
 **final masked writeback** of the accumulated `acc` tile into `Out`: every active
 lane (`offs_m < cur_batch_seq_len`, with `offs_d < head_dim` folded into the
-slice) holds the surface-produced `acc` value
-(`producedContextFwdBlock128/64OutValue`), and out-of-bounds lanes are preserved.
-The online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the
-`prompt_cache_len`-offset causal mask) is carried *inside* the surface kernel and
-reflected in the produced-value spec rather than re-proven as a closed-form
-softmax identity. The summary is instantiated at the Python test shape
+slice) holds the genuine boundary-masked causal-softmax closed form
+(`ctxFwdGenuineOutValue128/64` = `contextAttnExactFoldM`), and out-of-bounds lanes
+are preserved. The online-softmax streaming loop (`m_i`/`l_i`/`acc` updates,
+`tl.dot`, the `prompt_cache_len`-offset causal mask) is stepped through `exec` and
+proven to collapse to that closed form (no self-reference). The summary is
+instantiated at the Python test shape
 (`H=16`, `BLOCK_DMODEL=BLOCK_N=128`, `BLOCK_M ∈ {128, 64}`); other shapes are not
 covered by the top theorem.
 -/
@@ -4666,22 +4663,28 @@ theorem context_attn_fwd_exec_block64
     · rw [if_neg hac, if_neg (fun h => hac (hact.mpr h))]
       unfold BlockState.readMem; rw [hmem]
 
-/-- Self-referential executed `Out`-readback for the BLOCK_M = 64 (Tesla) branch.
-The genuine closed form `contextAttnExactFoldM` for this branch requires the full
-streaming-loop suite (`ctxLoopBody_steps`/`ctxInvariant`/`ctx_attn_step`/
-`ctxPostLoop_eval`) re-derived at the `[64,128]` tile shape (`BLOCK_N = 64` key
-blocks); banked only at `[128,128]`. -/
-noncomputable def producedContextFwdBlock64OutValue
-    (s : BlockState)
-    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+/-- The Tesla-shape streamed window: the first multiple of `BLOCK_N = 128` at/above
+the dynamic loop bound `block_mask · block_end_loc` (the loop step is `BLOCK_N`,
+while `block_end_loc` is computed with the query block size `BLOCK_M = 64`). -/
+def ctxFwdWindow64 (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) : Nat :=
+  let plen := s.readMemValue .nat B_Prompt_Cache_Len (s.pids 1 / 16)
+  let sl := s.readMemValue .nat B_Seqlen (s.pids 1 / 16) - plen
+  let bel := (let a := 64 * s.pids 0 + 64 + plen
+              let b := sl + plen
+              if a < b then a else b)
+  let bm := if 64 * s.pids 0 < sl then 1 else 0
+  128 * ((bm * bel + 127) / 128)
+
+/-- **Genuine closed-form output value** of `context_attn_fwd.py` at the Python test
+shape, BLOCK_M = 64 (Tesla): the boundary-masked causal-softmax fold
+`contextAttnExactFoldM` of the loaded Q/K/V memory — a pure function of memory, NOT
+the kernel's executed readback. -/
+noncomputable def ctxFwdGenuineOutValue64
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
     (idx : TileIndex [64, 128]) : ℝ :=
-  match exec (context_attn_fwd_kernel_int8kv_surface Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len
-      2048 128 1 8388608 262144 128 1 8388608 262144 128 1
-      2048 128 1 1 16 128 64 128) s with
-  | some s' => s'.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 64 idx)
-  | none => 0.0
+  contextAttnExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+    sm_scale_python 64 (ctxFwdWindow64 s B_Seqlen B_Prompt_Cache_Len)
+    (ctxFwdBel s B_Seqlen B_Prompt_Cache_Len 64) idx
 
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_fwd_final_store_slice_correct
@@ -4901,7 +4904,7 @@ theorem context_attn_fwd_surface_python_block128_compute_correct
 
 theorem context_attn_fwd_surface_python_block64_compute_correct
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
-    (s : BlockState) :
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
         (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
@@ -4915,7 +4918,7 @@ theorem context_attn_fwd_surface_python_block64_compute_correct
         (fun idx : TileIndex [64, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
       (expected := fun idx : TileIndex [64, 128] =>
-        producedContextFwdBlock64OutValue s Q K V Out B_Start_Loc B_Seqlen
+        ctxFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen
           B_Prompt_Cache_Len idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
@@ -4923,21 +4926,28 @@ theorem context_attn_fwd_surface_python_block64_compute_correct
       ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx _hActive
-  simp [producedContextFwdBlock64OutValue, hExec]
+  intro idx hActive
+  obtain ⟨sF, hexec, hO⟩ :=
+    context_attn_fwd_exec_block64 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s hundef
+  rw [show sm_scale_python = (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) from rfl] at hexec
+  rw [hExec] at hexec
+  obtain rfl : sF = s' := (Option.some.inj hexec).symm
+  have hb := hO idx
+  simp only [ComputeCorrect.OutputReadable.read_real, Region.cast_cast, Region.cast_id]
+    at hb hActive ⊢
+  rw [if_pos hActive] at hb
+  rw [hb, ctxFwdGenuineOutValue64, ctxFwdWindow64, ctxFwdBel]
+  norm_num
 
 /-- Public Python test-shape summary for `context_attn_fwd.py`.
 
 This records the faithful full int8-KV `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches. For the regular
-(non-Tesla, BLOCK_M = 128) path — the path exercised on the gold-test hardware —
-every active observable `Out` write holds the **genuine** boundary-masked
-causal-softmax closed form `contextAttnExactFoldM` of the loaded Q/K/V memory
-(`ctxFwdGenuineOutValue128`), NOT the kernel's own executed readback: the
-self-referential proof gap is closed. The Tesla (BLOCK_M = 64) branch is still
-recorded via the executed readback (`producedContextFwdBlock64OutValue`); its
-genuine closed form needs the streaming-loop suite re-derived at the `[64,128]`
-tile shape. -/
+layout and both Python launcher block-size branches. For **both** the regular
+(non-Tesla, BLOCK_M = 128) path and the Tesla (BLOCK_M = 64) path, every active
+observable `Out` write holds the **genuine** boundary-masked causal-softmax closed
+form `contextAttnExactFoldM` of the loaded Q/K/V memory (`ctxFwdGenuineOutValue128`
+/ `ctxFwdGenuineOutValue64`), NOT the kernel's own executed readback: the
+self-referential proof gap is closed for both block shapes. -/
 theorem context_attn_fwd_python_test_shape_output_summary
     (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
@@ -4979,7 +4989,7 @@ theorem context_attn_fwd_python_test_shape_output_summary
         (fun idx : TileIndex [64, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
       (expected := fun idx : TileIndex [64, 128] =>
-        producedContextFwdBlock64OutValue s Q K V Out B_Start_Loc B_Seqlen
+        ctxFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen
           B_Prompt_Cache_Len idx) := by
   constructor
   · exact context_attn_fwd_kernel_int8kv_surface_toAlgorithm_supported Q K V
@@ -4997,7 +5007,7 @@ theorem context_attn_fwd_python_test_shape_output_summary
   · exact context_attn_fwd_surface_python_block128_compute_correct Q K V Out
       B_Start_Loc B_Seqlen B_Prompt_Cache_Len s hundef
   · exact context_attn_fwd_surface_python_block64_compute_correct Q K V Out
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s hundef
 
 end VeriTile.Bench.TritonBenchG.ContextAttnFwd
 
