@@ -1035,78 +1035,6 @@ theorem bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
   exact bwd_decay_global_cumsum_surface_toAlgorithm_supported DQInner DQInter
     DKInner DKInter Q K G DG 64 8 2 4
 
-noncomputable def decayBackwardSurfaceValue
-    (s : BlockState)
-    (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
-    (offset : Nat) : ℝ :=
-  match exec (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
-      Q K G DG 64 8 2 4) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
-
-theorem bwd_decay_global_cumsum_surface_output_compute_correct
-    (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
-    (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner
-        DKInter Q K G DG 64 8 2 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (Out, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayBackwardSurfaceValue s DQInner DQInter DKInner DKInter Q K G DG
-          Out (offset s 64 8 t_rel.val 2 4 i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [bwd_decay_global_cumsum_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [decayBackwardSurfaceValue, hExec]
-
-theorem decay_cumsum_backward_python_test_shape_surface_outputs_compute_correct
-    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
-    (t_rel : Fin 2) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner
-        DKInter Q K G DG 64 8 2 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayBackwardSurfaceValue s DQInner DQInter DKInner DKInter Q K G DG
-          DQInter (offset s 64 8 t_rel.val 2 4 i))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner
-        DKInter Q K G DG 64 8 2 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (DKInter, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayBackwardSurfaceValue s DQInner DQInter DKInner DKInter Q K G DG
-          DKInter (offset s 64 8 t_rel.val 2 4 i))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner
-        DKInter Q K G DG 64 8 2 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayBackwardSurfaceValue s DQInner DQInter DKInner DKInter Q K G DG
-          DG (offset s 64 8 t_rel.val 2 4 i))) := by
-  constructor
-  · exact bwd_decay_global_cumsum_surface_output_compute_correct DQInner
-      DQInter DKInner DKInter Q K G DG DQInter t_rel s
-  constructor
-  · exact bwd_decay_global_cumsum_surface_output_compute_correct DQInner
-      DQInter DKInner DKInter Q K G DG DKInter t_rel s
-  · exact bwd_decay_global_cumsum_surface_output_compute_correct DQInner
-      DQInter DKInner DKInter Q K G DG DG t_rel s
 
 /-- Python test-path summary for the q/k decay preparation kernel.
 
@@ -1378,12 +1306,6 @@ theorem decay_cumsum_python_test_shape_complete_summary
 
 
 
-/-- `output_summary` for the Python backward decay-cumsum surface. -/
-abbrev decay_cumsum_backward_python_test_shape_output_summary
-    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
-    (t_rel : Fin 2) (s : BlockState) :=
-  decay_cumsum_backward_python_test_shape_surface_outputs_compute_correct
-    DQInner DQInter DKInner DKInter Q K G DG t_rel s
 
 /-- **Genuine forward closed form.** At chunk row `t_rel` and lane `i`, the
 forward decay-cumsum kernel writes the scaled prefix sum
@@ -1777,10 +1699,14 @@ noncomputable def bwdDGClosed
 /-! ### Proof recipe (backward closed forms)
 
 The three genuine closed forms above (`bwdDQInterClosed`, `bwdDKInterClosed`,
-`bwdDGClosed`) are the honest, non self-referential specifications that should
-replace `decayBackwardSurfaceValue`. Connecting them to the executed
-`bwd_decay_global_cumsum_surface` follows the **forward** closed-form recipe in
-this file (`fwd_decay_cumsum_full_surface_row{0,1}_closed`), but the backward
+`bwdDGClosed`) are the honest, non self-referential specifications that replace
+the (now-deleted) `decayBackwardSurfaceValue`. They are connected to the executed
+`bwd_decay_global_cumsum_surface` in
+`decay_cumsum_backward_python_test_shape_closed_output_summary` (and its three
+faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct` /
+`bwd_decay_cumsum_dg_closed_compute_correct`) at the end of this file, following
+the **forward** closed-form recipe (`fwd_decay_cumsum_full_surface_row{0,1}_closed`),
+but the backward
 loop body is ~25 statements with a conditional `last_g` capture and three masked
 stores per iteration, traversed over two `range(BT-1,-1,-1)` rows (lowered to a
 forward `forRangeDyn "__rev_t" 0 2 1` with `t := 1 - __rev_t`). A single
@@ -1801,7 +1727,12 @@ mandated per-statement architecture is required:
    `scatter_prop_masked_preserves_other_{offset,region}`), peeling the later
    stores in reverse, exactly as the forward row-1 proof does.
 5. Bridge to `ComputeCorrect.Realizes` via `realizes_writeIf_iff` +
-   `computeCorrect_of_toAlgKernel`, then delete `decayBackwardSurfaceValue`.
+   `computeCorrect_of_toAlgKernel` (done; `decayBackwardSurfaceValue` deleted).
+
+This plan is now fully realized: `bwd_iter_core` chains the 22-statement body,
+`bwd_iter0_eval` / `bwd_iter1_eval` add the head + conditional `last_g` capture,
+`bwd_full_exec` assembles prologue + 2-iteration loop, and the three readback
+theorems certify the closed forms (the `dg` face uses the genuine reverse cumsum).
 
 The `dq_inter`/`dk_inter` faces are pointwise (no carry); only `dg` needs the
 reverse-scan invariant. Region-distinctness side hypotheses (`DQInter ≠ DKInter`
@@ -4081,6 +4012,64 @@ theorem bwd_decay_cumsum_dg_closed_compute_correct
         (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)
         (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)]
     rfl
+
+/-- **Genuine backward closed-form output summary.** The full
+`bwd_decay_global_cumsum` surface realizes the three honest, non self-referential
+closed forms — `bwdDQInterClosed`, `bwdDKInterClosed`, and the reverse-cumsum
+`bwdDGClosed` — at every active lane of loop row `t_rel`. This is the
+non-self-referential replacement for the deleted `decayBackwardSurfaceValue`
+readback, closing the `decay-cumsum-scan-fold` proof gap for the backward kernel. -/
+theorem decay_cumsum_backward_python_test_shape_closed_output_summary
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hDQInter_DKInter : DQInter ≠ DKInter) (hDQInter_DG : DQInter ≠ DG)
+    (hDKInter_DG : DKInter ≠ DG) (hDG_DQInter : DG ≠ DQInter) (hDG_DKInter : DG ≠ DKInter)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter) :
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG 64 8 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf (active s 8 4)
+        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 => bwdDQInterClosed s DQInner DQInter G 64 8 2 4 t_rel i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG 64 8 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf (active s 8 4)
+        (fun i => (DKInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 => bwdDKInterClosed s DKInner DKInter G 64 8 2 4 t_rel i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG 64 8 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        bwdDGClosed s DQInner DQInter DKInner DKInter Q K G 64 8 2 4 t_rel i)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact bwd_decay_cumsum_dq_inter_closed_compute_correct DQInner DQInter DKInner DKInter
+      Q K G DG t_rel s hDQInter_DKInter hDQInter_DG hDKInner_DQInter hDKInter_DQInter
+      hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+  · exact bwd_decay_cumsum_dk_inter_closed_compute_correct DQInner DQInter DKInner DKInter
+      Q K G DG t_rel s hDKInter_DG hDQInter_DKInter hDKInner_DQInter hDKInter_DQInter
+      hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+  · exact bwd_decay_cumsum_dg_closed_compute_correct DQInner DQInter DKInner DKInter
+      Q K G DG t_rel s hDG_DQInter hDG_DKInter hDKInner_DQInter hDKInter_DQInter
+      hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+
+/-- `output_summary` for the Python backward decay-cumsum surface, certified against
+the **genuine** closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` /
+`bwdDGClosed`). Non-self-referential replacement closing the `decay-cumsum-scan-fold`
+proof gap for `bwd_decay_global_cumsum`. -/
+abbrev decay_cumsum_backward_python_test_shape_output_summary
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hDQInter_DKInter : DQInter ≠ DKInter) (hDQInter_DG : DQInter ≠ DG)
+    (hDKInter_DG : DKInter ≠ DG) (hDG_DQInter : DG ≠ DQInter) (hDG_DKInter : DG ≠ DKInter)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter) :=
+  decay_cumsum_backward_python_test_shape_closed_output_summary DQInner DQInter DKInner DKInter
+    Q K G DG t_rel s hDQInter_DKInter hDQInter_DG hDKInter_DG hDG_DQInter hDG_DKInter
+    hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
 
 end BwdAssembly
 
