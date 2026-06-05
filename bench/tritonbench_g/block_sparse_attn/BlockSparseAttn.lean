@@ -4145,5 +4145,200 @@ theorem bsa_step_mi
   · rw [← hbridge]; exact (max_eq_left (le_of_lt (by simpa using h))).symm
   · rw [← hbridge]; exact (max_eq_right (le_of_not_gt (by simpa using h))).symm
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **`bsa_step_li`** (standalone l_i conjunct). The loop body's
+`l_i_new = alpha·l_i + beta·l_ij` tile equals `bsaLPartial (c+1)` per cell, given
+`m_i = bsaMPartial c`, `l_i = some (bsaLPartial c)`, and the score/mask bridges. -/
+theorem bsa_step_li
+    (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks)
+    (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (SN : Nat) (gm : Fin 16 → Nat)
+    (qkScaled : Tile .real [16, 16])
+    (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)
+        ≤ qStart + i.val))
+    (hScore : ∀ (i jL : Fin 16), qkScaled.data (i, jL, PUnit.unit) =
+      (some (gScore Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)) : WithBot ℝ)) :
+    let qkM : Tile .real [16, 16] :=
+      ⟨fun ix : TileIndex [16, 16] =>
+        NumericDType.real.add (qkScaled.data ix)
+          (if SN + ix.2.1.val ≤ gm ix.1 then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))⟩
+    let mij : Tile .real [16] :=
+      ⟨fun outIdx : TileIndex [16] =>
+        (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+          (fun k : Fin 16 => qkM.data (outIdx.1, k, PUnit.unit))⟩
+    let mt : Tile .real [16] :=
+      ⟨fun i : TileIndex [16] => bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1⟩
+    let minew : Tile .real [16] :=
+      Tile.select
+        (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mt mij) mt mij
+    let p0 : Tile .real [16, 16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkM
+          (Tile.expandDim ⟨1, by simp⟩ mij))
+    let lij : Tile .real [16] :=
+      Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [16, 16].length) p0
+    let alpha : Tile .real [16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mt minew)
+    let beta : Tile .real [16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mij minew)
+    let lt : Tile .real [16] :=
+      ⟨fun i : TileIndex [16] =>
+        (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1) : WithBot ℝ)⟩
+    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) alpha lt)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) beta lij)
+      = (Tile.vec (fun i : Fin 16 =>
+          (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i) : WithBot ℝ))) := by
+  intro qkM mij mt minew p0 lij alpha beta lt
+  -- minew = bsaMPartial (c+1) per cell
+  have hminew : ∀ i : Fin 16, minew.data (i, PUnit.unit)
+      = bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i := by
+    intro i
+    have := congrArg (fun t : Tile .real [16] => t.data (i, PUnit.unit))
+      (bsa_step_mi qStart numKVBlocks c hc gpos Qg Kg scale SN gm qkScaled hMask hScore)
+    simpa [minew, mt, mij, qkM, Tile.vec, Tile.scalar_data_index] using this
+  -- mij = sup maskedScore per cell (finite when first key visible? — value form)
+  refine Tile.ext (fun outIdx => ?_)
+  obtain ⟨i, u⟩ := outIdx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+  -- expose alpha, beta, lt, lij cells
+  simp only [alpha, beta, lt, lij, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.reduceSumDrop_data, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, TileShape.insertAxisIndex, mt, Tile.scalar_data_index,
+    hminew i]
+  -- reduce RHS Tile.vec cell, then unfold the target recurrence
+  show NumericDType.real.add
+      (NumericDType.real.mul
+        (WithBot.realExp
+          (NumericDType.real.sub (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i)
+            (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i)))
+        (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i)))
+      (NumericDType.real.mul
+        (WithBot.realExp
+          (NumericDType.real.sub (mij.data (i, PUnit.unit))
+            (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i)))
+        (∑ x, p0.data (i, x, PUnit.unit)))
+    = (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i) : WithBot ℝ)
+  rw [bsaLPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg scale c hc i]
+  -- the qkM cell bridge: qkM (i, k) = maskedScore i (blockIndex c k)
+  have hqkM : ∀ k : Fin 16, qkM.data (i, k, PUnit.unit)
+      = maskedScore qStart gpos Qg Kg scale i
+          (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k) := by
+    intro k
+    exact bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c (Nat.succ_le_iff.mpr hc)
+      gpos Qg Kg scale SN gm qkScaled i k (hMask i k) (hScore i k)
+  -- mij cell = sup maskedScore
+  have hmijcell : mij.data (i, PUnit.unit)
+      = (Finset.univ : Finset (Fin 16)).sup
+          (fun jLocal : Fin 16 => maskedScore qStart gpos Qg Kg scale i
+            (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal)) := by
+    show (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+        (fun k : Fin 16 => qkM.data (i, k, PUnit.unit)) = _
+    rw [Finset.sup'_eq_sup]
+    exact Finset.sup_congr rfl (fun k _ => hqkM k)
+  -- p0 cell = realExp (sub (maskedScore k) (mij cell))
+  have hp0 : ∀ k : Fin 16, p0.data (i, k, PUnit.unit)
+      = WithBot.realExp (WithBot.realSub
+          (maskedScore qStart gpos Qg Kg scale i
+            (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k))
+          (mij.data (i, PUnit.unit))) := by
+    intro k
+    simp only [p0, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, hqkM k]
+    rfl
+  -- Both LHS terms are `some` of reals; reduce to a real equation.
+  set mnew := bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i with hmnewdef
+  set supM : WithBot ℝ := (Finset.univ : Finset (Fin 16)).sup
+    (fun jLocal : Fin 16 => maskedScore qStart gpos Qg Kg scale i
+      (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal)) with hsupMdef
+  have hmijsup : mij.data (i, PUnit.unit) = supM := hmijcell
+  -- Σ p0 cell = some (Σ p0val)
+  have hp0some : ∀ k : Fin 16, p0.data (i, k, PUnit.unit)
+      = some ((p0.data (i, k, PUnit.unit)).unbotD 0) := by
+    intro k; rw [hp0 k]; exact realExp_eq_some_unbotD _
+  have hsump0 : (∑ x, p0.data (i, x, PUnit.unit))
+      = (some (∑ x, (p0.data (i, x, PUnit.unit)).unbotD 0) : WithBot ℝ) := by
+    rw [show (∑ x, p0.data (i, x, PUnit.unit))
+        = @Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+            (fun x => (some ((p0.data (i, x, PUnit.unit)).unbotD 0) : WithBot ℝ)) from
+      Finset.sum_congr rfl (fun k _ => hp0some k)]
+    rw [WithBot.sum_someTerm_eq_some]
+  -- first term = some
+  rw [show NumericDType.real.mul
+        (WithBot.realExp (NumericDType.real.sub
+          (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i) mnew))
+        (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i))
+      = (some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i) mnew)).unbotD 0 *
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i) : WithBot ℝ) from by
+    show WithBot.realMul (WithBot.realExp (WithBot.realSub _ _)) (some _) = _
+    rw [realExp_eq_some_unbotD]; rfl]
+  -- second term = some
+  rw [hmijsup]
+  rw [show NumericDType.real.mul
+        (WithBot.realExp (NumericDType.real.sub supM mnew))
+        (∑ x, p0.data (i, x, PUnit.unit))
+      = (some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y) supM mnew)).unbotD 0 *
+          (∑ x, (p0.data (i, x, PUnit.unit)).unbotD 0)) : WithBot ℝ) from by
+    rw [hsump0]
+    show WithBot.realMul (WithBot.realExp (WithBot.realSub _ _)) (some _) = _
+    rw [realExp_eq_some_unbotD]; rfl]
+  -- combine
+  show (some _ : WithBot ℝ) = some _
+  refine congrArg some ?_
+  congr 1
+  -- second summand: β · Σ p0val = Σ realExp(mscore - mnew).unbotD
+  rw [Finset.mul_sum]
+  refine Finset.sum_congr rfl (fun k _ => ?_)
+  set mk := maskedScore qStart gpos Qg Kg scale i
+    (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k) with hmkdef
+  -- finiteness: mk ≠ ⊥ ⟹ supM = some, mnew = some
+  have hsupne : mk ≠ ⊥ → supM ≠ ⊥ := by
+    intro hmk hbot
+    have hle : mk ≤ supM := by
+      rw [hmkdef, hsupMdef]
+      exact Finset.le_sup (f := fun jLocal : Fin 16 => maskedScore qStart gpos Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal))
+        (Finset.mem_univ k)
+    rw [hbot] at hle
+    exact hmk (le_bot_iff.mp hle)
+  have hsupfin : mk ≠ ⊥ → ∃ b : ℝ, supM = (b : WithBot ℝ) := by
+    intro hmk
+    obtain ⟨b, hb⟩ := WithBot.ne_bot_iff_exists.mp (hsupne hmk)
+    exact ⟨b, hb.symm⟩
+  have hmnewfin : mk ≠ ⊥ → ∃ n : ℝ, mnew = (n : WithBot ℝ) := by
+    intro hmk
+    have hmle : supM ≤ mnew := by
+      rw [hmnewdef, bsaMPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg scale c hc i]
+      exact le_max_right _ _
+    have hmnewne : mnew ≠ ⊥ := by
+      intro hbot; rw [hbot] at hmle
+      exact hsupne hmk (le_bot_iff.mp hmle)
+    obtain ⟨n, hn⟩ := WithBot.ne_bot_iff_exists.mp hmnewne
+    exact ⟨n, hn.symm⟩
+  have hbeta := bsa_beta_p0_eq_exp mk supM mnew hsupfin hmnewfin
+  -- p0val_k = realExp(sub mk supM).unbotD
+  have hp0k : (p0.data (i, k, PUnit.unit)).unbotD 0
+      = (WithBot.realExp (WithBot.realSub mk supM)).unbotD 0 := by
+    rw [hp0 k, hmijsup]
+  rw [hp0k]
+  have hbu := congrArg (WithBot.unbotD (0:ℝ)) hbeta
+  rw [realExp_eq_some_unbotD (WithBot.realSub mk supM),
+      realExp_eq_some_unbotD (WithBot.realSub supM mnew),
+      realExp_eq_some_unbotD (WithBot.realSub mk mnew)] at hbu
+  simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map, WithBot.unbotD_some] at hbu
+  rw [show WithBot.realSub mk mnew = Option.map₂ (fun x y : ℝ => x - y) mk mnew from rfl] at hbu
+  rw [← hbu]
+  norm_num [mul_comm]
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
