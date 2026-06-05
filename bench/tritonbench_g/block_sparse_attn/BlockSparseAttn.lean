@@ -1114,6 +1114,12 @@ theorem bsaAttn_eq_blockSparseAttnClosedForm
   unfold BSAMathCausal.bsaAttn blockSparseAttnClosedForm
   simp only [BSAMathCausal.gScore, rawScoreBSA, mIndex]
 
+/-- `realExp x` is always `some` (it is `0` on `⊥`), so it round-trips through
+`unbotD 0`. Mirror of `FA1MathCausal.realExp_eq_some_unbotD`. -/
+theorem realExp_eq_some_unbotD (x : WithBot ℝ) :
+    WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
+  cases x <;> rfl
+
 end BSAMathCausal
 
 /-- Algorithm-layer correctness for the first block-sparse output store. -/
@@ -3229,6 +3235,13 @@ theorem bsaLoopBody_steps
       stepStmts (bsaLoopBody C) (s.setReg "col_idx_idx" .nat [] (Tile.scalar idx)) = some s'
       ∧ s'.pids = s.pids
       ∧ s'.mem = s.mem
+      ∧ (∀ rg o, s'.undef rg o = s.undef rg o)
+      -- preservation of registers the body never assigns
+      ∧ (∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+          nm ∉ (["col_idx_idx", "col_idx", "start_n", "k", "qk", "m_ij", "p", "l_ij",
+            "m_i_new", "alpha", "beta", "l_i_new", "p_scale", "acc_scale", "v",
+            "l_i", "m_i", "acc", "acc2"] : List RegName) →
+          s.regs dt sh nm = some t → s'.regs dt sh nm = some t)
       -- col_idx / start_n derived scalars
       ∧ (let CI := s.readMemValue .nat (Region.cast C) (LH * 4 + idx);
          let SN := CI * 16;
@@ -3800,7 +3813,7 @@ theorem bsaLoopBody_steps
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (bsa_reg_carry_eval s27 16 "m_i_new" minew hs27minew))]
   rw [stepStmts.nil]
   set s28 := s27.setReg "m_i" .real [16] minew with hs28d
-  refine ⟨s28, rfl, ?_, ?_, ?_⟩
+  refine ⟨s28, rfl, ?_, ?_, ?_, ?_, ?_⟩
   -- pids preservation
   · rw [hs28d, BlockState.setReg_pids, hs27d, BlockState.setReg_pids, hs26d, BlockState.setReg_pids,
       BlockState.setReg_pids, hs24d, BlockState.setReg_pids, hs23d, BlockState.setReg_pids,
@@ -3824,6 +3837,46 @@ theorem bsaLoopBody_steps
       hs7d, BlockState.setReg_mem, BlockState.setReg_mem, hs5d, BlockState.setReg_mem,
       hs4d, BlockState.setReg_mem, hs3d, BlockState.setReg_mem, hs2d, BlockState.setReg_mem,
       hs1d, BlockState.setReg_mem, hs0d, BlockState.setReg_mem]
+  -- undef preservation (only setRegs, no stores)
+  · intro rg o
+    simp only [hs28d, hs27d, hs26d, hs24d, hs23d, hs22d, hs21d, hs20d, hs19d, hs18d,
+      hs17d, hs16d, hs15d, hs14d, hs13d, hs12d, hs11d, hs10d, hs9d, hs8d, hs7d, hs5d,
+      hs4d, hs3d, hs2d, hs1d, hs0d, BlockState.setReg_undef]
+  -- preservation of un-assigned registers
+  · intro dt sh nm t hnm hreg
+    simp only [List.mem_cons, not_or] at hnm
+    obtain ⟨h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14,
+      h15, h16, h17, h18, -⟩ := hnm
+    rw [hs28d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h16,
+      hs27d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h15,
+      hs26d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h18,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h14,
+      hs24d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h17,
+      hs23d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h14,
+      hs22d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h6,
+      hs21d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h18,
+      hs20d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h17,
+      hs19d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h13,
+      hs18d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h6,
+      hs17d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h12,
+      hs16d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h11,
+      hs15d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h10,
+      hs14d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h9,
+      hs13d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h8,
+      hs12d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h7,
+      hs11d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h6,
+      hs10d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h5,
+      hs9d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      hs8d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      hs7d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      hs5d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      hs4d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      hs3d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h2,
+      hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h1,
+      hs0d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h0]
+    exact hreg
   -- exposed registers
   · refine ⟨?_, ?_, ?_, ?_, ?_⟩
     · rw [hs28d, BlockState.setReg_same]
