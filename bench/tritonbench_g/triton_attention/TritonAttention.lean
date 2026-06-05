@@ -3192,7 +3192,12 @@ theorem taLoopBody_steps (K V : RegionName) (off_hz : Nat) (sc : ℝ) (sin : Blo
                 (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
                   acc1T (Tile.dot [] pT (⟨fun idx => some (fwdVTile sin V idx)⟩ : Tile .real [128, 64])))
             ∧ sF.regs .blockPtr [128, 64] "k_tile_ptr" = some (taKVPtrTile K (off_hz * 128 + 128))
-            ∧ sF.regs .blockPtr [128, 64] "v_tile_ptr" = some (taKVPtrTile V (off_hz * 128 + 128)) := by
+            ∧ sF.regs .blockPtr [128, 64] "v_tile_ptr" = some (taKVPtrTile V (off_hz * 128 + 128))
+            ∧ sF.regs .real [128, 64] "q" = sin.regs .real [128, 64] "q"
+            ∧ sF.regs .nat [128] "offs_m" = sin.regs .nat [128] "offs_m"
+            ∧ sF.regs .nat [128] "offs_n" = sin.regs .nat [128] "offs_n"
+            ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
+            ∧ sF.regs .blockPtr [128, 64] "out_tile_ptr" = sin.regs .blockPtr [128, 64] "out_tile_ptr" := by
   set kT : Tile .real [128, 64] := ⟨fun idx => some (fwdKTile sin K idx)⟩ with hkT
   set vT : Tile .real [128, 64] := ⟨fun idx => some (fwdVTile sin V idx)⟩ with hvT
   set qkdot : Tile .real [128, 128] :=
@@ -3295,7 +3300,8 @@ theorem taLoopBody_steps (K V : RegionName) (off_hz : Nat) (sc : ℝ) (sin : Blo
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_advance_row_eval _ V 0 1024 64 128 64 64 1 (off_hz * 128) 128 "v_tile_ptr" (by simp [hvp, taKVPtrTile])))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, mcurrT, lcurrT, lrcpT, pT, acc1T, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, mcurrT, lcurrT, lrcpT, pT, acc1T, rfl, rfl, rfl, rfl, rfl,
+    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp
   · funext region offset; simp
   · intro rg o; simp [hundef]
@@ -3304,6 +3310,11 @@ theorem taLoopBody_steps (K V : RegionName) (off_hz : Nat) (sc : ℝ) (sin : Blo
   · simp [hacc1, hpT, hvT]
   · simp [taKVPtrTile]
   · simp [taKVPtrTile]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
