@@ -3552,6 +3552,106 @@ theorem ta_invariant_zero
   · exact hundef
   · rfl
 
+/-! ### Step-cell bridges (RECIPE → FA1 streaming)
+
+The following per-cell lemmas connect the symbolic register tiles exposed by
+`taLoopBody_steps` to the `FA1MathCausal` streaming accumulators at `c + 1`, for
+the single test-shape block (`Bk = 128`, `numKVBlocks = 1`, so `blockIndex 128 1
+0 _ jL = jL`). These are the triton (natural-exp, in-loop-`l_rcp`) analogues of
+the flash `*_op_eval`/`*_reg_eq` family. -/
+
+open VeriTile.Examples.FA1MathCausal in
+/-- The `q·kᵀ` dot cell, with `q = fwdQTile` and `k = fwdKTile` loaded, equals the
+real `Σ_e qT(r,e)·kT(j,e)` (the unscaled score). -/
+theorem ta_dot_score_cell (qT kT : TileIndex [128, 64] → ℝ) (r j : Fin 128) :
+    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+        (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))).data
+        (r, j, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin 64 => qT (r, e, PUnit.unit) * kT (j, e, PUnit.unit))) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·)
+          ((⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64]).data (r, e, PUnit.unit))
+          ((Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64])).data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (qT (r, e, PUnit.unit) * kT (j, e, PUnit.unit)) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by
+        rw [Tile.transpose_nil_data]; rfl)]
+  rw [WithBot.sum_someTerm_eq_some]
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- The masked qk cell `qk1(r,j)` equals `maskedScore qS qT kT sc r j` (global key
+`j`, single block `c = 0`). -/
+theorem ta_qk1_cell (qT kT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat) (r j : Fin 128) :
+    (if 0 + j.val ≤ qS + r.val then
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+            (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+              (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+          (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+      else (⊥ : WithBot ℝ))
+      = maskedScore qS qT kT sc r j := by
+  by_cases h : 0 + j.val ≤ qS + r.val
+  · rw [if_pos h]
+    rw [Tile.bop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarR, Tile.scalar_data,
+      NumericDType.mul, NumericDType.add]
+    rw [ta_dot_score_cell qT kT r j]
+    rw [maskedScore_of_le qS qT kT sc r j (by omega)]
+    simp only [StreamingAccumulator.scaledScore, WithBot.realAdd, WithBot.realMul,
+      Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_; ring
+  · rw [if_neg h, maskedScore_of_not_le qS qT kT sc r j (by omega)]
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- The block sup of the masked qk cells equals `mPartial 1` (`= max ⊥ (sup …)`). -/
+theorem ta_rmax_eq_mPartial1 (qT kT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat) (r : Fin 128) :
+    (Finset.univ : Finset (Fin 128)).sup' ⟨⟨0, by norm_num⟩, Finset.mem_univ _⟩
+        (fun j : Fin 128 =>
+          if 0 + j.val ≤ qS + r.val then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                  (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+              (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+          else (⊥ : WithBot ℝ))
+      = mPartial 128 qS qT 1 kT sc 1 r := by
+  rw [Finset.sup'_eq_sup]
+  rw [show mPartial 128 qS qT 1 kT sc 1 r = mPartial 128 qS qT 1 kT sc (0 + 1) r from rfl]
+  rw [mPartial_succ_of_lt (Bk := 128) qS qT 1 kT sc 0 (by norm_num) r]
+  rw [show mPartial 128 qS qT 1 kT sc 0 r = (⊥ : WithBot ℝ) from rfl]
+  rw [max_eq_right bot_le]
+  refine Finset.sup_congr rfl (fun j _ => ?_)
+  rw [ta_qk1_cell qT kT sc qS r j]
+  congr 1
+  apply Fin.ext; simp [StreamingAccumulator.blockIndex]
+
+open VeriTile.Examples.FA1MathCausal in
+/-- The `pexp` cell `exp(qk1(r,j) − Mr)` (where `Mr = (mPartial 1).unbotD 0`)
+equals `some` of the masked-score exp term used by `lPartial`/`oPartial` succ. -/
+theorem ta_pexp_cell (qT kT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat) (r j : Fin 128) :
+    WithBot.realExp (WithBot.realSub
+        (if 0 + j.val ≤ qS + r.val then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                  (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+              (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+          else (⊥ : WithBot ℝ))
+        (mPartial 128 qS qT 1 kT sc 1 r))
+      = some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) j))
+          (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0) := by
+  rw [ta_qk1_cell qT kT sc qS r j]
+  rw [show StreamingAccumulator.blockIndex 128 1 0 (by norm_num) j = j from by
+    apply Fin.ext; simp [StreamingAccumulator.blockIndex]]
+  exact realExp_eq_some_unbotD _
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
