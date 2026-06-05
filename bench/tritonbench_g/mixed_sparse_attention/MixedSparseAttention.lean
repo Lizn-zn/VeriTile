@@ -5115,6 +5115,276 @@ theorem msa_catFold_eq_closedForm
     · rw [if_pos (And.intro hrow (And.intro hcNC h0NC)), if_pos hrow, if_pos (And.intro hcNC h0NC)]
     · rw [if_neg (by tauto : ¬(s0.pids 0 * 64 + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC))), if_neg hrow]
 
+/-- The two pinned cat streams used by the loop assembly. -/
+noncomputable abbrev msaCatScore0
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (s0 : BlockState) : Nat → Fin 64 → Fin 64 → WithBot ℝ :=
+  msaCatScore 64 64 8
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
+    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+
+noncomputable abbrev msaCatVblk0
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (s0 : BlockState) : Nat → Fin 64 → Fin 64 → ℝ :=
+  msaCatVblk 64 64 8
+    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0)
+    (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0)
+
+/-- **Seeded-ratio bridge.** The two-phase seeded online-softmax ratio at the
+Loop-B end (`c = 1`, seeded by Loop-A's `bF = 8` finals) equals
+`mixedSparseAttnClosedForm`, given the cat denominator is positive at this lane. -/
+theorem msaSeeded_ratio_eq_closedForm
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (s0 : BlockState) (i d : Fin 64)
+    (hNC64 : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ 64)
+    (hpos : 0 < msaDenomUpto 64 64
+      (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0) 9 i) :
+    (msaOPartialSeed 64 64 64
+        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+        (fun ii dd => msaOPartial 64 64 64
+          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
+          (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0) 8 ii dd)
+        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+        (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0) 1 i d)
+      / (msaLPartialSeed 64 64
+        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0) 1 i)
+    = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
+        32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+        (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
+        (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+        (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 0.1 i d := by
+  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0 with hscA
+  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0 with hscB
+  set vblkA := msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 with hvbA
+  set vblkB := msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0 with hvbB
+  rw [msaOPartialSeed_eq_cat 64 64 64 8 scoreA scoreB vblkA vblkB _ _ 1 i d rfl rfl,
+      msaLPartialSeed_eq_cat 64 64 8 scoreA scoreB _ 1 i rfl,
+      show (8 + 1 : Nat) = 9 from rfl]
+  rw [msaPartial_ratio_collapse 64 64 64 _ _ 9 i d (by
+    rw [show msaCatScore 64 64 8 scoreA scoreB
+        = msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 from rfl]
+    exact hpos)]
+  exact msa_catFold_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 i d hNC64
+
+/-- Masked `fp16` scatter at distinct offsets: `readMemValue .fp16` reads the
+written `fp16` cell at an active lane, and the prior cell elsewhere. fp16 analogue
+of `scatter_readback_nat_prop_masked_nd` (fp16 `storeValue`/`ofReal` are identity in
+the model, so the round-tripped value is recovered exactly as `some r`). -/
+theorem msa_fp16_scatter_readback {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier FloatDType.fp16.toTileDType)
+    (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    BlockState.readMemValue ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped FloatDType.fp16.toTileDType region (offsetFn k) (valueFn k)
+         else acc) s)
+      .fp16 region (offsetFn i)
+    = if P i then FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i))
+      else s.readMemValue .fp16 region (offsetFn i) := by
+  have hpres : ∀ (l : List (TileIndex shape)) (sX : BlockState) (o : Nat),
+      (∀ k ∈ l, P k → offsetFn k ≠ o) →
+      BlockState.readMemValue ((l.foldl
+          (fun acc k =>
+            if P k then acc.writeMemTyped FloatDType.fp16.toTileDType region (offsetFn k) (valueFn k)
+            else acc) sX)) .fp16 region o
+        = sX.readMemValue .fp16 region o := by
+    intro l
+    induction l with
+    | nil => intro sX o _; rfl
+    | cons hd tl ih =>
+      intro sX o h
+      rw [List.foldl_cons]
+      have htl : ∀ k ∈ tl, P k → offsetFn k ≠ o :=
+        fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+      by_cases hPhd : P hd
+      · have hhd : offsetFn hd ≠ o := h hd List.mem_cons_self hPhd
+        simp only [hPhd, if_true]
+        rw [ih _ o htl]
+        show (sX.writeMemAs .fp16 region (offsetFn hd) (valueFn hd)).readMemAs .fp16 region o
+          = sX.readMemAs .fp16 region o
+        rw [BlockState.writeMemAs_readMemAs, if_neg (by rintro ⟨_, h_eq⟩; exact hhd h_eq.symm)]
+      · simp only [hPhd, if_false]
+        exact ih _ o htl
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  show BlockState.readMemValue ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped FloatDType.fp16.toTileDType region (offsetFn k) (valueFn k)
+         else acc) s)) .fp16 region (offsetFn i) = _
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, P k → offsetFn k ≠ offsetFn i := by
+    intro k hk _ heq; have hki : k = i := h_inj heq; subst hki; exact hi_notin_l2 hk
+  rw [hpres l₂ _ (offsetFn i) h_l2_not_in]
+  have h_l1_not_in : ∀ k ∈ l₁, P k → offsetFn k ≠ offsetFn i := by
+    intro k hk _ heq; have hki : k = i := h_inj heq; rw [hki] at hk
+    exact (hl1_disj i hk i List.mem_cons_self) rfl
+  by_cases hPi : P i
+  · simp only [hPi, if_true, if_pos hPi]
+    rw [show ∀ sX : BlockState, BlockState.readMemValue
+          (sX.writeMemTyped FloatDType.fp16.toTileDType region (offsetFn i) (valueFn i)) .fp16
+          region (offsetFn i)
+        = FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)) from fun sX => by
+      show (sX.writeMemAs .fp16 region (offsetFn i) (valueFn i)).readMemAs .fp16 region (offsetFn i) = _
+      rw [BlockState.writeMemAs_readMemAs, if_pos ⟨rfl, rfl⟩]]
+  · simp only [hPi, if_false, if_neg hPi]
+    rw [hpres l₁ _ (offsetFn i) h_l1_not_in]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readback.** Stepping the 2 post-loop statements
+(`acc /= l_i`, masked fp16 store of `acc`) from a Loop-B-end state satisfying
+`msaInvariantB … 1` (one column block run, seeded by Loop-A's 8-block finals), the
+kernel's `Out` store holds the genuine closed form `mixedSparseAttnClosedForm` at
+every active output lane (`pids 0·64 + i < seqlen`) and preserves inactive lanes.
+The faithful regime side conditions (`num_cols ≤ 64`, per-active-lane positive cat
+denominator) are supplied as hypotheses. -/
+theorem msaPostLoop_eval
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (Out : RegionName) (s0 s : BlockState)
+    (hNC64 : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ 64)
+    (hpos : ∀ i : Fin 64, s0.pids 0 * 64 + i.val < seqLen s0 4 (Region.cast Seqlens) →
+      0 < msaDenomUpto 64 64
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0) 9 i)
+    (hinv : msaInvariantB Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+      (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+      (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0)
+      (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+      (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+      (fun ii dd => msaOPartial 64 64 64
+        (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
+        (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0) 8 ii dd)
+      (msaQVal Q s0) (msaKPtr K s0) (msaVPtr V s0) (msaOPtr Out s0) s0 1 s) :
+    ∃ sP, stepStmts msaPostLoop s = some sP
+      ∧ ∀ idx : TileIndex [64, 64],
+          sP.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 64 idx)
+            = if s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens) then
+                (some (mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
+                  (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+                  (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ)
+              else s.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 64 idx) := by
+  obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
+    hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmnc, hmi, hli, hacc⟩ := hinv
+  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0 with hscA
+  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0 with hscB
+  set vblkA := msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 with hvbA
+  set vblkB := msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0 with hvbB
+  set mA := msaMPartial 64 64 scoreA 8 with hmA
+  set lA := msaLPartial 64 64 scoreA 8 with hlA
+  set oA := fun ii dd => msaOPartial 64 64 64 scoreA vblkA 8 ii dd with hoA
+  -- the per-lane ratio register value after the divide
+  set ratio : TileIndex [64, 64] → ℝ := fun idx =>
+    msaOPartialSeed 64 64 64 mA lA oA scoreB vblkB 1 idx.1 idx.2.1
+      / msaLPartialSeed 64 64 mA lA scoreB 1 idx.1 with hratio
+  unfold msaPostLoop
+  -- stmt 0: acc = acc / l_i[:, None]
+  have hexpand : @evalOp .real [64, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i")) s
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx : TileIndex [64] =>
+            (some (msaLPartialSeed 64 64 mA lA scoreB 1 idx.1) : WithBot ℝ)⟩ : Tile .real [64])) :=
+    evalOp_expandDim_ref_of_regs .real [64] ⟨1, by simp⟩ "l_i" s _ hli
+  have hdiv : evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))) s
+      = some (⟨fun idx : TileIndex [64, 64] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
+    rw [evalOp_div]
+    simp only [evalOp_ref, hacc, hexpand, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.bop_data, Tile.bop, Tile.expandDim, NumericDType.div,
+      Broadcast.leftIndex, Broadcast.rightIndex, TileShape.dropInsertedIndex, hratio]
+    rfl
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hdiv)]
+  set s1 := s.setReg "acc" .real [64, 64]
+    (⟨fun idx : TileIndex [64, 64] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [64, 64]) with hs1d
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs1acc : s1.regs .real [64, 64] "acc" = some
+      (⟨fun idx : TileIndex [64, 64] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
+    rw [hs1d, BlockState.setReg_same]
+  have hs1op : s1.regs .ptr [64, 64] "o_ptrs" = some
+      (⟨fun idx : TileIndex [64, 64] => msaOPtr Out s0 idx⟩ : Tile .ptr [64, 64]) := e1 (by decide) hop
+  have hs1mm : s1.regs .bool [64, 1] "m_mask" = some
+      (⟨fun idx : TileIndex [64, 1] =>
+        decide (s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [64, 1]) :=
+    e1 (by decide) hmmask
+  have hs1mem : s1.mem = s0.mem := by
+    funext rg o; rw [hs1d, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have hs1pids : s1.pids = s0.pids := by rw [hs1d, BlockState.setReg_pids]; exact hpids
+  -- stmt 1: masked fp16 store of acc at o_ptrs
+  have hstore : stepStmt (Stmt.store FloatDType.fp16.toTileDType [64, 64]
+      (MemAccess.ptr (Op.ref .ptr [64, 64] "o_ptrs"))
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [64, 64] "acc"))
+      (MaskOpt.mask (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
+        (Op.ref .bool [64, 1] "m_mask")))) s1
+      = some ((TileShape.allIndices [64, 64]).foldl
+          (fun acc idx =>
+            if s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens) then
+              acc.writeMemTyped FloatDType.fp16.toTileDType Out (outOffset s0 4 32768 8192 64 1 64 idx)
+                (FloatDType.real.cast FloatDType.fp16 (some (ratio idx)))
+            else acc) s1) := by
+    have hval : evalOp (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [64, 64] "acc")) s1
+        = some (⟨fun idx : TileIndex [64, 64] =>
+            FloatDType.real.cast FloatDType.fp16 (some (ratio idx))⟩ : Tile FloatDType.fp16.toTileDType [64, 64]) := by
+      rw [evalOp_castFloat]
+      erw [evalOp_ref, hs1acc]
+      rfl
+    have hmask : @evalOp .bool [64, 64] (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
+          (Op.ref .bool [64, 1] "m_mask")) s1
+        = some (Tile.remap Broadcast.nil.consL.consSame.leftIndex
+            (⟨fun idx : TileIndex [64, 1] =>
+              decide (s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [64, 1])) := by
+      rw [msa_evalOp_remap]
+      erw [evalOp_ref, hs1mm]
+      rfl
+    have hptr : evalOp (Op.ref .ptr [64, 64] "o_ptrs") s1
+        = some (⟨fun idx : TileIndex [64, 64] => msaOPtr Out s0 idx⟩ : Tile .ptr [64, 64]) := by
+      rw [evalOp_ref, hs1op]
+    unfold stepStmt
+    simp only [hval, hmask, hptr, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.cop_data, Tile.remap, Broadcast.leftIndex, Broadcast.rightIndex,
+      TileShape.dropInsertedIndex, decide_eq_true_eq, outOffset, offZ, offH, mIndex, dIndex,
+      msaOPtr, mul_one]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  have hinj : Function.Injective (fun idx : TileIndex [64, 64] =>
+      outOffset s0 4 32768 8192 64 1 64 idx) :=
+    mixed_sparse_attention_python_block64_offset_injective s0
+  rw [msa_fp16_scatter_readback s1
+    (fun idx : TileIndex [64, 64] => outOffset s0 4 32768 8192 64 1 64 idx)
+    (fun idx : TileIndex [64, 64] => FloatDType.real.cast FloatDType.fp16 (some (ratio idx)))
+    (fun idx : TileIndex [64, 64] => s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens))
+    hinj idx]
+  by_cases hlt : s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens)
+  · rw [if_pos hlt, if_pos hlt]
+    obtain ⟨ir, dd, u⟩ := idx
+    -- fp16 round-trip is identity: stored cell value = some ratio = some closedForm
+    rw [show FloatDType.fp16.ofReal (FloatDType.fp16.storeValue
+          (FloatDType.real.cast FloatDType.fp16 (some (ratio (ir, dd, u)))))
+        = (some (ratio (ir, dd, u)) : WithBot ℝ) from rfl]
+    rw [hratio]
+    exact congrArg some
+      (msaSeeded_ratio_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 ir dd
+        hNC64 (hpos ir hlt))
+  · rw [if_neg hlt, if_neg hlt]
+    simp only [BlockState.readMemValue, BlockState.readMemAs, hs1mem, hmem]
+
 end MSAFoundation
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
