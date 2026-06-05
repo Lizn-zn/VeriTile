@@ -2379,6 +2379,32 @@ theorem bwdIterBody_head_eval
   rw [stepStmts.cons_some h1]
   rfl
 
+/-- **Reverse-loop unroll (count = 2).** The lowered forward
+`forRangeDyn "__rev_t" 0 2 1 bwdIterBody` reverse loop, run from a post-prologue
+state `s0`, executes exactly two iterations: `bwdIterBody` with `__rev_t = 0`
+(time row `t = BT-1 = 1`), then `bwdIterBody` with `__rev_t = 1` (time row
+`t = 0`), then terminates. This is the structural backbone for the 2-iteration
+assembly: each `stepStmts bwdIterBody` factor is discharged by the per-statement
+chaining (`bwdIterBody_head_eval` + `bwd_iter_tail_eval`). -/
+theorem bwd_loop_unroll (s0 s1 s2 : BlockState)
+    (h0 : stepStmts bwdIterBody (s0.setReg "__rev_t" .nat [] (Tile.scalar 0)) = some s1)
+    (h1 : stepStmts bwdIterBody (s1.setReg "__rev_t" .nat [] (Tile.scalar 1)) = some s2) :
+    stepStmt (Stmt.forRangeDyn "__rev_t" (Op.constNat 0)
+        (Op.add .nat Broadcast.nil
+          (Op.div .nat Broadcast.nil
+            (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)) (Op.constNat 1))
+          (Op.constNat 1))
+        (Op.constNat 1) bwdIterBody) s0 = some s2 := by
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [evalOp, Tile.scalar, Option.bind, Tile.bop, NumericDType.add,
+    NumericDType.sub, NumericDType.div]
+  show stepForRangeAux "__rev_t" 0 2 1 bwdIterBody s0 = some s2
+  rw [stepForRangeAux.step_lt (by decide) (by decide), h0]
+  simp only [Option.bind]
+  rw [stepForRangeAux.step_lt (by decide) (by decide), h1]
+  simp only [Option.bind]
+  rw [stepForRangeAux.step_ge (by decide) (by decide)]
+
 end BwdAssembly
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
