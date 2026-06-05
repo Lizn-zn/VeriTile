@@ -473,6 +473,29 @@ noncomputable def mixedSparseAttnClosedForm
           (colKeyGlobal s column_index NUM_ROWS NNZ_V c.val) d)
   numer / denom
 
+/-- **Faithful exp2→exp scale.** The kernel sets `qk_scale = sm_scale ·
+1.44269504` and exponentiates with `exp2`. Since the semantics give
+`exp2(x) = exp(x · log 2)`, the per-key weight the loop computes is
+`exp2(qk_scale · raw) = exp(qk_scale · log 2 · raw)`. Hence the natural-exp
+scale to instantiate `mixedSparseAttnClosedForm` with — so that its
+`exp(scale · raw)` matches the kernel exactly — is
+`effScale sm_scale = sm_scale · 1.44269504 · log 2`. (`1.44269504 · log 2 ≈ 1`,
+the floating-point approximation of `log2(e) · ln 2 = 1`; the model carries the
+literal exactly, so the faithful closed form uses `effScale`, not bare
+`sm_scale`.) -/
+noncomputable def effScale (sm_scale : ℝ) : ℝ :=
+  sm_scale * 1.44269504 * Real.log 2
+
+/-- The faithful exp2 weight equals the natural-exp weight at `effScale`:
+`exp2(qk_scale · raw) = exp(effScale · raw)`, where `qk_scale = sm_scale ·
+1.44269504`. This is the precise numeric bridge the loop-fill proof needs to
+turn the kernel's `tl.math.exp2` updates into `mixedSparseAttnClosedForm`'s
+`Real.exp` weights. -/
+theorem exp2_qkScale_eq_exp_effScale (sm_scale raw : ℝ) :
+    Real.exp ((sm_scale * 1.44269504) * raw * Real.log 2)
+      = Real.exp (effScale sm_scale * raw) := by
+  unfold effScale; ring_nf
+
 /-- **Closed-form output-store bridge.** Given the loop-fill contract `hFill`
 (the streaming accumulator written to `Acc` equals `mixedSparseAttnClosedForm`
 on every active lane), the final `seqlens`-masked store copies the genuine
