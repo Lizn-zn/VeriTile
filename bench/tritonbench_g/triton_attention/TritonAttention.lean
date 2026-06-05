@@ -4330,6 +4330,138 @@ theorem ta_postLoop
       (fun idx : TileIndex [128] => FloatDType.real.storeValue (mTile.data idx)) hrawInj (i, PUnit.unit)]
     simp only [hmTile, FloatDType.real_storeValue]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **Full-kernel forward execution chain.** Running the lowered `_fwd_kernel`
+body (`taPreLoop ++ forRangeDyn(0,128,128) :: taPostLoop`) from a clean state `s`
+with the checked honest grid (`pids 0 = 0`, single KV block) reaches a final state
+`sF` whose `Out`/`L`/`M` stores hold the genuine closed-form values
+`fwdOutSpec`/`fwdLSpec`/`fwdMSpec`. -/
+theorem ta_exec (Q K V L M Out : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, exec (triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 1024 128 64 128) s = some sF
+      ∧ (∀ idx : TileIndex [128, 64],
+          active s (s.pids 1 * 128) 1024 128 idx →
+          sF.mem Out (outOffset s (s.pids 1 * 128) 64 1 128 idx)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (fwdOutSpec s Q K V idx))))
+      ∧ (∀ i : Fin 128, sF.readMem L (lRowOffset s (s.pids 1) 128 128 i) = fwdLSpec s Q K i)
+      ∧ (∀ i : Fin 128, sF.readMem M (lRowOffset s (s.pids 1) 128 128 i) = fwdMSpec s Q K i) := by
+  set sc := ((Real.sqrt (64 : ℝ))⁻¹) with hsc
+  -- decompose the body
+  have hbody : exec (triton_attention_fwd_kernel Q K V L M Out sc
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 1024 128 64 128) s
+        = stepStmts (taPreLoop Q K V Out sc
+            ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+                  (Op.mul .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+                  (Op.constNat 128) (taLoopBody sc)
+                :: taPostLoop L M Out)) s := by
+    show stepStmts (triton_attention_fwd_kernel Q K V L M Out sc
+          32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+          2 4 128 1024 128 64 128).toAlgKernel.body s = _
+    rw [ta_body_split]
+  rw [hbody]
+  -- preLoop
+  obtain ⟨sp, hpre, hsppids, hspmem, hspundef, hsmStart, hohp, homp, honp, hmpp, hlpp, haccp,
+      hqp, hkpp, hvpp, hopp⟩ := taPreLoop_eval s Q K V L M Out sc hundef
+  rw [stepStmts.append_some hpre]
+  -- invariant base case at counter 0
+  have hpid1bound : ∀ j : Fin 128, sp.pids 1 * 128 + j.val < 1024 := by
+    intro j; rw [hsppids]; have := j.isLt; have := hpid1; omega
+  have hinv0 : taInvariant Q K V Out sp sc 0 sp := by
+    refine ta_invariant_zero Q K V Out sp sc ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ hspundef
+    · exact hmpp
+    · exact hlpp
+    · exact haccp
+    · rw [hqp]; refine congrArg some ?_; ext idx
+      simp only [fwdQTile]
+      unfold BlockState.readMem; rw [hspmem, hsppids]
+    · rw [homp, hsppids]
+    · exact honp
+    · rw [hkpp, hsppids]
+    · rw [hvpp, hsppids]
+    · rw [hopp, hsppids]
+    · rw [hohp, hsppids]
+  -- run the loop via forRangeDyn_inv (single block, honest grid pids0 = 0)
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n") (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+      (stepOp := Op.constNat 128)
+      (P := fun i st => taInvariant Q K V Out sp sc i st)
+      (s_init := sp)
+      (by rw [evalOp_constNat])
+      (by rw [evalOp_mul, evalOp_add, evalOp_ref, hsmStart]
+          simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+          refine congrArg some ?_
+          ext u
+          simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+            NumericDType.add, NumericDType.mul]
+          rw [hpid0]; norm_num)
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      hinv0
+      (fun i st hi hP => ta_attn_step Q K V Out sp sc i st hi hpid1bound hP)
+  rw [stepStmts.cons_some hloop]
+  -- final counter = 128
+  have hfinal : final = 128 := by
+    simp only [taInvariant] at hinvL
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  subst hfinal
+  -- postLoop
+  obtain ⟨sF, hpostStep, hO, hLrb, hMrb⟩ :=
+    ta_postLoop Q K V L M Out sp sc sL hLOut hMOut hLM hinvL
+  refine ⟨sF, hpostStep, ?_, ?_, ?_⟩
+  · -- Out readback: bridge sp → s and oPartial/lPartial → fwdOutSpec
+    intro idx hActive
+    -- fwd tiles agree between s and sp (equal mem/pids)
+    have htileQ : fwdQTile sp Q = fwdQTile s Q := by
+      funext i; simp only [fwdQTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTile sp K = fwdKTile s K := by
+      funext i; simp only [fwdKTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileV : fwdVTile sp V = fwdVTile s V := by
+      funext i; simp only [fwdVTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hooff : outOffset sp (sp.pids 1 * 128) 64 1 128 idx = outOffset s (s.pids 1 * 128) 64 1 128 idx := by
+      simp only [outOffset, rowIndex, hsppids]
+    have hOidx := hO idx (by simp only [active, rowIndex, hsppids]; simpa only [active, rowIndex] using hActive)
+    rw [hooff] at hOidx
+    rw [hOidx]
+    refine congrArg (MemCell.of .fp16) (congrArg (FloatDType.real.cast FloatDType.fp16) (congrArg some ?_))
+    rw [fwdOutSpec_eq_streaming, htileQ, htileK, htileV, hsppids]
+  · -- L readback
+    intro i
+    have htileQ : fwdQTile sp Q = fwdQTile s Q := by
+      funext i; simp only [fwdQTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTile sp K = fwdKTile s K := by
+      funext i; simp only [fwdKTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hloff : lRowOffset sp (sp.pids 1) 128 128 i = lRowOffset s (s.pids 1) 128 128 i := by
+      simp only [lRowOffset, rowIndex, hsppids]
+    have hLi := hLrb i
+    rw [hloff] at hLi
+    rw [hLi, lPartial_eq_fwdLSpec]
+    simp only [fwdLSpec, fwdMSpec, fwdCausalSet, htileQ, htileK, hsppids]
+  · -- M readback
+    intro i
+    have htileQ : fwdQTile sp Q = fwdQTile s Q := by
+      funext i; simp only [fwdQTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTile sp K = fwdKTile s K := by
+      funext i; simp only [fwdKTile]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hloff : lRowOffset sp (sp.pids 1) 128 128 i = lRowOffset s (s.pids 1) 128 128 i := by
+      simp only [lRowOffset, rowIndex, hsppids]
+    have hMi := hMrb i
+    rw [hloff] at hMi
+    rw [hMi, ← fwdMSpec_eq_mPartial]
+    simp only [fwdMSpec, fwdCausalSet, htileQ, htileK, hsppids]
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
