@@ -3828,6 +3828,20 @@ private theorem dkOut_eq_closed (s : BlockState) (DKInner DKInter G : RegionName
       = offset s 64 8 (2 - 1) 2 4 i := by simp only [offset, baseOffset, hRlast]; ring
   simp only [dkOut, ldR, bwdDKInterClosed, ha, hb]
 
+/-- The per-lane `dg` summand `dq*q - dk*k` at row offset `(s.pids1*2+t_rel)*8`
+(with captured `last_g = g[row BT-1]`) equals the genuine `bwdDGSummand`. -/
+private theorem dgSum_eq_summand (s : BlockState)
+    (DQInner DQInter DKInner DKInter Q K G : RegionName) (t_rel : Fin 2) (i : Fin 4)
+    (R Rlast : Nat) (hR : R = (s.pids 1 * 2 + t_rel.val) * 8)
+    (hRlast : Rlast = (s.pids 1 * 2 + 1) * 8) :
+    dgSum s DQInner DQInter DKInner DKInter Q K G R (ldR s G Rlast) (i, PUnit.unit)
+      = bwdDGSummand s DQInner DQInter DKInner DKInter Q K G 64 8 2 4 t_rel i := by
+  have haQ : s.pids 2 * 64 + s.pids 0 * 4 + i.val + R = offset s 64 8 t_rel.val 2 4 i := by
+    simp only [offset, baseOffset, hR]; ring
+  simp only [dgSum, bwdDGSummand,
+    dqOut_eq_closed s DQInner DQInter G t_rel i R hR,
+    dkOut_eq_closed s DKInner DKInter G t_rel i R Rlast hR hRlast, ldR, haQ]
+
 /-- Helper: read a region `X` at an address other than the three written rows of
 an `stMem`-triple stacked at row `R`, when `X` differs from the three store
 regions or the address avoids the row range. -/
@@ -3983,6 +3997,90 @@ theorem bwd_decay_cumsum_dk_inter_closed_compute_correct
     rw [dkOut_eq_closed s DKInner DKInter G ⟨1, hlt⟩ i _ _
       (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)
       (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)]
+
+set_option maxHeartbeats 1600000 in
+/-- **Genuine `dg` readback.** The executed backward surface writes the honest
+reverse-cumulative-sum closed form `bwdDGClosed`
+(= `Σ_{j ≥ t_rel} (dq_inter[j]*q[j] - dk_inter[j]*k[j])`) into `DG` at every
+active lane of loop row `t_rel`. -/
+theorem bwd_decay_cumsum_dg_closed_compute_correct
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hDG_DQInter : DG ≠ DQInter) (hDG_DKInter : DG ≠ DKInter)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter) :
+    ComputeCorrect.Realizes
+      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG 64 8 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        bwdDGClosed s DQInner DQInter DKInner DKInter Q K G 64 8 2 4 t_rel i) := by
+  obtain ⟨s0, s1, s2, _, hexec, _, _, h1mem, h2mem⟩ :=
+    bwd_full_exec DQInner DQInter DKInner DKInter Q K G DG s
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bwd_decay_global_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro sa s' hExec hsa
+  subst sa
+  intro i hActive
+  have hs' : s' = s2 := by
+    rw [exec] at hexec; rw [exec] at hExec; rw [hExec] at hexec; exact Option.some.inj hexec
+  subst s'
+  have hacP : s.pids 0 * 4 + i.val < 8 := by simpa [active, elemIndex] using hActive
+  have hac : decide (s.pids 0 * 4 + i.val < 8) = Bool.true := decide_eq_true hacP
+  have hoff : offset s 64 8 t_rel.val 2 4 i
+      = s.pids 2 * 64 + s.pids 0 * 4 + i.val + (s.pids 1 * 2 + t_rel.val) * 8 := by
+    simp only [offset, baseOffset]; ring
+  have hmemrd : ∀ (a b : BlockState), a.mem = b.mem →
+      ∀ (r : RegionName) (o : Nat), a.readMem r o = b.readMem r o := by
+    intro a b hab r o; simp only [BlockState.readMem, hab]
+  show s2.readMem DG (offset s 64 8 t_rel.val 2 4 i) = _
+  rw [hoff, hmemrd s2 _ h2mem DG]
+  match t_rel with
+  | ⟨0, hlt⟩ =>
+    -- Row 0 = R1: DG is the outermost store of the outer triple → readback.
+    rw [show (s.pids 1 * 2 + 0) * 8 = (s.pids 1 * 2 + 2 - 1) * 8 - 8 from by omega,
+      stMem_readback s DG ((s.pids 1 * 2 + 2 - 1) * 8 - 8) _ _ (i, PUnit.unit)]
+    simp only [hac, if_true]
+    -- The reverse cumsum at row 0 = summand[row 0] + summand[row 1].
+    rw [show bwdDGClosed s DQInner DQInter DKInner DKInter Q K G 64 8 2 4 ⟨0, hlt⟩ i
+          = ∑ d : Fin 2, bwdDGSummand s DQInner DQInter DKInner DKInter Q K G 64 8 2 4
+              ⟨0 + d.val, by omega⟩ i from rfl]
+    rw [Fin.sum_univ_two]
+    rw [dgSum_eq_summand s DQInner DQInter DKInner DKInter Q K G ⟨1, by omega⟩ i
+        ((s.pids 1 * 2 + 2 - 1) * 8) _
+        (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)
+        (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega),
+      dgSum_eq_summand s DQInner DQInter DKInner DKInter Q K G ⟨0, by omega⟩ i
+        ((s.pids 1 * 2 + 2 - 1) * 8 - 8) _
+        (show (s.pids 1 * 2 + 2 - 1) * 8 - 8 = (s.pids 1 * 2 + 0) * 8 by omega)
+        (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)]
+    rw [add_comm]
+    rfl
+  | ⟨1, hlt⟩ =>
+    -- Row 1 = R0: outer triple skips DG by offset; inner triple's DG store → readback.
+    have hskip : ∀ region ∈ [DG, DKInter, DQInter], ∀ j : TileIndex [4],
+        region = DG → s.pids 2 * 64 + s.pids 0 * 4 + j.1.val
+            + ((s.pids 1 * 2 + 2 - 1) * 8 - 8) ≠
+          s.pids 2 * 64 + s.pids 0 * 4 + i.val + (s.pids 1 * 2 + 1) * 8 := by
+      intro region _ j _; have := j.1.2; have := (i : Fin 4).2; omega
+    rw [stMem3_read_skip s DG DKInter DQInter DG ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+        _ _ _ s1 _ hskip, hmemrd s1 _ h1mem DG]
+    rw [show (s.pids 1 * 2 + 1) * 8 = (s.pids 1 * 2 + 2 - 1) * 8 from by omega,
+      stMem_readback s DG ((s.pids 1 * 2 + 2 - 1) * 8) _ _ (i, PUnit.unit)]
+    simp only [hac, if_true]
+    rw [show bwdDGClosed s DQInner DQInter DKInner DKInter Q K G 64 8 2 4 ⟨1, hlt⟩ i
+          = ∑ d : Fin 1, bwdDGSummand s DQInner DQInter DKInner DKInter Q K G 64 8 2 4
+              ⟨1 + d.val, by omega⟩ i from rfl]
+    rw [Fin.sum_univ_one]
+    rw [dgSum_eq_summand s DQInner DQInter DKInner DKInter Q K G ⟨1, by omega⟩ i
+        ((s.pids 1 * 2 + 2 - 1) * 8) _
+        (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)
+        (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)]
+    rfl
 
 end BwdAssembly
 
