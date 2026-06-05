@@ -4699,5 +4699,151 @@ theorem bsa_step_acc
     rw [hOcdef, bsaOPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg Vg scale c hc (i, d, u)]
 
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **`bsa_attn_step`** — the CSR loop body advances `bsaInvariant` by one block.
+Given the invariant after `c` selected blocks plus the per-cell score/mask/value
+gather bridges over the loaded K/V tiles (discharged at exec assembly from the CSR
+selection schedule and the dot-product = `gScore` identity), the lowered
+`bsaLoopBody` steps to a state satisfying the invariant at `c + 1`. The four math
+conjuncts are the banked `bsa_step_mi`/`bsa_step_li`/`bsa_step_acc` (twice, for the
+two D-blocks); all seeded registers are preserved by `bsaLoopBody_steps`. -/
+theorem bsa_attn_step
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (s0 : BlockState) (c : Nat) (hc : c < numKVBlocks) (s : BlockState)
+    (hinv : bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 c s)
+    (idx : Nat)
+    -- gather bridges over the block-`c` loaded data; `SN = colIdx·16` is the block's
+    -- key base, `gm i = qStart + i` is the query row offset.
+    (hMask : ∀ (i jL : Fin 16),
+      ((s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx)) * 16 + jL.val
+        ≤ s0.pids 0 * 16 + i.val) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)
+        ≤ qStart + i.val))
+    (hScore : ∀ (i jL : Fin 16),
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Tile.bop NumericDType.real.add
+            (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ : TileIndex [16, 16] => some (0 : ℝ)⟩ : Tile .real [16, 16])
+            (Tile.dot []
+              (⟨fun ix : TileIndex [16, 16] =>
+                s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+                  ((s0.pids 0 * 16 + ix.1.val) * 32 + ix.2.1.val))⟩ : Tile .real [16, 16])
+              (⟨fun ix : TileIndex [16, 16] =>
+                s.readMemValue .real K ((s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) +
+                  (ix.2.1.val * 32 + ix.1.val) +
+                  s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx) * 16 * 32)⟩
+                : Tile .real [16, 16])))
+          (Tile.dot []
+            (⟨fun ix : TileIndex [16, 16] =>
+              s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+                ((s0.pids 0 * 16 + ix.1.val) * 32 + ix.2.1.val) + 16)⟩ : Tile .real [16, 16])
+            (⟨fun ix : TileIndex [16, 16] =>
+              s.readMemValue .real K ((s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) +
+                (ix.2.1.val * 32 + ix.1.val) +
+                s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx) * 16 * 32 + 16)⟩
+              : Tile .real [16, 16])))
+        (Tile.scalar (some (1.0 : ℝ) : WithBot ℝ))).data (i, jL, PUnit.unit)
+      = (some (gScore Qg Kg scale i
+          (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)) : WithBot ℝ))
+    (hVal : ∀ (d jL : Fin 16),
+      (⟨fun ix : TileIndex [16, 16] =>
+        s.readMemValue .real V ((s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) +
+          (ix.1.val * 32 + ix.2.1.val) +
+          s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx) * 16 * 32)⟩
+        : Tile .real [16, 16]).data (jL, d, PUnit.unit)
+      = (some (Vg (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL,
+          d, PUnit.unit)) : WithBot ℝ))
+    (hVal2 : ∀ (d jL : Fin 16),
+      (⟨fun ix : TileIndex [16, 16] =>
+        s.readMemValue .real V ((s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) +
+          (ix.1.val * 32 + ix.2.1.val) +
+          s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx) * 16 * 32 + 16)⟩
+        : Tile .real [16, 16]).data (jL, d, PUnit.unit)
+      = (some (Vg2 (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL,
+          d, PUnit.unit)) : WithBot ℝ)) :
+    ∃ s', stepStmts (bsaLoopBody C) (s.setReg "col_idx_idx" .nat [] (Tile.scalar idx)) = some s'
+      ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 (c + 1) s' := by
+  -- unpack the invariant
+  obtain ⟨hpids, hmem, hundef, hqsl, hsm, hbh, hoh, hob, hhg, hohkv, hom, hon, hod,
+    hlh, hmi, hli, hacc, hacc2, hq, hq2, hkp, hvp⟩ := hinv
+  -- run the banked loop-body execution chain
+  obtain ⟨s', hchain, hpidsF, hmemF, hundefF, hpres, hbody⟩ :=
+    bsaLoopBody_steps s Out Q K V R C idx (s0.pids 1 % 4 % 1)
+      (fun ix : TileIndex [16, 16] =>
+        (K, (s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) + (ix.2.1.val * 32 + ix.1.val)))
+      (fun ix : TileIndex [16, 16] =>
+        (V, (s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) + (ix.1.val * 32 + ix.2.1.val)))
+      (⟨fun ix : TileIndex [16, 16] =>
+        s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+          ((s0.pids 0 * 16 + ix.1.val) * 32 + ix.2.1.val))⟩ : Tile .real [16, 16])
+      (⟨fun ix : TileIndex [16, 16] =>
+        s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+          ((s0.pids 0 * 16 + ix.1.val) * 32 + ix.2.1.val) + 16)⟩ : Tile .real [16, 16])
+      (⟨fun idx : TileIndex [16, 16] =>
+        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale c idx /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c idx.1) : WithBot ℝ)⟩ : Tile .real [16, 16])
+      (⟨fun idx : TileIndex [16, 16] =>
+        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg2 scale c idx /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c idx.1) : WithBot ℝ)⟩ : Tile .real [16, 16])
+      (fun i : Fin 16 => s0.pids 0 * 16 + i.val)
+      (⟨fun i : TileIndex [16] => bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1⟩ : Tile .real [16])
+      (⟨fun i : TileIndex [16] =>
+        (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1) : WithBot ℝ)⟩ : Tile .real [16])
+      hlh hkp hvp hq hq2 hom hon hmi hli hacc hacc2
+  -- the body reads memory of `s` (unchanged from the loop perspective)
+  simp only at hbody
+  obtain ⟨hm_iF, hl_iF, hpF, haccF, hacc2F⟩ := hbody
+  refine ⟨s', hchain, ?_⟩
+  -- derive the per-cell bridges over the body's exposed SN-gathered tiles
+  set CI := s.readMemValue .nat (Region.cast C) (s0.pids 1 % 4 % 1 * 4 + idx) with hCIdef
+  set SN := CI * 16 with hSNdef
+  -- restate hScore/hMask/hVal/hVal2 over the loop body's `qkScaled`/`vt`/`v2t`
+  -- (these are exactly the tiles `bsaLoopBody_steps` exposes, modulo SN = CI*16)
+  unfold bsaInvariant
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF]; exact hpids
+  · rw [hmemF]; exact hmem
+  · intro rg o; rw [hundefF]; exact hundef rg o
+  · exact hpres (by decide) hqsl
+  · exact hpres (by decide) hsm
+  · exact hpres (by decide) hbh
+  · exact hpres (by decide) hoh
+  · exact hpres (by decide) hob
+  · exact hpres (by decide) hhg
+  · exact hpres (by decide) hohkv
+  · exact hpres (by decide) hom
+  · exact hpres (by decide) hon
+  · exact hpres (by decide) hod
+  · exact hpres (by decide) hlh
+  · -- m_i = bsaMPartial (c+1)
+    rw [hm_iF]; refine congrArg some ?_
+    exact bsa_step_mi qStart numKVBlocks c hc gpos Qg Kg scale SN
+      (fun i : Fin 16 => s0.pids 0 * 16 + i.val) _ hMask hScore
+  · -- l_i = bsaLPartial (c+1)
+    rw [hl_iF]; refine congrArg some ?_
+    exact bsa_step_li qStart numKVBlocks c hc gpos Qg Kg scale SN
+      (fun i : Fin 16 => s0.pids 0 * 16 + i.val) _ hMask hScore
+  · -- acc = bsaOPartial Vg (c+1) / bsaLPartial (c+1)
+    rw [haccF]; refine congrArg some ?_
+    exact bsa_step_acc qStart numKVBlocks c hc (by omega) gpos Qg Kg Vg scale SN
+      (fun i : Fin 16 => s0.pids 0 * 16 + i.val) _ _ hMask hScore hVal
+  · -- acc2 = bsaOPartial Vg2 (c+1) / bsaLPartial (c+1)
+    rw [hacc2F]; refine congrArg some ?_
+    exact bsa_step_acc qStart numKVBlocks c hc (by omega) gpos Qg Kg Vg2 scale SN
+      (fun i : Fin 16 => s0.pids 0 * 16 + i.val) _ _ hMask hScore hVal2
+  · exact hpres (by decide) hq
+  · exact hpres (by decide) hq2
+  · exact hpres (by decide) hkp
+  · exact hpres (by decide) hvp
+
+
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
