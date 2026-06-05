@@ -1471,6 +1471,271 @@ theorem bloomBody_split (Q K V Out : RegionName)
             :: bloomPostLoop Out) := by
   rfl
 
+/-! ### Bloom loop-body per-statement `evalOp` recipes -/
+
+/-- `k` masked-load mask (`((start_n+offs_n[None,:]) < bel) & (offs_d[:,None] < 96)`,
+shape `[D, BN]`). Lane `(e, j)` is `(SN + j < bel) ∧ (e < 96)`. -/
+theorem bloomKMask_eval {BN D : Nat} (s : BlockState) (SN bel : Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.boolAnd Broadcast.nil.consR.consL
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat 96))) s
+      = some (⟨fun idx : TileIndex [D, BN] =>
+          decide (SN + idx.2.1.val < bel) && decide (idx.1.val < 96)⟩ : Tile .bool [D, BN]) := by
+  rw [evalOp]
+  rw [evalOp_lt, evalOp_add]
+  erw [ctx_evalOp_expandDim_zero_nat]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_one_nat]
+  simp only [evalOp_ref, evalOp_constNat, hsn, hn, hd, hbel,
+    Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.cop_data, Tile.expandDim, Tile.scalar_data_index,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+
+/-- `v` masked-load mask (`((start_n+offs_n[:,None]) < bel) & (offs_d[None,:] < 96)`,
+shape `[BN, D]`). Lane `(j, e)` is `(SN + j < bel) ∧ (e < 96)`. -/
+theorem bloomVMask_eval {BN D : Nat} (s : BlockState) (SN bel : Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat 96))) s
+      = some (⟨fun idx : TileIndex [BN, D] =>
+          decide (SN + idx.1.val < bel) && decide (idx.2.1.val < 96)⟩ : Tile .bool [BN, D]) := by
+  rw [evalOp]
+  rw [evalOp_lt, evalOp_add]
+  erw [ctx_evalOp_expandDim_one_nat]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_zero_nat]
+  simp only [evalOp_ref, evalOp_constNat, hsn, hn, hd, hbel,
+    Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.cop_data, Tile.expandDim, Tile.scalar_data_index,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+
+/-- `qk = tl.zeros([…])` full-zero eval. -/
+theorem bloomQkFull_eval {BM BN : Nat} (s : BlockState) :
+    evalOp (Op.full [BM, BN] (Op.const (0 : ℝ))) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const]
+
+/-- `qk += tl.dot(q, k)` eval (`qk = qk + dot q k`, `qk` is all-zero). -/
+theorem bloomQkAddDot_eval {BM BN D : Nat} (s : BlockState)
+    (qktile : Tile .real [BM, BN]) (qtile : Tile .real [BM, D]) (ktile : Tile .real [D, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq : s.regs .real [BM, D] "q" = some qtile) (hk : s.regs .real [D, BN] "k" = some ktile) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BM, D] "q") (Op.ref .real [D, BN] "k"))) s
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame qktile
+          (Tile.dot [] qtile ktile)) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [BM, D] "q") (Op.ref .real [D, BN] "k")) s
+      = some (Tile.dot [] qtile ktile) := by rw [evalOp_dot]; simp [hq, hk]
+  have hdot2 : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.ref .real [BM, D] "q") (Op.ref .real [D, BN] "k")) s
+      = some (Tile.dot [] qtile ktile) := hdot
+  rw [evalOp_add]; simp only [evalOp_ref, hqk, hdot2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- `qk *= sm_scale` eval. -/
+theorem bloomQkScale_eval {BM BN : Nat} (s : BlockState) (sm : ℝ) (qktile : Tile .real [BM, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BM, BN] "qk") (Op.const sm)) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qktile (Tile.scalar (some sm))) := by
+  rw [evalOp_mul]; simp only [evalOp_ref, evalOp_const, hqk, Option.bind_eq_bind, Option.bind_some]
+
+/-- `qk = tl.where(offs_m[:,None]+plen ≥ start_n+offs_n[None,:], qk, -1e8)` eval
+(causal `-1e8` sentinel, mask `ge` inline). -/
+theorem bloomQkWhere_eval (s : BlockState) (BM BN plen SN : Nat) (gOM : Fin BM → Nat)
+    (qktile : Tile .real [BM, BN])
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hp : s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp ((Op.ge .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))).where
+        (Op.ref .real [BM, BN] "qk")
+        ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (100000000.0 : ℝ))).broadcast [BM, BN])) s
+      = some (Tile.select
+          (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN])
+          qktile
+          (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 100000000.0 : ℝ)⟩ : Tile .real [BM, BN])) := by
+  rw [evalOp_where]
+  have hmask : evalOp (Op.ge .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))) s
+      = some (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN]) := by
+    rw [ctx_evalOp_ge]
+    simp only [evalOp_add, evalOp_ref, ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+      hm, hn, hp, hsn, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_; ext idx
+    simp [Tile.cop, Tile.bop, Tile.expandDim, Tile.vec, ComparableDType.ge, NumericDType.add]
+  have hother : @evalOp .real [BM, BN]
+      ((Op.sub NumericDType.real Broadcast.nil (Op.const (0.0:ℝ)) (Op.const (100000000.0:ℝ))).broadcast [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 100000000.0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp]; refine congrArg some ?_; ext idx; simp [Tile.bop, NumericDType.sub]
+  simp only [hmask, evalOp_ref, hqk, hother, Option.bind_eq_bind, Option.bind_some]
+
+/-- `m_ij = tl.max(qk, 1)` eval (block-max reduce). -/
+theorem bloomMij_eval {BM BN : Nat} (s : BlockState) (qkfull : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qkfull)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkfull = some rmaxT) :
+    evalOp (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+  rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk, Option.bind_some]; exact hrm
+
+/-- `l_ij = tl.sum(p, 1)` eval. -/
+theorem bloomLij_eval {BM BN : Nat} (s : BlockState) (ptile : Tile .real [BM, BN])
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) ptile) := by
+  rw [evalOp_reduceSum]; simp only [evalOp_ref, hp, Option.bind_some]; rfl
+
+/-- `p = tl.exp(qk − m_ij[:, None])` natural-exp eval. -/
+theorem bloomP_eval {BM BN : Nat} (s : BlockState) (qk2tile : Tile .real [BM, BN])
+    (mij : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qk2tile) (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [BM, BN] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "m_ij"))).exp s
+      = some (Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame
+          qk2tile (Tile.expandDim ⟨1, by simp⟩ mij))) := by
+  rw [evalOp_exp, evalOp_sub]
+  have hexp : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ mij) := by erw [ctx_evalOp_expandDim_one_real, hmij]; rfl
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- `m_i_new = tl.maximum(m_i, m_ij)` = `where(m_i > m_ij, m_i, m_ij)` eval. -/
+theorem bloomMiNew_eval {BM : Nat} (s : BlockState) (mi mij : Tile .real [BM])
+    (hmi : s.regs .real [BM] "m_i" = some mi) (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp ((Op.gt .real Broadcast.nil.consSame (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij")).where
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mi mij) mi mij) := by
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmi, hmij, Option.bind_eq_bind, Option.bind_some]
+
+/-- `alpha = tl.exp(m_i − m_i_new)` / `beta = tl.exp(m_ij − m_i_new)` natural-exp eval. -/
+theorem bloomExpSub_eval {BM : Nat} (s : BlockState) (nm1 nm2 : RegName) (t1 t2 : Tile .real [BM])
+    (h1 : s.regs .real [BM] nm1 = some t1) (h2 : s.regs .real [BM] nm2 = some t2) :
+    evalOp (Op.sub .real Broadcast.nil.consSame (Op.ref .real [BM] nm1) (Op.ref .real [BM] nm2)).exp s
+      = some (Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consSame t1 t2)) := by
+  rw [evalOp_exp, evalOp_sub]; simp [h1, h2]
+
+/-- `l_i_new = alpha·l_i + beta·l_ij` eval. -/
+theorem bloomLiNew_eval {BM : Nat} (s : BlockState) (alpha li beta lij : Tile .real [BM])
+    (ha : s.regs .real [BM] "alpha" = some alpha) (hli : s.regs .real [BM] "l_i" = some li)
+    (hb : s.regs .real [BM] "beta" = some beta) (hlij : s.regs .real [BM] "l_ij" = some lij) :
+    evalOp (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BM] "alpha") (Op.ref .real [BM] "l_i"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BM] "beta") (Op.ref .real [BM] "l_ij"))) s
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame
+          (Tile.bop NumericDType.real.mul Broadcast.nil.consSame alpha li)
+          (Tile.bop NumericDType.real.mul Broadcast.nil.consSame beta lij)) := by
+  rw [evalOp_add]; simp [evalOp_mul, ha, hli, hb, hlij]
+
+/-- `p_scale = beta / l_i_new` eval. -/
+theorem bloomPscale_eval {BM : Nat} (s : BlockState) (beta lin : Tile .real [BM])
+    (hb : s.regs .real [BM] "beta" = some beta) (hlin : s.regs .real [BM] "l_i_new" = some lin) :
+    evalOp (Op.div .real Broadcast.nil.consSame (Op.ref .real [BM] "beta") (Op.ref .real [BM] "l_i_new")) s
+      = some (Tile.bop NumericDType.real.div Broadcast.nil.consSame beta lin) := by
+  rw [evalOp_div]; simp [hb, hlin]
+
+/-- `p = p · p_scale[:, None]` eval. -/
+theorem bloomP2_eval {BM BN : Nat} (s : BlockState) (ptile : Tile .real [BM, BN]) (pscale : Tile .real [BM])
+    (hp : s.regs .real [BM, BN] "p" = some ptile) (hps : s.regs .real [BM] "p_scale" = some pscale) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BM, BN] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "p_scale"))) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame ptile
+          (Tile.expandDim ⟨1, by simp⟩ pscale)) := by
+  have hexp : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "p_scale")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ pscale) := by erw [ctx_evalOp_expandDim_one_real, hps]; rfl
+  rw [evalOp_mul]; simp only [evalOp_ref, hp, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- `acc_scale = (l_i / l_i_new) · alpha` eval. -/
+theorem bloomAccScale1_eval {BM : Nat} (s : BlockState) (li lin alpha : Tile .real [BM])
+    (hli : s.regs .real [BM] "l_i" = some li) (hlin : s.regs .real [BM] "l_i_new" = some lin)
+    (ha : s.regs .real [BM] "alpha" = some alpha) :
+    evalOp (Op.mul .real Broadcast.nil.consSame
+        (Op.div .real Broadcast.nil.consSame (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "l_i_new"))
+        (Op.ref .real [BM] "alpha")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.nil.consSame
+          (Tile.bop NumericDType.real.div Broadcast.nil.consSame li lin) alpha) := by
+  rw [evalOp_mul]; simp [evalOp_div, hli, hlin, ha]
+
+/-- `acc_scale = tl.where(offs_m+plen ≥ start_n, acc_scale, 1.0)` eval (the
+acc-rescale active-lane guard). -/
+theorem bloomAccScale2_eval (s : BlockState) (BM plen SN : Nat) (gOM : Fin BM → Nat)
+    (acctile : Tile .real [BM])
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hp : s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hacc : s.regs .real [BM] "acc_scale" = some acctile) :
+    evalOp ((Op.ge .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BM] "offs_m") (Op.ref .nat [] "prompt_cache_len"))
+          (Op.ref .nat [] "start_n")).where
+        (Op.ref .real [BM] "acc_scale") ((Op.const (1.0 : ℝ)).broadcast [BM])) s
+      = some (Tile.select
+          (⟨fun idx : TileIndex [BM] => decide (SN ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM])
+          acctile (⟨fun _ : TileIndex [BM] => some (1.0 : ℝ)⟩ : Tile .real [BM])) := by
+  rw [evalOp_where]
+  have hmask : evalOp (Op.ge .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarR (Op.ref .nat [BM] "offs_m") (Op.ref .nat [] "prompt_cache_len"))
+        (Op.ref .nat [] "start_n")) s
+      = some (⟨fun idx : TileIndex [BM] => decide (SN ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM]) := by
+    rw [ctx_evalOp_ge]
+    simp only [evalOp_add, evalOp_ref, hm, hp, hsn, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_; ext idx
+    simp [Tile.cop, Tile.bop, Tile.vec, Tile.scalar_data_index, ComparableDType.ge, NumericDType.add]
+  have hother : @evalOp .real [BM] ((Op.const (1.0 : ℝ)).broadcast [BM]) s
+      = some (⟨fun _ : TileIndex [BM] => some (1.0 : ℝ)⟩ : Tile .real [BM]) := by
+    simp only [evalOp]; refine congrArg some ?_; ext idx; rfl
+  simp only [hmask, evalOp_ref, hacc, hother, Option.bind_eq_bind, Option.bind_some]
+
+/-- `acc = acc · acc_scale[:, None]` eval. -/
+theorem bloomAcc1_eval {BM D : Nat} (s : BlockState) (acctile : Tile .real [BM, D]) (ascale : Tile .real [BM])
+    (hacc : s.regs .real [BM, D] "acc" = some acctile) (has : s.regs .real [BM] "acc_scale" = some ascale) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BM, D] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "acc_scale"))) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame acctile
+          (Tile.expandDim ⟨1, by simp⟩ ascale)) := by
+  have hexp : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "acc_scale")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ ascale) := by erw [ctx_evalOp_expandDim_one_real, has]; rfl
+  rw [evalOp_mul]; simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- `acc += tl.dot(p, v)` eval (`acc = acc + dot p v`). -/
+theorem bloomAcc2_eval {BM BN D : Nat} (s : BlockState) (acctile : Tile .real [BM, D])
+    (ptile : Tile .real [BM, BN]) (vtile : Tile .real [BN, D])
+    (hacc : s.regs .real [BM, D] "acc" = some acctile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile) (hv : s.regs .real [BN, D] "v" = some vtile) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BM, D] "acc")
+        (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, D] "v"))) s
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acctile
+          (Tile.dot [] ptile vtile)) := by
+  have hdot0 : evalOp (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, D] "v")) s
+      = some (Tile.dot [] ptile vtile) := by rw [evalOp_dot]; simp [hp, hv]
+  have hdot : @evalOp TileDType.real [BM, D]
+      (Op.dot (batch := []) (Op.ref .real [BM, BN] "p") (Op.ref .real [BN, D] "v")) s
+      = some (Tile.dot [] ptile vtile) := hdot0
+  rw [evalOp_add]; simp only [evalOp_ref, hacc, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
 /-! ### Bloom-specific per-key data + boundary-masked exact fold
 
 The bloom kernel feeds the generic base-2 machinery the per-key pair
