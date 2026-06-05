@@ -1055,6 +1055,75 @@ theorem bsaLPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
   exact mul_ne_zero (Real.exp_ne_zero _)
     (ne_of_gt (lFree_final_pos hBk hN qStart gpos Q Kg scale i hVis0))
 
+/-- If the gathered m-free normalizer `lFree` vanishes, so does the m-free output
+`oFree` (no causally-visible key is selected, so every output summand carries a
+zero weight). -/
+theorem oFree_eq_zero_of_lFree_eq_zero {M D Bk N : Nat}
+    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
+    (Q : TileIndex [M, D] → ℝ) (Kg Vg : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k ≤ N) (idx : TileIndex [M, D])
+    (hl : lFree qStart gpos Q Kg scale k hk idx.1 = 0) :
+    oFree qStart gpos Q Kg Vg scale k hk idx = 0 := by
+  -- every summand of `lFree` is nonneg, so the sum is 0 ⟹ each is 0 ⟹ each weight 0
+  unfold lFree at hl
+  unfold oFree
+  rw [Finset.sum_eq_zero]
+  intro n _
+  rw [Finset.sum_eq_zero]
+  intro jL _
+  -- the corresponding `lFree` term is 0; deduce the weight is 0
+  have hterm : (fun jL : Fin Bk =>
+      let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+      if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) jL = 0 := by
+    have hnonneg_inner : ∀ m : Fin k, (0 : ℝ) ≤ Finset.univ.sum (fun jL : Fin Bk =>
+        let j := StreamingAccumulator.blockIndex Bk N m.val (Nat.lt_of_lt_of_le m.isLt hk) jL
+        if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) := by
+      intro m; apply Finset.sum_nonneg; intro jL _
+      by_cases h : gpos (StreamingAccumulator.blockIndex Bk N m.val (Nat.lt_of_lt_of_le m.isLt hk) jL) ≤ qStart + idx.1.val
+      · simp only [h, if_true]; exact le_of_lt (Real.exp_pos _)
+      · simp only [h, if_false]; exact le_refl 0
+    have houter := (Finset.sum_eq_zero_iff_of_nonneg (fun m _ => hnonneg_inner m)).mp hl n (Finset.mem_univ _)
+    have hinner_nonneg : ∀ jL : Fin Bk, (0 : ℝ) ≤
+        (let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+         if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) := by
+      intro jL
+      by_cases h : gpos (StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL) ≤ qStart + idx.1.val
+      · simp only [h, if_true]; exact le_of_lt (Real.exp_pos _)
+      · simp only [h, if_false]; exact le_refl 0
+    exact (Finset.sum_eq_zero_iff_of_nonneg (fun jL _ => hinner_nonneg jL)).mp houter jL (Finset.mem_univ _)
+  -- so the output summand (weight · V) is 0
+  simp only [] at hterm
+  show (if gpos (StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL) ≤ qStart + idx.1.val
+      then Real.exp (gScore Q Kg scale idx.1 _) else 0) * Vg _ = 0
+  rw [hterm, zero_mul]
+
+/-- The running ratio is well-defined under cancellation: `(O_c / L_c) · L_c = O_c`,
+even when `L_c = 0` (then `O_c = 0` too, by `oFree_eq_zero_of_lFree_eq_zero`). This
+is the load-bearing fact making the FA2 normalized acc-rescale advance the
+`O / L` invariant. -/
+theorem bsaOPartial_div_mul_self {M D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D])
+    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
+    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx /
+        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 *
+        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1
+      = bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx := by
+  by_cases hL : bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 = 0
+  · rw [hL, div_zero, mul_zero]
+    -- L = 0 ⟹ lFree = 0 (exp(-m) ≠ 0) ⟹ oFree = 0 ⟹ O = 0
+    rw [bsaLPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg scale k hk idx.1 hVis0] at hL
+    have hlFree : lFree qStart gpos Q Kg scale k hk idx.1 = 0 := by
+      rcases mul_eq_zero.mp hL with h | h
+      · exact absurd h (Real.exp_ne_zero _)
+      · exact h
+    rw [bsaOPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg Vg scale k hk idx hVis0,
+        oFree_eq_zero_of_lFree_eq_zero qStart gpos Q Kg Vg scale k hk idx hlFree, mul_zero]
+  · rw [div_mul_cancel₀ _ hL]
+
 /-- **Load-bearing streaming-eq bridge.** The final gathered-causal streaming
 ratio equals the gathered closed-form attention `bsaAttn` — i.e. the online
 softmax over the CSR-selected (non-contiguous, global-causal) key stream computes
