@@ -1643,4 +1643,110 @@ theorem chunk_delta_fwd_python_case2_output_summary
       final_state k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64 4
       Bool.true s (chunk_delta_fwd_final_state_python_test_shape_offset_injective s) hBHF
 
+/-! ## Cross-chunk exec carry-fold (genuine producer derivation)
+
+We step the lowered (algorithm-layer, float-erased) surface body of the checked
+Python shape directly, eliminating the producer hypotheses `hBH`/`hBVN`/`hBHF`.
+
+* `cdfStopOp` — the inner `tl.cdiv(32, 32)` loop bound (evaluates to `1`).
+* `cdfInnerBody` — the inner `forRangeDyn "i_c"` body (= `chunkDeltaInnerBody`).
+* `cdfOuterBody` — the outer `forRange "i_t" 0 4 1` body: `p_h` make + `h` store
+  + `b_h_cumsum = 0` + the inner dynamic loop + the `b_h += b_h_cumsum` advance.
+* `cdfPrologue USE` — the prologue (`i_k`/`i_v`/`i_bh`, `b_h = 0`, the
+  `USE_INITIAL_STATE` `ifThen` seed).
+* `cdfEpilogue STORE` — the `STORE_FINAL_STATE` `ifThen` flush.
+
+`chunk_delta_fwd_body_split` proves (by `rfl`) the full algorithm body equals
+`cdfPrologue ++ [forRange "i_t" 0 4 1 cdfOuterBody] ++ cdfEpilogue`. -/
+
+/-- The inner `forRangeDyn "i_c"` stop op `tl.cdiv(32, 32)` (= `(32+32-1)/32 = 1`). -/
+def cdfStopOp : Op .nat [] :=
+  Op.div .nat Broadcast.nil
+    (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat 32) (Op.constNat 32)) (Op.constNat 1))
+    (Op.constNat 32)
+
+theorem cdfStopOp_eval (s : BlockState) : evalOp cdfStopOp s = some (Tile.scalar 1) := by
+  simp only [cdfStopOp, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+    Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro z
+  simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.div, NumericDType.sub, NumericDType.add]
+
+/-- The outer `forRange "i_t" 0 4 1` body (float-erased, algorithm layer). -/
+def cdfOuterBody (k v d v_new h : RegionName) : List Stmt :=
+  [ Stmt.assign .blockPtr [64, 64] "p_h"
+      (Op.makeBlockPtrDynOffsets h
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 16384))
+          (Op.mul .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat 64))
+            (Op.constNat 64)))
+        [64, 64] [64, 64] [64, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
+    Stmt.store .real [64, 64]
+      (.blockPtr (Op.ref .blockPtr [64, 64] "p_h") [0, 1])
+      (Op.ref .real [64, 64] "b_h") .none,
+    Stmt.assign .real [64, 64] "b_h_cumsum"
+      (Op.full [64, 64] (Op.const 0)),
+    Stmt.forRangeDyn "i_c" (Op.constNat 0) cdfStopOp (Op.constNat 1)
+      (chunkDeltaInnerBody k v d v_new 8192 128 1 8192 64 1 128 64 64 32 32 64 64),
+    Stmt.assign .real [64, 64] "b_h"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "b_h")
+        (Op.ref .real [64, 64] "b_h_cumsum")) ]
+
+/-- The prologue (algorithm layer): program ids, `b_h = 0`, and the
+`USE_INITIAL_STATE` `ifThen` seed (`p_h0` make + `b_h` load). -/
+def cdfPrologue (initial_state : RegionName) (USE_INITIAL_STATE : Bool) : List Stmt :=
+  [ Stmt.assign .nat [] "i_k" (Op.programId 0),
+    Stmt.assign .nat [] "i_v" (Op.programId 1),
+    Stmt.assign .nat [] "i_bh" (Op.programId 2),
+    Stmt.assign .real [64, 64] "b_h" (Op.full [64, 64] (Op.const 0)),
+    Stmt.ifThen (Op.constBool USE_INITIAL_STATE)
+      [ Stmt.assign .blockPtr [64, 64] "p_h0"
+          (Op.makeBlockPtrDynOffsets initial_state
+            (Op.mul .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+              (Op.constNat 64))
+            [64, 64] [64, 64] [64, 1]
+            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
+              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
+        Stmt.assign .real [64, 64] "b_h"
+          (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 64] "p_h0") [0, 1]) .none) ] ]
+
+/-- The epilogue (algorithm layer): the `STORE_FINAL_STATE` `ifThen` flush
+(`p_ht` make + `final_state` store). -/
+def cdfEpilogue (final_state : RegionName) (STORE_FINAL_STATE : Bool) : List Stmt :=
+  [ Stmt.ifThen (Op.constBool STORE_FINAL_STATE)
+      [ Stmt.assign .blockPtr [64, 64] "p_ht"
+          (Op.makeBlockPtrDynOffsets final_state
+            (Op.mul .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+              (Op.constNat 64))
+            [64, 64] [64, 64] [64, 1]
+            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
+              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
+        Stmt.store .real [64, 64]
+          (.blockPtr (Op.ref .blockPtr [64, 64] "p_ht") [0, 1])
+          (Op.ref .real [64, 64] "b_h") .none ] ]
+
+set_option maxRecDepth 8000 in
+/-- **Body split (by `rfl`).** The Python-shape surface lowers (float-erased) to
+the prologue, the single outer `forRange "i_t" 0 4 1` carrying `cdfOuterBody`, and
+the epilogue. -/
+theorem chunk_delta_fwd_body_split
+    (k v d v_new h initial_state final_state : RegionName)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+      USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel.body
+      = cdfPrologue initial_state USE_INITIAL_STATE
+        ++ [Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)]
+        ++ cdfEpilogue final_state STORE_FINAL_STATE := by
+  cases USE_INITIAL_STATE <;> cases STORE_FINAL_STATE <;> rfl
+
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
