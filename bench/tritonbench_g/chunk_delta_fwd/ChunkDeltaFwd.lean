@@ -1155,55 +1155,66 @@ theorem cdfAccum_cumsum_eq (s sin : BlockState) (k v d : RegionName) (i_t : Nat)
 def cdfVNewAddr (s : BlockState) (i_t : Nat) (idx : TileIndex [32, 64]) : Nat :=
   s.pids 2 * 8192 + (i_t * 32 + 0 * 32 + idx.1.val) * 64 + (s.pids 1 * 64 + idx.2.1.val) * 1
 
+/-- The explicit post-store state of the `v_new` block-ptr store: the masked
+writeMem foldl of the corrected value (built from the reference state `s`) over
+the input state `sin`, at chunk `i_t`. -/
+noncomputable def cdfVNewStoreState (s sin : BlockState) (v d v_new : RegionName)
+    (i_t : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [32, 64]).foldl
+    (fun acc i => if (i_t * 32 + 0 * 32 + i.1.val < 128 ∧ s.pids 1 * 64 + i.2.1.val < 64)
+        then acc.writeMem v_new (cdfVNewAddr s i_t i)
+          (cdfBvNewCell s v d fbh i_t i.1.val i.2.1.val) else acc) sin
+
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
-/-- **`v_new` block-ptr store step.** Stepping the masked block-ptr store of the
-corrected `b_v` (= `cdfBvNewTile`) through `p_v_new` writes `cdfBvNewCell` at each
-active lane of chunk `i_t` and leaves all other addresses unchanged. -/
-theorem cdfStore_vnew_step (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
+/-- **`v_new` block-ptr store step (eq).** Stepping the masked block-ptr store of
+`b_v` (= `cdfBvNewTile`) through `p_v_new` yields `cdfVNewStoreState`. -/
+theorem cdfStore_vnew_step_eq (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
     (fbh : Nat → Nat → ℝ)
-    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
     (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvNewTile s v d fbh i_t))
     (hpvn : sin.regs .blockPtr [32, 64] "p_v_new" = some
       ⟨fun _ => BlockPtr.mk v_new (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
         [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
-    ∃ s', stepStmt (Stmt.store .real [32, 64]
+    stepStmt (Stmt.store .real [32, 64]
         (.blockPtr (Op.ref .blockPtr [32, 64] "p_v_new") [0, 1])
-        (Op.ref .real [32, 64] "b_v") .none) sin = some s'
-      ∧ s'.pids = sin.pids
-      ∧ s'.regs = sin.regs
+        (Op.ref .real [32, 64] "b_v") .none) sin
+      = some (cdfVNewStoreState s sin v d v_new i_t fbh) := by
+  unfold stepStmt cdfVNewStoreState
+  simp only [evalOp_ref, hbv, hpvn, Option.bind, Option.map]
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [32, 64])) ?_)
+  funext acc i
+  obtain ⟨c, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+    Bool.true_and, cdfVNewAddr]
+  by_cases hb : i_t * 32 + 0 * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64
+  · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real]; rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false]
+
+set_option maxHeartbeats 4000000 in
+/-- **`v_new` store readback properties.** `cdfVNewStoreState` writes
+`cdfBvNewCell` at every active lane and leaves all other addresses unchanged. -/
+theorem cdfStore_vnew_step_props (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ)
+    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx)) :
+    (cdfVNewStoreState s sin v d v_new i_t fbh).pids = sin.pids
+      ∧ (cdfVNewStoreState s sin v d v_new i_t fbh).regs = sin.regs
       ∧ (∀ idx : TileIndex [32, 64],
           (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          s'.readMem v_new (cdfVNewAddr s i_t idx)
+          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem v_new (cdfVNewAddr s i_t idx)
             = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
-      ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
+      ∧ (∀ rg off, rg ≠ v_new →
+          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem rg off = sin.readMem rg off)
       ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
-          s'.readMem v_new off = sin.readMem v_new off) := by
+          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem v_new off = sin.readMem v_new off) := by
   classical
+  unfold cdfVNewStoreState
   set offFn : TileIndex [32, 64] → Nat := fun idx => cdfVNewAddr s i_t idx with hoffFn
   set Pmask : TileIndex [32, 64] → Prop :=
     fun idx => i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64 with hPmask
   set valFn : TileIndex [32, 64] → ℝ :=
     fun idx => cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val with hvalFn
-  -- step the store into a masked writeMem foldl
-  have hstore : stepStmt (Stmt.store .real [32, 64]
-        (.blockPtr (Op.ref .blockPtr [32, 64] "p_v_new") [0, 1])
-        (Op.ref .real [32, 64] "b_v") .none) sin
-      = some ((TileShape.allIndices [32, 64]).foldl
-          (fun acc i => if Pmask i then acc.writeMem v_new (offFn i) (valFn i) else acc) sin) := by
-    unfold stepStmt
-    simp only [evalOp_ref, hbv, hpvn, Option.bind, Option.map]
-    refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [32, 64])) ?_)
-    funext acc i
-    obtain ⟨c, p, u⟩ := i
-    simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
-      Bool.true_and, hPmask, hoffFn, hvalFn, cdfVNewAddr]
-    by_cases hb : i_t * 32 + 0 * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64
-    · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real]; rfl
-    · simp only [hb, decide_false, Bool.false_eq_true, if_false]
-  rw [hstore]
   have hinj : Function.Injective offFn := hInj
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · rw [BlockState.foldl_writeMem_prop_masked_pids]
   · funext dtype shape name; rw [BlockState.foldl_writeMem_prop_masked_regs]
   · intro idx hidx
@@ -1216,6 +1227,130 @@ theorem cdfStore_vnew_step (s sin : BlockState) (v d v_new : RegionName) (i_t : 
   · intro off hoff
     exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
       v_new offFn valFn Pmask _ sin off (fun i _ _ => hoff i)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Inner-loop body step (single inner chunk).** Stepping `chunkDeltaInnerBody`
+from an entry state `sin` carrying `i_k=0`, `i_t`, `i_c=0`, an abstract `b_h` tile
+(cell fn `fbh`), and `b_h_cumsum = 0`, with memory matching `s`, advances
+`b_h_cumsum` to the cumulative `Σ_c b_k·b_vNew`, writes the corrected `v_new[i_t]`
+block, and preserves `b_h`/pids/the loop registers and the `k`/`v`/`d` regions. -/
+theorem chunkDeltaInnerBody_step
+    (k v d v_new : RegionName) (s sin : BlockState) (i_t : Nat) (fbh : Nat → Nat → ℝ)
+    (bhT : Tile .real [64, 64]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d)
+    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (_hpids : sin.pids = s.pids)
+    (hik : sin.regs .nat [] "i_k" = some (Tile.scalar 0))
+    (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hit : sin.regs .nat [] "i_t" = some (Tile.scalar i_t))
+    (hic : sin.regs .nat [] "i_c" = some (Tile.scalar 0))
+    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
+    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
+        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64])) :
+    ∃ s', stepStmts (chunkDeltaInnerBody k v d v_new 8192 128 1 8192 64 1 128 64 64 32 32 64 64) sin
+        = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s'.regs .nat [] "i_t" = some (Tile.scalar i_t)
+      ∧ s'.regs .real [64, 64] "b_h" = some bhT
+      ∧ s'.regs .real [64, 64] "b_h_cumsum" = some (cdfCumsumTile s k v d fbh i_t)
+      ∧ (∀ off, s'.readMem k off = s.readMem k off)
+      ∧ (∀ off, s'.readMem v off = s.readMem v off)
+      ∧ (∀ off, s'.readMem d off = s.readMem d off)
+      ∧ (∀ idx : TileIndex [32, 64],
+          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
+          s'.readMem v_new (cdfVNewAddr s i_t idx)
+            = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
+      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+          s'.readMem v_new off = sin.readMem v_new off) := by
+  unfold chunkDeltaInnerBody
+  -- p_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_2d_eval k sin _ _ _ [64, 128] [64, 32] [1, 128]
+      (s.pids 2 * 8192) (0 * 64) (i_t * 32 + 0 * 32)
+      (mulConst_eval sin "i_bh" (s.pids 2) 8192 hibh)
+      (mulConst_eval sin "i_k" 0 64 hik)
+      (addMulMul_eval sin "i_t" "i_c" i_t 32 0 32 hit hic)))]
+  -- p_d
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_2d_eval d _ _ _ _ [128, 64] [32, 64] [128, 1]
+      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (0 * 64)
+      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_k" 0 64 (by simp [hik]))))]
+  -- p_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_2d_eval v _ _ _ _ [128, 64] [32, 64] [64, 1]
+      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (s.pids 1 * 64)
+      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [hiv]))))]
+  -- p_v_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_2d_eval v_new _ _ _ _ [128, 64] [32, 64] [64, 1]
+      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (s.pids 1 * 64)
+      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [hiv]))))]
+  -- b_k load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfLoad_bk_eq s _ k i_t (by intro rg off; simp [hmem]) (by simp)))]
+  -- b_d load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfLoad_bd_eq s _ d i_t (by intro rg off; simp [hmem]) (by simp)))]
+  -- b_v load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfLoad_bv_eq s _ v i_t (by intro rg off; simp [hmem]) (by simp)))]
+  -- b_v correction
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfCorrect_bv_eq s _ v d i_t fbh bhT (fun e p => by simp [hbhf])
+      (by simp) (by simp) (by simp [hbh])))]
+  -- v_new store
+  rw [stepStmts.cons_some (cdfStore_vnew_step_eq s _ v d v_new i_t fbh (by simp) (by simp))]
+  obtain ⟨hpids9, hregs9, hvnew9, hother9, hoff9⟩ :=
+    cdfStore_vnew_step_props s _ v d v_new i_t fbh hInj
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cdfAccum_cumsum_eq s _ k v d i_t fbh ?hcs9 ?hbk9 ?hbv9))]
+  case hbk9 => rw [hregs9]; simp [BlockState.setReg_ne_name]
+  case hbv9 => rw [hregs9]; simp [BlockState.setReg_same]
+  case hcs9 => rw [hregs9]; simp [BlockState.setReg_ne_name, hcs]
+  rw [stepStmts.nil]
+  -- assemble
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    simp only [BlockState.setReg_pids, hpids9]
+  · -- i_k
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
+    simpa using hik
+  · -- i_bh
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
+    simpa using hibh
+  · -- i_t
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
+    simpa using hit
+  · -- b_h
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hregs9]
+    simpa using hbh
+  · -- b_h_cumsum
+    simp only [BlockState.setReg_same]
+  · -- k unchanged
+    intro off; simp only [BlockState.setReg_readMem]
+    rw [hother9 k off hVk.symm]; simp [hmem]
+  · -- v unchanged
+    intro off; simp only [BlockState.setReg_readMem]
+    rw [hother9 v off hVv.symm]; simp [hmem]
+  · -- d unchanged
+    intro off; simp only [BlockState.setReg_readMem]
+    rw [hother9 d off hVd.symm]; simp [hmem]
+  · -- v_new active readback
+    intro idx hidx; simp only [BlockState.setReg_readMem]; exact hvnew9 idx hidx
+  · -- v_new other offset
+    intro off hoff; simp only [BlockState.setReg_readMem]
+    rw [hoff9 off hoff]; simp [BlockState.setReg_readMem]
 
 /-! ## Per-Python-shape offset injectivity
 
