@@ -3652,6 +3652,110 @@ theorem ta_pexp_cell (qT kT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat)
     apply Fin.ext; simp [StreamingAccumulator.blockIndex]]
   exact realExp_eq_some_unbotD _
 
+open VeriTile.Examples.FA1MathCausal in
+/-- The masked exp block-sum cell `Σ_j pexp(r,j)` equals `some` of the `lPartial`
+succ block term (the `Σ_jL (exp(maskedScore − mPartial1)).unbotD` sum). -/
+theorem ta_pexp_block_sum (qT kT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat) (r : Fin 128) :
+    (Tile.reduceSumDrop (⟨1, by decide⟩ : Fin [128, 128].length)
+        (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (⟨fun idx : TileIndex [128, 128] =>
+              if 0 + idx.2.1.val ≤ qS + idx.1.val then
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                      (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+                  (Tile.scalar (some sc : WithBot ℝ))).data idx
+              else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
+            (Tile.expandDim ⟨1, by decide⟩
+              (⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ : Tile .real [128]))))).data
+        (r, PUnit.unit)
+      = some ((Finset.univ : Finset (Fin 128)).sum (fun jLocal =>
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal))
+            (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0)) := by
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ k : Fin (TileShape.axisDim [128, 128] (⟨1, by decide⟩ : Fin [128, 128].length)),
+      (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (⟨fun idx : TileIndex [128, 128] =>
+              if 0 + idx.2.1.val ≤ qS + idx.1.val then
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                      (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+                  (Tile.scalar (some sc : WithBot ℝ))).data idx
+              else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
+            (Tile.expandDim ⟨1, by decide⟩
+              (⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ : Tile .real [128])))).data
+          (TileShape.insertAxisIndex [128, 128] (⟨1, by decide⟩ : Fin [128, 128].length) (r, PUnit.unit) k)
+        = (some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) k))
+            (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0) : WithBot ℝ) := by
+    intro k
+    rw [show (TileShape.insertAxisIndex [128, 128] (⟨1, by decide⟩ : Fin [128, 128].length)
+          (r, PUnit.unit) k) = (r, k, PUnit.unit) from rfl]
+    rw [Tile.uop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.sub]
+    exact ta_pexp_cell qT kT sc qS r k
+  rw [Finset.sum_congr rfl (fun k _ => hcell k)]
+  rw [WithBot.sum_someTerm_eq_some]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- The `p·v` dot cell `Σ_j (pexp(r,j)·lrcp_r)·v(j,d)` equals `some` of
+`lrcp_r · oPartial 1 (r,d)` (the `Σ_jL (exp(maskedScore−mPartial1)).unbotD · V`
+block, scaled by the row's `l_rcp`). -/
+theorem ta_pv_dot_block (qT kT vT : TileIndex [128, 64] → ℝ) (sc : ℝ) (qS : Nat)
+    (r : Fin 128) (d : Fin 64) (lrcpVal : ℝ) :
+    (Tile.dot []
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Tile.uop WithBot.realExp
+            (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (⟨fun idx : TileIndex [128, 128] =>
+                if 0 + idx.2.1.val ≤ qS + idx.1.val then
+                  (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128])
+                      (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [128, 64])
+                        (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [128, 64]))))
+                    (Tile.scalar (some sc : WithBot ℝ))).data idx
+                else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
+              (Tile.expandDim ⟨1, by decide⟩
+                (⟨fun r : TileIndex [128] => mPartial 128 qS qT 1 kT sc 1 r.1⟩ : Tile .real [128]))))
+          (Tile.expandDim ⟨1, by decide⟩
+            (⟨fun _ : TileIndex [128] => some lrcpVal⟩ : Tile .real [128])))
+        (⟨fun idx => some (vT idx)⟩ : Tile .real [128, 64])).data (r, d, PUnit.unit)
+      = some (lrcpVal * (Finset.univ : Finset (Fin 128)).sum (fun jLocal =>
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal))
+            (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0
+            * vT (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) jLocal, d, PUnit.unit))) := by
+  rw [Tile.dot_nil_data]
+  refine Eq.trans (b := @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+      (fun j => (some (lrcpVal *
+        ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) j))
+          (mPartial 128 qS qT 1 kT sc 1 r))).unbotD 0
+          * vT (StreamingAccumulator.blockIndex 128 1 0 (by norm_num) j, d, PUnit.unit))) : WithBot ℝ)))
+    (Finset.sum_congr rfl (fun j (_ : j ∈ Finset.univ) => ?_)) ?_
+  · rw [Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.mul]
+    rw [Tile.uop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.sub]
+    rw [ta_pexp_cell qT kT sc qS r j]
+    rw [show StreamingAccumulator.blockIndex 128 1 0 (by norm_num) j = j from by
+      apply Fin.ext; simp [StreamingAccumulator.blockIndex]]
+    simp only [WithBot.realMul, Option.map₂_some_some]
+    refine congrArg some ?_; ring
+  · rw [WithBot.sum_someTerm_eq_some, ← Finset.mul_sum]
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
