@@ -2405,6 +2405,936 @@ theorem bwd_loop_unroll (s0 s1 s2 : BlockState)
   simp only [Option.bind]
   rw [stepForRangeAux.step_ge (by decide) (by decide)]
 
+/-- Per-lane masked store-fold of one `[BK]=[4]` masked store at row offset `R`
+into `region`, applied on top of state `acc`. The active-lane decision is the
+prologue lane mask; inactive lanes are skipped. -/
+private noncomputable def stMem (s : BlockState) (region : RegionName) (R : Nat)
+    (valFn : TileIndex [4] → ℝ) (acc : BlockState) : BlockState :=
+  (TileShape.allIndices [4]).foldl
+    (fun a i =>
+      if decide (s.pids 0 * 4 + i.1.val < 8) then
+        a.writeMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) (valFn i)
+      else a) acc
+
+/-- Active-lane masked load value of `region` at row offset `R` (as a real). -/
+private noncomputable def ldR (s : BlockState) (region : RegionName) (R : Nat)
+    (i : TileIndex [4]) : ℝ :=
+  s.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+
+/-- A `[4]` real tile that holds `some (f i)` on active lanes (those with
+`pid0*4 + i < 8`) and `0 = some 0` on inactive lanes. Every register tile threaded
+through the backward loop body has this masked shape. -/
+private noncomputable def gated (s : BlockState) (f : TileIndex [4] → ℝ) :
+    Tile .real [4] :=
+  ⟨fun i => if decide (s.pids 0 * 4 + i.1.val < 8) then some (f i) else (0 : WithBot ℝ)⟩
+
+/-- Per-lane `dq = dq_inner + dq_inter * exp2(g)` real value at row offset `R`. -/
+private noncomputable def dqOut (s : BlockState) (DQInner DQInter G : RegionName)
+    (R : Nat) (i : TileIndex [4]) : ℝ :=
+  ldR s DQInner R i + ldR s DQInter R i * Real.exp (ldR s G R i * Real.log 2)
+
+/-- Per-lane `dk = dk_inner + dk_inter * exp2(last_g - g)` real value, with the
+captured per-lane `last_g` value `lgVal`. -/
+private noncomputable def dkOut (s : BlockState) (DKInner DKInter G : RegionName)
+    (R : Nat) (lgVal : TileIndex [4] → ℝ) (i : TileIndex [4]) : ℝ :=
+  ldR s DKInner R i +
+    ldR s DKInter R i * Real.exp ((lgVal i - ldR s G R i) * Real.log 2)
+
+/-- Per-lane `dg_val = dq*q - dk*k` summand real value at row offset `R`. -/
+private noncomputable def dgSum (s : BlockState)
+    (DQInner DQInter DKInner DKInter Q K G : RegionName)
+    (R : Nat) (lgVal : TileIndex [4] → ℝ) (i : TileIndex [4]) : ℝ :=
+  dqOut s DQInner DQInter G R i * ldR s Q R i -
+    dkOut s DKInner DKInter G R lgVal i * ldR s K R i
+
+/-- The decremented per-lane pointer tile: `p_x -= 8` shifts every lane's address
+back by one `DK = 8` row, from row offset `R` to `R - 8`. -/
+private def ptrDec (region : RegionName) (s : BlockState) (R : Nat) :
+    Tile .ptr [4] :=
+  Tile.vec (fun e : Fin 4 => (region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R - 8))
+
+/-- Real add over two `gated` tiles is the `gated` tile of the pointwise sum
+(inactive lanes are `some 0 + some 0 = some 0`). -/
+private theorem gated_add (s : BlockState) (a b : TileIndex [4] → ℝ) :
+    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (gated s a) (gated s b)
+      = gated s (fun i => a i + b i) := by
+  apply Tile.ext; intro i
+  simp only [gated, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, WithBot.realAdd]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, Option.map₂_some_some]
+  · simp only [hc, Bool.false_eq_true, if_false]
+    show Option.map₂ (·+·) (some (0:ℝ)) (some 0) = some 0
+    rw [Option.map₂_some_some]; norm_num
+
+/-- Real sub over two `gated` tiles is the `gated` tile of the pointwise
+difference. -/
+private theorem gated_sub (s : BlockState) (a b : TileIndex [4] → ℝ) :
+    Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil)
+        (gated s a) (gated s b)
+      = gated s (fun i => a i - b i) := by
+  apply Tile.ext; intro i
+  simp only [gated, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.sub, WithBot.realSub]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, Option.map₂_some_some]
+  · simp only [hc, Bool.false_eq_true, if_false]
+    show Option.map₂ (·-·) (some (0:ℝ)) (some 0) = some 0
+    rw [Option.map₂_some_some]; norm_num
+
+/-- `gated a * exp2 (gated b)` is the `gated` tile of `a i * exp(b i * log 2)`.
+Inactive lanes: `some 0 * exp2(some 0) = some 0 * some 1 = some 0`. -/
+private theorem gated_mul_exp2 (s : BlockState) (a b : TileIndex [4] → ℝ) :
+    Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+        (gated s a) (Tile.uop WithBot.realExp2 (gated s b))
+      = gated s (fun i => a i * Real.exp (b i * Real.log 2)) := by
+  apply Tile.ext; intro i
+  simp only [gated, Tile.bop, Tile.uop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, WithBot.realMul]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, WithBot.realExp2_some, Option.map₂_some_some]
+  · simp only [hc, Bool.false_eq_true, if_false]
+    show Option.map₂ (·*·) (some (0:ℝ)) (WithBot.realExp2 (some 0)) = some 0
+    rw [WithBot.realExp2_some, Option.map₂_some_some]; norm_num
+
+/-- Plain real mul over two `gated` tiles. -/
+private theorem gated_mul (s : BlockState) (a b : TileIndex [4] → ℝ) :
+    Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+        (gated s a) (gated s b)
+      = gated s (fun i => a i * b i) := by
+  apply Tile.ext; intro i
+  simp only [gated, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, WithBot.realMul]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, Option.map₂_some_some]
+  · simp only [hc, Bool.false_eq_true, if_false]
+    show Option.map₂ (·*·) (some (0:ℝ)) (some 0) = some 0
+    rw [Option.map₂_some_some]; norm_num
+
+/-- The masked-load result tile (`bwdEval_assign_load_ptr_maskOther` output) at a
+prologue-shaped row pointer, evaluated in a state `c` whose `region`-reads agree
+with `s`, equals the `gated` load tile of `region` at `R`. -/
+private theorem load_tile_gated (s c : BlockState) (region : RegionName) (R : Nat)
+    (hread : ∀ a, c.readMem region a = s.readMem region a) :
+    (⟨fun i =>
+        if (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)) :
+            Tile .bool [4]).data i then
+          some (c.readMem
+            ((Tile.vec (fun e : Fin 4 =>
+                ((region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R) : RegionName × Nat)) :
+                Tile .ptr [4]).data i).1
+            ((Tile.vec (fun e : Fin 4 =>
+                ((region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R) : RegionName × Nat)) :
+                Tile .ptr [4]).data i).2)
+        else (⟨fun _ => some 0⟩ : Tile .real [4]).data i⟩ : Tile .real [4])
+      = gated s (ldR s region R) := by
+  apply Tile.ext; intro i
+  simp only [gated, ldR, Tile.vec, Region.cast_id]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, hread]
+  · simp only [hc, Bool.false_eq_true, if_false]
+    rfl
+
+/-- A masked pointer store (`bwdEval_store_ptr_masked` output) of a `gated` value
+tile at a prologue-shaped row pointer equals the `stMem` masked store fold. -/
+private theorem bwdStore_stMem (s : BlockState) (region : RegionName) (R : Nat)
+    (f : TileIndex [4] → ℝ) (c : BlockState) :
+    ((TileShape.allIndices [4]).foldl
+        (fun acc i =>
+          if (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)) :
+              Tile .bool [4]).data i then
+            acc.writeMemTyped .real
+              ((Tile.vec (fun e : Fin 4 =>
+                  ((region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R) : RegionName × Nat)) :
+                  Tile .ptr [4]).data i).1
+              ((Tile.vec (fun e : Fin 4 =>
+                  ((region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R) : RegionName × Nat)) :
+                  Tile .ptr [4]).data i).2
+              ((gated s f).data i)
+          else acc) c)
+      = stMem s region R f c := by
+  unfold stMem
+  congr 1
+  funext a i
+  simp only [gated, Tile.vec, Region.cast_id]
+  by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
+  · simp only [hc, if_true, BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+    rfl
+  · simp only [hc, Bool.false_eq_true, if_false]
+
+/-- `stMem` preserves program ids. -/
+private theorem stMem_pids (s : BlockState) (region : RegionName) (R : Nat)
+    (f : TileIndex [4] → ℝ) (c : BlockState) :
+    (stMem s region R f c).pids = c.pids := by
+  unfold stMem
+  rw [BlockState.foldl_writeMem_prop_masked_pids]
+
+/-- `stMem` preserves all registers. -/
+private theorem stMem_regs (s : BlockState) (region : RegionName) (R : Nat)
+    (f : TileIndex [4] → ℝ) (c : BlockState)
+    (d : TileDType) (sh : TileShape) (n : RegName) :
+    (stMem s region R f c).regs d sh n = c.regs d sh n := by
+  unfold stMem
+  induction (TileShape.allIndices [4]) generalizing c with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.foldl_cons, ih]
+    by_cases hc : decide (s.pids 0 * 4 + hd.1.val < 8) <;> simp [hc]
+
+/-- `stMem` into `region` leaves any other region's reads unchanged. -/
+private theorem stMem_readMem_other (s : BlockState) (region region' : RegionName)
+    (R : Nat) (f : TileIndex [4] → ℝ) (c : BlockState) (off : Nat)
+    (h : region' ≠ region) :
+    (stMem s region R f c).readMem region' off = c.readMem region' off := by
+  unfold stMem
+  exact BlockState.scatter_prop_masked_preserves_other_region region _ _ _
+    region' h off _ c
+
+/-- The memory of `stMem` is determined entirely by the input state's memory. -/
+private theorem stMem_mem_congr (s : BlockState) (region : RegionName) (R : Nat)
+    (f : TileIndex [4] → ℝ) (c c' : BlockState) (h : c.mem = c'.mem) :
+    (stMem s region R f c).mem = (stMem s region R f c').mem := by
+  unfold stMem
+  induction (TileShape.allIndices [4]) generalizing c c' with
+  | nil => exact h
+  | cons hd tl ih =>
+    rw [List.foldl_cons, List.foldl_cons]
+    refine ih _ _ ?_
+    by_cases hc : decide (s.pids 0 * 4 + hd.1.val < 8)
+    · simp only [hc, if_true, BlockState.writeMem]
+      funext r o; rw [h]
+    · simp only [hc, Bool.false_eq_true, if_false]; exact h
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Per-iteration straight-line body (post-`last_g`-capture, 22 statements).**
+From a state `s3` whose `g_val`/`last_g`/`cum_grad_dg` registers and 8 row
+pointers are in masked `gated` form at row offset `R`, the remaining body (drop 3
+of `bwdIterBody`) computes `dq`/`dk`/`dg` per lane, performs the three masked
+stores (`DQInter`, `DKInter`, `DG`), and decrements all 8 pointers. We chain the
+22 statements via `stepStmts.cons_some` + the per-statement recipes, threading the
+explicit `set` state, then read out the resulting memory as three nested masked
+store folds (`stMem`) and the updated registers. -/
+theorem bwd_iter_core
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s s3 : BlockState) (R : Nat)
+    (lgVal cumInVal : TileIndex [4] → ℝ)
+    (hDKInner_DQInter : DKInner ≠ DQInter)
+    (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
+    (hpid : s3.pids = s.pids)
+    (hmem : s3.mem = s.mem)
+    (hmask : s3.regs .bool [4] "mask" = some
+        (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8))))
+    (hgval : s3.regs .real [4] "g_val" = some (gated s (ldR s G R)))
+    (hlastg : s3.regs .real [4] "last_g" = some (gated s lgVal))
+    (hcum : s3.regs .real [4] "cum_grad_dg" = some (gated s cumInVal))
+    (hpg : s3.regs .ptr [4] "p_g" = some
+        (Tile.vec (fun e : Fin 4 => (G.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpk : s3.regs .ptr [4] "p_k" = some
+        (Tile.vec (fun e : Fin 4 => (K.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpq : s3.regs .ptr [4] "p_q" = some
+        (Tile.vec (fun e : Fin 4 => (Q.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpdqi : s3.regs .ptr [4] "p_dq_inner" = some
+        (Tile.vec (fun e : Fin 4 => (DQInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpdki : s3.regs .ptr [4] "p_dk_inner" = some
+        (Tile.vec (fun e : Fin 4 => (DKInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpdqt : s3.regs .ptr [4] "p_dq_inter" = some
+        (Tile.vec (fun e : Fin 4 => (DQInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpdkt : s3.regs .ptr [4] "p_dk_inter" = some
+        (Tile.vec (fun e : Fin 4 => (DKInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))))
+    (hpdg : s3.regs .ptr [4] "p_dg" = some
+        (Tile.vec (fun e : Fin 4 => (DG.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)))) :
+    ∃ sout, stepStmts (bwdIterBody.drop 3) s3 = some sout
+      ∧ sout.pids = s.pids
+      ∧ sout.mem =
+          (stMem s DG R (fun i => cumInVal i +
+              dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)
+            (stMem s DKInter R (dkOut s DKInner DKInter G R lgVal)
+              (stMem s DQInter R (dqOut s DQInner DQInter G R)
+                s3))).mem
+      ∧ sout.regs .bool [4] "mask" = some
+          (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)))
+      ∧ sout.regs .real [4] "last_g" = some (gated s lgVal)
+      ∧ sout.regs .real [4] "cum_grad_dg" = some
+          (gated s (fun i => cumInVal i +
+            dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i))
+      ∧ sout.regs .ptr [4] "p_g" = some (ptrDec G s R)
+      ∧ sout.regs .ptr [4] "p_k" = some (ptrDec K s R)
+      ∧ sout.regs .ptr [4] "p_q" = some (ptrDec Q s R)
+      ∧ sout.regs .ptr [4] "p_dq_inner" = some (ptrDec DQInner s R)
+      ∧ sout.regs .ptr [4] "p_dk_inner" = some (ptrDec DKInner s R)
+      ∧ sout.regs .ptr [4] "p_dq_inter" = some (ptrDec DQInter s R)
+      ∧ sout.regs .ptr [4] "p_dk_inter" = some (ptrDec DKInter s R)
+      ∧ sout.regs .ptr [4] "p_dg" = some (ptrDec DG s R) := by
+  -- Memory reads through `s3` agree with `s` (the prologue/head/ifThen write no
+  -- memory); register reads of the 8 pointers and mask survive the real-valued
+  -- assignments of the body.
+  have hread3 : ∀ (r : RegionName) (a : Nat), s3.readMem r a = s.readMem r a := by
+    intro r a; simp only [BlockState.readMem, hmem]
+  -- The masked-load `other` tile (zeros) and mask-tile evaluations, reused below.
+  have hmaskE : ∀ c : BlockState,
+      c.regs .bool [4] "mask" = some
+        (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8))) →
+      evalOp (Op.ref .bool [4] "mask") c = some
+        (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8))) := by
+    intro c hc; rw [evalOp_ref]; exact hc
+  have hother : ∀ c : BlockState,
+      evalOp ((Op.const (0 : ℝ)).broadcast [4]) c
+        = some (⟨fun _ => some 0⟩ : Tile .real [4]) := by
+    intro c; simp [evalOp]
+  -- Expose the 22 post-capture statements.
+  simp only [bwdIterBody, List.drop_succ_cons, List.drop_zero]
+  -- Abbreviations for the per-lane masked tiles produced along the chain.
+  set maskT : Tile .bool [4] :=
+    Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)) with hmaskT
+  set otherT : Tile .real [4] := ⟨fun _ => some 0⟩ with hotherT
+  -- Pointer tiles (prologue-shaped) at row offset R.
+  set ptrG : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (G.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrG
+  set ptrK : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (K.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrK
+  set ptrQ : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (Q.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrQ
+  set ptrDQi : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (DQInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrDQi
+  set ptrDKi : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (DKInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrDKi
+  set ptrDQt : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (DQInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrDQt
+  set ptrDKt : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (DKInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrDKt
+  set ptrDG : Tile .ptr [4] :=
+    Tile.vec (fun e : Fin 4 => (DG.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R)) with hptrDG
+  -- === Statement 3: dq1 = load p_dq_inner ===
+  have e3 : stepStmt (Stmt.assign .real [4] "dq1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) s3
+      = some (s3.setReg "dq1" .real [4] (gated s (ldR s DQInner R))) := by
+    rw [bwdEval_assign_load_ptr_maskOther s3 "dq1" "p_dq_inner" _ _
+        ptrDQi maskT otherT hpdqi (hmaskE s3 hmask) (hother s3)]
+    simp only [hptrDQi, hmaskT, hotherT]
+    rw [load_tile_gated s s3 DQInner R (fun a => hread3 DQInner a)]
+  rw [stepStmts.cons_some e3]
+  set c1 := s3.setReg "dq1" .real [4] (gated s (ldR s DQInner R)) with hc1
+  -- Lookups on `c1` (one real setReg above `s3`).
+  have c1mask : c1.regs .bool [4] "mask" = some maskT := by
+    rw [hc1, BlockState.setReg_ne_name (h := by decide)]; exact hmask
+  have c1pdqt : c1.regs .ptr [4] "p_dq_inter" = some ptrDQt := by
+    rw [hc1, BlockState.setReg_ne_name (h := by decide)]; exact hpdqt
+  have c1read : ∀ a, c1.readMem DQInter a = s.readMem DQInter a := by
+    intro a; rw [hc1, BlockState.setReg_readMem]; exact hread3 DQInter a
+  -- === Statement 4: dq2 = load p_dq_inter ===
+  have e4 : stepStmt (Stmt.assign .real [4] "dq2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) c1
+      = some (c1.setReg "dq2" .real [4] (gated s (ldR s DQInter R))) := by
+    rw [bwdEval_assign_load_ptr_maskOther c1 "dq2" "p_dq_inter" _ _
+        ptrDQt maskT otherT c1pdqt (hmaskE c1 c1mask) (hother c1)]
+    simp only [hptrDQt, hmaskT, hotherT]
+    rw [load_tile_gated s c1 DQInter R c1read]
+  rw [stepStmts.cons_some e4]
+  set c2 := c1.setReg "dq2" .real [4] (gated s (ldR s DQInter R)) with hc2
+  -- g_val survives down to `s3`.
+  have c2gval : c2.regs .real [4] "g_val" = some (gated s (ldR s G R)) := by
+    rw [hc2, BlockState.setReg_ne_name (h := by decide), hc1,
+        BlockState.setReg_ne_name (h := by decide)]; exact hgval
+  -- === Statement 5: dq2 = dq2 * exp2(g_val) ===
+  have e5 : stepStmt (Stmt.assign .real [4] "dq2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dq2")
+        (Op.ref .real [4] "g_val").exp2)) c2
+      = some (c2.setReg "dq2" .real [4]
+          (gated s (fun i => ldR s DQInter R i *
+            Real.exp (ldR s G R i * Real.log 2)))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_mul c2 _ _ (gated s (ldR s DQInter R))
+        (Tile.uop WithBot.realExp2 (gated s (ldR s G R)))
+        (by rw [evalOp_ref, hc2, BlockState.setReg_same])
+        (by rw [bwdEval_exp2 c2 _ (gated s (ldR s G R))
+            (by rw [evalOp_ref]; exact c2gval)])]
+    rw [gated_mul_exp2]
+  rw [stepStmts.cons_some e5]
+  set c3 := c2.setReg "dq2" .real [4]
+    (gated s (fun i => ldR s DQInter R i * Real.exp (ldR s G R i * Real.log 2))) with hc3
+  have c3dq1 : c3.regs .real [4] "dq1" = some (gated s (ldR s DQInner R)) := by
+    rw [hc3, BlockState.setReg_ne_name (h := by decide), hc2,
+        BlockState.setReg_ne_name (h := by decide), hc1, BlockState.setReg_same]
+  -- === Statement 6: dq = dq1 + dq2 ===
+  have e6 : stepStmt (Stmt.assign .real [4] "dq"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "dq1")
+        (Op.ref .real [4] "dq2"))) c3
+      = some (c3.setReg "dq" .real [4]
+          (gated s (dqOut s DQInner DQInter G R))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_add c3 _ _ (gated s (ldR s DQInner R))
+        (gated s (fun i => ldR s DQInter R i * Real.exp (ldR s G R i * Real.log 2)))
+        (by rw [evalOp_ref]; exact c3dq1)
+        (by rw [evalOp_ref, hc3, BlockState.setReg_same])]
+    rw [gated_add]; rfl
+  rw [stepStmts.cons_some e6]
+  set c4 := c3.setReg "dq" .real [4] (gated s (dqOut s DQInner DQInter G R)) with hc4
+  -- p_dq_inter and mask survive to `s3`.
+  have c4mask : c4.regs .bool [4] "mask" = some maskT := by
+    rw [hc4, BlockState.setReg_ne_name (h := by decide), hc3,
+        BlockState.setReg_ne_name (h := by decide), hc2,
+        BlockState.setReg_ne_name (h := by decide), hc1,
+        BlockState.setReg_ne_name (h := by decide)]; exact hmask
+  have c4pdqt : c4.regs .ptr [4] "p_dq_inter" = some ptrDQt := by
+    rw [hc4, BlockState.setReg_ne_name (h := by decide), hc3,
+        BlockState.setReg_ne_name (h := by decide), hc2,
+        BlockState.setReg_ne_name (h := by decide), hc1,
+        BlockState.setReg_ne_name (h := by decide)]; exact hpdqt
+  have c4dq : c4.regs .real [4] "dq" = some (gated s (dqOut s DQInner DQInter G R)) := by
+    rw [hc4]; exact BlockState.setReg_same _ _ _ _ _
+  -- === Statement 7: store p_dq_inter dq ===
+  have e7 : stepStmt (Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inter"))
+      (Op.ref .real [4] "dq") (MaskOpt.mask (Op.ref .bool [4] "mask"))) c4
+      = some (stMem s DQInter R (dqOut s DQInner DQInter G R) c4) := by
+    rw [bwdEval_store_ptr_masked c4 "p_dq_inter" _ _
+        ptrDQt (gated s (dqOut s DQInner DQInter G R)) maskT
+        c4pdqt (by rw [evalOp_ref]; exact c4dq) (by rw [evalOp_ref]; exact c4mask)]
+    simp only [hptrDQt, hmaskT]
+    rw [bwdStore_stMem]
+  rw [stepStmts.cons_some e7]
+  set c5 := stMem s DQInter R (dqOut s DQInner DQInter G R) c4 with hc5
+  -- `c4` reads (4 real setRegs over `s3`) agree with `s`.
+  have c4read : ∀ (r : RegionName) (a : Nat), c4.readMem r a = s.readMem r a := by
+    intro r a
+    rw [hc4, BlockState.setReg_readMem, hc3, BlockState.setReg_readMem,
+        hc2, BlockState.setReg_readMem, hc1, BlockState.setReg_readMem]
+    exact hread3 r a
+  -- `c4` pointer/mask lookups (peel the 4 real setRegs).
+  have c4peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c4.regs d sh n = s3.regs d sh n := by
+    intro d sh n h1 h2 h3
+    rw [hc4, BlockState.setReg_ne_name (h := h1), hc3,
+        BlockState.setReg_ne_name (h := h2), hc2,
+        BlockState.setReg_ne_name (h := h2), hc1,
+        BlockState.setReg_ne_name (h := h3)]
+  -- `c5` lookups: `stMem` preserves regs; reads of regions ≠ DQInter agree with `s`.
+  have c5peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c5.regs d sh n = s3.regs d sh n := by
+    intro d sh n h1 h2 h3
+    rw [hc5, stMem_regs]; exact c4peel d sh n h1 h2 h3
+  have c5read : ∀ (r : RegionName) (a : Nat), r ≠ DQInter →
+      c5.readMem r a = s.readMem r a := by
+    intro r a hr
+    rw [hc5, stMem_readMem_other s DQInter r R _ c4 a hr]; exact c4read r a
+  -- === Statement 8: dk1 = load p_dk_inner ===
+  have e8 : stepStmt (Stmt.assign .real [4] "dk1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) c5
+      = some (c5.setReg "dk1" .real [4] (gated s (ldR s DKInner R))) := by
+    have c5pdki : c5.regs .ptr [4] "p_dk_inner" = some ptrDKi := by
+      rw [c5peel .ptr [4] "p_dk_inner" (by decide) (by decide) (by decide)]; exact hpdki
+    have c5mask : c5.regs .bool [4] "mask" = some maskT := by
+      rw [c5peel .bool [4] "mask" (by decide) (by decide) (by decide)]; exact hmask
+    rw [bwdEval_assign_load_ptr_maskOther c5 "dk1" "p_dk_inner" _ _
+        ptrDKi maskT otherT c5pdki (hmaskE c5 c5mask) (hother c5)]
+    simp only [hptrDKi, hmaskT, hotherT]
+    rw [load_tile_gated s c5 DKInner R (fun a => c5read DKInner a hDKInner_DQInter)]
+  rw [stepStmts.cons_some e8]
+  set c6 := c5.setReg "dk1" .real [4] (gated s (ldR s DKInner R)) with hc6
+  -- === Statement 9: dk2 = load p_dk_inter ===
+  have e9 : stepStmt (Stmt.assign .real [4] "dk2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) c6
+      = some (c6.setReg "dk2" .real [4] (gated s (ldR s DKInter R))) := by
+    have c6pdkt : c6.regs .ptr [4] "p_dk_inter" = some ptrDKt := by
+      rw [hc6, BlockState.setReg_ne_name (h := by decide)]
+      rw [c5peel .ptr [4] "p_dk_inter" (by decide) (by decide) (by decide)]; exact hpdkt
+    have c6mask : c6.regs .bool [4] "mask" = some maskT := by
+      rw [hc6, BlockState.setReg_ne_name (h := by decide)]
+      rw [c5peel .bool [4] "mask" (by decide) (by decide) (by decide)]; exact hmask
+    have c6read : ∀ a, c6.readMem DKInter a = s.readMem DKInter a := by
+      intro a; rw [hc6, BlockState.setReg_readMem]; exact c5read DKInter a hDKInter_DQInter
+    rw [bwdEval_assign_load_ptr_maskOther c6 "dk2" "p_dk_inter" _ _
+        ptrDKt maskT otherT c6pdkt (hmaskE c6 c6mask) (hother c6)]
+    simp only [hptrDKt, hmaskT, hotherT]
+    rw [load_tile_gated s c6 DKInter R c6read]
+  rw [stepStmts.cons_some e9]
+  set c7 := c6.setReg "dk2" .real [4] (gated s (ldR s DKInter R)) with hc7
+  -- `c7` lookups of `s3`-level real registers (peel dk2, dk1, then `c5`).
+  have c7peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c7.regs d sh n = s3.regs d sh n := by
+    intro d sh n h1 h2 h3 h3' h4
+    rw [hc7, BlockState.setReg_ne_name (h := h1), hc6,
+        BlockState.setReg_ne_name (h := h2)]
+    exact c5peel d sh n h3 h3' h4
+  have c7lastg : c7.regs .real [4] "last_g" = some (gated s lgVal) := by
+    rw [c7peel .real [4] "last_g" (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hlastg
+  have c7gval : c7.regs .real [4] "g_val" = some (gated s (ldR s G R)) := by
+    rw [c7peel .real [4] "g_val" (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hgval
+  have c7dk2 : c7.regs .real [4] "dk2" = some (gated s (ldR s DKInter R)) := by
+    rw [hc7]; exact BlockState.setReg_same _ _ _ _ _
+  -- === Statement 10: dk2 = dk2 * exp2(last_g - g_val) ===
+  have hsub10 : evalOp (Op.sub .real Broadcast.nil.consSame (Op.ref .real [4] "last_g")
+      (Op.ref .real [4] "g_val")) c7
+      = some (gated s (fun i => lgVal i - ldR s G R i)) := by
+    rw [bwdEval_sub c7 _ _ (gated s lgVal) (gated s (ldR s G R))
+        (by rw [evalOp_ref]; exact c7lastg) (by rw [evalOp_ref]; exact c7gval)]
+    rw [gated_sub]
+  have e10 : stepStmt (Stmt.assign .real [4] "dk2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dk2")
+        (Op.sub .real Broadcast.nil.consSame (Op.ref .real [4] "last_g")
+            (Op.ref .real [4] "g_val")).exp2)) c7
+      = some (c7.setReg "dk2" .real [4]
+          (gated s (fun i => ldR s DKInter R i *
+            Real.exp ((lgVal i - ldR s G R i) * Real.log 2)))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_mul c7 _ _ (gated s (ldR s DKInter R))
+        (Tile.uop WithBot.realExp2 (gated s (fun i => lgVal i - ldR s G R i)))
+        (by rw [evalOp_ref]; exact c7dk2)
+        (by rw [bwdEval_exp2 c7 _ (gated s (fun i => lgVal i - ldR s G R i)) hsub10])]
+    rw [gated_mul_exp2]
+  rw [stepStmts.cons_some e10]
+  set c8 := c7.setReg "dk2" .real [4]
+    (gated s (fun i => ldR s DKInter R i *
+      Real.exp ((lgVal i - ldR s G R i) * Real.log 2))) with hc8
+  have c8dk1 : c8.regs .real [4] "dk1" = some (gated s (ldR s DKInner R)) := by
+    rw [hc8, BlockState.setReg_ne_name (h := by decide), hc7,
+        BlockState.setReg_ne_name (h := by decide), hc6, BlockState.setReg_same]
+  -- === Statement 11: dk = dk1 + dk2 ===
+  have e11 : stepStmt (Stmt.assign .real [4] "dk"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "dk1")
+        (Op.ref .real [4] "dk2"))) c8
+      = some (c8.setReg "dk" .real [4]
+          (gated s (dkOut s DKInner DKInter G R lgVal))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_add c8 _ _ (gated s (ldR s DKInner R))
+        (gated s (fun i => ldR s DKInter R i *
+          Real.exp ((lgVal i - ldR s G R i) * Real.log 2)))
+        (by rw [evalOp_ref]; exact c8dk1)
+        (by rw [evalOp_ref, hc8, BlockState.setReg_same])]
+    rw [gated_add]; rfl
+  rw [stepStmts.cons_some e11]
+  set c9 := c8.setReg "dk" .real [4] (gated s (dkOut s DKInner DKInter G R lgVal)) with hc9
+  -- `c9` reads agree with `s` for regions ≠ DQInter (only the DQInter store so far).
+  have c9read : ∀ (r : RegionName) (a : Nat), r ≠ DQInter →
+      c9.readMem r a = s.readMem r a := by
+    intro r a hr
+    rw [hc9, BlockState.setReg_readMem, hc8, BlockState.setReg_readMem,
+        hc7, BlockState.setReg_readMem, hc6, BlockState.setReg_readMem]
+    exact c5read r a hr
+  -- `c9` lookups of mask / p_dk_inter (peel dk, dk2, dk1, then `c5`).
+  have c9peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c9.regs d sh n = s3.regs d sh n := by
+    intro d sh n h0 h1 h2 h3 h3' h4
+    rw [hc9, BlockState.setReg_ne_name (h := h0), hc8,
+        BlockState.setReg_ne_name (h := h1)]
+    exact c7peel d sh n h1 h2 h3 h3' h4
+  have c9mask : c9.regs .bool [4] "mask" = some maskT := by
+    rw [c9peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hmask
+  have c9pdkt : c9.regs .ptr [4] "p_dk_inter" = some ptrDKt := by
+    rw [c9peel .ptr [4] "p_dk_inter" (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hpdkt
+  have c9dk : c9.regs .real [4] "dk" = some (gated s (dkOut s DKInner DKInter G R lgVal)) := by
+    rw [hc9]; exact BlockState.setReg_same _ _ _ _ _
+  -- === Statement 12: store p_dk_inter dk ===
+  have e12 : stepStmt (Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inter"))
+      (Op.ref .real [4] "dk") (MaskOpt.mask (Op.ref .bool [4] "mask"))) c9
+      = some (stMem s DKInter R (dkOut s DKInner DKInter G R lgVal) c9) := by
+    rw [bwdEval_store_ptr_masked c9 "p_dk_inter" _ _
+        ptrDKt (gated s (dkOut s DKInner DKInter G R lgVal)) maskT
+        c9pdkt (by rw [evalOp_ref]; exact c9dk) (by rw [evalOp_ref]; exact c9mask)]
+    simp only [hptrDKt, hmaskT]
+    rw [bwdStore_stMem]
+  rw [stepStmts.cons_some e12]
+  set c10 := stMem s DKInter R (dkOut s DKInner DKInter G R lgVal) c9 with hc10
+  -- `c10` reads: regions ≠ DKInter and ≠ DQInter agree with `s`.
+  have c10read : ∀ (r : RegionName) (a : Nat), r ≠ DKInter → r ≠ DQInter →
+      c10.readMem r a = s.readMem r a := by
+    intro r a hr1 hr2
+    rw [hc10, stMem_readMem_other s DKInter r R _ c9 a hr1]; exact c9read r a hr2
+  have c10peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c10.regs d sh n = s3.regs d sh n := by
+    intro d sh n h0 h1 h2 h3 h3' h4
+    rw [hc10, stMem_regs]; exact c9peel d sh n h0 h1 h2 h3 h3' h4
+  -- === Statement 13: q_val = load p_q ===
+  have e13 : stepStmt (Stmt.assign .real [4] "q_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_q"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) c10
+      = some (c10.setReg "q_val" .real [4] (gated s (ldR s Q R))) := by
+    have c10pq : c10.regs .ptr [4] "p_q" = some ptrQ := by
+      rw [c10peel .ptr [4] "p_q" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide)]; exact hpq
+    have c10mask : c10.regs .bool [4] "mask" = some maskT := by
+      rw [c10peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide)]; exact hmask
+    rw [bwdEval_assign_load_ptr_maskOther c10 "q_val" "p_q" _ _
+        ptrQ maskT otherT c10pq (hmaskE c10 c10mask) (hother c10)]
+    simp only [hptrQ, hmaskT, hotherT]
+    rw [load_tile_gated s c10 Q R (fun a => c10read Q a hQ_DKInter hQ_DQInter)]
+  rw [stepStmts.cons_some e13]
+  set c11 := c10.setReg "q_val" .real [4] (gated s (ldR s Q R)) with hc11
+  -- === Statement 14: k_val = load p_k ===
+  have e14 : stepStmt (Stmt.assign .real [4] "k_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_k"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) c11
+      = some (c11.setReg "k_val" .real [4] (gated s (ldR s K R))) := by
+    have c11pk : c11.regs .ptr [4] "p_k" = some ptrK := by
+      rw [hc11, BlockState.setReg_ne_name (h := by decide)]
+      rw [c10peel .ptr [4] "p_k" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide)]; exact hpk
+    have c11mask : c11.regs .bool [4] "mask" = some maskT := by
+      rw [hc11, BlockState.setReg_ne_name (h := by decide)]
+      rw [c10peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide)]; exact hmask
+    have c11read : ∀ a, c11.readMem K a = s.readMem K a := by
+      intro a; rw [hc11, BlockState.setReg_readMem]; exact c10read K a hK_DKInter hK_DQInter
+    rw [bwdEval_assign_load_ptr_maskOther c11 "k_val" "p_k" _ _
+        ptrK maskT otherT c11pk (hmaskE c11 c11mask) (hother c11)]
+    simp only [hptrK, hmaskT, hotherT]
+    rw [load_tile_gated s c11 K R c11read]
+  rw [stepStmts.cons_some e14]
+  set c12 := c11.setReg "k_val" .real [4] (gated s (ldR s K R)) with hc12
+  -- Lookups on `c12` of dq, dk, q_val (for the dg_val computation).
+  have c12dq : c12.regs .real [4] "dq" = some (gated s (dqOut s DQInner DQInter G R)) := by
+    rw [hc12, BlockState.setReg_ne_name (h := by decide), hc11,
+        BlockState.setReg_ne_name (h := by decide), hc10, stMem_regs, hc9,
+        BlockState.setReg_ne_name (h := by decide), hc8,
+        BlockState.setReg_ne_name (h := by decide), hc7,
+        BlockState.setReg_ne_name (h := by decide), hc6,
+        BlockState.setReg_ne_name (h := by decide), hc5, stMem_regs, hc4,
+        BlockState.setReg_same]
+  have c12dk : c12.regs .real [4] "dk" = some (gated s (dkOut s DKInner DKInter G R lgVal)) := by
+    rw [hc12, BlockState.setReg_ne_name (h := by decide), hc11,
+        BlockState.setReg_ne_name (h := by decide), hc10, stMem_regs, hc9,
+        BlockState.setReg_same]
+  have c12qval : c12.regs .real [4] "q_val" = some (gated s (ldR s Q R)) := by
+    rw [hc12, BlockState.setReg_ne_name (h := by decide), hc11, BlockState.setReg_same]
+  have c12kval : c12.regs .real [4] "k_val" = some (gated s (ldR s K R)) := by
+    rw [hc12]; exact BlockState.setReg_same _ _ _ _ _
+  -- === Statement 15: dg_val = dq*q_val - dk*k_val ===
+  have hmul_dq : evalOp (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dq")
+      (Op.ref .real [4] "q_val")) c12
+      = some (gated s (fun i => dqOut s DQInner DQInter G R i * ldR s Q R i)) := by
+    rw [bwdEval_mul c12 _ _ (gated s (dqOut s DQInner DQInter G R)) (gated s (ldR s Q R))
+        (by rw [evalOp_ref]; exact c12dq) (by rw [evalOp_ref]; exact c12qval)]
+    rw [gated_mul]
+  have hmul_dk : evalOp (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dk")
+      (Op.ref .real [4] "k_val")) c12
+      = some (gated s (fun i => dkOut s DKInner DKInter G R lgVal i * ldR s K R i)) := by
+    rw [bwdEval_mul c12 _ _ (gated s (dkOut s DKInner DKInter G R lgVal)) (gated s (ldR s K R))
+        (by rw [evalOp_ref]; exact c12dk) (by rw [evalOp_ref]; exact c12kval)]
+    rw [gated_mul]
+  have e15 : stepStmt (Stmt.assign .real [4] "dg_val"
+      (Op.sub .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dq")
+          (Op.ref .real [4] "q_val"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dk")
+          (Op.ref .real [4] "k_val")))) c12
+      = some (c12.setReg "dg_val" .real [4]
+          (gated s (dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_sub c12 _ _
+        (gated s (fun i => dqOut s DQInner DQInter G R i * ldR s Q R i))
+        (gated s (fun i => dkOut s DKInner DKInter G R lgVal i * ldR s K R i))
+        hmul_dq hmul_dk]
+    rw [gated_sub]; rfl
+  rw [stepStmts.cons_some e15]
+  set c13 := c12.setReg "dg_val" .real [4]
+    (gated s (dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal)) with hc13
+  have c13cum : c13.regs .real [4] "cum_grad_dg" = some (gated s cumInVal) := by
+    rw [hc13, BlockState.setReg_ne_name (h := by decide), hc12,
+        BlockState.setReg_ne_name (h := by decide), hc11,
+        BlockState.setReg_ne_name (h := by decide), hc10, stMem_regs, hc9,
+        BlockState.setReg_ne_name (h := by decide), hc8,
+        BlockState.setReg_ne_name (h := by decide), hc7,
+        BlockState.setReg_ne_name (h := by decide), hc6,
+        BlockState.setReg_ne_name (h := by decide), hc5, stMem_regs, hc4,
+        BlockState.setReg_ne_name (h := by decide), hc3,
+        BlockState.setReg_ne_name (h := by decide), hc2,
+        BlockState.setReg_ne_name (h := by decide), hc1,
+        BlockState.setReg_ne_name (h := by decide)]; exact hcum
+  -- === Statement 16: cum_grad_dg = cum_grad_dg + dg_val ===
+  have e16 : stepStmt (Stmt.assign .real [4] "cum_grad_dg"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "cum_grad_dg")
+        (Op.ref .real [4] "dg_val"))) c13
+      = some (c13.setReg "cum_grad_dg" .real [4]
+          (gated s (fun i => cumInVal i +
+            dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i))) := by
+    apply stepStmt_assign_eq_some
+    rw [bwdEval_add c13 _ _ (gated s cumInVal)
+        (gated s (dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal))
+        (by rw [evalOp_ref]; exact c13cum)
+        (by rw [evalOp_ref, hc13, BlockState.setReg_same])]
+    rw [gated_add]
+  rw [stepStmts.cons_some e16]
+  set c14 := c13.setReg "cum_grad_dg" .real [4]
+    (gated s (fun i => cumInVal i +
+      dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)) with hc14
+  -- `c14` peels to `s3` for the 14 real setRegs straddling `c5`/`c10` stMem layers.
+  have c14peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
+      n ≠ "cum_grad_dg" → n ≠ "dg_val" → n ≠ "k_val" → n ≠ "q_val" →
+      n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c14.regs d sh n = s3.regs d sh n := by
+    intro d sh n g0 g1 g2 g3 g4 g5 g6 g7 g8 g9
+    rw [hc14, BlockState.setReg_ne_name (h := g0), hc13,
+        BlockState.setReg_ne_name (h := g1), hc12,
+        BlockState.setReg_ne_name (h := g2), hc11,
+        BlockState.setReg_ne_name (h := g3), hc10, stMem_regs, hc9,
+        BlockState.setReg_ne_name (h := g4), hc8,
+        BlockState.setReg_ne_name (h := g5), hc7,
+        BlockState.setReg_ne_name (h := g5), hc6,
+        BlockState.setReg_ne_name (h := g6), hc5, stMem_regs, hc4,
+        BlockState.setReg_ne_name (h := g7), hc3,
+        BlockState.setReg_ne_name (h := g8), hc2,
+        BlockState.setReg_ne_name (h := g8), hc1,
+        BlockState.setReg_ne_name (h := g9)]
+  -- === Statement 17: store p_dg cum_grad_dg ===
+  have e17 : stepStmt (Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dg"))
+      (Op.ref .real [4] "cum_grad_dg") (MaskOpt.mask (Op.ref .bool [4] "mask"))) c14
+      = some (stMem s DG R
+          (fun i => cumInVal i + dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)
+          c14) := by
+    have c14pdg : c14.regs .ptr [4] "p_dg" = some ptrDG := by
+      rw [c14peel .ptr [4] "p_dg" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+      exact hpdg
+    have c14mask : c14.regs .bool [4] "mask" = some maskT := by
+      rw [c14peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+      exact hmask
+    have c14cum : c14.regs .real [4] "cum_grad_dg" = some
+        (gated s (fun i => cumInVal i +
+          dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)) := by
+      rw [hc14]; exact BlockState.setReg_same _ _ _ _ _
+    rw [bwdEval_store_ptr_masked c14 "p_dg" _ _
+        ptrDG (gated s (fun i => cumInVal i +
+          dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)) maskT
+        c14pdg (by rw [evalOp_ref]; exact c14cum) (by rw [evalOp_ref]; exact c14mask)]
+    simp only [hptrDG, hmaskT]
+    rw [bwdStore_stMem]
+  rw [stepStmts.cons_some e17]
+  set c15 := stMem s DG R
+    (fun i => cumInVal i + dgSum s DQInner DQInter DKInner DKInter Q K G R lgVal i)
+    c14 with hc15
+  -- The 8 pointer decrements. Each reads its (preserved) pointer register.
+  have c15p : ∀ (region : RegionName) (n : RegName),
+      s3.regs .ptr [4] n = some
+        (Tile.vec (fun e : Fin 4 => (region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))) →
+      n ≠ "cum_grad_dg" → n ≠ "dg_val" → n ≠ "k_val" → n ≠ "q_val" →
+      n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
+      c15.regs .ptr [4] n = some
+        (Tile.vec (fun e : Fin 4 => (region.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + R))) := by
+    intro region n hn g0 g1 g2 g3 g4 g5 g6 g7 g8 g9
+    rw [hc15, stMem_regs]
+    rw [c14peel .ptr [4] n g0 g1 g2 g3 g4 g5 g6 g7 g8 g9]; exact hn
+  -- Convenience: `c15p` instantiated at each row pointer.
+  have c15pg := c15p G "p_g" hpg (by decide) (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pk := c15p K "p_k" hpk (by decide) (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pq := c15p Q "p_q" hpq (by decide) (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pdqi := c15p DQInner "p_dq_inner" hpdqi (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pdki := c15p DKInner "p_dk_inner" hpdki (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pdqt := c15p DQInter "p_dq_inter" hpdqt (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pdkt := c15p DKInter "p_dk_inter" hpdkt (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  have c15pdg := c15p DG "p_dg" hpdg (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+  -- === Statements 18-25: p_x -= 8 (eight pointer decrements) ===
+  have e18 : stepStmt (Stmt.assign .ptr [4] "p_g"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_g") (Op.constNat 8))) c15
+      = some (c15.setReg "p_g" .ptr [4] (ptrDec G s R)) := by
+    rw [bwdEval_assign_ptrSub c15 "p_g" "p_g" 8 ptrG c15pg]; rfl
+  rw [stepStmts.cons_some e18]
+  set c16 := c15.setReg "p_g" .ptr [4] (ptrDec G s R) with hc16
+  have e19 : stepStmt (Stmt.assign .ptr [4] "p_k"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_k") (Op.constNat 8))) c16
+      = some (c16.setReg "p_k" .ptr [4] (ptrDec K s R)) := by
+    rw [bwdEval_assign_ptrSub c16 "p_k" "p_k" 8 ptrK
+        (by rw [hc16, BlockState.setReg_ne_name (h := by decide)]; exact c15pk)]; rfl
+  rw [stepStmts.cons_some e19]
+  set c17 := c16.setReg "p_k" .ptr [4] (ptrDec K s R) with hc17
+  have e20 : stepStmt (Stmt.assign .ptr [4] "p_q"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_q") (Op.constNat 8))) c17
+      = some (c17.setReg "p_q" .ptr [4] (ptrDec Q s R)) := by
+    rw [bwdEval_assign_ptrSub c17 "p_q" "p_q" 8 ptrQ
+        (by rw [hc17, BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pq)]; rfl
+  rw [stepStmts.cons_some e20]
+  set c18 := c17.setReg "p_q" .ptr [4] (ptrDec Q s R) with hc18
+  have e21 : stepStmt (Stmt.assign .ptr [4] "p_dq_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dq_inner") (Op.constNat 8))) c18
+      = some (c18.setReg "p_dq_inner" .ptr [4] (ptrDec DQInner s R)) := by
+    rw [bwdEval_assign_ptrSub c18 "p_dq_inner" "p_dq_inner" 8 ptrDQi
+        (by rw [hc18, BlockState.setReg_ne_name (h := by decide), hc17,
+            BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pdqi)]; rfl
+  rw [stepStmts.cons_some e21]
+  set c19 := c18.setReg "p_dq_inner" .ptr [4] (ptrDec DQInner s R) with hc19
+  have e22 : stepStmt (Stmt.assign .ptr [4] "p_dk_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dk_inner") (Op.constNat 8))) c19
+      = some (c19.setReg "p_dk_inner" .ptr [4] (ptrDec DKInner s R)) := by
+    rw [bwdEval_assign_ptrSub c19 "p_dk_inner" "p_dk_inner" 8 ptrDKi
+        (by rw [hc19, BlockState.setReg_ne_name (h := by decide), hc18,
+            BlockState.setReg_ne_name (h := by decide), hc17,
+            BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pdki)]; rfl
+  rw [stepStmts.cons_some e22]
+  set c20 := c19.setReg "p_dk_inner" .ptr [4] (ptrDec DKInner s R) with hc20
+  have e23 : stepStmt (Stmt.assign .ptr [4] "p_dq_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dq_inter") (Op.constNat 8))) c20
+      = some (c20.setReg "p_dq_inter" .ptr [4] (ptrDec DQInter s R)) := by
+    rw [bwdEval_assign_ptrSub c20 "p_dq_inter" "p_dq_inter" 8 ptrDQt
+        (by rw [hc20, BlockState.setReg_ne_name (h := by decide), hc19,
+            BlockState.setReg_ne_name (h := by decide), hc18,
+            BlockState.setReg_ne_name (h := by decide), hc17,
+            BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pdqt)]; rfl
+  rw [stepStmts.cons_some e23]
+  set c21 := c20.setReg "p_dq_inter" .ptr [4] (ptrDec DQInter s R) with hc21
+  have e24 : stepStmt (Stmt.assign .ptr [4] "p_dk_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dk_inter") (Op.constNat 8))) c21
+      = some (c21.setReg "p_dk_inter" .ptr [4] (ptrDec DKInter s R)) := by
+    rw [bwdEval_assign_ptrSub c21 "p_dk_inter" "p_dk_inter" 8 ptrDKt
+        (by rw [hc21, BlockState.setReg_ne_name (h := by decide), hc20,
+            BlockState.setReg_ne_name (h := by decide), hc19,
+            BlockState.setReg_ne_name (h := by decide), hc18,
+            BlockState.setReg_ne_name (h := by decide), hc17,
+            BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pdkt)]; rfl
+  rw [stepStmts.cons_some e24]
+  set c22 := c21.setReg "p_dk_inter" .ptr [4] (ptrDec DKInter s R) with hc22
+  have e25 : stepStmt (Stmt.assign .ptr [4] "p_dg"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dg") (Op.constNat 8))) c22
+      = some (c22.setReg "p_dg" .ptr [4] (ptrDec DG s R)) := by
+    rw [bwdEval_assign_ptrSub c22 "p_dg" "p_dg" 8 ptrDG
+        (by rw [hc22, BlockState.setReg_ne_name (h := by decide), hc21,
+            BlockState.setReg_ne_name (h := by decide), hc20,
+            BlockState.setReg_ne_name (h := by decide), hc19,
+            BlockState.setReg_ne_name (h := by decide), hc18,
+            BlockState.setReg_ne_name (h := by decide), hc17,
+            BlockState.setReg_ne_name (h := by decide), hc16,
+            BlockState.setReg_ne_name (h := by decide)]; exact c15pdg)]; rfl
+  rw [stepStmts.cons_some e25]
+  set c23 := c22.setReg "p_dg" .ptr [4] (ptrDec DG s R) with hc23
+  rw [stepStmts.nil]
+  -- All conjuncts proven against the final state `c23`.
+  refine ⟨c23, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    rw [hc23, BlockState.setReg_pids, hc22, BlockState.setReg_pids, hc21,
+        BlockState.setReg_pids, hc20, BlockState.setReg_pids, hc19,
+        BlockState.setReg_pids, hc18, BlockState.setReg_pids, hc17,
+        BlockState.setReg_pids, hc16, BlockState.setReg_pids, hc15, stMem_pids,
+        hc14, BlockState.setReg_pids, hc13, BlockState.setReg_pids, hc12,
+        BlockState.setReg_pids, hc11, BlockState.setReg_pids, hc10, stMem_pids,
+        hc9, BlockState.setReg_pids, hc8, BlockState.setReg_pids, hc7,
+        BlockState.setReg_pids, hc6, BlockState.setReg_pids, hc5, stMem_pids,
+        hc4, BlockState.setReg_pids, hc3, BlockState.setReg_pids, hc2,
+        BlockState.setReg_pids, hc1, BlockState.setReg_pids]
+    exact hpid
+  · -- mem: three nested masked stores, reduced over `s3` via mem-congruence
+    have hc4mem : c4.mem = s3.mem := by
+      simp only [hc4, hc3, hc2, hc1, BlockState.setReg]
+    have hc9mem : c9.mem = c5.mem := by
+      simp only [hc9, hc8, hc7, hc6, BlockState.setReg]
+    have hc14mem : c14.mem = c10.mem := by
+      simp only [hc14, hc13, hc12, hc11, BlockState.setReg]
+    have hc23mem : c23.mem = c15.mem := by
+      simp only [hc23, hc22, hc21, hc20, hc19, hc18, hc17, hc16, BlockState.setReg]
+    rw [hc23mem, hc15]
+    refine stMem_mem_congr s DG R _ c14 _ ?_
+    rw [hc14mem, hc10]
+    refine stMem_mem_congr s DKInter R _ c9 _ ?_
+    rw [hc9mem, hc5]
+    exact stMem_mem_congr s DQInter R _ c4 s3 hc4mem
+  · -- mask: peel all 8 ptrSubs to c15, stMem regs, then c14 down to s3.
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18,
+        BlockState.setReg_ne_name (h := by decide), hc17,
+        BlockState.setReg_ne_name (h := by decide), hc16,
+        BlockState.setReg_ne_name (h := by decide), hc15, stMem_regs,
+        c14peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hmask
+  · -- last_g
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18,
+        BlockState.setReg_ne_name (h := by decide), hc17,
+        BlockState.setReg_ne_name (h := by decide), hc16,
+        BlockState.setReg_ne_name (h := by decide), hc15, stMem_regs,
+        c14peel .real [4] "last_g" (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hlastg
+  · -- cum_grad_dg: set at c14 (below the 8 ptrSubs and the DG store).
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18,
+        BlockState.setReg_ne_name (h := by decide), hc17,
+        BlockState.setReg_ne_name (h := by decide), hc16,
+        BlockState.setReg_ne_name (h := by decide), hc15, stMem_regs, hc14]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_g (set at c16)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18,
+        BlockState.setReg_ne_name (h := by decide), hc17,
+        BlockState.setReg_ne_name (h := by decide), hc16]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_k (set at c17)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18,
+        BlockState.setReg_ne_name (h := by decide), hc17]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_q (set at c18)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19,
+        BlockState.setReg_ne_name (h := by decide), hc18]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_dq_inner (set at c19)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20,
+        BlockState.setReg_ne_name (h := by decide), hc19]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_dk_inner (set at c20)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21,
+        BlockState.setReg_ne_name (h := by decide), hc20]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_dq_inter (set at c21)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22,
+        BlockState.setReg_ne_name (h := by decide), hc21]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_dk_inter (set at c22)
+    rw [hc23, BlockState.setReg_ne_name (h := by decide), hc22]
+    exact BlockState.setReg_same _ _ _ _ _
+  · -- p_dg (set at c23)
+    rw [hc23]
+    exact BlockState.setReg_same _ _ _ _ _
+
 end BwdAssembly
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
