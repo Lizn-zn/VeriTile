@@ -2233,49 +2233,49 @@ carry the kernel's per-block tile arithmetic over the masked cell
 /-- The kernel's masked `qk` cell at lane `(i, j)`: active lane gets the scaled
 dot `sm·Σ_e qf(i,e)·kf(j,e)`; future lane gets the `-1e8` sentinel. Finite (no
 `⊥`), matching `ctxLoopBody_steps`'s `qkT`. -/
-noncomputable def ctxQkCell (sm : ℝ) (SN plen : Nat) (gOM : Fin 128 → Nat)
-    (qf : Fin 128 → Fin 128 → ℝ) (kf : Fin 128 → Fin 128 → ℝ) (i j : Fin 128) : ℝ :=
+noncomputable def ctxQkCell {BM BN D : Nat} (sm : ℝ) (SN plen : Nat) (gOM : Fin BM → Nat)
+    (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ) (i : Fin BM) (j : Fin BN) : ℝ :=
   if SN + j.val ≤ gOM i + plen then
-    sm * Finset.univ.sum (fun e : Fin 128 => qf i e * kf j e)
+    sm * Finset.univ.sum (fun e : Fin D => qf i e * kf j e)
   else (0.0 - 10e7 : ℝ)
 
-/-- **The `q·k` dot cell is the scaled score.** With `qtile`/`ktile` reading
-`qf`/`kf` (as `some`), the dot of `qtile` against `ktile` at cell `(i, j)` is
-`some (Σ_e qf(i,e)·kf(j,e))`. -/
-theorem ctx_dot_score_cell
-    (qtile ktile : Tile .real [128, 128]) (i j : Fin 128)
-    (qf kf : Fin 128 → Fin 128 → ℝ)
-    (hq : ∀ e : Fin 128, qtile.data (i, e, PUnit.unit) = some (qf i e))
-    (hk : ∀ e : Fin 128, ktile.data (e, j, PUnit.unit) = some (kf j e)) :
+/-- **The `q·k` dot cell is the scaled score** (shape-generic `[BM,D]·[D,BN]`). With
+`qtile`/`ktile` reading `qf`/`kf` (as `some`), the dot of `qtile` against `ktile`
+at cell `(i, j)` is `some (Σ_e qf(i,e)·kf(j,e))`. -/
+theorem ctx_dot_score_cell {BM BN D : Nat}
+    (qtile : Tile .real [BM, D]) (ktile : Tile .real [D, BN]) (i : Fin BM) (j : Fin BN)
+    (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ)
+    (hq : ∀ e : Fin D, qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ e : Fin D, ktile.data (e, j, PUnit.unit) = some (kf j e)) :
     (Tile.dot [] qtile ktile).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum (fun e : Fin 128 => qf i e * kf j e)) := by
+      = some (Finset.univ.sum (fun e : Fin D => qf i e * kf j e)) := by
   rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+  rw [show (@Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
         (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+      = @Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
           (fun e => (some (qf i e * kf j e) : WithBot ℝ))
       from Finset.sum_congr rfl (fun e _ => by rw [hq e, hk e]; rfl)]
-  rw [show (fun e : Fin 128 => (some (qf i e * kf j e) : WithBot ℝ))
-        = (fun e : Fin 128 => ((qf i e * kf j e : ℝ) : WithBot ℝ)) from rfl,
+  rw [show (fun e : Fin D => (some (qf i e * kf j e) : WithBot ℝ))
+        = (fun e : Fin D => ((qf i e * kf j e : ℝ) : WithBot ℝ)) from rfl,
     ← WithBot.coe_sum]; rfl
 
-/-- **The kernel's `qkT` cell is `some (ctxQkCell …)`.** The `tl.where(mask, qk·sm,
--1e8)` register, with the loaded `q`/`k` reading `qf`/`kf`, has cell `(i,j)`
-equal to the masked `ctxQkCell`. -/
-theorem ctx_qkT_cell (sm : ℝ) (SN plen : Nat) (gOM : Fin 128 → Nat)
-    (qtile kloadT : Tile .real [128, 128]) (qf kf : Fin 128 → Fin 128 → ℝ)
-    (hq : ∀ i e : Fin 128, qtile.data (i, e, PUnit.unit) = some (qf i e))
-    (hk : ∀ j e : Fin 128, kloadT.data (e, j, PUnit.unit) = some (kf j e))
-    (i j : Fin 128) :
+/-- **The kernel's `qkT` cell is `some (ctxQkCell …)`** (shape-generic). The
+`tl.where(mask, qk·sm, -1e8)` register, with the loaded `q`/`k` reading `qf`/`kf`,
+has cell `(i,j)` equal to the masked `ctxQkCell`. -/
+theorem ctx_qkT_cell {BM BN D : Nat} (sm : ℝ) (SN plen : Nat) (gOM : Fin BM → Nat)
+    (qtile : Tile .real [BM, D]) (kloadT : Tile .real [D, BN]) (qf : Fin BM → Fin D → ℝ) (kf : Fin BN → Fin D → ℝ)
+    (hq : ∀ (i : Fin BM) (e : Fin D), qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ (j : Fin BN) (e : Fin D), kloadT.data (e, j, PUnit.unit) = some (kf j e))
+    (i : Fin BM) (j : Fin BN) :
     (Tile.select
-        (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [128, 128])
+        (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN])
         (Tile.bop NumericDType.real.mul Broadcast.scalarR (Tile.dot [] qtile kloadT)
           (Tile.scalar (some sm)))
-        (⟨fun _ : TileIndex [128, 128] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [128, 128])).data
+        (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [BM, BN])).data
       (i, j, PUnit.unit)
       = some (ctxQkCell sm SN plen gOM qf kf i j) := by
   rw [Tile.select_data, ctxQkCell]
-  have hsel : (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [128, 128]).data (i, j, PUnit.unit)
+  have hsel : (⟨fun idx : TileIndex [BM, BN] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN]).data (i, j, PUnit.unit)
       = decide (SN + j.val ≤ gOM i + plen) := rfl
   by_cases h : SN + j.val ≤ gOM i + plen
   · rw [hsel, if_pos h]
@@ -2630,8 +2630,8 @@ The `qk -= m_ij[:, None]` cell `(qkT − expandDim m_ij).data (i, jL)` equals
 `dropInsertedIndex [128] ⟨1,_⟩ 1 (...)` axis term a single time (avoiding the
 in-proof deep recursion of forcing `Tile.expandDim_data`+`dropInsertedIndex`
 inline in the `acc` conjunct). -/
-theorem ctx_qk_sub_mij_cell (qkT : Tile .real [128, 128]) (mijT : Tile .real [128])
-    (i jL : Fin 128) (sc mij : ℝ)
+theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Tile .real [BM])
+    (i : Fin BM) (jL : Fin BN) (sc mij : ℝ)
     (hqk : qkT.data (i, jL, PUnit.unit) = some sc)
     (hmij : mijT.data (i, PUnit.unit) = some mij) :
     (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT
