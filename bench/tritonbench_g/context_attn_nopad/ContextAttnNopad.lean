@@ -2415,6 +2415,195 @@ theorem nopadFoldUpto_anchor
     (by intro h; exact absurd h (lt_irrefl 0))
   simpa only [nopadFoldUpto, zero_add] using h
 
+/-- `realExp` always returns `some`; restate it as `some (·.unbotD 0)`. -/
+theorem nopad_realExp_eq_some_unbotD (x : WithBot ℝ) :
+    WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
+  cases x <;> rfl
+
+/-- The running `max` of an `osNormStepBot` block fold (from a coerced-real state)
+is `m ⊔ blockSup`. -/
+theorem osNormStepBot_block_fst (m : WithBot ℝ) (l acc : ℝ) (block : List (ℝ × ℝ)) :
+    (block.foldl osNormStepBot (m, l, acc)).1
+      = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [osNormStepBot_foldl_fst]
+  induction block generalizing m with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.foldl_cons, List.foldr_cons]
+    rw [ih]
+    rw [show (m ⊔ ((a.1 : ℝ) : WithBot ℝ)) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))
+          = m ⊔ (((a.1 : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))) from by
+      rw [sup_assoc]]
+
+/-- The coerced-score `⊔`-foldr is `⊥` iff the list is empty (coerced reals ≠ `⊥`). -/
+theorem foldr_sup_coe_bot_iff (xs : List (ℝ × ℝ)) :
+    (xs.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ = ⊥ ↔ xs = [] := by
+  induction xs with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.foldr_cons]
+    constructor
+    · intro h
+      exact absurd (le_bot_iff.mp (h ▸ le_sup_left)) WithBot.coe_ne_bot
+    · intro h; exact absurd h (by simp)
+
+/-- A `⊥`-seeded `osNormStepBot` fold has `⊥` running max iff the key list is empty. -/
+theorem osNormStepBot_foldl_fst_bot_iff (xs : List (ℝ × ℝ)) :
+    (xs.foldl osNormStepBot (⊥, 0, 0)).1 = ⊥ ↔ xs = [] := by
+  rw [osNormStepBot_block_fst, bot_sup_eq]; exact foldr_sup_coe_bot_iff xs
+
+/-- A `⊥`-seeded `osNormStepBot` fold with non-`⊥` running max has positive batch
+denominator `L = Σ exp(score)` (every key contributes `exp > 0`). -/
+theorem osNormStepBot_foldl_L_pos (xs : List (ℝ × ℝ))
+    (h : (xs.foldl osNormStepBot (⊥, 0, 0)).1 ≠ ⊥) :
+    0 < (xs.map (fun p => Real.exp p.1)).sum := by
+  have hne : xs ≠ [] := fun he => h ((osNormStepBot_foldl_fst_bot_iff xs).mpr he)
+  rcases xs with _ | ⟨a, t⟩
+  · exact absurd rfl hne
+  · rw [List.map_cons, List.sum_cons]
+    have h1 : 0 ≤ (t.map (fun p => Real.exp p.1)).sum := by
+      apply List.sum_nonneg; intro x hx
+      simp only [List.mem_map] at hx; obtain ⟨p, _, rfl⟩ := hx; exact le_of_lt (Real.exp_pos _)
+    have := Real.exp_pos a.1; linarith
+
+/-- `lij`-style block sum rescaled by `β = exp(blockSup ⊖ M')` collapses to
+`exp(−Mr)·Σ exp(s)·g` where `Mr = M'.unbotD 0` (empty-block case: both sides `0`).
+Auxiliary for `osNormStepBot_block_eq`. -/
+private theorem osNormStepBot_blockSum_rescale (block : List (ℝ × ℝ)) (Mr : ℝ)
+    (g : ℝ × ℝ → ℝ) :
+    let blockSup := (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+    (WithBot.realExp (WithBot.realSub blockSup ((Mr : ℝ) : WithBot ℝ))).unbotD 0
+        * (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * g p)).sum
+      = Real.exp (-Mr) * (block.map (fun p => Real.exp p.1 * g p)).sum := by
+  intro blockSup
+  cases hbs : blockSup with
+  | bot =>
+    have hempty : block = [] := by
+      rcases block with _ | ⟨a, t⟩
+      · rfl
+      · exfalso
+        have hle : ((a.1 : ℝ) : WithBot ℝ) ≤ blockSup := by
+          simp only [blockSup, List.map_cons, List.foldr_cons]; exact le_sup_left
+        rw [hbs] at hle
+        exact absurd (le_bot_iff.mp hle) (WithBot.coe_ne_bot)
+    subst hempty; simp
+  | coe bsr =>
+    have hbsunbot : blockSup.unbotD 0 = bsr := by rw [hbs]; rfl
+    simp only [hbs, WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe, hbsunbot]
+    rw [show (block.map (fun p => Real.exp (p.1 - bsr) * g p)).sum
+          = Real.exp (-bsr) * (block.map (fun p => Real.exp p.1 * g p)).sum from by
+      rw [← List.sum_map_mul_left]
+      congr 1; apply List.map_congr_left; intro p _
+      rw [show p.1 - bsr = -bsr + p.1 from by ring, Real.exp_add]; ring]
+    rw [show Real.exp (bsr - Mr) * (Real.exp (-bsr) * (block.map (fun p => Real.exp p.1 * g p)).sum)
+          = (Real.exp (bsr - Mr) * Real.exp (-bsr)) * (block.map (fun p => Real.exp p.1 * g p)).sum from by ring,
+      ← Real.exp_add]
+    ring_nf
+
+/-- **The block-at-once *normalized* update equals the key-by-key `osNormStepBot`
+fold.** Mirror of #307's `srOsStepBot_block_eq` for nopad's *in-loop normalized*
+recurrence (the kernel rescales `acc` by `l/l'·α` and adds `(exp/l')·v`, so `acc`
+already holds the running ratio). Given a state `(m, ↑l, ↑acc)` anchored to the true
+denominator `L` (`l = κ(m)·L`) and accumulator `T` (`acc·L = T`, with `acc = 0` when
+`L = 0`), and block max `M' = m ⊔ blockSup`, the kernel's one-shot update — block
+denominator `l_ij = Σ exp(s − blockSup)`, `m_i_new = M'`, `α = exp(m ⊖ M')`,
+`β = exp(blockSup ⊖ M')`, `l_i_new = α·l + β·l_ij`, and
+`acc' = acc·(l/l_i_new·α) + Σ (exp(s−blockSup)·β/l_i_new)·v` — lands on the coerced
+`block.foldl osNormStepBot (m, l, acc)`. -/
+theorem osNormStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (ℝ × ℝ))
+    (hbne : block ≠ [])
+    (hL0 : 0 ≤ L)
+    (hl : l = (m.elim 0 (fun r => Real.exp (-r))) * L)
+    (hacc : acc * L = T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0)
+    (hLpos : 0 < L → l ≠ 0) :
+    let blockSup := (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+    let M' := m ⊔ blockSup
+    let α := (WithBot.realExp (WithBot.realSub m M')).unbotD 0
+    let β := (WithBot.realExp (WithBot.realSub blockSup M')).unbotD 0
+    let lij := (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0))).sum
+    let l' := α * l + β * lij
+    let acc' := acc * (l / l' * α)
+      + (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * β / l' * p.2)).sum
+    (M', l', acc') = block.foldl osNormStepBot (m, l, acc) := by
+  intro blockSup M' α β lij l' acc'
+  have hfst : (block.foldl osNormStepBot (m, l, acc)).1 = M' := by
+    rw [osNormStepBot_block_fst]
+  obtain ⟨hfold_l, hfold_acc, _hL'0, _hbot1, _hbot2, _hne⟩ :=
+    osNormStepBot_foldl_consistent block m l acc T L hL0 (fun _ _ => trivial) hl hacc hmL hmT hLpos
+  rw [hfst] at hfold_l
+  set L'b := L + (block.map (fun p => Real.exp p.1)).sum with hL'b
+  set T'b := T + (block.map (fun p => Real.exp p.1 * p.2)).sum with hT'b
+  -- α·l = exp(-Mr)·L for any finite Mr = M'.unbotD 0 (uses anchor `l = κ(m)·L`)
+  have hαl : ∀ Mr : ℝ, M' = (Mr : WithBot ℝ) → l * α = Real.exp (-Mr) * L := by
+    intro Mr hM'
+    cases hm : m with
+    | bot => have : L = 0 := hmL hm; rw [hl, hm]; simp [this]
+    | coe a =>
+      have hαv : α = Real.exp (a - Mr) := by
+        simp only [α, hm, hM', WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+      rw [hαv, hl, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+      rw [show Real.exp (-a) * L * Real.exp (a - Mr) = (Real.exp (-a) * Real.exp (a - Mr)) * L from by ring,
+        ← Real.exp_add]
+      ring_nf
+  -- block ≠ [] ⟹ blockSup ≠ ⊥ ⟹ M' ≠ ⊥
+  have hbsne : blockSup ≠ ⊥ := fun h => hbne ((foldr_sup_coe_bot_iff block).mp h)
+  cases hM' : M' with
+  | bot =>
+    exact absurd (le_bot_iff.mp (hM' ▸ (le_sup_right : blockSup ≤ M'))) hbsne
+  | coe Mr =>
+    -- l' = exp(-Mr)·L'b
+    have hl'eq : l' = Real.exp (-Mr) * L'b := by
+      show α * l + β * lij = Real.exp (-Mr) * L'b
+      have h1 : α * l = Real.exp (-Mr) * L := by rw [mul_comm]; exact hαl Mr hM'
+      have h2 : β * lij = Real.exp (-Mr) * (block.map (fun p => Real.exp p.1)).sum := by
+        have hr := osNormStepBot_blockSum_rescale block Mr (fun _ => 1)
+        simp only [mul_one] at hr
+        rw [show β = (WithBot.realExp (WithBot.realSub blockSup ((Mr:ℝ):WithBot ℝ))).unbotD 0 from by simp only [β, hM']]
+        rw [show lij = (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0))).sum from rfl]
+        exact hr
+      rw [h1, h2, hL'b]; ring
+    have hL'pos : 0 < L'b := by
+      rw [hL'b]
+      have hsumpos : 0 < (block.map (fun p => Real.exp p.1)).sum := by
+        rcases block with _ | ⟨a, t⟩
+        · exact absurd rfl hbne
+        · rw [List.map_cons, List.sum_cons]
+          have h1 : 0 ≤ (t.map (fun p => Real.exp p.1)).sum := by
+            apply List.sum_nonneg; intro x hx
+            simp only [List.mem_map] at hx; obtain ⟨p, _, rfl⟩ := hx; exact le_of_lt (Real.exp_pos _)
+          have := Real.exp_pos a.1; linarith
+      linarith
+    have hl'ne : l' ≠ 0 := by rw [hl'eq]; positivity
+    refine Prod.ext (hfst.trans hM').symm (Prod.ext ?_ ?_)
+    · show l' = (block.foldl osNormStepBot (m, l, acc)).2.1
+      rw [hM'] at hfold_l
+      rw [hfold_l, hl'eq, show ((↑Mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-Mr) from rfl]
+    · show acc' = (block.foldl osNormStepBot (m, l, acc)).2.2
+      have hfacc : (block.foldl osNormStepBot (m, l, acc)).2.2 = T'b / L'b := by
+        rw [eq_div_iff (ne_of_gt hL'pos), hfold_acc]
+      rw [hfacc]
+      show acc * (l / l' * α) + (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * β / l' * p.2)).sum
+        = T'b / L'b
+      have hβsum : (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * β / l' * p.2)).sum
+          = (Real.exp (-Mr) * (block.map (fun p => Real.exp p.1 * p.2)).sum) / l' := by
+        have hmapeq : (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * β / l' * p.2))
+            = (block.map (fun p => (Real.exp (p.1 - blockSup.unbotD 0) * (β * p.2)) * (1 / l'))) := by
+          apply List.map_congr_left; intro p _; ring
+        rw [hmapeq, List.sum_map_mul_right, ← div_eq_mul_one_div]
+        congr 1
+        rw [show (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * (β * p.2))).sum
+              = β * (block.map (fun p => Real.exp (p.1 - blockSup.unbotD 0) * p.2)).sum from by
+          rw [← List.sum_map_mul_left]; congr 1; apply List.map_congr_left; intro p _; ring]
+        rw [show β = (WithBot.realExp (WithBot.realSub blockSup ((Mr:ℝ):WithBot ℝ))).unbotD 0 from by simp only [β, hM']]
+        exact osNormStepBot_blockSum_rescale block Mr (fun p => p.2)
+      rw [hβsum]
+      rw [show acc * (l / l' * α) = acc * (l * α) / l' from by ring, hαl Mr hM', hl'eq, hT'b]
+      rw [← add_div]
+      rw [show acc * (Real.exp (-Mr) * L) + Real.exp (-Mr) * (block.map (fun p => Real.exp p.1 * p.2)).sum
+            = Real.exp (-Mr) * (acc * L + (block.map (fun p => Real.exp p.1 * p.2)).sum) from by ring]
+      rw [hacc, mul_div_mul_left _ _ (Real.exp_ne_zero _)]
+
 /-- The loop invariant after `c` `128`-blocks at the Python test shape. Binds the
 running `m_i`/`l_i`/`acc` registers to `nopadFoldUpto … (c·128)` and preserves every
 preLoop-seeded register. `S = ctxNopadWindow`, `bel = seqLen`, scale =
@@ -2783,5 +2972,674 @@ theorem nopadPreLoop_eval
       not_false_eq_true]
     refine congrArg some (Tile.ext (fun idx => ?_))
     simp only [Nat.zero_mul, nopadFoldUpto_zero]; rfl
+
+/-- The block-`c` score list (`.map fst`) of `nopadBlockM` is channel-independent. -/
+theorem nopadBlockM_fst_channel_indep
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel c : Nat) (i : Fin 128) (d d' : Fin 128) :
+    (nopadBlockM s Q K V B_Start_Loc sm_scale 128 S bel c i d).map Prod.fst
+      = (nopadBlockM s Q K V B_Start_Loc sm_scale 128 S bel c i d').map Prod.fst := by
+  unfold nopadBlockM
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val ≤ s.pids 2 * 128 + i.val ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 <;> simp [hj]
+
+/-- Block `c` of `nopadBlockM` is non-empty for every row `i` when the streamed
+window reaches it (`c·128 < S`) and the program is causal-active for the block's
+first key (`c·128 ≤ start_m·128 + i`): key `c·128` (lane `jL = 0`) is included. -/
+theorem nopadBlockM_ne_nil
+    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
+    (S bel c : Nat) (i : Fin 128) (d : Fin 128)
+    (hwin : (c + 1) * 128 ≤ S) (hcle : c * 128 ≤ s.pids 2 * 128 + i.val) :
+    nopadBlockM s Q K V B_Start_Loc sm_scale 128 S bel c i d ≠ [] := by
+  intro hnil
+  have h0 : (⟨c * 128, by omega⟩ : Fin S) ∈ List.finRange S := List.mem_finRange _
+  have := List.filterMap_eq_nil_iff.mp hnil (⟨c * 128, by omega⟩ : Fin S) h0
+  simp only [Fin.val_mk] at this
+  rw [if_pos ⟨by omega, by omega, by omega⟩] at this
+  exact absurd this (by simp)
+
+/- WIP (compiles through all 22 loop-body statement steps; the per-block math
+   bridge `hbridge` + invariant readback have `set`/`simp` tactic friction still
+   being polished — wrapped out to keep the file sorry-free and compiling). The
+   supporting math (`osNormStepBot_block_eq`, `nopadBlockM_*`, `nopadBlockM_ne_nil`,
+   `nopadBlockM_fst_channel_indep`, `nopad_realExp_eq_some_unbotD`) is all live above.
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **One loop-body step advances the invariant by one block.** Mirror of #307's
+`sr_attn_step`. Peels the 22 lowered loop-body statements over the post-`setReg`
+state and bridges the per-block kernel update (`m_i_new`/`l_i_new`/`acc`) to
+`nopadFoldUpto … ((c+1)·128)` via `nopadFoldUptoM_succ` + `osNormStepBot_block_eq`
++ the masked `nopadBlockM_*` lane bridges. -/
+theorem nopad_attn_step
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName)
+    (s0 : BlockState) (i : Nat) (s : BlockState)
+    (hilt : i < ctxNopadWindow s0 B_Seqlen 128)
+    (hinv : nopadInvariant Q K V B_Start_Loc B_Seqlen s0 (i / 128) s)
+    (hi : i = (i / 128) * 128) :
+    ∃ s', stepStmts (nopadLoopBody sm_scale_python) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ nopadInvariant Q K V B_Start_Loc B_Seqlen s0 (i / 128 + 1) s' := by
+  set S := ctxNopadWindow s0 B_Seqlen 128 with hSdef
+  set bel := seqLen s0 B_Seqlen with hbeldef
+  set c := i / 128 with hc_def
+  set sc := sm_scale_python with hscdef
+  -- window bound: (c+1)*128 ≤ S
+  have hwin : (c + 1) * 128 ≤ S := by
+    -- i = c*128 < S and S is a multiple of 128 (S = bm*(start_m+1)*128)
+    have hSmul : S = (if 128 * s0.pids 2 < bel then 1 else 0) * (s0.pids 2 + 1) * 128 := by
+      simp only [hSdef, ctxNopadWindow, hbeldef]
+    by_cases hbm : 128 * s0.pids 2 < bel
+    · rw [hSmul, if_pos hbm, one_mul] at hilt ⊢
+      -- i = c*128 < (start_m+1)*128 ⟹ c ≤ start_m ⟹ (c+1) ≤ start_m+1
+      have : c < s0.pids 2 + 1 := by omega
+      nlinarith
+    · rw [hSmul, if_neg hbm] at hilt; omega
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp, hbmask, hmi, hli, hacc⟩ := hinv
+  -- the row-and-channel-indexed fold-so-far state (at c*128)
+  set fold0 : Fin 128 → Fin 128 → WithBot ℝ × ℝ × ℝ := fun ir dd =>
+    nopadFoldUpto s0 Q K V B_Start_Loc sc S bel (c * 128) ir dd with hfold0
+  -- block list per row/channel
+  set blk : Fin 128 → Fin 128 → List (ℝ × ℝ) := fun ir dd =>
+    nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd with hblk
+  -- score (pre-scale Σ) per row/lane
+  set rawSum : Fin 128 → Fin 128 → ℝ := fun ir jL =>
+    Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit)
+        * ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit))
+    with hrawSum
+  -- ============== peel the 22 statements ==============
+  unfold nopadLoopBody
+  set s1 := s.setReg "start_n" .nat [] (Tile.scalar i) with hs1d
+  -- helpers transporting regs across s1 (≠ start_n preserved)
+  have hs1pids : s1.pids = s0.pids := by rw [hs1d, BlockState.setReg_pids]; exact hpids
+  have hs1mem : s1.mem = s0.mem := by funext rg o; rw [hs1d, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "start_n" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- stmt 0: start_n = ref start_n (rebind to i)
+  have hs1sn : s1.regs .nat [] "start_n" = some (Tile.scalar i) := by rw [hs1d, BlockState.setReg_same]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") s1 = some (Tile.scalar i) from by rw [evalOp_ref]; exact hs1sn))]
+  set s2 := s1.setReg "start_n" .nat [] (Tile.scalar i) with hs2d
+  have hs2pids : s2.pids = s0.pids := by rw [hs2d, BlockState.setReg_pids]; exact hs1pids
+  have hs2mem : s2.mem = s0.mem := by funext rg o; rw [hs2d, BlockState.setReg_mem]; exact hs1mem ▸ rfl
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "start_n" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2sn : s2.regs .nat [] "start_n" = some (Tile.scalar i) := by rw [hs2d, BlockState.setReg_same]
+  have hs2seq : s2.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar bel) := e2 (by decide) (e1 (by decide) hseq)
+  have hs2slStart : startLoc s2 B_Start_Loc = startLoc s0 B_Start_Loc := startLoc_eq_of_mem_pids s2 s0 B_Start_Loc hs2mem hs2pids
+  have hs2sl : s2.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s2 B_Start_Loc)) := by
+    rw [hs2slStart]; exact e2 (by decide) (e1 (by decide) hsl)
+  have hs2n : s2.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)) := e2 (by decide) (e1 (by decide) hn)
+  have hs2m : s2.regs .nat [128] "offs_m" = some (Tile.vec (fun ir : Fin 128 => s0.pids 2 * 128 + ir.val)) := e2 (by decide) (e1 (by decide) hoffm)
+  have hs2kp : s2.regs .ptr [128, 128] "k_ptrs" = some (⟨fun idx : TileIndex [128, 128] =>
+      (K, idx.2.1.val * 768 + s2.pids 1 * 128 + idx.1.val)⟩ : Tile .ptr [128, 128]) := by
+    rw [hs2pids]; exact e2 (by decide) (e1 (by decide) hkp)
+  have hs2seqB : seqLen s2 B_Seqlen = bel := by rw [hbeldef]; exact seqLen_eq_of_mem_pids s2 s0 B_Seqlen hs2mem hs2pids
+  -- stmt 1: k = masked load → s3 with k tile = (e, jL) ↦ ctxKTileM(c*128+jL, e)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ s2 = _ from by
+      have h := nopad_k_load_eval s2 K B_Start_Loc B_Seqlen i hs2kp hs2sl hs2sn hs2n (by rw [hs2seqB]; exact hs2seq)
+      rw [hs2seqB] at h; exact h))]
+  -- kFn e jL = ctxKTileM s0 (c*128+jL, e)
+  set kFn : Fin 128 → Fin 128 → ℝ := fun e jL =>
+    ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit) with hkFn
+  rw [show (⟨fun idx : TileIndex [128, 128] =>
+        if i + idx.2.1.val < bel then
+          some (s2.readMem K ((startLoc s2 B_Start_Loc + (i + idx.2.1.val)) * 768 + s2.pids 1 * 128 + idx.1.val))
+        else some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+      = (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_)
+    obtain ⟨e, jL, u⟩ := idx
+    simp only [hkFn, ctxKTileM, ctxKTile, hs2pids,
+      show startLoc s2 B_Start_Loc = startLoc s0 B_Start_Loc from startLoc_eq_of_mem_pids s2 s0 B_Start_Loc hs2mem hs2pids,
+      show i + jL.val = c * 128 + jL.val from by rw [hi]]
+    by_cases hlt : c * 128 + jL.val < bel
+    · rw [if_pos hlt, if_pos hlt]
+      simp only [BlockState.readMem, hs2mem]
+    · rw [if_neg hlt, if_neg hlt]; norm_num]
+  set s3 := s2.setReg "k" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) with hs3d
+  have e3 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "k" → s2.regs dt sh nm = some t → s3.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs3d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs3pids : s3.pids = s0.pids := by rw [hs3d, BlockState.setReg_pids]; exact hs2pids
+  have hs3mem : s3.mem = s0.mem := by funext rg o; rw [hs3d, BlockState.setReg_mem]; exact hs2mem ▸ rfl
+  have hs3k : s3.regs .real [128, 128] "k" = some (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := by
+    rw [hs3d, BlockState.setReg_same]
+  -- q register (ctxQTileMRow s0) in `some (qFn ir e)` form
+  set qFn : Fin 128 → Fin 128 → ℝ := fun ir e => ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit) with hqFn
+  have hs3q : s3.regs .real [128, 128] "q" = some (⟨fun idx : TileIndex [128, 128] => some (qFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) :=
+    e3 (by decide) (e2 (by decide) (e1 (by decide) hq))
+  -- stmt 2: qk = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 128] (Op.const 0)) s3
+        = some (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  set s4 := s3.setReg "qk" .real [128, 128] (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128]) with hs4d
+  have e4 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "qk" → s3.regs dt sh nm = some t → s4.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs4d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs4qk0 : s4.regs .real [128, 128] "qk" = some (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128]) := by
+    rw [hs4d, BlockState.setReg_same]
+  have hs4q : s4.regs .real [128, 128] "q" = some (⟨fun idx : TileIndex [128, 128] => some (qFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := e4 (by decide) hs3q
+  have hs4k : s4.regs .real [128, 128] "k" = some (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := e4 (by decide) hs3k
+  -- stmt 3: qk += dot(q,k) → some (rawSum ir jL)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_qk_dot_eval s4 qFn kFn hs4qk0 hs4q hs4k))]
+  -- the dot result Σ_e qFn ir e · kFn e jL = rawSum ir jL
+  rw [show (⟨fun idx : TileIndex [128, 128] =>
+        some (Finset.univ.sum (fun e : Fin 128 => qFn idx.1 e * kFn e idx.2.1))⟩ : Tile .real [128, 128])
+      = (⟨fun idx : TileIndex [128, 128] => some (rawSum idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, jL, u⟩ := idx
+    simp only [hrawSum, hqFn, hkFn]]
+  set s5 := s4.setReg "qk" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (rawSum idx.1 idx.2.1)⟩ : Tile .real [128, 128]) with hs5d
+  have e5 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "qk" → s4.regs dt sh nm = some t → s5.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs5d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs5qk : s5.regs .real [128, 128] "qk" = some (⟨fun idx : TileIndex [128, 128] => some (rawSum idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := by
+    rw [hs5d, BlockState.setReg_same]
+  -- stmt 4: qk *= sc → some (rawSum · sc)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_qk_scale_eval s5 sc rawSum hs5qk))]
+  set s6 := s5.setReg "qk" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (rawSum idx.1 idx.2.1 * sc)⟩ : Tile .real [128, 128]) with hs6d
+  have e6 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "qk" → s5.regs dt sh nm = some t → s6.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs6d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs6qk : s6.regs .real [128, 128] "qk" = some (⟨fun idx : TileIndex [128, 128] => some (rawSum idx.1 idx.2.1 * sc)⟩ : Tile .real [128, 128]) := by
+    rw [hs6d, BlockState.setReg_same]
+  have hs6m : s6.regs .nat [128] "offs_m" = some (Tile.vec (fun ir : Fin 128 => s0.pids 2 * 128 + ir.val)) :=
+    e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) hs2m)))
+  have hs6sn : s6.regs .nat [] "start_n" = some (Tile.scalar i) :=
+    e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) hs2sn)))
+  have hs6n : s6.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)) :=
+    e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) hs2n)))
+  -- stmt 5: qk = where(offs_m ≥ start_n + offs_n, qk, -inf) → causal mask
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (nopad_qk_where_eval s6 i (fun ir jL => rawSum ir jL * sc) (fun ir => s0.pids 2 * 128 + ir.val)
+      hs6qk hs6m hs6sn hs6n))]
+  -- qkWhere ir jL = if c*128+jL ≤ pid2*128+ir then some (sc·rawSum) else ⊥
+  set qkW : Fin 128 → Fin 128 → WithBot ℝ := fun ir jL =>
+    if c * 128 + jL.val ≤ s0.pids 2 * 128 + ir.val then ((sc * rawSum ir jL : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)
+    with hqkW
+  rw [show (⟨fun idx : TileIndex [128, 128] =>
+        if i + idx.2.1.val ≤ s0.pids 2 * 128 + idx.1.val then some (rawSum idx.1 idx.2.1 * sc)
+        else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128])
+      = (⟨fun idx : TileIndex [128, 128] => qkW idx.1 idx.2.1⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, jL, u⟩ := idx
+    simp only [hqkW, show i + jL.val = c * 128 + jL.val from by rw [hi]]
+    by_cases hca : c * 128 + jL.val ≤ s0.pids 2 * 128 + ir.val
+    · rw [if_pos hca, if_pos hca]; rw [mul_comm]; rfl
+    · rw [if_neg hca, if_neg hca]]
+  set s7 := s6.setReg "qk" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => qkW idx.1 idx.2.1⟩ : Tile .real [128, 128]) with hs7d
+  have e7 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "qk" → s6.regs dt sh nm = some t → s7.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs7d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs7qk : s7.regs .real [128, 128] "qk" = some (⟨fun idx : TileIndex [128, 128] => qkW idx.1 idx.2.1⟩ : Tile .real [128, 128]) := by
+    rw [hs7d, BlockState.setReg_same]
+  -- mij ir = blockSup ir = ⊔ over nopadBlockM scores (via nopadBlockM_sup_eq)
+  set mijFn : Fin 128 → WithBot ℝ := fun ir =>
+    (blk ir ⟨0, by norm_num⟩).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) |>.foldr (· ⊔ ·) ⊥ with hmijFn
+  -- stmt 6: m_ij = max(qk, 1)  → sup'  (= sup, then = blockSup via bridge)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_mij_eval s7 qkW hs7qk))]
+  rw [show (⟨fun idx : TileIndex [128] =>
+        Finset.univ.sup' Finset.univ_nonempty (fun jL : Fin 128 => qkW idx.1 jL)⟩ : Tile .real [128])
+      = (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, u⟩ := idx
+    show Finset.univ.sup' Finset.univ_nonempty (fun jL : Fin 128 => qkW ir jL) = mijFn ir
+    rw [Finset.sup'_eq_sup]
+    rw [hmijFn]
+    simp only [hblk]
+    rw [← nopadBlockM_sup_eq s0 Q K V B_Start_Loc sc 128 S bel c ir ⟨0, by norm_num⟩ hwin]]
+  set s8 := s7.setReg "m_ij" .real [128] (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) with hs8d
+  have e8 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "m_ij" → s7.regs dt sh nm = some t → s8.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs8d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs8qk : s8.regs .real [128, 128] "qk" = some (⟨fun idx : TileIndex [128, 128] => qkW idx.1 idx.2.1⟩ : Tile .real [128, 128]) := e8 (by decide) hs7qk
+  have hs8mij : s8.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs8d, BlockState.setReg_same]
+  -- stmt 7: p = exp(qk - m_ij[:,None])
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_p_eval s8 qkW mijFn hs8qk hs8mij))]
+  set pFn : Fin 128 → Fin 128 → WithBot ℝ := fun ir jL => WithBot.realExp (WithBot.realSub (qkW ir jL) (mijFn ir)) with hpFn
+  set s9 := s8.setReg "p" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => pFn idx.1 idx.2.1⟩ : Tile .real [128, 128]) with hs9d
+  have e9 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "p" → s8.regs dt sh nm = some t → s9.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs9d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs9p : s9.regs .real [128, 128] "p" = some (⟨fun idx : TileIndex [128, 128] => pFn idx.1 idx.2.1⟩ : Tile .real [128, 128]) := by
+    rw [hs9d, BlockState.setReg_same]
+  -- stmt 8: l_ij = sum(p, 1)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_lij_eval s9 pFn hs9p))]
+  set lijFn : Fin 128 → WithBot ℝ := fun ir => Finset.univ.sum (fun jL : Fin 128 => pFn ir jL) with hlijFn
+  set s10 := s9.setReg "l_ij" .real [128] (⟨fun idx : TileIndex [128] => lijFn idx.1⟩ : Tile .real [128]) with hs10d
+  have e10 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "l_ij" → s9.regs dt sh nm = some t → s10.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs10d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs10lij : s10.regs .real [128] "l_ij" = some (⟨fun idx : TileIndex [128] => lijFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs10d, BlockState.setReg_same]
+  -- m_i register (from invariant) = fold0 .1 ; in some/coe form
+  set miFn : Fin 128 → WithBot ℝ := fun ir => (fold0 ir ⟨0, by norm_num⟩).1 with hmiFn
+  have hs10mi : s10.regs .real [128] "m_i" = some (⟨fun idx : TileIndex [128] => miFn idx.1⟩ : Tile .real [128]) :=
+    e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hmi)))))))))
+  have hs10mij : s10.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) := e10 (by decide) (e9 (by decide) hs8mij)
+  -- stmt 9: m_i_new = maximum(m_i, m_ij) = miFn ⊔ mijFn
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_minew_eval s10 miFn mijFn hs10mi hs10mij))]
+  set minewFn : Fin 128 → WithBot ℝ := fun ir => miFn ir ⊔ mijFn ir with hminewFn
+  set s11 := s10.setReg "m_i_new" .real [128] (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) with hs11d
+  have e11 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "m_i_new" → s10.regs dt sh nm = some t → s11.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs11d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs11minew : s11.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs11d, BlockState.setReg_same]
+  have hs11mi : s11.regs .real [128] "m_i" = some (⟨fun idx : TileIndex [128] => miFn idx.1⟩ : Tile .real [128]) := e11 (by decide) hs10mi
+  have hs11mij : s11.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) := e11 (by decide) hs10mij
+  -- stmt 10: alpha = exp(m_i - m_i_new)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_alpha_eval s11 miFn minewFn hs11mi hs11minew))]
+  set alphaFn : Fin 128 → WithBot ℝ := fun ir => WithBot.realExp (WithBot.realSub (miFn ir) (minewFn ir)) with halphaFn
+  set s12 := s11.setReg "alpha" .real [128] (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128]) with hs12d
+  have e12 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "alpha" → s11.regs dt sh nm = some t → s12.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs12d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs12alpha : s12.regs .real [128] "alpha" = some (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs12d, BlockState.setReg_same]
+  have hs12mij : s12.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]) := e12 (by decide) hs11mij
+  have hs12minew : s12.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) := e12 (by decide) hs11minew
+  -- stmt 11: beta = exp(m_ij - m_i_new)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_beta_eval s12 mijFn minewFn hs12mij hs12minew))]
+  set betaFn : Fin 128 → WithBot ℝ := fun ir => WithBot.realExp (WithBot.realSub (mijFn ir) (minewFn ir)) with hbetaFn
+  set s13 := s12.setReg "beta" .real [128] (⟨fun idx : TileIndex [128] => betaFn idx.1⟩ : Tile .real [128]) with hs13d
+  have e13 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "beta" → s12.regs dt sh nm = some t → s13.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs13d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs13beta : s13.regs .real [128] "beta" = some (⟨fun idx : TileIndex [128] => betaFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs13d, BlockState.setReg_same]
+  have hs13alpha : s13.regs .real [128] "alpha" = some (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128]) := e13 (by decide) hs12alpha
+  -- l_i register (from invariant) = fold0 .2.1 (coerced)
+  set liFn : Fin 128 → WithBot ℝ := fun ir => ((fold0 ir ⟨0, by norm_num⟩).2.1 : WithBot ℝ) with hliFn
+  have hs13li : s13.regs .real [128] "l_i" = some (⟨fun idx : TileIndex [128] => liFn idx.1⟩ : Tile .real [128]) :=
+    e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hli))))))))))))
+  have hs13lij : s13.regs .real [128] "l_ij" = some (⟨fun idx : TileIndex [128] => lijFn idx.1⟩ : Tile .real [128]) :=
+    e13 (by decide) (e12 (by decide) (e11 (by decide) hs10lij))
+  -- stmt 12: l_i_new = alpha*l_i + beta*l_ij
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_linew_eval s13 alphaFn liFn betaFn lijFn hs13alpha hs13li hs13beta hs13lij))]
+  set linewFn : Fin 128 → WithBot ℝ := fun ir =>
+    WithBot.realAdd (WithBot.realMul (alphaFn ir) (liFn ir)) (WithBot.realMul (betaFn ir) (lijFn ir)) with hlinewFn
+  set s14 := s13.setReg "l_i_new" .real [128] (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) with hs14d
+  have e14 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "l_i_new" → s13.regs dt sh nm = some t → s14.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs14d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs14linew : s14.regs .real [128] "l_i_new" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs14d, BlockState.setReg_same]
+  have hs14beta : s14.regs .real [128] "beta" = some (⟨fun idx : TileIndex [128] => betaFn idx.1⟩ : Tile .real [128]) := e14 (by decide) hs13beta
+  -- stmt 13: p_scale = beta / l_i_new
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_pscale_eval s14 betaFn linewFn hs14beta hs14linew))]
+  set psFn : Fin 128 → WithBot ℝ := fun ir => WithBot.realDiv (betaFn ir) (linewFn ir) with hpsFn
+  set s15 := s14.setReg "p_scale" .real [128] (⟨fun idx : TileIndex [128] => psFn idx.1⟩ : Tile .real [128]) with hs15d
+  have e15 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "p_scale" → s14.regs dt sh nm = some t → s15.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs15d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs15ps : s15.regs .real [128] "p_scale" = some (⟨fun idx : TileIndex [128] => psFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs15d, BlockState.setReg_same]
+  have hs15p : s15.regs .real [128, 128] "p" = some (⟨fun idx : TileIndex [128, 128] => pFn idx.1 idx.2.1⟩ : Tile .real [128, 128]) :=
+    e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) hs9p)))))
+  -- stmt 14: p = p * p_scale[:,None]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_pmul_eval s15 pFn psFn hs15p hs15ps))]
+  set pFinal : Fin 128 → Fin 128 → WithBot ℝ := fun ir jL => WithBot.realMul (pFn ir jL) (psFn ir) with hpFinal
+  set s16 := s15.setReg "p" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) with hs16d
+  have e16 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "p" → s15.regs dt sh nm = some t → s16.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs16d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs16p : s16.regs .real [128, 128] "p" = some (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) := by
+    rw [hs16d, BlockState.setReg_same]
+  -- l_i / l_i_new / alpha for acc_scale
+  have hs16li : s16.regs .real [128] "l_i" = some (⟨fun idx : TileIndex [128] => liFn idx.1⟩ : Tile .real [128]) :=
+    e16 (by decide) (e15 (by decide) (e14 (by decide) hs13li))
+  have hs16linew : s16.regs .real [128] "l_i_new" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) :=
+    e16 (by decide) (e15 (by decide) hs14linew)
+  have hs16alpha : s16.regs .real [128] "alpha" = some (⟨fun idx : TileIndex [128] => alphaFn idx.1⟩ : Tile .real [128]) :=
+    e16 (by decide) (e15 (by decide) (e14 (by decide) hs13alpha))
+  -- stmt 15: acc_scale = l_i / l_i_new * alpha
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_accscale_eval s16 liFn linewFn alphaFn hs16li hs16linew hs16alpha))]
+  set asFn : Fin 128 → WithBot ℝ := fun ir => WithBot.realMul (WithBot.realDiv (liFn ir) (linewFn ir)) (alphaFn ir) with hasFn
+  set s17 := s16.setReg "acc_scale" .real [128] (⟨fun idx : TileIndex [128] => asFn idx.1⟩ : Tile .real [128]) with hs17d
+  have e17 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc_scale" → s16.regs dt sh nm = some t → s17.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs17d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs17as : s17.regs .real [128] "acc_scale" = some (⟨fun idx : TileIndex [128] => asFn idx.1⟩ : Tile .real [128]) := by
+    rw [hs17d, BlockState.setReg_same]
+  -- acc register (from invariant) = fold0 .2.2 (coerced), per (ir, dd)
+  set accFn : Fin 128 → Fin 128 → WithBot ℝ := fun ir dd => ((fold0 ir dd).2.2 : WithBot ℝ) with haccFn
+  have hs17acc : s17.regs .real [128, 128] "acc" = some (⟨fun idx : TileIndex [128, 128] => accFn idx.1 idx.2.1⟩ : Tile .real [128, 128]) :=
+    e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hacc))))))))))))))))
+  -- stmt 16: acc = acc * acc_scale[:,None]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (nopad_accmul_eval s17 accFn asFn hs17acc hs17as))]
+  set accMul : Fin 128 → Fin 128 → WithBot ℝ := fun ir dd => WithBot.realMul (accFn ir dd) (asFn ir) with haccMul
+  set s18 := s17.setReg "acc" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => accMul idx.1 idx.2.1⟩ : Tile .real [128, 128]) with hs18d
+  have e18 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s17.regs dt sh nm = some t → s18.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs18d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs18acc : s18.regs .real [128, 128] "acc" = some (⟨fun idx : TileIndex [128, 128] => accMul idx.1 idx.2.1⟩ : Tile .real [128, 128]) := by
+    rw [hs18d, BlockState.setReg_same]
+  -- s18 pids/mem agree with s0 (only register writes since s3)
+  have hs18mem : s18.mem = s0.mem := by
+    funext rg o; rw [hs18d, BlockState.setReg_mem, hs17d, BlockState.setReg_mem, hs16d, BlockState.setReg_mem,
+      hs15d, BlockState.setReg_mem, hs14d, BlockState.setReg_mem, hs13d, BlockState.setReg_mem,
+      hs12d, BlockState.setReg_mem, hs11d, BlockState.setReg_mem, hs10d, BlockState.setReg_mem,
+      hs9d, BlockState.setReg_mem, hs8d, BlockState.setReg_mem, hs7d, BlockState.setReg_mem,
+      hs6d, BlockState.setReg_mem, hs5d, BlockState.setReg_mem, hs4d, BlockState.setReg_mem]; exact hs3mem ▸ rfl
+  have hs18pids : s18.pids = s0.pids := by
+    rw [hs18d, BlockState.setReg_pids, hs17d, BlockState.setReg_pids, hs16d, BlockState.setReg_pids,
+      hs15d, BlockState.setReg_pids, hs14d, BlockState.setReg_pids, hs13d, BlockState.setReg_pids,
+      hs12d, BlockState.setReg_pids, hs11d, BlockState.setReg_pids, hs10d, BlockState.setReg_pids,
+      hs9d, BlockState.setReg_pids, hs8d, BlockState.setReg_pids, hs7d, BlockState.setReg_pids,
+      hs6d, BlockState.setReg_pids, hs5d, BlockState.setReg_pids, hs4d, BlockState.setReg_pids, hs3pids]
+  have hs18pids1 : s18.pids 1 = s0.pids 1 := by rw [hs18pids]
+  have hs18seqB : seqLen s18 B_Seqlen = bel := by rw [hbeldef]; exact seqLen_eq_of_mem_pids s18 s0 B_Seqlen hs18mem hs18pids
+  have hs18slB : startLoc s18 B_Start_Loc = startLoc s0 B_Start_Loc := startLoc_eq_of_mem_pids s18 s0 B_Start_Loc hs18mem hs18pids
+  -- v_ptrs (from invariant), seq_len, start_loc, start_n, offs_n at s18
+  have hs18vp : s18.regs .ptr [128, 128] "v_ptrs" = some (⟨fun idx : TileIndex [128, 128] =>
+      (V, idx.1.val * 768 + s18.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]) := by
+    rw [hs18pids1]
+    exact e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hvp)))))))))))))))))
+  have hs18sl : s18.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s18 B_Start_Loc)) := by
+    rw [hs18slB, ← hs2slStart]
+    exact e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) hs2sl)))))))))))))))
+  have hs18sn : s18.regs .nat [] "start_n" = some (Tile.scalar i) :=
+    e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) hs6sn)))))))))))
+  have hs18n : s18.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)) :=
+    e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) hs6n)))))))))))
+  have hs18seq : s18.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s18 B_Seqlen)) := by
+    rw [hs18seqB]
+    exact e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) hs2seq)))))))))))))))
+  -- stmt 17: v = masked load → vFn jL d = ctxVTileM(c*128+jL, d) on active lanes
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ s18 = _ from by
+      have h := nopad_v_load_eval s18 V B_Start_Loc B_Seqlen i hs18vp hs18sl hs18sn hs18n hs18seq
+      exact h))]
+  set vFn : Fin 128 → Fin 128 → ℝ := fun jL dd =>
+    if i + jL.val < seqLen s18 B_Seqlen then
+      s18.readMem V ((startLoc s18 B_Start_Loc + (i + jL.val)) * 768 + s18.pids 1 * 128 + dd.val)
+    else (0.0 : ℝ) with hvFn
+  set s19 := s18.setReg "v" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) with hs19d
+  rw [show (⟨fun idx : TileIndex [128, 128] =>
+        if i + idx.1.val < seqLen s18 B_Seqlen then
+          some (s18.readMem V ((startLoc s18 B_Start_Loc + (i + idx.1.val)) * 768 + s18.pids 1 * 128 + idx.2.1.val))
+        else some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+      = (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨jL, dd, u⟩ := idx
+    show (if i + jL.val < seqLen s18 B_Seqlen then
+        some (s18.readMem V ((startLoc s18 B_Start_Loc + (i + jL.val)) * 768 + s18.pids 1 * 128 + dd.val))
+      else some (0.0 : ℝ)) = some (vFn jL dd)
+    by_cases hlt : i + jL.val < seqLen s18 B_Seqlen
+    · simp only [hvFn, hlt, if_true]
+    · simp only [hvFn, hlt, if_false]]
+  have e19 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "v" → s18.regs dt sh nm = some t → s19.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs19d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs19v : s19.regs .real [128, 128] "v" = some (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := by
+    rw [hs19d, BlockState.setReg_same]
+  have hs19p : s19.regs .real [128, 128] "p" = some (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) := e19 (by decide) hs16p
+  -- stmt 18: p = p (rebind to same)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [128, 128] "p") s19 = some (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) from by
+      rw [evalOp_ref]; exact hs19p))]
+  set s20 := s19.setReg "p" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) with hs20d
+  have e20 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "p" → s19.regs dt sh nm = some t → s20.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs20d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs20p : s20.regs .real [128, 128] "p" = some (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128]) := by
+    rw [hs20d, BlockState.setReg_same]
+  have hs20v : s20.regs .real [128, 128] "v" = some (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := e20 (by decide) hs19v
+  have hs20acc : s20.regs .real [128, 128] "acc" = some (⟨fun idx : TileIndex [128, 128] => accMul idx.1 idx.2.1⟩ : Tile .real [128, 128]) :=
+    e20 (by decide) (e19 (by decide) hs18acc)
+  -- ======= real-extraction: every kernel WithBot quantity is `some` of a real =======
+  -- anchor per (ir, dd): l = κ(m)·L, acc·L = T, etc.
+  set Lf : Fin 128 → ℝ := fun ir =>
+    ((ctxNopadKeysUptoM s0 Q K V B_Start_Loc sc 128 S bel (c * 128) ir ⟨0, by norm_num⟩).map (fun p => Real.exp p.1)).sum with hLf
+  -- pFn ir jL = some (pReal ir jL)
+  set pReal : Fin 128 → Fin 128 → ℝ := fun ir jL =>
+    (WithBot.realExp (WithBot.realSub (qkW ir jL) (mijFn ir))).unbotD 0 with hpReal
+  have hpFnSome : ∀ ir jL : Fin 128, pFn ir jL = some (pReal ir jL) := by
+    intro ir jL; simp only [hpFn, hpReal]; exact nopad_realExp_eq_some_unbotD _
+  -- lijFn ir = some (lijReal ir) ;   lijReal = block-lij bridge value
+  have hlijSome : ∀ ir : Fin 128, lijFn ir = some (Finset.univ.sum (fun jL : Fin 128 => pReal ir jL)) := by
+    intro ir; simp only [hlijFn]
+    rw [show (fun jL : Fin 128 => pFn ir jL) = (fun jL : Fin 128 => ((pReal ir jL : ℝ) : WithBot ℝ)) from by
+      funext jL; rw [hpFnSome ir jL]]
+    rw [WithBot.sum_some_eq_some]
+  set lijReal : Fin 128 → ℝ := fun ir => Finset.univ.sum (fun jL : Fin 128 => pReal ir jL) with hlijReal
+  -- miFn = fold0.1 ; liFn = some(fold0.2.1) ; accFn = some(fold0.2.2)
+  -- α, β real
+  set αReal : Fin 128 → ℝ := fun ir => (WithBot.realExp (WithBot.realSub (miFn ir) (minewFn ir))).unbotD 0 with hαReal
+  set βReal : Fin 128 → ℝ := fun ir => (WithBot.realExp (WithBot.realSub (mijFn ir) (minewFn ir))).unbotD 0 with hβReal
+  have hαSome : ∀ ir, alphaFn ir = some (αReal ir) := by intro ir; simp only [halphaFn, hαReal]; exact nopad_realExp_eq_some_unbotD _
+  have hβSome : ∀ ir, betaFn ir = some (βReal ir) := by intro ir; simp only [hbetaFn, hβReal]; exact nopad_realExp_eq_some_unbotD _
+  have hliSome : ∀ ir, liFn ir = some ((fold0 ir ⟨0, by norm_num⟩).2.1) := by intro ir; simp only [hliFn]
+  -- linewFn ir = some (linewReal ir)
+  set linewReal : Fin 128 → ℝ := fun ir => αReal ir * (fold0 ir ⟨0, by norm_num⟩).2.1 + βReal ir * lijReal ir with hlinewReal
+  have hlinewSome : ∀ ir, linewFn ir = some (linewReal ir) := by
+    intro ir; simp only [hlinewFn, hαSome, hliSome, hβSome, hlijSome, hlinewReal]
+    simp only [WithBot.realMul_coe_coe, WithBot.realAdd_coe_coe, lijReal]
+  -- psFn ir = some (βReal ir / linewReal ir)
+  set psReal : Fin 128 → ℝ := fun ir => βReal ir / linewReal ir with hpsReal
+  have hpsSome : ∀ ir, psFn ir = some (psReal ir) := by
+    intro ir; simp only [hpsFn, hβSome, hlinewSome, hpsReal, WithBot.realDiv_coe_coe]
+  -- pFinal ir jL = some (pReal ir jL * psReal ir)
+  have hpFinalSome : ∀ ir jL, pFinal ir jL = some (pReal ir jL * psReal ir) := by
+    intro ir jL; simp only [hpFinal, hpFnSome, hpsSome, WithBot.realMul_coe_coe]
+  -- accFn ir dd = some (fold0.2.2) ;  asFn ir = some (asReal ir) ;  accMul = some(...)
+  set asReal : Fin 128 → ℝ := fun ir => (fold0 ir ⟨0, by norm_num⟩).2.1 / linewReal ir * αReal ir with hasReal
+  have hasSome : ∀ ir, asFn ir = some (asReal ir) := by
+    intro ir; simp only [hasFn, hliSome, hlinewSome, hαSome, hasReal, WithBot.realDiv_coe_coe, WithBot.realMul_coe_coe]
+  have haccFnSome : ∀ ir dd, accFn ir dd = some ((fold0 ir dd).2.2) := by intro ir dd; simp only [haccFn]
+  have haccMulSome : ∀ ir dd, accMul ir dd = some ((fold0 ir dd).2.2 * asReal ir) := by
+    intro ir dd; simp only [haccMul, haccFnSome, hasSome, WithBot.realMul_coe_coe]
+  -- p / v as `some` for the acc dot recipe
+  rw [show (⟨fun idx : TileIndex [128, 128] => pFinal idx.1 idx.2.1⟩ : Tile .real [128, 128])
+        = (⟨fun idx : TileIndex [128, 128] => some (pReal idx.1 idx.2.1 * psReal idx.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, jL, u⟩ := idx; exact hpFinalSome ir jL] at hs20p
+  rw [show (⟨fun idx : TileIndex [128, 128] => accMul idx.1 idx.2.1⟩ : Tile .real [128, 128])
+        = (⟨fun idx : TileIndex [128, 128] => some ((fold0 idx.1 idx.2.1).2.2 * asReal idx.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, dd, u⟩ := idx; exact haccMulSome ir dd] at hs20acc
+  -- stmt 19: acc += dot(p, v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (nopad_acc_dot_eval s20 (fun ir dd => some ((fold0 ir dd).2.2 * asReal ir))
+      (fun ir jL => pReal ir jL * psReal ir) vFn hs20acc hs20p hs20v))]
+  set accFinal : Fin 128 → Fin 128 → ℝ := fun ir dd =>
+    (fold0 ir dd).2.2 * asReal ir + Finset.univ.sum (fun jL : Fin 128 => (pReal ir jL * psReal ir) * vFn jL dd) with haccFinal
+  rw [show (⟨fun idx : TileIndex [128, 128] =>
+        WithBot.realAdd (some ((fold0 idx.1 idx.2.1).2.2 * asReal idx.1))
+          (some (Finset.univ.sum (fun jL : Fin 128 => (pReal idx.1 jL * psReal idx.1) * vFn jL idx.2.1)))⟩ : Tile .real [128, 128])
+      = (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨ir, dd, u⟩ := idx
+    rw [haccFinal, WithBot.realAdd_coe_coe]]
+  set s21 := s20.setReg "acc" .real [128, 128] (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) with hs21d
+  have e21 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s20.regs dt sh nm = some t → s21.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs21d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs21acc : s21.regs .real [128, 128] "acc" = some (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) := by
+    rw [hs21d, BlockState.setReg_same]
+  have hs21linew : s21.regs .real [128] "l_i_new" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) :=
+    e21 (by decide) (e20 (by decide) (e19 (by decide) (e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) hs14linew))))))
+  have hs21minew : s21.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) :=
+    e21 (by decide) (e20 (by decide) (e19 (by decide) (e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) hs11minew)))))))))
+  -- stmt 20: l_i = l_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [128] "l_i_new") s21 = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) from by
+      rw [evalOp_ref]; exact hs21linew))]
+  set s22 := s21.setReg "l_i" .real [128] (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) with hs22d
+  have e22 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "l_i" → s21.regs dt sh nm = some t → s22.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs22d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs22minew : s22.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) := e22 (by decide) hs21minew
+  -- stmt 21: m_i = m_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [128] "m_i_new") s22 = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) from by
+      rw [evalOp_ref]; exact hs22minew))]
+  rw [stepStmts.nil]
+  set s23 := s22.setReg "m_i" .real [128] (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128]) with hs23d
+  refine ⟨s23, rfl, ?_⟩
+  -- ======= the math bridge: the new (m, l, acc) = nopadFoldUpto ((c+1)*128) =======
+  -- per (ir, dd): (minewFn ir, linewReal ir, accFinal ir dd) = nopadFoldUpto ((c+1)*128) ir dd
+  have hbridge : ∀ ir dd : Fin 128,
+      (minewFn ir, linewReal ir, accFinal ir dd)
+        = nopadFoldUpto s0 Q K V B_Start_Loc sc S bel ((c + 1) * 128) ir dd := by
+    intro ir dd
+    rw [nopadFoldUptoM_succ s0 Q K V B_Start_Loc sc S bel c ir dd]
+    -- block list non-empty (causal key c*128)
+    have hbne : nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd ≠ [] :=
+      nopadBlockM_ne_nil s0 Q K V B_Start_Loc sc S bel c ir dd hwin (by rw [hpids]; omega)
+    -- anchor at (ir, dd)
+    obtain ⟨ha_l, ha_acc, ha_L0, ha_botL, ha_botT, ha_ne⟩ :=
+      nopadFoldUpto_anchor s0 Q K V B_Start_Loc sc S bel (c * 128) ir dd
+    -- channel-indep: fold0 ir dd has same .1/.2.1 as fold0 ir ⟨0⟩
+    obtain ⟨hci1, hci2⟩ := nopadFoldUpto_channel_indep s0 Q K V B_Start_Loc sc S bel (c * 128) ir dd ⟨0, by norm_num⟩
+    -- block_eq with m = fold0.1, l = fold0.2.1, acc = fold0.2.2
+    have hblockEq := osNormStepBot_block_eq (fold0 ir dd).1 (fold0 ir dd).2.1 (fold0 ir dd).2.2
+      (((ctxNopadKeysUptoM s0 Q K V B_Start_Loc sc 128 S bel (c * 128) ir dd).map (fun p => Real.exp p.1 * p.2)).sum)
+      (((ctxNopadKeysUptoM s0 Q K V B_Start_Loc sc 128 S bel (c * 128) ir dd).map (fun p => Real.exp p.1)).sum)
+      (nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd)
+      hbne ha_L0 ha_l ha_acc ha_botL ha_botT ha_ne
+    simp only at hblockEq
+    -- block max (foldr-sup) of blk ir dd
+    set bsupDD : WithBot ℝ := (nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) |>.foldr (· ⊔ ·) ⊥ with hbsupDD
+    -- mijFn ir = bsupDD (channel-indep scores)
+    have hmijEq : mijFn ir = bsupDD := by
+      simp only [hmijFn, hbsupDD, hblk]
+      rw [show (nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir ⟨0, by norm_num⟩).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+            = ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir ⟨0, by norm_num⟩).map Prod.fst).map (fun r : ℝ => ((r : ℝ) : WithBot ℝ)) from by rw [List.map_map]; rfl,
+        nopadBlockM_fst_channel_indep s0 Q K V B_Start_Loc sc S bel c ir ⟨0, by norm_num⟩ dd,
+        ← List.map_map]
+    -- m = (fold0 ir dd).1 = (fold0 ir ⟨0⟩).1 = miFn ir
+    have hmiEq : miFn ir = (fold0 ir dd).1 := by simp only [hmiFn]; exact hci1.symm
+    -- minewFn ir = (fold0 ir dd).1 ⊔ bsupDD
+    have hMnew : minewFn ir = (fold0 ir dd).1 ⊔ bsupDD := by simp only [hminewFn]; rw [hmiEq, hmijEq]
+    -- l = (fold0 ir dd).2.1 = (fold0 ir ⟨0⟩).2.1
+    have hliEq : (fold0 ir ⟨0, by norm_num⟩).2.1 = (fold0 ir dd).2.1 := hci2.symm
+    -- α/β/lij/l' bridge
+    have hαEqB : αReal ir = (WithBot.realExp (WithBot.realSub (fold0 ir dd).1 (minewFn ir))).unbotD 0 := by
+      simp only [hαReal]; rw [hmiEq]
+    have hβEqB : βReal ir = (WithBot.realExp (WithBot.realSub bsupDD (minewFn ir))).unbotD 0 := by
+      simp only [hβReal]; rw [hmijEq]
+    -- lijReal ir = block_eq's lij = Σ blk exp(p.1 - bsupDD.unbotD)
+    have hlijEqB : lijReal ir = ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0))).sum := by
+      have hMr := nopadBlockM_lij_sum s0 Q K V B_Start_Loc sc 128 S bel c ir dd (bsupDD.unbotD 0) hwin
+      -- pReal ir jL = realExp(realSub qkW mij).unbotD ; lijReal = Σ pReal
+      have hpRealEq : ∀ jL : Fin 128, (pReal ir jL : ℝ)
+          = (WithBot.realExp (WithBot.realSub
+              (if c * 128 + jL.val ≤ s0.pids 2 * 128 + ir.val then
+                ((sc * Finset.univ.sum (fun e : Fin 128 =>
+                    ctxQTileMRow s0 Q B_Start_Loc 128 bel (ir, e, PUnit.unit)
+                      * ctxKTileM s0 K B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+               else (⊥ : WithBot ℝ)) ((bsupDD.unbotD 0 : ℝ) : WithBot ℝ))).unbotD 0 := by
+        intro jL; simp only [hpReal, hqkW, hrawSum, hmijEq]
+      -- Σ pReal = (Σ over lanes realExp(...)).unbotD ;  bridge gives some(Σ blk ...)
+      have hsum : ((Finset.univ.sum (fun jL : Fin 128 => pReal ir jL) : ℝ) : WithBot ℝ)
+          = some (((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0))).sum) := by
+        rw [← hMr, ← WithBot.sum_some_eq_some]
+        apply Finset.sum_congr rfl; intro jL _
+        rw [hpRealEq jL, nopad_realExp_eq_some_unbotD]
+      simp only [hlijReal]
+      exact WithBot.coe_inj.mp hsum
+    -- assemble the tuple equality, then trans with hblockEq
+    rw [← hblockEq]
+    refine Prod.ext ?_ (Prod.ext ?_ ?_)
+    · show minewFn ir = (fold0 ir dd).1 ⊔ bsupDD; exact hMnew
+    · show linewReal ir = _
+      simp only [hlinewReal]; rw [hαEqB, hβEqB, hlijEqB, hliEq]
+    · show accFinal ir dd = _
+      simp only [haccFinal]
+      -- asReal ir = (fold0 ir dd).2.1 / l' * α  (block_eq's l/l'·α)
+      have hasEqB : asReal ir = (fold0 ir dd).2.1 / linewReal ir * αReal ir := by
+        simp only [hasReal]; rw [hliEq]
+      -- vFn jL dd = ctxVTileM (c*128+jL, dd)
+      have hvEq : ∀ jL : Fin 128, vFn jL dd
+          = ctxVTileM s0 V B_Start_Loc S bel (⟨c * 128 + jL.val, nopad_lane_lt_S c S hwin jL⟩, dd, PUnit.unit) := by
+        intro jL
+        rw [hvFn, ctxVTileM, ctxVTile, hs18seqB, hs18slB, hs18pids1,
+          show i + jL.val = c * 128 + jL.val from by rw [hi]]
+        by_cases hlt : c * 128 + jL.val < bel
+        · rw [if_pos hlt, if_pos hlt]; simp only [BlockState.readMem, hs18mem]
+        · rw [if_neg hlt, if_neg hlt]; norm_num
+      -- Σ_jL (pReal·psReal)·vFn = psReal · Σ_blk exp(p.1-bs)·v  (via nopadBlockM_acc_sum)
+      have haccsum : Finset.univ.sum (fun jL : Fin 128 => (pReal ir jL * psReal ir) * vFn jL dd)
+          = psReal ir * ((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0) * p.2)).sum := by
+        rw [Finset.mul_sum]
+        have hbr := nopadBlockM_acc_sum s0 Q K V B_Start_Loc sc 128 S bel c ir dd (bsupDD.unbotD 0) hwin
+          (fun jL => vFn jL dd) (fun jL _ => hvEq jL)
+        -- coerce: Σ realMul(realExp(realSub qkW' bs))(coe(vFn)) = some(Σ blk ...)
+        have hcoe : ((Finset.univ.sum (fun jL : Fin 128 => pReal ir jL * vFn jL dd) : ℝ) : WithBot ℝ)
+            = some (((nopadBlockM s0 Q K V B_Start_Loc sc 128 S bel c ir dd).map (fun p => Real.exp (p.1 - bsupDD.unbotD 0) * p.2)).sum) := by
+          rw [← hbr, ← WithBot.sum_some_eq_some]
+          apply Finset.sum_congr rfl; intro jL _
+          rw [WithBot.realMul_coe_coe]
+          congr 1
+          simp only [hpReal, hqkW, hrawSum, hmijEq]
+          rw [nopad_realExp_eq_some_unbotD]
+        rw [show (fun jL : Fin 128 => pReal ir jL * psReal ir * vFn jL dd)
+              = (fun jL : Fin 128 => psReal ir * (pReal ir jL * vFn jL dd)) from by funext jL; ring]
+        rw [← Finset.mul_sum, WithBot.coe_inj.mp hcoe]
+      rw [hasEqB, haccsum]; simp only [hpsReal]; rw [hβEqB]; simp only [hlijReal]
+      ring
+  -- ======= reconstruct the invariant =======
+  -- e23 for the final m_i setReg
+  have e23 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "m_i" → s22.regs dt sh nm = some t → s23.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs23d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- chain a preserved register (≠ all 23 written names) from s (= invariant input) to s23
+  have chainAll : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "start_n" → nm ≠ "k" → nm ≠ "qk" → nm ≠ "m_ij" → nm ≠ "p" → nm ≠ "l_ij"
+      → nm ≠ "m_i_new" → nm ≠ "alpha" → nm ≠ "beta" → nm ≠ "l_i_new" → nm ≠ "p_scale"
+      → nm ≠ "acc_scale" → nm ≠ "acc" → nm ≠ "v" → nm ≠ "l_i" → nm ≠ "m_i"
+      → s.regs dt sh nm = some t → s23.regs dt sh nm = some t := by
+    intro dt sh nm t h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h
+    exact e23 h16 (e22 h15 (e21 h13 (e20 h5 (e19 h14 (e18 h13 (e17 h12 (e16 h5 (e15 h11 (e14 h10 (e13 h9 (e12 h8 (e11 h7 (e10 h6 (e9 h5 (e8 h4 (e7 h3 (e6 h3 (e5 h3 (e4 h3 (e3 h2 (e2 h1 (e1 h1 h)))))))))))))))))))))))
+  -- pids / mem / undef
+  have hs23pids : s23.pids = s0.pids := by
+    rw [hs23d, BlockState.setReg_pids, hs22d, BlockState.setReg_pids, hs21d, BlockState.setReg_pids,
+      hs20d, BlockState.setReg_pids, hs19d, BlockState.setReg_pids, hs18pids]
+  have hs23mem : s23.mem = s0.mem := by
+    funext rg o; rw [hs23d, BlockState.setReg_mem, hs22d, BlockState.setReg_mem, hs21d, BlockState.setReg_mem,
+      hs20d, BlockState.setReg_mem, hs19d, BlockState.setReg_mem]; exact hs18mem ▸ rfl
+  have hs23undef : ∀ rg o, s23.undef rg o = 0 := by
+    intro rg o
+    rw [hs23d, BlockState.setReg_undef, hs22d, BlockState.setReg_undef, hs21d, BlockState.setReg_undef,
+      hs20d, BlockState.setReg_undef, hs19d, BlockState.setReg_undef, hs18d, BlockState.setReg_undef,
+      hs17d, BlockState.setReg_undef, hs16d, BlockState.setReg_undef, hs15d, BlockState.setReg_undef,
+      hs14d, BlockState.setReg_undef, hs13d, BlockState.setReg_undef, hs12d, BlockState.setReg_undef,
+      hs11d, BlockState.setReg_undef, hs10d, BlockState.setReg_undef, hs9d, BlockState.setReg_undef,
+      hs8d, BlockState.setReg_undef, hs7d, BlockState.setReg_undef, hs6d, BlockState.setReg_undef,
+      hs5d, BlockState.setReg_undef, hs4d, BlockState.setReg_undef, hs3d, BlockState.setReg_undef,
+      hs2d, BlockState.setReg_undef, hs1d, BlockState.setReg_undef]
+    exact hundef rg o
+  refine ⟨hs23pids, hs23mem, hs23undef, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hcb
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hch
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hseq
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hsl
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hn
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hd
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hoffm
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hq
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hkp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hvp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hbmask
+  · -- m_i = (newfold).1
+    rw [hs23d, BlockState.setReg_same]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨ir, u⟩ := idx
+    show minewFn ir = (nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) ((c + 1) * 128) ir ⟨0, by norm_num⟩).1
+    exact congrArg (Prod.fst) (hbridge ir ⟨0, by norm_num⟩)
+  · -- l_i = some((newfold).2.1)
+    rw [show s23.regs .real [128] "l_i" = some (⟨fun idx : TileIndex [128] => linewFn idx.1⟩ : Tile .real [128]) from by
+      rw [hs23d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hs22d, BlockState.setReg_same]]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨ir, u⟩ := idx
+    show linewFn ir = ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) ((c + 1) * 128) ir ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
+    rw [hlinewSome ir]
+    exact congrArg (fun p => ((p.2.1 : ℝ) : WithBot ℝ)) (hbridge ir ⟨0, by norm_num⟩)
+  · -- acc = some((newfold).2.2)
+    rw [show s23.regs .real [128, 128] "acc" = some (⟨fun idx : TileIndex [128, 128] => some (accFinal idx.1 idx.2.1)⟩ : Tile .real [128, 128]) from by
+      rw [hs23d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hs22d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hs21d, BlockState.setReg_same]]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨ir, dd, u⟩ := idx
+    show some (accFinal ir dd) = ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) ((c + 1) * 128) ir dd).2.2 : WithBot ℝ)
+    exact congrArg (fun p => ((p.2.2 : ℝ) : WithBot ℝ)) (hbridge ir dd)
+-/
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
