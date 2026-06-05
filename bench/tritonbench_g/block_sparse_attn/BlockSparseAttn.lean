@@ -30,51 +30,49 @@ grid.
 ## Proof architecture
 
 ```
-block_sparse_attn_python_case1_output_summary / _case2_output_summary   ← TOP (abbrev, EVEN_M/N = true / false)
-  ├─ block_sparse_attn_case{1,2}_surface_first_output_compute_correct    first D-block store of the full surface
-  │    └─ block_sparse_attn_python_first_output_compute_correct
-  │         └─ block_sparse_attn_output_store_slice_compute_correct
-  │              └─ block_sparse_attn_output_store_slice_correct          algorithm-layer readback per lane
-  └─ block_sparse_attn_case{1,2}_surface_second_output_compute_correct   second D-block store (+BLOCK_D)
-       └─ block_sparse_attn_python_second_output_compute_correct
-            └─ block_sparse_attn_output_store_second_slice_compute_correct
-                 └─ block_sparse_attn_output_store_second_slice_correct
+block_sparse_attn_python_case1_output_closed_form_summary                ← TOP (EVEN_M = EVEN_N = true)
+  ├─ bsa_exec                                       full surface exec → streaming accumulators
+  │    ├─ bsaPreLoop_eval                           prologue → bsaInvariant 0 (+ start_l/end_l regs)
+  │    ├─ bsa_csr_loop ∘ bsa_attn_step              forRangeDyn driver: bsaInvariant c → c+1
+  │    └─ bsaPostLoop_eval                          two masked out stores = bsaOPartial / bsaLPartial
+  └─ bsa_streaming_eq_closedForm                    streaming = blockSparseAttnClosedForm
+       ├─ bsaStreaming_eq_bsaAttn                   online-softmax fold = gathered causal softmax
+       ├─ bsaAttn_reindex                           16·numKVBlocks = numKVBlocks·16 reshape
+       └─ bsaAttn_eq_blockSparseAttnClosedForm      gathered = genuine block-sparse closed form
 ```
-(Offset injectivity discharged by `block_sparse_attn_python_{first,second}_output_offset_injective`.)
+(`bsa_body_split` splits the lowered body; offset injectivity is inlined in
+`bsaPostLoop_eval`.)
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp`, `tl.dot`, and the
 `softmax_scale` multiply are not modeled at the bit level); `@triton.autotune`
-is not modeled. The verified result is **final-store scoped**: the proof
-establishes that the two masked `out` stores write the accumulator slices
-`Acc`/`Acc2` at the correct, injective output offsets and preserve inactive
-lanes — the written value is `producedBlockSparseAttnCase{1,2}Out{,2}Value` /
-`accStoreValue` `Acc`, an opaque carrier for the online-softmax + sparse-mask
-recurrence, which is **not** re-derived as a closed-form attention formula here.
-The sparse-mask schedule itself (which key blocks the CSR loop visits) lives in
-that opaque carrier and the trusted host boundary. Side conditions: the
-test-shape summaries fix the concrete layout `(B,H,M,D) = (2,4,16,32)` with
-`NUM_D_BLOCKS = 2`; case 1 uses `EVEN_M = EVEN_N = true`, case 2 uses
-`EVEN_M = EVEN_N = false`.
+is not modeled. The verified result is the **genuine closed form**: the full
+faithful kernel surface (prologue + CSR `forRangeDyn` online-softmax loop + the
+two masked `out` stores) is unfolded statement-by-statement and proven to write
+`blockSparseAttnClosedForm` (NOT a self-referential executed value) at every
+active output lane. The CSR sparsity schedule itself — which key blocks the loop
+visits (`start_l`/`end_l`, the per-block selection/load alignment `hstep`, and
+first-key causal visibility `hVis0`) — is the trusted host boundary, supplied as
+hypotheses of the summary. The case-1 summary fixes the concrete layout
+`(B,H,M,D) = (2,4,16,32)` with `NUM_D_BLOCKS = 2` and `EVEN_M = EVEN_N = true`;
+the `EVEN_M = EVEN_N = false` masked-load variant (`test_case_2`) reuses a
+different lowered body and is out of scope here.
 
-## Genuine closed-form spec (banked)
+## Genuine closed-form spec
 
 `blockSparseAttnClosedForm` is a **genuine, non-self-referential** closed form
 for one program's output: the causal natural-exp softmax attention
 (`tl.exp`, not `exp2`) of the program's query tile against the key/value rows the
 CSR layout selects (`selKeyGlobal`), under grouped-query head mapping
-(`offHkv`). The store recipes `block_sparse_attn_{first,second}_output_closed_form`
-prove **sorry-free** that the two masked `out` stores write this closed form to
-`Out` — *given* the loop-fill contract `hFill` (the accumulator regions hold the
-closed form at each active lane). The remaining proof gap is exactly `hFill`:
-the online-softmax recurrence over the CSR-selected, causally-masked key blocks
-equals the batch causal softmax. That `exec`-side loop unfolding (data-dependent
-CSR bounds + per-step rescale + two D-blocks) is far larger than the existing
-non-sparse `AttentionForwardClosedForm` assembly and is **not** discharged here;
-the self-referential `produced…Value` summaries are retained as the surface
-record until it is. This is tracked alongside the other sparse-attention loop
-gaps (cf. `mixed_sparse_attention`).
+(`offHkv`). The top summary `block_sparse_attn_python_case1_output_closed_form_summary`
+proves **sorry-free** that the two masked `out` stores write this closed form to
+`Out` at every active lane, via `bsa_exec` (the full execution chain) composed
+with `bsa_streaming_eq_closedForm` (the streaming online-softmax recurrence over
+the CSR-selected, causally-masked key blocks collapses to the gathered causal
+softmax). The store recipes `block_sparse_attn_{first,second}_output_closed_form`
+provide the same result from a precomputed accumulator under the loop-fill
+contract `hFill`. The self-referential `produced…Value` carriers are retired.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
@@ -1220,6 +1218,46 @@ theorem realExp_eq_some_unbotD (x : WithBot ℝ) :
     WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
   cases x <;> rfl
 
+/-- `bsaAttn` only sums over `Fin (Bk * N)` via each index's `.val`, so it is
+invariant under any reshaping `Bk₁ * N₁ = Bk₂ * N₂` that preserves the underlying
+`Nat`-valued data (`gpos`/`Kg`/`Vg` are `.val`-functions). This bridges the
+streaming instantiation (`Bk = BLOCK_N` keys per block × `numKVBlocks` iterations,
+flat domain `Fin (BLOCK_N * numKVBlocks)`) to the closed-form layout
+(`numSelBlocks` blocks × `BLOCK_N` keys, domain `Fin (numSelBlocks * BLOCK_N)`):
+both flat domains have the same size and index the same gathered keys by `.val`. -/
+theorem bsaAttn_reindex {M D Dv Bk₁ N₁ Bk₂ N₂ : Nat} (h : Bk₁ * N₁ = Bk₂ * N₂)
+    (qStart : Nat)
+    (gposVal : Nat → Nat) (KgVal : Nat → Fin D → ℝ) (VgVal : Nat → Fin Dv → ℝ)
+    (Q : TileIndex [M, D] → ℝ) (scale : ℝ) (idx : TileIndex [M, Dv]) :
+    bsaAttn (M := M) (D := D) (Dv := Dv) (Bk := Bk₁) (N := N₁) qStart
+        (fun r => gposVal r.val) Q
+        (fun jx => KgVal jx.1.val jx.2.1) (fun jx => VgVal jx.1.val jx.2.1) scale idx
+      = bsaAttn (M := M) (D := D) (Dv := Dv) (Bk := Bk₂) (N := N₂) qStart
+        (fun r => gposVal r.val) Q
+        (fun jx => KgVal jx.1.val jx.2.1) (fun jx => VgVal jx.1.val jx.2.1) scale idx := by
+  obtain ⟨i, d, u⟩ := idx
+  -- The per-key gScore depends on the index only via `.val` (through `KgVal`).
+  set gsv : Nat → ℝ := fun n =>
+    scale * Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * KgVal n e) with hgsv
+  have hgScore₁ : ∀ r : Fin (Bk₁ * N₁),
+      gScore Q (fun jx : TileIndex [Bk₁ * N₁, D] => KgVal jx.1.val jx.2.1) scale i r = gsv r.val := by
+    intro r; rfl
+  have hgScore₂ : ∀ r : Fin (Bk₂ * N₂),
+      gScore Q (fun jx : TileIndex [Bk₂ * N₂, D] => KgVal jx.1.val jx.2.1) scale i r = gsv r.val := by
+    intro r; rfl
+  -- generic `.val`-indexed reshape of a sum
+  have hg : ∀ (f : Nat → ℝ),
+      (Finset.univ : Finset (Fin (Bk₁ * N₁))).sum (fun j => f j.val)
+        = (Finset.univ : Finset (Fin (Bk₂ * N₂))).sum (fun j => f j.val) := by
+    intro f
+    refine Finset.sum_nbij' (fun j => (finCongr h) j) (fun j => (finCongr h.symm) j)
+      ?_ ?_ ?_ ?_ ?_ <;> intro j _ <;> simp [finCongr]
+  unfold bsaAttn
+  simp only [hgScore₁, hgScore₂]
+  refine congrArg₂ (· / ·) ?_ ?_
+  · exact hg (fun n => (if gposVal n ≤ qStart + i.val then Real.exp (gsv n) else 0) * VgVal n d)
+  · exact hg (fun n => if gposVal n ≤ qStart + i.val then Real.exp (gsv n) else 0)
+
 end BSAMathCausal
 
 /-- Algorithm-layer correctness for the first block-sparse output store. -/
@@ -1593,138 +1631,6 @@ theorem block_sparse_attn_second_output_closed_form
   rw [accStoreValue, if_pos hActive]
   simpa using hFill idx hActive
 
-noncomputable def producedBlockSparseAttnCase1OutValue
-    (s : BlockState) (Out Q K V : RegionName)
-    (layoutRows layoutCols : Region .nat) (idx : TileIndex [16, 16]) : ℝ :=
-  match exec (block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-      3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-      4 2 16 16 16 16 2 Bool.true Bool.true).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 4 2048 512 32 16 idx)
-  | none => 0.0
-
-noncomputable def producedBlockSparseAttnCase1Out2Value
-    (s : BlockState) (Out Q K V : RegionName)
-    (layoutRows layoutCols : Region .nat) (idx : TileIndex [16, 16]) : ℝ :=
-  match exec (block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-      3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-      4 2 16 16 16 16 2 Bool.true Bool.true).toAlgKernel s with
-  | some s' => s'.readMem Out (out2Offset s 4 2048 512 32 16 16 idx)
-  | none => 0.0
-
-theorem block_sparse_attn_case1_surface_first_output_compute_correct
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out,
-          outOffset s 4 2048 512 32 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase1OutValue s Out Q K V layoutRows
-          layoutCols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [ComputeKernel.toAlgKernel, block_sparse_attention_kernel,
-      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBlockSparseAttnCase1OutValue, hExec]
-
-theorem block_sparse_attn_case1_surface_second_output_compute_correct
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out,
-          out2Offset s 4 2048 512 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase1Out2Value s Out Q K V layoutRows
-          layoutCols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [ComputeKernel.toAlgKernel, block_sparse_attention_kernel,
-      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBlockSparseAttnCase1Out2Value, hExec]
-
-noncomputable def producedBlockSparseAttnCase2OutValue
-    (s : BlockState) (Out Q K V : RegionName)
-    (layoutRows layoutCols : Region .nat) (idx : TileIndex [16, 16]) : ℝ :=
-  match exec (block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-      3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-      4 2 16 16 16 16 2 Bool.false Bool.false).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 4 2048 512 32 16 idx)
-  | none => 0.0
-
-noncomputable def producedBlockSparseAttnCase2Out2Value
-    (s : BlockState) (Out Q K V : RegionName)
-    (layoutRows layoutCols : Region .nat) (idx : TileIndex [16, 16]) : ℝ :=
-  match exec (block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-      3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-      4 2 16 16 16 16 2 Bool.false Bool.false).toAlgKernel s with
-  | some s' => s'.readMem Out (out2Offset s 4 2048 512 32 16 16 idx)
-  | none => 0.0
-
-theorem block_sparse_attn_case2_surface_first_output_compute_correct
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out,
-          outOffset s 4 2048 512 32 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase2OutValue s Out Q K V layoutRows
-          layoutCols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBlockSparseAttnCase2OutValue, hExec]
-
-theorem block_sparse_attn_case2_surface_second_output_compute_correct
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out,
-          out2Offset s 4 2048 512 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase2Out2Value s Out Q K V layoutRows
-          layoutCols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBlockSparseAttnCase2Out2Value, hExec]
-
 /-- Legacy output-pair summary for the checked `(B,H,M,D)=(2,4,16,32)`
 layout. This factors the two observable D-block stores when the sparse
 attention loop's accumulators are supplied as precomputed inputs. -/
@@ -1752,74 +1658,6 @@ theorem block_sparse_attn_python_output_pair_compute_correct
   constructor
   · exact block_sparse_attn_python_first_output_compute_correct Acc Out s
   · exact block_sparse_attn_python_second_output_compute_correct Acc2 Out s
-
-/-- `test_case_1` in `block_sparse_attn.py` uses `EVEN_M = true` and
-`EVEN_N = true`. The checked output surface is the full sparse-attention kernel
-for the Python shape `(B,H,M,D) = (2,4,16,32)`, observed through its two final
-D-block stores. -/
-abbrev block_sparse_attn_python_case1_output_summary
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase1OutValue s Out Q K V layoutRows
-          layoutCols idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase1Out2Value s Out Q K V layoutRows
-          layoutCols idx)) :=
-  ⟨block_sparse_attn_case1_surface_first_output_compute_correct Out Q K V
-      layoutRows layoutCols s,
-    block_sparse_attn_case1_surface_second_output_compute_correct Out Q K V
-      layoutRows layoutCols s⟩
-
-/-- `test_case_2` in `block_sparse_attn.py` flips `EVEN_M = false` and
-`EVEN_N = false`. The checked output surface is the full sparse-attention kernel
-for the Python shape `(B,H,M,D) = (2,4,16,32)`, observed through its two final
-D-block stores. -/
-abbrev block_sparse_attn_python_case2_output_summary
-    (Out Q K V : RegionName) (layoutRows layoutCols : Region .nat) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase2OutValue s Out Q K V layoutRows
-          layoutCols idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V layoutRows layoutCols
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedBlockSparseAttnCase2Out2Value s Out Q K V layoutRows
-          layoutCols idx)) :=
-  ⟨block_sparse_attn_case2_surface_first_output_compute_correct Out Q K V
-      layoutRows layoutCols s,
-    block_sparse_attn_case2_surface_second_output_compute_correct Out Q K V
-      layoutRows layoutCols s⟩
 
 /-! ## Per-statement op-eval recipes for the CSR loop body (RECIPE LAYER)
 
@@ -5347,6 +5185,169 @@ theorem bsa_exec
     · rw [if_pos hlt, if_pos hlt]
     · rw [if_neg hlt, if_neg hlt]
       simp only [BlockState.readMem, hmemL]
+
+/-- **Streaming output = genuine closed form.** For the BSA test-shape
+instantiation (`Bk = BLOCK_N = 16` keys per CSR block, `numKVBlocks` selected
+blocks, `gpos`/`Kg`/`Vg` gathered along `selKeyGlobal`), the streaming
+`bsaOPartial / bsaLPartial` ratio at the full window equals
+`blockSparseAttnClosedForm`. Chains `bsaStreaming_eq_bsaAttn` (Bk=16), the
+`bsaAttn_reindex` reshape (`16·numKVBlocks = numKVBlocks·16`), and
+`bsaAttn_eq_blockSparseAttnClosedForm` (`numSelBlocks = numKVBlocks`,
+`BLOCK_N = 16`). `hVis0` (first selected key causally visible) is required for the
+normalizer to be nonzero. `dBlockBase ∈ {0, 16}` selects the output D-block. -/
+theorem bsa_streaming_eq_closedForm
+    (s : BlockState) (Q K V : RegionName) (C : Region .nat)
+    (numKVBlocks : Nat) (hN : 0 < numKVBlocks) (start_l dBlockBase : Nat)
+    (idx : TileIndex [16, 16])
+    (hVis0 : selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 0 ≤ s.pids 0 * 16 + idx.1.val) :
+    BSAMathCausal.bsaOPartial 16 (s.pids 0 * 16) numKVBlocks
+        (fun r : Fin (16 * numKVBlocks) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+        (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+        (fun jx : TileIndex [16 * numKVBlocks, 32] => kRowBSA s K 4 2 1024 512 32
+          (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+        (fun jx : TileIndex [16 * numKVBlocks, 16] => vRowBSA s V 4 2 1024 512 32
+          (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (dBlockBase + jx.2.1.val))
+        1.0 numKVBlocks idx /
+      BSAMathCausal.bsaLPartial 16 (s.pids 0 * 16) numKVBlocks
+        (fun r : Fin (16 * numKVBlocks) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+        (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+        (fun jx : TileIndex [16 * numKVBlocks, 32] => kRowBSA s K 4 2 1024 512 32
+          (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+        1.0 numKVBlocks idx.1
+      = blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
+          (s.pids 1 % 4 % 1) 4 start_l numKVBlocks 32 16 16 dBlockBase 1.0 idx.1 idx.2.1.val := by
+  -- step 1: streaming = bsaAttn (Bk = 16, N = numKVBlocks)
+  have h1 := BSAMathCausal.bsaStreaming_eq_bsaAttn (M := 16) (D := 32) (Dv := 16) (Bk := 16)
+    (by norm_num) (s.pids 0 * 16) numKVBlocks hN
+    (fun r : Fin (16 * numKVBlocks) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+    (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+    (fun jx : TileIndex [16 * numKVBlocks, 32] => kRowBSA s K 4 2 1024 512 32
+      (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+    (fun jx : TileIndex [16 * numKVBlocks, 16] => vRowBSA s V 4 2 1024 512 32
+      (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (dBlockBase + jx.2.1.val))
+    1.0 idx hVis0
+  rw [h1]
+  -- step 2: reindex bsaAttn from (Bk=16, N=numKVBlocks) to (Bk=numKVBlocks, N=16)
+  rw [BSAMathCausal.bsaAttn_reindex (M := 16) (D := 32) (Dv := 16)
+      (Bk₁ := 16) (N₁ := numKVBlocks) (Bk₂ := numKVBlocks) (N₂ := 16) (Nat.mul_comm 16 numKVBlocks)
+      (s.pids 0 * 16)
+      (fun n => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 n)
+      (fun n e => kRowBSA s K 4 2 1024 512 32 (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 n) e.val)
+      (fun n d => vRowBSA s V 4 2 1024 512 32 (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 n) (dBlockBase + d.val))
+      (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val) 1.0 idx]
+  -- step 3: bsaAttn (Bk = numKVBlocks, N = 16) = blockSparseAttnClosedForm
+  obtain ⟨i, d, u⟩ := idx
+  exact BSAMathCausal.bsaAttn_eq_blockSparseAttnClosedForm s Q K V C 4 2
+    2048 512 32 1024 512 32 1024 512 32 (s.pids 1 % 4 % 1) 4 start_l numKVBlocks 32 16 16 16
+    dBlockBase 1.0 i d
+
+set_option maxHeartbeats 4000000 in
+/-- `test_case_1` in `block_sparse_attn.py` (`EVEN_M = EVEN_N = true`, the
+contiguous/full-block case) at the Python shape `(B,H,M,D) = (2,4,16,32)`,
+`NUM_D_BLOCKS = 2`. The full faithful `block_sparse_attention_kernel` surface
+(prologue + the CSR `forRangeDyn` online-softmax loop + the two masked `out`
+stores) **realizes the genuine causal block-sparse softmax closed form**
+`blockSparseAttnClosedForm` at every active output lane — the natural-exp softmax
+attention of the program's query tile against the CSR-selected key/value rows
+(`selKeyGlobal`), causally masked on the global key position, under grouped-query
+head mapping. The two stores write the two D-blocks (`dBlockBase = 0` / `16`).
+
+This is **not** the self-referential executed value: the streaming
+`m_i`/`l_i`/`acc`/`acc2` recurrence is unfolded statement-by-statement
+(`bsa_exec`) and proven to collapse to the closed form (`bsa_streaming_eq_closedForm`,
+via `bsaStreaming_eq_bsaAttn` ∘ `bsaAttn_eq_blockSparseAttnClosedForm`). The CSR
+sparsity schedule (`start_l`/`end_l` row-pointer window, the per-block selection +
+load alignment `hstep`, and first-key causal visibility `hVis0`) is the trusted
+host boundary, supplied as hypotheses. -/
+theorem block_sparse_attn_python_case1_output_closed_form_summary
+    (Out Q K V : RegionName) (R C : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (start_l end_l : Nat)
+    (hStartL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0) = start_l)
+    (hEndL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0 + 1) = end_l)
+    (hsle : start_l ≤ end_l) (hN : 0 < end_l - start_l)
+    (hVis0 : ∀ idx : TileIndex [16, 16], active s 16 16 idx →
+      selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 0 ≤ s.pids 0 * 16 + idx.1.val)
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariant Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
+          (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+          (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+          (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
+            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+          (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
+          (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
+          1.0 s (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBody C) (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariant Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
+            (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+            (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+            (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
+              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+            (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
+            (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
+            1.0 s (i - start_l + 1) st') :
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attention_kernel Out Q K V R C
+        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
+        4 2 16 16 16 16 2 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
+          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 0 1.0 idx.1 idx.2.1.val)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attention_kernel Out Q K V R C
+        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
+        4 2 16 16 16 16 2 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, out2Offset s 4 2048 512 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
+          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 16 1.0 idx.1 idx.2.1.val)) := by
+  obtain ⟨sF, hstepK, hOut, hOut2⟩ :=
+    bsa_exec Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
+      (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
+      (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
+      (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
+        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
+      (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
+      (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
+        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
+      1.0 s hundef start_l end_l hStartL hEndL rfl hsle hstep
+  constructor
+  · -- first D-block store (dBlockBase = 0)
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    rw [hOut idx, if_pos (show s.pids 0 * 16 + idx.1.val < 16 from hActive)]
+    exact bsa_streaming_eq_closedForm s Q K V C (end_l - start_l) hN start_l 0 idx (hVis0 idx hActive)
+  · -- second D-block store (dBlockBase = 16)
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    rw [hOut2 idx, if_pos (show s.pids 0 * 16 + idx.1.val < 16 from hActive)]
+    exact bsa_streaming_eq_closedForm s Q K V C (end_l - start_l) hN start_l 16 idx (hVis0 idx hActive)
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
