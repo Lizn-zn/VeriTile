@@ -1778,6 +1778,49 @@ theorem bsa_evalOp_remap {dtype inShape outShape}
       let va ← evalOp a s; some (Tile.remap map va)) := by
   simp [evalOp]
 
+/-- **`if cond { thenBody } else { elseBody }` step, true branch.** When the
+elaborated condition Op evaluates to the scalar boolean `true`, the runtime
+`ifThenElse` statement steps to running `thenBody`. Used to discharge the
+concrete `if EVEN_N {...} else {...}` branches in the CSR loop body chain
+(`EVEN_N = true` ⇒ unmasked loads). -/
+theorem stepStmt_ifThenElse_true {cond : Op .bool []}
+    {thenBody elseBody : List Stmt} {s s' : BlockState}
+    (hcond : evalOp cond s = some (Tile.scalar (Bool.true)))
+    (hthen : stepStmts thenBody s = some s') :
+    stepStmt (.ifThenElse cond thenBody elseBody) s = some s' := by
+  simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_true]
+  exact hthen
+
+/-- **`if cond { thenBody } else { elseBody }` step, false branch.** Mirror of
+`stepStmt_ifThenElse_true` for `EVEN_N = false` (masked ptr-arith loads). -/
+theorem stepStmt_ifThenElse_false {cond : Op .bool []}
+    {thenBody elseBody : List Stmt} {s s' : BlockState}
+    (hcond : evalOp cond s = some (Tile.scalar (Bool.false)))
+    (helse : stepStmts elseBody s = some s') :
+    stepStmt (.ifThenElse cond thenBody elseBody) s = some s' := by
+  simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_false]
+  exact helse
+
+/-- **`if cond { body }` step, true branch.** When the elaborated condition Op
+evaluates to scalar `true`, the runtime `ifThen` statement steps to running
+`body`. Used for the concrete `if NUM_D_BLOCKS ≥ 2 { ... }` D-block branches
+(`NUM_D_BLOCKS = 2` ⇒ both D-blocks execute). -/
+theorem stepStmt_ifThen_true {cond : Op .bool []}
+    {body : List Stmt} {s s' : BlockState}
+    (hcond : evalOp cond s = some (Tile.scalar (Bool.true)))
+    (hbody : stepStmts body s = some s') :
+    stepStmt (.ifThen cond body) s = some s' := by
+  simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_true]
+  exact hbody
+
+/-- **`if cond { body }` step, false branch.** When the condition is scalar
+`false`, the `ifThen` is a no-op (state unchanged). -/
+theorem stepStmt_ifThen_false {cond : Op .bool []}
+    {body : List Stmt} {s : BlockState}
+    (hcond : evalOp cond s = some (Tile.scalar (Bool.false))) :
+    stepStmt (.ifThen cond body) s = some s := by
+  simp [stepStmt, hcond]
+
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **`col_idx = tl.load(layout_csr_col_indices + layout_h·stride_col + col_idx_idx)`
