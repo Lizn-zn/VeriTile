@@ -2604,6 +2604,506 @@ theorem bloomPreLoop_eval
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **M1 — `bloom_attn_step`: the streaming loop body advances `bloomInvariant` by
+one block.** From the invariant at block `c` (`i = c·128`, `(c+1)·128 ≤ S`), the 26
+lowered loop-body statements step to the invariant at block `c+1`. The running
+`m_i`/`l_i` registers advance by one `osStepBot` block over `bloomG` (in natural
+units, `= log2 · base-2 fold`) via `gStateBot_succ_explicit`, and the in-loop
+normalized `acc` advances by `gAccN_succ`: the per-row `acc_scale` guard
+`offs_m + plen ≥ start_n` (`= c·128 ≤ qpos`) case-splits guard-pass (standard
+`(lᵢ/lᵢⁿᵉʷ)·α` rescale) vs guard-fail (`acc_scale = 1`), matching `gAccN`'s guard.
+The channel-masked tiles make the score cells faithful. -/
+theorem bloom_attn_step
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (S bel : Nat) (c : Nat) (i : Nat) (s : BlockState)
+    (hwin : (c + 1) * 128 ≤ S) (hieq : i = c * 128)
+    (hinv : bloomInvariant Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+        sm_scale_bloom S bel c s) :
+    ∃ s', stepStmts (bloomLoopBody Q K V Req_to_tokens B_req_idx) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ bloomInvariant Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+          sm_scale_bloom S bel (c + 1) s' := by
+  subst hieq
+  set plen := promptLen s0 B_Prompt_Cache_Len with hplend
+  set sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len with hsld
+  set g := fun (i d : Fin 128) =>
+    bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale_bloom S bel i d with hgd
+  simp only [bloomInvariant] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
+      hq, hmi, hli, hacc, hcle⟩ := hinv
+  -- the loaded q tile of the invariant (row/channel-masked)
+  set qtile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      if decide (s0.pids 2 * 128 + idx.1.val < sl) && decide (idx.2.1.val < 96) then
+        s0.readMemValue .real (Region.cast Q)
+          ((startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 576 + s0.pids 1 * 96 + idx.2.1.val * 1)
+      else some (0.0 : ℝ)⟩ with hqtile
+  set mtile : Tile .real [128] := ⟨fun r : TileIndex [128] =>
+      (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).1.map (· * Real.log 2)⟩ with hmtile
+  set ltile : Tile .real [128] := ⟨fun r : TileIndex [128] =>
+      some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩ with hltile
+  set acctile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      some (gAccN S 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) c)⟩ with hacctile
+  -- run the body via the banked steps lemma
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hsnF, hcbF, hckvhF, hchF, hplenF, hslF, hbelF,
+      hcbsiF, hrqiF, homF, honF, hodF, hqF,
+      kloadT, vloadT, qkT, rmaxT, miNewT, alphaT, betaT, lijT, pscaleT, liNewT, accscale2T,
+      pexpT, p2T, acc1T,
+      hkleq, hvleq, hqkeq, hrm, hpexpeq, hlijeq, hminew, haleq, hbetaeq, hlineweq, hpscaleeq, hp2eq,
+      hascale2eq, hacc1eq, hm_iF, hl_iF, haccF⟩ :=
+    bloomLoopBody_steps Q K V Req_to_tokens B_req_idx (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))) (c * 128)
+      (fun r : Fin 128 => s0.pids 2 * 128 + r.val)
+      (s0.pids 0) (s0.pids 1 / 1) (s0.pids 1) plen sl bel
+      (startLoc s0 B_Start_Loc) (reqIdx s0 B_req_idx)
+      qtile mtile ltile acctile
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcb)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hckvh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hch)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hplen)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbel)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcbsi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hrqi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hon)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hod)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by intro rg o; simp [BlockState.setReg_undef, hundef])
+  refine ⟨sF, hchain, ?_⟩
+  -- cur_kv_head = cur_head (kv_group_num = 1)
+  have hckvhd : s0.pids 1 / 1 = s0.pids 1 := Nat.div_one _
+  have hrmem : ∀ (R : RegionName) (o : Nat),
+      (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMem R o = s0.readMem R o := by
+    intro R o; rw [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  have hrmemN : ∀ (R : RegionName) (o : Nat),
+      s.readMemValue .nat R o = s0.readMemValue .nat R o := by
+    intro R o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  have hrmemR : ∀ (R : RegionName) (o : Nat), s.readMem R o = s0.readMem R o := by
+    intro R o; unfold BlockState.readMem; rw [hmem]
+  -- per-cell q readback: qtile = bloomQTileM
+  have hqf : ∀ (a e : Fin 128),
+      qtile.data (a, e, PUnit.unit) = some (bloomQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 a e) := by
+    intro a e
+    rw [hqtile]
+    show (if decide (s0.pids 2 * 128 + a.val < sl) && decide (e.val < 96) then
+        s0.readMemValue .real (Region.cast Q)
+          ((startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + a.val)) * 576 + s0.pids 1 * 96 + e.val * 1)
+      else some (0.0 : ℝ)) = _
+    simp only [bloomQTileM, ctxQTile, curHead, ← hsld]
+    by_cases h1 : s0.pids 2 * 128 + a.val < sl
+    · by_cases h2 : e.val < 96
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h1, h2⟩),
+          if_pos (And.intro h1 h2)]
+        simp only [BlockState.readMemValue_real, Region.cast_id, Nat.mul_one]
+      · rw [if_neg (by simp only [decide_eq_false_iff_not.mpr h2, Bool.and_false, Bool.false_eq_true, not_false_eq_true]),
+          if_neg (fun hcon => h2 hcon.2)]; norm_num
+    · rw [if_neg (by simp only [decide_eq_false_iff_not.mpr h1, Bool.false_and, Bool.false_eq_true, not_false_eq_true]),
+        if_neg (fun hcon => h1 hcon.1)]; norm_num
+  -- per-cell k readback: kloadT = bloomKTileM (at global key c*128+jL)
+  have hkf : ∀ (jL e : Fin 128),
+      kloadT.data (e, jL, PUnit.unit)
+        = some (bloomKTileM s0 K Req_to_tokens B_req_idx 7500 1 S bel (⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩, e, PUnit.unit)) := by
+    intro jL e
+    rw [hkleq]
+    show (if decide (c * 128 + jL.val < bel) && decide (e.val < 96) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .real (Region.cast K)
+          ((if decide (c * 128 + jL.val < bel) then
+              (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .nat (Region.cast Req_to_tokens)
+                (7500 * reqIdx s0 B_req_idx + (c * 128 + jL.val))
+            else 0) * 576 + (s0.pids 1 / 1) * 96 + e.val * 1)
+        else some (0.0 : ℝ)) = _
+    simp only [bloomKTileM, ctxKTile, kvLoc, curHead]
+    by_cases h : c * 128 + jL.val < bel
+    · by_cases h2 : e.val < 96
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h, h2⟩),
+          if_pos (And.intro h h2), if_pos (by simp only [decide_eq_true_eq]; exact h)]
+        rw [show 7500 * reqIdx s0 B_req_idx + (c * 128 + jL.val)
+          = reqIdx s0 B_req_idx * 7500 + 1 * (c * 128 + jL.val) from by ring]
+        simp only [BlockState.setReg_readMem, BlockState.setReg_readMemValue,
+          BlockState.readMemValue_real, Region.cast_id, hckvhd, Nat.mul_one, hrmemN, hrmemR]
+      · rw [if_neg (by simp [h2]), if_neg (by simp [h2])]; norm_num
+    · rw [if_neg (by simp [h]), if_neg (by simp [h])]; norm_num
+  -- per-cell v readback: vloadT = bloomVTileM
+  have hvf : ∀ (jL d : Fin 128),
+      vloadT.data (jL, d, PUnit.unit)
+        = some (bloomVTileM s0 V Req_to_tokens B_req_idx 7500 1 S bel (⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩, d, PUnit.unit)) := by
+    intro jL d
+    rw [hvleq]
+    show (if decide (c * 128 + jL.val < bel) && decide (d.val < 96) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .real (Region.cast V)
+          ((if decide (c * 128 + jL.val < bel) then
+              (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .nat (Region.cast Req_to_tokens)
+                (7500 * reqIdx s0 B_req_idx + (c * 128 + jL.val))
+            else 0) * 576 + (s0.pids 1 / 1) * 96 + d.val * 1)
+        else some (0.0 : ℝ)) = _
+    simp only [bloomVTileM, ctxVTile, kvLoc, curHead]
+    by_cases h : c * 128 + jL.val < bel
+    · by_cases h2 : d.val < 96
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h, h2⟩),
+          if_pos (And.intro h h2), if_pos (by simp only [decide_eq_true_eq]; exact h)]
+        rw [show 7500 * reqIdx s0 B_req_idx + (c * 128 + jL.val)
+          = reqIdx s0 B_req_idx * 7500 + 1 * (c * 128 + jL.val) from by ring]
+        simp only [BlockState.setReg_readMem, BlockState.setReg_readMemValue,
+          BlockState.readMemValue_real, Region.cast_id, hckvhd, Nat.mul_one, hrmemN, hrmemR]
+      · rw [if_neg (by simp [h2]), if_neg (by simp [h2])]; norm_num
+    · rw [if_neg (by simp [h]), if_neg (by simp [h])]; norm_num
+  -- the score cell (natural) = (g a dd ⟨c*128+jL⟩).1 · log 2
+  have hscorelog : ∀ (a jL dd : Fin 128),
+      bloomQkCell sm_scale_bloom (c * 128) plen (fun r : Fin 128 => s0.pids 2 * 128 + r.val)
+          (fun a e => bloomQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 a e)
+          (fun jK e => bloomKTileM s0 K Req_to_tokens B_req_idx 7500 1 S bel (⟨c * 128 + jK.val, gBlock_idx_lt S 128 c hwin jK⟩, e, PUnit.unit))
+          a jL
+        = (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 * Real.log 2 := by
+    intro a jL dd
+    simp only [hgd, bloomG, bloomKVM, bloomQkCell]
+    by_cases h : c * 128 + jL.val ≤ s0.pids 2 * 128 + a.val + plen
+    · rw [if_pos h, if_pos (by rw [hplend] at *; omega)]
+      rw [div_mul_cancel₀ _ (by positivity : Real.log 2 ≠ 0)]
+    · rw [if_neg h, if_neg (by rw [hplend] at *; omega)]
+      rw [div_mul_cancel₀ _ (by positivity : Real.log 2 ≠ 0)]; norm_num
+  -- qkT cell = some (score · log 2)
+  have hqk : ∀ (a jL dd : Fin 128),
+      qkT.data (a, jL, PUnit.unit) = some ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 * Real.log 2) := by
+    intro a jL dd
+    rw [hqkeq]
+    rw [bloom_qkT_cell sm_scale_bloom (c * 128) plen (fun r : Fin 128 => s0.pids 2 * 128 + r.val)
+      qtile kloadT
+      (fun aa ee => bloomQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 aa ee)
+      (fun jK ee => bloomKTileM s0 K Req_to_tokens B_req_idx 7500 1 S bel (⟨c * 128 + jK.val, gBlock_idx_lt S 128 c hwin jK⟩, ee, PUnit.unit))
+      hqf hkf a jL]
+    rw [hscorelog a jL dd]
+  -- abbreviations for the base-2 running state and the explicit successor
+  set st := gStateBot S (c * 128) with hstdef
+  set M' := fun (a dd : Fin 128) => (gStateBot S ((c + 1) * 128) (g a dd)).1 with hM'def
+  have hsucc : ∀ a dd : Fin 128,
+      gStateBot S ((c + 1) * 128) (g a dd)
+        = (M' a dd,
+           (st (g a dd)).2.1 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin 128 =>
+                 pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)),
+           (st (g a dd)).2.2 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin 128 =>
+                 pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)
+                   * (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
+    intro a dd
+    have he := gStateBot_succ_explicit S 128 c (g a dd) hwin
+    simp only [] at he
+    have hM'eq : M' a dd = (gStateBot S (c * 128) (g a dd)).1 ⊔ Finset.univ.sup (fun jL : Fin 128 =>
+        ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) := by
+      rw [hM'def]; simp only []; rw [he]
+    rw [hM'eq]; exact he
+  have hM'ne : ∀ a dd : Fin 128, M' a dd ≠ ⊥ := by
+    intro a dd
+    rw [hM'def]; simp only []
+    rw [gStateBot_fst_eq_runningMax]
+    exact gRunningMax_succ_ne_bot S 128 c (g a dd) (by norm_num) hwin
+  have hMdd : ∀ a dd : Fin 128, M' a ⟨0, by decide⟩ = M' a dd := by
+    intro a dd
+    rw [hM'def]; simp only []
+    exact (gStateBot_score_congr S ((c + 1) * 128) _ _
+      (fun j => by simp only [hgd, bloomG, bloomKVM])).1
+  have hst1 : ∀ (a dd : Fin 128), (st (g a ⟨0, by decide⟩)).1 = (st (g a dd)).1 := by
+    intro a dd
+    rw [hstdef]
+    exact (gStateBot_score_congr S (c * 128) _ _
+      (fun j => by simp only [hgd, bloomG, bloomKVM])).1
+  -- positivity of log 2 and the scaling map's monotonicity facts
+  have hlog2pos : (0 : ℝ) < Real.log 2 := Real.log_pos (by norm_num)
+  set L : ℝ := Real.log 2 with hLdef
+  -- WithBot scaling commutes with ⊔ and Finset.sup (since L > 0)
+  have hmapsup2 : ∀ x y : WithBot ℝ, (x.map (· * L)) ⊔ (y.map (· * L)) = (x ⊔ y).map (· * L) := by
+    intro x y
+    cases x with
+    | bot => simp
+    | coe xr => cases y with
+      | bot => simp
+      | coe yr =>
+        simp only [WithBot.map_coe, ← WithBot.coe_sup, WithBot.coe_le_coe]
+        rcases le_total xr yr with h | h
+        · rw [sup_eq_right.mpr h, sup_eq_right.mpr (mul_le_mul_of_nonneg_right h hlog2pos.le)]
+        · rw [sup_eq_left.mpr h, sup_eq_left.mpr (mul_le_mul_of_nonneg_right h hlog2pos.le)]
+  have hmapFsup : ∀ (f : Fin 128 → WithBot ℝ),
+      Finset.univ.sup (fun jL : Fin 128 => (f jL).map (· * L)) = (Finset.univ.sup f).map (· * L) := by
+    intro f
+    refine Finset.cons_induction ?_ ?_ (Finset.univ : Finset (Fin 128))
+    · simp
+    · intro a s ha ih
+      rw [Finset.sup_cons, Finset.sup_cons, ih, hmapsup2]
+  -- natural-exp of a log2-scaled difference is the base-2 realExp2
+  have hexpmap : ∀ x y : WithBot ℝ,
+      WithBot.realExp (WithBot.realSub (x.map (· * L)) (y.map (· * L)))
+        = WithBot.realExp2 (WithBot.realSub x y) := by
+    intro x y
+    cases x with
+    | bot => cases y <;> rfl
+    | coe xr => cases y with
+      | bot => rfl
+      | coe yr =>
+        show WithBot.realExp (some (xr * L - yr * L)) = WithBot.realExp2 (some (xr - yr))
+        rw [WithBot.realExp2_some]
+        show some (Real.exp (xr * L - yr * L)) = some (Real.exp ((xr - yr) * Real.log 2))
+        rw [hLdef]; congr 1; congr 1; ring
+  -- m_ij cell = (block base-2 sup) · L  (natural block max)
+  have hmijc : ∀ a : Fin 128, rmaxT.data (a, PUnit.unit)
+      = (Finset.univ.sup (fun jL : Fin 128 =>
+          ((g a ⟨0, by decide⟩ ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ))).map (· * L) := by
+    intro a
+    rw [ctxg_reduceMaxDrop_data_row (by decide) qkT rmaxT hrm a
+      (fun jL => ((g a ⟨0, by decide⟩ ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ).map (· * L))
+      (fun jL => by rw [hqk a jL ⟨0, by decide⟩]; rfl)]
+    exact hmapFsup _
+  -- m_i_new cell = (M' a 0).map (·*L)  (natural running max)
+  have hminewc : ∀ a : Fin 128, miNewT.data (a, PUnit.unit) = (M' a ⟨0, by decide⟩).map (· * L) := by
+    intro a
+    rw [hminew]
+    rw [ctxg_mij_max mtile rmaxT a ((st (g a ⟨0, by decide⟩)).1.map (· * L)) _
+      (by rw [hmtile]) (hmijc a)]
+    rw [hM'def]; simp only []
+    rw [congrArg Prod.fst (gStateBot_succ_explicit S 128 c (g a ⟨0, by decide⟩) hwin)]
+    simp only []
+    rw [hmapsup2]
+  -- alpha cell = realExp2(st.1 - M').unbotD  (the base-2 α, natural-exp via ·*L)
+  have halc : ∀ a dd : Fin 128, alphaT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0) := by
+    intro a dd
+    rw [haleq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT).data (a, PUnit.unit)) = _
+    have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT).data (a, PUnit.unit)
+        = WithBot.realSub ((st (g a dd)).1.map (· * L)) ((M' a dd).map (· * L)) := by
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+      rw [hmtile]; simp only []
+      rw [hminewc a, hMdd a dd, hst1 a dd]
+    rw [hinner, hexpmap]
+    exact (ctxg_realExp2_eq_some_unbotD _)
+  -- block-sup abbreviation (base-2, score-independent in dd)
+  set Bsup := fun (a dd : Fin 128) => Finset.univ.sup (fun jL : Fin 128 =>
+      ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) with hBsupdef
+  have hBsupne : ∀ a dd : Fin 128, Bsup a dd ≠ ⊥ := by
+    intro a dd
+    rw [hBsupdef]; simp only []
+    intro hcon
+    have h0 := Finset.le_sup (f := fun jL : Fin 128 =>
+        ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ))
+      (Finset.mem_univ (⟨0, by decide⟩ : Fin 128))
+    rw [hcon] at h0; exact absurd (le_bot_iff.mp h0) (by simp)
+  have hBsupdd : ∀ a dd : Fin 128, Bsup a ⟨0, by decide⟩ = Bsup a dd := by
+    intro a dd
+    rw [hBsupdef]; simp only []
+    refine Finset.sup_congr rfl (fun jL _ => ?_)
+    simp only [hgd, bloomG, bloomKVM]
+  -- Bsup unfolds to the score sup at dd = 0
+  have hBsup0 : ∀ a : Fin 128, Bsup a ⟨0, by decide⟩
+      = Finset.univ.sup (fun jL : Fin 128 =>
+          ((g a ⟨0, by decide⟩ ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) := by
+    intro a; rw [hBsupdef]
+  -- rmaxT cell = (Bsup a dd).unbotD · L
+  have hrmaxc : ∀ a dd : Fin 128, rmaxT.data (a, PUnit.unit) = some ((Bsup a dd).unbotD 0 * L) := by
+    intro a dd
+    rw [hmijc a, ← hBsup0 a, hBsupdd a dd]
+    rcases hB : Bsup a dd with _ | br
+    · exact absurd hB (hBsupne a dd)
+    · simp [WithBot.map]
+  -- p (pexp) cell = pow2(score - (Bsup a dd).unbotD)
+  have hpc : ∀ (a jL dd : Fin 128), pexpT.data (a, jL, PUnit.unit)
+      = some (pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (Bsup a dd).unbotD 0)) := by
+    intro a jL dd
+    rw [hpexpeq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT
+        (Tile.expandDim ⟨1, by decide⟩ rmaxT)).data (a, jL, PUnit.unit)) = _
+    rw [ctx_qk_sub_mij_cell qkT rmaxT a jL _ _ (hqk a jL dd) (hrmaxc a dd)]
+    show WithBot.realExp (some _) = _
+    simp only [WithBot.realExp, pow2]
+    rw [show (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 * L - (Bsup a dd).unbotD 0 * L
+          = Real.log 2 * ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (Bsup a dd).unbotD 0)
+        from by rw [hLdef]; ring]
+  -- l_ij cell = Σ pow2(score - Bsup)
+  have hlijc : ∀ a dd : Fin 128, lijT.data (a, PUnit.unit)
+      = some (Finset.univ.sum (fun jL : Fin 128 =>
+          pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (Bsup a dd).unbotD 0))) := by
+    intro a dd
+    rw [hlijeq, Tile.reduceSumDrop_data]
+    simp only [TileShape.insertAxisIndex]
+    refine Eq.trans (Finset.sum_congr rfl (fun (jL : Fin 128) _ => hpc a jL dd)) ?_
+    exact ctxg_withBot_sum_some
+      (fun jL : Fin 128 => pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (Bsup a dd).unbotD 0))
+  -- beta value (base-2): realExp2(Bsup - M').unbotD
+  have hbetav : ∀ a dd : Fin 128, betaT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0) := by
+    intro a dd
+    rw [hbetaeq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT).data (a, PUnit.unit)) = _
+    have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT).data (a, PUnit.unit)
+        = WithBot.realSub ((Bsup a dd).map (· * L)) ((M' a dd).map (· * L)) := by
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+      rw [hmijc a, hminewc a, ← hBsup0 a, hBsupdd a dd, hMdd a dd]
+    rw [hinner, hexpmap]
+    exact (ctxg_realExp2_eq_some_unbotD _)
+  -- pow2(Bsup - M') · pow2(score - Bsup) = pow2(score - M')  (Bsup, M' finite)
+  have hbetapow : ∀ (a jL dd : Fin 128),
+      (WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0
+        * pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (Bsup a dd).unbotD 0)
+      = pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0) := by
+    intro a jL dd
+    rcases hB : Bsup a dd with _ | br
+    · exact absurd hB (hBsupne a dd)
+    · rcases hM : M' a dd with _ | Mr
+      · exact absurd hM (hM'ne a dd)
+      · have hfac : (WithBot.realExp2 (WithBot.realSub (some br) (some Mr))).unbotD 0
+            = Real.exp ((br - Mr) * Real.log 2) := rfl
+        have hb' : (WithBot.unbotD 0 (some br) : ℝ) = br := rfl
+        have hm' : (WithBot.unbotD 0 (some Mr) : ℝ) = Mr := rfl
+        rw [hfac, hb', hm', pow2, pow2, ← Real.exp_add]
+        congr 1; ring
+  -- p2 cell = pow2(score - M') / l_i_new
+  have hliNewv : ∀ a dd : Fin 128, liNewT.data (a, PUnit.unit)
+      = some ((gStateBot S ((c + 1) * 128) (g a dd)).2.1) := by
+    intro a dd
+    rw [hlineweq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+    rw [halc a dd, show ltile.data (a, PUnit.unit) = some (st (g a dd)).2.1 from by
+        rw [hltile]; simp only []; rw [hstdef]
+        exact congrArg some (gStateBot_score_congr S (c * 128) (g a ⟨0, by decide⟩) (g a dd)
+          (fun j => by simp only [hgd, bloomG, bloomKVM])).2,
+      hbetav a dd, hlijc a dd]
+    rw [hsucc a dd]; simp only []
+    show WithBot.realAdd (WithBot.realMul (some _) (some _)) (WithBot.realMul (some _) (some _)) = _
+    simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [Finset.mul_sum]
+    rw [Finset.sum_congr rfl (fun (jL : Fin 128) _ => hbetapow a jL dd)]
+    ring
+  -- pscale cell = beta / l_i_new
+  have hpscalev : ∀ a dd : Fin 128, pscaleT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0
+          / (gStateBot S ((c + 1) * 128) (g a dd)).2.1) := by
+    intro a dd
+    rw [hpscaleeq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div]
+    rw [hbetav a dd, hliNewv a dd]; rfl
+  -- p2 cell = pow2(score - M') / l_i_new
+  have hp2c : ∀ (a jL dd : Fin 128), p2T.data (a, jL, PUnit.unit)
+      = some (pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)
+          / (gStateBot S ((c + 1) * 128) (g a dd)).2.1) := by
+    intro a jL dd
+    rw [hp2eq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, TileShape.insertAxisIndex, NumericDType.mul]
+    rw [hpc a jL dd, hpscalev a dd]
+    show WithBot.realMul (some _) (some _) = _
+    simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [← hbetapow a jL dd]; ring
+  -- acc_scale2 cell = guarded (l_i/l_i_new)·alpha or 1
+  have hascale2c : ∀ a dd : Fin 128, accscale2T.data (a, PUnit.unit)
+      = some (if c * 128 ≤ s0.pids 2 * 128 + a.val + plen then
+          ((st (g a dd)).2.1 / (gStateBot S ((c + 1) * 128) (g a dd)).2.1)
+            * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+          else 1) := by
+    intro a dd
+    rw [hascale2eq]
+    rw [Tile.select_data]
+    have hcond : (⟨fun idx : TileIndex [128] => decide (c * 128 ≤ (fun r : Fin 128 => s0.pids 2 * 128 + r.val) idx.1 + plen)⟩ : Tile .bool [128]).data (a, PUnit.unit)
+        = decide (c * 128 ≤ s0.pids 2 * 128 + a.val + plen) := rfl
+    rw [hcond]
+    by_cases hg : c * 128 ≤ s0.pids 2 * 128 + a.val + plen
+    · rw [if_pos (by simp only [decide_eq_true_eq]; exact hg), if_pos hg]
+      -- accscale1 cell = (l_i/l_i_new)·alpha
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.div]
+      rw [show ltile.data (a, PUnit.unit) = some (st (g a dd)).2.1 from by
+          rw [hltile]; simp only []; rw [hstdef]
+          exact congrArg some (gStateBot_score_congr S (c * 128) (g a ⟨0, by decide⟩) (g a dd)
+            (fun j => by simp only [hgd, bloomG, bloomKVM])).2,
+        hliNewv a dd, halc a dd]
+      show WithBot.realMul (WithBot.realDiv (some _) (some _)) (some _) = _
+      simp only [WithBot.realMul, WithBot.realDiv, Option.map₂, Option.bind, Option.map]
+    · rw [if_neg (by simp only [decide_eq_true_eq]; exact hg), if_neg hg]; norm_num
+  -- acc1 cell = gAccN(c) · acc_scale2
+  have hacc1c : ∀ idx : TileIndex [128, 128], acc1T.data idx
+      = some (gAccN S 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) c
+          * (if c * 128 ≤ s0.pids 2 * 128 + idx.1.val + plen then
+              ((st (g idx.1 idx.2.1)).2.1 / (gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).2.1)
+                * (WithBot.realExp2 (WithBot.realSub (st (g idx.1 idx.2.1)).1 (M' idx.1 idx.2.1))).unbotD 0
+              else 1)) := by
+    intro idx
+    rw [hacc1eq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, TileShape.insertAxisIndex, NumericDType.mul]
+    rw [show acctile.data idx = some (gAccN S 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) c) from by
+        rw [hacctile], hascale2c idx.1 idx.2.1]
+    show WithBot.realMul (some _) (some _) = _
+    simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  -- now build the invariant at (c+1)
+  have hgapp : ∀ a d : Fin 128,
+      bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale_bloom S bel a d = g a d :=
+    fun a d => rfl
+  simp only [bloomInvariant, hgapp]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids]; exact hpids
+  · rw [hmemF]; exact hmem
+  · exact hundefF
+  · rw [hcbF]
+  · rw [hckvhF]
+  · rw [hchF]
+  · rw [hplenF]
+  · rw [hslF]
+  · rw [hbelF]
+  · rw [hcbsiF]
+  · rw [hrqiF]
+  · rw [homF]
+  · rw [honF]
+  · rw [hodF]
+  · rw [hqF]
+  · -- m_i = (gStateBot (c+1)).1.map (·*log2)
+    rw [hm_iF]; refine congrArg some ?_; ext a
+    show miNewT.data a = (gStateBot S ((c + 1) * 128) (g a.1 ⟨0, by decide⟩)).1.map (· * Real.log 2)
+    rw [hminewc a.1, hM'def, ← hLdef]
+  · -- l_i = (gStateBot (c+1)).2.1
+    rw [hl_iF]; refine congrArg some ?_; ext a
+    show liNewT.data a = some (gStateBot S ((c + 1) * 128) (g a.1 ⟨0, by decide⟩)).2.1
+    rw [hliNewv a.1 ⟨0, by decide⟩]
+  · -- acc = gAccN (c+1)
+    rw [haccF]; refine congrArg some ?_; ext idx
+    show (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acc1T (Tile.dot [] p2T vloadT)).data idx
+        = some (gAccN S 128 (s0.pids 2 * 128 + idx.1.val + plen) (g idx.1 idx.2.1) (c + 1))
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+    -- dot(p2, v) cell = increment / l_i_new
+    have hdotc : (Tile.dot [] p2T vloadT).data (idx.1, idx.2.1, PUnit.unit)
+        = some (Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' idx.1 idx.2.1).unbotD 0)
+              * (g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)
+            / (gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).2.1) := by
+      rw [ctxg_dot_row p2T vloadT idx.1 idx.2.1 _ _ (fun jL => hp2c idx.1 jL idx.2.1)
+        (fun jL => by rw [hvf jL idx.2.1])]
+      refine congrArg some ?_
+      rw [Finset.sum_div]
+      refine Finset.sum_congr rfl (fun jL _ => ?_)
+      simp only [hgd, bloomG, bloomKVM]
+      ring
+    rw [hdotc, hacc1c idx]
+    show WithBot.realAdd (some _) (some _) = _
+    simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [gAccN_succ]
+    -- unfold st / M' abbreviations to raw gStateBot, matching gAccN_succ output
+    simp only [hstdef, hM'def]
+    -- the increment numerator (raw): stn.2.2 − st.2.2·α  =  Σ pow2(score − M')·v
+    have hincr : (gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).2.2
+          - (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2
+              * (WithBot.realExp2 (WithBot.realSub (gStateBot S (c * 128) (g idx.1 idx.2.1)).1
+                  (gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).1)).unbotD 0
+        = Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1
+                - ((gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).1).unbotD 0)
+              * (g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2) := by
+      conv_lhs => rw [hsucc idx.1 idx.2.1]
+      simp only [hstdef, hM'def]; ring
+    rw [hincr]
+  · exact hwin
+
 theorem context_attn_bloom_python_block128_offset_injective
     (s : BlockState) (B_Start_Loc : RegionName) :
     Function.Injective
