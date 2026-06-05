@@ -898,6 +898,156 @@ theorem chunk_delta_fwd_final_state_store_slice_realizes_final
   rw [h2, finalStateStoreValue, if_pos hActive, WithBot.unbotD_some]
   exact hBHF idx hActive
 
+/-! ## Cross-chunk exec derivation (concrete Python shape)
+
+The genuine `exec`-driven derivation of the producer hypotheses. We step the
+lowered surface body of the checked Python shape
+(`s_qk_h=8192, s_qk_t=128, s_qk_d=1, s_vo_h=8192, s_vo_t=64, s_vo_d=1,
+s_h_h=16384, s_h_t=64, K=V=64, BT=BC=32, BK=BV=64, NT=4`) through:
+
+* the prologue (`i_k`/`i_v`/`i_bh`, `b_h = 0`, the `USE_INITIAL_STATE` seed);
+* the outer **static** `forRange "i_t" 0 4 1` carrying the `[64,64]` state tile
+  `b_h = cdfStateTile i_t` (= `stateValue i_t`), with the chunk-start `h[i_t]`
+  store and the cumulative `v_new[i_t]` store materialized for chunks `< i_t`;
+* the inner **dynamic** `forRangeDyn "i_c" 0 1 1` (single inner chunk, `BC=BT`)
+  loading `b_k`/`b_d`/`b_v`, correcting `b_v ← b_v − dot(b_d,b_h)`, storing
+  `v_new`, and accumulating `b_h_cumsum += dot(b_k,b_v)`;
+* the `STORE_FINAL_STATE` flush of `H_4`.
+
+Everything is at `i_k = 0` (the `NK=1` regime). `pids 0 = i_k`, `pids 1 = i_v`,
+`pids 2 = i_bh`. We keep the `BlockState` symbolic and peel `setReg` chains by
+name inequality. -/
+
+/-- The carried `[64,64]` state tile of chunk `i_t`: data `(e,p) ↦ stateValue`. -/
+noncomputable def cdfStateTile (s : BlockState) (k v d initial_state : RegionName)
+    (USE_INITIAL_STATE : Bool) (i_t : Nat) : Tile .real [64, 64] :=
+  ⟨fun idx => some (stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+    USE_INITIAL_STATE i_t idx.1.val idx.2.1.val)⟩
+
+/-- The loaded `b_k` tile `[64,32]` of chunk `i_t` (inner chunk `i_c=0`, `i_k=0`).
+Cell `(e,c)` reads `k` at `i_bh·8192 + e·1 + (i_t·32+c)·128 = kElem`. -/
+noncomputable def cdfBkTile (s : BlockState) (k : RegionName) (i_t : Nat) :
+    Tile .real [64, 32] :=
+  ⟨fun idx => if (idx.1.val < 64 ∧ i_t * 32 + idx.2.1.val < 128) then
+      some (kElem s k 8192 128 1 32 i_t idx.1.val idx.2.1.val) else some 0⟩
+
+/-- The loaded `b_d` tile `[32,64]` of chunk `i_t`. Cell `(c,e)` reads `dElem`. -/
+noncomputable def cdfBdTile (s : BlockState) (d : RegionName) (i_t : Nat) :
+    Tile .real [32, 64] :=
+  ⟨fun idx => if (i_t * 32 + idx.1.val < 128 ∧ idx.2.1.val < 64) then
+      some (dElem s d 8192 128 1 32 i_t idx.1.val idx.2.1.val) else some 0⟩
+
+/-- The loaded `b_v` tile `[32,64]` of chunk `i_t`. Cell `(c,p)` reads `vElem`. -/
+noncomputable def cdfBvTile (s : BlockState) (v : RegionName) (i_t : Nat) :
+    Tile .real [32, 64] :=
+  ⟨fun idx => if (i_t * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) then
+      some (vElem s v 8192 64 1 32 64 i_t idx.1.val idx.2.1.val) else some 0⟩
+
+/-- Cell-level `dot(ref a, ref b)` eval recipe (returns the closed-form cell tile). -/
+theorem cdfDot_op_eval {M Kd N : Nat} (s' : BlockState) (aName bName : RegName)
+    (atile : Tile .real [M, Kd]) (btile : Tile .real [Kd, N])
+    (fa : Fin M → Fin Kd → ℝ) (fb : Fin Kd → Fin N → ℝ)
+    (ha : s'.regs .real [M, Kd] aName = some atile)
+    (hb : s'.regs .real [Kd, N] bName = some btile)
+    (haf : ∀ m e, atile.data (m, e, PUnit.unit) = some (fa m e))
+    (hbf : ∀ e n, btile.data (e, n, PUnit.unit) = some (fb e n)) :
+    evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName)) s'
+      = some (⟨fun idx : TileIndex [M, N] =>
+          some (Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩
+          : Tile .real [M, N]) := by
+  have hev : evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName)
+      (Op.ref .real [Kd, N] bName)) s' = some (Tile.dot [] atile btile) := by
+    rw [evalOp_dot]; simp [ha, hb]
+  rw [hev]
+  refine congrArg some ?_
+  ext idx; obtain ⟨m, n, u⟩ := idx
+  exact dot2d_elem atile btile m n (fa m) (fun e => fb e n)
+    (fun e => haf m e) (fun e => hbf e n)
+
+/-- Cell-level accumulating `acc + dot(ref a, ref b)` eval recipe. -/
+theorem cdfAccDot_op_eval {M Kd N : Nat} (s' : BlockState)
+    (accName aName bName : RegName)
+    (acctile : Tile .real [M, N]) (atile : Tile .real [M, Kd]) (btile : Tile .real [Kd, N])
+    (facc : Fin M → Fin N → ℝ) (fa : Fin M → Fin Kd → ℝ) (fb : Fin Kd → Fin N → ℝ)
+    (hacc : s'.regs .real [M, N] accName = some acctile)
+    (ha : s'.regs .real [M, Kd] aName = some atile)
+    (hb : s'.regs .real [Kd, N] bName = some btile)
+    (haccf : ∀ m n, acctile.data (m, n, PUnit.unit) = some (facc m n))
+    (haf : ∀ m e, atile.data (m, e, PUnit.unit) = some (fa m e))
+    (hbf : ∀ e n, btile.data (e, n, PUnit.unit) = some (fb e n)) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+        (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (⟨fun idx : TileIndex [M, N] =>
+          some (facc idx.1 idx.2.1
+            + Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩
+          : Tile .real [M, N]) := by
+  have hdotev := cdfDot_op_eval s' aName bName atile btile fa fb ha hb haf hbf
+  set dottile : Tile .real [M, N] :=
+    ⟨fun idx => some (Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩ with hdt
+  have hfull : evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+      (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acctile dottile) := by
+    rw [evalOp_add]
+    rw [show evalOp (Op.ref .real [M, N] accName) s' = some acctile from by rw [evalOp_ref]; exact hacc]
+    show (evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName)
+        (Op.ref .real [Kd, N] bName)) s').bind
+        (fun vy => some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acctile vy))
+      = _
+    rw [hdotev]
+    rfl
+  rw [hfull]
+  refine congrArg some ?_
+  ext idx; obtain ⟨m, n, u⟩ := idx
+  simp only [hdt, Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
+    haccf m n, NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+
+/-- Cell-level subtracting `acc − dot(ref a, ref b)` eval recipe (the `b_v` correction). -/
+theorem cdfSubDot_op_eval {M Kd N : Nat} (s' : BlockState)
+    (accName aName bName : RegName)
+    (acctile : Tile .real [M, N]) (atile : Tile .real [M, Kd]) (btile : Tile .real [Kd, N])
+    (facc : Fin M → Fin N → ℝ) (fa : Fin M → Fin Kd → ℝ) (fb : Fin Kd → Fin N → ℝ)
+    (hacc : s'.regs .real [M, N] accName = some acctile)
+    (ha : s'.regs .real [M, Kd] aName = some atile)
+    (hb : s'.regs .real [Kd, N] bName = some btile)
+    (haccf : ∀ m n, acctile.data (m, n, PUnit.unit) = some (facc m n))
+    (haf : ∀ m e, atile.data (m, e, PUnit.unit) = some (fa m e))
+    (hbf : ∀ e n, btile.data (e, n, PUnit.unit) = some (fb e n)) :
+    evalOp (Op.sub .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+        (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (⟨fun idx : TileIndex [M, N] =>
+          some (facc idx.1 idx.2.1
+            - Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩
+          : Tile .real [M, N]) := by
+  have hdotev := cdfDot_op_eval s' aName bName atile btile fa fb ha hb haf hbf
+  set dottile : Tile .real [M, N] :=
+    ⟨fun idx => some (Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩ with hdt
+  have hfull : evalOp (Op.sub .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+      (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (Tile.bop NumericDType.real.sub Broadcast.nil.consSame.consSame acctile dottile) := by
+    rw [evalOp_sub]
+    rw [show evalOp (Op.ref .real [M, N] accName) s' = some acctile from by rw [evalOp_ref]; exact hacc]
+    show (evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName)
+        (Op.ref .real [Kd, N] bName)) s').bind
+        (fun vy => some (Tile.bop NumericDType.real.sub Broadcast.nil.consSame.consSame acctile vy))
+      = _
+    rw [hdotev]
+    rfl
+  rw [hfull]
+  refine congrArg some ?_
+  ext idx; obtain ⟨m, n, u⟩ := idx
+  simp only [hdt, Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
+    haccf m n, NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
+
+/-- Corrected `b_v` cell with an abstract chunk-start state `fbh` for `b_h`:
+`vElem − Σ_e dElem·fbh(e,p)` on the active region (`0` off it). -/
+noncomputable def cdfBvNewCell (s : BlockState) (v d : RegionName)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) (c p : Nat) : ℝ :=
+  (if (i_t * 32 + c < 128 ∧ s.pids 1 * 64 + p < 64) then
+      vElem s v 8192 64 1 32 64 i_t c p else 0)
+    - Finset.univ.sum (fun e : Fin 64 =>
+        (if (i_t * 32 + c < 128 ∧ e.val < 64) then
+            dElem s d 8192 128 1 32 i_t c e.val else 0) * fbh e.val p)
+
 /-! ## Per-Python-shape offset injectivity
 
 `chunk_delta_fwd.py`'s checked tests use `B = 2`, `H = 4`, `T = 128`,
