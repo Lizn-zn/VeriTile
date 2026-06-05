@@ -1972,6 +1972,45 @@ theorem msa_load_v_eval (s : BlockState) (BN BD SVN : Nat)
   simp only [Tile.scalar_data_index]
   rfl
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`cols = tl.load(cols_ptr + start_n + offs_n, mask=cond[:,None], other=0)`
+(B3, loop B ONLY)**: the masked `.nat` gather of the visited sparse columns from
+`column_index`. `cols_ptr` is a scalar pointer `(cpReg, cpOff)`; lane `j` reads
+`column_index[cpOff + start_n + j]` when the loop guard `cond` holds, else the `0`
+default. Given `cols_ptr = (cpReg, cpOff)`, `start_n = SN`, `offs_n = id`,
+`cond = cb`. The block-sparse loop reads its columns contiguously instead (loop A
+has no analogous gather; it uses `cols = start_n + offs_n`). -/
+theorem msa_colgather_eval (s : BlockState) (BN cpOff SN : Nat) (cb : Bool)
+    (cpReg : RegionName) (hax0 : 0 < ([] : TileShape).length.succ)
+    (hcp : s.regs .ptr [] "cols_ptr" = some (Tile.scalar (cpReg, cpOff)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hcond : s.regs .bool [] "cond" = some (Tile.scalar cb)) :
+    evalOp (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarL
+            (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "cols_ptr") (Op.ref .nat [] "start_n"))
+            (Op.ref .nat [BN] "offs_n")))
+        (MaskOpt.maskOther
+          (Op.remap [BN] Broadcast.nil.consL.leftIndex
+            (Op.expandDim ⟨0, hax0⟩ (Op.ref .bool [] "cond")))
+          ((Op.constNat 0).broadcast [BN]))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          let ptrs := Tile.ptrAdd Broadcast.scalarL
+            (Tile.ptrAdd Broadcast.nil (Tile.scalar (cpReg, cpOff)) (Tile.scalar SN))
+            (Tile.vec (fun j : Fin BN => j.val))
+          if (Tile.remap Broadcast.nil.consL.leftIndex
+                (Tile.expandDim ⟨0, hax0⟩ (Tile.scalar cb : Tile .bool []))).data idx then
+            s.readMemValue .nat (ptrs.data idx).1 (ptrs.data idx).2
+          else (0 : Nat)⟩ : Tile .nat [BN]) := by
+  simp only [evalOp, hcp, hsn, hon]
+  erw [evalOp_expandDim_ref_of_regs .bool [] ⟨0, hax0⟩ "cond" s _ hcond]
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.scalar_data_index]
+  rfl
+
 end MSARecipes
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
