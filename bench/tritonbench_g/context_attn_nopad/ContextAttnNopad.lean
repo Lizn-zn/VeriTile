@@ -473,6 +473,151 @@ noncomputable def ctxNopadGenuineOutValue
   contextAttnNopadExactFoldM s Q K V B_Start_Loc sm_scale_python 128
     (ctxNopadWindow s B_Seqlen 128) (ctxNopadBel s B_Seqlen) idx
 
+/-! ## Online-normalized streaming recurrence (the loop invariant's math)
+
+Unlike the int8-KV context kernel (which divides `acc /= l_i` once after the
+loop), `context_attn_nopad` **normalizes inside the loop**: each block it rescales
+`p` by `beta/l_i_new` and `acc` by `l_i/l_i_new·alpha`, so after every block the
+`acc` register already holds the *running normalized softmax ratio* `numer/denom`
+and `l_i` holds the running denominator shifted by `exp(-m_i)` (i.e.
+`Σ exp(score − m_i)`). This section is the mathematical heart of nopad's loop: the
+⊥-seeded normalized recurrence (running max in `WithBot ℝ`, seeded `⊥` to model
+`m_i = −inf`, `l_i = acc = 0`), and the proof that its running `(l, acc)` stay
+equal to `exp(−m)·Σexp(score)` and `Σexp(score)v / Σexp(score)` — so the
+full-window `acc` reads off the genuine causal-softmax closed form with NO
+post-loop division. -/
+
+/-- One ⊥-seeded **online-normalized** softmax step absorbing key `(sc, v)`. The
+running max lives in `WithBot ℝ` (seeded `⊥`); `α = realExp(m ⊖ m')` is `0` on the
+first key (faithful to `m_i = −inf`, `l_i = acc = 0`). `l` is the running
+shifted denominator `Σ exp(score − m)`; `acc` is the running normalized ratio
+`numer/denom`. The block update is `l' = α·l + exp(sc − m')`,
+`acc' = acc·(l/l'·α) + (exp(sc − m')/l')·v`. -/
+noncomputable def osNormStepBot
+    (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
+  let m := st.1; let l := st.2.1; let acc := st.2.2
+  let sc := sv.1; let v := sv.2
+  let m' := m ⊔ ((sc : ℝ) : WithBot ℝ)
+  let α := (WithBot.realExp (WithBot.realSub m m')).unbotD 0
+  let l' := l * α + Real.exp (sc - m'.unbotD 0)
+  let acc' := acc * (l / l' * α) + (Real.exp (sc - m'.unbotD 0) / l') * v
+  (m', l', acc')
+
+/-- The running `max` component of an `osNormStepBot` fold is the `WithBot ⊔`-fold
+of the per-key scores — independent of the normalized `l`/`acc` carried. -/
+theorem osNormStepBot_foldl_fst
+    (xs : List (ℝ × ℝ)) (m₀ : WithBot ℝ) (l₀ acc₀ : ℝ) :
+    (xs.foldl osNormStepBot (m₀, l₀, acc₀)).1
+      = (xs.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldl (· ⊔ ·) m₀ := by
+  induction xs generalizing m₀ l₀ acc₀ with
+  | nil => rfl
+  | cons x xs ih => simp only [List.foldl_cons, List.map_cons]; rw [ih]; rfl
+
+/-- **⊥-seeded normalized consistency.** Folding `osNormStepBot` from a state
+consistent with batch denominator `L` and unnormalized accumulator `T`
+(`l = κ(m)·L`, `acc = T/L`, with the convention `acc = 0` when `L = 0`) keeps that
+invariant: the final `l = κ(m_final)·(L + Σexp)`, `acc = (T + Σexp·v)/(L + Σexp)`.
+`κ ⊥ = 0`, `κ (some r) = exp(−r)`. -/
+theorem osNormStepBot_foldl_consistent
+    (xs : List (ℝ × ℝ)) (m : WithBot ℝ) (l acc T L : ℝ)
+    (hL0 : 0 ≤ L)
+    (hxpos : ∀ p ∈ xs, True)
+    (hl : l = (m.elim 0 (fun r => Real.exp (-r))) * L)
+    (hacc : acc * L = T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0)
+    (hLpos : 0 < L → l ≠ 0) :
+    let st := xs.foldl osNormStepBot (m, l, acc)
+    let L' := L + (xs.map (fun p => Real.exp p.1)).sum
+    let T' := T + (xs.map (fun p => Real.exp p.1 * p.2)).sum
+    st.2.1 = (st.1.elim 0 (fun r => Real.exp (-r))) * L'
+      ∧ st.2.2 * L' = T'
+      ∧ 0 ≤ L'
+      ∧ (st.1 = ⊥ → L' = 0)
+      ∧ (st.1 = ⊥ → T' = 0)
+      ∧ (0 < L' → st.2.1 ≠ 0) := by
+  induction xs generalizing m l acc T L with
+  | nil => exact ⟨by simpa using hl, by simpa using hacc, by simpa using hL0,
+      by simpa using hmL, by simpa using hmT, by simpa using hLpos⟩
+  | cons x xs ih =>
+    obtain ⟨sc, v⟩ := x
+    set m' : WithBot ℝ := m ⊔ ((sc : ℝ) : WithBot ℝ) with hm'
+    have hm'r : ∃ r : ℝ, m' = (r : WithBot ℝ) := by
+      cases m with
+      | bot => exact ⟨sc, by rw [hm']; rfl⟩
+      | coe a => exact ⟨max a sc, by rw [hm']; rw [← WithBot.coe_max]⟩
+    obtain ⟨mr, hmr⟩ := hm'r
+    have hκm' : m'.elim 0 (fun r => Real.exp (-r)) = Real.exp (-mr) := by rw [hmr]; rfl
+    have hunbot : m'.unbotD 0 = mr := by rw [hmr]; rfl
+    set L' := L + Real.exp sc with hL'd
+    set T' := T + Real.exp sc * v with hT'd
+    set α : ℝ := (WithBot.realExp (WithBot.realSub m m')).unbotD 0 with hαd
+    set p : ℝ := Real.exp (sc - m'.unbotD 0) with hpd
+    set l' : ℝ := l * α + p with hl'd
+    set acc' : ℝ := acc * (l / l' * α) + (p / l') * v with hacc'd
+    -- l·α = exp(-mr)·L : `m = ⊥` uses `L = 0`; `m = ↑a` uses `l = exp(-a)·L`, `α = exp(a − mr)`.
+    have hlα : l * α = Real.exp (-mr) * L := by
+      cases m with
+      | bot =>
+        have hL0' : L = 0 := hmL rfl
+        rw [hl, hL0']; simp
+      | coe a =>
+        have hm'a : m' = ((max a sc : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a sc := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαv : α = Real.exp (a - max a sc) := by
+          rw [hαd, hm'a, WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+        rw [hl, hαv,
+          show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+        rw [show Real.exp (-a) * L * Real.exp (a - max a sc)
+            = (Real.exp (-a) * Real.exp (a - max a sc)) * L from by ring,
+          ← Real.exp_add, hmra]
+        ring_nf
+    -- new l' = κ(m')·L'
+    have hl'eq : l' = Real.exp (-mr) * L' := by
+      rw [hl'd, hlα, hpd, hunbot, hL'd]
+      have e2 : Real.exp (sc - mr) = Real.exp (-mr) * Real.exp sc := by
+        rw [← Real.exp_add]; ring_nf
+      rw [e2]; ring
+    -- L' ≥ 0
+    have hL'pos : 0 ≤ L' := by rw [hL'd]; positivity
+    -- L' > 0 (key always contributes exp sc > 0)
+    have hL'strict : 0 < L' := by rw [hL'd]; positivity
+    -- l' ≠ 0
+    have hl'ne : l' ≠ 0 := by rw [hl'eq]; positivity
+    -- acc' * L' = T'
+    have hacc'eq : acc' * L' = T' := by
+      rw [hacc'd, hpd, hunbot]
+      rw [add_mul]
+      -- term 2: (exp(sc-mr)/l')·v·L' = exp(sc-mr)·L'/l' · v ; l' = exp(-mr)L'
+      have hl'val : l' = Real.exp (-mr) * L' := hl'eq
+      have e2 : Real.exp (sc - mr) / l' * v * L'
+          = Real.exp sc * v := by
+        rw [hl'val]
+        rw [show Real.exp (sc - mr) = Real.exp (-mr) * Real.exp sc from by
+          rw [← Real.exp_add]; ring_nf]
+        have hexpne : Real.exp (-mr) ≠ 0 := Real.exp_ne_zero _
+        have hL'ne : (L' : ℝ) ≠ 0 := ne_of_gt hL'strict
+        field_simp
+      -- term 1: acc·(l/l'·α)·L' = acc·(l·α)·(L'/l') = acc·(exp(-mr)L)·(L'/(exp(-mr)L')) = acc·L = T
+      have e1 : acc * (l / l' * α) * L' = T := by
+        have hexpne : Real.exp (-mr) ≠ 0 := Real.exp_ne_zero _
+        have hL'ne : (L' : ℝ) ≠ 0 := ne_of_gt hL'strict
+        have hrw : acc * (l / l' * α) * L'
+            = acc * (l * α) * L' / l' := by ring
+        rw [hrw, hlα, hl'val]
+        rw [show acc * (Real.exp (-mr) * L) * L' / (Real.exp (-mr) * L')
+            = acc * L * (Real.exp (-mr) * L' / (Real.exp (-mr) * L')) from by ring]
+        rw [div_self (mul_ne_zero hexpne hL'ne), mul_one, hacc]
+      rw [e1, e2, hT'd]
+    have hL'bot : m' = ⊥ → L' = 0 := fun h => absurd h (by rw [hmr]; simp)
+    have hT'bot : m' = ⊥ → T' = 0 := fun h => absurd h (by rw [hmr]; simp)
+    have hL'ne0 : 0 < L' → l' ≠ 0 := fun _ => hl'ne
+    have step := ih m' l' acc' T' L' hL'pos (fun _ _ => trivial)
+      (by rw [hl'eq, hκm']) hacc'eq hL'bot hT'bot hL'ne0
+    -- rewrite the goal's fold/sum to match step
+    simpa [List.foldl_cons, osNormStepBot, hm', hαd, hpd, hl'd, hacc'd,
+      List.map_cons, List.sum_cons, hL'd, hT'd, add_assoc, add_comm, add_left_comm,
+      mul_comm, mul_left_comm] using step
+
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_nopad_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
