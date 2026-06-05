@@ -1295,4 +1295,39 @@ theorem sr_vindex_gather_eval (s : BlockState) (BLoc BSeqLen : RegionName) (SN :
   · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
     rfl
 
+set_option maxHeartbeats 1600000 in
+/-- **`v` paged-gather recipe** (`tl.load(v_ptrs + v_index[:,None]·8192)`, unmasked,
+shape `[64,64]`).  Given `v_ptrs` holds `(V, cur_head·64 + d)` and `v_index` lane `j`
+holds `vIdxFn j`, the result lane `(j,d)` is `readMem V (vIdxFn(j).toNat·8192 +
+cur_head·64 + d)`. -/
+theorem sr_v_gather_eval (s : BlockState) (V : RegionName) (vIdxFn : Fin 64 → Int)
+    (hvp : s.regs .ptr [1, 64] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, 64] => (V, s.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64]))
+    (hvi : s.regs .int [64] "v_index" =
+      some (⟨fun idx : TileIndex [64] => vIdxFn idx.1⟩ : Tile .int [64])) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .int Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+                (Op.constNat 8192).castNatToInt).castIntToNat))
+        MaskOpt.none) s
+      = some (⟨fun idx : TileIndex [64, 64] =>
+          some (s.readMem V ((vIdxFn idx.1).toNat * 8192 + s.pids 1 * 64 + idx.2.1.val))⟩
+          : Tile .real [64, 64]) := by
+  have hexp : @evalOp .int [64, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index")) s
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx : TileIndex [64] => vIdxFn idx.1⟩ : Tile .int [64])) :=
+    evalOp_expandDim_ref_of_regs .int [64] ⟨1, by simp⟩ "v_index" s _ hvi
+  simp only [evalOp, hvp, hexp, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, d, u⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, Tile.expandDim_data,
+    TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    TileShape.dropInsertedIndex_zero_cons, NumericDType.mul, IntegralDType.int_mul,
+    Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real]
+  congr 2
+  omega
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
