@@ -2398,6 +2398,218 @@ def msaPostLoop : List Stmt :=
         (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
           (Op.ref .bool [64, 1] "m_mask"))) ]
 
+/-! ### Streaming online-softmax accumulators (unnormalized, base-2)
+
+The two loops share one online-softmax core (recipes A7,A10–A18 ≡ B6–B16). We
+model it by a single generic exp2 fold parametric over a per-iteration *masked
+score* row `score k i j : WithBot ℝ` (the `qk` lane value after the loop's
+`where` mask; masked-out lanes carry `⊥`) and a per-iteration *value tile*
+`vblk k j d : ℝ`. `BM`/`BN`/`BD = 64` at the block64 shape. The fold is the
+*unnormalized* FA2 form: `acc` is the numerator, `l_i` the denominator, `m_i` the
+running max — the postLoop `acc /= l_i` performs the single normalization.
+
+`score`/`vblk` are supplied by the per-loop recipes (block-A: contiguous causal
+keys; column-B: gathered columns), so the invariants below are stated against
+opaque `score`/`vblk` carriers exactly as `block_sparse_attn`'s `bsaInvariant`
+parametrizes by its gathered `Kg`/`Vg`/`gpos` stream. -/
+
+/-- Running per-row max over the first `k` iterations (base-2 / `⊥`-seeded). -/
+noncomputable def msaMPartial (BM BN : Nat)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) : Nat → Fin BM → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      max (msaMPartial BM BN score k i)
+        ((Finset.univ : Finset (Fin BN)).sup fun j => score k i j)
+
+/-- Running denominator (`l_i`): rescale prior by `alpha = exp2(mOld - mNew)` then
+add this iteration's `Σ_j exp2(score - mNew)`. -/
+noncomputable def msaLPartial (BM BN : Nat)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) : Nat → Fin BM → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      let mNew := msaMPartial BM BN score (k + 1) i
+      let alpha := (WithBot.realExp2
+        (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN score k i) mNew)).unbotD 0
+      alpha * msaLPartial BM BN score k i +
+        (Finset.univ : Finset (Fin BN)).sum (fun j =>
+          (WithBot.realExp2
+            (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew)).unbotD 0)
+
+/-- Running unnormalized numerator (`acc`): rescale prior by `alpha` then add this
+iteration's `Σ_j exp2(score - mNew)·vblk`. -/
+noncomputable def msaOPartial (BM BN BD : Nat)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) (vblk : Nat → Fin BN → Fin BD → ℝ) :
+    Nat → Fin BM → Fin BD → ℝ
+  | 0, _, _ => 0
+  | k + 1, i, d =>
+      let mNew := msaMPartial BM BN score (k + 1) i
+      let alpha := (WithBot.realExp2
+        (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN score k i) mNew)).unbotD 0
+      alpha * msaOPartial BM BN BD score vblk k i d +
+        (Finset.univ : Finset (Fin BN)).sum (fun j =>
+          (WithBot.realExp2
+            (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew)).unbotD 0 * vblk k j d)
+
+/-- Loop-B running max, **seeded** by Loop A's final max `mA` (so iteration 0 is
+`mA`, not `⊥`). -/
+noncomputable def msaSeedMax (BM BN : Nat) (mA : Fin BM → WithBot ℝ)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) : Nat → Fin BM → WithBot ℝ
+  | 0, i => mA i
+  | k + 1, i =>
+      max (msaSeedMax BM BN mA score k i)
+        ((Finset.univ : Finset (Fin BN)).sup fun j => score k i j)
+
+/-- Loop-B running denominator, seeded by Loop A's final `lA` and max `mA`. -/
+noncomputable def msaLPartialSeed (BM BN : Nat) (mA : Fin BM → WithBot ℝ) (lA : Fin BM → ℝ)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) : Nat → Fin BM → ℝ
+  | 0, i => lA i
+  | k + 1, i =>
+      let mNew := msaSeedMax BM BN mA score (k + 1) i
+      let alpha := (WithBot.realExp2
+        (Option.map₂ (fun x y : ℝ => x - y) (msaSeedMax BM BN mA score k i) mNew)).unbotD 0
+      alpha * msaLPartialSeed BM BN mA lA score k i +
+        (Finset.univ : Finset (Fin BN)).sum (fun j =>
+          (WithBot.realExp2
+            (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew)).unbotD 0)
+
+/-- Loop-B running numerator, seeded by Loop A's final `oA`, `lA`, and max `mA`. -/
+noncomputable def msaOPartialSeed (BM BN BD : Nat) (mA : Fin BM → WithBot ℝ) (lA : Fin BM → ℝ)
+    (oA : Fin BM → Fin BD → ℝ)
+    (score : Nat → Fin BM → Fin BN → WithBot ℝ) (vblk : Nat → Fin BN → Fin BD → ℝ) :
+    Nat → Fin BM → Fin BD → ℝ
+  | 0, i, d => oA i d
+  | k + 1, i, d =>
+      let mNew := msaSeedMax BM BN mA score (k + 1) i
+      let alpha := (WithBot.realExp2
+        (Option.map₂ (fun x y : ℝ => x - y) (msaSeedMax BM BN mA score k i) mNew)).unbotD 0
+      alpha * msaOPartialSeed BM BN BD mA lA oA score vblk k i d +
+        (Finset.univ : Finset (Fin BN)).sum (fun j =>
+          (WithBot.realExp2
+            (Option.map₂ (fun x y : ℝ => x - y) (score k i j) mNew)).unbotD 0 * vblk k j d)
+
+@[simp] theorem msaMPartial_zero (BM BN : Nat) (score) (i : Fin BM) :
+    msaMPartial BM BN score 0 i = ⊥ := rfl
+
+@[simp] theorem msaLPartial_zero (BM BN : Nat) (score) (i : Fin BM) :
+    msaLPartial BM BN score 0 i = 0 := rfl
+
+@[simp] theorem msaOPartial_zero (BM BN BD : Nat) (score) (vblk) (i : Fin BM) (d : Fin BD) :
+    msaOPartial BM BN BD score vblk 0 i d = 0 := rfl
+
+/-- **Loop-A invariant** after `c` block-sparse iterations. The live registers
+`m_i`/`l_i`/`acc` hold the `⊥`-seeded unnormalized base-2 online-softmax fold over
+the first `c` visited dense blocks (the block-A `scoreA`/`vblkA` stream), and every
+pre-loop-seeded register (program ids, the loaded scalars/pointers, `q`, `m_mask`,
+`max_num_blks`) is preserved. The streaming data `scoreA`/`vblkA` is fixed by the
+program (independent of `c`). -/
+noncomputable def msaInvariantA
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (scoreA : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkA : Nat → Fin 64 → Fin 64 → ℝ)
+    (qF : TileIndex [64, 64] → ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, 64] → RegionName × Nat) (opF : TileIndex [64, 64] → RegionName × Nat)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "seqlen" = some (Tile.scalar (seqLen s0 4 (Region.cast Seqlens)))
+  ∧ s.regs .nat [64] "offs_m" = some (Tile.vec (fun i : Fin 64 => s0.pids 0 * 64 + i.val))
+  ∧ s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+  ∧ s.regs .nat [64] "offs_d" = some (Tile.vec (fun e : Fin 64 => e.val))
+  ∧ s.regs .nat [] "num_blks" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast Blocks)
+        (s0.pids 1 * 2 + s0.pids 0)))
+  ∧ s.regs .nat [] "num_cols" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast ColCounts)
+        (s0.pids 1 * 2 + s0.pids 0)))
+  ∧ s.regs .ptr [] "blks_ptr" =
+      some (Tile.scalar (Region.cast BlockOffsets, (s0.pids 1 * 2 + s0.pids 0) * 4))
+  ∧ s.regs .ptr [] "cols_ptr" =
+      some (Tile.scalar (Region.cast Cols, (s0.pids 1 * 2 + s0.pids 0) * 8))
+  ∧ s.regs FloatDType.fp16.toTileDType [64, 64] "q" =
+      some (⟨fun idx : TileIndex [64, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (qF idx) : WithBot ℝ)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
+  ∧ s.regs .ptr [64, 1] "k_ptrs" =
+      some (⟨fun idx : TileIndex [64, 1] => kpF idx⟩ : Tile .ptr [64, 1])
+  ∧ s.regs .ptr [1, 64] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, 64] => vpF idx⟩ : Tile .ptr [1, 64])
+  ∧ s.regs .ptr [64, 64] "o_ptrs" =
+      some (⟨fun idx : TileIndex [64, 64] => opF idx⟩ : Tile .ptr [64, 64])
+  ∧ s.regs .bool [64, 1] "m_mask" =
+      some (⟨fun idx : TileIndex [64, 1] =>
+        decide (s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [64, 1])
+  ∧ s.regs .nat [] "max_num_blks" = some (Tile.scalar 8)
+  ∧ s.regs .real [64] "m_i" =
+      some (⟨fun idx : TileIndex [64] => msaMPartial 64 64 scoreA c idx.1⟩ : Tile .real [64])
+  ∧ s.regs .real [64] "l_i" =
+      some (⟨fun idx : TileIndex [64] =>
+        (some (msaLPartial 64 64 scoreA c idx.1) : WithBot ℝ)⟩ : Tile .real [64])
+  ∧ s.regs .real [64, 64] "acc" =
+      some (⟨fun idx : TileIndex [64, 64] =>
+        (some (msaOPartial 64 64 64 scoreA vblkA c idx.1 idx.2.1) : WithBot ℝ)⟩
+          : Tile .real [64, 64])
+
+/-- **Loop-B invariant** after `c` column-sparse iterations. The two-phase fold:
+the running `m_i`/`l_i`/`acc` are seeded by Loop A's FINAL state (over all
+`numBlks` visited dense blocks, captured by `mA`/`lA`/`oA`) and then advanced by
+`c` column-B iterations of the `scoreB`/`vblkB` stream. This is the genuine
+two-phase mixed-sparsity fold: Loop B does NOT re-seed from `⊥`/`0`/`0`; it
+continues Loop A's unnormalized accumulators. All pre-loop-seeded registers are
+preserved (the column loop additionally fixes `max_num_cols = 16`). -/
+noncomputable def msaInvariantB
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (scoreB : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkB : Nat → Fin 64 → Fin 64 → ℝ)
+    (mA : Fin 64 → WithBot ℝ) (lA : Fin 64 → ℝ) (oA : Fin 64 → Fin 64 → ℝ)
+    (qF : TileIndex [64, 64] → ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, 64] → RegionName × Nat) (opF : TileIndex [64, 64] → RegionName × Nat)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "seqlen" = some (Tile.scalar (seqLen s0 4 (Region.cast Seqlens)))
+  ∧ s.regs .nat [64] "offs_m" = some (Tile.vec (fun i : Fin 64 => s0.pids 0 * 64 + i.val))
+  ∧ s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+  ∧ s.regs .nat [64] "offs_d" = some (Tile.vec (fun e : Fin 64 => e.val))
+  ∧ s.regs .nat [] "num_blks" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast Blocks)
+        (s0.pids 1 * 2 + s0.pids 0)))
+  ∧ s.regs .nat [] "num_cols" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast ColCounts)
+        (s0.pids 1 * 2 + s0.pids 0)))
+  ∧ s.regs .ptr [] "blks_ptr" =
+      some (Tile.scalar (Region.cast BlockOffsets, (s0.pids 1 * 2 + s0.pids 0) * 4))
+  ∧ s.regs .ptr [] "cols_ptr" =
+      some (Tile.scalar (Region.cast Cols, (s0.pids 1 * 2 + s0.pids 0) * 8))
+  ∧ s.regs FloatDType.fp16.toTileDType [64, 64] "q" =
+      some (⟨fun idx : TileIndex [64, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (qF idx) : WithBot ℝ)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
+  ∧ s.regs .ptr [64, 1] "k_ptrs" =
+      some (⟨fun idx : TileIndex [64, 1] => kpF idx⟩ : Tile .ptr [64, 1])
+  ∧ s.regs .ptr [1, 64] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, 64] => vpF idx⟩ : Tile .ptr [1, 64])
+  ∧ s.regs .ptr [64, 64] "o_ptrs" =
+      some (⟨fun idx : TileIndex [64, 64] => opF idx⟩ : Tile .ptr [64, 64])
+  ∧ s.regs .bool [64, 1] "m_mask" =
+      some (⟨fun idx : TileIndex [64, 1] =>
+        decide (s0.pids 0 * 64 + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [64, 1])
+  ∧ s.regs .nat [] "max_num_blks" = some (Tile.scalar 8)
+  ∧ s.regs .nat [] "max_num_cols" = some (Tile.scalar 16)
+  ∧ s.regs .real [64] "m_i" =
+      some (⟨fun idx : TileIndex [64] =>
+        msaSeedMax 64 64 mA scoreB c idx.1⟩ : Tile .real [64])
+  ∧ s.regs .real [64] "l_i" =
+      some (⟨fun idx : TileIndex [64] =>
+        (some (msaLPartialSeed 64 64 mA lA scoreB c idx.1) : WithBot ℝ)⟩ : Tile .real [64])
+  ∧ s.regs .real [64, 64] "acc" =
+      some (⟨fun idx : TileIndex [64, 64] =>
+        (some (msaOPartialSeed 64 64 64 mA lA oA scoreB vblkB c idx.1 idx.2.1) : WithBot ℝ)⟩
+          : Tile .real [64, 64])
+
 set_option maxRecDepth 8000 in
 /-- **Body split.** The lowered `block64` forward body is exactly the 3 outer
 program-setup statements followed by the active-guard `ifThen` wrapping the 21
