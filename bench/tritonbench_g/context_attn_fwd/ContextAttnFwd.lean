@@ -3347,6 +3347,318 @@ noncomputable def ctxFwdGenuineOutValue128
     sm_scale_python 128 (ctxFwdWindow s B_Seqlen B_Prompt_Cache_Len 128)
     (ctxFwdBel s B_Seqlen B_Prompt_Cache_Len 128) idx
 
+/-! ## BLOCK_M = 64 (Tesla) exec assembly — duplicate of the BLOCK_M=128 chain at
+the `[64,...]` tile shapes (`BLOCK_M = BLOCK_N = 64`, `BLOCK_DMODEL = 128`).
+
+The block math (`gStateBot`/`gStateBot_succ_explicit`/…) and all op-eval recipes
+and tile bridges are BN/BM/D-parametric (shared with the 128 path). Only the
+shape-literal exec layer (the prologue/loop-body/epilogue `Stmt` lists, their
+readback invariant, and the whole-kernel assembly) is re-derived here at `[64,…]`. -/
+
+/-- The Python-shape (Tesla) preLoop: the first 19 lowered statements of the
+context surface kernel at `BLOCK_M = 64` (`offs_n = arange 64`, `block_start_loc =
+64·start_m`, q/acc rows `[64, 128]`). -/
+def ctxPreLoop64 (Q : RegionName) (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) :
+    List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "cur_bh" (Op.programId 1),
+    Stmt.assign .nat [] "cur_batch"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat 16)),
+    Stmt.assign .nat [] "cur_head"
+      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat 16)),
+    Stmt.assign .nat [] "cur_kv_head"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 1)),
+    Stmt.assign .nat [] "prompt_cache_len"
+      (Op.load .nat (MemAccess.region b_prompt_cache_len (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_in_all_start_index"
+      (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.sub .nat Broadcast.nil
+        (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+        (Op.ref .nat [] "prompt_cache_len")),
+    Stmt.assign .nat [] "block_start_loc"
+      (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.ref .nat [] "start_m")),
+    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
+    Stmt.assign .nat [128] "offs_d" (Op.arange 128),
+    Stmt.assign .nat [64] "offs_m"
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "block_start_loc") (Op.arange 64)),
+    Stmt.assign .nat [64, 128] "off_q"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")))
+            (Op.constNat 2048))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [64, 128] "q"
+      (Op.load .real (MemAccess.region Q (Op.ref .nat [64, 128] "off_q"))
+        (MaskOpt.maskOther
+          (Op.remap [64, 128] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m"))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const (0.0 : ℝ)).broadcast [64, 128]))),
+    Stmt.assign .real [64] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [64] "l_i" (Op.full [64] (Op.const 0)),
+    Stmt.assign .real [64, 128] "acc" (Op.full [64, 128] (Op.const 0)),
+    Stmt.assign .nat [] "block_mask"
+      ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.ref .nat [] "cur_batch_seq_len")).where
+        (Op.constNat 1) (Op.constNat 0)),
+    Stmt.assign .nat [] "block_end_loc"
+      ((Op.lt .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat 64))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))).where
+        (Op.add .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat 64))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+          (Op.ref .nat [] "prompt_cache_len"))) ]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution (Tesla, BLOCK_M = 64).** The 19 prologue statements step a
+clean input state to the loop-entry state, exposing every register the loop reads
+back, at the `[64,…]` shapes. -/
+theorem ctxPreLoop_eval64
+    (s : BlockState) (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (ctxPreLoop64 Q B_Start_Loc B_Seqlen b_prompt_cache_len) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "cur_batch" = some (Tile.scalar (s.pids 1 / 16))
+      ∧ s0.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1 % 16))
+      ∧ s0.regs .nat [] "cur_kv_head" = some (Tile.scalar (s.pids 1 % 16 / 1))
+      ∧ s0.regs .nat [] "prompt_cache_len"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)))
+      ∧ s0.regs .nat [] "cur_batch_in_all_start_index"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16)))
+      ∧ s0.regs .nat [] "cur_batch_seq_len"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)))
+      ∧ s0.regs .nat [] "block_start_loc" = some (Tile.scalar (64 * s.pids 0))
+      ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+      ∧ s0.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))
+      ∧ s0.regs .nat [64] "offs_m" = some (Tile.vec (fun r : Fin 64 => 64 * s.pids 0 + r.val))
+      ∧ s0.regs .real [64] "m_i" = some ⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [64] "l_i" = some ⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [64, 128] "acc" = some ⟨fun _ : TileIndex [64, 128] => some (0 : ℝ)⟩
+      ∧ s0.regs .nat [] "block_mask"
+          = some (Tile.scalar (if 64 * s.pids 0 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16) then 1 else 0))
+      ∧ s0.regs .nat [] "block_end_loc"
+          = some (Tile.scalar
+              (let a := 64 * s.pids 0 + 64 + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+               let b := (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+                   - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16))
+                 + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+               if a < b then a else b))
+      ∧ s0.regs .nat [64, 128] "off_q" = some ⟨fun idx : TileIndex [64, 128] =>
+          (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (64 * s.pids 0 + idx.1.val))
+              * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1⟩
+      ∧ s0.regs .real [64, 128] "q" = some ⟨fun idx : TileIndex [64, 128] =>
+          if decide (64 * s.pids 0 + idx.1.val
+              < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+                - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)) then
+            s.readMemValue .real (Region.cast Q)
+              ((s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (64 * s.pids 0 + idx.1.val))
+                  * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1)
+          else some (0.0 : ℝ)⟩ := by
+  unfold ctxPreLoop64
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: cur_bh = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: cur_batch = cur_bh // 16
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat 16)) _
+        = some (Tile.scalar (s.pids 1 / 16)) from by
+      rw [ctx_evalOp_floorDiv]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 3: cur_head = cur_bh % 16
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mod .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat 16)) _
+        = some (Tile.scalar (s.pids 1 % 16)) from by
+      rw [ctx_evalOp_mod]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 4: cur_kv_head = cur_head // 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 1)) _
+        = some (Tile.scalar (s.pids 1 % 16 / 1)) from by
+      rw [ctx_evalOp_floorDiv]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some]
+      rfl))]
+  -- stmt 5: prompt_cache_len
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_scalar_nat b_prompt_cache_len (Op.ref .nat [] "cur_batch") _ (s.pids 1 / 16)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  -- stmt 6: cur_batch_in_all_start_index
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_scalar_nat B_Start_Loc (Op.ref .nat [] "cur_batch") _ (s.pids 1 / 16)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  -- stmt 7: cur_batch_seq_len
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.sub .nat Broadcast.nil
+        (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+        (Op.ref .nat [] "prompt_cache_len")) _
+        = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16))) from by
+      rw [evalOp_sub, ctx_evalOp_load_scalar_nat B_Seqlen (Op.ref .nat [] "cur_batch") _ (s.pids 1 / 16)
+        (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+      simp only [evalOp_ref, BlockState.setReg_same, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 8: block_start_loc = 64 * start_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.ref .nat [] "start_m")) _
+        = some (Tile.scalar (64 * s.pids 0)) from by
+      rw [evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 9: offs_n = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun j : Fin 64 => j.val)) from evalOp_arange 64 _))]
+  -- stmt 10: offs_d = arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 128) _ = some (Tile.vec (fun e : Fin 128 => e.val)) from evalOp_arange 128 _))]
+  -- stmt 11: offs_m = block_start_loc + arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "block_start_loc") (Op.arange 64)) _
+        = some (Tile.vec (fun r : Fin 64 => 64 * s.pids 0 + r.val)) from by
+      rw [evalOp_add]
+      simp only [evalOp_ref, evalOp_arange, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r
+      simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add]))]
+  -- stmt 12: off_q
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")))
+            (Op.constNat 2048))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))) _
+        = some (⟨fun idx : TileIndex [64, 128] =>
+            (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (64 * s.pids 0 + idx.1.val))
+                * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1⟩ : Tile .nat [64, 128]) from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+        ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+        BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 13: q = masked load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther Q (Op.ref .nat [64, 128] "off_q") _ _ _
+      (⟨fun idx : TileIndex [64, 128] =>
+          (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (64 * s.pids 0 + idx.1.val))
+              * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1⟩ : Tile .nat [64, 128])
+      (⟨fun idx : TileIndex [64, 128] => decide (64 * s.pids 0 + idx.1.val
+          < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16))⟩ : Tile .bool [64, 128])
+      (⟨fun _ : TileIndex [64, 128] => some (0.0 : ℝ)⟩ : Tile .real [64, 128])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (@ctxRowMask_eval 64 128 _ (fun r : Fin 64 => 64 * s.pids 0 + r.val) _
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 14: m_i = full 0 + (-inf) = full ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩ : Tile .real [64]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rfl))]
+  -- stmt 15: l_i = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩ : Tile .real [64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 16: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64, 128] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64, 128] => some (0 : ℝ)⟩ : Tile .real [64, 128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 17: block_mask
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc")
+            (Op.ref .nat [] "cur_batch_seq_len")).where (Op.constNat 1) (Op.constNat 0)) _
+        = some (Tile.scalar (if 64 * s.pids 0 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16) then 1 else 0)) from by
+      rw [evalOp_where]
+      simp only [evalOp_lt, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext _idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.scalar_data_index, ComparableDType.lt]
+      by_cases h : 64 * s.pids 0 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+      · simp [h]
+      · simp [h]))]
+  -- stmt 18: block_end_loc
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.lt .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat 64))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))).where
+          (Op.add .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat 64))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+            (Op.ref .nat [] "prompt_cache_len"))) _
+        = some (Tile.scalar
+            (let a := 64 * s.pids 0 + 64 + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+             let b := (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+                 - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16))
+               + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+             if a < b then a else b)) from by
+      rw [evalOp_where]
+      simp only [evalOp_lt, evalOp_add, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext _idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.scalar_data_index,
+        ComparableDType.lt, NumericDType.add, Broadcast.leftIndex, Broadcast.rightIndex]
+      by_cases h : 64 * s.pids 0 + 64 + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+          < (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16))
+            + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)
+      · simp [h]
+      · simp [h]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  all_goals
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
+      BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+
 /-- Self-referential executed `Out`-readback for the BLOCK_M = 64 (Tesla) branch.
 The genuine closed form `contextAttnExactFoldM` for this branch requires the full
 streaming-loop suite (`ctxLoopBody_steps`/`ctxInvariant`/`ctx_attn_step`/
