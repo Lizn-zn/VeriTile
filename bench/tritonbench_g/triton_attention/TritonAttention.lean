@@ -2473,6 +2473,156 @@ theorem exp_fwdMSpec_mul_fwdLSpec
   · simp only [hj, if_false]
     rw [mul_zero]
 
+/-! ## Forward loop-body per-statement op-eval recipes (RECIPE LAYER)
+
+The 19-statement `forRangeDyn` body of `_fwd_kernel` (STAGE=3, diagonal causal
+block) lowers — via `toAlgorithm?` — to the `Stmt` list (statement order):
+
+```
+ 1. k       = load(blockPtr k_tile_ptr [0,1])              -- K tile, boundary-checked
+ 2. qk      = full [128,128] (const 0)                     -- zeros
+ 3. qk      = qk + dot(q, transpose k)                     -- qk = q·kᵀ
+ 4. qk      = qk * (√64)⁻¹                                 -- scale
+ 5. qk      = where(offs_m[:,None] ≥ start_n+offs_n[None,:], qk, -inf)  -- causal mask
+ 6. m_curr  = where(reduceMax(qk,1) > m_prev, reduceMax(qk,1), m_prev)  -- maximum
+ 7. l_prev  = l_prev * exp(m_prev - m_curr)                -- l_prev rescale (alpha)
+ 8. p       = exp(qk - m_curr[:,None])                     -- NATURAL exp
+ 9. l_curr  = reduceSum(p,1) + l_prev                      -- l_curr
+10. l_rcp   = 1.0 / l_curr                                 -- reciprocal
+11. p       = p * l_rcp[:,None]                            -- p rescale
+12. acc     = acc * (l_prev * l_rcp)[:,None]               -- acc rescale
+13. p       = castFloat real→fp16 p                        -- fp16 round-trip
+14. v       = load(blockPtr v_tile_ptr [0,1])              -- V tile, boundary-checked
+15. acc     = acc + dot(castFloat fp16→real p, v)          -- numerator dot
+16. l_prev  = l_curr
+17. m_prev  = m_curr
+18. k_tile_ptr = advance(k_tile_ptr, [128,0])
+19. v_tile_ptr = advance(v_tile_ptr, [128,0])
+```
+
+These standalone `evalOp` reductions (abstract register-readback hyps, symbolic
+`BlockState`) are the triton-attention analogues of the `flash_*_op_eval` family
+in `flash_attn` and the `AttentionForwardClosedForm` `*_op_eval` template — but
+retargeted to this kernel's **natural-exp** (`Op.exp`, not `exp2`), in-loop
+`l_rcp = 1/l_curr` reciprocal, and **boundary-checked** block-pointer loads
+(`MemAccess.blockPtr … [0,1]`, not the `.none` flash form). They thread through
+`stepStmts.cons_some` without reducing nested `setReg` literal states; the
+invariant/step/assembly is the NEXT stage. -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Boundary-checked `[rowOff, 0]` block-ptr load** (`tl.load(ptr,
+boundary_check=(0,1))`): a `.real` load of a well-formed 2D block-pointer with
+offsets `[rowOff, 0]` and checked axes `[0,1]` reads `readMem` at
+`base + (rowOff+i)·strideT + j·strideS` on every in-bounds lane (`rowOff+i < rows
+∧ j < cols`), and the default carrier otherwise. This is the K/V boundary-checked
+load shape (the K/V `make_block_ptr` row-offset = `off_hz·stride_qh_2d`). -/
+theorem ta_load_blockPtr_bc_eval
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
+    (ptrOp : Op .blockPtr [BT, BS]) (s : BlockState)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff, 0] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
+      = some ⟨fun idx : TileIndex [BT, BS] =>
+          if (rowOff + idx.1.val < rows ∧ idx.2.1.val < cols) then
+            some (s.readMem region
+              (base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS))
+          else BlockState.defaultCarrier .real⟩ := by
+  simp only [evalOp, hp, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_row_offset,
+    BlockPtr.inBounds_2d_row_offset, BlockState.readMemValue_real]
+  by_cases h : rowOff + idx.1.val < rows ∧ idx.2.1.val < cols
+  · simp only [h, decide_true, if_true, and_self]
+  · simp only [h, decide_false, and_self, Bool.false_eq_true, if_false]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`k = tl.load(k_tile_ptr, boundary_check=(0,1))`** (loop body L1) → `fwdKTile`
+cells. With the K `make_block_ptr` (parentShape `(1024, 64)`, strides
+`(stride_kn=64, stride_kk=1)`, offsets `[off_hz·128, 0]`) and the test-shape
+guarantee that every lane is in bounds (`off_hz·128 + i < 1024` for `off_hz < 8`,
+`j < 64`), each lane reads `K[(off_hz·128 + i)·64 + j] = (fwdKTile s K)(i,j,⋆)`
+(note `off_hz = pids 1`). -/
+theorem ta_load_k_eval
+    (K : RegionName) (off_hz : Nat) (ptrOp : Op .blockPtr [128, 64]) (s : BlockState)
+    (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [128, 64] =>
+        { region := K, baseOffset := 0, parentShape := [1024, 64],
+          blockShape := [128, 64], strides := [64, 1],
+          offsets := [off_hz * 128, 0] }⟩)
+    (hrow : ∀ i : Fin 128, off_hz * 128 + i.val < 1024) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
+      = some ⟨fun idx : TileIndex [128, 64] =>
+          some (fwdKTile s K idx)⟩ := by
+  rw [ta_load_blockPtr_bc_eval K 0 1024 64 128 64 64 1
+    (off_hz * 128) ptrOp s hp]
+  refine congrArg some ?_
+  ext idx
+  have hj : idx.2.1.val < 64 := idx.2.1.isLt
+  have hi : off_hz * 128 + idx.1.val < 1024 := hrow idx.1
+  simp only [hi, hj, and_self, if_true]
+  congr 1
+  simp only [fwdKTile, hpids1, Nat.zero_add, Nat.mul_one]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`v = tl.load(v_tile_ptr, boundary_check=(0,1))`** (loop body L14) → `fwdVTile`
+cells. Same K/V `make_block_ptr` row-offset shape (`strides=(stride_vk=64,
+stride_vn=1)`); each in-bounds lane reads `V[(off_hz·128 + j)·64 + e] =
+(fwdVTile s V)(j,e,⋆)`. -/
+theorem ta_load_v_eval
+    (V : RegionName) (off_hz : Nat) (ptrOp : Op .blockPtr [128, 64]) (s : BlockState)
+    (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [128, 64] =>
+        { region := V, baseOffset := 0, parentShape := [1024, 64],
+          blockShape := [128, 64], strides := [64, 1],
+          offsets := [off_hz * 128, 0] }⟩)
+    (hrow : ∀ j : Fin 128, off_hz * 128 + j.val < 1024) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
+      = some ⟨fun idx : TileIndex [128, 64] =>
+          some (fwdVTile s V idx)⟩ := by
+  rw [ta_load_blockPtr_bc_eval V 0 1024 64 128 64 64 1
+    (off_hz * 128) ptrOp s hp]
+  refine congrArg some ?_
+  ext idx
+  have he : idx.2.1.val < 64 := idx.2.1.isLt
+  have hj : off_hz * 128 + idx.1.val < 1024 := hrow idx.1
+  simp only [hj, he, and_self, if_true]
+  congr 1
+  simp only [fwdVTile, hpids1, Nat.zero_add, Nat.mul_one]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`q = tl.load(q_tile_ptr)`** (pre-loop, no boundary check in the diagonal
+block) → `fwdQTile` cells. The Q `make_block_ptr` has offsets
+`[off_hz·128 + start_m·128, 0]` (row), strides `(stride_qm=64, stride_qk=1)`; each
+lane reads `Q[(off_hz·128 + start_m·128 + i)·64 + e] = (fwdQTile s Q)(i,e,⋆)`
+(with `start_m = pids 0`, `off_hz = pids 1`). Specializes `load_blockPtr_Q_eval`. -/
+theorem ta_load_q_eval
+    (Q : RegionName) (off_hz start_m : Nat) (ptrOp : Op .blockPtr [128, 64]) (s : BlockState)
+    (hpids0 : s.pids 0 = start_m) (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [128, 64] =>
+        { region := Q, baseOffset := 0,
+          parentShape := [1024, 64], blockShape := [128, 64], strides := [64, 1],
+          offsets := [off_hz * 128 + start_m * 128, 0] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [128, 64] =>
+          some (fwdQTile s Q idx)⟩ := by
+  rw [load_blockPtr_Q_eval Q 0 1024 64 128 64
+    64 1 (off_hz * 128 + start_m * 128) ptrOp s hp]
+  refine congrArg some ?_
+  ext idx
+  congr 1
+  simp only [fwdQTile, hpids0, hpids1, Nat.zero_add, Nat.mul_one]
+
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
     (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
