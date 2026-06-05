@@ -4340,5 +4340,364 @@ theorem bsa_step_li
   rw [← hbu]
   norm_num [mul_comm]
 
+/-- `(realExp x).unbotD 0 ≥ 0`: natural exp is `some 0` on ⊥ and `some (exp r) > 0`
+otherwise, so the demoted value is always nonnegative. -/
+theorem realExp_unbotD_nonneg (x : WithBot ℝ) :
+    0 ≤ (WithBot.realExp x).unbotD 0 := by
+  cases x with
+  | bot => simp [WithBot.realExp]
+  | coe r => simp [WithBot.realExp]; positivity
+
+open BSAMathCausal in
+/-- `bsaLPartial` is nonnegative (sum/product of exp weights and nonneg prefixes). -/
+theorem bsaLPartial_nonneg {M D Bk : Nat}
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) :
+    0 ≤ bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k i := by
+  induction k with
+  | zero => simp [bsaLPartial]
+  | succ k ih =>
+    by_cases hk : k + 1 ≤ numKVBlocks
+    · rw [bsaLPartial_succ_of_lt qStart numKVBlocks gpos Q Kg scale k (Nat.lt_of_succ_le hk) i]
+      apply add_nonneg
+      · exact mul_nonneg (realExp_unbotD_nonneg _) ih
+      · apply Finset.sum_nonneg; intro jL _; exact realExp_unbotD_nonneg _
+    · rw [bsaLPartial, dif_neg hk]; exact ih
+
+open BSAMathCausal in
+/-- If `bsaLPartial k = 0` then `bsaOPartial k = 0` (every causal weight vanishes,
+so each value contribution vanishes). No first-key-visibility hypothesis needed. -/
+theorem bsaOPartial_eq_zero_of_bsaLPartial_eq_zero {M D Bk : Nat}
+    (qStart : Nat) (numKVBlocks : Nat) (gpos : Fin (Bk * numKVBlocks) → Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (Kg Vg : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (idx : TileIndex [M, D])
+    (hL : bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 = 0) :
+    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx = 0 := by
+  induction k with
+  | zero => simp [bsaOPartial]
+  | succ k ih =>
+    by_cases hk : k + 1 ≤ numKVBlocks
+    · rw [bsaLPartial_succ_of_lt qStart numKVBlocks gpos Q Kg scale k (Nat.lt_of_succ_le hk) idx.1] at hL
+      rw [bsaOPartial_succ_of_lt qStart numKVBlocks gpos Q Kg Vg scale k (Nat.lt_of_succ_le hk) idx]
+      -- both summands of hL are nonneg
+      have hαnn : 0 ≤ (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 :=
+        realExp_unbotD_nonneg _
+      have hLknn : 0 ≤ bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 :=
+        bsaLPartial_nonneg qStart numKVBlocks gpos Q Kg scale k idx.1
+      have hsumnn : 0 ≤ (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qStart gpos Q Kg scale idx.1
+              (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal))
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0) := by
+        apply Finset.sum_nonneg; intro jL _; exact realExp_unbotD_nonneg _
+      have hαL : (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+          bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 = 0 ∧
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+              (maskedScore qStart gpos Q Kg scale idx.1
+                (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal))
+              (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0) = 0 := by
+        constructor
+        · nlinarith [mul_nonneg hαnn hLknn]
+        · nlinarith [mul_nonneg hαnn hLknn]
+      obtain ⟨hαL0, hsum0⟩ := hαL
+      -- each weight in the sum is 0
+      have hwzero : ∀ jL : Fin Bk,
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qStart gpos Q Kg scale idx.1
+              (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jL))
+            (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 = 0 := by
+        intro jL
+        exact (Finset.sum_eq_zero_iff_of_nonneg (fun j _ => realExp_unbotD_nonneg _)).mp hsum0 jL (Finset.mem_univ jL)
+      -- numerator first term: α · Ok = 0
+      have hαO : (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1)
+          (bsaMPartial Bk qStart numKVBlocks gpos Q Kg scale (k + 1) idx.1))).unbotD 0 *
+          bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx = 0 := by
+        rcases mul_eq_zero.mp hαL0 with hα0 | hLk0
+        · rw [hα0, zero_mul]
+        · rw [ih hLk0, mul_zero]
+      simp only [hαO, zero_add]
+      apply Finset.sum_eq_zero; intro jL _
+      rw [hwzero jL, zero_mul]
+    · rw [bsaLPartial, dif_neg hk] at hL
+      rw [bsaOPartial, dif_neg hk]; exact ih hL
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **`bsa_step_acc`** (standalone acc conjunct). The loop body's
+`acc = acc·acc_scale + tl.dot(p, v)` tile equals `bsaOPartial(c+1)/bsaLPartial(c+1)`
+per cell, given the invariant register values and the score/mask/value bridges. -/
+theorem bsa_step_acc
+    (qStart numKVBlocks c : Nat) (hc : c < numKVBlocks) (hBkN : 0 < 16 * numKVBlocks)
+    (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg Vg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (SN : Nat) (gm : Fin 16 → Nat)
+    (qkScaled vt : Tile .real [16, 16])
+    (hMask : ∀ (i jL : Fin 16), (SN + jL.val ≤ gm i) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)
+        ≤ qStart + i.val))
+    (hScore : ∀ (i jL : Fin 16), qkScaled.data (i, jL, PUnit.unit) =
+      (some (gScore Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL)) : WithBot ℝ))
+    (hVal : ∀ (d jL : Fin 16), vt.data (jL, d, PUnit.unit) =
+      (some (Vg (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jL,
+        d, PUnit.unit)) : WithBot ℝ)) :
+    let qkM : Tile .real [16, 16] :=
+      ⟨fun ix : TileIndex [16, 16] =>
+        NumericDType.real.add (qkScaled.data ix)
+          (if SN + ix.2.1.val ≤ gm ix.1 then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))⟩
+    let mij : Tile .real [16] :=
+      ⟨fun outIdx : TileIndex [16] =>
+        (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+          (fun k : Fin 16 => qkM.data (outIdx.1, k, PUnit.unit))⟩
+    let mt : Tile .real [16] :=
+      ⟨fun i : TileIndex [16] => bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1⟩
+    let minew : Tile .real [16] :=
+      Tile.select
+        (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mt mij) mt mij
+    let p0 : Tile .real [16, 16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkM
+          (Tile.expandDim ⟨1, by simp⟩ mij))
+    let lij : Tile .real [16] :=
+      Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [16, 16].length) p0
+    let alpha : Tile .real [16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mt minew)
+    let beta : Tile .real [16] :=
+      Tile.uop WithBot.realExp
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mij minew)
+    let lt : Tile .real [16] :=
+      ⟨fun i : TileIndex [16] =>
+        (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i.1) : WithBot ℝ)⟩
+    let linew : Tile .real [16] :=
+      Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) alpha lt)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) beta lij)
+    let pscale : Tile .real [16] :=
+      Tile.bop NumericDType.real.div (Broadcast.consSame Broadcast.nil) beta linew
+    let pfinal : Tile .real [16, 16] :=
+      Tile.bop NumericDType.real.mul
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) p0
+        (Tile.expandDim ⟨1, by simp⟩ pscale)
+    let accscale : Tile .real [16] :=
+      Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.div (Broadcast.consSame Broadcast.nil) lt linew) alpha
+    let acct : Tile .real [16, 16] :=
+      ⟨fun idx : TileIndex [16, 16] =>
+        (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale c idx /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c idx.1) : WithBot ℝ)⟩
+    let accMul : Tile .real [16, 16] :=
+      Tile.bop NumericDType.real.mul
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acct
+        (Tile.expandDim ⟨1, by simp⟩ accscale)
+    Tile.bop NumericDType.real.add
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) accMul
+        (Tile.dot [] pfinal vt)
+      = (⟨fun idx : TileIndex [16, 16] =>
+          (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale (c + 1) idx /
+            bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) idx.1) : WithBot ℝ)⟩
+          : Tile .real [16, 16]) := by
+  intro qkM mij mt minew p0 lij alpha beta lt linew pscale pfinal accscale acct accMul
+  -- linew cell = some (bsaLPartial (c+1)) — reuse bsa_step_li
+  have hlinew : ∀ i : Fin 16, linew.data (i, PUnit.unit)
+      = (some (bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i) : WithBot ℝ) := by
+    intro i
+    have := congrArg (fun t : Tile .real [16] => t.data (i, PUnit.unit))
+      (bsa_step_li qStart numKVBlocks c hc gpos Qg Kg scale SN gm qkScaled hMask hScore)
+    simpa [linew, alpha, beta, lt, lij, p0, mt, minew, mij, qkM, Tile.vec, Tile.scalar_data_index]
+      using this
+  -- minew cell = bsaMPartial (c+1)
+  have hminew : ∀ i : Fin 16, minew.data (i, PUnit.unit)
+      = bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i := by
+    intro i
+    have := congrArg (fun t : Tile .real [16] => t.data (i, PUnit.unit))
+      (bsa_step_mi qStart numKVBlocks c hc gpos Qg Kg scale SN gm qkScaled hMask hScore)
+    simpa [minew, mt, mij, qkM, Tile.vec, Tile.scalar_data_index] using this
+  refine Tile.ext (fun idx => ?_)
+  obtain ⟨i, d, u⟩ := idx
+  -- abbreviations
+  set mnew := bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i with hmnewdef
+  set supM : WithBot ℝ := (Finset.univ : Finset (Fin 16)).sup
+    (fun jLocal : Fin 16 => maskedScore qStart gpos Qg Kg scale i
+      (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal)) with hsupMdef
+  set Lc := bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale c i with hLcdef
+  set Lnew := bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i with hLnewdef
+  set Oc := bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale c (i, d, u) with hOcdef
+  set alphaTerm := (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+      (bsaMPartial 16 qStart numKVBlocks gpos Qg Kg scale c i) mnew)).unbotD 0 with hAlphaT
+  -- mij cell = supM
+  have hmijcell : mij.data (i, PUnit.unit) = supM := by
+    show (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+        (fun k : Fin 16 => qkM.data (i, k, PUnit.unit)) = _
+    rw [Finset.sup'_eq_sup]
+    refine Finset.sup_congr rfl (fun k _ => ?_)
+    exact bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c (Nat.succ_le_iff.mpr hc)
+      gpos Qg Kg scale SN gm qkScaled i k (hMask i k) (hScore i k)
+  -- alpha cell = some alphaTerm
+  have halphacell : alpha.data (i, PUnit.unit) = (some alphaTerm : WithBot ℝ) := by
+    simp only [alpha, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      mt, Tile.scalar_data_index, hminew i]
+    rw [realExp_eq_some_unbotD]; rfl
+  -- p0 cell value, beta cell, the masked weight w
+  set wfun := fun k : Fin 16 => (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+      (maskedScore qStart gpos Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k)) mnew)).unbotD 0 with hwfun
+  set vfun := fun k : Fin 16 => Vg (StreamingAccumulator.blockIndex 16 numKVBlocks c
+      (Nat.succ_le_iff.mpr hc) k, d, u) with hvfun
+  -- pfinal cell_k · vt cell_k = some ((wfun k / Lnew) * vfun k)
+  have hbeta_p0 : ∀ k : Fin 16,
+      WithBot.realMul (beta.data (i, PUnit.unit)) (p0.data (i, k, PUnit.unit))
+        = (some (wfun k) : WithBot ℝ) := by
+    intro k
+    have hqkMk : qkM.data (i, k, PUnit.unit)
+        = maskedScore qStart gpos Qg Kg scale i
+            (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k) :=
+      bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c (Nat.succ_le_iff.mpr hc)
+        gpos Qg Kg scale SN gm qkScaled i k (hMask i k) (hScore i k)
+    have hp0k : p0.data (i, k, PUnit.unit)
+        = WithBot.realExp (WithBot.realSub
+            (maskedScore qStart gpos Qg Kg scale i
+              (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k)) supM) := by
+      simp only [p0, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Tile.expandDim_data, TileShape.dropInsertedIndex, hqkMk, hmijcell]
+      rfl
+    have hbetacell : beta.data (i, PUnit.unit)
+        = WithBot.realExp (WithBot.realSub supM mnew) := by
+      simp only [beta, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        hminew i, hmijcell, hmnewdef]
+      rfl
+    -- finiteness
+    set mk := maskedScore qStart gpos Qg Kg scale i
+      (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) k) with hmkdef
+    have hsupne : mk ≠ ⊥ → supM ≠ ⊥ := by
+      intro hmk hbot
+      have hle : mk ≤ supM := by
+        rw [hmkdef, hsupMdef]
+        exact Finset.le_sup (f := fun jLocal : Fin 16 => maskedScore qStart gpos Qg Kg scale i
+          (StreamingAccumulator.blockIndex 16 numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal))
+          (Finset.mem_univ k)
+      rw [hbot] at hle; exact hmk (le_bot_iff.mp hle)
+    have hsupfin : mk ≠ ⊥ → ∃ b : ℝ, supM = (b : WithBot ℝ) := by
+      intro hmk; obtain ⟨b, hb⟩ := WithBot.ne_bot_iff_exists.mp (hsupne hmk); exact ⟨b, hb.symm⟩
+    have hmnewfin : mk ≠ ⊥ → ∃ n : ℝ, mnew = (n : WithBot ℝ) := by
+      intro hmk
+      have hmle : supM ≤ mnew := by
+        rw [hmnewdef, bsaMPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg scale c hc i]
+        exact le_max_right _ _
+      have hmnewne : mnew ≠ ⊥ := by
+        intro hbot; rw [hbot] at hmle; exact hsupne hmk (le_bot_iff.mp hmle)
+      obtain ⟨n, hn⟩ := WithBot.ne_bot_iff_exists.mp hmnewne; exact ⟨n, hn.symm⟩
+    rw [hbetacell, hp0k]
+    have hbeta := bsa_beta_p0_eq_exp mk supM mnew hsupfin hmnewfin
+    rw [hwfun]
+    rw [hbeta, realExp_eq_some_unbotD]; rfl
+  -- pfinal cell_k · vt cell_k = some ((wfun k / Lnew) * vfun k)
+  have hpf_vt : ∀ k : Fin 16,
+      Option.map₂ (· * ·) (pfinal.data (i, k, PUnit.unit)) (vt.data (k, d, u))
+        = (some ((wfun k / Lnew) * vfun k) : WithBot ℝ) := by
+    intro k
+    -- pfinal cell_k = realMul (p0 cell_k) (pscale cell_i)
+    have hpfk : pfinal.data (i, k, PUnit.unit)
+        = WithBot.realMul (p0.data (i, k, PUnit.unit)) (pscale.data (i, PUnit.unit)) := by
+      simp only [pfinal, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Tile.expandDim_data, TileShape.dropInsertedIndex]
+      rfl
+    -- pscale cell = realDiv (beta cell) (linew cell) = some (wfun-num/Lnew)? compute via div
+    have hpscale : pscale.data (i, PUnit.unit)
+        = WithBot.realDiv (beta.data (i, PUnit.unit)) (some Lnew) := by
+      simp only [pscale, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hlinew i, hLnewdef]
+      rfl
+    -- beta·p0 = some (wfun k)
+    have hbp := hbeta_p0 k
+    -- vt cell
+    rw [hpfk, hpscale, hvfun, hVal d k]
+    -- (p0 * (beta/Lnew)) * Vg = ((beta*p0)/Lnew)*Vg = (wfun/Lnew)*Vg
+    rw [show WithBot.realDiv (beta.data (i, PUnit.unit)) (some Lnew)
+        = WithBot.realMul (beta.data (i, PUnit.unit)) (some (Lnew⁻¹)) from ?_]
+    · -- now everything realMul of somes
+      rw [show WithBot.realMul (p0.data (i, k, PUnit.unit))
+            (WithBot.realMul (beta.data (i, PUnit.unit)) (some Lnew⁻¹))
+          = WithBot.realMul (WithBot.realMul (beta.data (i, PUnit.unit)) (p0.data (i, k, PUnit.unit)))
+              (some Lnew⁻¹) from ?_]
+      · rw [hbp]
+        show WithBot.realMul (WithBot.realMul (some (wfun k)) (some Lnew⁻¹)) (some (vfun k)) = _
+        simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+        refine congrArg some ?_
+        field_simp; ring
+      · cases hb : beta.data (i, PUnit.unit) <;> cases hp : p0.data (i, k, PUnit.unit) <;>
+          simp [WithBot.realMul, Option.map₂, Option.bind, Option.map, mul_comm, mul_left_comm, mul_assoc]
+    · cases hb : beta.data (i, PUnit.unit) <;>
+        simp [WithBot.realDiv, WithBot.realMul, Option.map₂, Option.bind, Option.map, div_eq_mul_inv]
+  -- the dot cell = some (Σ (wfun/Lnew)·vfun)
+  have hdot : (Tile.dot [] pfinal vt).data (i, d, u)
+      = (some (Finset.univ.sum (fun k : Fin 16 => (wfun k / Lnew) * vfun k)) : WithBot ℝ) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+          (fun k => Option.map₂ (· * ·) (pfinal.data (i, k, PUnit.unit)) (vt.data (k, d, u))))
+        = @Finset.sum (Fin 16) (WithBot ℝ) _ Finset.univ
+            (fun k => (some ((wfun k / Lnew) * vfun k) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun k _ => hpf_vt k)]
+    rw [WithBot.sum_someTerm_eq_some]
+  -- accMul cell = some (Rc · (Lc/Lnew · alphaTerm))
+  have haccMul : accMul.data (i, d, u)
+      = (some ((Oc / Lc) * (Lc / Lnew * alphaTerm)) : WithBot ℝ) := by
+    have hacctcell : acct.data (i, d, u)
+        = (some (Oc / Lc) : WithBot ℝ) := by
+      simp only [acct, hOcdef, hLcdef]
+    have haccscale : accscale.data (i, PUnit.unit)
+        = (some (Lc / Lnew * alphaTerm) : WithBot ℝ) := by
+      simp only [accscale, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        lt, Tile.scalar_data_index, hlinew i, halphacell, hLcdef, hLnewdef,
+        NumericDType.mul, NumericDType.div,
+        WithBot.realDiv, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    simp only [accMul, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, hacctcell, haccscale,
+      NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  -- combine
+  show Option.map₂ (· + ·) (accMul.data (i, d, u)) ((Tile.dot [] pfinal vt).data (i, d, u)) = _
+  rw [haccMul, hdot]
+  show (some _ : WithBot ℝ) = some _
+  refine congrArg some ?_
+  show Oc / Lc * (Lc / Lnew * alphaTerm) + Finset.univ.sum (fun k => wfun k / Lnew * vfun k)
+      = bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale (c + 1) (i, d, u) /
+          bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i
+  -- fa2_acc_step_real
+  by_cases hLnz : Lnew = 0
+  · -- Lnew = 0 ⟹ both sides are 0 (kernel divides by Lnew = 0 → 0; RHS = _/0 = 0)
+    have hRHS : bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale (c + 1) i = 0 := by
+      rw [← hLnewdef]; exact hLnz
+    rw [hLnz, hRHS]
+    simp only [div_zero, zero_mul, mul_zero, Finset.sum_const_zero, add_zero]
+  · -- Lnew ≠ 0
+    have hRO : (Oc / Lc) * Lc = Oc := by
+      by_cases hLc : Lc = 0
+      · rw [hLc, div_zero, mul_zero]
+        rw [hOcdef]
+        exact (bsaOPartial_eq_zero_of_bsaLPartial_eq_zero qStart numKVBlocks gpos Qg Kg Vg scale
+          c (i, d, u) (by rw [← hLcdef]; exact hLc)).symm
+      · rw [div_mul_cancel₀ _ hLc]
+    have hLnewEq : Lnew = alphaTerm * Lc + Finset.univ.sum wfun := by
+      rw [hLnewdef, bsaLPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg scale c hc i]
+    have := fa2_acc_step_real (Oc / Lc) Lc Oc alphaTerm Lnew wfun vfun hRO hLnewEq hLnz
+    -- RHS: (α·Oc + Σ w·v)/Lnew = bsaOPartial(c+1)/bsaLPartial(c+1)
+    rw [this]
+    -- bsaOPartial(c+1) = α·Oc + Σ w·v
+    rw [hLnewdef]
+    congr 1
+    rw [hOcdef, bsaOPartial_succ_of_lt qStart numKVBlocks gpos Qg Kg Vg scale c hc (i, d, u)]
+
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
