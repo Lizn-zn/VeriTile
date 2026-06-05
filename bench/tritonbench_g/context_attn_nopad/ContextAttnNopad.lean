@@ -1265,6 +1265,121 @@ theorem nopad_qk_where_eval (s : BlockState) (SN : Nat) (qkFn : Fin 128 → Fin 
   · rw [if_pos (by simp only [decide_eq_true_eq]; omega), if_pos hle]
   · rw [if_neg (by simp only [decide_eq_true_eq]; omega), if_neg hle]; rfl
 
+set_option maxHeartbeats 1600000 in
+/-- **`m_ij = tl.max(qk, 1)` recipe** (per-row running block max over the key axis).
+Row `i`: `⊔'_{jL} qk[i,jL]`. -/
+theorem nopad_mij_eval (s : BlockState) (qkFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (hqk : s.regs .real [128, 128] "qk"
+      = some (⟨fun idx : TileIndex [128, 128] => qkFn idx.1 idx.2.1⟩ : Tile .real [128, 128])) :
+    evalOp (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "qk")) s
+      = some (⟨fun idx : TileIndex [128] =>
+          Finset.univ.sup' Finset.univ_nonempty (fun jL : Fin 128 => qkFn idx.1 jL)⟩ : Tile .real [128]) := by
+  rw [evalOp_reduceMax, evalOp_ref, hqk]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.reduceMax_false]
+  unfold Tile.reduceMaxDrop
+  rw [dif_pos (show 0 < TileShape.axisDim [128, 128] (⟨1, by simp⟩ : Fin [128,128].length) from by decide)]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- **`p = tl.exp(qk - m_ij[:, None])` recipe** (per-cell softmax numerator,
+broadcast `[128,128] - [128]` over the key axis).  `p` lane `(i, jL)`:
+`realExp(qk[i,jL] ⊖ m_ij[i])`. -/
+theorem nopad_p_eval (s : BlockState) (qkFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (mijFn : Fin 128 → WithBot ℝ)
+    (hqk : s.regs .real [128, 128] "qk"
+      = some (⟨fun idx : TileIndex [128, 128] => qkFn idx.1 idx.2.1⟩ : Tile .real [128, 128]))
+    (hmij : s.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))).exp s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          WithBot.realExp (WithBot.realSub (qkFn idx.1 idx.2.1) (mijFn idx.1))⟩ : Tile .real [128, 128]) := by
+  have hexp : @evalOp .real [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128])) :=
+    evalOp_expandDim_ref_of_regs .real [128] ⟨1, by simp⟩ "m_ij" s _ hmij
+  rw [evalOp_exp, evalOp_sub, evalOp_ref, hqk, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, u⟩ := idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.sub, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1600000 in
+/-- **`l_ij = tl.sum(p, 1)` recipe** (per-row block denominator over the key axis).
+Row `i`: `Σ_{jL} p[i,jL]`. -/
+theorem nopad_lij_eval (s : BlockState) (pFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (hp : s.regs .real [128, 128] "p"
+      = some (⟨fun idx : TileIndex [128, 128] => pFn idx.1 idx.2.1⟩ : Tile .real [128, 128])) :
+    evalOp (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "p")) s
+      = some (⟨fun idx : TileIndex [128] =>
+          (Finset.univ.sum (fun jL : Fin 128 => pFn idx.1 jL))⟩ : Tile .real [128]) := by
+  rw [evalOp_reduceSum, evalOp_ref, hp]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.reduceSum_false]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- **`m_i_new = tl.maximum(m_i, m_ij)` recipe** (`where(m_i > m_ij, m_i, m_ij)`),
+per-row `m_i[i] ⊔ m_ij[i]`. -/
+theorem nopad_minew_eval (s : BlockState) (miFn mijFn : Fin 128 → WithBot ℝ)
+    (hmi : s.regs .real [128] "m_i" = some (⟨fun idx : TileIndex [128] => miFn idx.1⟩ : Tile .real [128]))
+    (hmij : s.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128])) :
+    evalOp ((Op.gt ComparableDType.real Broadcast.nil.consSame (Op.ref .real [128] "m_i")
+            (Op.ref .real [128] "m_ij")).where
+        (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij")) s
+      = some (⟨fun idx : TileIndex [128] => miFn idx.1 ⊔ mijFn idx.1⟩ : Tile .real [128]) := by
+  rw [evalOp_where, evalOp_gt]
+  simp only [evalOp_ref, hmi, hmij, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    ComparableDType.gt]
+  by_cases h : mijFn i < miFn i
+  · rw [if_pos (by simpa using h), max_eq_left (le_of_lt h)]
+  · rw [if_neg (by simpa using h), max_eq_right (not_lt.mp h)]
+
+set_option maxHeartbeats 1600000 in
+/-- **`alpha = tl.exp(m_i - m_i_new)` recipe** (old-block rescale), per-row
+`realExp(m_i[i] ⊖ m_i_new[i])`. -/
+theorem nopad_alpha_eval (s : BlockState) (miFn minewFn : Fin 128 → WithBot ℝ)
+    (hmi : s.regs .real [128] "m_i" = some (⟨fun idx : TileIndex [128] => miFn idx.1⟩ : Tile .real [128]))
+    (hminew : s.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_i")
+        (Op.ref .real [128] "m_i_new")).exp s
+      = some (⟨fun idx : TileIndex [128] => WithBot.realExp (WithBot.realSub (miFn idx.1) (minewFn idx.1))⟩
+          : Tile .real [128]) := by
+  rw [evalOp_exp, evalOp_sub, evalOp_ref, hmi, evalOp_ref, hminew]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.sub]
+
+set_option maxHeartbeats 1600000 in
+/-- **`beta = tl.exp(m_ij - m_i_new)` recipe** (new-block rescale), per-row
+`realExp(m_ij[i] ⊖ m_i_new[i])`. -/
+theorem nopad_beta_eval (s : BlockState) (mijFn minewFn : Fin 128 → WithBot ℝ)
+    (hmij : s.regs .real [128] "m_ij" = some (⟨fun idx : TileIndex [128] => mijFn idx.1⟩ : Tile .real [128]))
+    (hminew : s.regs .real [128] "m_i_new" = some (⟨fun idx : TileIndex [128] => minewFn idx.1⟩ : Tile .real [128])) :
+    evalOp (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_ij")
+        (Op.ref .real [128] "m_i_new")).exp s
+      = some (⟨fun idx : TileIndex [128] => WithBot.realExp (WithBot.realSub (mijFn idx.1) (minewFn idx.1))⟩
+          : Tile .real [128]) := by
+  rw [evalOp_exp, evalOp_sub, evalOp_ref, hmij, evalOp_ref, hminew]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, u⟩ := idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.sub]
+
 set_option maxRecDepth 8000 in
 /-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
 theorem nopad_body_split
