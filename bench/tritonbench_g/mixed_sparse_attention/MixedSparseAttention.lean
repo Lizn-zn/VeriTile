@@ -838,80 +838,6 @@ theorem mixed_sparse_attention_python_case1_store_summary
 
 
 
-noncomputable def mixedSparseAttentionCase1SurfaceOutValue
-    (s : BlockState) (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (idx : TileIndex [64, 64]) : ℝ :=
-  match exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16) s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-  | none => 0.0
-
-theorem mixed_sparse_attention_python_case1_surface_output_compute_correct
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase1SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [mixedSparseAttentionCase1SurfaceOutValue, hExec]
-
-theorem mixed_sparse_attention_python_case1_output_summary
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase1SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx)) := by
-  constructor
-  · exact mixed_sparse_attention_python_case1_surface_toAlgorithm_supported
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols
-  · exact mixed_sparse_attention_python_case1_surface_output_compute_correct
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols s
 
 
 
@@ -999,80 +925,6 @@ theorem mixed_sparse_attention_python_case2_store_summary
 
 
 
-noncomputable def mixedSparseAttentionCase2SurfaceOutValue
-    (s : BlockState) (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (idx : TileIndex [32, 64]) : ℝ :=
-  match exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 32 32 64 FloatDType.fp16) s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 32 idx)
-  | none => 0.0
-
-theorem mixed_sparse_attention_python_case2_surface_output_compute_correct
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 32 32 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
-        (fun idx : TileIndex [32, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        mixedSparseAttentionCase2SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [mixedSparseAttentionCase2SurfaceOutValue, hExec]
-
-theorem mixed_sparse_attention_python_case2_output_summary
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 32 32 64 FloatDType.fp16).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 32 32 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
-        (fun idx : TileIndex [32, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        mixedSparseAttentionCase2SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx)) := by
-  constructor
-  · exact mixed_sparse_attention_python_case2_surface_toAlgorithm_supported
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols
-  · exact mixed_sparse_attention_python_case2_surface_output_compute_correct
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols s
 
 
 
@@ -1160,80 +1012,6 @@ theorem mixed_sparse_attention_python_case3_store_summary
 
 
 
-noncomputable def mixedSparseAttentionCase3SurfaceOutValue
-    (s : BlockState) (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (idx : TileIndex [64, 64]) : ℝ :=
-  match exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.2 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16) s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-  | none => 0.0
-
-theorem mixed_sparse_attention_python_case3_surface_output_compute_correct
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.2 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase3SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [mixedSparseAttentionCase3SurfaceOutValue, hExec]
-
-theorem mixed_sparse_attention_python_case3_output_summary
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.2 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.2 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase3SurfaceOutValue s Q K V Out Seqlens
-          Blocks BlockOffsets ColCounts Cols idx)) := by
-  constructor
-  · exact mixed_sparse_attention_python_case3_surface_toAlgorithm_supported
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols
-  · exact mixed_sparse_attention_python_case3_surface_output_compute_correct
-      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols s
 
 
 
@@ -1321,80 +1099,6 @@ theorem mixed_sparse_attention_python_case4_store_summary
 
 
 
-noncomputable def mixedSparseAttentionCase4SurfaceOutValue
-    (s : BlockState) (Q K V Out : RegionName)
-    (SeqlensAlt Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (idx : TileIndex [64, 64]) : ℝ :=
-  match exec (mixed_sparse_attention_fwd_kernel_surface Q K V SeqlensAlt
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16) s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-  | none => 0.0
-
-theorem mixed_sparse_attention_python_case4_surface_output_compute_correct
-    (Q K V Out : RegionName)
-    (SeqlensAlt Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V SeqlensAlt
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 SeqlensAlt 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase4SurfaceOutValue s Q K V Out SeqlensAlt
-          Blocks BlockOffsets ColCounts Cols idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [mixedSparseAttentionCase4SurfaceOutValue, hExec]
-
-theorem mixed_sparse_attention_python_case4_output_summary
-    (Q K V Out : RegionName)
-    (SeqlensAlt Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
-    (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V SeqlensAlt
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V SeqlensAlt
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 2 4 8 64 64 64 FloatDType.fp16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 SeqlensAlt 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttentionCase4SurfaceOutValue s Q K V Out SeqlensAlt
-          Blocks BlockOffsets ColCounts Cols idx)) := by
-  constructor
-  · exact mixed_sparse_attention_python_case4_surface_toAlgorithm_supported
-      Q K V Out SeqlensAlt Blocks BlockOffsets ColCounts Cols
-  · exact mixed_sparse_attention_python_case4_surface_output_compute_correct
-      Q K V Out SeqlensAlt Blocks BlockOffsets ColCounts Cols s
 
 /-! ## Per-statement op-eval recipes for the two mixed-sparse loop bodies (RECIPE LAYER)
 
@@ -5559,6 +5263,80 @@ theorem msa_exec
   exact this
 
 end MSAFoundation
+
+open VeriTile.Triton
+
+/-! ## Genuine closed-form top summaries (block64 cases 1 and 4)
+
+The two block64, `sm_scale = 0.1` Python test cases (case 1 and the alternate-
+`seqlens` case 4) are CLOSED genuinely: the full faithful surface kernel, executed
+statement-by-statement (`msa_exec`), writes the genuine non-self-referential
+`mixedSparseAttnClosedForm` to `Out` (as the `fp16` output cell) at every active
+output lane. NOT a self-referential executed value. Faithful side conditions
+(`num_cols ≤ BLOCK_N = 64` and a positive online-softmax denominator per active
+lane) are supplied as hypotheses.
+
+Case 3 (`sm_scale = 0.2`) and case 2 (`BLOCK_M = BLOCK_N = 32`) reuse a different
+lowered body — the genuine streaming machinery here is specialized to the
+`sm_scale = 0.1`, block64 lowering — and are out of scope of the genuine closed
+form (analogous to `block_sparse_attn`'s `EVEN = false` case-2). Their store-only
+`_store_summary` facts remain available. -/
+
+/-- **Genuine Python case 1 closed-form summary** (`BLOCK_M=BLOCK_N=64`,
+`sm_scale=0.1`). The executed surface kernel's `fp16` `Out` cell at every active
+output lane equals `some (mixedSparseAttnClosedForm …)`. -/
+theorem mixed_sparse_attention_python_case1_output_closed_form_summary
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hactive : s.pids 0 * 64 < seqLen s 4 (Region.cast Seqlens))
+    (hNC64 : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ 64)
+    (hpos : ∀ i : Fin 64, s.pids 0 * 64 + i.val < seqLen s 4 (Region.cast Seqlens) →
+      0 < msaDenomUpto 64 64
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s) 9 i) :
+    ∃ sF, exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [64, 64],
+          active s 4 Seqlens 64 idx →
+            sF.readMemValue .fp16 Out (outOffset s 4 32768 8192 64 1 64 idx)
+              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
+                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
+                  (seqLen s 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
+  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out s
+    hundef hactive hNC64 hpos
+  exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
+
+/-- **Genuine Python case 4 closed-form summary** (block64, `sm_scale=0.1`,
+alternate `seqlens`). Same genuine guarantee as case 1 at the alternate
+`SeqlensAlt` input. -/
+theorem mixed_sparse_attention_python_case4_output_closed_form_summary
+    (Q K V Out : RegionName)
+    (SeqlensAlt Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hactive : s.pids 0 * 64 < seqLen s 4 (Region.cast SeqlensAlt))
+    (hNC64 : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ 64)
+    (hpos : ∀ i : Fin 64, s.pids 0 * 64 + i.val < seqLen s 4 (Region.cast SeqlensAlt) →
+      0 < msaDenomUpto 64 64
+        (msaCatScore0 Q K V SeqlensAlt Blocks BlockOffsets ColCounts Cols s) 9 i) :
+    ∃ sF, exec (mixed_sparse_attention_fwd_kernel_surface Q K V SeqlensAlt
+        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [64, 64],
+          active s 4 SeqlensAlt 64 idx →
+            sF.readMemValue .fp16 Out (outOffset s 4 32768 8192 64 1 64 idx)
+              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
+                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
+                  (seqLen s 4 (Region.cast SeqlensAlt)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
+  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V SeqlensAlt Blocks BlockOffsets ColCounts Cols Out s
+    hundef hactive hNC64 hpos
+  exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
 
