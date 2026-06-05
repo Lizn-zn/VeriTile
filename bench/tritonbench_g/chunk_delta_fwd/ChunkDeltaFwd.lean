@@ -1151,6 +1151,72 @@ theorem cdfAccum_cumsum_eq (s sin : BlockState) (k v d : RegionName) (i_t : Nat)
   ext idx; obtain ⟨e, p, u⟩ := idx
   simp only [cdfCumsumTile, zero_add]
 
+/-- The block-ptr `v_new` store offset at lane `(c,p)` (inner chunk `i_c=0`). -/
+def cdfVNewAddr (s : BlockState) (i_t : Nat) (idx : TileIndex [32, 64]) : Nat :=
+  s.pids 2 * 8192 + (i_t * 32 + 0 * 32 + idx.1.val) * 64 + (s.pids 1 * 64 + idx.2.1.val) * 1
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **`v_new` block-ptr store step.** Stepping the masked block-ptr store of the
+corrected `b_v` (= `cdfBvNewTile`) through `p_v_new` writes `cdfBvNewCell` at each
+active lane of chunk `i_t` and leaves all other addresses unchanged. -/
+theorem cdfStore_vnew_step (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ)
+    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
+    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvNewTile s v d fbh i_t))
+    (hpvn : sin.regs .blockPtr [32, 64] "p_v_new" = some
+      ⟨fun _ => BlockPtr.mk v_new (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
+        [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
+    ∃ s', stepStmt (Stmt.store .real [32, 64]
+        (.blockPtr (Op.ref .blockPtr [32, 64] "p_v_new") [0, 1])
+        (Op.ref .real [32, 64] "b_v") .none) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs = sin.regs
+      ∧ (∀ idx : TileIndex [32, 64],
+          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
+          s'.readMem v_new (cdfVNewAddr s i_t idx)
+            = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
+      ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
+      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+          s'.readMem v_new off = sin.readMem v_new off) := by
+  classical
+  set offFn : TileIndex [32, 64] → Nat := fun idx => cdfVNewAddr s i_t idx with hoffFn
+  set Pmask : TileIndex [32, 64] → Prop :=
+    fun idx => i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64 with hPmask
+  set valFn : TileIndex [32, 64] → ℝ :=
+    fun idx => cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val with hvalFn
+  -- step the store into a masked writeMem foldl
+  have hstore : stepStmt (Stmt.store .real [32, 64]
+        (.blockPtr (Op.ref .blockPtr [32, 64] "p_v_new") [0, 1])
+        (Op.ref .real [32, 64] "b_v") .none) sin
+      = some ((TileShape.allIndices [32, 64]).foldl
+          (fun acc i => if Pmask i then acc.writeMem v_new (offFn i) (valFn i) else acc) sin) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hbv, hpvn, Option.bind, Option.map]
+    refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [32, 64])) ?_)
+    funext acc i
+    obtain ⟨c, p, u⟩ := i
+    simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+      Bool.true_and, hPmask, hoffFn, hvalFn, cdfVNewAddr]
+    by_cases hb : i_t * 32 + 0 * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64
+    · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real]; rfl
+    · simp only [hb, decide_false, Bool.false_eq_true, if_false]
+  rw [hstore]
+  have hinj : Function.Injective offFn := hInj
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+  · funext dtype shape name; rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro idx hidx
+    have h := BlockState.scatter_readback_prop_masked_nd (region := v_new) sin offFn valFn Pmask hinj idx
+    simp only [hoffFn] at h ⊢
+    rw [h, if_pos (show Pmask idx from hidx)]
+  · intro rg off hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      v_new offFn valFn Pmask _ sin rg off hrg
+  · intro off hoff
+    exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+      v_new offFn valFn Pmask _ sin off (fun i _ _ => hoff i)
+
 /-! ## Per-Python-shape offset injectivity
 
 `chunk_delta_fwd.py`'s checked tests use `B = 2`, `H = 4`, `T = 128`,
