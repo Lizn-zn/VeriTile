@@ -1681,4 +1681,261 @@ theorem srPreLoop_eval
     simp only [BlockState.setReg_same, Nat.zero_mul, srStateBot_zero]
     rfl
 
+/-! ### Block-reduction bridges (`srBlock` ↔ `Fin 64` masked reductions)
+
+The loop body reduces a `64`-lane masked row over `Fin 64` (lane `jL` ↦ token
+`c·64 + jL` when `c·64 + jL < S`, else masked); the `srOsStepBot` math uses the
+`srBlock` list (a `Fin S` window filterMap of `[c·64, (c+1)·64)`). These bridges
+equate the two by reindexing the window onto `Fin 64`, masked lanes (token ≥ S)
+contributing `⊥`/`0`. -/
+
+/-- filterMap-sum over `Fin n` with a guard collapses into the masked `Finset.sum`. -/
+theorem sr_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- The `WithBot` `foldr` of a guarded score list (coerced) equals the `Finset.sup`
+over `Fin n` of the lane terms (`⊥` on filtered-out lanes). -/
+theorem sr_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
+    (sc : Fin n → ℝ) :
+    (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) := by
+  rw [show (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = (List.finRange n).foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : P a <;> simp [ha, ih]]
+  apply le_antisymm
+  · induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih =>
+      simp only [List.foldr_cons]
+      exact sup_le (Finset.le_sup (f := fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+        (Finset.mem_univ a)) ih
+  · apply Finset.sup_le
+    intro j _
+    have key : ∀ (l : List (Fin n)), j ∈ l →
+        (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+          ≤ l.foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ := by
+      intro l hl
+      induction l with
+      | nil => simp at hl
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        rcases List.mem_cons.mp hl with h | h
+        · subst h; exact le_sup_left
+        · exact le_trans (ih h) le_sup_right
+    exact key _ (List.mem_finRange j)
+
+/-- Reindex a windowed `Finset.sup` over `Fin S` (lanes `c·64 ≤ j < (c+1)·64`)
+onto `Fin 64` (lane `jL` ↦ token `c·64 + jL`); out-of-window / out-of-range lanes
+contribute `⊥`. -/
+theorem sr_window_sup_reindex (c S : Nat) (hwin : (c + 1) * 64 ≤ S)
+    (F : Nat → WithBot ℝ) :
+    Finset.univ.sup (fun j : Fin S =>
+        if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then F j.val else ⊥)
+      = Finset.univ.sup (fun jL : Fin 64 => F (c * 64 + jL.val)) := by
+  apply le_antisymm
+  · apply Finset.sup_le
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+    · rw [if_pos hj]
+      have hjL : j.val - c * 64 < 64 := by omega
+      refine le_trans ?_ (Finset.le_sup
+        (f := fun jL : Fin 64 => F (c * 64 + jL.val))
+        (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
+      simp only
+      rw [show c * 64 + (j.val - c * 64) = j.val from by omega]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le
+    intro jL _
+    have hb : c * 64 + jL.val < S := by have := jL.isLt; omega
+    refine le_trans ?_ (Finset.le_sup
+      (f := fun j : Fin S =>
+        if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then F j.val else ⊥)
+      (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin S)))
+    simp only
+    rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega⟩)]
+
+/-- Reindex a windowed `Finset.sum` over `Fin S` onto `Fin 64`. -/
+theorem sr_window_sum_reindex (c S : Nat) (hwin : (c + 1) * 64 ≤ S) (g : Nat → ℝ) :
+    (∑ jL : Fin 64, g (c * 64 + jL.val))
+      = ∑ j : Fin S, (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then g j.val else 0) := by
+  rw [← Finset.sum_filter]
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin S)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * 64 + a.val = c * 64 + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * 64, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- **`srBlock` running-sup bridge.** The `Fin 64`-masked sup of the kernel's `qk`
+lane tile (lane `jL` ↦ `some (qk[c·64+jL])` if `c·64+jL < S`, else `⊥`) equals the
+`WithBot ⊔`-foldr of `srBlock`'s coerced logits. -/
+theorem srBlock_sup_eq {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ S) :
+    Finset.univ.sup (fun jL : Fin 64 =>
+        if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = ((srBlock qk v 64 c d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  classical
+  set F : Nat → WithBot ℝ := fun jg =>
+    if h : jg < S then ((qk ⟨jg, h⟩ : ℝ) : WithBot ℝ) else ⊥ with hF
+  rw [show (srBlock qk v 64 c d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+        = ((List.finRange S).filterMap (fun j : Fin S =>
+            if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then some (qk j) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold srBlock
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 <;> simp [hj]]
+  rw [sr_filterMap_foldr_sup S
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64) (fun j => qk j)]
+  rw [show (Finset.univ.sup (fun j : Fin S =>
+        if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then ((qk j : ℝ) : WithBot ℝ) else ⊥))
+      = Finset.univ.sup (fun j : Fin S =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 then F j.val else ⊥) from by
+    apply Finset.sup_congr rfl
+    intro j _
+    by_cases hw : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+    · rw [if_pos hw, if_pos hw, hF]; simp only [dif_pos j.isLt]
+    · rw [if_neg hw, if_neg hw]]
+  rw [sr_window_sup_reindex c S hwin F]
+  apply Finset.sup_congr rfl
+  intro jL _
+  have hb : c * 64 + jL.val < S := by have := jL.isLt; omega
+  by_cases hq : c * 64 + jL.val < S
+  · rw [if_pos hq, hF]; simp only [dif_pos hb]
+  · exact absurd hb hq
+
+/-- **`srBlock` map-and-sum bridge.** The `srBlock` list map-sum reindexes the
+window `[c·64, (c+1)·64) ⊆ Fin S` onto lanes `jL : Fin 64` (token `c·64 + jL`). -/
+theorem srBlock_map_sum {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ S) (h : ℝ × ℝ → ℝ) :
+    ((srBlock qk v 64 c d).map h).sum
+      = ∑ jL : Fin 64,
+          (if c * 64 + jL.val < S then
+            h (qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩,
+               v ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d)
+           else 0) := by
+  classical
+  rw [srBlock, sr_filterMap_finRange_sum S
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64)
+    (fun j => (qk j, v j d)) h]
+  rw [← Finset.sum_filter
+        (fun j : Fin S => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64)
+        (fun j => h (qk j, v j d))]
+  symm
+  rw [← Finset.sum_filter
+        (fun jL : Fin 64 => c * 64 + jL.val < S)
+        (fun jL => h (qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩,
+            v ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d))]
+  refine Finset.sum_bij
+    (i := fun jL (_ : jL ∈ Finset.univ.filter (fun jL : Fin 64 => c * 64 + jL.val < S)) =>
+      (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin S)) ?_ ?_ ?_ ?_
+  · intro jL hjL
+    have hlt : c * 64 + jL.val < S := (Finset.mem_filter.mp hjL).2
+    rw [Finset.mem_filter]
+    refine ⟨Finset.mem_univ _, ?_⟩
+    show c * 64 ≤ c * 64 + jL.val ∧ c * 64 + jL.val < (c + 1) * 64
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * 64 + a.val = c * 64 + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 := (Finset.mem_filter.mp hj).2
+    refine ⟨⟨j.val - c * 64, by omega⟩, ?_, by apply Fin.ext; simp only; omega⟩
+    rw [Finset.mem_filter]
+    exact ⟨Finset.mem_univ _, by simp only; omega⟩
+  · intro jL _; rfl
+
+/-- **`srBlock` `e_sum` lane-sum bridge.** The kernel's `Σ_{jL} pFn jL` over the
+`Fin 64` block, with `pFn jL = realExp(qk[c·64+jL] ⊖ M')` on active lanes and
+`realExp(⊥ ⊖ M') = some 0` on masked lanes, equals `some (Σ over srBlock of
+exp(s − Mr))`. -/
+theorem srBlock_esum_sum {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64) (Mr : ℝ)
+    (hwin : (c + 1) * 64 ≤ S) :
+    (∑ jL : Fin 64, WithBot.realExp (WithBot.realSub
+        (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+      = some ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mr))).sum := by
+  have hcell : ∀ jL : Fin 64,
+      WithBot.realExp (WithBot.realSub
+        (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ))
+        = some (if c * 64 + jL.val < S
+            then Real.exp (qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mr) else 0) := by
+    intro jL
+    by_cases hj : c * 64 + jL.val < S
+    · rw [if_pos hj, if_pos hj, WithBot.realSub_coe_coe, WithBot.realExp_coe]; rfl
+    · rw [if_neg hj, if_neg hj, WithBot.realSub_bot_left, WithBot.realExp_bot]; rfl
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [srBlock_map_sum qk v c d hwin (fun p => Real.exp (p.1 - Mr))]
+
+/-- **`srBlock` `acc` lane-sum bridge.** The kernel's `Σ_{jL} pFn jL · vFn jL d`
+over the `Fin 64` block, with `pFn jL = realExp(qk ⊖ M')` (so masked lanes give
+`some 0`) and `vFn jL = some (rawV jL)` (the V gather is unmasked — masked-index
+lanes carry garbage `rawV` but are zeroed by `pFn = some 0`), equals `some (Σ over
+srBlock of exp(s − Mr)·v)`, provided `rawV` agrees with `v` on active lanes. -/
+theorem srBlock_acc_sum {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64) (Mr : ℝ)
+    (rawV : Fin 64 → ℝ)
+    (hrawV : ∀ jL : Fin 64, (hj : c * 64 + jL.val < S) →
+      rawV jL = v ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d)
+    (hwin : (c + 1) * 64 ≤ S) :
+    (∑ jL : Fin 64, WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+        ((rawV jL : ℝ) : WithBot ℝ))
+      = some ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mr) * p.2)).sum := by
+  have hcell : ∀ jL : Fin 64,
+      WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ)) ((Mr : ℝ) : WithBot ℝ)))
+        ((rawV jL : ℝ) : WithBot ℝ)
+        = some (if c * 64 + jL.val < S
+            then Real.exp (qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mr)
+                  * v ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d
+            else 0) := by
+    intro jL
+    by_cases hj : c * 64 + jL.val < S
+    · rw [if_pos hj, if_pos hj, WithBot.realSub_coe_coe, WithBot.realExp_coe,
+        WithBot.realMul_coe_coe, hrawV jL hj]; rfl
+    · rw [if_neg hj, if_neg hj, WithBot.realSub_bot_left, WithBot.realExp_bot]
+      show WithBot.realMul ((0:ℝ):WithBot ℝ) ((rawV jL : ℝ):WithBot ℝ) = some 0
+      rw [WithBot.realMul_coe_coe, zero_mul]; rfl
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [srBlock_map_sum qk v c d hwin (fun p => Real.exp (p.1 - Mr) * p.2)]
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
