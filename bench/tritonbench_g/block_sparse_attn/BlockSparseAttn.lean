@@ -1715,4 +1715,79 @@ abbrev block_sparse_attn_python_case2_output_summary
     block_sparse_attn_case2_surface_second_output_compute_correct Out Q K V
       layoutRows layoutCols s⟩
 
+/-! ## Per-statement op-eval recipes for the CSR loop body (RECIPE LAYER)
+
+These `bsa_*_eval` lemmas are the block-sparse-attention analogues of the
+`flash_*_op_eval` / `ta_*_eval` family: each proves that one CSR-loop-body
+statement's algorithm-layer `Op` evaluates (under abstract register-readback
+hypotheses on a symbolic `BlockState`) to a symbolic result tile. They are the
+banked building blocks for the (separate, NEXT-stage) loop invariant/step/
+assembly proof; nothing here unfolds the data-dependent `forRangeDyn`.
+
+The exact CSR loop body — `forRangeDyn "col_idx_idx" (ref "start_l")
+(ref "end_l") (constNat 1)` — has statement order (extracted from the elaborated
+`block_sparse_attention_kernel` AST):
+
+1.  `col_idx`   = load .nat region C at `layout_h·1 + col_idx_idx`           (gather)
+2.  `start_n`   = `col_idx · BLOCK_N`
+3.  `k`         = ptr-load `k_ptrs + start_n·stride_kn`         (EVEN_N gated mask)
+4.  `qk`        = zeros `[BLOCK_M, BLOCK_N]`
+5.  `qk`       += dot(q, k)
+6.  if D≥2:     `k` = ptr-load `… + BLOCK_D`; `qk += dot(q2, k)`
+7.  `qk`       *= softmax_scale
+8.  `qk`       += where(offs_m[:,None] ≥ start_n + offs_n[None,:], 0, -inf)
+9.  `m_ij`      = reduceMax(qk, axis 1)
+10. `p`         = exp(qk - m_ij[:,None])                               (natural exp)
+11. `l_ij`      = reduceSum(p, axis 1)
+12. `m_i_new`   = where(m_i > m_ij, m_i, m_ij)
+13. `alpha`     = exp(m_i - m_i_new)                                  (natural exp)
+14. `beta`      = exp(m_ij - m_i_new)                                 (natural exp)
+15. `l_i_new`   = alpha·l_i + beta·l_ij
+16. `p_scale`   = beta / l_i_new
+17. `p`         = p · p_scale[:,None]
+18. `acc_scale` = (l_i / l_i_new) · alpha
+19. `acc`       = acc · acc_scale[:,None]
+20. if D≥2:     `acc2` = acc2 · acc_scale[:,None]
+21. `p`         = p                                       (`.to(Q.dtype)`, identity)
+22. `v`         = ptr-load `v_ptrs + start_n·stride_vn`        (EVEN_N gated mask)
+23. `acc`       = acc + dot(p, v)
+24. if D≥2:     `v` = ptr-load `… + BLOCK_D`; `acc2 += dot(p, v)`
+25. `l_i`       = l_i_new                                              (carry)
+26. `m_i`       = m_i_new                                              (carry)
+
+The two output D-blocks (`acc`/`acc2`) share scores/softmax weights; they differ
+only in which V projection is read (statements 22-24, `+BLOCK_D` channel offset).
+-/
+
+section BSARecipes
+
+open VeriTile.Triton
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`col_idx = tl.load(layout_csr_col_indices + layout_h·stride_col + col_idx_idx)`
+statement eval** (CSR loop body L1): the unmasked `.nat` gather of the visited CSR
+column index. With `layout_h = LH`, `stride_col = SC`, and `col_idx_idx = CI`, lane
+reads `layoutCols[LH·SC + CI]`. Block-sparse analogue of `ctx_kvloc_gather_eval`. -/
+theorem bsa_colidx_gather_eval (s : BlockState)
+    (layoutCols : Region .nat) (LH SC CI : Nat)
+    (hlh : s.regs .nat [] "layout_h" = some (Tile.scalar LH))
+    (hci : s.regs .nat [] "col_idx_idx" = some (Tile.scalar CI)) :
+    evalOp (Op.load .nat
+        (MemAccess.region layoutCols
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "layout_h") (Op.constNat SC))
+            (Op.ref .nat [] "col_idx_idx")))
+        MaskOpt.none) s
+      = some (Tile.scalar
+          (s.readMemValue .nat (Region.cast layoutCols) (LH * SC + CI))) := by
+  rw [evalOp_load_region_none]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hlh, hci,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+end BSARecipes
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
