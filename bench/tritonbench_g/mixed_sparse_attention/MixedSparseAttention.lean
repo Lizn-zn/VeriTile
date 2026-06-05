@@ -1362,4 +1362,88 @@ theorem mixed_sparse_attention_python_case4_output_summary
   · exact mixed_sparse_attention_python_case4_surface_output_compute_correct
       Q K V Out SeqlensAlt Blocks BlockOffsets ColCounts Cols s
 
+/-! ## Per-statement op-eval recipes for the two mixed-sparse loop bodies (RECIPE LAYER)
+
+These `msa_*_eval` lemmas are the mixed-sparse-attention analogues of
+`block_sparse_attn`'s `bsa_*_eval` family: each proves that one loop-body
+statement's algorithm-layer `Op` evaluates (under abstract register-readback
+hypotheses on a symbolic `BlockState`) to a symbolic result tile. They are the
+banked building blocks for the (separate, NEXT-stage) loop invariant/step/
+assembly proof; nothing here unfolds the data-dependent `forRangeDyn`.
+
+The kernel runs **two** `forRangeDyn` loops, both inside the
+`start_m·BLOCK_M ≥ seqlen` early-exit guard. Statement order is extracted
+verbatim from the elaborated `mixed_sparse_attention_fwd_kernel_surface` AST.
+
+### Loop A — block-sparse (`for block_index in range(8)`, 18 statements)
+
+```
+A1.  cond      = block_index < num_blks
+A2.  start_n   = load(blks_ptr + block_index, mask=cond)            (masked .nat ptr-load)
+A3.  cols      = start_n + offs_n
+A4.  n_mask    = (cols < seqlen) & cond
+A5.  k         = load(k_ptrs + cols[None,:]·stride_kn, mask=n_mask[None,:], other=0)
+A6.  v         = load(v_ptrs + cols[:,None]·stride_vn, mask=n_mask[:,None], other=0)
+A7.  qk        = zeros[BLOCK_M, BLOCK_N]
+A8.  causal    = cols[None,:] ≤ offs_m[:,None]
+A9.  qk        = where(m_mask & causal, qk, -inf)                  (selecting, CAUSAL)
+A10. qk        = qk + dot(castFloat fp16→real q, k)
+A11. m_i_new   = where(m_i > reduceMax(qk,1), m_i, reduceMax(qk,1))
+A12. alpha     = exp2(m_i - m_i_new)                                       (exp2)
+A13. p         = exp2(qk - m_i_new[:,None])                                (exp2)
+A14. acc_scale = l_i·0 + alpha
+A15. acc       = acc · acc_scale[:,None]
+A16. acc       = acc + dot(castFloat real→fp16 then fp16→real p, v)
+A17. l_i       = l_i·alpha + reduceSum(p,1)                                (carry)
+A18. m_i       = m_i_new                                                   (carry)
+```
+
+### Loop B — column-sparse (`for start_n in range(0,16,BLOCK_N)`, 16 statements)
+
+```
+B1.  cond      = start_n < num_cols
+B2.  n_mask    = (start_n + offs_n < num_cols) & cond
+B3.  cols      = load(cols_ptr + start_n + offs_n, mask=cond, other=0)  (masked .nat gather)
+B4.  k         = load(k_ptrs + cols[None,:]·stride_kn, mask=n_mask[None,:], other=0)
+B5.  v         = load(v_ptrs + cols[:,None]·stride_vn, mask=n_mask[:,None], other=0)
+B6.  qk        = zeros[BLOCK_M, BLOCK_N]
+B7.  qk        = where(m_mask & n_mask, qk, -inf)                  (selecting, NO causal)
+B8.  qk        = qk + dot(castFloat fp16→real q, k)
+B9.  m_i_new   = where(m_i > reduceMax(qk,1), m_i, reduceMax(qk,1))
+B10. alpha     = exp2(m_i - m_i_new)                                       (exp2)
+B11. p         = exp2(qk - m_i_new[:,None])                                (exp2)
+B12. acc_scale = l_i·0 + alpha
+B13. acc       = acc · acc_scale[:,None]
+B14. acc       = acc + dot(castFloat real→fp16 then fp16→real p, v)
+B15. l_i       = l_i·alpha + reduceSum(p,1)                                (carry)
+B16. m_i       = m_i_new                                                   (carry)
+```
+
+Both loops share the identical online-softmax core (A7-A18 ≡ B6-B16, modulo the
+causal `where` mask of A9 vs the plain `m_mask & n_mask` of B7). The recipes for
+that shared core therefore apply to both loops; the causal `where` (A8/A9) and the
+column gather (B3) are the only loop-specific pieces. -/
+
+section MSARecipes
+
+open VeriTile.Triton
+
+/-- Local `evalOp` unfolding for `.le` (mirrors `block_sparse_attn`'s `bsa_evalOp_ge`;
+used for the causal `cols[None,:] ≤ offs_m[:,None]` mask). -/
+theorem msa_evalOp_le {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.le h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.le bc vx vy)) := by
+  simp [evalOp]
+
+/-- Local `evalOp` unfolding for `.remap` (mirrors `block_sparse_attn`'s
+`bsa_evalOp_remap`; used inside the masked K/V/column loads). -/
+theorem msa_evalOp_remap {dtype inShape outShape}
+    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
+    evalOp (.remap outShape map a) s = (do
+      let va ← evalOp a s; some (Tile.remap map va)) := by
+  simp [evalOp]
+
+end MSARecipes
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
