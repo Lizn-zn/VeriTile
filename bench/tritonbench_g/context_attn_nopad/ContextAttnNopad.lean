@@ -1173,6 +1173,98 @@ theorem nopad_k_load_eval (s : BlockState) (K B_Start_Loc B_Seqlen : RegionName)
         = (startLoc s B_Start_Loc + (SN + jL.val)) * 768 + s.pids 1 * 128 + e.val from by ring]
   · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
 
+set_option maxHeartbeats 1600000 in
+/-- **`qk += tl.dot(q, k)` recipe** (over the seeded `qk = full 0`).  `qk` lane
+`(i, jL)`: `some (Σ_e qFn i e · kFn e jL)`, where `q`/`k` are non-`⊥` real tiles. -/
+theorem nopad_qk_dot_eval (s : BlockState) (qFn : Fin 128 → Fin 128 → ℝ)
+    (kFn : Fin 128 → Fin 128 → ℝ)
+    (hqk0 : s.regs .real [128, 128] "qk"
+      = some (⟨fun _ : TileIndex [128, 128] => some (0 : ℝ)⟩ : Tile .real [128, 128]))
+    (hq : s.regs .real [128, 128] "q"
+      = some (⟨fun idx : TileIndex [128, 128] => some (qFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]))
+    (hk : s.regs .real [128, 128] "k"
+      = some (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "qk")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k"))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          some (Finset.univ.sum (fun e : Fin 128 => qFn idx.1 e * kFn e idx.2.1))⟩
+          : Tile .real [128, 128]) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k")) s
+      = some (Tile.dot [] (⟨fun idx : TileIndex [128, 128] => some (qFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])
+          (⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])) := by
+    rw [evalOp_dot]; erw [evalOp_ref, hq, evalOp_ref, hk]; rfl
+  rw [evalOp_add, evalOp_ref, hqk0]
+  show Option.bind (evalOp (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k")) s) _ = _
+  rw [hdot]
+  simp only [Option.bind]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, WithBot.realAdd]
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ fun e : Fin 128 =>
+        Option.map₂ (· * ·) ((⟨fun idx : TileIndex [128, 128] => some (qFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]).data (i, e, PUnit.unit))
+          ((⟨fun idx : TileIndex [128, 128] => some (kFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]).data (e, jL, PUnit.unit)))
+      = (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ fun e : Fin 128 => ((qFn i e * kFn e jL : ℝ) : WithBot ℝ)) from by
+    apply Finset.sum_congr rfl; intro e _; rfl]
+  rw [WithBot.sum_some_eq_some]
+  show Option.map₂ (· + ·) (some 0) (some _) = _
+  simp only [Option.map₂, Option.bind, Option.map, zero_add]
+
+set_option maxHeartbeats 1600000 in
+/-- **`qk *= sm_scale` recipe.** `qk` lane `(i, jL)`: `some (sc · rawFn i jL)`. -/
+theorem nopad_qk_scale_eval (s : BlockState) (sc : ℝ) (rawFn : Fin 128 → Fin 128 → ℝ)
+    (hqk : s.regs .real [128, 128] "qk"
+      = some (⟨fun idx : TileIndex [128, 128] => some (rawFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 128] "qk") (Op.const sc)) s
+      = some (⟨fun idx : TileIndex [128, 128] => some (rawFn idx.1 idx.2.1 * sc)⟩
+          : Tile .real [128, 128]) := by
+  rw [evalOp_mul, evalOp_ref, hqk, evalOp_const]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- **`qk = tl.where(offs_m ≥ start_n+offs_n, qk, -inf)` recipe** (causal mask).
+`qk` lane `(i, jL)`: keeps `some (qkFn i jL)` when `gi[i] ≥ SN + jL` (`gi[i] =
+offs_m[i]`), else the genuine `⊥` sentinel. -/
+theorem nopad_qk_where_eval (s : BlockState) (SN : Nat) (qkFn : Fin 128 → Fin 128 → ℝ)
+    (offsM : Fin 128 → Nat)
+    (hqk : s.regs .real [128, 128] "qk"
+      = some (⟨fun idx : TileIndex [128, 128] => some (qkFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]))
+    (hm : s.regs .nat [128] "offs_m" = some (Tile.vec offsM))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))) :
+    evalOp ((Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))).where
+        (Op.ref .real [128, 128] "qk") (Op.negInf.broadcast [128, 128])) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          if SN + idx.2.1.val ≤ offsM idx.1 then some (qkFn idx.1 idx.2.1)
+          else (⊥ : WithBot ℝ)⟩ : Tile .real [128, 128]) := by
+  have hexpM : @evalOp .nat [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec offsM)) :=
+    evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_m" s _ hm
+  have hexpN : @evalOp .nat [1, 128] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")) s
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin 128 => j.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [128] ⟨0, by simp⟩ "offs_n" s _ hn
+  simp only [evalOp, hexpM, hsn, hexpN, hqk, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, u⟩ := idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Tile.vec,
+    Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.ge, NumericDType.add,
+    TileShape.dropInsertedIndex]
+  by_cases hle : SN + jL.val ≤ offsM i
+  · rw [if_pos (by simp only [decide_eq_true_eq]; omega), if_pos hle]
+  · rw [if_neg (by simp only [decide_eq_true_eq]; omega), if_neg hle]; rfl
+
 set_option maxRecDepth 8000 in
 /-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
 theorem nopad_body_split
