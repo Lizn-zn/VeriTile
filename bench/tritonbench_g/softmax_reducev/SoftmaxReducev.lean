@@ -1560,4 +1560,125 @@ noncomputable def srInvariant
         ((srStateBot (srQkF s0 Logics BStartLoc BSeqLen) (srVF s0 V BLoc BSeqLen)
           (c * 64) idx.1).2.2 : WithBot ℝ)⟩ : Tile .real [64])
 
+set_option maxHeartbeats 1600000 in
+/-- **`off_v` recipe** (`cur_head·64 + offs_d[None,:]·1`, shape `[1,64]`). -/
+theorem sr_offv_eval (s : BlockState) (head : Nat)
+    (hch : s.regs .nat [] "cur_head" = some (Tile.scalar head))
+    (hd : s.regs .nat [64] "offs_d" = some (Tile.vec (fun e : Fin 64 => e.val))) :
+    evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 64))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d"))
+          (Op.constNat 1))) s
+      = some (⟨fun idx : TileIndex [1, 64] => head * 64 + idx.2.1.val⟩ : Tile .nat [1, 64]) := by
+  have hexp : @evalOp .nat [1, 64] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) s
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun e : Fin 64 => e.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [64] ⟨0, by simp⟩ "offs_d" s _ hd
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hexp, hch,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.vec, Tile.expandDim_data, NumericDType.mul, NumericDType.add]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **preLoop execution.** The 12 deterministic preLoop statements step a clean
+input state (`undef = 0`) to a state satisfying `srInvariant … 0` — the loop-entry
+base case (`e_max = ⊥`, `e_sum = 0`, `acc = 0` via `srRunningMax_zero` /
+`srStateBot_zero`). -/
+theorem srPreLoop_eval
+    (s : BlockState) (V : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : Region .nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (srPreLoop V BStartLoc BSeqLen) s = some s0
+      ∧ srInvariant BSeqLen.cast V BLoc BStartLoc BSeqLen s 0 s0 := by
+  unfold srPreLoop
+  -- stmt 0: cur_batch = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: cur_head = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: cur_batch_seq_len = load BSeqLen[cur_batch]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region BSeqLen (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (srSeqLen s BSeqLen.cast)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def, srSeqLen]
+      rfl))]
+  -- stmt 3: cur_batch_start_loc = load BStartLoc[cur_batch]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region BStartLoc (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (srStartLoc s BStartLoc.cast)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def, srStartLoc]
+      rfl))]
+  -- stmt 4: offs_n = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun j : Fin 64 => j.val)) from evalOp_arange 64 _))]
+  -- stmt 5: offs_d = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun e : Fin 64 => e.val)) from evalOp_arange 64 _))]
+  -- stmt 6: off_v = cur_head*64 + offs_d[None,:]*1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 64))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d"))
+            (Op.constNat 1))) _
+        = some (⟨fun idx : TileIndex [1, 64] => s.pids 1 * 64 + idx.2.1.val⟩ : Tile .nat [1, 64]) from
+      sr_offv_eval _ (s.pids 1) (by simp) (by simp [Tile.vec])))]
+  -- stmt 7: off_b_loc = cur_batch*128 + (128 - seqlen)*1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 128))
+          (Op.mul .nat Broadcast.nil
+            (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "cur_batch_seq_len"))
+            (Op.constNat 1))) _
+        = some (Tile.scalar (srOffBLoc s BSeqLen.cast)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul, evalOp_sub]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids, Option.bind_eq_bind,
+        Option.bind_some, srOffBLoc, srSeqLen]
+      refine congrArg some ?_
+      ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub]))]
+  -- stmt 8: v_ptrs = V + off_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V) (Op.ref .nat [1, 64] "off_v")) _
+        = some (⟨fun idx : TileIndex [1, 64] => (V, s.pids 1 * 64 + idx.2.1.val)⟩ : Tile .ptr [1, 64]) from by
+      simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, BlockState.setReg_pids, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨z, e, u⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  -- stmt 9: e_max = -inf
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp Op.negInf _ = some (Tile.scalar (⊥ : WithBot ℝ)) from by
+      simp [evalOp_negInf]; rfl))]
+  -- stmt 10: e_sum = 0.0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.const 0.0) _ = some (Tile.scalar (some (0 : ℝ))) from by
+      simp only [evalOp_const]; norm_num))]
+  -- stmt 11: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩ : Tile .real [64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp, ?_, ?_, by simp, by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec],
+    by simp, by simp, ?_, ?_, ?_⟩
+  · funext rg o; simp
+  · intro rg o; simp [hundef]
+  · -- e_max = srRunningMax 0 = ⊥
+    rw [Nat.zero_mul, srRunningMax_zero]
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true]
+  · -- e_sum = srStateBot.2.1 (0) = 0
+    rw [Nat.zero_mul, srStateBot_zero]
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    rfl
+  · -- acc = srStateBot.2.2 (0) = 0
+    simp only [BlockState.setReg_same, Nat.zero_mul, srStateBot_zero]
+    rfl
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
