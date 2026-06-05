@@ -2013,4 +2013,422 @@ theorem msa_colgather_eval (s : BlockState) (BN cpOff SN : Nat) (cb : Bool)
 
 end MSARecipes
 
+/-! ## FOUNDATION: body-split, the two loop bodies, the loop invariants, and preLoop
+
+This section is the execution-layer FOUNDATION for the (NEXT-stage)
+step/assembly/top proof of `mixed_sparse_attention_fwd_kernel_surface` at the
+Python `block64` shape. It mirrors `context_attn_nopad`'s `nopadPreLoop` /
+`nopadLoopBody` / `nopadPostLoop` / `nopad_body_split` / `nopadInvariant` /
+`nopadPreLoop_eval` scaffolding, adapted to this kernel's TWO sequential
+`forRangeDyn` loops nested inside the `start_m·BLOCK_M ≥ seqlen` early-exit
+`ifThen` guard.
+
+**Extracted body structure** (via `rfl`-checked probes at the `block64` shape):
+the lowered `toAlgKernel.body` is `[start_m, off_hz, seqlen, ifThen negGuard inner]`
+(4 top statements; `negGuard = boolNot (start_m·64 ≥ seqlen)`), and `inner`
+(26 statements) is
+
+```
+  inner = msaSetup (21 stmts: offs_m … max_num_blks)
+            ++ [forRangeDyn "block_index" 0 (ref max_num_blks) 1 msaLoopBodyA]   -- 18-stmt body
+            ++ [max_num_cols = 16]
+            ++ [forRangeDyn "start_n" 0 (ref max_num_cols) 64 msaLoopBodyB]      -- 16-stmt body
+            ++ msaPostLoop (2 stmts: acc /= l_i; masked store)
+```
+
+**FA2 normalization note.** Unlike `block_sparse_attn` (whose loop body folds in
+`p_scale = beta/l_i_new` and `acc_scale = (l_i/l_i_new)·alpha`, so its `acc`
+register holds the *normalized* `OPartial/LPartial` ratio at every step and
+`bsaInvariant` records that ratio), THIS kernel uses the classic *unnormalized*
+FlashAttention-2 form: `acc_scale = l_i·0 + alpha = alpha`, `acc *= alpha`,
+`acc += dot(p, v)`, `l_i = l_i·alpha + sum(p)`, and the single division
+`acc /= l_i` happens once in `msaPostLoop`. Hence the in-loop `acc` register is
+the *unnormalized* numerator `OPartial`, `l_i` is the denominator `LPartial`, and
+`m_i` is the running max `MPartial`; the invariants below record those
+unnormalized streaming accumulators (the post-loop divide is what produces the
+final closed-form ratio, exactly as `mixedSparseAttnClosedForm = numer/denom`). -/
+
+section MSAFoundation
+
+open VeriTile.Triton
+
+/-- The early-exit guard predicate `start_m·BLOCK_M ≥ seqlen` (block64: `BLOCK_M =
+64`). The kernel's `if guard { return }` lowers to `ifThen (boolNot guard) inner`,
+so the whole compute body runs exactly when `guard` is false (program is active). -/
+def msaGuard : Op .bool [] :=
+  Op.ge ComparableDType.nat Broadcast.nil
+    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
+    (Op.ref .nat [] "seqlen")
+
+/-- The 21 setup statements that run (inside the active-guard `ifThen`) before
+Loop A: the index vectors, the Q/out base offsets, the K/V/O pointer tiles, the
+per-row sparsity-schedule scalars/pointers, the `m_i=⊥`/`l_i=0`/`acc=0` running
+init, the fp16 scaled `q` load, the `m_mask` row mask, and `max_num_blks = 8`.
+Block64 shape: `BLOCK_M = BLOCK_N = BLOCK_DMODEL = 64`. -/
+def msaSetup (Q K V : RegionName) (seqlens : Region .nat)
+    (block_count block_offset column_count column_index : Region .nat)
+    (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [64] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
+        (Op.arange 64)),
+    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
+    Stmt.assign .nat [64] "offs_d" (Op.arange 64),
+    Stmt.assign .nat [] "qo_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+          (Op.constNat 32768))
+        (Op.mul .nat Broadcast.nil
+          (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+          (Op.constNat 8192))),
+    Stmt.assign .nat [] "kv_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+          (Op.constNat 32768))
+        (Op.mul .nat Broadcast.nil
+          (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+          (Op.constNat 8192))),
+    Stmt.assign .ptr [64, 64] "q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.constNat 64)))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))),
+    Stmt.assign .ptr [64, 1] "k_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))),
+    Stmt.assign .ptr [1, 64] "v_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))),
+    Stmt.assign .ptr [64, 64] "o_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.constNat 64)))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))),
+    Stmt.assign .nat [] "num_blks"
+      (Op.load .nat
+        (MemAccess.region block_count
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m")))
+        MaskOpt.none),
+    Stmt.assign .ptr [] "blks_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase block_offset)
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m"))
+          (Op.constNat 4))),
+    Stmt.assign .nat [] "num_cols"
+      (Op.load .nat
+        (MemAccess.region column_count
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m")))
+        MaskOpt.none),
+    Stmt.assign .ptr [] "cols_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase column_index)
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m"))
+          (Op.constNat 8))),
+    Stmt.assign .real [64] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [64] "l_i" (Op.full [64] (Op.const 0)),
+    Stmt.assign .real [64, 64] "acc" (Op.full [64, 64] (Op.const 0)),
+    Stmt.assign .real [] "qk_scale"
+      (Op.mul .real Broadcast.nil (Op.const (0.1 : ℝ)) (Op.const 1.44269504)),
+    Stmt.assign .real [64, 64] "q"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [64, 64] "q_ptrs")) MaskOpt.none),
+    Stmt.assign FloatDType.fp16.toTileDType [64, 64] "q"
+      (Op.castFloat FloatDType.real FloatDType.fp16
+        (Op.mul .real Broadcast.scalarR
+          (Op.ref .real [64, 64] "q")
+          (Op.ref .real [] "qk_scale"))),
+    Stmt.assign .bool [64, 1] "m_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.ref .nat [] "seqlen")),
+    Stmt.assign .nat [] "max_num_blks" (Op.constNat 8) ]
+
+/-- Loop A — block-sparse causal body (18 statements), the body of
+`forRangeDyn "block_index" 0 (ref max_num_blks) 1`. Transcribed against the
+`msa_*_eval` recipes A1–A18: masked block-start gather, contiguous columns,
+in-seqlen mask, masked K/V loads, causal `where`, fp16 dot, online-softmax
+max/exp2/rescale/accumulate, and the `m_i`/`l_i` carries. Block64 shape. -/
+def msaLoopBodyA : List Stmt :=
+  [ -- A1: cond = block_index < num_blks
+    Stmt.assign .bool [] "cond"
+      (Op.lt ComparableDType.nat Broadcast.nil
+        (Op.ref .nat [] "block_index") (Op.ref .nat [] "num_blks")),
+    -- A2: start_n = load(blks_ptr + block_index, mask=cond)
+    Stmt.assign .nat [] "start_n"
+      (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "blks_ptr") (Op.ref .nat [] "block_index")))
+        (MaskOpt.mask (Op.ref .bool [] "cond"))),
+    -- A3: cols = start_n + offs_n
+    Stmt.assign .nat [64] "cols"
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n")),
+    -- A4: n_mask = (cols < seqlen) & cond
+    Stmt.assign .bool [64] "n_mask"
+      (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.ref .nat [64] "cols") (Op.ref .nat [] "seqlen"))
+        (Op.ref .bool [] "cond")),
+    -- A5: k = masked K load
+    Stmt.assign .real [64, 64] "k"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consL.consR (Op.ref .ptr [64, 1] "k_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "cols")) (Op.constNat 64))))
+        (MaskOpt.maskOther
+          (Op.remap [64, 64] Broadcast.nil.consSame.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [64] "n_mask")))
+          ((Op.const 0.0).broadcast [64, 64]))),
+    -- A6: v = masked V load
+    Stmt.assign .real [64, 64] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "cols")) (Op.constNat 64))))
+        (MaskOpt.maskOther
+          (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .bool [64] "n_mask")))
+          ((Op.const 0.0).broadcast [64, 64]))),
+    -- A7: qk = zeros
+    Stmt.assign .real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
+    -- A8: causal_mask = cols[None,:] ≤ offs_m[:,None]
+    Stmt.assign .bool [64, 64] "causal_mask"
+      (Op.le ComparableDType.nat Broadcast.nil.consR.consL
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "cols"))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m"))),
+    -- A9: qk = where(m_mask & causal_mask, qk, -inf)
+    Stmt.assign .real [64, 64] "qk"
+      ((Op.boolAnd Broadcast.nil.consL.consSame
+          (Op.ref .bool [64, 1] "m_mask") (Op.ref .bool [64, 64] "causal_mask")).where
+        (Op.ref .real [64, 64] "qk") (Op.negInf.broadcast [64, 64])),
+    -- A10: qk += dot(q, k)
+    Stmt.assign .real [64, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "qk")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.ref FloatDType.fp16.toTileDType [64, 64] "q")) : Op .real [64, 64])
+          (Op.ref .real [64, 64] "k"))),
+    -- A11: m_i_new = maximum(m_i, max(qk,1))
+    Stmt.assign .real [64] "m_i_new"
+      ((Op.gt ComparableDType.real Broadcast.nil.consSame
+          (Op.ref .real [64] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+            (Op.ref .real [64, 64] "qk"))).where
+        (Op.ref .real [64] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+          (Op.ref .real [64, 64] "qk"))),
+    -- A12: alpha = exp2(m_i - m_i_new)
+    Stmt.assign .real [64] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [64] "m_i") (Op.ref .real [64] "m_i_new"))),
+    -- A13: p = exp2(qk - m_i_new[:,None])
+    Stmt.assign .real [64, 64] "p"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m_i_new")))),
+    -- A14: acc_scale = l_i * 0 + alpha
+    Stmt.assign .real [64] "acc_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64] "l_i") (Op.const 0))
+        (Op.ref .real [64] "alpha")),
+    -- A15: acc *= acc_scale[:,None]
+    Stmt.assign .real [64, 64] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "acc_scale"))),
+    -- A16: acc += dot((p).to(fp16), v)
+    Stmt.assign .real [64, 64] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [64, 64] "p"))) : Op .real [64, 64])
+          (Op.ref .real [64, 64] "v"))),
+    -- A17: l_i = l_i * alpha + sum(p,1)
+    Stmt.assign .real [64] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [64] "l_i") (Op.ref .real [64] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+          (Op.ref .real [64, 64] "p"))),
+    -- A18: m_i = m_i_new
+    Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_i_new") ]
+
+/-- Loop B — column-sparse body (16 statements), the body of
+`forRangeDyn "start_n" 0 (ref max_num_cols) 64`. Transcribed against `msa_*_eval`
+recipes B1–B16: the column-validity mask, the masked `.nat` column gather (B3),
+the masked K/V loads, the NON-causal `where`, fp16 dot, and the same online-softmax
+core (B6–B16 ≡ A7,A10–A18). Block64 shape. -/
+def msaLoopBodyB : List Stmt :=
+  [ -- B1: cond = start_n < num_cols
+    Stmt.assign .bool [] "cond"
+      (Op.lt ComparableDType.nat Broadcast.nil
+        (Op.ref .nat [] "start_n") (Op.ref .nat [] "num_cols")),
+    -- B2: n_mask = (start_n + offs_n < num_cols) & cond
+    Stmt.assign .bool [64] "n_mask"
+      (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+          (Op.ref .nat [] "num_cols"))
+        (Op.ref .bool [] "cond")),
+    -- B3: cols = masked column gather
+    Stmt.assign .nat [64] "cols"
+      (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarL
+            (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "cols_ptr") (Op.ref .nat [] "start_n"))
+            (Op.ref .nat [64] "offs_n")))
+        (MaskOpt.maskOther
+          (Op.remap [64] Broadcast.nil.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [] "cond")))
+          ((Op.constNat 0).broadcast [64]))),
+    -- B4: k = masked K load
+    Stmt.assign .real [64, 64] "k"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consL.consR (Op.ref .ptr [64, 1] "k_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "cols")) (Op.constNat 64))))
+        (MaskOpt.maskOther
+          (Op.remap [64, 64] Broadcast.nil.consSame.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [64] "n_mask")))
+          ((Op.const 0.0).broadcast [64, 64]))),
+    -- B5: v = masked V load
+    Stmt.assign .real [64, 64] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "cols")) (Op.constNat 64))))
+        (MaskOpt.maskOther
+          (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .bool [64] "n_mask")))
+          ((Op.const 0.0).broadcast [64, 64]))),
+    -- B6: qk = zeros
+    Stmt.assign .real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
+    -- B7: qk = where(m_mask & n_mask, qk, -inf)
+    Stmt.assign .real [64, 64] "qk"
+      ((Op.boolAnd Broadcast.nil.consL.leadR
+          (Op.ref .bool [64, 1] "m_mask") (Op.ref .bool [64] "n_mask")).where
+        (Op.ref .real [64, 64] "qk") (Op.negInf.broadcast [64, 64])),
+    -- B8: qk += dot(q, k)
+    Stmt.assign .real [64, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "qk")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.ref FloatDType.fp16.toTileDType [64, 64] "q")) : Op .real [64, 64])
+          (Op.ref .real [64, 64] "k"))),
+    -- B9: m_i_new = maximum(m_i, max(qk,1))
+    Stmt.assign .real [64] "m_i_new"
+      ((Op.gt ComparableDType.real Broadcast.nil.consSame
+          (Op.ref .real [64] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+            (Op.ref .real [64, 64] "qk"))).where
+        (Op.ref .real [64] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+          (Op.ref .real [64, 64] "qk"))),
+    -- B10: alpha = exp2(m_i - m_i_new)
+    Stmt.assign .real [64] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [64] "m_i") (Op.ref .real [64] "m_i_new"))),
+    -- B11: p = exp2(qk - m_i_new[:,None])
+    Stmt.assign .real [64, 64] "p"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m_i_new")))),
+    -- B12: acc_scale = l_i * 0 + alpha
+    Stmt.assign .real [64] "acc_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64] "l_i") (Op.const 0))
+        (Op.ref .real [64] "alpha")),
+    -- B13: acc *= acc_scale[:,None]
+    Stmt.assign .real [64, 64] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "acc_scale"))),
+    -- B14: acc += dot((p).to(fp16), v)
+    Stmt.assign .real [64, 64] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [64, 64] "p"))) : Op .real [64, 64])
+          (Op.ref .real [64, 64] "v"))),
+    -- B15: l_i = l_i * alpha + sum(p,1)
+    Stmt.assign .real [64] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [64] "l_i") (Op.ref .real [64] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
+          (Op.ref .real [64, 64] "p"))),
+    -- B16: m_i = m_i_new
+    Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_i_new") ]
+
+/-- The 2 post-loop statements: `acc /= l_i[:, None]` and the `m_mask`-masked store
+of the (now normalized) `acc` to `Out` via `o_ptrs`. Block64 shape. -/
+def msaPostLoop : List Stmt :=
+  [ Stmt.assign .real [64, 64] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))),
+    Stmt.store FloatDType.fp16.toTileDType [64, 64]
+      (MemAccess.ptr (Op.ref .ptr [64, 64] "o_ptrs"))
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [64, 64] "acc"))
+      (MaskOpt.mask
+        (Op.remap [64, 64] Broadcast.nil.consL.consSame.leftIndex
+          (Op.ref .bool [64, 1] "m_mask"))) ]
+
+set_option maxRecDepth 8000 in
+/-- **Body split.** The lowered `block64` forward body is exactly the 3 outer
+program-setup statements followed by the active-guard `ifThen` wrapping the 21
+setup statements, the two `forRangeDyn` loops (block-sparse Loop A then
+column-sparse Loop B, separated by `max_num_cols = 16`), and the 2 post-loop
+statements. Extracted by `rfl`. -/
+theorem msa_body_split
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) :
+    (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel.body
+      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+          Stmt.assign .nat [] "off_hz" (Op.programId 1),
+          Stmt.assign .nat [] "seqlen"
+            (Op.load .nat
+              (MemAccess.region Seqlens
+                (Op.floorDiv IntegralDType.nat Broadcast.nil
+                  (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+              MaskOpt.none),
+          Stmt.ifThen (Op.boolNot msaGuard)
+            (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+              ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
+                    (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
+                   Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
+                   Stmt.forRangeDyn "start_n" (Op.constNat 0)
+                    (Op.ref .nat [] "max_num_cols") (Op.constNat 64) msaLoopBodyB ]
+              ++ msaPostLoop) ] := by
+  rfl
+
+end MSAFoundation
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
