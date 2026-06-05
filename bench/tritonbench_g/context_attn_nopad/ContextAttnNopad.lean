@@ -1483,6 +1483,92 @@ theorem nopad_accmul_eval (s : BlockState) (accFn : Fin 128 → Fin 128 → With
   simp only [Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
     NumericDType.mul, TileShape.dropInsertedIndex]
 
+set_option maxHeartbeats 1600000 in
+/-- **`v` masked-load recipe.** `tl.load(v_ptrs + (start_loc+start_n)·768,
+mask=(start_n+offs_n)<seqlen, other=0)`, shape `[128,128]`, lane `(jL, d)`
+(`jL`=key axis 0, `d`=channel axis 1): `some (V[start_loc+start_n+jL, cur_head, d])`
+if `start_n+jL < seqlen`, else `some 0`. -/
+theorem nopad_v_load_eval (s : BlockState) (V B_Start_Loc B_Seqlen : RegionName) (SN : Nat)
+    (hvp : s.regs .ptr [128, 128] "v_ptrs" =
+      some (⟨fun idx : TileIndex [128, 128] =>
+        (V, idx.1.val * 768 + s.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128]))
+    (hsl : s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s B_Start_Loc)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hseq : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s B_Seqlen))) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 128] "v_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat 768))))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [128, 128]))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          if SN + idx.1.val < seqLen s B_Seqlen then
+            some (s.readMem V ((startLoc s B_Start_Loc + (SN + idx.1.val)) * 768
+              + s.pids 1 * 128 + idx.2.1.val))
+          else some (0.0 : ℝ)⟩ : Tile .real [128, 128]) := by
+  have hexp : @evalOp .nat [128, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun j : Fin 128 => j.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [128] ⟨1, by simp⟩ "offs_n" s _ hn
+  simp only [evalOp, hvp, hsl, hsn, hexp, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨jL, d, u⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim,
+    Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real, Region.cast_id,
+    BlockState.readMem, TileShape.dropInsertedIndex]
+  by_cases hlt : SN + jL.val < seqLen s B_Seqlen
+  · simp only [hlt, decide_true, if_true, if_pos hlt, BlockState.readMem]
+    rw [show jL.val * 768 + s.pids 1 * 128 + d.val + (startLoc s B_Start_Loc + SN) * 768
+        = (startLoc s B_Start_Loc + (SN + jL.val)) * 768 + s.pids 1 * 128 + d.val from by ring]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+
+set_option maxHeartbeats 1600000 in
+/-- **`acc += tl.dot(p, v)` recipe** (over the rescaled `acc`).  `acc` lane `(i, d)`:
+`realAdd acc[i,d] (Σ_{jL} p[i,jL]·v[jL,d])`. -/
+theorem nopad_acc_dot_eval (s : BlockState) (accFn : Fin 128 → Fin 128 → WithBot ℝ)
+    (pFn : Fin 128 → Fin 128 → ℝ) (vFn : Fin 128 → Fin 128 → ℝ)
+    (hacc : s.regs .real [128, 128] "acc"
+      = some (⟨fun idx : TileIndex [128, 128] => accFn idx.1 idx.2.1⟩ : Tile .real [128, 128]))
+    (hp : s.regs .real [128, 128] "p"
+      = some (⟨fun idx : TileIndex [128, 128] => some (pFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]))
+    (hv : s.regs .real [128, 128] "v"
+      = some (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "acc")
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v"))) s
+      = some (⟨fun idx : TileIndex [128, 128] =>
+          WithBot.realAdd (accFn idx.1 idx.2.1)
+            (some (Finset.univ.sum (fun jL : Fin 128 => pFn idx.1 jL * vFn jL idx.2.1)))⟩
+          : Tile .real [128, 128]) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v")) s
+      = some (Tile.dot [] (⟨fun idx : TileIndex [128, 128] => some (pFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])
+          (⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128])) := by
+    rw [evalOp_dot]; erw [evalOp_ref, hp, evalOp_ref, hv]; rfl
+  rw [evalOp_add, evalOp_ref, hacc]
+  show Option.bind (evalOp (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v")) s) _ = _
+  rw [hdot]
+  simp only [Option.bind]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, d, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add]
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ fun jL : Fin 128 =>
+        Option.map₂ (· * ·) ((⟨fun idx : TileIndex [128, 128] => some (pFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]).data (i, jL, PUnit.unit))
+          ((⟨fun idx : TileIndex [128, 128] => some (vFn idx.1 idx.2.1)⟩ : Tile .real [128, 128]).data (jL, d, PUnit.unit)))
+      = (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ fun jL : Fin 128 => ((pFn i jL * vFn jL d : ℝ) : WithBot ℝ)) from by
+    apply Finset.sum_congr rfl; intro jL _; rfl]
+  rw [WithBot.sum_some_eq_some]; rfl
+
 set_option maxRecDepth 8000 in
 /-- The lowered forward body is exactly `nopadPreLoop ++ forRangeDyn :: nopadPostLoop`. -/
 theorem nopad_body_split
