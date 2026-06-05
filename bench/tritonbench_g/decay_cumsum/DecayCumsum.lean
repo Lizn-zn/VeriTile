@@ -2543,7 +2543,9 @@ private theorem gated_mul (s : BlockState) (a b : TileIndex [4] → ℝ) :
 prologue-shaped row pointer, evaluated in a state `c` whose `region`-reads agree
 with `s`, equals the `gated` load tile of `region` at `R`. -/
 private theorem load_tile_gated (s c : BlockState) (region : RegionName) (R : Nat)
-    (hread : ∀ a, c.readMem region a = s.readMem region a) :
+    (hread : ∀ i : TileIndex [4],
+      c.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)) :
     (⟨fun i =>
         if (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)) :
             Tile .bool [4]).data i then
@@ -2559,7 +2561,7 @@ private theorem load_tile_gated (s c : BlockState) (region : RegionName) (R : Na
   apply Tile.ext; intro i
   simp only [gated, ldR, Tile.vec, Region.cast_id]
   by_cases hc : decide (s.pids 0 * 4 + i.1.val < 8)
-  · simp only [hc, if_true, hread]
+  · simp only [hc, if_true]; rw [hread i]
   · simp only [hc, Bool.false_eq_true, if_false]
     rfl
 
@@ -2652,7 +2654,9 @@ theorem bwd_iter_core
     (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
     (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
     (hpid : s3.pids = s.pids)
-    (hmem : s3.mem = s.mem)
+    (hrow : ∀ (r : RegionName) (i : TileIndex [4]),
+      s3.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R))
     (hmask : s3.regs .bool [4] "mask" = some
         (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8))))
     (hgval : s3.regs .real [4] "g_val" = some (gated s (ldR s G R)))
@@ -2699,8 +2703,9 @@ theorem bwd_iter_core
   -- Memory reads through `s3` agree with `s` (the prologue/head/ifThen write no
   -- memory); register reads of the 8 pointers and mask survive the real-valued
   -- assignments of the body.
-  have hread3 : ∀ (r : RegionName) (a : Nat), s3.readMem r a = s.readMem r a := by
-    intro r a; simp only [BlockState.readMem, hmem]
+  have hread3 : ∀ (r : RegionName) (i : TileIndex [4]),
+      s3.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := hrow
   -- The masked-load `other` tile (zeros) and mask-tile evaluations, reused below.
   have hmaskE : ∀ c : BlockState,
       c.regs .bool [4] "mask" = some
@@ -2743,7 +2748,7 @@ theorem bwd_iter_core
     rw [bwdEval_assign_load_ptr_maskOther s3 "dq1" "p_dq_inner" _ _
         ptrDQi maskT otherT hpdqi (hmaskE s3 hmask) (hother s3)]
     simp only [hptrDQi, hmaskT, hotherT]
-    rw [load_tile_gated s s3 DQInner R (fun a => hread3 DQInner a)]
+    rw [load_tile_gated s s3 DQInner R (fun i => hread3 DQInner i)]
   rw [stepStmts.cons_some e3]
   set c1 := s3.setReg "dq1" .real [4] (gated s (ldR s DQInner R)) with hc1
   -- Lookups on `c1` (one real setReg above `s3`).
@@ -2751,8 +2756,10 @@ theorem bwd_iter_core
     rw [hc1, BlockState.setReg_ne_name (h := by decide)]; exact hmask
   have c1pdqt : c1.regs .ptr [4] "p_dq_inter" = some ptrDQt := by
     rw [hc1, BlockState.setReg_ne_name (h := by decide)]; exact hpdqt
-  have c1read : ∀ a, c1.readMem DQInter a = s.readMem DQInter a := by
-    intro a; rw [hc1, BlockState.setReg_readMem]; exact hread3 DQInter a
+  have c1read : ∀ i : TileIndex [4],
+      c1.readMem DQInter (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem DQInter (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+    intro i; rw [hc1, BlockState.setReg_readMem]; exact hread3 DQInter i
   -- === Statement 4: dq2 = load p_dq_inter ===
   have e4 : stepStmt (Stmt.assign .real [4] "dq2"
       (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inter"))
@@ -2827,11 +2834,13 @@ theorem bwd_iter_core
   rw [stepStmts.cons_some e7]
   set c5 := stMem s DQInter R (dqOut s DQInner DQInter G R) c4 with hc5
   -- `c4` reads (4 real setRegs over `s3`) agree with `s`.
-  have c4read : ∀ (r : RegionName) (a : Nat), c4.readMem r a = s.readMem r a := by
-    intro r a
+  have c4read : ∀ (r : RegionName) (i : TileIndex [4]),
+      c4.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+    intro r i
     rw [hc4, BlockState.setReg_readMem, hc3, BlockState.setReg_readMem,
         hc2, BlockState.setReg_readMem, hc1, BlockState.setReg_readMem]
-    exact hread3 r a
+    exact hread3 r i
   -- `c4` pointer/mask lookups (peel the 4 real setRegs).
   have c4peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
       n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
@@ -2847,10 +2856,11 @@ theorem bwd_iter_core
       c5.regs d sh n = s3.regs d sh n := by
     intro d sh n h1 h2 h3
     rw [hc5, stMem_regs]; exact c4peel d sh n h1 h2 h3
-  have c5read : ∀ (r : RegionName) (a : Nat), r ≠ DQInter →
-      c5.readMem r a = s.readMem r a := by
-    intro r a hr
-    rw [hc5, stMem_readMem_other s DQInter r R _ c4 a hr]; exact c4read r a
+  have c5read : ∀ (r : RegionName) (i : TileIndex [4]), r ≠ DQInter →
+      c5.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+    intro r i hr
+    rw [hc5, stMem_readMem_other s DQInter r R _ c4 _ hr]; exact c4read r i
   -- === Statement 8: dk1 = load p_dk_inner ===
   have e8 : stepStmt (Stmt.assign .real [4] "dk1"
       (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inner"))
@@ -2863,7 +2873,7 @@ theorem bwd_iter_core
     rw [bwdEval_assign_load_ptr_maskOther c5 "dk1" "p_dk_inner" _ _
         ptrDKi maskT otherT c5pdki (hmaskE c5 c5mask) (hother c5)]
     simp only [hptrDKi, hmaskT, hotherT]
-    rw [load_tile_gated s c5 DKInner R (fun a => c5read DKInner a hDKInner_DQInter)]
+    rw [load_tile_gated s c5 DKInner R (fun i => c5read DKInner i hDKInner_DQInter)]
   rw [stepStmts.cons_some e8]
   set c6 := c5.setReg "dk1" .real [4] (gated s (ldR s DKInner R)) with hc6
   -- === Statement 9: dk2 = load p_dk_inter ===
@@ -2877,8 +2887,10 @@ theorem bwd_iter_core
     have c6mask : c6.regs .bool [4] "mask" = some maskT := by
       rw [hc6, BlockState.setReg_ne_name (h := by decide)]
       rw [c5peel .bool [4] "mask" (by decide) (by decide) (by decide)]; exact hmask
-    have c6read : ∀ a, c6.readMem DKInter a = s.readMem DKInter a := by
-      intro a; rw [hc6, BlockState.setReg_readMem]; exact c5read DKInter a hDKInter_DQInter
+    have c6read : ∀ i : TileIndex [4],
+        c6.readMem DKInter (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+          = s.readMem DKInter (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+      intro i; rw [hc6, BlockState.setReg_readMem]; exact c5read DKInter i hDKInter_DQInter
     rw [bwdEval_assign_load_ptr_maskOther c6 "dk2" "p_dk_inter" _ _
         ptrDKt maskT otherT c6pdkt (hmaskE c6 c6mask) (hother c6)]
     simp only [hptrDKt, hmaskT, hotherT]
@@ -2944,12 +2956,13 @@ theorem bwd_iter_core
   rw [stepStmts.cons_some e11]
   set c9 := c8.setReg "dk" .real [4] (gated s (dkOut s DKInner DKInter G R lgVal)) with hc9
   -- `c9` reads agree with `s` for regions ≠ DQInter (only the DQInter store so far).
-  have c9read : ∀ (r : RegionName) (a : Nat), r ≠ DQInter →
-      c9.readMem r a = s.readMem r a := by
-    intro r a hr
+  have c9read : ∀ (r : RegionName) (i : TileIndex [4]), r ≠ DQInter →
+      c9.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+    intro r i hr
     rw [hc9, BlockState.setReg_readMem, hc8, BlockState.setReg_readMem,
         hc7, BlockState.setReg_readMem, hc6, BlockState.setReg_readMem]
-    exact c5read r a hr
+    exact c5read r i hr
   -- `c9` lookups of mask / p_dk_inter (peel dk, dk2, dk1, then `c5`).
   have c9peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
       n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
@@ -2978,10 +2991,11 @@ theorem bwd_iter_core
   rw [stepStmts.cons_some e12]
   set c10 := stMem s DKInter R (dkOut s DKInner DKInter G R lgVal) c9 with hc10
   -- `c10` reads: regions ≠ DKInter and ≠ DQInter agree with `s`.
-  have c10read : ∀ (r : RegionName) (a : Nat), r ≠ DKInter → r ≠ DQInter →
-      c10.readMem r a = s.readMem r a := by
-    intro r a hr1 hr2
-    rw [hc10, stMem_readMem_other s DKInter r R _ c9 a hr1]; exact c9read r a hr2
+  have c10read : ∀ (r : RegionName) (i : TileIndex [4]), r ≠ DKInter → r ≠ DQInter →
+      c10.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+        = s.readMem r (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+    intro r i hr1 hr2
+    rw [hc10, stMem_readMem_other s DKInter r R _ c9 _ hr1]; exact c9read r i hr2
   have c10peel : ∀ (d : TileDType) (sh : TileShape) (n : RegName),
       n ≠ "dk" → n ≠ "dk2" → n ≠ "dk1" → n ≠ "dq" → n ≠ "dq2" → n ≠ "dq1" →
       c10.regs d sh n = s3.regs d sh n := by
@@ -3001,7 +3015,7 @@ theorem bwd_iter_core
     rw [bwdEval_assign_load_ptr_maskOther c10 "q_val" "p_q" _ _
         ptrQ maskT otherT c10pq (hmaskE c10 c10mask) (hother c10)]
     simp only [hptrQ, hmaskT, hotherT]
-    rw [load_tile_gated s c10 Q R (fun a => c10read Q a hQ_DKInter hQ_DQInter)]
+    rw [load_tile_gated s c10 Q R (fun i => c10read Q i hQ_DKInter hQ_DQInter)]
   rw [stepStmts.cons_some e13]
   set c11 := c10.setReg "q_val" .real [4] (gated s (ldR s Q R)) with hc11
   -- === Statement 14: k_val = load p_k ===
@@ -3017,8 +3031,10 @@ theorem bwd_iter_core
       rw [hc11, BlockState.setReg_ne_name (h := by decide)]
       rw [c10peel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)
           (by decide) (by decide)]; exact hmask
-    have c11read : ∀ a, c11.readMem K a = s.readMem K a := by
-      intro a; rw [hc11, BlockState.setReg_readMem]; exact c10read K a hK_DKInter hK_DQInter
+    have c11read : ∀ i : TileIndex [4],
+        c11.readMem K (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+          = s.readMem K (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+      intro i; rw [hc11, BlockState.setReg_readMem]; exact c10read K i hK_DKInter hK_DQInter
     rw [bwdEval_assign_load_ptr_maskOther c11 "k_val" "p_k" _ _
         ptrK maskT otherT c11pk (hmaskE c11 c11mask) (hother c11)]
     simp only [hptrK, hmaskT, hotherT]
@@ -3495,7 +3511,7 @@ theorem bwd_iter0_eval
     bwd_iter_core DQInner DQInter DKInner DKInter Q K G DG s s3 R
       (ldR s G R) (fun _ => 0)
       hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
-      hs3pid hs3mem
+      hs3pid (fun r i => by simp only [BlockState.readMem, hs3mem])
       (by rw [hpeel .bool [4] "mask" (by decide) (by decide) (by decide) (by decide)]
           exact hsh.mask)
       (by rw [hs3, BlockState.setReg_ne_name (h := by decide), bwdIterHeadState,
