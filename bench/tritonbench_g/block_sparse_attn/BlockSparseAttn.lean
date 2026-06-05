@@ -3877,5 +3877,36 @@ theorem bsa_qkM_cell_eq_maskedScore
   · rw [if_neg h, maskedScore_of_not_le qStart gpos Qg Kg scale i _ (by rw [← hMask]; exact h)]
     rfl
 
+open BSAMathCausal in
+/-- The kernel's per-row block max `m_ij = sup' (qkM row)` equals the gathered
+`sup`-of-`maskedScore` over the block-`c` lanes (the inner term of
+`bsaMPartial_succ_of_lt`). Built from the per-cell `bsa_qkM_cell_eq_maskedScore`
+bridge plus `Finset.sup'_eq_sup`. -/
+theorem bsa_mij_eq_sup_maskedScore
+    (qStart numKVBlocks c : Nat) (hc : c + 1 ≤ numKVBlocks)
+    (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 16] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (SN : Nat) (gm : Fin 16 → Nat)
+    (qkScaled : Tile .real [16, 16])
+    (i : Fin 16)
+    (hMask : ∀ jL : Fin 16, (SN + jL.val ≤ gm i) ↔
+      (gpos (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jL) ≤ qStart + i.val))
+    (hScore : ∀ jL : Fin 16, qkScaled.data (i, jL, PUnit.unit) =
+      (some (gScore Qg Kg scale i
+        (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jL)) : WithBot ℝ)) :
+    (Finset.univ : Finset (Fin 16)).sup' Finset.univ_nonempty
+        (fun k : Fin 16 =>
+          NumericDType.real.add (qkScaled.data (i, k, PUnit.unit))
+            (if SN + k.val ≤ gm i then (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)))
+      = (Finset.univ : Finset (Fin 16)).sup
+          (fun jLocal : Fin 16 =>
+            maskedScore qStart gpos Qg Kg scale i
+              (StreamingAccumulator.blockIndex 16 numKVBlocks c hc jLocal)) := by
+  rw [Finset.sup'_eq_sup]
+  refine Finset.sup_congr rfl (fun jL _ => ?_)
+  exact bsa_qkM_cell_eq_maskedScore qStart numKVBlocks c hc gpos Qg Kg scale SN gm
+    qkScaled i jL (hMask jL) (hScore jL)
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
