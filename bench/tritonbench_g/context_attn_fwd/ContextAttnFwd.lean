@@ -2526,81 +2526,82 @@ theorem gStateBot_score_congr (S hi : Nat) (g1 g2 : Fin S → ℝ × ℝ)
   refine ⟨hfst, ?_⟩
   rw [(gStateBot_consistent S hi g1).1, (gStateBot_consistent S hi g2).1, hfst, hkeys2]
 
-/-- **Block-step in explicit `Fin 128` form** (`BN = 128`). The ⊥-seeded state
+/-- **Block-step in explicit `Fin BN` form** (BN-parametric). The ⊥-seeded state
 after `c+1` blocks equals the kernel's one-shot rescale-and-add over block `c`'s
-reindexed `Fin 128` lanes, anchored to the state after `c` blocks. This is the
-exact tuple `(m_ij, l_i', acc')` the loop body computes. -/
-theorem gStateBot_succ_explicit (S c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 1) * 128 ≤ S) :
-    let st := gStateBot S (c * 128) g
-    let M' := st.1 ⊔ Finset.univ.sup (fun jL : Fin 128 =>
-        ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ))
-    gStateBot S ((c + 1) * 128) g
+reindexed `Fin BN` lanes, anchored to the state after `c` blocks. This is the
+exact tuple `(m_ij, l_i', acc')` the loop body computes (instantiated at `BN = 128`
+for the regular path, `BN = 64` for the Tesla path). -/
+theorem gStateBot_succ_explicit (S BN c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 1) * BN ≤ S) :
+    let st := gStateBot S (c * BN) g
+    let M' := st.1 ⊔ Finset.univ.sup (fun jL : Fin BN =>
+        ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 : WithBot ℝ))
+    gStateBot S ((c + 1) * BN) g
       = (M',
          st.2.1 * (WithBot.realExp2 (WithBot.realSub st.1 M')).unbotD 0
-           + Finset.univ.sum (fun jL : Fin 128 =>
-               pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)),
+           + Finset.univ.sum (fun jL : Fin BN =>
+               pow2 ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 - M'.unbotD 0)),
          st.2.2 * (WithBot.realExp2 (WithBot.realSub st.1 M')).unbotD 0
-           + Finset.univ.sum (fun jL : Fin 128 =>
-               pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)
-                 * (g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
+           + Finset.univ.sum (fun jL : Fin BN =>
+               pow2 ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 - M'.unbotD 0)
+                 * (g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).2)) := by
   intro st M'
-  obtain ⟨hLc, hTc⟩ := gStateBot_consistent S (c * 128) g
+  obtain ⟨hLc, hTc⟩ := gStateBot_consistent S (c * BN) g
   -- M' is the running-max after c+1 blocks
-  have hMblock : M' = st.1 ⊔ ((gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-    have hsup : ((gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
-        = Finset.univ.sup (fun jL : Fin 128 =>
-            ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) := by
-      rw [show (gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+  have hMblock : M' = st.1 ⊔ ((gBlock S BN c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    have hsup : ((gBlock S BN c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+        = Finset.univ.sup (fun jL : Fin BN =>
+            ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 : WithBot ℝ)) := by
+      rw [show (gBlock S BN c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
             = ((List.finRange S).filterMap (fun j : Fin S =>
-                if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+                if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
                 then some ((g j).1) else none)).map (fun x : ℝ => ((x : ℝ) : WithBot ℝ)) from by
         unfold gBlock
         rw [List.map_filterMap, List.map_filterMap]
         apply List.filterMap_congr
         intro j _
-        by_cases hj : c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 <;> simp [hj]]
-      rw [ctx_filterMap_foldr_sup S (fun j => c * 128 ≤ j.val ∧ j.val < (c + 1) * 128) (fun j => (g j).1)]
+        by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN <;> simp [hj]]
+      rw [ctx_filterMap_foldr_sup S (fun j => c * BN ≤ j.val ∧ j.val < (c + 1) * BN) (fun j => (g j).1)]
       classical
       rw [show (Finset.univ.sup (fun j : Fin S =>
-            if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then (((g j).1 : ℝ) : WithBot ℝ) else ⊥))
+            if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then (((g j).1 : ℝ) : WithBot ℝ) else ⊥))
           = Finset.univ.sup (fun j : Fin S =>
-              if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+              if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
               then (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥) j.val else ⊥)
           from by
         apply Finset.sup_congr rfl
         intro j _
-        by_cases hw : c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+        by_cases hw : c * BN ≤ j.val ∧ j.val < (c + 1) * BN
         · rw [if_pos hw, if_pos hw]; simp only [dif_pos j.isLt]
         · rw [if_neg hw, if_neg hw]]
-      rw [ctx_window_sup_reindex 128 c S hwin
+      rw [ctx_window_sup_reindex BN c S hwin
         (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥)]
       apply Finset.sup_congr rfl
       intro jL _
-      simp only [dif_pos (gBlock_idx_lt S 128 c hwin jL)]
+      simp only [dif_pos (gBlock_idx_lt S BN c hwin jL)]
     show _ = _
     rw [hsup]
   -- now invoke osStepBot_block_eq with L,T from consistency
   have hstep := osStepBot_block_eq st.1 st.2.1 st.2.2
-    (((gKeysUpto S (c * 128) g).map (fun p => pow2 p.1 * p.2)).sum)
-    (((gKeysUpto S (c * 128) g).map (fun p => pow2 p.1)).sum)
-    (gBlock S 128 c g) hLc hTc
-    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * 128) g hb _)
-    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * 128) g hb _)
-  -- the block-fold equals gStateBot((c+1)*128)
-  have hfold : (gBlock S 128 c g).foldl osStepBot st = gStateBot S ((c + 1) * 128) g :=
-    (gStateBot_succ S 128 c g).symm
+    (((gKeysUpto S (c * BN) g).map (fun p => pow2 p.1 * p.2)).sum)
+    (((gKeysUpto S (c * BN) g).map (fun p => pow2 p.1)).sum)
+    (gBlock S BN c g) hLc hTc
+    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * BN) g hb _)
+    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * BN) g hb _)
+  -- the block-fold equals gStateBot((c+1)*BN)
+  have hfold : (gBlock S BN c g).foldl osStepBot st = gStateBot S ((c + 1) * BN) g :=
+    (gStateBot_succ S BN c g).symm
   rw [hfold] at hstep
   simp only [] at hstep
   rw [← hMblock] at hstep
-  rw [show ((gBlock S 128 c g).map (fun p => pow2 (p.1 - M'.unbotD 0))).sum
-        = Finset.univ.sum (fun jL : Fin 128 =>
-            pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0))
-      from gBlock_map_sum S 128 c g hwin (fun p => pow2 (p.1 - M'.unbotD 0))] at hstep
-  rw [show ((gBlock S 128 c g).map (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)).sum
-        = Finset.univ.sum (fun jL : Fin 128 =>
-            pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)
-              * (g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)
-      from gBlock_map_sum S 128 c g hwin (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)] at hstep
+  rw [show ((gBlock S BN c g).map (fun p => pow2 (p.1 - M'.unbotD 0))).sum
+        = Finset.univ.sum (fun jL : Fin BN =>
+            pow2 ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 - M'.unbotD 0))
+      from gBlock_map_sum S BN c g hwin (fun p => pow2 (p.1 - M'.unbotD 0))] at hstep
+  rw [show ((gBlock S BN c g).map (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)).sum
+        = Finset.univ.sum (fun jL : Fin BN =>
+            pow2 ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 - M'.unbotD 0)
+              * (g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).2)
+      from gBlock_map_sum S BN c g hwin (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)] at hstep
   exact hstep.symm
 
 /-- The block-`c` score sup over `Fin 128` (local lane `jL` ↦ global key
@@ -2793,7 +2794,7 @@ theorem ctx_attn_step
                  pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)
                    * (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
     intro a dd
-    have he := gStateBot_succ_explicit S c (g a dd) hwin
+    have he := gStateBot_succ_explicit S 128 c (g a dd) hwin
     simp only [] at he
     -- M' a dd = the internal sup (take .1 of he)
     have hM'eq : M' a dd = (gStateBot S (c * 128) (g a dd)).1 ⊔ Finset.univ.sup (fun jL : Fin 128 =>
@@ -2822,7 +2823,7 @@ theorem ctx_attn_step
     rw [ctxg_mij_max mtile rmaxT a _ _ (by rw [hmtile]) (by rfl)]
     rw [hM'def]
     simp only []
-    rw [congrArg Prod.fst (gStateBot_succ_explicit S c (g a ⟨0, by decide⟩) hwin)]
+    rw [congrArg Prod.fst (gStateBot_succ_explicit S 128 c (g a ⟨0, by decide⟩) hwin)]
     simp only []
     refine congrArg (fun z => (gStateBot S (c * 128) (g a ⟨0, by decide⟩)).1 ⊔ z) ?_
     exact ctxg_block_sup_eq s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python
