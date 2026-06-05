@@ -1149,6 +1149,72 @@ theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Ti
     TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk, hmij,
     NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
 
+/-! ### Per-statement `evalOp` helpers (parametric) -/
+
+/-- Axis-0 `expandDim` over a `nat` register (`offs_n[None, :]` row broadcast). -/
+@[simp] theorem ctx_evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
+      (s.regs .nat [D] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [1, D] => v.data (i.2.1, PUnit.unit) } : Tile .nat [1, D])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Axis-1 `expandDim` over a `nat` register (`offs_m[:, None]` column broadcast). -/
+@[simp] theorem ctx_evalOp_expandDim_one_nat {M : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] name)) s =
+      (s.regs .nat [M] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Axis-1 `expandDim` over a `real` register (`m_ij[:, None]`/`alpha[:, None]`). -/
+@[simp] theorem ctx_evalOp_expandDim_one_real {M : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .real [M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] name)) s =
+      (s.regs .real [M] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .real [M, 1])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Eval helper for `ge` (causal mask comparison). -/
+theorem ctx_evalOp_ge {dtype a b shape} (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+/-- Eval helper for `floorDiv` (`cur_kv_head = cur_head // kv_group_num`). -/
+theorem ctx_evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
+
+/-- Eval helper for `remap` (column/row broadcast of load/store masks). -/
+theorem ctx_evalOp_remap {dtype outShape inShape}
+    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
+    evalOp (.remap outShape map a) s = (do
+      let v ← evalOp a s; some (Tile.remap map v)) := by
+  simp [evalOp]
+
+/-- Scalar `nat` region load (`tl.load(b_prompt_cache_len + cur_batch)` etc.). -/
+theorem ctx_evalOp_load_scalar_nat (region : Region .nat) (off : Op .nat [])
+    (s : BlockState) (o : Nat) (hoff : evalOp off s = some (Tile.scalar o)) :
+    evalOp (.load .nat (MemAccess.region region off) MaskOpt.none) s
+      = some (Tile.scalar (s.readMemValue .nat (Region.cast region) o)) := by
+  simp only [evalOp, hoff, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Masked pointer-arith region load (`tl.load(R + offs, mask=m, other=o)`). -/
+theorem ctx_evalOp_load_region_maskOther {dtype : TileDType} {shape : TileShape}
+    (region : Region dtype) (offsets : Op .nat shape)
+    (mask : Op .bool shape) (other : Op dtype shape) (s : BlockState)
+    (offsTile : Tile .nat shape) (maskTile : Tile .bool shape) (otherTile : Tile dtype shape)
+    (hoff : evalOp offsets s = some offsTile)
+    (hmask : evalOp mask s = some maskTile)
+    (hother : evalOp other s = some otherTile) :
+    evalOp (.load dtype (MemAccess.region region offsets) (MaskOpt.maskOther mask other)) s
+      = some ⟨fun i => if maskTile.data i then
+          s.readMemValue dtype (Region.cast region) (offsTile.data i) else otherTile.data i⟩ := by
+  simp only [evalOp, hoff, hmask, hother, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
 /-! ### Bloom-specific per-key data + boundary-masked exact fold
 
 The bloom kernel feeds the generic base-2 machinery the per-key pair
