@@ -334,6 +334,145 @@ theorem contextAttnNopadClosedForm_eq_attentionRealCausalBlock
   simp only [contextAttnNopadClosedForm, attentionRealCausalBlock, scaledScore,
     Finset.mul_sum]
 
+/-! ### Boundary-masked (load-faithful) closed form
+
+The kernel's `k`/`v` loads carry the no-padding mask `(start_n + offs_n) <
+cur_batch_seq_len` (`other=0`), so phantom keys `j ≥ cur_batch_seq_len` load as
+`0`. The boundary-masked tiles below reflect that. For an **active** query row
+(`gi = start_m·BLOCK_M + i < cur_batch_seq_len`) the causal mask `j ≤ gi` already
+forces every contributing key into `j < cur_batch_seq_len`, so the boundary mask
+is subsumed and the masked closed form coincides with the genuine
+`contextAttnNopadClosedForm`. -/
+
+/-- Sequence-length-masked key tile: `ctxKTile` for `j < bel = cur_batch_seq_len`,
+else `0` (the kernel's `k` load mask). -/
+noncomputable def ctxKTileM
+    (s : BlockState) (K B_Start_Loc : RegionName) (S bel : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, e, u) => if j.val < bel then ctxKTile s K B_Start_Loc S (j, e, u) else 0
+
+/-- Sequence-length-masked value tile: `ctxVTile` for `j < bel`, else `0`. -/
+noncomputable def ctxVTileM
+    (s : BlockState) (V B_Start_Loc : RegionName) (S bel : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, d, u) => if j.val < bel then ctxVTile s V B_Start_Loc S (j, d, u) else 0
+
+/-- **The faithful kernel value** at output lane `(i, d)`: the causal softmax over
+the *load-masked* tiles (`ctxKTileM`/`ctxVTileM`), window `[0, S)`, boundary
+`bel = cur_batch_seq_len`. A pure function of `Q`/`K`/`V` memory — exactly what the
+loop's `m_i`/`l_i`/`acc` realize (online normalization makes `acc` already the
+ratio), phantom keys included. -/
+noncomputable def contextAttnNopadExactFoldM
+    (s : BlockState) (Q K V B_Start_Loc : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  let gi := s.pids 2 * BLOCK_M + i.val
+  let raw := fun j : Fin S =>
+    Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+        * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit))
+  let weight := fun j : Fin S =>
+    if j.val ≤ gi then Real.exp (sm_scale * raw j) else 0
+  let denom := Finset.univ.sum (fun j : Fin S => weight j)
+  let numer := Finset.univ.sum (fun j : Fin S =>
+    weight j * ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
+  numer / denom
+
+/-- **Boundary mask subsumed on active rows.** When the query row is active
+(`gi < bel`) the causal predicate `j ≤ gi` already entails `j < bel`, so the
+load-masked tiles agree with the genuine tiles on every contributing key: the
+faithful fold `contextAttnNopadExactFoldM` equals the idealized closed form
+`contextAttnNopadClosedForm`. -/
+theorem contextAttnNopadExactFoldM_eq_closedForm
+    (s : BlockState) (Q K V B_Start_Loc : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128])
+    (hActive : s.pids 2 * BLOCK_M + idx.1.val < bel) :
+    contextAttnNopadExactFoldM s Q K V B_Start_Loc sm_scale BLOCK_M S bel idx
+      = contextAttnNopadClosedForm s Q K V B_Start_Loc sm_scale BLOCK_M S idx := by
+  obtain ⟨i, d, u⟩ := idx
+  simp only [contextAttnNopadExactFoldM, contextAttnNopadClosedForm]
+  -- key-by-key: for j ≤ gi < bel, `ctxKTileM = ctxKTile` and `ctxVTileM = ctxVTile`.
+  have hKkey : ∀ j : Fin S, j.val ≤ s.pids 2 * BLOCK_M + i.val →
+      (Finset.univ.sum (fun e : Fin 128 =>
+        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+          * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+      = Finset.univ.sum (fun e : Fin 128 =>
+        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+          * ctxKTile s K B_Start_Loc S (j, e, PUnit.unit)) := by
+    intro j hj
+    have hjb : j.val < bel := lt_of_le_of_lt hj hActive
+    apply Finset.sum_congr rfl
+    intro e _
+    simp only [ctxKTileM, hjb, if_true]
+  have hwK : ∀ j : Fin S,
+      (if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+          Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+        else 0)
+      = (if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+          Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTile s K B_Start_Loc S (j, e, PUnit.unit)))
+        else 0) := by
+    intro j
+    by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val
+    · simp only [hj, if_true, hKkey j hj]
+    · simp only [hj, if_false]
+  have hVkey : ∀ j : Fin S, j.val ≤ s.pids 2 * BLOCK_M + i.val →
+      ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit)
+        = ctxVTile s V B_Start_Loc S (j, d, PUnit.unit) := by
+    intro j hj
+    have hjb : j.val < bel := lt_of_le_of_lt hj hActive
+    simp only [ctxVTileM, hjb, if_true]
+  congr 1
+  · -- numerator
+    apply Finset.sum_congr rfl
+    intro j _
+    by_cases hj : j.val ≤ s.pids 2 * BLOCK_M + i.val
+    · rw [show (if j.val ≤ s.pids 2 * BLOCK_M + i.val then
+            Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)))
+          else 0) = _ from hwK j, hVkey j hj]
+    · simp only [hj, if_false, zero_mul]
+  · -- denominator
+    exact Finset.sum_congr rfl (fun j _ => hwK j)
+
+/-! ### Kernel-decoded window / boundary and the genuine output value
+
+`sm_scale = 1/√128`. The streaming loop runs
+`range(0, block_mask·(start_m+1)·BLOCK_M, BLOCK_N)` with
+`BLOCK_M = BLOCK_N = 128` and `block_mask = (128·start_m < seq_len ? 1 : 0)`. The
+dynamic bound is already a multiple of `BLOCK_N`, so the streamed window is
+`S = block_mask·(start_m+1)·128`. The k/v load boundary is
+`bel = cur_batch_seq_len`. -/
+
+/-- The kernel's `sm_scale` at the Python test shape (`D_HEAD = 128`). -/
+noncomputable def sm_scale_python : ℝ := (Real.sqrt (128 : ℝ))⁻¹
+
+/-- Kernel-decoded streamed window `S = block_mask·(start_m+1)·BLOCK_M` (already a
+multiple of `BLOCK_N = BLOCK_M`). -/
+def ctxNopadWindow (s : BlockState) (B_Seqlen : RegionName) (BM : Nat) : Nat :=
+  let sl := seqLen s B_Seqlen
+  let bm := if BM * s.pids 2 < sl then 1 else 0
+  bm * (s.pids 2 + 1) * BM
+
+/-- Kernel-decoded k/v load boundary `bel = cur_batch_seq_len`. -/
+def ctxNopadBel (s : BlockState) (B_Seqlen : RegionName) : Nat :=
+  seqLen s B_Seqlen
+
+/-- **Genuine closed-form output value** of `context_attn_nopad.py` at the Python
+test shape (`BLOCK_M = 128`): the boundary-masked causal-softmax fold
+`contextAttnNopadExactFoldM` of the loaded Q/K/V memory — a pure function of
+memory, NOT the kernel's executed readback. -/
+noncomputable def ctxNopadGenuineOutValue
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  contextAttnNopadExactFoldM s Q K V B_Start_Loc sm_scale_python 128
+    (ctxNopadWindow s B_Seqlen 128) (ctxNopadBel s B_Seqlen) idx
+
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_nopad_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
