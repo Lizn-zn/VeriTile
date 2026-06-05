@@ -5385,6 +5385,179 @@ theorem msaPostLoop_eval
   · rw [if_neg hlt, if_neg hlt]
     simp only [BlockState.readMemValue, BlockState.readMemAs, hs1mem, hmem]
 
+/-- `if cond { body }` step (true branch): when `cond` evaluates to scalar `true`,
+the `ifThen` runs `body`. -/
+theorem stepStmt_ifThen_true {cond : Op .bool []}
+    {body : List Stmt} {s s' : BlockState}
+    (hcond : evalOp cond s = some (Tile.scalar (Bool.true)))
+    (hbody : stepStmts body s = some s') :
+    stepStmt (.ifThen cond body) s = some s' := by
+  simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_true]
+  exact hbody
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Full-kernel execution chain (active program).** Running the lowered Python
+block64 forward body (`start_m`/`off_hz`/`seqlen` + the active-guard `ifThen`
+wrapping setup + Loop A + handoff + Loop B + postLoop) from a clean state `s` whose
+program is active (`start_m·64 < seqlen`), the kernel's `Out` store holds the
+genuine closed form `mixedSparseAttnClosedForm` at every active output lane and
+preserves inactive lanes. Faithful side conditions (`num_cols ≤ 64`,
+per-active-lane positive cat denominator) supplied as hypotheses. -/
+theorem msa_exec
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (Out : RegionName) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hactive : s.pids 0 * 64 < seqLen s 4 (Region.cast Seqlens))
+    (hNC64 : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ 64)
+    (hpos : ∀ i : Fin 64, s.pids 0 * 64 + i.val < seqLen s 4 (Region.cast Seqlens) →
+      0 < msaDenomUpto 64 64
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s) 9 i) :
+    ∃ sF, stepStmts ((mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel.body) s = some sF
+      ∧ ∀ idx : TileIndex [64, 64],
+          s.pids 0 * 64 + idx.1.val < seqLen s 4 (Region.cast Seqlens) →
+            sF.readMemValue .fp16 Out (outOffset s 4 32768 8192 64 1 64 idx)
+              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
+                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
+                  (seqLen s 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
+  rw [msa_body_split]
+  -- preLoop = [3 outer] ++ msaSetup; the whole preLoop runs to s0 (invariantA 0).
+  obtain ⟨s0, hpre, hinv0⟩ := msaPreLoop_eval s Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
+    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s) hundef
+  -- the three outer statements, stepped explicitly to a concrete state s3
+  have h0 : stepStmt (Stmt.assign .nat [] "start_m" (Op.programId 0)) s
+      = some (s.setReg "start_m" .nat [] (Tile.scalar (s.pids 0))) :=
+    stepStmt_assign_eq_some (evalOp_programId 0 s)
+  set sA := s.setReg "start_m" .nat [] (Tile.scalar (s.pids 0)) with hsAd
+  have hpidsA : sA.pids 1 = s.pids 1 := by rw [hsAd, BlockState.setReg_pids]
+  have h1 : stepStmt (Stmt.assign .nat [] "off_hz" (Op.programId 1)) sA
+      = some (sA.setReg "off_hz" .nat [] (Tile.scalar (s.pids 1))) := by
+    rw [← hpidsA]; exact stepStmt_assign_eq_some (evalOp_programId 1 sA)
+  set sB := sA.setReg "off_hz" .nat [] (Tile.scalar (s.pids 1)) with hsBd
+  have hseqEval : evalOp (Op.load .nat (MemAccess.region Seqlens
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+        MaskOpt.none) sB
+      = some (Tile.scalar (seqLen s 4 (Region.cast Seqlens))) := by
+    simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+      BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+      not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+    refine congrArg some ?_; ext idx
+    simp only [Tile.scalar, Tile.scalar_data, castTile_self, Tile.bop, Tile.bop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, IntegralDType.floorDiv, seqLen, offZ,
+      BlockState.readMemValue, BlockState.readMemTyped, hsBd, hsAd,
+      BlockState.setReg_mem, BlockState.setReg_pids, if_true, if_pos]
+  have h2 : stepStmt (Stmt.assign .nat [] "seqlen"
+      (Op.load .nat (MemAccess.region Seqlens
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+        MaskOpt.none)) sB
+      = some (sB.setReg "seqlen" .nat [] (Tile.scalar (seqLen s 4 (Region.cast Seqlens)))) :=
+    stepStmt_assign_eq_some hseqEval
+  set s3 := sB.setReg "seqlen" .nat [] (Tile.scalar (seqLen s 4 (Region.cast Seqlens))) with hs3d
+  -- the 3 outer statements run s → s3
+  have h3 : stepStmts [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+      Stmt.assign .nat [] "off_hz" (Op.programId 1),
+      Stmt.assign .nat [] "seqlen"
+        (Op.load .nat (MemAccess.region Seqlens
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+          MaskOpt.none) ] s = some s3 := by
+    rw [stepStmts.cons_some h0, stepStmts.cons_some h1, stepStmts.cons_some h2, stepStmts.nil]
+  -- setup runs s3 → s0 (from the full preLoop run, split at s3)
+  have hsetup : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out) s3
+      = some s0 := by
+    have hsplit := stepStmts.append_some h3 (l2 := msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out)
+    rw [show ([ Stmt.assign .nat [] "start_m" (Op.programId 0),
+        Stmt.assign .nat [] "off_hz" (Op.programId 1),
+        Stmt.assign .nat [] "seqlen"
+          (Op.load .nat (MemAccess.region Seqlens
+            (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+            MaskOpt.none) ]
+      ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out)
+      = msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out from rfl] at hsplit
+    rw [← hsplit]; exact hpre
+  -- s3 pids/mem agree with s
+  have hs3pids : s3.pids = s.pids := by
+    rw [hs3d, BlockState.setReg_pids, hsBd, BlockState.setReg_pids, hsAd, BlockState.setReg_pids]
+  have hs3start : s3.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs3d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hsBd, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hsAd, BlockState.setReg_same]
+  have hs3seq : s3.regs .nat [] "seqlen" = some (Tile.scalar (seqLen s 4 (Region.cast Seqlens))) := by
+    rw [hs3d, BlockState.setReg_same]
+  -- active guard: boolNot (start_m·64 ≥ seqlen) = true
+  have hguard : evalOp (Op.boolNot msaGuard) s3 = some (Tile.scalar Bool.true) := by
+    simp only [msaGuard, evalOp, evalOp_ref, evalOp_constNat, hs3start, hs3seq,
+      Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+    refine congrArg some ?_; ext idx
+    simp only [Tile.scalar, Tile.cop, Tile.cop_data, Tile.uop, Tile.uop_data, Tile.bop, Tile.bop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, ComparableDType.ge,
+      Bool.not_eq_true', decide_eq_false_iff_not, not_le]
+    exact hactive
+  -- Loop A: forRangeDyn over the 8 dense blocks (invariantA 0 → 8)
+  obtain ⟨sA1, hloopA, hinvA8⟩ := msa_loopA_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s s0 hinv0
+  -- handoff: max_num_cols = 16 (invariantA 8 → invariantB 0)
+  obtain ⟨sB1, hhand, hinvB0⟩ := msa_handoff Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
+    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s)
+    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s) (msaKPtr K s) s)
+    (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s) s)
+    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 8 sA1 hinvA8
+  -- Loop B: forRangeDyn over the 1 column block (invariantB 0 → 1)
+  obtain ⟨sC1, hloopB, hinvB1⟩ := msa_loopB_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s) 8)
+    (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s) 8)
+    (fun ii dd => msaOPartial 64 64 64
+      (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
+      (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s) 8 ii dd)
+    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s sB1 hinvB0
+  -- postLoop: acc /= l_i + masked store (invariantB 1 → genuine closed form)
+  obtain ⟨sP, hpost, hOut⟩ := msaPostLoop_eval Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    s sC1 hNC64 hpos hinvB1
+  -- assemble the inner block: setup ++ [loopA, maxcols, loopB] ++ postLoop
+  -- the middle block [loopA, maxcols, loopB] runs s0 → sC1
+  have hmid : stepStmts [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
+        (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
+       Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
+       Stmt.forRangeDyn "start_n" (Op.constNat 0)
+        (Op.ref .nat [] "max_num_cols") (Op.constNat 64) msaLoopBodyB ] s0 = some sC1 := by
+    have hhandStmt : stepStmt (Stmt.assign .nat [] "max_num_cols" (Op.constNat 16)) sA1 = some sB1 := by
+      rcases hx : stepStmt (Stmt.assign .nat [] "max_num_cols" (Op.constNat 16)) sA1 with _ | s'
+      · rw [show stepStmts [Stmt.assign .nat [] "max_num_cols" (Op.constNat 16)] sA1 = none from by
+          conv_lhs => unfold stepStmts; rw [hx]] at hhand; exact absurd hhand (by simp)
+      · rw [stepStmts.cons_some hx, stepStmts.nil] at hhand; exact hhand
+    rw [stepStmts.cons_some hloopA, stepStmts.cons_some hhandStmt,
+      stepStmts.cons_some hloopB, stepStmts.nil]
+  -- setup ++ mid runs s3 → sC1
+  have hsetupmid : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+      ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
+            (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
+           Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
+           Stmt.forRangeDyn "start_n" (Op.constNat 0)
+            (Op.ref .nat [] "max_num_cols") (Op.constNat 64) msaLoopBodyB ]) s3 = some sC1 := by
+    rw [stepStmts.append_some hsetup]; exact hmid
+  have hinner : stepStmts ((msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+      ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
+            (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
+           Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
+           Stmt.forRangeDyn "start_n" (Op.constNat 0)
+            (Op.ref .nat [] "max_num_cols") (Op.constNat 64) msaLoopBodyB ])
+      ++ msaPostLoop) s3 = some sP := by
+    rw [stepStmts.append_some hsetupmid]; exact hpost
+  -- close: active ifThen runs the inner block
+  rw [stepStmts.cons_some h0, stepStmts.cons_some h1, stepStmts.cons_some h2,
+    stepStmts.cons_some (stepStmt_ifThen_true hguard hinner), stepStmts.nil]
+  refine ⟨sP, rfl, ?_⟩
+  intro idx hlt
+  -- readback transport: msaPostLoop_eval's anchor is the clean input `s`
+  have := hOut idx
+  rw [if_pos hlt] at this
+  exact this
+
 end MSAFoundation
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
