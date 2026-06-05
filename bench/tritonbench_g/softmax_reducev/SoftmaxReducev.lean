@@ -1938,4 +1938,282 @@ theorem srBlock_acc_sum {S : Nat}
   refine congrArg some ?_
   rw [srBlock_map_sum qk v c d hwin (fun p => Real.exp (p.1 - Mr) * p.2)]
 
+/-- `srRunningMax` is channel-independent (depends only on the logits). -/
+theorem srRunningMax_eq {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (hi : Nat) (d d' : Fin 64) :
+    srRunningMax qk v hi d = srRunningMax qk v hi d' := by
+  unfold srRunningMax srKeysUpto
+  rw [List.map_filterMap, List.map_filterMap]
+  congr 1
+  apply List.filterMap_congr
+  intro n _
+  by_cases hn : n.val < hi <;> simp [hn]
+
+/-- Any member of a `WithBot ℝ` list is `≤` its `foldr (⊔) ⊥`. -/
+theorem sr_mem_le_foldr_sup (a : WithBot ℝ) :
+    ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
+  intro L
+  induction L with
+  | nil => intro h; simp at h
+  | cons b t ih =>
+    intro h
+    rcases List.mem_cons.mp h with h | h
+    · subst h; exact le_sup_left
+    · exact le_trans (ih h) le_sup_right
+
+/-- **One-block advance** of the `⊥`-seeded running max: streaming block `c`
+advances `srRunningMax` by `⊔` with that block's masked logit `Finset.sup` over the
+`Fin 64` lanes — exactly the kernel's `n_e_max = tl.maximum(tl.max(qk,0), e_max)`. -/
+theorem srRunningMax_succ {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ S) :
+    srRunningMax qk v ((c + 1) * 64) d
+      = srRunningMax qk v (c * 64) d
+        ⊔ Finset.univ.sup (fun jL : Fin 64 =>
+            if c * 64 + jL.val < S then
+              ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+            else (⊥ : WithBot ℝ)) := by
+  unfold srRunningMax
+  rw [srKeysUpto_succ, List.map_append, List.foldr_append]
+  rw [srBlock_sup_eq qk v c d hwin]
+  -- foldr over (prefix ++ block) split: foldr block over (foldr prefix bot)... but foldr_append already done
+  -- now: foldr prefix (foldr block ⊥) = (foldr prefix ⊥) ⊔ (foldr block ⊥)
+  induction (srKeysUpto qk v (c * 64) d).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.foldr_cons]
+    rw [ih, ← sup_assoc]
+
+/-- The `⊥`-seeded running max over a nonempty window (`hi > 0`, `hi ≤ S`) is not
+`⊥` — some valid token contributes its (finite) logit. -/
+theorem srRunningMax_ne_bot {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (hi : Nat) (d : Fin 64)
+    (hpos : 0 < hi) (hle : hi ≤ S) :
+    srRunningMax qk v hi d ≠ ⊥ := by
+  have hS : 0 < S := lt_of_lt_of_le hpos hle
+  -- token 0 is valid and in the window
+  have hmem : ((qk ⟨0, hS⟩ : ℝ) : WithBot ℝ) ∈
+      (srKeysUpto qk v hi d).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    unfold srKeysUpto
+    rw [List.map_filterMap]
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, hS⟩, List.mem_finRange _, ?_⟩
+    simp only [hpos, if_true, Option.map_some]
+  have hle' := sr_mem_le_foldr_sup _ _ hmem
+  rw [← srRunningMax] at hle'
+  intro hbot
+  rw [hbot] at hle'
+  exact absurd (le_bot_iff.mp hle') WithBot.coe_ne_bot
+
+/-- The ⊥-seeded `e_sum` after `c` blocks is anchored: `l = κ(M_c)·L_c`. -/
+theorem sr_denom_anchor {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (hi : Nat) (d : Fin 64) :
+    (srStateBot qk v hi d).2.1
+      = ((srStateBot qk v hi d).1.elim 0 (fun r => Real.exp (-r)))
+        * (0 + ((srKeysUpto qk v hi d).map (fun p => Real.exp p.1)).sum) := by
+  rw [srStateBot_snd_fst, srStateBot_fst_eq_runningMax, zero_add]
+
+/-- The ⊥-seeded `acc` after `c` blocks: `acc = κ(M_c)·T_c`. -/
+theorem sr_acc_anchor {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (hi : Nat) (d : Fin 64) :
+    (srStateBot qk v hi d).2.2
+      = ((srStateBot qk v hi d).1.elim 0 (fun r => Real.exp (-r)))
+        * (0 + ((srKeysUpto qk v hi d).map (fun p => Real.exp p.1 * p.2)).sum) := by
+  rw [srStateBot_snd_snd, srStateBot_fst_eq_runningMax, zero_add]
+
+/-- If the ⊥-seeded running max over `[0, hi)` is `⊥`, the key list is empty, so its
+weight sum (resp. `·v` sum) is `0`. -/
+theorem srKeysUpto_sum_zero_of_bot {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (hi : Nat) (d : Fin 64)
+    (hbot : srRunningMax qk v hi d = ⊥) (h : ℝ × ℝ → ℝ) :
+    ((srKeysUpto qk v hi d).map h).sum = 0 := by
+  rw [show srKeysUpto qk v hi d = [] from ?_, List.map_nil, List.sum_nil]
+  by_contra hne
+  obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+  have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+      (srKeysUpto qk v hi d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+    List.mem_map_of_mem hp
+  have := sr_mem_le_foldr_sup _ _ hmem
+  rw [← srRunningMax, hbot] at this
+  exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+
+/-! ### attn_step channel bridges (n_e_max / e_sum / acc registers)
+
+These read the kernel's per-block register updates (after threading the recipes)
+off `srStateBot((c+1)*64)` / `srRunningMax((c+1)*64)` via `srOsStepBot_block_eq` +
+`srStateBot_succ`, reducing the `Fin 64` masked sum to the `srBlock` list sum. -/
+
+/-- **`n_e_max = srRunningMax((c+1)·64)`.** The kernel's `n_e_max = e_max ⊔ sup'(qk
+lanes)` with `e_max = srRunningMax(c·64)` equals the running max after `c+1` blocks
+(`srRunningMax_succ`). The `qk` lane tile is `some (qk[c·64+jL])` on active lanes,
+`⊥` on masked lanes. -/
+theorem sr_nemax_reg_eq {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ S) :
+    srRunningMax qk v (c * 64) d
+        ⊔ Finset.univ.sup' Finset.univ_nonempty (fun jL : Fin 64 =>
+            if c * 64 + jL.val < S then
+              ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+            else (⊥ : WithBot ℝ))
+      = srRunningMax qk v ((c + 1) * 64) d := by
+  rw [Finset.sup'_eq_sup, srRunningMax_succ qk v c d hwin]
+
+/-- **`e_sum = srStateBot((c+1)·64).2.1`.** The kernel's `e_sum' = realAdd (realMul
+e_sum α) (Σ p)` register, with `e_sum = srStateBot(c·64).2.1`, `α = realExp(M_c ⊖
+M_{c+1})`, and `Σ p` the masked block sum, equals the ⊥-seeded denominator after
+`c+1` blocks. -/
+theorem sr_esum_reg_eq {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ S) :
+    WithBot.realAdd
+      (WithBot.realMul ((srStateBot qk v (c * 64) ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
+        (WithBot.realExp (WithBot.realSub
+          (srRunningMax qk v (c * 64) ⟨0, by norm_num⟩)
+          (srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩))))
+      (∑ jL : Fin 64, WithBot.realExp (WithBot.realSub
+        (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ))
+        (srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩)))
+      = ((srStateBot qk v ((c + 1) * 64) d).2.1 : WithBot ℝ) := by
+  set m := (srStateBot qk v (c * 64) d).1 with hm_def
+  set Mc := srRunningMax qk v (c * 64) ⟨0, by norm_num⟩ with hMc
+  set Mc1 := srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩ with hMc1
+  have hmMc : m = Mc := by
+    rw [hm_def, hMc, srStateBot_fst_eq_runningMax, srRunningMax_eq qk v (c * 64) d ⟨0, by norm_num⟩]
+  have hne : Mc1 ≠ ⊥ := srRunningMax_ne_bot qk v ((c + 1) * 64) ⟨0, by norm_num⟩ (by positivity) hwin
+  obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+    cases hh : Mc1 with
+    | bot => exact absurd hh hne
+    | coe x => exact ⟨x, rfl⟩
+  -- M' = Mc1
+  have hMsucc : Mc1 = m ⊔ ((srBlock qk v 64 c d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    have h1 : Mc1 = (srStateBot qk v ((c + 1) * 64) d).1 := by
+      rw [hMc1, srStateBot_fst_eq_runningMax, srRunningMax_eq qk v ((c+1)*64) ⟨0, by norm_num⟩ d]
+    rw [h1, srStateBot_succ, srOsStepBot_block_fst m
+      ((srStateBot qk v (c * 64) d).2.1) ((srStateBot qk v (c * 64) d).2.2)]
+  -- the lane block sum = some(srBlock exp sum)
+  have hsum := srBlock_esum_sum qk v c d Mr hwin
+  -- osStepBot_block_eq for the .2.1 channel
+  have hblockEq := srOsStepBot_block_eq m
+    ((srStateBot qk v (c * 64) d).2.1) ((srStateBot qk v (c * 64) d).2.2)
+    ((srKeysUpto qk v (c * 64) d).map (fun p => Real.exp p.1 * p.2)).sum
+    ((srKeysUpto qk v (c * 64) d).map (fun p => Real.exp p.1)).sum
+    (srBlock qk v 64 c d)
+    (by rw [sr_denom_anchor, zero_add, hm_def])
+    (by rw [sr_acc_anchor, zero_add, hm_def])
+    (fun hbot => srKeysUpto_sum_zero_of_bot qk v (c * 64) d
+      (by rw [← srStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => srKeysUpto_sum_zero_of_bot qk v (c * 64) d
+      (by rw [← srStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  -- target .2.1 via srStateBot_succ
+  rw [show (srStateBot qk v ((c + 1) * 64) d).2.1
+        = (Mc1, (srStateBot qk v (c * 64) d).2.1
+              * (WithBot.realExp (WithBot.realSub m Mc1)).unbotD 0
+              + ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mc1.unbotD 0))).sum, _).2.1
+        from by rw [srStateBot_succ]; rw [← hblockEq]]
+  -- kernel side
+  set α : ℝ := (WithBot.realExp (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  -- e_sum register at channel 0 = at channel d (channel-independent)
+  have hkeq : ∀ (e e' : Fin 64),
+      ((srKeysUpto qk v (c * 64) e).map (fun p => Real.exp p.1)).sum
+        = ((srKeysUpto qk v (c * 64) e').map (fun p => Real.exp p.1)).sum := by
+    intro e e'
+    unfold srKeysUpto
+    rw [List.map_filterMap, List.map_filterMap]
+    congr 1
+    apply List.filterMap_congr; intro n _; by_cases hn : n.val < c*64 <;> simp [hn]
+  have hcind : ((srStateBot qk v (c * 64) ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
+        = ((srStateBot qk v (c * 64) d).2.1 : WithBot ℝ) := by
+    rw [srStateBot_snd_fst, srStateBot_snd_fst, srRunningMax_eq qk v (c*64) ⟨0, by norm_num⟩ d]
+    rw [hkeq ⟨0, by norm_num⟩ d]
+  rw [hcind]
+  rw [show WithBot.realSub Mc Mc1 = WithBot.realSub m Mc1 from by rw [hmMc]]
+  -- rewrite the block-sum (carrying ↑Mr) and α
+  rw [show (∑ jL : Fin 64, WithBot.realExp (WithBot.realSub
+        (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+         else (⊥ : WithBot ℝ)) Mc1))
+      = some ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mr))).sum from by
+    rw [hMr]; exact hsum]
+  rw [show (Mc1.unbotD 0) = Mr from by rw [hMr, WithBot.unbotD_coe]]
+  rw [show ((srStateBot qk v (c * 64) d).2.1 : WithBot ℝ)
+        = some (srStateBot qk v (c * 64) d).2.1 from rfl, hαsome]
+  simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+  rfl
+
+/-- **`acc[d] = srStateBot((c+1)·64).2.2`** (per channel `d`). The kernel's `acc' =
+realAdd (realMul acc α) (Σ p·v)` register, with `acc = srStateBot(c·64).2.2`, `α =
+realExp(M_c ⊖ M_{c+1})`, and `Σ p·v` the masked block PV sum (V gather unmasked, so
+masked lanes carry garbage `rawV` zeroed by `p = some 0`), equals the ⊥-seeded
+accumulator after `c+1` blocks. -/
+theorem sr_acc_reg_eq {S : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin 64 → ℝ) (c : Nat) (d : Fin 64)
+    (rawV : Fin 64 → ℝ)
+    (hrawV : ∀ jL : Fin 64, (hj : c * 64 + jL.val < S) →
+      rawV jL = v ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ d)
+    (hwin : (c + 1) * 64 ≤ S) :
+    WithBot.realAdd
+      (WithBot.realMul ((srStateBot qk v (c * 64) d).2.2 : WithBot ℝ)
+        (WithBot.realExp (WithBot.realSub
+          (srRunningMax qk v (c * 64) ⟨0, by norm_num⟩)
+          (srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩))))
+      (∑ jL : Fin 64, WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ))
+          (srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩)))
+        ((rawV jL : ℝ) : WithBot ℝ))
+      = ((srStateBot qk v ((c + 1) * 64) d).2.2 : WithBot ℝ) := by
+  set m := (srStateBot qk v (c * 64) d).1 with hm_def
+  set Mc := srRunningMax qk v (c * 64) ⟨0, by norm_num⟩ with hMc
+  set Mc1 := srRunningMax qk v ((c + 1) * 64) ⟨0, by norm_num⟩ with hMc1
+  have hmMc : m = Mc := by
+    rw [hm_def, hMc, srStateBot_fst_eq_runningMax, srRunningMax_eq qk v (c * 64) d ⟨0, by norm_num⟩]
+  have hne : Mc1 ≠ ⊥ := srRunningMax_ne_bot qk v ((c + 1) * 64) ⟨0, by norm_num⟩ (by positivity) hwin
+  obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+    cases hh : Mc1 with
+    | bot => exact absurd hh hne
+    | coe x => exact ⟨x, rfl⟩
+  have hMsucc : Mc1 = m ⊔ ((srBlock qk v 64 c d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    have h1 : Mc1 = (srStateBot qk v ((c + 1) * 64) d).1 := by
+      rw [hMc1, srStateBot_fst_eq_runningMax, srRunningMax_eq qk v ((c+1)*64) ⟨0, by norm_num⟩ d]
+    rw [h1, srStateBot_succ, srOsStepBot_block_fst m
+      ((srStateBot qk v (c * 64) d).2.1) ((srStateBot qk v (c * 64) d).2.2)]
+  have hsum := srBlock_acc_sum qk v c d Mr rawV hrawV hwin
+  have hblockEq := srOsStepBot_block_eq m
+    ((srStateBot qk v (c * 64) d).2.1) ((srStateBot qk v (c * 64) d).2.2)
+    ((srKeysUpto qk v (c * 64) d).map (fun p => Real.exp p.1 * p.2)).sum
+    ((srKeysUpto qk v (c * 64) d).map (fun p => Real.exp p.1)).sum
+    (srBlock qk v 64 c d)
+    (by rw [sr_denom_anchor, zero_add, hm_def])
+    (by rw [sr_acc_anchor, zero_add, hm_def])
+    (fun hbot => srKeysUpto_sum_zero_of_bot qk v (c * 64) d
+      (by rw [← srStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => srKeysUpto_sum_zero_of_bot qk v (c * 64) d
+      (by rw [← srStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  rw [show (srStateBot qk v ((c + 1) * 64) d).2.2
+        = (Mc1, _, (srStateBot qk v (c * 64) d).2.2
+              * (WithBot.realExp (WithBot.realSub m Mc1)).unbotD 0
+              + ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
+        from by rw [srStateBot_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  rw [show WithBot.realSub Mc Mc1 = WithBot.realSub m Mc1 from by rw [hmMc]]
+  rw [show (∑ jL : Fin 64, WithBot.realMul
+        (WithBot.realExp (WithBot.realSub
+          (if c * 64 + jL.val < S then ((qk ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+           else (⊥ : WithBot ℝ)) Mc1))
+        ((rawV jL : ℝ) : WithBot ℝ))
+      = some ((srBlock qk v 64 c d).map (fun p => Real.exp (p.1 - Mr) * p.2)).sum from by
+    rw [hMr]; exact hsum]
+  rw [show (Mc1.unbotD 0) = Mr from by rw [hMr, WithBot.unbotD_coe]]
+  rw [show ((srStateBot qk v (c * 64) d).2.2 : WithBot ℝ)
+        = some (srStateBot qk v (c * 64) d).2.2 from rfl, hαsome]
+  simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+  rfl
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
