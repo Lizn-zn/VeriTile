@@ -4407,6 +4407,49 @@ theorem msa_attn_stepB
               (msaSeedMax 64 64 mA scoreB (c + 1) i))).unbotD 0 * vblkB c j d) from rfl]
     refine congrArg some ?_; ring
 
+/-! ### A→B handoff: Loop-A final state seeds Loop-B at iteration 0
+
+Between the two loops the kernel runs `max_num_cols = 16`. Stepping it from a
+Loop-A-final state (`msaInvariantA … bF`) yields `msaInvariantB … 0`, whose seed
+`mA`/`lA`/`oA` are exactly Loop A's final `MPartial`/`LPartial`/`OPartial` (so
+`msaSeedMax … 0 = mA`, `msaLPartialSeed … 0 = lA`, `msaOPartialSeed … 0 = oA` by
+definition). The `scoreB`/`vblkB` column stream is supplied for Loop B. -/
+theorem msa_handoff
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (scoreA : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkA : Nat → Fin 64 → Fin 64 → ℝ)
+    (scoreB : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkB : Nat → Fin 64 → Fin 64 → ℝ)
+    (qF : TileIndex [64, 64] → WithBot ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, 64] → RegionName × Nat) (opF : TileIndex [64, 64] → RegionName × Nat)
+    (s0 : BlockState) (bF : Nat) (s : BlockState)
+    (hinv : msaInvariantA Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+      scoreA vblkA qF kpF vpF opF s0 bF s) :
+    ∃ s', stepStmts [Stmt.assign .nat [] "max_num_cols" (Op.constNat 16)] s = some s'
+      ∧ msaInvariantB Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+          scoreB vblkB (msaMPartial 64 64 scoreA bF)
+          (fun i => msaLPartial 64 64 scoreA bF i)
+          (fun i d => msaOPartial 64 64 64 scoreA vblkA bF i d)
+          qF kpF vpF opF s0 0 s' := by
+  obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
+    hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmi, hli, hacc⟩ := hinv
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 16 s)), stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  set s' := s.setReg "max_num_cols" .nat [] (Tile.scalar 16) with hs'd
+  have e : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "max_num_cols" → s.regs dt sh nm = some t → s'.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs'd, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  refine ⟨by rw [hs'd, BlockState.setReg_pids]; exact hpids,
+    by funext rg o; rw [hs'd, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o,
+    by intro rg o; rw [hs'd, BlockState.setReg_undef]; exact hundef rg o,
+    e (by decide) hsm, e (by decide) hoh, e (by decide) hseq, e (by decide) hoffm,
+    e (by decide) hoffn, e (by decide) hoffd, e (by decide) hnb, e (by decide) hnc,
+    e (by decide) hbp, e (by decide) hcp, e (by decide) hq, e (by decide) hkp,
+    e (by decide) hvp, e (by decide) hop, e (by decide) hmmask, e (by decide) hmnb,
+    by rw [hs'd, BlockState.setReg_same], ?_, ?_, ?_⟩
+  · rw [e (by decide) hmi]; rfl
+  · rw [e (by decide) hli]; rfl
+  · rw [e (by decide) hacc]; rfl
+
 end MSAFoundation
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
