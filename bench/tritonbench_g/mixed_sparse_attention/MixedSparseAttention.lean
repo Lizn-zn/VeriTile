@@ -1444,6 +1444,101 @@ theorem msa_evalOp_remap {dtype inShape outShape}
       let va ← evalOp a s; some (Tile.remap map va)) := by
   simp [evalOp]
 
+/-! ### Loop-A shared recipes (block-sparse). The softmax-core recipes
+(`A7,A10..A18`) are shape-identical to loop B's `B6,B8..B16`. -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`cond = block_index < num_blks` (A1)** / **`cond = start_n < num_cols` (B1)**:
+the loop-guard predicate, a scalar `<` of the loop counter against the per-row
+nonzero count. Instantiate `counter := "block_index"`/`"num_blks"` for loop A,
+`"start_n"`/`"num_cols"` for loop B. -/
+theorem msa_cond_eval (s : BlockState) (counter bound : RegName) (CI NB : Nat)
+    (hci : s.regs .nat [] counter = some (Tile.scalar CI))
+    (hnb : s.regs .nat [] bound = some (Tile.scalar NB)) :
+    evalOp (Op.lt ComparableDType.nat Broadcast.nil
+        (Op.ref .nat [] counter) (Op.ref .nat [] bound)) s
+      = some (Tile.cop ComparableDType.nat.lt Broadcast.nil
+          (Tile.scalar CI) (Tile.scalar NB)) := by
+  rw [evalOp_lt]
+  simp only [evalOp_ref, hci, hnb, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`cols = start_n + offs_n` (A3)**: the contiguous block-key column indices,
+`start_n` broadcast-added to `offs_n`. Given `start_n = SN`, `offs_n = id`, lane
+`j` becomes `SN + j`. -/
+theorem msa_cols_eval (s : BlockState) (BN SN : Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+        (Op.ref .nat [BN] "offs_n")) s
+      = some (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+          (Tile.vec (fun j : Fin BN => j.val))) := by
+  rw [evalOp_add]
+  simp only [evalOp_ref, hsn, hon, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`n_mask = (cols < seqlen) & cond` (A4)**: the per-column validity mask
+combining the in-seqlen test on the gathered columns with the loop guard `cond`.
+Given `cols = ct`, `seqlen = SL`, `cond = cb`, lane `j` becomes
+`decide (ct j < SL) && cb`. -/
+theorem msa_nmask_eval (s : BlockState) (BN SL : Nat) (cb : Bool)
+    (ct : Tile .nat [BN])
+    (hcols : s.regs .nat [BN] "cols" = some ct)
+    (hsl : s.regs .nat [] "seqlen" = some (Tile.scalar SL))
+    (hcond : s.regs .bool [] "cond" = some (Tile.scalar cb)) :
+    evalOp (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.ref .nat [BN] "cols") (Op.ref .nat [] "seqlen"))
+        (Op.ref .bool [] "cond")) s
+      = some (Tile.bop (fun x y : Bool => x && y) Broadcast.scalarR
+          (Tile.cop ComparableDType.nat.lt Broadcast.scalarR ct (Tile.scalar SL))
+          (Tile.scalar cb)) := by
+  have hand :
+      evalOp (Op.boolAnd Broadcast.scalarR
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.ref .nat [BN] "cols") (Op.ref .nat [] "seqlen"))
+          (Op.ref .bool [] "cond")) s = (do
+        let va' ← evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.ref .nat [BN] "cols") (Op.ref .nat [] "seqlen")) s
+        let vb' ← evalOp (Op.ref .bool [] "cond") s
+        some (Tile.bop (fun x y : Bool => x && y) Broadcast.scalarR va' vb')) := by
+    simp only [evalOp]
+  rw [hand, evalOp_lt]
+  simp only [evalOp_ref, hcols, hsl, hcond, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`qk = tl.zeros([BLOCK_M, BLOCK_N])` (A7/B6)**: the all-`0` pre-`where`/pre-dot
+score accumulator. Mixed-sparse analogue of `bsa_qkzeros_eval`. -/
+theorem msa_qkzeros_eval (s : BlockState) (BM BN : Nat) :
+    evalOp (Op.full [BM, BN] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **`causal_mask = cols[None,:] ≤ offs_m[:,None]` (A8, loop A ONLY)**: the causal
+visibility predicate, true when key column `cols j` is at or before query row
+`offs_m i`. Given `cols = ct`, `offs_m = om`, lane `(i,j)` becomes
+`decide (ct j ≤ om i)`. Loop B has no causal mask. -/
+theorem msa_causal_eval (s : BlockState) (BM BN : Nat)
+    (hax0 : 0 < [BN].length.succ) (hax1 : 1 < [BM].length.succ)
+    (ct : Tile .nat [BN]) (om : Tile .nat [BM])
+    (hcols : s.regs .nat [BN] "cols" = some ct)
+    (hom : s.regs .nat [BM] "offs_m" = some om) :
+    evalOp (Op.le ComparableDType.nat Broadcast.nil.consR.consL
+        (Op.expandDim ⟨0, hax0⟩ (Op.ref .nat [BN] "cols"))
+        (Op.expandDim ⟨1, hax1⟩ (Op.ref .nat [BM] "offs_m"))) s
+      = some (Tile.cop ComparableDType.nat.le Broadcast.nil.consR.consL
+          (Tile.expandDim ⟨0, hax0⟩ ct) (Tile.expandDim ⟨1, hax1⟩ om)) := by
+  rw [msa_evalOp_le]
+  erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨0, hax0⟩ "cols" s _ hcols,
+    evalOp_expandDim_ref_of_regs .nat [BM] ⟨1, hax1⟩ "offs_m" s _ hom]
+  rfl
+
 end MSARecipes
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
