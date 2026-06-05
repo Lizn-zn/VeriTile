@@ -1059,4 +1059,122 @@ theorem softmax_reducev_python_test_shape_output_summary
   · exact softmax_reducev_surface_output_compute_correct Logics V Out BLoc
       BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0 s
 
+/-- The 12 lowered preLoop statements at the Python test shape. -/
+def srPreLoop (V : RegionName) (BStartLoc BSeqLen : Region .nat) : List Stmt :=
+  [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+    Stmt.assign .nat [] "cur_head" (Op.programId 1),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.load .nat (MemAccess.region BSeqLen (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_start_loc"
+      (Op.load .nat (MemAccess.region BStartLoc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
+    Stmt.assign .nat [64] "offs_d" (Op.arange 64),
+    Stmt.assign .nat [1, 64] "off_v"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 64))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .nat [] "off_b_loc"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 128))
+        (Op.mul .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.constNat 1))),
+    Stmt.assign .ptr [1, 64] "v_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V) (Op.ref .nat [1, 64] "off_v")),
+    Stmt.assign .real [] "e_max" Op.negInf,
+    Stmt.assign .real [] "e_sum" (Op.const 0.0),
+    Stmt.assign .real [64] "acc" (Op.full [64] (Op.const 0)) ]
+
+/-- The 10 lowered loop-body statements at the Python test shape. `other_kv_index`
+is the `-1` sentinel for the `v_index` gather. -/
+def srLoopBody (Logics : RegionName) (BLoc : Region .int) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .int [64] "v_index"
+      (Op.load .int
+        (MemAccess.region BLoc
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "off_b_loc")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+              (Op.constNat 1))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          ((Op.constInt (-1)).broadcast [64]))),
+    Stmt.assign .real [64] "qk"
+      (Op.load .real
+        (MemAccess.region Logics
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 256))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_start_loc")
+                  (Op.ref .nat [] "start_n"))
+                (Op.ref .nat [64] "offs_n"))
+              (Op.constNat 1))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [64] "offs_n"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.negInf.broadcast [64]))),
+    Stmt.assign .real [] "n_e_max"
+      ((Op.gt .real Broadcast.nil
+            (Op.reduceMax ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "qk"))
+            (Op.ref .real [] "e_max")).where
+        (Op.reduceMax ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "qk"))
+        (Op.ref .real [] "e_max")),
+    Stmt.assign .real [] "old_scale"
+      (Op.sub .real Broadcast.nil (Op.ref .real [] "e_max") (Op.ref .real [] "n_e_max")).exp,
+    Stmt.assign .real [64] "p"
+      (Op.sub .real Broadcast.scalarR (Op.ref .real [64] "qk") (Op.ref .real [] "n_e_max")).exp,
+    Stmt.assign .real [] "e_sum"
+      (Op.add .real Broadcast.nil
+        (Op.mul .real Broadcast.nil (Op.ref .real [] "e_sum") (Op.ref .real [] "old_scale"))
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64] "p"))),
+    Stmt.assign .real [64, 64] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, 64] "v_ptrs")
+            (Op.mul .int Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .int [64] "v_index"))
+                (Op.constNat 8192).castNatToInt).castIntToNat))
+        MaskOpt.none),
+    Stmt.assign .real [64] "acc"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64] "acc") (Op.ref .real [] "old_scale"))
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false
+          (Op.mul .real Broadcast.nil.consL.consSame
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "p"))
+            (Op.ref .real [64, 64] "v")))),
+    Stmt.assign .real [] "e_max" (Op.ref .real [] "n_e_max") ]
+
+/-- The 4 lowered postLoop statements at the Python test shape. -/
+def srPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .real [64] "acc"
+      (Op.div .real Broadcast.scalarR (Op.ref .real [64] "acc") (Op.ref .real [] "e_sum")),
+    Stmt.assign .nat [64] "off_o"
+      (Op.add .nat Broadcast.scalarL
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 128))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 64)))
+        (Op.mul .nat Broadcast.scalarR (Op.ref .nat [64] "offs_d") (Op.constNat 1))),
+    Stmt.assign .ptr [64] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [64] "off_o")),
+    Stmt.store .real [64] (MemAccess.ptr (Op.ref .ptr [64] "out_ptrs"))
+      (Op.ref .real [64] "acc") MaskOpt.none ]
+
+/-- The lowered Python-shape `softmax_reducev` body is `srPreLoop ++ forRangeDyn …
+srLoopBody :: srPostLoop`.  Pure `List` identity by `rfl` on the transcription. -/
+theorem srBody_split
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) :
+    (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgKernel.body
+      = srPreLoop V BStartLoc BSeqLen
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0) (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.constNat 64) (srLoopBody Logics BLoc)
+            :: srPostLoop Out) := by
+  rfl
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
