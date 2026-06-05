@@ -2506,7 +2506,7 @@ noncomputable def msaInvariantA
     (Q K V : RegionName) (Seqlens : Region .nat)
     (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
     (scoreA : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkA : Nat → Fin 64 → Fin 64 → ℝ)
-    (qF : TileIndex [64, 64] → ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
+    (qF : TileIndex [64, 64] → WithBot ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
     (vpF : TileIndex [1, 64] → RegionName × Nat) (opF : TileIndex [64, 64] → RegionName × Nat)
     (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
   s.pids = s0.pids
@@ -2530,7 +2530,7 @@ noncomputable def msaInvariantA
       some (Tile.scalar (Region.cast Cols, (s0.pids 1 * 2 + s0.pids 0) * 8))
   ∧ s.regs FloatDType.fp16.toTileDType [64, 64] "q" =
       some (⟨fun idx : TileIndex [64, 64] =>
-        FloatDType.real.cast FloatDType.fp16 (some (qF idx) : WithBot ℝ)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
+        FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
   ∧ s.regs .ptr [64, 1] "k_ptrs" =
       some (⟨fun idx : TileIndex [64, 1] => kpF idx⟩ : Tile .ptr [64, 1])
   ∧ s.regs .ptr [1, 64] "v_ptrs" =
@@ -2563,7 +2563,7 @@ noncomputable def msaInvariantB
     (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
     (scoreB : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkB : Nat → Fin 64 → Fin 64 → ℝ)
     (mA : Fin 64 → WithBot ℝ) (lA : Fin 64 → ℝ) (oA : Fin 64 → Fin 64 → ℝ)
-    (qF : TileIndex [64, 64] → ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
+    (qF : TileIndex [64, 64] → WithBot ℝ) (kpF : TileIndex [64, 1] → RegionName × Nat)
     (vpF : TileIndex [1, 64] → RegionName × Nat) (opF : TileIndex [64, 64] → RegionName × Nat)
     (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
   s.pids = s0.pids
@@ -2587,7 +2587,7 @@ noncomputable def msaInvariantB
       some (Tile.scalar (Region.cast Cols, (s0.pids 1 * 2 + s0.pids 0) * 8))
   ∧ s.regs FloatDType.fp16.toTileDType [64, 64] "q" =
       some (⟨fun idx : TileIndex [64, 64] =>
-        FloatDType.real.cast FloatDType.fp16 (some (qF idx) : WithBot ℝ)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
+        FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [64, 64])
   ∧ s.regs .ptr [64, 1] "k_ptrs" =
       some (⟨fun idx : TileIndex [64, 1] => kpF idx⟩ : Tile .ptr [64, 1])
   ∧ s.regs .ptr [1, 64] "v_ptrs" =
@@ -2641,6 +2641,429 @@ theorem msa_body_split
               ++ msaPostLoop) ] := by
   rfl
 
+/-- The pre-loop statement list: the 3 outer program-setup statements
+(`start_m`/`off_hz`/`seqlen`) followed by `msaSetup`'s 21 statements. Stepping
+this from a clean state reaches the Loop-A base case `msaInvariantA … 0`. (The
+early-exit `ifThen` guard that wraps `msaSetup ++ loops ++ postLoop` in the full
+body — see `msa_body_split` — is discharged at the NEXT-stage top-level assembly
+when the program is active; this list is what runs inside it.) -/
+def msaPreLoop (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [] "seqlen"
+      (Op.load .nat
+        (MemAccess.region Seqlens
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+        MaskOpt.none) ]
+    ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+
+/-- The `q_ptrs` pointer tile the setup computes, lane `(i,e)`:
+`Q` region at `qo_offset + (start_m·64 + i)·64 + e`, where `qo_offset =
+(off_hz/4)·32768 + (off_hz%4)·8192`. -/
+def msaQPtr (Q : RegionName) (s0 : BlockState) : TileIndex [64, 64] → RegionName × Nat :=
+  fun idx => (Q, ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
+    + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val)
+
+/-- The `k_ptrs` pointer tile `(e channel axis, j=1)`: `K` at `kv_offset + e·1`. -/
+def msaKPtr (K : RegionName) (s0 : BlockState) : TileIndex [64, 1] → RegionName × Nat :=
+  fun idx => (K, ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + idx.1.val)
+
+/-- The `v_ptrs` pointer tile `(1, d channel axis)`: `V` at `kv_offset + d·1`. -/
+def msaVPtr (V : RegionName) (s0 : BlockState) : TileIndex [1, 64] → RegionName × Nat :=
+  fun idx => (V, ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + idx.2.1.val)
+
+/-- The `o_ptrs` pointer tile, lane `(i,e)`: `Out` at the same offset as `q_ptrs`. -/
+def msaOPtr (Out : RegionName) (s0 : BlockState) : TileIndex [64, 64] → RegionName × Nat :=
+  fun idx => (Out, ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
+    + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val)
+
+/-- The scaled `q` value the setup computes (as a `WithBot ℝ` carrier), lane
+`(i,e)`: the raw `Q` read (via `readMemValue .real`) times `qk_scale =
+0.1·1.44269504`, before the fp16 cast that `msaInvariantA` applies. Written with
+`WithBot.realMul` so it matches the loop-body `mul` carrier exactly. -/
+noncomputable def msaQVal (Q : RegionName) (s0 : BlockState) : TileIndex [64, 64] → WithBot ℝ :=
+  fun idx => WithBot.realMul
+    (s0.readMemValue .real Q (((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
+      + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val))
+    (some (0.1 * 1.44269504))
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution → Loop-A base case.** The 24 deterministic pre-loop
+statements step a clean input state (`undef = 0`) to a state satisfying
+`msaInvariantA … 0`: the streaming accumulators are at their `⊥`/`0`/`0` seeds
+(`msaMPartial`/`msaLPartial`/`msaOPartial` at iteration 0), the seeded program
+scalars/pointers (`q`, `k_ptrs`, `v_ptrs`, `o_ptrs`, `num_blks`, `num_cols`,
+`blks_ptr`, `cols_ptr`, `m_mask`, `max_num_blks`) match the concrete carriers, and
+`mem`/`pids` are preserved. The block-A score/value stream `scoreA`/`vblkA` is
+arbitrary — at `c = 0` the accumulators are data-independent. -/
+theorem msaPreLoop_eval
+    (s : BlockState) (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (scoreA : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkA : Nat → Fin 64 → Fin 64 → ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out) s
+        = some s0
+      ∧ msaInvariantA Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+          scoreA vblkA (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 0 s0 := by
+  unfold msaPreLoop msaSetup
+  simp only [List.cons_append, List.nil_append, List.append_assoc]
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: off_hz = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: seqlen = load Seqlens[off_hz / 4]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region Seqlens
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
+          MaskOpt.none) _
+        = some (Tile.scalar (seqLen s 4 (Region.cast Seqlens))) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.scalar, Tile.bop, Tile.bop_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, IntegralDType.floorDiv, seqLen, offZ,
+        BlockState.readMemValue, BlockState.readMemTyped, BlockState.setReg_mem,
+        if_true, if_pos]))]
+  -- stmt 3: offs_m = start_m*64 + arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
+          (Op.arange 64)) _
+        = some (Tile.vec (fun i : Fin 64 => s.pids 0 * 64 + i.val)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_arange]
+      simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 4: offs_n = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun j : Fin 64 => j.val)) from evalOp_arange 64 _))]
+  -- stmt 5: offs_d = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun e : Fin 64 => e.val)) from evalOp_arange 64 _))]
+  -- stmt 6: qo_offset = (off_hz/4)*32768 + (off_hz%4)*8192
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil
+            (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+            (Op.constNat 32768))
+          (Op.mul .nat Broadcast.nil
+            (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+            (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.scalar, Tile.bop, Tile.bop_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+        IntegralDType.mod]))]
+  -- stmt 7: kv_offset = same as qo_offset
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil
+            (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+            (Op.constNat 32768))
+          (Op.mul .nat Broadcast.nil
+            (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4))
+            (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.scalar, Tile.bop, Tile.bop_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+        IntegralDType.mod]))]
+  -- stmt 8: q_ptrs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+          (Op.add .nat Broadcast.nil.consL.consR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.constNat 64)))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))) _
+        = some (⟨fun idx : TileIndex [64, 64] => msaQPtr Q s idx⟩ : Tile .ptr [64, 64]) from by
+      simp only [evalOp]
+      erw [evalOp_expandDim_ref_of_regs .nat [64] ⟨1, by simp⟩ "offs_m" _
+            (Tile.vec (fun i : Fin 64 => s.pids 0 * 64 + i.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte]),
+        evalOp_expandDim_ref_of_regs .nat [64] ⟨0, by simp⟩ "offs_d" _
+            (Tile.vec (fun e : Fin 64 => e.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte])]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨i, e, u⟩ := idx
+      simp only [msaQPtr, Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar,
+        Tile.scalar_data_index, Tile.vec, Tile.expandDim, castTile_self,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        TileShape.dropInsertedIndex, Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]
+      ring))]
+  -- stmt 9: k_ptrs
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))) _
+        = some (⟨fun idx : TileIndex [64, 1] => msaKPtr K s idx⟩ : Tile .ptr [64, 1]) from by
+      simp only [evalOp]
+      erw [evalOp_expandDim_ref_of_regs .nat [64] ⟨1, by simp⟩ "offs_d" _
+            (Tile.vec (fun e : Fin 64 => e.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte])]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨e, j, u⟩ := idx
+      simp only [msaKPtr, Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar,
+        Tile.scalar_data_index, Tile.vec, Tile.expandDim, castTile_self,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        TileShape.dropInsertedIndex, Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]
+      ring))]
+  -- stmt 10: v_ptrs
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))) _
+        = some (⟨fun idx : TileIndex [1, 64] => msaVPtr V s idx⟩ : Tile .ptr [1, 64]) from by
+      simp only [evalOp]
+      erw [evalOp_expandDim_ref_of_regs .nat [64] ⟨0, by simp⟩ "offs_d" _
+            (Tile.vec (fun e : Fin 64 => e.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte])]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨j, d, u⟩ := idx
+      simp only [msaVPtr, Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar,
+        Tile.scalar_data_index, Tile.vec, Tile.expandDim, castTile_self,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        TileShape.dropInsertedIndex, Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]
+      ring))]
+  -- stmt 11: o_ptrs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+          (Op.add .nat Broadcast.nil.consL.consR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.constNat 64)))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_d")) (Op.constNat 1)))) _
+        = some (⟨fun idx : TileIndex [64, 64] => msaOPtr Out s idx⟩ : Tile .ptr [64, 64]) from by
+      simp only [evalOp]
+      erw [evalOp_expandDim_ref_of_regs .nat [64] ⟨1, by simp⟩ "offs_m" _
+            (Tile.vec (fun i : Fin 64 => s.pids 0 * 64 + i.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte]),
+        evalOp_expandDim_ref_of_regs .nat [64] ⟨0, by simp⟩ "offs_d" _
+            (Tile.vec (fun e : Fin 64 => e.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte])]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨i, e, u⟩ := idx
+      simp only [msaOPtr, Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar,
+        Tile.scalar_data_index, Tile.vec, Tile.expandDim, castTile_self,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        TileShape.dropInsertedIndex, Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]
+      ring))]
+  -- stmt 12: num_blks = load block_count[off_hz*2 + start_m]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region Blocks
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m"))) MaskOpt.none) _
+        = some (Tile.scalar (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.scalar, Tile.bop, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, BlockState.readMemValue, BlockState.readMemTyped,
+        BlockState.setReg_mem, if_true]))]
+  -- stmt 13: blks_ptr = block_offset + (off_hz*2 + start_m)*4
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase BlockOffsets)
+          (Op.mul .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+              (Op.ref .nat [] "start_m"))
+            (Op.constNat 4))) _
+        = some (Tile.scalar (Region.cast BlockOffsets, (s.pids 1 * 2 + s.pids 0) * 4)) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, Tile.scalar_data_index,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]))]
+  -- stmt 14: num_cols = load column_count[off_hz*2 + start_m]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region ColCounts
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+            (Op.ref .nat [] "start_m"))) MaskOpt.none) _
+        = some (Tile.scalar (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.scalar, Tile.bop, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, BlockState.readMemValue, BlockState.readMemTyped,
+        BlockState.setReg_mem, if_true]))]
+  -- stmt 15: cols_ptr = column_index + (off_hz*2 + start_m)*8
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase Cols)
+          (Op.mul .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 2))
+              (Op.ref .nat [] "start_m"))
+            (Op.constNat 8))) _
+        = some (Tile.scalar (Region.cast Cols, (s.pids 1 * 2 + s.pids 0) * 8)) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, Tile.scalar_data_index,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+        Nat.zero_add, Prod.mk.injEq, true_and, Region.cast_id]))]
+  -- stmt 16: m_i = full 0 + (-inf) = ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩ : Tile .real [64]) from by
+      rw [evalOp_add, evalOp_full, evalOp_const, evalOp_negInf]
+      simp only [Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add]
+      rfl))]
+  -- stmt 17: l_i = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩ : Tile .real [64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 18: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64, 64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64, 64] => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 19: qk_scale = 0.1 * 1.44269504
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.nil (Op.const (0.1 : ℝ)) (Op.const 1.44269504)) _
+        = some (Tile.scalar (some ((0.1 : ℝ) * 1.44269504) : WithBot ℝ)) from by
+      rw [evalOp_mul, evalOp_const, evalOp_const]
+      simp only [Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.mul]
+      rfl))]
+  -- stmt 20: q = load q_ptrs (real)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [64, 64] "q_ptrs")) MaskOpt.none) _
+        = some (⟨fun idx : TileIndex [64, 64] =>
+            s.readMemValue .real (msaQPtr Q s idx).1 (msaQPtr Q s idx).2⟩ : Tile .real [64, 64]) from by
+      simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, BlockState.setReg_mem, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      simp only [msaQPtr, BlockState.readMemValue, BlockState.readMemAs, BlockState.setReg_mem,
+        if_true]))]
+  -- stmt 21: q = castFloat real→fp16 (q * qk_scale)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.castFloat FloatDType.real FloatDType.fp16
+          (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 64] "q") (Op.ref .real [] "qk_scale"))) _
+        = some (⟨fun idx : TileIndex [64, 64] =>
+            FloatDType.real.cast FloatDType.fp16 (msaQVal Q s idx)⟩
+            : Tile FloatDType.fp16.toTileDType [64, 64]) from by
+      rw [evalOp_castFloat, evalOp_mul]
+      simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some, FloatDType.toTileDType_real]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      simp only [msaQVal, msaQPtr, Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.mul]))]
+  -- stmt 22: m_mask = offs_m[:,None] < seqlen
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")) (Op.ref .nat [] "seqlen")) _
+        = some (⟨fun idx : TileIndex [64, 1] =>
+            decide (s.pids 0 * 64 + idx.1.val < seqLen s 4 (Region.cast Seqlens))⟩
+            : Tile .bool [64, 1]) from by
+      rw [evalOp_lt]
+      erw [evalOp_expandDim_ref_of_regs .nat [64] ⟨1, by simp⟩ "offs_m" _
+            (Tile.vec (fun i : Fin 64 => s.pids 0 * 64 + i.val))
+            (by simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+              String.reduceEq, not_false_eq_true, reduceCtorEq, reduceDIte])]
+      simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨i, j, u⟩ := idx
+      simp only [Tile.cop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim,
+        Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt,
+        TileShape.dropInsertedIndex]
+      rfl))]
+  -- stmt 23: max_num_blks = 8
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.constNat 8) _ = some (Tile.scalar 8) from by simp))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  unfold msaInvariantA
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp  -- pids
+  · funext rg o; simp  -- mem
+  · intro rg o; simp [hundef]  -- undef
+  · simp  -- start_m
+  · simp  -- off_hz
+  · simp  -- seqlen
+  · simp [Tile.vec]  -- offs_m
+  · simp [Tile.vec]  -- offs_n
+  · simp [Tile.vec]  -- offs_d
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      BlockState.setReg_mem, ne_eq, String.reduceEq, not_false_eq_true]  -- num_blks
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      BlockState.setReg_mem, ne_eq, String.reduceEq, not_false_eq_true]  -- num_cols
+  · simp  -- blks_ptr
+  · simp  -- cols_ptr
+  · simp  -- q
+  · simp only [TileShape.insertAxis, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]  -- k_ptrs
+  · simp only [TileShape.insertAxis, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]  -- v_ptrs
+  · simp  -- o_ptrs
+  · simp only [TileShape.insertAxis, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      BlockState.setReg_mem, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]  -- m_mask
+  · simp  -- max_num_blks
+  · -- m_i = msaMPartial 0 = ⊥
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      ne_eq, String.reduceEq, not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [msaMPartial_zero]
+  · -- l_i = msaLPartial 0 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      ne_eq, String.reduceEq, not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [msaLPartial_zero]
+  · -- acc = msaOPartial 0 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+      ne_eq, String.reduceEq, not_false_eq_true]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [msaOPartial_zero]
+
 end MSAFoundation
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
+
