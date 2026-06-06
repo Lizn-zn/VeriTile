@@ -2504,6 +2504,59 @@ theorem aft3StateBot_full_eq_spec_case3
   exact (attentionFwdTriton3Case3OutSpec_eq_streaming s Q K V i d).symm
 
 
+/-! ### `l_i = 1` seed reconciliation
+
+The kernel seeds `l_i = tl.zeros + 1.0` (not `0`). On the first streamed key the
+running max transitions from `⊥`, forcing `α = (realExp2 (realSub ⊥ m')).unbotD 0
+= 0`, which annihilates the `1` carry. Hence the seed-`1` fold and the seed-`0`
+fold agree on every nonempty key prefix. `aft3StateBot1` is the faithful seed-`1`
+state; it equals `aft3StateBot` on nonempty windows. -/
+
+/-- **⊥-seed independence of the `l`/`acc` carries.** From a `⊥`-max start the
+first key resets the carries, so the `aft3OsStepBot` fold over a nonempty list is
+independent of the initial `l`/`acc`. -/
+theorem aft3OsStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
+    (l acc l' acc' : ℝ) :
+    xs.foldl aft3OsStepBot (⊥, l, acc) = xs.foldl aft3OsStepBot (⊥, l', acc') := by
+  obtain ⟨x, t, rfl⟩ := List.exists_cons_of_ne_nil hne
+  obtain ⟨s, v⟩ := x
+  have hstep : ∀ L A : ℝ, aft3OsStepBot (⊥, L, A) (s, v)
+      = (((s : ℝ) : WithBot ℝ), pow2 (s - s), pow2 (s - s) * v) := by
+    intro L A
+    simp only [aft3OsStepBot, bot_sup_eq]
+    have hα : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) ((s : ℝ) : WithBot ℝ))).unbotD 0 = 0 := by
+      rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    have hub : (((s : ℝ) : WithBot ℝ)).unbotD 0 = s := by rfl
+    rw [hα, hub]
+    simp
+  simp only [List.foldl_cons, hstep]
+
+/-- ⊥-seeded running state from the kernel's `l_i = 1` seed. -/
+noncomputable def aft3StateBot1
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64) :
+    WithBot ℝ × ℝ × ℝ :=
+  (aft3KeysUpto qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (⊥, 1, 0)
+
+/-- The faithful seed-`1` state equals the seed-`0` state whenever the window is
+nonempty (`aft3RunningMax ≠ ⊥`). -/
+theorem aft3StateBot1_eq_aft3StateBot
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64)
+    (hne : aft3RunningMax qT kT vT keyScale keep hi i d ≠ ⊥) :
+    aft3StateBot1 qT kT vT keyScale keep hi i d
+      = aft3StateBot qT kT vT keyScale keep hi i d := by
+  have hxs : aft3KeysUpto qT kT vT keyScale keep hi i d ≠ [] := by
+    intro h
+    apply hne
+    unfold aft3RunningMax
+    rw [h]; rfl
+  unfold aft3StateBot1 aft3StateBot
+  exact aft3OsStepBot_bot_seed_indep _ hxs 1 0 0 0
+
+
 /-! ## Loop invariant (deliverable 4)
 
 `attnInvariant` binds the kernel's live registers after `c` key blocks (counter
@@ -2526,9 +2579,9 @@ noncomputable def attnInvariant
   (s.regs .real [64] "m_i" = some ⟨fun r : TileIndex [64] =>
       aft3RunningMax qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩⟩) ∧
   (s.regs .real [64] "l_i" = some ⟨fun r : TileIndex [64] =>
-      ((aft3StateBot qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+      ((aft3StateBot1 qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [64, 64] "acc" = some ⟨fun idx : TileIndex [64, 64] =>
-      ((aft3StateBot qT kT vT keyScale3 keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+      ((aft3StateBot1 qT kT vT keyScale3 keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .real [64, 64] "q" = some ⟨fun idx : TileIndex [64, 64] =>
       some (qT idx)⟩) ∧
   (s.regs .real [] "qk_scale" = some (Tile.scalar (some ((1 / 8 : ℝ) * 1.4426950408889634)))) ∧
@@ -2545,5 +2598,40 @@ noncomputable def attnInvariant
         parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
         offsets := [i, 0] }⟩)) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+/-! ### preLoop evaluation (deliverable 4) -/
+
+/-- `makeBlockPtrDyn` evaluation recipe. -/
+theorem aft3_makeBlockPtrDyn_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape)
+    (strides offsets : List Nat) (s : BlockState) (base : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base)) :
+    evalOp (.makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := offsets }⟩) := by
+  simp only [evalOp, hb, Option.bind]
+  rfl
+
+/-- `makeBlockPtrDynOffsets` with dynamic row offset, literal `0` column. -/
+theorem aft3_makeBlockPtr_rowcol_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape) (strides : List Nat)
+    (rowOp : Op .nat []) (s : BlockState) (base rowOff : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base))
+    (hr : evalOp rowOp s = some (Tile.scalar rowOff)) :
+    evalOp (.makeBlockPtrDynOffsets region baseOffset parentShape blockShape strides
+        [rowOp, Op.constNat 0]) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := [rowOff, 0] }⟩) := by
+  simp only [evalOp, hb, hr, Option.bind, List.mapM, List.mapM.loop, evalOp_constNat, Tile.scalar]
+  rfl
+
+/-- `Stmt.ifThenElse` with a constexpr-true condition runs the then-branch. -/
+theorem aft3_ifThenElse_true {cond : Op .bool []} {t e : List Stmt} {s : BlockState}
+    (hc : evalOp cond s = some (Tile.scalar Bool.true)) :
+    stepStmt (.ifThenElse cond t e) s = stepStmts t s := by
+  simp only [stepStmt, hc, Option.bind, Tile.scalar]
+  rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
