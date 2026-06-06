@@ -2504,4 +2504,46 @@ theorem aft3StateBot_full_eq_spec_case3
   exact (attentionFwdTriton3Case3OutSpec_eq_streaming s Q K V i d).symm
 
 
+/-! ## Loop invariant (deliverable 4)
+
+`attnInvariant` binds the kernel's live registers after `c` key blocks (counter
+`i = c·64`, window `[0, i)`): the streaming state `m_i`/`l_i`/`acc` equals the
+⊥-seeded `aft3RunningMax`/`aft3StateBot` over the first `i` kept keys (per the
+case `keep` predicate), and the setup registers (`q`, `qk_scale`, the `K`/`V`
+block pointers advanced by `i`, `start_m`, `off_hz`, the `m_ptrs`/`l_ptrs`
+vectors, the `O_block_ptr`) carry their loop-entry values. Memory / undef are
+preserved. Strides specialized to the Python case layout. -/
+
+noncomputable def attnInvariant
+    (Q K V M Out L : RegionName) (s0 : BlockState)
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
+    (i : Nat) (s : BlockState) : Prop :=
+  let base := baseOffset3 s0
+  let qT := qTile3 s0 Q
+  let kT := kTile3 s0 K
+  let vT := vTile3 s0 V
+  s.pids = s0.pids ∧ i % 64 = 0 ∧ i ≤ 128 ∧
+  (s.regs .real [64] "m_i" = some ⟨fun r : TileIndex [64] =>
+      aft3RunningMax qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩⟩) ∧
+  (s.regs .real [64] "l_i" = some ⟨fun r : TileIndex [64] =>
+      ((aft3StateBot qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [64, 64] "acc" = some ⟨fun idx : TileIndex [64, 64] =>
+      ((aft3StateBot qT kT vT keyScale3 keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .real [64, 64] "q" = some ⟨fun idx : TileIndex [64, 64] =>
+      some (qT idx)⟩) ∧
+  (s.regs .real [] "qk_scale" = some (Tile.scalar (some ((1 / 8 : ℝ) * 1.4426950408889634)))) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .blockPtr [64, 64] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := K, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [64, 128], blockShape := [64, 64], strides := [1, 64],
+        offsets := [0, i] }⟩)) ∧
+  (s.regs .blockPtr [64, 64] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := V, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+        offsets := [i, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
