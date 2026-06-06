@@ -1684,4 +1684,62 @@ theorem aftPreLoop_check (Q K V QScale KScale Out : RegionName) :
       = AftFoundation.aftPreLoop Q K V QScale KScale Out :=
   rfl
 
+/-- **Loop invariant** for the AFT streaming loop (counter `i = c·64`, window
+`hi_c = i`). Binds the running-state registers after `c` blocks to the ⊥-seeded
+`aftStateBot`/`aftRunningMax` over the first `i` keys, per output row `r` (channel
+`d` for `acc`), keyed by the per-key score scale `keyScale`. Also binds the static
+index vectors (`offs_m`/`offs_n`/`offs_k`), the loaded `q`/`q_scale`, the program
+ids, and preserves `undef`/`mem`. The pointer registers (`K_ptrs`/`K_scale_ptr`/
+`V_ptrs` advanced by `i`) are tracked by the step lemma via the recipe pointer
+advances; here we keep the running-state heart, which the readback needs. -/
+noncomputable def aftInvariant
+    (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
+    (keyScale : Fin 128 → ℝ) (i : Nat) (s : BlockState) : Prop :=
+  let qStart := qStartAFT s0
+  let qT := qTileAFT s0 Q
+  let kT := kTileAFT s0 K
+  let vT := vTileAFT s0 V
+  s.pids = s0.pids ∧ i % 64 = 0 ∧ i ≤ 128 ∧
+  (s.regs .real [128] "m_i" = some ⟨fun r : TileIndex [128] =>
+      aftRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩) ∧
+  (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
+      ((aftStateBot qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
+      ((aftStateBot qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qStart + r.val))) ∧
+  (s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))) ∧
+  (s.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
+
+open VeriTile.Triton VeriTile.Bench.TritonBenchG.AttnFwdTriton
+
+/-- The running-state bindings of `aftInvariant … 0` are the ⊥-seed inits
+(`m_i = ⊥`, `l_i = 0`, `acc = 0`) — the base case the preLoop establishes. Pure
+math (reads off `aftRunningMax_zero`/`aftStateBot_zero`); the exec preLoop step
+supplies the register equalities, this supplies the value normalization. -/
+theorem aftInvariant_running_zero
+    (Q K V : RegionName) (s0 : BlockState) (keyScale : Fin 128 → ℝ) :
+    (⟨fun r : TileIndex [128] =>
+        aftRunningMax (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+          (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩⟩ : Tile .real [128])
+        = ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
+      ∧ (⟨fun r : TileIndex [128] =>
+        ((aftStateBot (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+          (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩ : Tile .real [128])
+        = ⟨fun _ : TileIndex [128] => (some (0 : ℝ) : WithBot ℝ)⟩
+      ∧ (⟨fun idx : TileIndex [128, 128] =>
+        ((aftStateBot (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+          (qStartAFT s0) 0 idx.1 idx.2.1).2.2 : ℝ)⟩ : Tile .real [128, 128])
+        = ⟨fun _ : TileIndex [128, 128] => (some (0 : ℝ) : WithBot ℝ)⟩ := by
+  refine ⟨?_, ?_, ?_⟩
+  · ext r; simp only [aftRunningMax_zero]
+  · ext r; simp only [aftStateBot_zero]; rfl
+  · ext idx; simp only [aftStateBot_zero]; rfl
+
+end VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
