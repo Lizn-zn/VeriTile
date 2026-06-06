@@ -1582,4 +1582,106 @@ theorem aftBody_split
                 2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23) :=
   rfl
 
+/-! ## FOUNDATION Part 4 — `aftPreLoop` AST + `aftInvariant` + `aftPreLoop_eval`
+
+`aftPreLoop` is the 22-statement deterministic prefix (`= body.take 22`). The loop
+invariant `aftInvariant` binds the running registers after `c` blocks (counter
+`i = c·64`): `m_i`/`l_i`/`acc` to the three components of the ⊥-seeded `aftStateBot`
+(running max = `aftRunningMax`), together with the static index vectors, the loaded
+`q`/`q_scale`, and the four streamed pointer tiles (`K_ptrs`/`K_scale_ptr`/`V_ptrs`
+advanced by `i`, `O_block_ptr`/`Q_ptrs`/`Q_scale_ptr` fixed). `aftPreLoop_eval`
+steps the prefix to a state satisfying `aftInvariant … 0`. -/
+
+namespace AftFoundation
+
+open VeriTile.Triton
+
+/-- The 22 lowered preLoop statements of the Python-shape AFT kernel (`= body.take 22`). -/
+def aftPreLoop (Q K V QScale KScale Out : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [] "off_z"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign .nat [] "off_h"
+      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign .nat [] "qvk_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat 65536))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 16384))),
+    Stmt.assign .nat [] "vk_offset"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat 128)),
+    Stmt.assign .nat [] "q_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat 128) (Op.constNat 128)) (Op.constNat 1))
+          (Op.constNat 128))),
+    Stmt.assign .nat [] "k_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat 128) (Op.constNat 64)) (Op.constNat 1))
+          (Op.constNat 64))),
+    Stmt.assign .nat [128] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
+    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
+    Stmt.assign .nat [128] "offs_k" (Op.arange 128),
+    Stmt.assign .ptr [128, 128] "Q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [] "Q_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase QScale)
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))),
+    Stmt.assign .ptr [128, 64] "K_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_k")))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n")) (Op.constNat 128)))),
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase KScale) (Op.ref .nat [] "k_scale_offset")),
+    Stmt.assign .ptr [64, 128] "V_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n")) (Op.constNat 128)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [128, 128] "O_block_ptr"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .real [128] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [128] "l_i"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) (Op.const 1.0)),
+    Stmt.assign .real [128, 128] "acc" (Op.full [128, 128] (Op.const 0)),
+    Stmt.assign .real [128, 128] "q"
+      (Op.load .real (.ptr (.ref .ptr [128, 128] "Q_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))),
+    Stmt.assign .real [] "q_scale"
+      (Op.load .real (.ptr (.ref .ptr [] "Q_scale_ptr")) .none) ]
+
+end AftFoundation
+
+namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
+
+open VeriTile.Triton
+
+set_option maxRecDepth 8000 in
+/-- `body.take 22 = aftPreLoop`. Checked by `rfl`. -/
+theorem aftPreLoop_check (Q K V QScale KScale Out : RegionName) :
+    (attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel.body.take 22
+      = AftFoundation.aftPreLoop Q K V QScale KScale Out :=
+  rfl
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
