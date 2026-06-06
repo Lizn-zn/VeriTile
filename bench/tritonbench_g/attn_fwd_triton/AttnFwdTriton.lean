@@ -1420,4 +1420,166 @@ theorem aftStateBot_full_eq_spec
   rw [attnFwdTritonOutSpec_eq_streaming]
   rw [VeriTile.Triton.osStep_foldl_eq_batch]
 
+/-! ## FOUNDATION Part 1 — `aftBody_split` (preLoop ++ forRange aftLoopBody :: postLoop)
+
+The lowered algorithm body of `attn_fwd_triton_surface` at the Python test shape is
+a 25-statement list: 22 preLoop statements (`aftPreLoop`), then the static
+`Stmt.forRange "start_n" 0 128 64 aftLoopBody` (loop body = 22 statements), then 2
+postLoop statements (`acc = acc / l_i[:, None]` and the masked `tl.store`). This is
+a **static** `forRange` (range bounds `0..128 step 64`, NOT a `forRangeDyn`), so the
+`forRange_inv` master invariant principle drives the loop. Mirrors `flash_body_split`.
+
+The three pieces are transcribed concretely (the per-statement op-eval recipes above
+encode the exact `Op`/`Broadcast`/dtype terms); `aftBody_split` is checked by `rfl`. -/
+
+namespace AftFoundation
+
+open VeriTile.Triton
+
+/-- The 22 lowered loop-body statements (statements 0–21 of the `forRange` body),
+matching the recipe op-eval lemmas `aft_*`. -/
+def aftLoopBody : List Stmt :=
+  [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
+    Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    -- 1: k_mask
+    Stmt.assign .bool [128, 64] "k_mask"
+      (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))),
+    -- 2: k = tl.load(K_ptrs, mask=k_mask)
+    Stmt.assign .real [128, 64] "k"
+      (Op.load .real (.ptr (.ref .ptr [128, 64] "K_ptrs")) (.mask (.ref .bool [128, 64] "k_mask"))),
+    -- 3: k_scale = tl.load(K_scale_ptr)
+    Stmt.assign .real [] "k_scale"
+      (Op.load .real (.ptr (.ref .ptr [] "K_scale_ptr")) .none),
+    -- 4: qk = castFloat(q·k) * q_scale * k_scale
+    Stmt.assign .real [128, 64] "qk"
+      (Op.mul .real Broadcast.scalarR
+        (Op.mul .real Broadcast.scalarR
+          (Op.castFloat FloatDType.real FloatDType.real
+            (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 64] "k")))
+          (Op.ref .real [] "q_scale"))
+        (Op.ref .real [] "k_scale")),
+    -- 5: mask = offs_m[:,None] >= start_n + offs_n[None,:]
+    Stmt.assign .bool [128, 64] "mask"
+      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n")))),
+    -- 6: qk = tl.where(mask, qk, -1000000.0)  (unary minus → sub (const 0.0) (const 1e6))
+    Stmt.assign .real [128, 64] "qk"
+      (Op.where (Op.ref .bool [128, 64] "mask")
+        (Op.ref .real [128, 64] "qk")
+        (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [128, 64])),
+    -- 7: m_ij = maximum(m_i, max(qk,1))
+    Stmt.assign .real [128] "m_ij"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [128] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false
+            (Op.ref .real [128, 64] "qk")))
+        (Op.ref .real [128] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false
+          (Op.ref .real [128, 64] "qk"))),
+    -- 8: qk = qk - m_ij[:, None]
+    Stmt.assign .real [128, 64] "qk"
+      (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))),
+    -- 9: p = exp2(qk)
+    Stmt.assign .real [128, 64] "p" (Op.exp2 (Op.ref .real [128, 64] "qk")),
+    -- 10: p = tl.where(mask, p, 0)
+    Stmt.assign .real [128, 64] "p"
+      (Op.where (Op.ref .bool [128, 64] "mask")
+        (Op.ref .real [128, 64] "p") (Op.broadcast (Op.const 0.0) [128, 64])),
+    -- 11: l_ij = sum(p, 1)
+    Stmt.assign .real [128] "l_ij"
+      (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "p")),
+    -- 12: alpha = exp2(m_i - m_ij)
+    Stmt.assign .real [128] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij"))),
+    -- 13: l_i = l_i * alpha + l_ij
+    Stmt.assign .real [128] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [128] "l_i") (Op.ref .real [128] "alpha"))
+        (Op.ref .real [128] "l_ij")),
+    -- 14: acc = acc * alpha[:, None]
+    Stmt.assign .real [128, 128] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 128] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "alpha"))),
+    -- 15: v = tl.load(V_ptrs, mask=...)  (v is [64,128]: rows=keys, cols=head)
+    Stmt.assign .real [64, 128] "v"
+      (Op.load .real (.ptr (.ref .ptr [64, 128] "V_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n"))
+            (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))),
+    -- 16: p = p.to(fp16)
+    Stmt.assign .fp16 [128, 64] "p"
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [128, 64] "p")),
+    -- 17: acc += dot(p.to(real), v)
+    Stmt.assign .real [128, 128] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 128] "acc")
+        (Op.dot (batch := [])
+          (Op.castFloat FloatDType.fp16 FloatDType.real (Op.ref .fp16 [128, 64] "p"))
+          (Op.ref .real [64, 128] "v"))),
+    -- 18: m_i = m_ij
+    Stmt.assign .real [128] "m_i" (Op.ref .real [128] "m_ij"),
+    -- 19: K_ptrs += BLOCK_N * HEAD_DIM
+    Stmt.assign .ptr [128, 64] "K_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 64] "K_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.constNat 128))),
+    -- 20: K_scale_ptr += 1
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "K_scale_ptr") (Op.constNat 1)),
+    -- 21: V_ptrs += BLOCK_N * HEAD_DIM
+    Stmt.assign .ptr [64, 128] "V_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [64, 128] "V_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.constNat 128))) ]
+
+end AftFoundation
+
+namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
+
+open VeriTile.Triton
+
+set_option maxRecDepth 8000 in
+/-- The lowered `forRange` loop body of the Python-shape AFT kernel is exactly
+`aftLoopBody` (22 statements). Checked by `rfl`. -/
+theorem aftLoopBody_check
+    (Q K V QScale KScale Out : RegionName) :
+    (match ((attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel.body)[22]? with
+      | some (Stmt.forRange _ _ _ _ body) => body
+      | _ => [])
+      = AftFoundation.aftLoopBody :=
+  rfl
+
+set_option maxRecDepth 8000 in
+/-- **`aftBody_split`** — the lowered AFT body decomposes as
+`take 22 ++ (forRange "start_n" 0 128 64 aftLoopBody :: drop 23)`. The static
+`forRange` (NOT `forRangeDyn`) sits at index 22; the 2 postLoop statements follow.
+Pure structural identity, checked by `rfl`. -/
+theorem aftBody_split
+    (Q K V QScale KScale Out : RegionName) :
+    (attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel.body
+      = (attn_fwd_triton_surface Q K V QScale KScale Out
+          65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+          2 4 128 128 128 64 128 96 3).toAlgKernel.body.take 22
+        ++ (Stmt.forRange "start_n" 0 128 64 AftFoundation.aftLoopBody
+            :: (attn_fwd_triton_surface Q K V QScale KScale Out
+                65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+                2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23) :=
+  rfl
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
