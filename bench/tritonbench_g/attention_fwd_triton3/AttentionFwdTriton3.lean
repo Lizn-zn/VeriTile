@@ -3345,4 +3345,96 @@ theorem aft3LoopBody_steps (sin : BlockState) (SM SN : Nat)
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
 
+/-! ### attn_step bridges (deliverable 4): block sums / running max -/
+
+/-- Map-and-sum of a `filterMap` over `finRange` is a masked `Finset.sum`. -/
+theorem aft3_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- The map-and-sum of `aft3Block` (case `keep`) equals a `Fin 64`-masked
+`Finset.sum`, reindexing block `c`'s window onto lanes `jL` (global key
+`c·64 + jL`). -/
+theorem aft3Block_map_sum
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (c : Nat) (i : Fin 64) (d : Fin 64)
+    (hwin : (c + 1) * 64 ≤ 128) (h : ℝ × ℝ → ℝ) :
+    ((aft3Block qT kT vT keyScale keep c i d).map h).sum
+      = ∑ jL : Fin 64,
+          (if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
+            h (keyScale ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ *
+                Finset.univ.sum (fun e : Fin 64 =>
+                  qT (i, e, PUnit.unit) * kT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)),
+                vT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit))
+           else 0) := by
+  rw [aft3Block, aft3_filterMap_finRange_sum 128
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j)
+    (fun j => (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
+        qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))) h]
+  rw [show (∑ j : Fin 128, if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j
+            then h (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
+                  qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit)) else 0)
+        = ∑ j ∈ Finset.univ.filter (fun j : Fin 128 => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64),
+            (if keep i j then h (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit)) else 0) from by
+    rw [Finset.sum_filter]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hwj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+    · by_cases hcj : keep i j
+      · rw [if_pos ⟨hwj.1, hwj.2, hcj⟩, if_pos hwj, if_pos hcj]
+      · rw [if_neg (fun hh => hcj hh.2.2), if_pos hwj, if_neg hcj]
+    · rw [if_neg (fun hh => hwj ⟨hh.1, hh.2.1⟩), if_neg hwj]]
+  symm
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * 64 + a.val = c * 64 + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * 64, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- A real `foldl max` over a list, coerced to `WithBot`, is `max` of the seed
+with the `WithBot` `foldr` of the coerced list. -/
+theorem aft3_foldl_max_coe (m0 : ℝ) (L : List ℝ) :
+    ((L.foldl (fun a x => max a x) m0 : ℝ) : WithBot ℝ)
+      = max ((m0 : ℝ) : WithBot ℝ) ((L.map (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥) := by
+  induction L generalizing m0 with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.foldl_cons, List.map_cons, List.foldr_cons, ih]
+    rw [WithBot.coe_max, ← max_assoc]
+
+/-- **`aft3RunningMax` one-block advance.** -/
+theorem aft3RunningMax_succ
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (c : Nat) (i : Fin 64) (d : Fin 64) :
+    aft3RunningMax qT kT vT keyScale keep ((c + 1) * 64) i d
+      = aft3RunningMax qT kT vT keyScale keep (c * 64) i d
+        ⊔ ((aft3Block qT kT vT keyScale keep c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  unfold aft3RunningMax
+  rw [aft3KeysUpto_succ, List.map_append, List.foldr_append]
+  generalize (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) (aft3Block qT kT vT keyScale keep c i d)).foldr (· ⊔ ·) ⊥ = B
+  induction (aft3KeysUpto qT kT vT keyScale keep (c * 64) i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) with
+  | nil => simp
+  | cons a t ih => simp only [List.foldr_cons, ih, sup_assoc]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
