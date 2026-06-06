@@ -1935,4 +1935,77 @@ theorem aft3_mi_carry_eval (s : BlockState) (mij : Tile .real [64])
   rw [evalOp_ref, hmij]
 
 
+/-! ## Exec-assembly foundation: body decomposition
+
+The lowered Python-test-shape (case 1) `attention_fwd_triton3_surface` algorithm
+body splits as `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
+aft3PostLoop`. The preLoop sets up offsets / block pointers / `m_ptrs`/`l_ptrs`,
+runs the constexpr `INIT` branch (`m_i = -inf`, `l_i = 1`, `acc = 0`), the
+`qk_scale` scalar, and the constexpr `IS_EVEN_M` `q` load. The loop body is the
+streaming online-softmax block recurrence (with the constexpr sliding-window
+`ifThen`/`ifThenElse`). The postLoop runs the constexpr `END` finalize
+(`m_i += log2 l_i`, `acc /= l_i`) then stores `m_i`/`acc`. -/
+
+noncomputable def aft3PreLoop (Q K V M Out L : RegionName) : List Stmt :=
+  [ Stmt.assign TileDType.nat [] "start_m" (Op.programId 0),
+    Stmt.assign TileDType.nat [] "off_hz" (Op.programId 1),
+    Stmt.assign TileDType.nat [] "off_z" (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign TileDType.nat [] "off_h" (Op.mod IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign TileDType.nat [] "off_hkv" (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat 4) (Op.constNat 4))),
+    Stmt.assign TileDType.nat [] "q_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 8192))),
+    Stmt.assign TileDType.nat [] "k_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat 8192))),
+    Stmt.assign TileDType.nat [] "v_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat 8192))),
+    Stmt.assign TileDType.nat [] "o_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 8192))),
+    Stmt.assign TileDType.blockPtr [64, 64] "Q_block_ptr" (Op.makeBlockPtrDynOffsets Q (Op.ref TileDType.nat [] "q_offset") [128, 64] [64, 64] [64, 1] [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64), Op.constNat 0]),
+    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" (Op.makeBlockPtrDyn V (Op.ref TileDType.nat [] "v_offset") [128, 64] [64, 64] [64, 1] [0, 0]),
+    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" (Op.makeBlockPtrDyn K (Op.ref TileDType.nat [] "k_offset") [64, 128] [64, 64] [1, 64] [0, 0]),
+    Stmt.assign TileDType.blockPtr [64, 64] "O_block_ptr" (Op.makeBlockPtrDynOffsets Out (Op.ref TileDType.nat [] "o_offset") [128, 64] [64, 64] [64, 1] [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64), Op.constNat 0]),
+    Stmt.assign TileDType.nat [64] "offs_m" (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64)) (Op.arange 64)),
+    Stmt.assign TileDType.ptr [64] "m_ptrs" (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 128)) (Op.ref TileDType.nat [64] "offs_m"))),
+    Stmt.assign TileDType.ptr [64] "l_ptrs" (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 128)) (Op.ref TileDType.nat [64] "offs_m"))),
+    Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [64] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [64, 64] "acc" (Op.full [64, 64] (Op.const 0))] [Stmt.assign TileDType.real [64] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [64] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [64] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [64, 64] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "O_block_ptr") []) MaskOpt.none)],
+    Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const (1 / 8)) (Op.const 1.0)),
+    Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+    Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64, 64] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [64, 64] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [0, 1]) MaskOpt.none)] ]
+
+def aft3LoopBody : List Stmt :=
+  [ Stmt.assign TileDType.real [64, 64] "k" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none),
+    Stmt.assign TileDType.real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
+    Stmt.assign TileDType.real [64, 64] "qk" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "qk") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "q") (Op.ref TileDType.real [64, 64] "k"))))),
+    Stmt.assign TileDType.real [64, 64] "qk" ((Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [64, 64] "qk") (Op.ref TileDType.real [] "qk_scale"))),
+    Stmt.ifThen (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.nat [64, 64] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by decide⟩ (Op.arange 64)) (Op.expandDim ⟨0, by decide⟩ (Op.arange 64))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat 0)), Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.bool [64, 64] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64))] [Stmt.assign TileDType.bool [64, 64] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64)))], Stmt.assign TileDType.real [64, 64] "qk" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "qk") (Op.negInf.broadcast [64, 64]))],
+    Stmt.assign TileDType.real [64] "m_ij" (((Op.gt ComparableDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.reduceMax ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "qk"))).where (Op.ref TileDType.real [64] "m_i") (Op.reduceMax ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "qk")))),
+    Stmt.assign TileDType.real [64, 64] "qk" (Op.sub NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "qk") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "m_ij"))),
+    Stmt.assign TileDType.real [64, 64] "p" (Op.ref TileDType.real [64, 64] "qk").exp2,
+    Stmt.ifThen (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64, 64] "p" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "p") ((Op.const 0.0).broadcast [64, 64]))],
+    Stmt.assign TileDType.real [64] "l_ij" (Op.reduceSum ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "p")),
+    Stmt.assign TileDType.real [64] "tmp" ((Op.sub NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "m_ij"))),
+    Stmt.assign TileDType.real [64] "alpha" (Op.ref TileDType.real [64] "tmp").exp2,
+    Stmt.assign TileDType.real [64] "l_i" ((Op.add NumericDType.real Broadcast.nil.consSame (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "l_i") (Op.ref TileDType.real [64] "alpha")) (Op.ref TileDType.real [64] "l_ij"))),
+    Stmt.assign TileDType.real [64, 64] "acc" ((Op.mul NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "acc") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "alpha")))),
+    Stmt.assign TileDType.real [64, 64] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none),
+    Stmt.assign TileDType.real [64, 64] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "p") (Op.ref TileDType.real [64, 64] "v"))))),
+    Stmt.assign TileDType.real [64] "m_i" ((Op.ref TileDType.real [64] "m_ij")),
+    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [64, 0]),
+    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [0, 64]) ]
+
+def aft3PostLoop (M Out L : RegionName) : List Stmt :=
+  [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64] "m_i" ((Op.add NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "l_i").log2)), Stmt.assign TileDType.real [64, 64] "acc" ((Op.div NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "acc") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "l_i"))))] [Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "l_ptrs")) ((Op.ref TileDType.real [64] "l_i")) MaskOpt.none],
+    Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs")) ((Op.ref TileDType.real [64] "m_i")) MaskOpt.none,
+    Stmt.store TileDType.real [64, 64] (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "O_block_ptr") []) ((Op.ref TileDType.real [64, 64] "acc")) MaskOpt.none ]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
+exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
+aft3PostLoop`. -/
+theorem aft3_body_split (Q K V M Out L : RegionName) :
+    (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel.body
+      = aft3PreLoop Q K V M Out L
+        ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody :: aft3PostLoop M Out L := by
+  rfl
+
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
