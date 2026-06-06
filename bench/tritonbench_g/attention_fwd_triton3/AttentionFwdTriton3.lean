@@ -125,10 +125,38 @@ def attention_fwd_triton3_surface
   } else {
     q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
   }
-  acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-    start_m, qk_scale, $(NKV_CTX), $(_sliding_window_offset), $(_sliding_window_size),
-    $(BLOCK_M), $(BLOCK_DMODEL), $(BLOCK_N), $(_SLIDING_WINDOW), $(IS_EVEN_M),
-    $(_IS_EVEN_N), $(_COMPLEMENT_SLIDING_WINDOW))
+  for start_n in range($(0), $(NKV_CTX), $(BLOCK_N)) {
+    k = tl.load(K_block_ptr)
+    qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
+    qk += tl.dot(q, k)
+    qk = qk * qk_scale
+    if $(_SLIDING_WINDOW) != $(0) {
+      dist = tl.arange(0, $(BLOCK_M))[:, None] - tl.arange(0, $(BLOCK_N))[None, :]
+        + start_m * $(BLOCK_M) - start_n + $(_sliding_window_offset)
+      if $(_COMPLEMENT_SLIDING_WINDOW) != $(0) {
+        mask = dist >= $(_sliding_window_size)
+      } else {
+        mask = (dist >= $(0)) & (dist < $(_sliding_window_size))
+      }
+      qk = tl.where(mask, qk, float("-inf"))
+    }
+    m_ij = tl.maximum(m_i, tl.max(qk, 1))
+    qk = qk - m_ij[:, None]
+    p = tl.math.exp2(qk)
+    if $(_SLIDING_WINDOW) != $(0) {
+      p = tl.where(mask, p, 0.0)
+    }
+    l_ij = tl.sum(p, 1)
+    tmp = m_i - m_ij
+    alpha = tl.math.exp2(tmp)
+    l_i = l_i * alpha + l_ij
+    acc = acc * alpha[:, None]
+    v = tl.load(V_block_ptr)
+    acc += tl.dot(p, v)
+    m_i = m_ij
+    V_block_ptr = tl.advance(V_block_ptr, [$(BLOCK_N), $(0)])
+    K_block_ptr = tl.advance(K_block_ptr, [$(0), $(BLOCK_N)])
+  }
   if $(END) != $(0) {
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
