@@ -2634,4 +2634,388 @@ theorem aft3_ifThenElse_true {cond : Op .bool []} {t e : List Stmt} {s : BlockSt
   simp only [stepStmt, hc, Option.bind, Tile.scalar]
   rfl
 
+/-- Eval helper for `floorDiv` (no `@[simp]` form). -/
+theorem aft3_evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
+
+/-- Eval helper for `mod` (no `@[simp]` form). -/
+theorem aft3_evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.mod h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
+  simp [evalOp]
+
+/-- Eval helper for `ptrAdd` (no `@[simp]` form). -/
+theorem aft3_evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
+    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
+    evalOp (.ptrAdd bc ptr off) s = (do
+      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
+      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
+
+/-- Eval helper for `ptrBase` (the base region pointer). -/
+theorem aft3_evalOp_ptrBase (region : RegionName) (s : BlockState) :
+    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
+
+/-- The constexpr `INIT != 0` / `IS_EVEN_M != 0` condition (`Op.ne 1 0`) is true. -/
+theorem aft3_ne_one_zero_true (s : BlockState) :
+    evalOp (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) s
+      = some (Tile.scalar Bool.true) := by
+  unfold evalOp
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-! ### preLoop execution (deliverable 4, exec side)
+
+Steps the 20 lowered `aft3PreLoop` statements from a clean state to a loop-entry
+state satisfying `attnInvariant … 0`. The scalar / pointer / index prefix is
+discharged by `simp` (the `@[simp] evalOp_*`/`setReg` lemmas thread register
+lookups through the `setReg` chain); the `q` block-pointer load is then threaded
+through `aft3_load_v_eval` with the just-set `Q_block_ptr` readback (abstract,
+never whnf-ing the literal state). -/
+
+/-- The prefix of `aft3PreLoop` before the `INIT` branch (stmts 0–15: the 9
+scalar offsets, 4 block pointers, `offs_m`, `m_ptrs`, `l_ptrs`). -/
+noncomputable def aft3PreLoopScalars (Q K V M Out L : RegionName) : List Stmt :=
+  (aft3PreLoop Q K V M Out L).take 16
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- The scalar/pointer/index prefix steps to a state exposing the register
+readbacks the `INIT`/`qk_scale`/`q`-load chunks need. -/
+theorem aft3PreLoopScalars_eval (Q K V M Out L : RegionName) (s : BlockState) :
+    ∃ s11, stepStmts (aft3PreLoopScalars Q K V M Out L) s = some s11
+      ∧ s11.pids = s.pids ∧ s11.mem = s.mem ∧ s11.undef = s.undef
+      ∧ s11.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s11.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
+      ∧ s11.regs .blockPtr [64, 64] "Q_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := Q, baseOffset := s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192,
+              parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+              offsets := [s.pids 0 * 64, 0] }⟩)
+      ∧ s11.regs .blockPtr [64, 64] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := K, baseOffset := s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192,
+              parentShape := [64, 128], blockShape := [64, 64], strides := [1, 64],
+              offsets := [0, 0] }⟩)
+      ∧ s11.regs .blockPtr [64, 64] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := V, baseOffset := s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192,
+              parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+              offsets := [0, 0] }⟩) := by
+  unfold aft3PreLoopScalars aft3PreLoop
+  simp only [List.take_succ_cons, List.take_zero, List.append_nil]
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: off_hz = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: off_z = off_hz / 4
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)) _
+        = some (Tile.scalar (s.pids 1 / 4)) from by
+      rw [aft3_evalOp_floorDiv]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 3: off_h = off_hz % 4
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mod IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)) _
+        = some (Tile.scalar (s.pids 1 % 4)) from by
+      rw [aft3_evalOp_mod]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 4: off_hkv = off_h / (4 / 4)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat 4) (Op.constNat 4))) _
+        = some (Tile.scalar (s.pids 1 % 4 / (4 / 4))) from by
+      rw [aft3_evalOp_floorDiv, aft3_evalOp_floorDiv]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 5: q_offset = off_z*32768 + off_h*8192
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 6: k_offset = off_z*32768 + off_hkv*8192
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 / (4 / 4) * 8192)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 7: v_offset = same as k_offset
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 / (4 / 4) * 8192)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 8: o_offset = off_z*32768 + off_h*8192  (= q_offset)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 8192))) _
+        = some (Tile.scalar (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 9: Q_block_ptr = makeBlockPtrDynOffsets Q q_offset [start_m*64, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_makeBlockPtr_rowcol_eval Q (Op.ref TileDType.nat [] "q_offset") [128, 64] [64, 64] [64, 1]
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64)) _
+      (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192) (s.pids 0 * 64)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+      (by rw [evalOp_mul]; simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_ne_name,
+            ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+            Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 10: V_block_ptr = makeBlockPtrDyn V v_offset [0,0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_makeBlockPtrDyn_eval V (Op.ref TileDType.nat [] "v_offset") [128, 64] [64, 64] [64, 1] [0, 0] _
+      (s.pids 1 / 4 * 32768 + s.pids 1 % 4 / (4 / 4) * 8192)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  -- stmt 11: K_block_ptr = makeBlockPtrDyn K k_offset [0,0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_makeBlockPtrDyn_eval K (Op.ref TileDType.nat [] "k_offset") [64, 128] [64, 64] [1, 64] [0, 0] _
+      (s.pids 1 / 4 * 32768 + s.pids 1 % 4 / (4 / 4) * 8192)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  -- stmt 12: O_block_ptr = makeBlockPtrDynOffsets Out o_offset [start_m*64, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_makeBlockPtr_rowcol_eval Out (Op.ref TileDType.nat [] "o_offset") [128, 64] [64, 64] [64, 1]
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64)) _
+      (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192) (s.pids 0 * 64)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+      (by rw [evalOp_mul]; simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_ne_name,
+            ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+            Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 13: offs_m = start_m*64 + arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64)) (Op.arange 64)) _
+        = some (Tile.vec (fun r : Fin 64 => s.pids 0 * 64 + r.val)) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_arange, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 14: m_ptrs = M + (off_hz*128 + offs_m)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 128)) (Op.ref TileDType.nat [64] "offs_m"))) _
+        = some (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * 128))
+              (Tile.vec (fun r : Fin 64 => s.pids 0 * 64 + r.val)))) from by
+      rw [aft3_evalOp_ptrAdd, evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, aft3_evalOp_ptrBase, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  -- stmt 15: l_ptrs = L + (off_hz*128 + offs_m)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 128)) (Op.ref TileDType.nat [64] "offs_m"))) _
+        = some (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * 128))
+              (Tile.vec (fun r : Fin 64 => s.pids 0 * 64 + r.val)))) from by
+      rw [aft3_evalOp_ptrAdd, evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, aft3_evalOp_ptrBase, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · funext rg o; simp only [BlockState.setReg_undef]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, Nat.reduceDiv, Nat.div_one]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, Nat.reduceDiv, Nat.div_one]
+
+/-- The 3 `INIT` then-branch statements step `m_i = ⊥`, `l_i = 1`, `acc = 0`. -/
+theorem aft3_init_steps (s : BlockState) :
+    stepStmts [Stmt.assign TileDType.real [64] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf)),
+        Stmt.assign TileDType.real [64] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) (Op.const 1.0))),
+        Stmt.assign TileDType.real [64, 64] "acc" (Op.full [64, 64] (Op.const 0))] s
+      = some (((s.setReg "m_i" .real [64] ⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩).setReg
+          "l_i" .real [64] ⟨fun _ : TileIndex [64] => some (1 : ℝ)⟩).setReg
+          "acc" .real [64, 64] ⟨fun _ : TileIndex [64, 64] => some (0 : ℝ)⟩) := by
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf) s
+        = some (⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩ : Tile .real [64]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]; rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) (Op.const 1.0)) _
+        = some (⟨fun _ : TileIndex [64] => some (1 : ℝ)⟩ : Tile .real [64]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      refine congrArg some ?_; norm_num))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64, 64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64, 64] => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.nil]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution.** The 20 deterministic preLoop statements step a clean
+state (`undef = 0`) to the loop-entry state, establishing `attnInvariant … 0`
+for any case `keep` predicate: `m_i = ⊥`, `l_i = 1`, `acc = 0` (the constexpr
+`INIT` then-branch), `q = qTile3`, `qk_scale`, the index vectors, the four block
+pointers (`K`/`V` at offsets `0`), and `start_m`/`off_hz`. -/
+theorem aft3PreLoop_eval
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts (aft3PreLoop Q K V M Out L) s = some s'
+      ∧ attnInvariant Q K V M Out L s keep 0 s' := by
+  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp⟩ :=
+    aft3PreLoopScalars_eval Q K V M Out L s
+  -- split body into prefix ++ [INIT, qk1, qk2, qload]
+  rw [show aft3PreLoop Q K V M Out L
+      = aft3PreLoopScalars Q K V M Out L ++ (aft3PreLoop Q K V M Out L).drop 16 from by
+    rw [aft3PreLoopScalars]; rw [List.take_append_drop]]
+  rw [stepStmts.append_some h11]
+  -- drop 16 = [INIT, qk_scale1, qk_scale2, q-ifThenElse]
+  rw [show (aft3PreLoop Q K V M Out L).drop 16
+      = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [64] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [64] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [64, 64] "acc" (Op.full [64, 64] (Op.const 0))] [Stmt.assign TileDType.real [64] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [64] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [64] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [64, 64] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "O_block_ptr") []) MaskOpt.none)],
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const (1 / 8)) (Op.const 1.0)),
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+          Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64, 64] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [64, 64] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+  -- INIT ifThenElse (constexpr true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ s11 = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true s11), aft3_init_steps s11])]
+  -- qk_scale = (1/8)*1.0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.const (1 / 8)) (Op.const 1.0)) _
+        = some (Tile.scalar (some ((1 / 8 : ℝ) * 1.0))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  -- qk_scale = qk_scale * 1.4426950408889634
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some ((1 / 8 : ℝ) * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+      refine congrArg some ?_; norm_num))]
+  -- q ifThenElse (constexpr true): q = load Q_block_ptr
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_load_v_eval Q (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192) 128 64 64 64 64 1 (s.pids 0 * 64)
+          (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") _
+          (by rw [evalOp_ref]
+              simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same]
+              exact hQp)))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  -- now establish attnInvariant ... 0
+  simp only [attnInvariant]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    simp only [BlockState.setReg_pids]; exact hpids
+  · -- 0 % 64 = 0
+    trivial
+  · -- 0 ≤ 128
+    norm_num
+  · -- m_i = aft3RunningMax ... 0 = ⊥
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    simp only [aft3RunningMax_zero]
+  · -- l_i = aft3StateBot1 ... 0 .2.1 = 1
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    have hz : aft3StateBot1 (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 keep 0 r.1 ⟨0, by norm_num⟩
+          = (⊥, 1, 0) := by
+      unfold aft3StateBot1 aft3KeysUpto
+      rw [show (List.finRange 128).filterMap
+            (fun j : Fin 128 => if j.val < 0 ∧ keep r.1 j
+              then some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+                    qTile3 s Q (r.1, e, PUnit.unit) * kTile3 s K (j, e, PUnit.unit)), vTile3 s V (j, ⟨0, by norm_num⟩, PUnit.unit))
+              else none) = [] from by
+        apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+      rfl
+    simp only [hz]; rfl
+  · -- acc = aft3StateBot1 ... 0 .2.2 = 0
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    have hz : aft3StateBot1 (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 keep 0 idx.1 idx.2.1
+          = (⊥, 1, 0) := by
+      unfold aft3StateBot1 aft3KeysUpto
+      rw [show (List.finRange 128).filterMap
+            (fun j : Fin 128 => if j.val < 0 ∧ keep idx.1 j
+              then some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+                    qTile3 s Q (idx.1, e, PUnit.unit) * kTile3 s K (j, e, PUnit.unit)), vTile3 s V (j, idx.2.1, PUnit.unit))
+              else none) = [] from by
+        apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+      rfl
+    simp only [hz]; rfl
+  · -- q = qTile3
+    simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [qTile3, baseOffset3, BlockState.setReg_readMem]
+    refine congrArg some ?_
+    rw [show s11.readMem Q (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192 + (s.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1)
+          = s.readMem Q (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192 + (s.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val) from by
+      unfold BlockState.readMem; rw [hmem]; ring_nf]
+  · -- qk_scale
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · -- start_m
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hstart]
+  · -- off_hz
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hoffhz]
+  · -- K_block_ptr (offsets [0, 0])
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hKp]
+  · -- V_block_ptr (offsets [0, 0])
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hVp]
+  · -- undef = 0
+    intro rg o
+    simp only [BlockState.setReg_undef]
+    rw [huf]; exact hundef rg o
+  · -- mem = s.mem
+    funext rg o
+    simp only [BlockState.setReg_mem]
+    rw [show s11.mem rg o = s.mem rg o from by rw [hmem]]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
