@@ -4256,4 +4256,29 @@ theorem aft_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 12
   rw [show (aftStateBotK qT kT vT kc qStart (c * 64) i d).2.2 * α
         = (aftStateBot qT kT vT kc qStart (c * 64) i d).2.2 * α from hcancel]
 
+/-! ## FINAL Part 2 (foundation) — genuine per-key score scale `aftKeyScale`
+
+`aftKeyScale s0 QScale KScale j = q_scale · k_scale[j/64]` reads the program's
+`q_scale` (`QScale[q_scale_offset + start_m]`) and the per-block `k_scale`
+(`KScale[k_scale_offset + j/64]`). The remaining `aft_attn_step` threads
+`aftLoopBody_steps` + the masked bridges against this scale via the block-`c`
+agreement `aftKeyScale_block`. -/
+
+/-- The genuine per-key score scale: `q_scale · k_scale[j/64]` for the program. -/
+noncomputable def aftKeyScale (s0 : BlockState) (QScale KScale : RegionName) :
+    Fin 128 → ℝ :=
+  fun j => (s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0))
+    * (s0.readMem KScale (s0.pids 1 * ((128 + 64 - 1) / 64) + j.val / 64))
+
+/-- The block-`c` agreement: on block `c`'s keys, `aftKeyScale` equals the loaded
+`q_scale · k_scale[c]`. -/
+theorem aftKeyScale_block (s0 : BlockState) (QScale KScale : RegionName) (c : Nat)
+    (jL : Fin 64) (hb : c * 64 + jL.val < 128) :
+    aftKeyScale s0 QScale KScale ⟨c * 64 + jL.val, hb⟩
+      = (s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0))
+        * (s0.readMem KScale (s0.pids 1 * ((128 + 64 - 1) / 64) + c)) := by
+  unfold aftKeyScale
+  have hdiv : (c * 64 + jL.val) / 64 = c := by have := jL.isLt; omega
+  simp only [hdiv]
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
