@@ -1772,6 +1772,22 @@ def aftLoopBody : List Stmt :=
       (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [64, 128] "V_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.constNat 128))) ]
 
+/-- The 2 lowered postLoop statements (`body.drop 23`): the `acc = acc / l_i[:,None]`
+finalize and the masked `tl.store(O_block_ptr, acc, mask=(offs_m<128)&(offs_k<96))`. -/
+def aftPostLoop (Out : RegionName) : List Stmt :=
+  [ -- 23: acc = acc / l_i[:, None]
+    Stmt.assign .real [128, 128] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 128] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "l_i"))),
+    -- 24: tl.store(O_block_ptr, acc, mask=(offs_m < 128) & (offs_k < 96))
+    Stmt.store .real [128, 128] (.ptr (.ref .ptr [128, 128] "O_block_ptr"))
+      (Op.ref .real [128, 128] "acc")
+      (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96))))) ]
+
 end AftFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
@@ -1789,6 +1805,16 @@ theorem aftLoopBody_check
       | some (Stmt.forRange _ _ _ _ body) => body
       | _ => [])
       = AftFoundation.aftLoopBody :=
+  rfl
+
+set_option maxRecDepth 8000 in
+/-- The 2 lowered postLoop statements (`body.drop 23`) of the Python-shape AFT
+kernel are exactly `aftPostLoop`. Checked by `rfl`. -/
+theorem aftPostLoop_check (Q K V QScale KScale Out : RegionName) :
+    (attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23
+      = AftFoundation.aftPostLoop Out :=
   rfl
 
 set_option maxRecDepth 8000 in
@@ -4424,6 +4450,39 @@ theorem aftKeyScale_block (s0 : BlockState) (QScale KScale : RegionName) (c : Na
   unfold aftKeyScale
   have hdiv : (c * 64 + jL.val) / 64 = c := by have := jL.isLt; omega
   simp only [hdiv]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop establishes the loop invariant at window 0.** Stepping `aftPreLoop`
+from a clean `undef ≡ 0` state reaches a loop-entry state satisfying
+`aftInvariant … 0`: the running `m_i`/`l_i`/`acc` carry the ⊥-seed inits
+(`aftRunningMax 0 = ⊥`, `aftStateBotK 0 = (⊥,1,0)`), normalized via
+`aftInvariant_running_zero`. -/
+theorem aftPreLoop_invariant
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (AftFoundation.aftPreLoop Q K V QScale KScale Out) s = some s0
+      ∧ aftInvariant Q K V QScale KScale Out s (aftKeyScale s QScale KScale) 0 s0 := by
+  obtain ⟨s0, hstep, hpids, hmem, hundef0, hstartm, hoffhz, hmi, hli, hacc,
+    hoffsm, hoffsn, hoffsk, hqscale, hKp, hKsp, hVp, hq, hOp⟩ := aftPreLoop_eval s Q K V QScale KScale Out hundef
+  refine ⟨s0, hstep, ?_⟩
+  obtain ⟨hrm0, hl0, hacc0⟩ :=
+    VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase.aftInvariant_running_zero
+      (qMaskedAFT s Q) (kTileAFT s K) (vMaskedAFT s V) s (aftKeyScale s QScale KScale)
+  simp only [aftInvariant, qStartAFT]
+  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, hoffsn, hoffsk, ?_, ?_, ?_, hqscale,
+    ?_, ?_, ?_, ?_, hundef0, hmem⟩
+  · rw [hmi]; exact congrArg some hrm0.symm
+  · rw [hli]; exact congrArg some hl0.symm
+  · rw [hacc]; exact congrArg some hacc0.symm
+  · rw [hoffsm]
+  · rw [hstartm]
+  · rw [hoffhz]
+  · rw [hq]
+  · rw [hKp]
+  · rw [hKsp]
+  · rw [hVp]
+  · rw [hOp]
 
 /-! ## FINAL Part 3 — `aft_attn_step` (single streaming block step over `aftLoopBody`)
 
