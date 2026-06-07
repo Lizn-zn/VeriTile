@@ -2704,4 +2704,234 @@ theorem aftLoopBodyHead_steps
   -- p reg
   · rw [BlockState.setReg_same]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Loop-body tail execution chain.** The 11 tail statements step the head-exit
+state `sH` (with the masked weights `p`, the causal `mask`, the new running max
+`m_ij`, the old `m_i`/`l_i`/`acc`, the index vector `offs_n`, `start_n`, and the
+streamed pointer tiles) to the final loop-body state `sF`, exposing the updated
+running-state registers `m_i`/`l_i`/`acc` (the kernel's per-block rescale-and-add)
+and the advanced `K_ptrs`/`K_scale_ptr`/`V_ptrs`. Threaded through
+`stepStmts.cons_some` via the banked `aft_*` recipes. -/
+theorem aftLoopBodyTail_steps
+    (sH : BlockState) (SN : Nat)
+    (offsn : Tile .nat [64])
+    (ptile : Tile .real [128, 64]) (vtile : Tile .real [64, 128])
+    (vmaskT : Tile .bool [64, 128])
+    (mtile mijtile litile lijtile : Tile .real [128]) (acctile : Tile .real [128, 128])
+    (Kptrs : Tile .ptr [128, 64]) (Ksp : Tile .ptr []) (Vptrs : Tile .ptr [64, 128])
+    (hsn : sH.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hoffsn : sH.regs .nat [64] "offs_n" = some offsn)
+    (hp : sH.regs .real [128, 64] "p" = some ptile)
+    (hmi : sH.regs .real [128] "m_i" = some mtile)
+    (hmij : sH.regs .real [128] "m_ij" = some mijtile)
+    (hli : sH.regs .real [128] "l_i" = some litile)
+    (hacc : sH.regs .real [128, 128] "acc" = some acctile)
+    (hKp : sH.regs .ptr [128, 64] "K_ptrs" = some Kptrs)
+    (hKsp : sH.regs .ptr [] "K_scale_ptr" = some Ksp)
+    (hVp : sH.regs .ptr [64, 128] "V_ptrs" = some Vptrs)
+    (hvmask : ∀ idx : TileIndex [64, 128],
+      vmaskT.data idx = ((ComparableDType.nat.lt (offsn.data (idx.1, PUnit.unit)) (128 - SN))
+        && (ComparableDType.nat.lt idx.2.1.val 96)))
+    (hvload : ∀ idx : TileIndex [64, 128],
+      vtile.data idx = (if vmaskT.data idx then some (sH.readMem (Vptrs.data idx).1 (Vptrs.data idx).2)
+        else some (sH.undef (Vptrs.data idx).1 (Vptrs.data idx).2)))
+    (hundef : ∀ rg o, sH.undef rg o = 0) :
+    ∃ sF, stepStmts aftLoopBodyTail sH = some sF
+      ∧ sF.pids = sH.pids ∧ sF.mem = sH.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ ∃ (lijT alphaT : Tile .real [128]),
+          lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [128, 64].length) ptile
+          ∧ alphaT = Tile.uop WithBot.realExp2
+              (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijtile)
+          ∧ sF.regs .real [128] "m_i" = some mijtile
+          ∧ sF.regs .real [128] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) litile alphaT) lijT)
+          ∧ sF.regs .real [128, 128] "acc" = some (Tile.bop NumericDType.real.add
+              (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+              (Tile.dot [] ⟨fun i => FloatDType.fp16.cast FloatDType.real
+                (FloatDType.real.cast FloatDType.fp16 (ptile.data i))⟩ vtile))
+          ∧ sF.regs .ptr [128, 64] "K_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Kptrs
+              (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128)))
+          ∧ sF.regs .ptr [] "K_scale_ptr" = some (Tile.ptrAdd Broadcast.nil Ksp (Tile.scalar 1))
+          ∧ sF.regs .ptr [64, 128] "V_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Vptrs
+              (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))) := by
+  set lijT : Tile .real [128] :=
+    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [128, 64].length) ptile : Tile .real [128]) with hlijT
+  set alphaT : Tile .real [128] := Tile.uop WithBot.realExp2
+      (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijtile) with halphaT
+  -- the fp16-cast p tile
+  set pf16T : Tile .fp16 [128, 64] := ⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ with hpf16T
+  rw [aftLoopBodyTail_eq]
+  -- stmt 11: l_ij = sum(p, 1)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false
+        (Op.ref .real [128, 64] "p")) sH = some lijT from aft_lij_eval sH ptile hp))]
+  -- stmt 12: alpha = exp2(m_i - m_ij)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_alpha_eval _ mtile mijtile
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmij)))]
+  -- stmt 13: l_i = l_i * alpha + l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_li_eval _ litile alphaT lijT
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)];
+          exact BlockState.setReg_same _ _ _ _ _)))]
+  -- stmt 14: acc = acc * alpha[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_acc_rescale_eval _ (by simp) acctile alphaT
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)];
+          exact BlockState.setReg_same _ _ _ _ _)))]
+  -- stmt 15: v = load(V_ptrs, mask)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (.ptr (.ref .ptr [64, 128] "V_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n"))
+            (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))) _
+        = some vtile from by
+      rw [aft_evalOp_load_ptr_mask_of (Op.ref .ptr [64, 128] "V_ptrs") _ _ Vptrs vmaskT
+        (by rw [evalOp_ref, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+              BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+              BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+              BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)
+        (show evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n"))
+              (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
+            (Op.expandDim ⟨0, by simp⟩
+              (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))) _
+            = some vmaskT from by
+          rw [aft_evalOp_boolAnd, evalOp_lt]
+          erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+                    BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+                    BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+                    BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsn),
+            evalOp_expandDim]
+          simp only [evalOp_lt, evalOp_arange, evalOp_constNat, evalOp_sub, evalOp_ref,
+            BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            Option.bind_some, Option.bind_eq_bind, hsn]
+          refine congrArg some ?_; ext idx
+          rw [hvmask idx]
+          simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
+            Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+            Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+            Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+            Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+            TileShape.dropInsertedIndex, NumericDType.sub])]
+      refine congrArg some ?_; ext idx
+      simp only [BlockState.setReg_readMem, BlockState.setReg_undef]
+      rw [hvload idx]; rfl))]
+  -- stmt 16: p = p.to(fp16)
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_p_fp16_eval _ ptile
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hp)))]
+  -- stmt 17: acc += dot(p.to(real), v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_acc_eval _ 128 64 128
+      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+      pf16T vtile
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)];
+          exact BlockState.setReg_same _ _ _ _ _)
+      (by exact BlockState.setReg_same _ _ _ _ _)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)];
+          exact BlockState.setReg_same _ _ _ _ _)))]
+  -- stmt 18: m_i = m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_mi_carry_eval _ mijtile
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmij)))]
+  -- stmt 19: K_ptrs += 64*128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_advance_ptr_eval _ 128 64 64 "K_ptrs" Kptrs
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKp)))]
+  -- stmt 20: K_scale_ptr += 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_advance_kscale_eval _ "K_scale_ptr" Ksp
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKsp)))]
+  -- stmt 21: V_ptrs += 64*128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft_advance_ptr_eval _ 64 128 64 "V_ptrs" Vptrs
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, lijT, alphaT, rfl, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_pids]
+  · funext rg o; simp [BlockState.setReg_mem]
+  · intro rg o; simp [BlockState.setReg_undef, hundef]
+  -- m_i = m_ij
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- l_i
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- acc
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- K_ptrs
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- K_scale_ptr
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- V_ptrs
+  · rw [BlockState.setReg_same]
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
