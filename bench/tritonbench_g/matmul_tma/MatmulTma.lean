@@ -4,56 +4,48 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
 /-!
-# `matmul_tma` — strict per-kernel correctness
+# `matmul_tma` — closed-form GEMM correctness
 
-`matmul_tma_load_store` is a single-tile matmul that uses TMA block pointers:
-it builds `tl.make_block_ptr` views of `A`, `B`, `C`, loads the `BLOCK_M×BLOCK_K`
-and `BLOCK_K×BLOCK_N` tiles, computes `tl.dot(a, b)`, optionally downcasts the
-result to fp16, and stores the `BLOCK_M×BLOCK_N` tile back into `C`.
+`matmul_tma.py`'s `matmul_tma_load_store` is a **single-tile** matmul driven by
+TMA block pointers: it builds `tl.make_block_ptr` views of `A`, `B`, `C`, loads
+the `BLOCK_M×BLOCK_K` and `BLOCK_K×BLOCK_N` tiles, computes `tl.dot(a, b)`,
+optionally downcasts to `float16`, and stores the `BLOCK_M×BLOCK_N` tile into `C`.
 
-## Scope
-
-This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
-body. The host launch (`matmul_tma_load_store[(1, 1)](...)`, the grid/CTA
-scheduling, `num_warps`/`num_ctas`, and how the runtime composes per-program
-writes into one buffer) is the *trusted boundary*, not a proof obligation here.
-Program ids are universally quantified, so the per-program statements cover
-every program of the grid.
+This file proves the kernel correct against a **genuine mathematical matrix
+product**: every output cell `C[i,j]` of the computed tile equals
+`Σ_{e < BLOCK_K} A[i,e] · B[e,j]` over `ℝ` (and `fp16(…)` of that sum in the
+`OUTPUT_F16 = true` branch). This is *not* the kernel's own emitted value — the
+real-valued `Σ_e A·B` GEMM reference is derived independently from the loaded
+`A`/`B` tiles, and the `tl.dot` contraction is proven to realize it.
 
 ## Proof architecture
 
 ```
-matmul_tma_python_f32_output_summary          ← TOP THEOREM (f32 branch)
-matmul_tma_python_f16_output_summary          ← TOP THEOREM (fp16 branch)
-matmul_tma_python_f32_branch_output_summary   ← TOP THEOREM (any transpose, f32)
-matmul_tma_python_f16_branch_output_summary   ← TOP THEOREM (any transpose, fp16)
-  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
-  │    via matmul_tma_load_store_surface_toAlgorithm_supported
-  └─ matmul_tma_surface_output_compute_correct  ← ComputeCorrect over the C store
-
-matmul_tma_python_f32_store_summary           ← store-slice summaries (f32 / fp16)
-matmul_tma_python_f16_store_summary
-  └─ matmul_output_store_slice_compute_correct  ← ComputeCorrect for the 2D store
-       └─ matmul_output_store_slice_correct      ← algorithm-layer 2D readback
-  └─ matmul_output_store_f16_slice_compute_correct
-       └─ matmul_output_store_f16_slice_correct  ← fp16 memcell readback
+matmul_tma_f32_closed_form_correct          ← TOP THEOREM (f32 branch, ComputeCorrect.Realizes)
+  └─ matmul_tma_f32_exec_closed_form        ← exec-side closed form (every cell = ∑_e A·B)
+matmul_tma_f16_closed_form_correct          ← TOP THEOREM (fp16 branch)
+  └─ matmul_tma_f16_exec_closed_form        ← exec-side closed form (every cell = fp16(∑_e A·B))
 ```
+
+Both reductions step the straight-line surface — three `tl.make_block_ptr`
+assignments, the two block-pointer loads, the `tl.dot`, the optional
+`Op.castFloat` fp16 downcast, and the block-pointer store — then read the output
+cell off the scatter.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point for a
-matmul is the **K-loop dot-accumulator**: here the single tile is computed by
-`tl.dot(a, b)`, and the inner contraction over `K` is **left as a blocker** —
-the surface-level `matmul_tma_*_output_summary` theorems characterize the C
-store as `s'.mem C ...` (whatever the surface computed) rather than proving it
-equals the mathematical sum-over-`K` dot product; the `matmul_output_store_*`
-slices prove only the 2D writeback (acc tile to C, with the fp16 downcast as a
-`Op.castFloat`) given a precomputed accumulator. So the dot-product value
-itself is the trusted/blocked part. TMA block-pointer `order` tuples are
-scheduling metadata erased at the surface; `@triton.autotune`/`num_warps`/
-`num_ctas` are not modeled. The fp16 downcast is modeled as `castFloat` (real
-to fp16 store); no output/input disjointness is assumed beyond an injective C
-offset map.
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the modeled
+`tl.cast(..., fp16)` is the placeholder `FloatDType.real.cast .fp16`. The single
+`(1, 1)` host launch, `@triton.autotune`/`num_warps`/`num_ctas`, and the TMA
+`order` scheduling tuples are the trusted boundary; the per-program statement is
+universally quantified over the input state `s`. The layout contract is exactly
+the block pointers the kernel constructs: with offsets `(0, 0)` the load/store
+address of lane `(i, j)` is `i · strideRow + j · strideCol` into the respective
+region (`A`: `i·stride_am + e·stride_ak`, `B`: `e·stride_bk + j·stride_bn`,
+`C`: `i·stride_cm + j·stride_cn`); no `boundary_check` is requested, so every
+lane is in-bounds. The output-offset map is assumed injective (distinct lanes
+hit distinct addresses), exactly as the contiguous `128×128` Python test tiles
+satisfy.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulTma
@@ -62,17 +54,15 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Faithful transcription of `matmul_tma.py`'s `matmul_tma_load_store`.
+/-! ## Surfaces -/
 
-The Python wrapper's transpose cases are represented by the strides passed to
-the same kernel, so no separate transpose-specific surface is needed. The TMA
-`order` tuple is scheduling metadata; the DSL accepts it at the surface and
-erases it into the same block-pointer AST. -/
-def matmul_tma_load_store_surface
+/-- Faithful transcription of `matmul_tma.py`'s `matmul_tma_load_store` for the
+`OUTPUT_F16 = false` branch (float32 output, no downcast). The TMA `order` tuple
+is scheduling metadata the DSL erases into the same block-pointer AST. -/
+def matmul_tma_f32_surface
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_M BLOCK_N BLOCK_K : Nat)
-    (OUTPUT_F16 : Bool) :
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
   a_block_ptr = tl.make_block_ptr(base=A, shape=($(M), $(K)),
     strides=($(stride_am), $(stride_ak)), offsets=($(0), $(0)),
@@ -86,26 +76,12 @@ def matmul_tma_load_store_surface
   a = tl.load(a_block_ptr)
   b = tl.load(b_block_ptr)
   c = tl.dot(a, b)
-  if OUTPUT_F16 {
-    c = (c).to(tl.float16)
-  }
   tl.store(c_block_ptr, c)
 }
 
-/-- The full TMA load/store matmul surface lowers to the algorithm layer. -/
-theorem matmul_tma_load_store_surface_toAlgorithm_supported
-    (A B C : RegionName)
-    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_M BLOCK_N BLOCK_K : Nat)
-    (OUTPUT_F16 : Bool) :
-    ∃ alg, (matmul_tma_load_store_surface A B C M N K stride_am stride_ak
-      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
-      OUTPUT_F16).toAlgorithm? = Except.ok alg := by
-  simp [matmul_tma_load_store_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-
-/-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store` with
-`OUTPUT_F16 = true`. -/
-def matmul_tma_load_store_f16_surface
+/-- Faithful transcription of `matmul_tma_load_store` for the `OUTPUT_F16 = true`
+branch (the dot result is downcast to `float16` before the store). -/
+def matmul_tma_f16_surface
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat) :
@@ -125,134 +101,218 @@ def matmul_tma_load_store_f16_surface
   tl.store(c_block_ptr, c)
 }
 
-/-- The fp16-specialized TMA load/store surface lowers to the algorithm layer. -/
-theorem matmul_tma_load_store_f16_surface_toAlgorithm_supported
+/-- The f32 TMA surface lowers to the algorithm layer. -/
+theorem matmul_tma_f32_surface_toAlgorithm_supported
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat) :
-    ∃ alg, (matmul_tma_load_store_f16_surface A B C M N K stride_am stride_ak
+    ∃ alg, (matmul_tma_f32_surface A B C M N K stride_am stride_ak
       stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgorithm?
         = Except.ok alg := by
-  simp [matmul_tma_load_store_f16_surface, ComputeExpr.toAlgorithm?,
-    ComputeOp.toAlgorithm?]
+  simp [matmul_tma_f32_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-/-- Proof-oriented output-store slice of `matmul_tma.py`'s `matmul_kernel`.
+/-- The fp16 TMA surface lowers to the algorithm layer. -/
+theorem matmul_tma_f16_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ∃ alg, (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgorithm?
+        = Except.ok alg := by
+  simp [matmul_tma_f16_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-The full kernel uses Triton block pointers/TMA loads, computes the dot product, optionally converts the result, and stores the tile. This slice starts from a precomputed `Acc` tile
-and proves the final 2D writeback into `C`. -/
-def matmul_output_store_slice
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
-    ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
-  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
-  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
-  acc = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
-    $(stride_accn) * offs_cn[None, :])
-  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    (acc).to(C.dtype.element_ty))
-}
+/-! ## GEMM closed-form spec -/
 
-/-- Proof-oriented fp16 output-store slice for `OUTPUT_F16 = true`. -/
-def matmul_output_store_f16_slice
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
-    ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
-  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
-  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
-  acc = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
-    $(stride_accn) * offs_cn[None, :])
-  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    (acc).to(tl.float16))
-}
+/-- `A[i, e] = readMem A (i · stride_am + e · stride_ak)` — the address of tile
+lane `(i, e)` of the `a_block_ptr` view (offsets `(0, 0)`). -/
+noncomputable def aElem (s : BlockState) (A : RegionName) (stride_am stride_ak : Nat)
+    (i e : Nat) : ℝ :=
+  s.readMem A (i * stride_am + e * stride_ak)
 
-def rowIndex (s : BlockState) (BLOCK_SIZE_M : Nat) (i : Fin BLOCK_SIZE_M) : Nat :=
-  s.pids 0 * BLOCK_SIZE_M + i.val
+/-- `B[e, j] = readMem B (e · stride_bk + j · stride_bn)` — the address of tile
+lane `(e, j)` of the `b_block_ptr` view (offsets `(0, 0)`). -/
+noncomputable def bElem (s : BlockState) (B : RegionName) (stride_bk stride_bn : Nat)
+    (e j : Nat) : ℝ :=
+  s.readMem B (e * stride_bk + j * stride_bn)
 
-def colIndex (s : BlockState) (BLOCK_SIZE_N : Nat) (j : Fin BLOCK_SIZE_N) : Nat :=
-  s.pids 1 * BLOCK_SIZE_N + j.val
+/-- **Genuine GEMM spec** (over ℝ): `C[i,j] = Σ_{e < BLOCK_K} A[i,e] · B[e,j]`. -/
+noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
+    (stride_am stride_ak stride_bk stride_bn BLOCK_K : Nat)
+    (i j : Nat) : ℝ :=
+  (Finset.univ : Finset (Fin BLOCK_K)).sum
+    (fun e => aElem s A stride_am stride_ak i e.val
+              * bElem s B stride_bk stride_bn e.val j)
 
-def cOffset
-    (s : BlockState) (stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Nat :=
-  stride_cm * rowIndex s BLOCK_SIZE_M idx.1 +
-    stride_cn * colIndex s BLOCK_SIZE_N idx.2.1
+/-- The output store address for tile lane `(i,j)`: `i · stride_cm + j · stride_cn`
+(the `c_block_ptr` address with offsets `(0, 0)`). -/
+def cOffset (stride_cm stride_cn : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Nat :=
+  idx.1.val * stride_cm + idx.2.1.val * stride_cn
 
-def accOffset
-    (s : BlockState) (stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Nat :=
-  stride_accm * rowIndex s BLOCK_SIZE_M idx.1 +
-    stride_accn * colIndex s BLOCK_SIZE_N idx.2.1
+/-! ## exec-stepping helpers -/
 
-private noncomputable def preStoreState
-    (s : BlockState) (Acc : RegionName)
-    (stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat) : BlockState :=
-  s.setReg "pid_m" TileDType.nat [] (Tile.scalar (s.pids 0))
-    |>.setReg "pid_n" TileDType.nat [] (Tile.scalar (s.pids 1))
-    |>.setReg "offs_cm" TileDType.nat [BLOCK_SIZE_M]
-      (Tile.vec fun i => s.pids 0 * BLOCK_SIZE_M + i.val)
-    |>.setReg "offs_cn" TileDType.nat [BLOCK_SIZE_N]
-      (Tile.vec fun i => s.pids 1 * BLOCK_SIZE_N + i.val)
-    |>.setReg "acc" TileDType.real [BLOCK_SIZE_M, BLOCK_SIZE_N]
-      { data := fun idx =>
-        some (s.readMem Acc
-          (stride_accm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-            stride_accn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))) }
+/-- `tl.make_block_ptr` (offsets `(0,0)`) eval: every lane is the same
+`BlockPtr` record. -/
+theorem makeBlockPtr_eval (s : BlockState) (R : RegionName)
+    (parentR parentC strideR strideC BR BC : Nat) :
+    evalOp (Op.makeBlockPtrDyn R (Op.constNat 0) [parentR, parentC] [BR, BC]
+      [strideR, strideC] [0, 0]) s
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := R, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC]) := by
+  simp [evalOp, Option.bind]
 
+/-- Block-pointer load (offsets `(0,0)`, empty boundary check) of a region whose
+lane `(i,j)` address is `i·strideR + j·strideC`: reads `readMem` at that address. -/
+theorem load_blockPtr_eval {BR BC : Nat} (s : BlockState) (R : RegionName)
+    (parentR parentC strideR strideC : Nat)
+    (bpName : RegName)
+    (hbp : s.regs .blockPtr [BR, BC] bpName
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := R, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC])) :
+    evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BR, BC] bpName) []) .none) s
+      = some (⟨fun idx : TileIndex [BR, BC] =>
+          some (s.readMem R (idx.1.val * strideR + idx.2.1.val * strideC))⟩
+          : Tile .real [BR, BC]) := by
+  simp only [evalOp, evalOp_ref, hbp, Option.bind_some, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  simp only [TileShape.indexToList, BlockState.readMemValue_real, BlockPtr.inBounds,
+    List.all_nil, if_true, BlockPtr.address_2d_zero_offsets, Nat.zero_add]
+
+/-- The masked-free dot of two all-`some` loaded tiles, lane `(i,j)`, equals
+`some (Σ_e fx e · fy e)`. -/
+theorem dot_xy (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
+    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
+    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
+    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
+    (Tile.dot [] x y).data (i, j, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
+  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
+  rw [← WithBot.coe_sum]; rfl
+
+/-- `tl.dot(a, b)` statement eval: evaluates to `Tile.dot [] at_ bt` given the
+register values of `a`/`b`. -/
+theorem dot_eval {BM BN BLOCK_K : Nat} (s : BlockState)
+    (at_ : Tile .real [BM, BLOCK_K]) (bt : Tile .real [BLOCK_K, BN])
+    (ha : s.regs .real [BM, BLOCK_K] "a" = some at_)
+    (hb : s.regs .real [BLOCK_K, BN] "b" = some bt) :
+    evalOp (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a")
+        (Op.ref .real [BLOCK_K, BN] "b")) s
+      = some (Tile.dot [] at_ bt) := by
+  rw [evalOp_dot]; simp [ha, hb]
+
+/-- `(tl.dot(a, b)).to(fp16)` statement eval: the fp16 downcast of the dot. -/
+theorem castdot_eval {BM BN BLOCK_K : Nat} (s : BlockState)
+    (at_ : Tile .real [BM, BLOCK_K]) (bt : Tile .real [BLOCK_K, BN])
+    (ha : s.regs .real [BM, BLOCK_K] "a" = some at_)
+    (hb : s.regs .real [BLOCK_K, BN] "b" = some bt) :
+    evalOp (Op.castFloat FloatDType.real FloatDType.fp16
+        (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a")
+          (Op.ref .real [BLOCK_K, BN] "b"))) s
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 ((Tile.dot [] at_ bt).data idx)⟩
+          : Tile FloatDType.fp16.toTileDType ([] ++ [BM, BN])) := by
+  have hd : evalOp (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a")
+      (Op.ref .real [BLOCK_K, BN] "b")) s = some (Tile.dot [] at_ bt) := dot_eval s at_ bt ha hb
+  rw [evalOp_castFloat]
+  erw [hd]
+  rfl
+
+/-! ## Block-pointer store scatter -/
+
+/-- Real block-pointer store (offsets `(0,0)`, empty boundary check), lane `(i,j)`
+address `i·strideR + j·strideC`. The `if true && inBounds [] = true` guard is
+unconditional, so this is an ordinary injective real scatter. -/
+theorem store_blockPtr_real_readback {BR BC : Nat} (s : BlockState)
+    (R : RegionName) (parentR parentC strideR strideC : Nat)
+    (cpName cName : RegName)
+    (vt : Tile .real [BR, BC])
+    (hcp : s.regs .blockPtr [BR, BC] cpName
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := R, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC]))
+    (hc : s.regs .real [BR, BC] cName = some vt)
+    (offsetFn : TileIndex [BR, BC] → Nat)
+    (hoff : ∀ idx : TileIndex [BR, BC], offsetFn idx = idx.1.val * strideR + idx.2.1.val * strideC)
+    (hInj : Function.Injective offsetFn) :
+    ∃ s', stepStmt (Stmt.store .real [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .real [BR, BC] cName) .none) s = some s'
+      ∧ ∀ idx : TileIndex [BR, BC],
+          s'.readMem R (offsetFn idx) = (vt.data idx).unbotD 0 := by
+  set sfin := (TileShape.allIndices [BR, BC]).foldl
+      (fun acc i => acc.writeMem R (offsetFn i) ((vt.data i).unbotD 0)) s with hsfin
+  have hstep : stepStmt (Stmt.store .real [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .real [BR, BC] cName) .none) s = some sfin := by
+    simp only [stepStmt, evalOp_ref, hc, hcp, Option.bind_some, bind]
+    refine congrArg some ?_
+    rw [hsfin]
+    apply List.foldl_ext
+    intro acc i _
+    obtain ⟨ii, jj, u⟩ := i
+    rw [show TileShape.indexToList [BR, BC] (ii, jj, PUnit.unit) = [ii.val, jj.val] by
+          simp [TileShape.indexToList]]
+    simp only [BlockPtr.inBounds, List.all_nil, Bool.and_true, if_true,
+      BlockPtr.address_2d_zero_offsets, Nat.zero_add, hoff,
+      BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+  refine ⟨sfin, hstep, ?_⟩
+  intro idx
+  rw [hsfin]
+  exact BlockState.scatter_readback_nd s offsetFn
+    (fun i => (vt.data i).unbotD 0) hInj idx
+
+/-- fp16 scatter preservation away from the target offset. -/
 private theorem foldl_writeMemTyped_fp16_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
     (o : Nat) (l : List α) :
-    ∀ s : BlockState,
-      (∀ k ∈ l, offsetFn k ≠ o) →
-        ((l.foldl
-          (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-          s).mem region o) = s.mem region o := by
+    ∀ s : BlockState, (∀ k ∈ l, offsetFn k ≠ o) →
+      ((l.foldl (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k)) s).mem
+        region o) = s.mem region o := by
   induction l with
-  | nil =>
-      intro s _h
-      rfl
+  | nil => intro s _h; rfl
   | cons hd tl ih =>
       intro s h
       rw [List.foldl_cons]
-      have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
-        fun k hk => h k (List.mem_cons_of_mem hd hk)
+      have htl : ∀ k ∈ tl, offsetFn k ≠ o := fun k hk => h k (List.mem_cons_of_mem hd hk)
       have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
       rw [ih _ htl]
       unfold BlockState.writeMemTyped BlockState.writeMemAs
-      change
-        (if region = region ∧ o = offsetFn hd then
+      change (if region = region ∧ o = offsetFn hd then
           MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn hd)))
-        else
-          s.mem region o) = s.mem region o
-      rw [if_neg (by
-        intro hsame
-        exact hhd hsame.2.symm)]
+        else s.mem region o) = s.mem region o
+      rw [if_neg (by intro hsame; exact hhd hsame.2.symm)]
 
+/-- fp16 scatter readback at an injective offset. -/
 private theorem scatter_memcell_fp16_nd {region : RegionName} {shape : TileShape}
     (s : BlockState) (offsetFn : TileIndex shape → Nat)
     (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
     (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
     ((TileShape.allIndices shape).foldl
-       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-       s).mem region (offsetFn i)
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k)) s).mem
+       region (offsetFn i)
     = MemCell.of .fp16
         (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i))) := by
   let l := TileShape.allIndices shape
   obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
   have h_nodup := TileShape.allIndices_nodup shape
   change ((l.foldl
-       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-       s).mem region (offsetFn i))
-    = MemCell.of .fp16
-        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k)) s).mem region (offsetFn i))
+    = MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
   rw [hl] at h_nodup
   rw [List.nodup_append, List.nodup_cons] at h_nodup
   obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
-  have hl' : l = l₁ ++ i :: l₂ := by
-    simpa [l] using hl
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
   rw [hl', List.foldl_append, List.foldl_cons]
   have h_l2_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := by
     intro k hk heq
@@ -261,474 +321,396 @@ private theorem scatter_memcell_fp16_nd {region : RegionName} {shape : TileShape
     exact hi_notin_l2 hk
   rw [foldl_writeMemTyped_fp16_preserves offsetFn valueFn (offsetFn i) l₂ _ h_l2_not_in]
   unfold BlockState.writeMemTyped BlockState.writeMemAs
-  change
-    (if region = region ∧ offsetFn i = offsetFn i then
+  change (if region = region ∧ offsetFn i = offsetFn i then
       MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-    else
-      (List.foldl
-        (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-        s l₁).mem region (offsetFn i))
-      =
-      MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+    else (List.foldl (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k)) s l₁).mem
+      region (offsetFn i))
+    = MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
   rw [if_pos ⟨rfl, rfl⟩]
 
-/-- Algorithm-layer correctness for the 2D output tile store. -/
-theorem matmul_output_store_slice_correct
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N))
-    (hExec : exec (matmul_output_store_slice C Acc stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N) s = some s') :
-    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
-      s'.readMem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) =
-        s.readMem Acc
-          (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
+/-- fp16 block-pointer store (offsets `(0,0)`, empty boundary check): the stored
+value is the `castFloat`-downcast of the dot result. -/
+theorem store_blockPtr_fp16_readback {BR BC : Nat} (s : BlockState)
+    (R : RegionName) (parentR parentC strideR strideC : Nat)
+    (cpName cName : RegName)
+    (vt : Tile .fp16 [BR, BC])
+    (hcp : s.regs .blockPtr [BR, BC] cpName
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := R, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC]))
+    (hc : s.regs .fp16 [BR, BC] cName = some vt)
+    (offsetFn : TileIndex [BR, BC] → Nat)
+    (hoff : ∀ idx : TileIndex [BR, BC], offsetFn idx = idx.1.val * strideR + idx.2.1.val * strideC)
+    (hInj : Function.Injective offsetFn) :
+    ∃ s', stepStmt (Stmt.store .fp16 [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .fp16 [BR, BC] cName) .none) s = some s'
+      ∧ ∀ idx : TileIndex [BR, BC],
+          s'.mem R (offsetFn idx)
+            = MemCell.of .fp16
+                (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (vt.data idx))) := by
+  set sfin := (TileShape.allIndices [BR, BC]).foldl
+      (fun acc i => acc.writeMemTyped .fp16 R (offsetFn i) (vt.data i)) s with hsfin
+  have hstep : stepStmt (Stmt.store .fp16 [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .fp16 [BR, BC] cName) .none) s = some sfin := by
+    simp only [stepStmt, evalOp_ref, hc, hcp, Option.bind_some, bind]
+    refine congrArg some ?_
+    rw [hsfin]
+    apply List.foldl_ext
+    intro acc i _
+    obtain ⟨ii, jj, u⟩ := i
+    rw [show TileShape.indexToList [BR, BC] (ii, jj, PUnit.unit) = [ii.val, jj.val] by
+          simp [TileShape.indexToList]]
+    simp only [BlockPtr.inBounds, List.all_nil, Bool.and_true, if_true,
+      BlockPtr.address_2d_zero_offsets, Nat.zero_add, hoff]
+  refine ⟨sfin, hstep, ?_⟩
   intro idx
-  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
-  rw [← hExec]
-  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
-    fun idx =>
-      stride_cm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-        stride_cn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val)
-  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → ℝ :=
-    fun idx =>
-      s.readMem Acc
-        (stride_accm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-          stride_accn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, cOffset, rowIndex, colIndex] using hOutInj
-  have hscatter := BlockState.scatter_readback_nd
-    (region := C)
-    (s := preStoreState s Acc stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-    (offsetFn := offsetFn) (valueFn := valueFn) hOffsetInj idx
-  simpa [offsetFn, valueFn, cOffset, accOffset, rowIndex, colIndex,
-    preStoreState, TileShape.dropInsertedIndex] using hscatter
+  rw [hsfin]
+  exact scatter_memcell_fp16_nd (region := R) s offsetFn (fun i => vt.data i) hInj idx
 
-/-- Compute-facing correctness for the 2D output tile store. -/
-theorem matmul_output_store_slice_compute_correct
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N)) :
-    ComputeCorrect.Realizes
-      (kernel := matmul_output_store_slice C Acc stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] =>
-        some (C, cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx))
-      (expected := fun idx =>
-        s.readMem Acc
-          (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [matmul_output_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  exact matmul_output_store_slice_correct C Acc stride_cm stride_cn
-    stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
+/-! ## f32 branch -/
 
-/-- Algorithm-layer correctness for the fp16 2D output tile store. -/
-theorem matmul_output_store_f16_slice_correct
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N))
-    (hExec : exec (matmul_output_store_f16_slice C Acc stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N) s = some s') :
-    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
-      s'.mem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) =
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc
-              (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx)))) := by
-  intro idx
-  simp [exec, matmul_output_store_f16_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
-  rw [← hExec]
-  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
-    fun idx =>
-      stride_cm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-        stride_cn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val)
-  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → TileCarrier TileDType.fp16 :=
-    fun idx =>
-      FloatDType.real.cast FloatDType.fp16
-        (some (s.readMem Acc
-          (stride_accm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-            stride_accn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))))
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, cOffset, rowIndex, colIndex] using hOutInj
-  have hscatter := scatter_memcell_fp16_nd
-    (region := C)
-    (s := preStoreState s Acc stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-    (offsetFn := offsetFn) (valueFn := valueFn) hOffsetInj idx
-  simpa [offsetFn, valueFn, cOffset, accOffset, rowIndex, colIndex,
-    preStoreState, TileShape.dropInsertedIndex] using hscatter
-
-/-- Compute-facing correctness for the fp16 2D output tile store. -/
-theorem matmul_output_store_f16_slice_compute_correct
-    (C Acc : RegionName)
-    (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N)) :
-    ComputeCorrect.Realizes
-      (kernel := matmul_output_store_f16_slice C Acc stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] =>
-        some (C, cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc
-              (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx))))) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [matmul_output_store_f16_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  exact matmul_output_store_f16_slice_correct C Acc stride_cm stride_cn
-    stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
-
-/-- Contiguous `128 × 128` output tiles in the Python TMA tests have injective
-addresses for the single full-tile launch. -/
-theorem matmul_tma_python_test_output_offset_injective
-    (s : BlockState) :
-    Function.Injective (cOffset s 128 1 128 128) := by
-  intro a b h
-  simp [cOffset, rowIndex, colIndex] at h
-  ext <;> omega
-
-/-- Python case 1: no transposition, float32 output. -/
-theorem matmul_tma_python_case1_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 128 1 128 1 128 1 128 128 128 Bool.false
-
-/-- Python case 2: transposed A strides, float32 output. -/
-theorem matmul_tma_python_case2_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 1 128 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 1 128 128 1 128 1 128 128 128 Bool.false
-
-/-- Python case 3: transposed B strides, float32 output. -/
-theorem matmul_tma_python_case3_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 1 128 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 128 1 1 128 128 1 128 128 128 Bool.false
-
-/-- Python case 4: transposed A and B strides, float32 output. -/
-theorem matmul_tma_python_case4_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 1 128 1 128 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 1 128 1 128 128 1 128 128 128 Bool.false
-
-/-- Python case 5: no transposition, fp16 output. -/
-theorem matmul_tma_python_case5_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 128 1 128 1 128 1 128 128 128 Bool.true
-
-/-- Python case 6: transposed A strides, fp16 output. -/
-theorem matmul_tma_python_case6_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 1 128 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 1 128 128 1 128 1 128 128 128 Bool.true
-
-/-- Python case 7: transposed B strides, fp16 output. -/
-theorem matmul_tma_python_case7_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 1 128 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 128 1 1 128 128 1 128 128 128 Bool.true
-
-/-- Python case 8: transposed A and B strides, fp16 output. -/
-theorem matmul_tma_python_case8_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 1 128 1 128 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
-    128 128 128 1 128 1 128 128 1 128 128 128 Bool.true
-
-noncomputable def matmulTmaSurfaceCell
-    (s : BlockState) (A B C Out : RegionName)
+set_option maxHeartbeats 1000000 in
+/-- **f32 exec closed form**: every output cell of the executed `matmul_tma`
+(float32 branch) equals the genuine GEMM value `Σ_e A·B`. -/
+theorem matmul_tma_f32_exec_closed_form
+    (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_M BLOCK_N BLOCK_K : Nat) (OUTPUT_F16 : Bool) (offset : Nat) : MemCell :=
-  match exec (matmul_tma_load_store_surface A B C M N K stride_am stride_ak
-      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16) s with
-  | some s' => s'.mem Out offset
-  | none => 0
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn))
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) :
+    (match exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s with
+      | some s' => s'.readMem C (cOffset stride_cm stride_cn idx)
+      | none => (0 : ℝ)) =
+      matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+        idx.1.val idx.2.1.val := by
+  -- the loaded a / b tiles
+  set aT : Tile .real [BLOCK_M, BLOCK_K] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_K] =>
+      some (s.readMem A (idx.1.val * stride_am + idx.2.1.val * stride_ak))⟩ with haT
+  set bT : Tile .real [BLOCK_K, BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_K, BLOCK_N] =>
+      some (s.readMem B (idx.1.val * stride_bk + idx.2.1.val * stride_bn))⟩ with hbT
+  set cT : Tile .real [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+        idx.1.val idx.2.1.val)⟩ with hcT
+  set apT : Tile .blockPtr [BLOCK_M, BLOCK_K] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_K] =>
+      { region := A, baseOffset := 0, parentShape := [M, K],
+        blockShape := [BLOCK_M, BLOCK_K], strides := [stride_am, stride_ak],
+        offsets := [0, 0] }⟩ with hapT
+  set bpT : Tile .blockPtr [BLOCK_K, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_K, BLOCK_N] =>
+      { region := B, baseOffset := 0, parentShape := [K, N],
+        blockShape := [BLOCK_K, BLOCK_N], strides := [stride_bk, stride_bn],
+        offsets := [0, 0] }⟩ with hbpT
+  set cpT : Tile .blockPtr [BLOCK_M, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] =>
+      { region := C, baseOffset := 0, parentShape := [M, N],
+        blockShape := [BLOCK_M, BLOCK_N], strides := [stride_cm, stride_cn],
+        offsets := [0, 0] }⟩ with hcpT
+  -- step through the straight-line body
+  rw [show exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s
+      = stepStmts ((matmul_tma_f32_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body) s
+      from rfl]
+  rw [show (matmul_tma_f32_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body
+      = [ Stmt.assign .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr"
+            (Op.makeBlockPtrDyn A (Op.constNat 0) [M, K] [BLOCK_M, BLOCK_K] [stride_am, stride_ak] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr"
+            (Op.makeBlockPtrDyn B (Op.constNat 0) [K, N] [BLOCK_K, BLOCK_N] [stride_bk, stride_bn] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr"
+            (Op.makeBlockPtrDyn C (Op.constNat 0) [M, N] [BLOCK_M, BLOCK_N] [stride_cm, stride_cn] [0, 0]),
+          Stmt.assign .real [BLOCK_M, BLOCK_K] "a"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr") []) .none),
+          Stmt.assign .real [BLOCK_K, BLOCK_N] "b"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr") []) .none),
+          Stmt.assign .real ([] ++ [BLOCK_M, BLOCK_N]) "c"
+            (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_K] "a") (Op.ref .real [BLOCK_K, BLOCK_N] "b")),
+          Stmt.store .real [BLOCK_M, BLOCK_N]
+            (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr") [])
+            (Op.ref .real [BLOCK_M, BLOCK_N] "c") .none ] from rfl]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval s A M K stride_am stride_ak BLOCK_M BLOCK_K))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval _ B K N stride_bk stride_bn BLOCK_K BLOCK_N))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval _ C M N stride_cm stride_cn BLOCK_M BLOCK_N))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_blockPtr_eval (BR := BLOCK_M) (BC := BLOCK_K) _ A M K stride_am stride_ak "a_block_ptr"
+          (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_blockPtr_eval (BR := BLOCK_K) (BC := BLOCK_N) _ B K N stride_bk stride_bn "b_block_ptr"
+          (by simp)))]
+  -- normalise intermediate-state readMem to `s.readMem`, fold the loaded tiles
+  simp only [BlockState.setReg_readMem]
+  rw [← haT, ← hbT]
+  -- name the post-load state so the dot/store steps have concrete registers
+  set s5 := (((((s.setReg "a_block_ptr" .blockPtr [BLOCK_M, BLOCK_K] apT).setReg
+        "b_block_ptr" .blockPtr [BLOCK_K, BLOCK_N] bpT).setReg
+        "c_block_ptr" .blockPtr [BLOCK_M, BLOCK_N] cpT).setReg
+        "a" .real [BLOCK_M, BLOCK_K] aT).setReg "b" .real [BLOCK_K, BLOCK_N] bT) with hs5
+  have hmem5 : ∀ (R : RegionName) (o : Nat), s5.readMem R o = s.readMem R o := by
+    intro R o; simp only [hs5, BlockState.setReg_readMem]
+  have ha5 : s5.regs .real [BLOCK_M, BLOCK_K] "a" = some aT := by rw [hs5]; simp
+  have hb5 : s5.regs .real [BLOCK_K, BLOCK_N] "b" = some bT := by rw [hs5]; simp
+  have hcp5 : s5.regs .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr" = some cpT := by
+    rw [hs5]; simp [hcpT]
+  -- the dot step (over the post-load state)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (dot_eval s5 aT bT ha5 hb5))]
+  -- characterise the dot tile, lane `(i,j)`, as the genuine GEMM spec value
+  set cTile : Tile .real [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+        idx.1.val idx.2.1.val)⟩ with hcTile
+  have hdotval : ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+      (Tile.dot [] aT bT).data idx = cTile.data idx := by
+    intro idx
+    obtain ⟨i, j, u⟩ := idx
+    rw [dot_xy BLOCK_M BLOCK_K BLOCK_N aT bT i j
+          (fun e => aElem s A stride_am stride_ak i.val e.val)
+          (fun e => bElem s B stride_bk stride_bn e.val j.val)
+          (fun e => by rw [haT]; rfl) (fun e => by rw [hbT]; rfl)]
+    rfl
+  -- the store: read back the genuine GEMM value
+  obtain ⟨sfin, hstore, hread⟩ :=
+    store_blockPtr_real_readback (BR := BLOCK_M) (BC := BLOCK_N)
+      (s5.setReg "c" .real ([] ++ [BLOCK_M, BLOCK_N]) (Tile.dot [] aT bT))
+      C M N stride_cm stride_cn "c_block_ptr" "c" (Tile.dot [] aT bT)
+      (by rw [hcp5.symm]; simp) (by simp)
+      (cOffset stride_cm stride_cn) (fun idx => by simp [cOffset]) hInj
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  show sfin.readMem C (cOffset stride_cm stride_cn idx) = _
+  rw [hread idx, hdotval idx, hcTile]
+  rfl
 
-theorem matmul_tma_surface_output_compute_correct
-    (A B C : RegionName)
+/-- **Closed-form correctness for the f32 `matmul_tma` (general statement).**
+
+For any matrix/tile dimensions and strides, every output cell of the computed
+`BLOCK_M × BLOCK_N` tile equals the genuine matrix product
+`Σ_{e < BLOCK_K} A[i,e] · B[e,j]` (over ℝ) of the loaded `A`/`B` tiles — *not*
+the kernel's own executed value. Layout: `A[i,e]` at
+`A + i·stride_am + e·stride_ak`, `B[e,j]` at `B + e·stride_bk + j·stride_bn`,
+`C[i,j]` at `C + i·stride_cm + j·stride_cn` (the block pointers' offset-`(0,0)`
+addresses). Precondition: output-offset injectivity. -/
+theorem matmul_tma_f32_closed_form_correct
+    (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_M BLOCK_N BLOCK_K : Nat) (OUTPUT_F16 : Bool) (s : BlockState) :
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
     ComputeCorrect.Realizes
-      (kernel := matmul_tma_load_store_surface A B C M N K stride_am stride_ak
-        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16)
+      (kernel := matmul_tma_f32_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)
       (write := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        some (C, cOffset s stride_cm stride_cn BLOCK_M BLOCK_N idx))
-      (expected := fun idx =>
-        matmulTmaSurfaceCell s A B C C M N K stride_am stride_ak stride_bk
-          stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16
-          (cOffset s stride_cm stride_cn BLOCK_M BLOCK_N idx)) := by
+        some (C, cOffset stride_cm stride_cn idx))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+          idx.1.val idx.2.1.val) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [matmul_tma_load_store_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
+  · simp [matmul_tma_f32_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
-  subst s0
+  subst hs0
   intro idx
-  simp [matmulTmaSurfaceCell, hExec]
+  have hmain := matmul_tma_f32_exec_closed_form A B C s0 M N K stride_am stride_ak
+    stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K hInj idx
+  have hExec2 : exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s0 = some s' := hExec
+  rw [hExec2] at hmain
+  simpa only [ComputeCorrect.OutputReadable.read_real] using hmain
 
-/-- Public Python float32-output summary for a concrete TMA test branch. -/
-theorem matmul_tma_python_f32_store_summary
-    (A B C Acc : RegionName) (s : BlockState)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-          Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_output_store_slice C Acc 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        s.readMem Acc (accOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_output_store_slice_compute_correct C Acc
-      128 1 128 1 128 128 s
-      (matmul_tma_python_test_output_offset_injective s)
+/-! ## fp16 branch -/
 
-/-- Public Python float32-output summary for any of the transpose-stride TMA
-test branches. The input strides identify the branch; the observed output
-layout is always contiguous `128 × 128`. -/
-theorem matmul_tma_python_f32_branch_store_summary
-    (A B C Acc : RegionName) (s : BlockState)
-    (stride_am stride_ak stride_bk stride_bn : Nat)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_output_store_slice C Acc 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        s.readMem Acc (accOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_output_store_slice_compute_correct C Acc
-      128 1 128 1 128 128 s
-      (matmul_tma_python_test_output_offset_injective s)
+set_option maxHeartbeats 1000000 in
+/-- **fp16 exec closed form**: every output cell of the executed `matmul_tma`
+(fp16 branch) equals `fp16(Σ_e A·B)` — the genuine GEMM value cast to fp16. -/
+theorem matmul_tma_f16_exec_closed_form
+    (A B C : RegionName) (s : BlockState)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn))
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) :
+    (match exec (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s with
+      | some s' => s'.mem C (cOffset stride_cm stride_cn idx)
+      | none => (0 : MemCell)) =
+      MemCell.of .fp16
+        (FloatDType.real.cast FloatDType.fp16
+          (some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+            idx.1.val idx.2.1.val))) := by
+  set aT : Tile .real [BLOCK_M, BLOCK_K] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_K] =>
+      some (s.readMem A (idx.1.val * stride_am + idx.2.1.val * stride_ak))⟩ with haT
+  set bT : Tile .real [BLOCK_K, BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_K, BLOCK_N] =>
+      some (s.readMem B (idx.1.val * stride_bk + idx.2.1.val * stride_bn))⟩ with hbT
+  set apT : Tile .blockPtr [BLOCK_M, BLOCK_K] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_K] =>
+      { region := A, baseOffset := 0, parentShape := [M, K],
+        blockShape := [BLOCK_M, BLOCK_K], strides := [stride_am, stride_ak],
+        offsets := [0, 0] }⟩ with hapT
+  set bpT : Tile .blockPtr [BLOCK_K, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_K, BLOCK_N] =>
+      { region := B, baseOffset := 0, parentShape := [K, N],
+        blockShape := [BLOCK_K, BLOCK_N], strides := [stride_bk, stride_bn],
+        offsets := [0, 0] }⟩ with hbpT
+  set cpT : Tile .blockPtr [BLOCK_M, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] =>
+      { region := C, baseOffset := 0, parentShape := [M, N],
+        blockShape := [BLOCK_M, BLOCK_N], strides := [stride_cm, stride_cn],
+        offsets := [0, 0] }⟩ with hcpT
+  rw [show exec (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s
+      = stepStmts ((matmul_tma_f16_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body) s
+      from rfl]
+  rw [show (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body
+      = [ Stmt.assign .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr"
+            (Op.makeBlockPtrDyn A (Op.constNat 0) [M, K] [BLOCK_M, BLOCK_K] [stride_am, stride_ak] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr"
+            (Op.makeBlockPtrDyn B (Op.constNat 0) [K, N] [BLOCK_K, BLOCK_N] [stride_bk, stride_bn] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr"
+            (Op.makeBlockPtrDyn C (Op.constNat 0) [M, N] [BLOCK_M, BLOCK_N] [stride_cm, stride_cn] [0, 0]),
+          Stmt.assign .real [BLOCK_M, BLOCK_K] "a"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr") []) .none),
+          Stmt.assign .real [BLOCK_K, BLOCK_N] "b"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr") []) .none),
+          Stmt.assign FloatDType.fp16.toTileDType ([] ++ [BLOCK_M, BLOCK_N]) "c"
+            (Op.castFloat FloatDType.real FloatDType.fp16
+              (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_K] "a") (Op.ref .real [BLOCK_K, BLOCK_N] "b"))),
+          Stmt.store .fp16 [BLOCK_M, BLOCK_N]
+            (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr") [])
+            (Op.ref .fp16 [BLOCK_M, BLOCK_N] "c") .none ] from rfl]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval s A M K stride_am stride_ak BLOCK_M BLOCK_K))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval _ B K N stride_bk stride_bn BLOCK_K BLOCK_N))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (makeBlockPtr_eval _ C M N stride_cm stride_cn BLOCK_M BLOCK_N))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_blockPtr_eval (BR := BLOCK_M) (BC := BLOCK_K) _ A M K stride_am stride_ak "a_block_ptr"
+          (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_blockPtr_eval (BR := BLOCK_K) (BC := BLOCK_N) _ B K N stride_bk stride_bn "b_block_ptr"
+          (by simp)))]
+  simp only [BlockState.setReg_readMem]
+  rw [← haT, ← hbT]
+  set s5 := (((((s.setReg "a_block_ptr" .blockPtr [BLOCK_M, BLOCK_K] apT).setReg
+        "b_block_ptr" .blockPtr [BLOCK_K, BLOCK_N] bpT).setReg
+        "c_block_ptr" .blockPtr [BLOCK_M, BLOCK_N] cpT).setReg
+        "a" .real [BLOCK_M, BLOCK_K] aT).setReg "b" .real [BLOCK_K, BLOCK_N] bT) with hs5
+  have ha5 : s5.regs .real [BLOCK_M, BLOCK_K] "a" = some aT := by rw [hs5]; simp
+  have hb5 : s5.regs .real [BLOCK_K, BLOCK_N] "b" = some bT := by rw [hs5]; simp
+  have hcp5 : s5.regs .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr" = some cpT := by
+    rw [hs5]; simp [hcpT]
+  -- the cast(dot, fp16) step
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (castdot_eval s5 aT bT ha5 hb5))]
+  -- characterise the cast-dot tile, lane `(i,j)`, as fp16(GEMM spec value)
+  set cTile : Tile .fp16 [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx => FloatDType.real.cast FloatDType.fp16 ((Tile.dot [] aT bT).data idx)⟩ with hcTile
+  have hdotval : ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+      cTile.data idx = FloatDType.real.cast FloatDType.fp16
+        (some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+          idx.1.val idx.2.1.val)) := by
+    intro idx
+    obtain ⟨i, j, u⟩ := idx
+    simp only [hcTile]
+    rw [dot_xy BLOCK_M BLOCK_K BLOCK_N aT bT i j
+          (fun e => aElem s A stride_am stride_ak i.val e.val)
+          (fun e => bElem s B stride_bk stride_bn e.val j.val)
+          (fun e => by rw [haT]; rfl) (fun e => by rw [hbT]; rfl)]
+    rfl
+  -- the fp16 store
+  obtain ⟨sfin, hstore, hread⟩ :=
+    store_blockPtr_fp16_readback (BR := BLOCK_M) (BC := BLOCK_N)
+      (s5.setReg "c" FloatDType.fp16.toTileDType ([] ++ [BLOCK_M, BLOCK_N])
+        ⟨fun idx => FloatDType.real.cast FloatDType.fp16 ((Tile.dot [] aT bT).data idx)⟩)
+      C M N stride_cm stride_cn "c_block_ptr" "c" cTile
+      (by rw [hcp5.symm]; simp) (by simp [hcTile])
+      (cOffset stride_cm stride_cn) (fun idx => by simp [cOffset]) hInj
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  show sfin.mem C (cOffset stride_cm stride_cn idx) = _
+  rw [hread idx, hdotval idx]
+  -- collapse the fp16 round-trip
+  simp only [FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue,
+    FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+    WithBot.unbotD_some]
 
-/-- Public Python fp16-output summary for a concrete TMA test branch. -/
-theorem matmul_tma_python_f16_store_summary
-    (A B C Acc : RegionName) (s : BlockState)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-          Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_output_store_f16_slice C Acc 128 1 128 1 128 128)
+/-- **Closed-form correctness for the fp16 `matmul_tma`.** Every output cell of
+the computed tile equals `fp16(Σ_{e<BLOCK_K} A[i,e]·B[e,j])` — the genuine
+matrix product over ℝ cast to float16. -/
+theorem matmul_tma_f16_closed_form_correct
+    (A B C : RegionName) (s : BlockState)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_tma_f16_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
+      (write := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        some (C, cOffset stride_cm stride_cn idx))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         MemCell.of .fp16
           (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc (accOffset s 128 1 128 128 idx)))))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_output_store_f16_slice_compute_correct C Acc
-      128 1 128 1 128 128 s
-      (matmul_tma_python_test_output_offset_injective s)
+            (some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+              idx.1.val idx.2.1.val)))) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_tma_f16_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst hs0
+  intro idx
+  have hmain := matmul_tma_f16_exec_closed_form A B C s0 M N K stride_am stride_ak
+    stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K hInj idx
+  have hExec2 : exec (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s0 = some s' := hExec
+  rw [hExec2] at hmain
+  simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
 
-/-- Public Python fp16-output summary for any of the transpose-stride TMA test
-branches. -/
-theorem matmul_tma_python_f16_branch_store_summary
-    (A B C Acc : RegionName) (s : BlockState)
-    (stride_am stride_ak stride_bk stride_bn : Nat)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_output_store_f16_slice C Acc 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc (accOffset s 128 1 128 128 idx)))))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_output_store_f16_slice_compute_correct C Acc
-      128 1 128 1 128 128 s
-      (matmul_tma_python_test_output_offset_injective s)
+/-! ## Python test-shape coverage -/
 
+/-- Contiguous `128 × 128` output tiles (the Python TMA tests' single full-tile
+launch, `stride_cm = 128`, `stride_cn = 1`) have injective addresses. -/
+theorem matmul_tma_output_offset_injective :
+    Function.Injective (cOffset (BLOCK_M := 128) (BLOCK_N := 128) 128 1) := by
+  intro a b h
+  simp only [cOffset] at h
+  ext <;> omega
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/-- **Public test-shape summary** (no transpose, float32 output — Python
+`test_case_1`): the surface lowers and realizes the genuine matrix product
+`Σ_{e<128} A[i,e]·B[e,j]` (over ℝ). -/
 theorem matmul_tma_python_f32_output_summary
-    (A B C : RegionName) (s : BlockState)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-          Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
+    (A B C : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_tma_f32_surface A B C
+      128 128 128 128 1 128 1 128 1 128 128 128).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.false)
+      (kernel := matmul_tma_f32_surface A B C 128 128 128 128 1 128 1 128 1 128 128 128)
       (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        matmulTmaSurfaceCell s A B C C
-          128 128 128 128 1 128 1 128 1 128 128 128 Bool.false
-          (cOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_tma_surface_output_compute_correct A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false s
+      (write := fun idx : TileIndex [128, 128] => some (C, cOffset 128 1 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        matmulSpec s A B 128 1 128 1 128 idx.1.val idx.2.1.val)) :=
+  ⟨matmul_tma_f32_surface_toAlgorithm_supported A B C 128 128 128 128 1 128 1 128 1 128 128 128,
+   matmul_tma_f32_closed_form_correct A B C s 128 128 128 128 1 128 1 128 1 128 128 128
+     matmul_tma_output_offset_injective⟩
 
-theorem matmul_tma_python_f32_branch_output_summary
-    (A B C : RegionName) (s : BlockState)
-    (stride_am stride_ak stride_bk stride_bn : Nat)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.false)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        matmulTmaSurfaceCell s A B C C
-          128 128 128 stride_am stride_ak stride_bk stride_bn
-          128 1 128 128 128 Bool.false (cOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_tma_surface_output_compute_correct A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.false s
-
+/-- **Public test-shape summary** (no transpose, fp16 output — Python
+`test_case_5`): the surface realizes `fp16(Σ_{e<128} A[i,e]·B[e,j])`. -/
 theorem matmul_tma_python_f16_output_summary
-    (A B C : RegionName) (s : BlockState)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-          Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
+    (A B C : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_tma_f16_surface A B C
+      128 128 128 128 1 128 1 128 1 128 128 128).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := matmul_tma_load_store_surface A B C
-        128 128 128 128 1 128 1 128 1 128 128 128 Bool.true)
+      (kernel := matmul_tma_f16_surface A B C 128 128 128 128 1 128 1 128 1 128 128 128)
       (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        matmulTmaSurfaceCell s A B C C
-          128 128 128 128 1 128 1 128 1 128 128 128 Bool.true
-          (cOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_tma_surface_output_compute_correct A B C
-      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true s
-
-theorem matmul_tma_python_f16_branch_output_summary
-    (A B C : RegionName) (s : BlockState)
-    (stride_am stride_ak stride_bk stride_bn : Nat)
-    (hSurface :
-      ∃ alg, (matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) :
-    (∃ alg, (matmul_tma_load_store_surface A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_tma_load_store_surface A B C
-        128 128 128 stride_am stride_ak stride_bk stride_bn
-        128 1 128 128 128 Bool.true)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (C, cOffset s 128 1 128 128 idx))
-      (expected := fun idx =>
-        matmulTmaSurfaceCell s A B C C
-          128 128 128 stride_am stride_ak stride_bk stride_bn
-          128 1 128 128 128 Bool.true (cOffset s 128 1 128 128 idx))) := by
-  constructor
-  · exact hSurface
-  · exact matmul_tma_surface_output_compute_correct A B C
-      128 128 128 stride_am stride_ak stride_bk stride_bn
-      128 1 128 128 128 Bool.true s
+      (write := fun idx : TileIndex [128, 128] => some (C, cOffset 128 1 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (matmulSpec s A B 128 1 128 1 128 idx.1.val idx.2.1.val))))) :=
+  ⟨matmul_tma_f16_surface_toAlgorithm_supported A B C 128 128 128 128 1 128 1 128 1 128 128 128,
+   matmul_tma_f16_closed_form_correct A B C s 128 128 128 128 1 128 1 128 1 128 128 128
+     matmul_tma_output_offset_injective⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulTma
