@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `attention_fwd_triton3` — strict per-kernel correctness
@@ -4784,5 +4785,54 @@ theorem aft3PostLoop_eval
     rw [WithBot.realLog2_some]
     simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map, WithBot.unbotD_coe]
     rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Full kernel execution (case 3, no window).** The lowered case-3 surface body
+steps a clean state (`undef = 0`) through preLoop + the `forRange` streaming loop
+(via `forRange_inv` with `attnInvariant noWindowKeep` as the loop invariant,
+advanced by `aft3_attn_step3`) + postLoop, leaving the `O` and `M` writebacks at
+their genuine closed forms. -/
+theorem aft3_attn_exec
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0).toAlgKernel.body s = some sF
+      ∧ (∀ idx : TileIndex [64, 64],
+          sF.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
+            = attentionFwdTriton3Case3OutSpec s Q K V idx)
+      ∧ (∀ i : Fin 64,
+          sF.readMem M (lRowOffset s (s.pids 1) 128 64 i)
+            = (aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+                  (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).unbotD 0
+              + Real.log
+                ((aft3StateBot1 (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+                    (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).2.1) / Real.log 2) := by
+  rw [aft3_body_split_case3]
+  -- preLoop
+  obtain ⟨sp, hpre, hinv0⟩ :=
+    aft3PreLoop_eval Q K V M Out L s (fun i j => noWindowKeep i j) hundef
+  rw [stepStmts.append_some hpre]
+  -- the forRange streaming loop via forRange_inv with P = attnInvariant
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
+      (body := aft3LoopBody3)
+      (P := fun i st => attnInvariant Q K V M Out L s (fun i j => noWindowKeep i j) i st)
+      (s_init := sp)
+      (by norm_num)
+      hinv0
+      (fun i st hi hP => aft3_attn_step3 Q K V M Out L s i st hi
+        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+  rw [stepStmts.cons_some hloop]
+  -- at loop exit, counter `final` is the first multiple of 64 ≥ 128, i.e. 128
+  have hfinal : final = 128 := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  subst hfinal
+  -- postLoop
+  obtain ⟨sF, hpost, hO, hM⟩ :=
+    aft3PostLoop_eval Q K V M Out L s sL hMO hinvL
+  refine ⟨sF, hpost, hO, hM⟩
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
