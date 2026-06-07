@@ -3227,4 +3227,37 @@ theorem afcLoopBody_steps
   · exact hFksp
   · exact hFvp
 
+/-! ## FOUNDATION Part 5 — `afcPostLoop` AST + check
+
+The 2 lowered postLoop statements (`= body.drop 23`): `acc = acc / l_i[:, None]`
+(per-row denominator normalization) and the masked `tl.store` of `acc` to
+`O_block_ptr` (mask `(offs_m < 128) & (offs_k < 96)`). The store value is a plain
+`Op.ref` (no cast: `Out` is real). Checked by `rfl`. -/
+
+/-- The 2 lowered postLoop statements of the Python-shape AFC kernel
+(`= body.drop 23`). -/
+def afcPostLoop (Out : RegionName) : List Stmt :=
+  [ -- 23: acc = acc / l_i[:, None]
+    Stmt.assign .real [128, 128] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 128] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "l_i"))),
+    -- 24: tl.store(O_block_ptr, acc, mask=(offs_m < 128) & (offs_k < 96))
+    Stmt.store .real [128, 128] (.ptr (.ref .ptr [128, 128] "O_block_ptr"))
+      (Op.ref .real [128, 128] "acc")
+      (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96))))) ]
+
+set_option maxRecDepth 8000 in
+/-- The 2 lowered postLoop statements (`body.drop 23`) of the Python-shape AFC
+kernel are exactly `afcPostLoop`. Checked by `rfl`. -/
+theorem afcPostLoop_check (Q K V QScale KScale Out : RegionName) :
+    (attn_fwd_causal_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 1).toAlgKernel.body.drop 23
+      = afcPostLoop Out :=
+  rfl
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
