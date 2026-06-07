@@ -3981,4 +3981,98 @@ theorem afc_denom_reg_eq_masked (s : BlockState) (Q K V : RegionName) (keyScale 
     have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
 
 
+set_option maxHeartbeats 1600000 in
+/-- **`acc' = afcStateBot((c+1)·64).2.2` (AFC, masked).** The kernel's accumulator
+carry `acc·α + dot(p, v)` lands on the seed-0 ⊥-state accumulator after `c+1`
+blocks. The masked v-load value at channel `d` is carried via `vval`/`hvval`
+(matching `afcKV`'s value component). -/
+theorem afc_acc_reg_eq_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128)
+    (qkSentT : Tile .real [128, 64]) (mtile mijT alphaT : Tile .real [128])
+    (acctile acc1T : Tile .real [128, 128]) (pT : Tile .real [128, 64]) (vtile : Tile .real [64, 128]) (vval : Fin 64 → ℝ)
+    (hsent : ∀ jL : Fin 64, qkSentT.data (i, jL, PUnit.unit)
+        = if qStartAFC s + i.val ≥ c * 64 + jL.val then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hacctile : acctile.data (i, d, PUnit.unit) = some
+        ((afcStateBot1 (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) (c * 64) i d).2.2))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) (c * 64) i ⟨0, by norm_num⟩)
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hacc1 : acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+    (hpT : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
+        = if (qStartAFC s + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ))
+    (hv : ∀ jL : Fin 64, vtile.data (jL, d, PUnit.unit) = some (vval jL))
+    (hvval : ∀ jL : Fin 64, vval jL
+        = (afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).2) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        acc1T (Tile.dot [] pT vtile)).data (i, d, PUnit.unit)
+      = some ((afcStateBot (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i d).2.2) := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  set qStart := qStartAFC s
+  set m := (afcStateBot qT kT vT keyScale qStart (c * 64) i d).1 with hm_def
+  set Mc := afcRunningMax qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩ with hMc
+  set Mc1 := afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
+  have hmMc : m = Mc := by
+    rw [hm_def, hMc, afcStateBot_fst_eq_runningMax,
+      afcRunningMax_eq qT kT vT keyScale qStart (c * 64) i d ⟨0, by norm_num⟩]
+  have hmd : m = afcRunningMax qT kT vT keyScale qStart (c * 64) i d := by
+    rw [hm_def, afcStateBot_fst_eq_runningMax]
+  have hMsucc : Mc1 = m ⊔ ((afcBlock qT kT vT keyScale qStart c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, afcRunningMax_eq qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ d,
+      afcRunningMax_succ, hmd]
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub, ← hMc, ← hMc1, hmMc]
+  have hdot := afc_acc_dot_block_masked s Q K V keyScale c hc1 i d qkSentT mijT pT vtile vval
+    hsent hmij hpT hv hvval
+  have hblockEq := osStepBot_block_eq m
+    ((afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.1)
+    ((afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.2)
+    ((afcKeysUpto qT kT vT keyScale qStart (c * 64) i d).map (fun p => pow2 p.1 * p.2)).sum
+    ((afcKeysUpto qT kT vT keyScale qStart (c * 64) i d).map (fun p => pow2 p.1)).sum
+    (afcBlock qT kT vT keyScale qStart c i d)
+    (by rw [afc_denom_anchor, zero_add, hm_def])
+    (by rw [afc_acc_anchor, zero_add, hm_def])
+    (fun hbot => afcKeysUpto_sum_zero_of_bot qT kT vT keyScale qStart (c * 64) i d
+      (by rw [← afcStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => afcKeysUpto_sum_zero_of_bot qT kT vT keyScale qStart (c * 64) i d
+      (by rw [← afcStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  rw [show (afcStateBot qT kT vT keyScale qStart ((c + 1) * 64) i d).2.2
+        = (Mc1, _,
+            (afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.2
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((afcBlock qT kT vT keyScale qStart c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
+        from by rw [afcStateBot_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  have hcancel := (afcStateBot1_cancel qT kT vT keyScale qStart c i d Mc1).2
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hdot]
+  rw [hacc1, Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, hacctile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [show (afcStateBot1 qT kT vT keyScale qStart (c * 64) i d).2.2 * α
+        = (afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.2 * α from by
+    have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
