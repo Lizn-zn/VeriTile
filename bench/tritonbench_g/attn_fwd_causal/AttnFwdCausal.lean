@@ -1950,14 +1950,86 @@ theorem afcPreLoop_check (Q K V QScale KScale Out : RegionName) :
       = AfcFoundation.afcPreLoop Q K V QScale KScale Out :=
   rfl
 
+/-! ### Streamed-pointer closed cell-forms
+
+The loop streams `K_ptrs`/`K_scale_ptr`/`V_ptrs` forward by `64·128 = 8192` (resp.
+`1`) per block. After `c` blocks the closed cell-forms below hold; the preLoop
+base is the `c = 0` instance and the loop-body advance maps `c → c+1`. -/
+
+/-- `K_ptrs` after `c` blocks: transposed key tile `[BD, BN]`, cell `(e, j)`
+addresses `K[baseOffset + e + (c·64 + j)·128]`. -/
+noncomputable def kPtrsAFC (s0 : BlockState) (K : RegionName) (c : Nat) :
+    Tile .ptr [128, 64] :=
+  ⟨fun idx : TileIndex [128, 64] => (K.cast, baseOffsetAFC s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128)⟩
+
+/-- `K_scale_ptr` after `c` blocks: scalar pointer addressing `KScale[k_scale_offset + c]`. -/
+noncomputable def kScalePtrAFC (s0 : BlockState) (KScale : RegionName) (c : Nat) :
+    Tile .ptr [] :=
+  ⟨fun _ : TileIndex [] => (KScale.cast, s0.pids 1 * ((128 + 64 - 1) / 64) + c)⟩
+
+/-- `V_ptrs` after `c` blocks: value tile `[BN, BD]`, cell `(j, d)` addresses
+`V[baseOffset + (c·64 + j)·128 + d]`. -/
+noncomputable def vPtrsAFC (s0 : BlockState) (V : RegionName) (c : Nat) :
+    Tile .ptr [64, 128] :=
+  ⟨fun idx : TileIndex [64, 128] => (V.cast, baseOffsetAFC s0 + (c * 64 + idx.1.val) * 128 + idx.2.1.val)⟩
+
+/-- One-block advance of `K_ptrs`: the loop-body `ptrAdd … (64·128)` maps
+`kPtrsAFC c → kPtrsAFC (c+1)`. -/
+theorem kPtrsAFC_succ (s0 : BlockState) (K : RegionName) (c : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (kPtrsAFC s0 K c)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))
+      = kPtrsAFC s0 K (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [kPtrsAFC, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
+/-- One-block advance of `K_scale_ptr`: the loop-body `ptrAdd … 1` maps
+`kScalePtrAFC c → kScalePtrAFC (c+1)`. -/
+theorem kScalePtrAFC_succ (s0 : BlockState) (KScale : RegionName) (c : Nat) :
+    Tile.ptrAdd Broadcast.nil (kScalePtrAFC s0 KScale c) (Tile.scalar 1)
+      = kScalePtrAFC s0 KScale (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [kScalePtrAFC, Tile.ptrAdd_data, Tile.scalar,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    omega
+
+/-- One-block advance of `V_ptrs`: the loop-body `ptrAdd … (64·128)` maps
+`vPtrsAFC c → vPtrsAFC (c+1)`. -/
+theorem vPtrsAFC_succ (s0 : BlockState) (V : RegionName) (c : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (vPtrsAFC s0 V c)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))
+      = vPtrsAFC s0 V (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [vPtrsAFC, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
+/-- **Sentinel boundedness side-condition.** For a faithful bounded-input kernel,
+every causally-kept key's coerced score exceeds the `-1e6` masking sentinel — i.e.
+the streamed running max is never `⊥` once a key is kept, and the kept scores stay
+above `-1e6`. Captured as: at the full window, the running max is `> -1e6`
+(equivalently the masked-block `max(m_i, -1e6)` agrees with `afcRunningMax`). This
+is a legitimate precondition for bounded `Q`/`K` (analogous to #316's `undef = 0` /
+`M ≠ Out` preconditions). -/
+def afcScoreBound
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ) (qStart : Nat) : Prop :=
+  ∀ (j : Fin 128) (i d : Fin 128),
+    keyScale j * Finset.univ.sum (fun e : Fin 128 => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
+      > -1000000.0
+
 /-- **Loop invariant** for the AFC streaming loop (counter `i = c·64`, window
-`hi_c = i`). Binds the running-state registers after `c` blocks to the ⊥-seeded
-`afcStateBot`/`afcRunningMax` over the first `i` keys, per output row `r` (channel
-`d` for `acc`), keyed by the per-key score scale `keyScale`. Also binds the static
-index vectors (`offs_m`/`offs_n`/`offs_k`), the loaded `q`/`q_scale`, the program
-ids, and preserves `undef`/`mem`. The pointer registers (`K_ptrs`/`K_scale_ptr`/
-`V_ptrs` advanced by `i`) are tracked by the step lemma via the recipe pointer
-advances; here we keep the running-state heart, which the readback needs. -/
+`hi_c = i`). Binds the running-state registers after `c` blocks to the seed-`1`
+⊥-seeded `afcStateBot1`/`afcRunningMax` over the first `i` keys, per output row `r`
+(channel `d` for `acc`), keyed by the per-key score scale `keyScale`. Also binds
+the static index vectors (`offs_m`/`offs_n`/`offs_k`), the loaded `q`/`q_scale`,
+the program ids, and the three streamed pointers (`K_ptrs`/`K_scale_ptr`/`V_ptrs`
+advanced by `c = i/64`), and preserves `undef`/`mem`. -/
 noncomputable def afcInvariant
     (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
     (keyScale : Fin 128 → ℝ) (i : Nat) (s : BlockState) : Prop :=
@@ -1969,14 +2041,21 @@ noncomputable def afcInvariant
   (s.regs .real [128] "m_i" = some ⟨fun r : TileIndex [128] =>
       afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩) ∧
   (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
-      ((afcStateBot qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+      ((afcStateBot1 qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
-      ((afcStateBot qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+      ((afcStateBot1 qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qStart + r.val))) ∧
   (s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))) ∧
   (s.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
   (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
   (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+      if qStart + idx.1.val < 128 ∧ idx.2.1.val < 96 then some (qT idx) else some (0.0 : ℝ)⟩) ∧
+  (s.regs .real [] "q_scale" = some (Tile.scalar
+      (some (s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0))))) ∧
+  (s.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s0 K (i / 64))) ∧
+  (s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s0 KScale (i / 64))) ∧
+  (s.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s0 V (i / 64))) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase
@@ -1994,17 +2073,17 @@ theorem afcInvariant_running_zero
           (qStartAFC s0) 0 r.1 ⟨0, by norm_num⟩⟩ : Tile .real [128])
         = ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
       ∧ (⟨fun r : TileIndex [128] =>
-        ((afcStateBot (qTileAFC s0 Q) (kTileAFC s0 K) (vTileAFC s0 V) keyScale
+        ((afcStateBot1 (qTileAFC s0 Q) (kTileAFC s0 K) (vTileAFC s0 V) keyScale
           (qStartAFC s0) 0 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩ : Tile .real [128])
-        = ⟨fun _ : TileIndex [128] => (some (0 : ℝ) : WithBot ℝ)⟩
+        = ⟨fun _ : TileIndex [128] => (some (1 : ℝ) : WithBot ℝ)⟩
       ∧ (⟨fun idx : TileIndex [128, 128] =>
-        ((afcStateBot (qTileAFC s0 Q) (kTileAFC s0 K) (vTileAFC s0 V) keyScale
+        ((afcStateBot1 (qTileAFC s0 Q) (kTileAFC s0 K) (vTileAFC s0 V) keyScale
           (qStartAFC s0) 0 idx.1 idx.2.1).2.2 : ℝ)⟩ : Tile .real [128, 128])
         = ⟨fun _ : TileIndex [128, 128] => (some (0 : ℝ) : WithBot ℝ)⟩ := by
   refine ⟨?_, ?_, ?_⟩
   · ext r; simp only [afcRunningMax_zero]
-  · ext r; simp only [afcStateBot_zero]; rfl
-  · ext idx; simp only [afcStateBot_zero]; rfl
+  · ext r; simp only [afcStateBot1_zero]; rfl
+  · ext idx; simp only [afcStateBot1_zero]; rfl
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase
 
