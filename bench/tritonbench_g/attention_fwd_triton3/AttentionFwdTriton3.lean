@@ -4303,6 +4303,115 @@ theorem aft3_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
         = (aft3StateBot qT kT vT keyScale3 kp (c * 64) i d).2.2 * α from hacc1cancel]
   rw [hMr, WithBot.unbotD_coe]
 
+/-! ### Masked per-channel register bridges (cases 1/2, sliding window)
+
+These mirror the case-3 (`noWindowKeep`) bridges, but the kernel's `qk` cell is
+the *masked* tile `if mc jL then some score else ⊥` (out-of-window lanes set to
+`-inf` by the `tl.where`). The reconciliation hypothesis `hmc` ties the lowered
+nat-mask `mc` (= `aft3MaskCell1`/`aft3MaskCell2` on lane `jL`) to the faithful
+`keep` predicate at the global key `c·64 + jL`. The empty-block case (`mc` all
+false) is now genuinely reachable, so — unlike case 3 — no `ne_bot` assumption is
+made: the ⊥-carry (`m_ij = ⊥`, `α = 0`) is handled by the seed-cancellation in
+`aft3OsStepBot`. -/
+
+/-- **The masked `q·k` score cell (cases 1/2).** On a kept lane the cell is the
+score `some (sc · Σ q·k)`; on a masked lane it is `⊥`. -/
+theorem aft3_score_cell_masked (s0 : BlockState) (Q K : RegionName) (sc : ℝ) (c : Nat)
+    (i jL : Fin 64) (hjL : c * 64 + jL.val < 128) (mc : Bool)
+    (qtile : Tile .real [64, 64]) (ktile : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64))) :
+    (if mc then
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
+          (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+      else (⊥ : WithBot ℝ))
+      = if mc then some (sc * Finset.univ.sum (fun e : Fin 64 =>
+          qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)))
+        else (⊥ : WithBot ℝ) := by
+  match mc with
+  | Bool.false => rfl
+  | Bool.true => exact aft3_score_cell s0 Q K sc c i jL hjL qtile ktile hq hk
+
+/-- **Masked block sup (cases 1/2).** The kernel's `tl.max(qk, 1)` over block `c`
+(cell = `if mc jL then some score else ⊥`) equals the `aft3Block`-windowed
+`foldr ⊔ ⊥` for the `keep` predicate, given the cell-mask reconciliation. -/
+theorem aft3Block_masked_blockSup (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
+    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin 64 → Bool)
+    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩)) :
+    Finset.univ.sup (fun jL : Fin 64 =>
+        if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin 64 =>
+              qTile3 s0 Q (i, e, PUnit.unit) *
+                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          keep c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  -- replace the Bool cell-mask by the faithful `keep` predicate at the global key
+  rw [show (fun jL : Fin 64 =>
+        if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin 64 =>
+              qTile3 s0 Q (i, e, PUnit.unit) *
+                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = (fun jL : Fin 64 =>
+          if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
+            ((sc * Finset.univ.sum (fun e : Fin 64 =>
+                qTile3 s0 Q (i, e, PUnit.unit) *
+                  kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ)) from by
+    funext jL
+    rw [hmc jL]
+    by_cases hk : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+    · rw [if_pos (by exact decide_eq_true hk), if_pos hk]
+    · rw [if_neg (by simp [hk]), if_neg hk]]
+  rw [show (aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+        keep c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange 128).filterMap (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j
+          then some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+                qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit))) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold aft3Block
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j <;> simp [hj]]
+  rw [aft3_filterMap_foldr_sup 128
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j)
+    (fun j => keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+        qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit)))]
+  symm
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j
+    · rw [if_pos hj]
+      have hjL : j.val - c * 64 < 64 := by omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
+      simp only
+      have hfin : (⟨c * 64 + (j.val - c * 64), by omega⟩ : Fin 128) = j := by
+        apply Fin.ext; simp; omega
+      rw [if_pos (show keep i ⟨c * 64 + (j.val - c * 64), by omega⟩ from by rw [hfin]; exact hj.2.2)]
+      apply le_of_eq
+      rw [hsc, keyScale3, keyScale3]
+      congr 1; rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * 64 + jL.val < 128 := by have := jL.isLt; omega
+    by_cases hkeep : keep i ⟨c * 64 + jL.val, hb⟩
+    · rw [if_pos hkeep]
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin 128)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
+      apply le_of_eq
+      rw [hsc, keyScale3, keyScale3]
+    · rw [if_neg hkeep]; exact bot_le
+
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Step lemma (case 3, no window).** The loop body `aft3LoopBody3` advances
