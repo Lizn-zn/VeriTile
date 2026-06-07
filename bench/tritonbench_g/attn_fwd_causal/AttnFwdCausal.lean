@@ -1515,6 +1515,89 @@ theorem afcStateBot_full_eq_spec
   rw [attnFwdCausalOutSpec_eq_streaming]
   rw [VeriTile.Triton.osStep_foldl_eq_batch]
 
+/-! ### `l_i = 1` seed reconciliation
+
+The kernel seeds `l_i = tl.zeros + 1.0` (not `0`). On the first streamed key the
+running max transitions from `⊥`, forcing `α = (realExp2 (realSub ⊥ m')).unbotD 0
+= 0`, which annihilates the `1` carry. Hence the seed-`1` fold and the seed-`0`
+fold agree on every nonempty key prefix. `afcStateBot1` is the faithful seed-`1`
+state; it equals `afcStateBot` on nonempty windows. Ported from the triton3
+foundation (`aft3StateBot1`). -/
+
+/-- **⊥-seed independence of the `l`/`acc` carries.** From a `⊥`-max start the
+first key resets the carries, so the `osStepBot` fold over a nonempty list is
+independent of the initial `l`/`acc`. -/
+theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
+    (l acc l' acc' : ℝ) :
+    xs.foldl osStepBot (⊥, l, acc) = xs.foldl osStepBot (⊥, l', acc') := by
+  obtain ⟨x, t, rfl⟩ := List.exists_cons_of_ne_nil hne
+  obtain ⟨s, v⟩ := x
+  have hstep : ∀ L A : ℝ, osStepBot (⊥, L, A) (s, v)
+      = (((s : ℝ) : WithBot ℝ), pow2 (s - s), pow2 (s - s) * v) := by
+    intro L A
+    simp only [osStepBot, bot_sup_eq]
+    have hα : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) ((s : ℝ) : WithBot ℝ))).unbotD 0 = 0 := by
+      rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    have hub : (((s : ℝ) : WithBot ℝ)).unbotD 0 = s := by rfl
+    rw [hα, hub]
+    simp
+  simp only [List.foldl_cons, hstep]
+
+/-- ⊥-seeded running state from the kernel's `l_i = 1` seed. -/
+noncomputable def afcStateBot1
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
+  (afcKeysUpto qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 1, 0)
+
+/-- The faithful seed-`1` state equals the seed-`0` state whenever the window is
+nonempty (`afcRunningMax ≠ ⊥`). -/
+theorem afcStateBot1_eq_afcStateBot
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128)
+    (hne : afcRunningMax qT kT vT keyScale qStart hi i d ≠ ⊥) :
+    afcStateBot1 qT kT vT keyScale qStart hi i d
+      = afcStateBot qT kT vT keyScale qStart hi i d := by
+  have hxs : afcKeysUpto qT kT vT keyScale qStart hi i d ≠ [] := by
+    intro h
+    apply hne
+    unfold afcRunningMax
+    rw [h]; rfl
+  unfold afcStateBot1 afcStateBot
+  exact osStepBot_bot_seed_indep _ hxs 1 0 0 0
+
+/-- The seed-`1` running `max` is `afcRunningMax` (the `l`-seed does not affect the
+max channel). -/
+theorem afcStateBot1_fst_eq_runningMax
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) :
+    (afcStateBot1 qT kT vT keyScale qStart hi i d).1
+      = afcRunningMax qT kT vT keyScale qStart hi i d := by
+  rw [afcStateBot1, afcStateBot_fst, afcRunningMax, afc_foldl_sup_bot_eq_foldr]
+
+/-- The seed-`1` state at the empty / `hi = 0` window is `(⊥, 1, 0)` — the kernel's
+preLoop init (`m_i = -inf`, `l_i = 1`, `acc = 0`). -/
+theorem afcStateBot1_zero
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart : Nat) (i : Fin 128) (d : Fin 128) :
+    afcStateBot1 qT kT vT keyScale qStart 0 i d = (⊥, 1, 0) := by
+  unfold afcStateBot1 afcKeysUpto
+  rw [show (List.finRange 128).filterMap
+        (fun j : Fin 128 => if j.val < 0 ∧ j.val ≤ qStart + i.val
+          then some (afcKV qT kT vT keyScale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- **One-block advance for the seed-`1` state**: `afcStateBot1` after `c+1` blocks
+is `osStepBot`-folded over block `c`'s keys from `afcStateBot1` after `c` blocks. -/
+theorem afcStateBot1_succ
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart c : Nat) (i : Fin 128) (d : Fin 128) :
+    afcStateBot1 qT kT vT keyScale qStart ((c + 1) * 64) i d
+      = (afcBlock qT kT vT keyScale qStart c i d).foldl osStepBot
+          (afcStateBot1 qT kT vT keyScale qStart (c * 64) i d) := by
+  unfold afcStateBot1
+  rw [afcKeysUpto_succ, List.foldl_append]
+
 /-! ## FOUNDATION Part 1 — `afcBody_split` (preLoop ++ forRange afcLoopBody :: postLoop)
 
 The lowered algorithm body of `attn_fwd_causal_surface` at the Python test shape is
