@@ -3918,4 +3918,152 @@ theorem aft3Block_noWindow_blockSup (s0 : BlockState) (Q K V : RegionName) (sc :
     apply le_of_eq
     rw [hsc, keyScale3, keyScale3]
 
+/-- **`m_ij = aft3RunningMax((c+1)·64)` (case 3).** -/
+theorem aft3_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
+    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
+    (qtile ktile : Tile .real [64, 64]) (mtile rmaxT : Tile .real [64])
+    (qkT : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
+    (hqkT : qkT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc)))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+            (fun i j => noWindowKeep i j) (c * 64) i ⟨0, by norm_num⟩)
+    (hrmax : Tile.reduceMaxDrop aft3Ax1 qkT = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
+      = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          (fun i j => noWindowKeep i j) ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          (fun i j => noWindowKeep i j) c i ⟨0, by norm_num⟩).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [aft3_reduceMaxDrop_row qkT rmaxT hrmax i
+      (fun jL => ((sc * Finset.univ.sum (fun e : Fin 64 =>
+          qTile3 s0 Q (i, e, PUnit.unit) *
+            kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ))
+      (fun jL => by rw [hqkT]; exact aft3_score_cell s0 Q K sc c i jL (by have := jL.isLt; omega) qtile ktile hq hk)]
+    exact aft3Block_noWindow_blockSup s0 Q K V sc c hc1 i ⟨0, by norm_num⟩ hsc
+  rw [aft3RunningMax_succ (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+      (fun i j => noWindowKeep i j) c i ⟨0, by norm_num⟩]
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
+  set M := aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+      (fun i j => noWindowKeep i j) (c * 64) i ⟨0, by norm_num⟩
+  set S := ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+      (fun i j => noWindowKeep i j) c i ⟨0, by norm_num⟩).map
+      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+  by_cases h : M ≤ S
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
+/-- **`Σ_jL p[i,jL] = aft3Block` pow2-score sum (case 3).** -/
+theorem aft3_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
+    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
+    (qtile ktile : Tile .real [64, 64]) (mijT : Tile .real [64]) (pT : Tile .real [64, 64])
+    (qkT : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
+    (hqkT : qkT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc)))
+    (Mr : ℝ) (hmij : mijT.data (i, PUnit.unit) = (Mr : WithBot ℝ))
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))) :
+    (Tile.reduceSumDrop aft3Ax1 pT).data (i, PUnit.unit)
+      = some ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          (fun i j => noWindowKeep i j) c i d).map (fun p => pow2 (p.1 - Mr))).sum := by
+  unfold aft3Ax1
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ jL : Fin 64,
+      pT.data (TileShape.insertAxisIndex [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) (i, PUnit.unit) jL)
+        = some (pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
+              qTile3 s0 Q (i, e, PUnit.unit) *
+                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)) := by
+    intro jL
+    rw [show (TileShape.insertAxisIndex [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
+    rw [hpT]
+    show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.sub, hmij]
+    rw [hqkT, aft3_score_cell s0 Q K sc c i jL (by have := jL.isLt; omega) qtile ktile hq hk]
+    simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+    refine congrArg some ?_; simp only [pow2]; ring_nf
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3Block_map_sum (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+      (fun i j => noWindowKeep i j) c i d hc1 (fun p => pow2 (p.1 - Mr))]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  rw [if_pos (by trivial)]
+  rw [hsc, keyScale3, keyScale3]
+
+/-- **`Σ_jL p[i,jL]·v[jL,d] = aft3Block` pow2-score·v sum (case 3).** -/
+theorem aft3_acc_dot_block (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
+    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
+    (qtile ktile vtile : Tile .real [64, 64]) (mijT : Tile .real [64]) (pT : Tile .real [64, 64])
+    (qkT : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
+    (hv : ∀ idx : TileIndex [64, 64],
+        vtile.data idx = some (s0.readMem V (baseOffset3 s0 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)))
+    (hqkT : qkT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc)))
+    (Mr : ℝ) (hmij : mijT.data (i, PUnit.unit) = (Mr : WithBot ℝ))
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))) :
+    (Tile.dot [] pT vtile).data (i, d, PUnit.unit)
+      = some ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          (fun i j => noWindowKeep i j) c i d).map (fun p => pow2 (p.1 - Mr) * p.2)).sum := by
+  rw [Tile.dot_nil_data]
+  have hcell : ∀ jL : Fin 64,
+      Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
+              qTile3 s0 Q (i, e, PUnit.unit) *
+                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)
+              * vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)) := by
+    intro jL
+    have hpcell : pT.data (i, jL, PUnit.unit)
+        = some (pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
+            qTile3 s0 Q (i, e, PUnit.unit) *
+              kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)) := by
+      rw [hpT]
+      show WithBot.realExp2 _ = _
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+        TileShape.dropInsertedIndex, NumericDType.sub, hmij]
+      rw [hqkT, aft3_score_cell s0 Q K sc c i jL (by have := jL.isLt; omega) qtile ktile hq hk]
+      simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+      refine congrArg some ?_; simp only [pow2]; ring_nf
+    rw [hpcell, hv (jL, d, PUnit.unit)]
+    rw [show s0.readMem V (baseOffset3 s0 + (c * 64 + jL.val) * 64 + d.val * 1)
+          = vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit) from by
+      simp only [vTile3]; congr 1; ring]
+    simp only [Option.map₂, Option.bind, Option.map]
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (pT.data (i, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
+                qTile3 s0 Q (i, e, PUnit.unit) *
+                  kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)
+              * vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hcell jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3Block_map_sum (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+      (fun i j => noWindowKeep i j) c i d hc1 (fun p => pow2 (p.1 - Mr) * p.2)]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  rw [if_pos (by trivial)]
+  rw [hsc, keyScale3, keyScale3]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
