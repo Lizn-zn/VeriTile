@@ -807,117 +807,6 @@ theorem attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
     (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
     32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
 
-noncomputable def producedAttentionFwdTriton3Case1OutValue
-    (s : BlockState) (Q K V M Out L : RegionName)
-    (idx : TileIndex [64, 64]) : ℝ :=
-  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-  | none => 0.0
-
-noncomputable def producedAttentionFwdTriton3Case1MValue
-    (s : BlockState) (Q K V M Out L : RegionName) (i : Fin 64) : ℝ :=
-  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel s with
-  | some s' => s'.readMem M (lRowOffset s (s.pids 1) 128 64 i)
-  | none => 0.0
-
-theorem attention_fwd_triton3_case1_surface_out_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        producedAttentionFwdTriton3Case1OutValue s Q K V M Out L idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedAttentionFwdTriton3Case1OutValue]
-  rw [inv_eq_one_div, hExec]
-
-theorem attention_fwd_triton3_case1_surface_m_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        producedAttentionFwdTriton3Case1MValue s Q K V M Out L i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [producedAttentionFwdTriton3Case1MValue]
-  rw [inv_eq_one_div, hExec]
-
-theorem attention_fwd_triton3_python_case1_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        producedAttentionFwdTriton3Case1OutValue s Q K V M Out L idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        producedAttentionFwdTriton3Case1MValue s Q K V M Out L i) := by
-  constructor
-  · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
-      Q K V M Out L
-  constructor
-  · exact attention_fwd_triton3_case1_surface_out_compute_correct Q K V M Out
-      L s
-  · exact attention_fwd_triton3_case1_surface_m_compute_correct Q K V M Out
-      L s
 
 noncomputable def producedAttentionFwdTriton3Case2OutValue
     (s : BlockState) (Q K V M Out L : RegionName)
@@ -6102,5 +5991,114 @@ theorem attention_fwd_triton3_python_case3_output_summary
       Q K V M Out L
   · exact attention_fwd_triton3_case3_surface_out_compute_correct Q K V M Out L s hMO hundef
   · exact attention_fwd_triton3_case3_surface_m_compute_correct Q K V M Out L s hMO hundef
+
+
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- Genuine case-1 `Out`-store correctness: the masked `Out` writeback realizes the
+faithful nat-truncated sliding-window closed form `attentionFwdTriton3Case1OutSpec`
+at every active lane (`0/0 = 0` at fully-masked rows). -/
+theorem attention_fwd_triton3_case1_surface_out_compute_correct
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case1OutSpec s Q K V idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec1 Q K V M Out L s hMO hundef
+  rw [exec] at hExec
+  rw [hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  exact hO idx
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- Genuine case-1 `M`-store correctness: the `M`-row writeback realizes the raw
+`m_i + log2 l_i` finalize (`attentionFwdTriton3KMSpec`) at every row. -/
+theorem attention_fwd_triton3_case1_surface_m_compute_correct
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec1 Q K V M Out L s hMO hundef
+  rw [exec] at hExec
+  rw [hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  exact hM i
+
+/-- **Case 1 genuine output summary.** The case-1 surface lowers to the algorithm
+layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
+(`attentionFwdTriton3Case1OutSpec` / `attentionFwdTriton3KMSpec`) on clean
+(`undef = 0`) input with `M ≠ Out`. -/
+theorem attention_fwd_triton3_python_case1_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case1OutSpec s Q K V idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported Q K V M Out L
+  · exact attention_fwd_triton3_case1_surface_out_compute_correct Q K V M Out L s hMO hundef
+  · exact attention_fwd_triton3_case1_surface_m_compute_correct Q K V M Out L s hMO hundef
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
