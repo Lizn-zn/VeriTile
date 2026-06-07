@@ -1993,6 +1993,14 @@ noncomputable def vPtrsAFC (s0 : BlockState) (V : RegionName) (c : Nat) :
     Tile .ptr [64, 128] :=
   ⟨fun idx : TileIndex [64, 128] => (V.cast, baseOffsetAFC s0 + (c * 64 + idx.1.val) * 128 + idx.2.1.val)⟩
 
+/-- `O_block_ptr` (constant through the loop): output tile `[BM, BD]`, cell `(i, e)`
+addresses `Out[baseOffset + (qStart + i)·128 + e]` (the preLoop-tail stmt 16
+`ptrAdd (ptrBase Out) (qvk + offs_m[:,None]·128 + offs_k[None,:]·1)`). Mirrors the
+`outOffset` cell-form at the Python test shape. -/
+noncomputable def oBlockPtrAFC (s0 : BlockState) (Out : RegionName) :
+    Tile .ptr [128, 128] :=
+  ⟨fun idx : TileIndex [128, 128] => (Out.cast, baseOffsetAFC s0 + (s0.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val)⟩
+
 /-- One-block advance of `K_ptrs`: the loop-body `ptrAdd … (64·128)` maps
 `kPtrsAFC c → kPtrsAFC (c+1)`. -/
 theorem kPtrsAFC_succ (s0 : BlockState) (K : RegionName) (c : Nat) :
@@ -2073,6 +2081,7 @@ noncomputable def afcInvariant
   (s.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s0 K (i / 64))) ∧
   (s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s0 KScale (i / 64))) ∧
   (s.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s0 V (i / 64))) ∧
+  (s.regs .ptr [128, 128] "O_block_ptr" = some (oBlockPtrAFC s0 Out)) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase
@@ -2289,6 +2298,7 @@ theorem afcPreLoopTail_eval
       ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s1 K 0)
       ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s1 KScale 0)
       ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s1 V 0)
+      ∧ s0.regs .ptr [128, 128] "O_block_ptr" = some (oBlockPtrAFC s1 Out)
       ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
           if s1.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96
           then some (qTileAFC s1 Q idx) else some (0.0 : ℝ)⟩ := by
@@ -2437,7 +2447,7 @@ theorem afcPreLoopTail_eval
     (afc_evalOp_load_ptr_none_of (Op.ref .ptr [] "Q_scale_ptr") _ _
       (by rw [evalOp_ref]; rfl)))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rfl  -- pids
   · rfl  -- mem
   · intro rg o; exact hundef rg o  -- undef
@@ -2497,6 +2507,22 @@ theorem afcPreLoopTail_eval
     · simp only [vPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
         Broadcast.rightIndex_scalarL, Region.cast]
     · simp only [vPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, qvkOffAFC, baseOffsetAFC]
+      ring_nf
+  · -- O_block_ptr = oBlockPtrAFC s1 Out
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [oBlockPtrAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [oBlockPtrAFC, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
         Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
         Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
         Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
@@ -2579,6 +2605,7 @@ theorem afcPreLoop_eval
       ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s K 0)
       ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s KScale 0)
       ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s V 0)
+      ∧ s0.regs .ptr [128, 128] "O_block_ptr" = some (oBlockPtrAFC s Out)
       ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
           if s.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96
           then some (qTileAFC s Q idx) else some (0.0 : ℝ)⟩ := by
@@ -2602,7 +2629,7 @@ theorem afcPreLoop_eval
       = some (Tile.vec (fun r : Fin 128 => s1.pids 0 * 128 + r.val)) := by
     rw [hpids1]; exact hoffsm1
   obtain ⟨s0, hTail, hpids0, hmem0, hundef0, hstartm0, hoffhz0, hmi0, hli0, hacc0,
-    hoffsm0, hoffsn0, hoffsk0, hqscale0, hkp0, hksp0, hvp0, hq0⟩ :=
+    hoffsm0, hoffsn0, hoffsk0, hqscale0, hkp0, hksp0, hvp0, hop0, hq0⟩ :=
     afcPreLoopTail_eval s1 Q K V QScale KScale Out hundef1
       hstartm1' hoffhz1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
   -- base/pid-derived closed forms agree between s1 and s (pids/mem coincide)
@@ -2613,7 +2640,9 @@ theorem afcPreLoop_eval
     simp only [kScalePtrAFC, hpids1]
   have hvpEq : vPtrsAFC s1 V 0 = vPtrsAFC s V 0 := by
     simp only [vPtrsAFC, hbase]
-  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  have hopEq : oBlockPtrAFC s1 Out = oBlockPtrAFC s Out := by
+    simp only [oBlockPtrAFC, hbase, hpids1]
+  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpids0, hpids1]
   · rw [hmem0, hmem1]
   · exact hundef0
@@ -2632,6 +2661,7 @@ theorem afcPreLoop_eval
   · rw [hkp0, hkpEq]
   · rw [hksp0, hkspEq]
   · rw [hvp0, hvpEq]
+  · rw [hop0, hopEq]
   · rw [hq0]
     refine congrArg some ?_
     ext idx
@@ -2653,7 +2683,7 @@ theorem afcPreLoop_invariant
     ∃ s0, stepStmts (AfcFoundation.afcPreLoop Q K V QScale KScale Out) s = some s0
       ∧ afcInvariant Q K V QScale KScale Out s keyScale 0 s0 := by
   obtain ⟨s0, hstep, hpids, hmem, hundef0, hstartm, hoffhz, hmi, hli, hacc,
-    hoffsm, hoffsn, hoffsk, hqscale, hkp, hksp, hvp, hq⟩ :=
+    hoffsm, hoffsn, hoffsk, hqscale, hkp, hksp, hvp, hop, hq⟩ :=
     afcPreLoop_eval s Q K V QScale KScale Out hundef
   obtain ⟨hzm, hzl, hza⟩ :=
     VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase.afcInvariant_running_zero
@@ -2661,7 +2691,7 @@ theorem afcPreLoop_invariant
   refine ⟨s0, hstep, ?_⟩
   simp only [afcInvariant, qStartAFC]
   refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_,
-    ?_, ?_, ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
+    ?_, ?_, ?_, ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
   · -- m_i = afcRunningMax ... 0 = ⊥
     rw [hmi]; exact congrArg some hzm.symm
   · -- l_i = afcStateBot1 ... 0 .2.1 = 1
@@ -2682,6 +2712,8 @@ theorem afcPreLoop_invariant
     rw [hksp]
   · -- V_ptrs
     rw [hvp]
+  · -- O_block_ptr
+    rw [hop]
 
 /-! ## FOUNDATION Part 5 — `afcLoopBody_steps` (loop-body execution chain)
 
@@ -4138,7 +4170,7 @@ theorem afc_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
   set vT := vTileAFCm s0 V with hvT
   simp only [afcInvariant] at hinv
   obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hoffsm, hoffsn,
-    hq, hqs, hKp, hKsp, hVp, hundef, hmem⟩ := hinv
+    hq, hqs, hKp, hKsp, hVp, hOp, hundef, hmem⟩ := hinv
   set c := i / 64 with hc_def
   have hi : i = c * 64 := by omega
   have hc1 : (c + 1) * 64 ≤ 128 := by omega
@@ -4280,7 +4312,7 @@ theorem afc_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
       exact afc_sentinel_eq
   -- assemble the new invariant
   simp only [afcInvariant, ← hqStart, ← hqT, ← hkT, ← hvT]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- pids
     rw [hpidsF, hpids']
   · -- (i + 64) % 64 = 0
@@ -4398,6 +4430,10 @@ theorem afc_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
     rw [hFKsp, kScalePtrAFC_succ, show (i + 64) / 64 = c + 1 from by omega]
   · -- V_ptrs
     rw [hFVp, vPtrsAFC_succ, show (i + 64) / 64 = c + 1 from by omega]
+  · -- O_block_ptr (loop body does not assign it)
+    rw [afcLoopBody_preserves_OblockPtr hchain, hsin,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hOp
   · -- undef
     intro rg o; rw [hundefF, hundef']
   · -- mem
