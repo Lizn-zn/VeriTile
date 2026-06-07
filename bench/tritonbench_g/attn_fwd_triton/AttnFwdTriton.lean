@@ -2934,4 +2934,124 @@ theorem aftLoopBodyTail_steps
   -- V_ptrs
   · rw [BlockState.setReg_same]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Loop-body execution chain** (`aftLoopBody`, head ++ tail). Steps the
+iteration-entry state `sin` to the final state `sF`, exposing the kernel's per-block
+online-softmax update: the new running max `m_ij` (= `m_i ⊔ blockMax`), the rescaled
+denominator `l_i` and accumulator `acc`, plus the advanced `K_ptrs`/`K_scale_ptr`/
+`V_ptrs`. The masked block weights `p` (cell `if causal then exp2(qk−m_ij) else 0`),
+the score tile `qkRaw` (= `q·k·q_scale·k_scale`), and the value tile `v` are exposed
+symbolically for the math bridge. Composes `aftLoopBodyHead_steps` and
+`aftLoopBodyTail_steps` via `stepStmts.append_some`. -/
+theorem aftLoopBody_steps
+    (sin : BlockState) (SN : Nat)
+    (offsm : Tile .nat [128]) (offsn : Tile .nat [64])
+    (qtile : Tile .real [128, 128]) (qsc ksc : Tile .real [])
+    (ktile : Tile .real [128, 64]) (kmaskT : Tile .bool [128, 64])
+    (vtile : Tile .real [64, 128]) (vmaskT : Tile .bool [64, 128])
+    (mtile litile : Tile .real [128]) (acctile : Tile .real [128, 128])
+    (Kptrs : Tile .ptr [128, 64]) (Ksp : Tile .ptr []) (Vptrs : Tile .ptr [64, 128])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hoffsm : sin.regs .nat [128] "offs_m" = some offsm)
+    (hoffsn : sin.regs .nat [64] "offs_n" = some offsn)
+    (hq : sin.regs .real [128, 128] "q" = some qtile)
+    (hqsc : sin.regs .real [] "q_scale" = some qsc)
+    (hmi : sin.regs .real [128] "m_i" = some mtile)
+    (hli : sin.regs .real [128] "l_i" = some litile)
+    (hacc : sin.regs .real [128, 128] "acc" = some acctile)
+    (hKp : sin.regs .ptr [128, 64] "K_ptrs" = some Kptrs)
+    (hKsp : sin.regs .ptr [] "K_scale_ptr" = some Ksp)
+    (hVp : sin.regs .ptr [64, 128] "V_ptrs" = some Vptrs)
+    (hkmask : ∀ idx : TileIndex [128, 64],
+      kmaskT.data idx = ((ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (128 - SN))
+        && (ComparableDType.nat.lt idx.1.val 96)))
+    (hkload : ∀ idx : TileIndex [128, 64],
+      ktile.data idx = (if kmaskT.data idx then some (sin.readMem (Kptrs.data idx).1 (Kptrs.data idx).2)
+        else some (sin.undef (Kptrs.data idx).1 (Kptrs.data idx).2)))
+    (hkscval : ksc = ⟨fun _ : TileIndex [] => some (sin.readMem (Ksp.data PUnit.unit).1 (Ksp.data PUnit.unit).2)⟩)
+    (hvmask : ∀ idx : TileIndex [64, 128],
+      vmaskT.data idx = ((ComparableDType.nat.lt (offsn.data (idx.1, PUnit.unit)) (128 - SN))
+        && (ComparableDType.nat.lt idx.2.1.val 96)))
+    (hvload : ∀ idx : TileIndex [64, 128],
+      vtile.data idx = (if vmaskT.data idx then some (sin.readMem (Vptrs.data idx).1 (Vptrs.data idx).2)
+        else some (sin.undef (Vptrs.data idx).1 (Vptrs.data idx).2)))
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts AftFoundation.aftLoopBody sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ ∃ (maskT : Tile .bool [128, 64]) (qkRawT qk6T : Tile .real [128, 64])
+            (rmaxT mijT : Tile .real [128]) (pT : Tile .real [128, 64])
+            (lijT alphaT : Tile .real [128]),
+          (∀ idx : TileIndex [128, 64],
+            maskT.data idx = ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+              (SN + offsn.data (idx.2.1, PUnit.unit)))
+          ∧ qkRawT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                ⟨fun i => (Tile.dot [] qtile ktile).data i⟩ qsc) ksc
+          ∧ (∀ idx : TileIndex [128, 64],
+            qk6T.data idx = if maskT.data idx then qkRawT.data idx
+              else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)))
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qk6T = some rmaxT
+          ∧ mijT = Tile.select
+              (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ (∀ idx : TileIndex [128, 64],
+            pT.data idx = if maskT.data idx
+              then WithBot.realExp2 (WithBot.realSub (qk6T.data idx) (mijT.data (idx.1, PUnit.unit)))
+              else (some (0.0 : ℝ) : WithBot ℝ))
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [128, 64].length) pT
+          ∧ alphaT = Tile.uop WithBot.realExp2
+              (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ sF.regs .real [128] "m_i" = some mijT
+          ∧ sF.regs .real [128] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) litile alphaT) lijT)
+          ∧ sF.regs .real [128, 128] "acc" = some (Tile.bop NumericDType.real.add
+              (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+              (Tile.dot [] ⟨fun i => FloatDType.fp16.cast FloatDType.real
+                (FloatDType.real.cast FloatDType.fp16 (pT.data i))⟩ vtile))
+          ∧ sF.regs .ptr [128, 64] "K_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Kptrs
+              (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128)))
+          ∧ sF.regs .ptr [] "K_scale_ptr" = some (Tile.ptrAdd Broadcast.nil Ksp (Tile.scalar 1))
+          ∧ sF.regs .ptr [64, 128] "V_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Vptrs
+              (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))) := by
+  rw [aftLoopBody_eq_head_tail]
+  -- run the head
+  obtain ⟨sH, hHead, hpidsH, hmemH, hundefH, hsnH, hoffsmH, hoffsnH, hqH, hqscH, hmiH, hliH,
+      haccH, hKpH, hKspH, hVpH,
+      maskT, qkRawT, qk6T, rmaxT, mijT, pT,
+      hmaskd, hqkRawd, hqk6d, hrm, hmijd, hpd, hmaskReg, hmijReg, hpReg⟩ :=
+    aftLoopBodyHead_steps sin SN offsm offsn qtile qsc ksc ktile kmaskT mtile litile acctile
+      Kptrs Ksp Vptrs hsn hoffsm hoffsn hq hqsc hmi hli hacc hKp hKsp hVp hkmask hkload hkscval hundef
+  rw [stepStmts.append_some hHead]
+  -- the v-load on sH reads sin's mem/undef (head preserves them)
+  have hvloadH : ∀ idx : TileIndex [64, 128],
+      vtile.data idx = (if vmaskT.data idx then some (sH.readMem (Vptrs.data idx).1 (Vptrs.data idx).2)
+        else some (sH.undef (Vptrs.data idx).1 (Vptrs.data idx).2)) := by
+    intro idx
+    rw [hvload idx]
+    cases hm : vmaskT.data idx
+    · simp only [hm, Bool.false_eq_true, if_false, hundefH, hundef]
+    · simp only [hm, if_true, BlockState.readMem, hmemH]
+  have hoffsnH' : sH.regs .nat [64] "offs_n" = some offsn := hoffsnH
+  -- run the tail
+  obtain ⟨sF, hTail, hpidsF, hmemF, hundefF, lijT, alphaT, hlijd, halphad,
+      hmiF, hliF, haccF, hKpF, hKspF, hVpF⟩ :=
+    aftLoopBodyTail_steps sH SN offsn pT vtile vmaskT mtile mijT litile
+      (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [128, 64].length) pT) acctile
+      Kptrs Ksp Vptrs hsnH hoffsnH' hpReg hmiH hmijReg hliH haccH hKpH hKspH hVpH
+      hvmask hvloadH hundefH
+  refine ⟨sF, hTail, ?_, ?_, ?_,
+    maskT, qkRawT, qk6T, rmaxT, mijT, pT, lijT, alphaT,
+    hmaskd, hqkRawd, hqk6d, hrm, hmijd, hpd, hlijd, halphad, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, hpidsH]
+  · rw [hmemF, hmemH]
+  · exact hundefF
+  · exact hmiF
+  · rw [hliF, halphad]
+  · rw [haccF, halphad]
+  · exact hKpF
+  · exact hKspF
+  · exact hVpF
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
