@@ -2620,6 +2620,58 @@ theorem afcPreLoop_eval
     ext idx
     simp only [hpids1, qTileAFC, BlockState.readMem, hmem1, hbase]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop ⇒ invariant base case.** The 22 deterministic preLoop statements step
+a clean state `s` (with `s.undef ≡ 0`) to a loop-entry state `s0` satisfying the
+strengthened `afcInvariant … 0`: the running `m_i`/`l_i`/`acc` carry the ⊥-seed
+inits (`afcRunningMax 0 = ⊥`, `afcStateBot1 0 = (⊥,1,0)`), the index vectors and
+program-id scalars are bound, the masked `q` / scalar `q_scale` are loaded, and the
+three streamed pointers carry their `c = 0` cell-forms (`kPtrsAFC`/`kScalePtrAFC`/
+`vPtrsAFC`). This is the base case `forRange_inv` consumes. -/
+theorem afcPreLoop_invariant
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (keyScale : Fin 128 → ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (AfcFoundation.afcPreLoop Q K V QScale KScale Out) s = some s0
+      ∧ afcInvariant Q K V QScale KScale Out s keyScale 0 s0 := by
+  obtain ⟨s0, hstep, hpids, hmem, hundef0, hstartm, hoffhz, hmi, hli, hacc,
+    hoffsm, hoffsn, hoffsk, hqscale, hkp, hksp, hvp, hq⟩ :=
+    afcPreLoop_eval s Q K V QScale KScale Out hundef
+  obtain ⟨hzm, hzl, hza⟩ :=
+    VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase.afcInvariant_running_zero
+      Q K V s keyScale
+  refine ⟨s0, hstep, ?_⟩
+  simp only [afcInvariant, qStartAFC]
+  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
+  · -- m_i = afcRunningMax ... 0 = ⊥
+    rw [hmi]; exact congrArg some hzm.symm
+  · -- l_i = afcStateBot1 ... 0 .2.1 = 1
+    rw [hli]; exact congrArg some hzl.symm
+  · -- acc = afcStateBot1 ... 0 .2.2 = 0
+    rw [hacc]; exact congrArg some hza.symm
+  · -- offs_m = vec (qStart + r)
+    rw [hoffsm]
+  · -- offs_n
+    exact hoffsn
+  · -- offs_k
+    exact hoffsk
+  · -- start_m
+    rw [hstartm]
+  · -- off_hz
+    rw [hoffhz]
+  · -- q
+    rw [hq]; rfl
+  · -- q_scale
+    rw [hqscale]; rfl
+  · -- K_ptrs (i/64 = 0)
+    rw [hkp]
+  · -- K_scale_ptr
+    rw [hksp]
+  · -- V_ptrs
+    rw [hvp]
+
 /-! ## FOUNDATION Part 5 — `afcLoopBody_steps` (loop-body execution chain)
 
 The 22 lowered `afcLoopBody` statements (statements 0–21) step the iteration-entry
