@@ -1273,19 +1273,51 @@ noncomputable def keyScale3 : Fin 128 → ℝ :=
 /-- Global query row for output tile-row `i` in this program. -/
 def qStart3 (s : BlockState) : Nat := s.pids 0 * 64
 
+/-- **Faithful nat-truncated sliding-window distance.** The kernel computes
+`dist = (i − jL : ℕ) + start_m·64 − start_n` with **natural** subtraction (negative
+results truncate to `0`), where `start_m = SM`, the block-local key is
+`jL = j mod 64`, and `start_n = (j / 64)·64`. For a global key `j` and row `i`
+this is `(i − j%64 : ℕ) + SM·64 − (j/64)·64`. This is the exact quantity the
+lowered surface evaluates per cell (see `aft3MaskCell1`/`aft3MaskCell2`), NOT the
+signed-ℤ distance of `slidingWindowKeep`. -/
+def natDist3 (SM : Nat) (i : Fin 64) (j : Fin 128) : Nat :=
+  (i.val - j.val % 64) + SM * 64 - (j.val / 64) * 64
+
+/-- **Faithful case-1 keep predicate** (sliding window, non-complement): the
+kernel's `mask = (dist ≥ 0) & (dist < 64)`. The `dist ≥ 0` clause is vacuous on
+ℕ, so this is exactly `natDist3 SM i j < 64` — matching `aft3MaskCell1` cell for
+cell (true by construction). -/
+def natSlidingWindowKeep (SM : Nat) (i : Fin 64) (j : Fin 128) : Prop :=
+  natDist3 SM i j < 64
+
+instance natSlidingWindowKeepDecidable (SM : Nat) (i : Fin 64) (j : Fin 128) :
+    Decidable (natSlidingWindowKeep SM i j) := by
+  unfold natSlidingWindowKeep; infer_instance
+
+/-- **Faithful case-2 keep predicate** (complement sliding window): the kernel's
+`mask = dist ≥ 64`, i.e. `64 ≤ natDist3 SM i j` — matching `aft3MaskCell2`. -/
+def natComplementSlidingWindowKeep (SM : Nat) (i : Fin 64) (j : Fin 128) : Prop :=
+  64 ≤ natDist3 SM i j
+
+instance natComplementSlidingWindowKeepDecidable (SM : Nat) (i : Fin 64) (j : Fin 128) :
+    Decidable (natComplementSlidingWindowKeep SM i j) := by
+  unfold natComplementSlidingWindowKeep; infer_instance
+
 /-- **Genuine closed form, case 1** (sliding window, non-complement): the
-normalized `END` output is predicate-masked base-2 attention with the
-`slidingWindowKeep qStart 0 64` mask. -/
+normalized `END` output is predicate-masked base-2 attention with the *faithful*
+nat-truncated `natSlidingWindowKeep` mask (the exact condition the kernel computes,
+not the signed-ℤ `slidingWindowKeep`). -/
 noncomputable def attentionFwdTriton3Case1OutSpec
     (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
   attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-    keyScale3 (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) idx
+    keyScale3 (fun i j => natSlidingWindowKeep (s.pids 0) i j) idx
 
-/-- **Genuine closed form, case 2** (complement sliding window). -/
+/-- **Genuine closed form, case 2** (complement sliding window) — faithful
+nat-truncated `natComplementSlidingWindowKeep` mask. -/
 noncomputable def attentionFwdTriton3Case2OutSpec
     (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
   attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-    keyScale3 (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) idx
+    keyScale3 (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) idx
 
 /-- **Genuine closed form, case 3** (no sliding window) — plain base-2 softmax. -/
 noncomputable def attentionFwdTriton3Case3OutSpec
@@ -1299,26 +1331,26 @@ theorem attentionFwdTriton3Case1OutSpec_eq_streaming
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
     attentionFwdTriton3Case1OutSpec s Q K V (i, d, PUnit.unit)
       = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-            keyScale3 (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) i d).foldl
+            keyScale3 (fun i j => natSlidingWindowKeep (s.pids 0) i j) i d).foldl
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attentionFwdTriton3Case1OutSpec] using
     VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) i d
+      (fun i j => natSlidingWindowKeep (s.pids 0) i j) i d
 
 /-- Streaming bridge, case 2. -/
 theorem attentionFwdTriton3Case2OutSpec_eq_streaming
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
     attentionFwdTriton3Case2OutSpec s Q K V (i, d, PUnit.unit)
       = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-            keyScale3 (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) i d).foldl
+            keyScale3 (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i d).foldl
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attentionFwdTriton3Case2OutSpec] using
     VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) i d
+      (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i d
 
 /-- Streaming bridge, case 3 — also equals the plain (unmasked) base-2 softmax. -/
 theorem attentionFwdTriton3Case3OutSpec_eq_streaming
@@ -2365,9 +2397,9 @@ theorem aft3StateBot_ratio_eq
 theorem aft3StateBot_full_eq_spec_case1
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64)
     (hne : aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) 128 i d ≠ ⊥) :
+        (fun i j => natSlidingWindowKeep (s.pids 0) i j) 128 i d ≠ ⊥) :
     (let st := aft3StateBot (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => slidingWindowKeep (qStart3 s) 0 64 i j) 128 i d
+        (fun i j => natSlidingWindowKeep (s.pids 0) i j) 128 i d
      st.2.2 / st.2.1)
       = attentionFwdTriton3Case1OutSpec s Q K V (i, d, PUnit.unit) := by
   simp only
@@ -2379,9 +2411,9 @@ theorem aft3StateBot_full_eq_spec_case1
 theorem aft3StateBot_full_eq_spec_case2
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64)
     (hne : aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) 128 i d ≠ ⊥) :
+        (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) 128 i d ≠ ⊥) :
     (let st := aft3StateBot (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => complementSlidingWindowKeep (qStart3 s) 0 64 i j) 128 i d
+        (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) 128 i d
      st.2.2 / st.2.1)
       = attentionFwdTriton3Case2OutSpec s Q K V (i, d, PUnit.unit) := by
   simp only
