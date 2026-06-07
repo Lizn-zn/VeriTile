@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `attn_fwd_triton` — strict per-kernel correctness
@@ -40,15 +41,21 @@ attn_fwd_triton_python_test_shape_output_summary           ← TOP THEOREM
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; the `exp2`, the `tl.dot`
 `float16` accumulation, and `q_scale · k_scale` quantization are not modeled at
 the bit level); `@triton.autotune`/`num_warps`/`num_stages` are not modeled.
-The verified result is **final-store scoped**: the proof establishes that the
-masked store copies the accumulator slice `Acc` to `Out` at the correct,
-injective output offsets and preserves inactive lanes — the value written is
-`producedAttnFwdTritonOutValue` / `s.readMem Acc (...)`, an opaque carrier for
-the online-softmax recurrence (`m_i`, `l_i`, `acc` updates, the final `acc /
-l_i` normalization), which is **not** re-derived as a closed-form attention
-formula here. Side condition: the test-shape wrapper fixes the concrete layout
-(`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`, `BLOCK_N = 64`, strides
-`(65536, 16384, 128, 1)`, mask = first 96 head lanes) and uses `STAGE = 3`.
+The verified result is the **genuine closed form**: the full surface (preLoop +
+the inlined `forRange` streaming loop + postLoop) is executed and its `Out` store
+is proven equal to `attnFwdTritonOutSpec` — masked base-2 (`exp2`) per-key-scale
+**causal** softmax (`keyScale = aftKeyScale = q_scale · k_scale[block]`,
+`keep = causalKeep qStart`, head-active `q`/`k`/`v` masks at `e/d ≥ 96`) — at
+every active output lane (`attn_fwd_triton_python_test_shape_output_summary`). The
+inner online-softmax recurrence (`m_i`/`l_i`/`acc` updates, the final `acc / l_i`
+normalization) is reconciled to this closed form via the ⊥-seeded `aftStateBot`
+streaming fold and `aftStateBot_full_eq_spec`; the loop is driven by `forRange_inv`
++ `aft_attn_step`. Two genuine side conditions are explicit: `aftScoreBound` (the
+`-1e6` `tl.where` mask sentinel is inert — every kept score `≥ -1e6`) and the
+clean `undef ≡ 0` initial state. Side condition: the test-shape wrapper fixes the
+concrete layout (`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`,
+`BLOCK_N = 64`, strides `(65536, 16384, 128, 1)`, mask = first 96 head lanes) and
+uses `STAGE = 3`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
@@ -225,18 +232,6 @@ def outOffset
   offZ s H * stride_qz + offH s H * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 
-noncomputable def producedAttnFwdTritonOutValue
-    (s : BlockState) (Q K V QScale KScale Out : RegionName)
-    (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (attn_fwd_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 3).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
-  | none => 0.0
-
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attn_fwd_triton_final_store_slice_correct
     (Acc Out : RegionName)
@@ -371,63 +366,6 @@ theorem attn_fwd_triton_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
-theorem attn_fwd_triton_surface_python_test_shape_compute_correct
-    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 3)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedAttnFwdTritonOutValue s Q K V QScale KScale Out idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attn_fwd_triton_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedAttnFwdTritonOutValue, hExec]
-
-/-- Python test-shape summary for `attn_fwd_triton.py`.
-
-The Python wrapper fixes `STAGE = 3`; this summary combines that full surface
-with the observable `Out` writes produced at the test layout. -/
-theorem attn_fwd_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
-    (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 3)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedAttnFwdTritonOutValue s Q K V QScale KScale Out idx) := by
-  constructor
-  · exact attn_fwd_triton_surface_toAlgorithm_supported Q K V QScale KScale
-      Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-      65536 16384 128 1 2 4 128 128 128 64 128 96 3
-  · exact attn_fwd_triton_surface_python_test_shape_compute_correct Q K V
-      QScale KScale Out s
 
 /-! ## Genuine closed-form attention spec (exp2, causal)
 
@@ -4934,5 +4872,132 @@ theorem aftPostLoop_eval (Q K V QScale KScale Out : RegionName) (s0 : BlockState
       / (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.1
     = attnFwdTritonOutSpec s0 Q K V keyScale (ir, id, PUnit.unit)
   exact aftStateBot_full_eq_spec s0 Q K V keyScale ir id (hne ir id)
+
+/-! ## FINAL Part 4 (top) — genuine closed-form exec correctness + summary -/
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Genuine exec correctness.** The full `attn_fwd_triton` surface, executed at
+the Python test shape, lands the genuine closed-form attention `attnFwdTritonOutSpec`
+(masked base-2 per-key-scale causal softmax with `keyScale = aftKeyScale`) at every
+active `Out` lane. Composes `aftPreLoop_invariant` (→ `aftInvariant … 0`),
+`forRange_inv` driven by `aft_attn_step` (→ `aftInvariant … 128`), and
+`aftPostLoop_eval`. -/
+theorem attn_fwd_triton_exec_eq_spec
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sP, exec (attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel s = some sP
+      ∧ (∀ idx : TileIndex [128, 128], active s 128 96 128 idx →
+          sP.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
+            = attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
+  set keyScale := aftKeyScale s QScale KScale with hkeyScale
+  -- the score bound: every kept score ≥ -1e6 (here only the running-max ≠ ⊥ matters downstream)
+  -- preLoop → aftInvariant 0
+  obtain ⟨s0, hpre, hinv0⟩ := aftPreLoop_invariant s Q K V QScale KScale Out hundef
+  -- the loop invariant carries pids = s.pids; rephrase qStart/baseOffset against s
+  -- forRange loop: aftInvariant 0 → aftInvariant 128 (over aft_attn_step)
+  obtain ⟨fin, sF, hloop, hfin, hinvF⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
+      (P := fun i st => aftInvariant Q K V QScale KScale Out s keyScale i st)
+      (by norm_num) hinv0
+      (fun i st hi hP => by
+        have himod : i % 64 = 0 := by
+          have h := hP; simp only [aftInvariant] at h; exact h.2.1
+        exact aft_attn_step Q K V QScale KScale Out s i st hi himod hsb hP)
+  -- fin = 128
+  have hfin128 : fin = 128 := by
+    have h := hinvF; simp only [aftInvariant] at h
+    obtain ⟨_, hmodF, hileF, _⟩ := h; omega
+  subst hfin128
+  -- postLoop
+  obtain ⟨sP, hpost, hO⟩ := aftPostLoop_eval Q K V QScale KScale Out s sF
+    (fun i d => aftRunningMax_causal_ne_bot s Q K V keyScale 128 (by norm_num) i d) hinvF
+  -- compose the exec
+  refine ⟨sP, ?_, hO⟩
+  rw [exec, aftBody_split]
+  rw [stepStmts.append_some (by
+    rw [aftPreLoop_check]; exact hpre)]
+  rw [stepStmts]
+  rw [show (attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23 = AftFoundation.aftPostLoop Out from aftPostLoop_check Q K V QScale KScale Out]
+  rw [show stepStmt (Stmt.forRange "start_n" 0 128 64 AftFoundation.aftLoopBody) s0 = some sF from hloop]
+  exact hpost
+
+set_option maxHeartbeats 4000000 in
+/-- **Genuine compute-facing correctness.** The surface realizes the genuine
+closed-form attention `attnFwdTritonOutSpec` at every active `Out` lane, given the
+score-bound side condition (the `-1e6` mask sentinel is inert) and a clean
+(`undef ≡ 0`) initial state. -/
+theorem attn_fwd_triton_surface_python_test_shape_compute_correct_genuine
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+        2 4 128 128 128 64 128 96 3)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attn_fwd_triton_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  obtain ⟨sP, hexec, hO⟩ := attn_fwd_triton_exec_eq_spec Q K V QScale KScale Out s hsb hundef
+  rw [hexec] at hExec
+  rw [← Option.some.inj hExec]
+  exact hO idx hActive
+
+
+/-- **Python test-shape summary for `attn_fwd_triton.py` (genuine closed form).**
+
+The Python wrapper fixes `STAGE = 3`; this summary combines the supported full
+surface with the observable `Out` writes, now stated against the **genuine
+closed-form attention** `attnFwdTritonOutSpec` (masked base-2 per-key-scale causal
+softmax with `keyScale = aftKeyScale = q_scale · k_scale`) — no longer the
+self-referential executed-output value. The two genuine side conditions are
+explicit: `aftScoreBound` (the kernel's `-1e6` `tl.where` mask sentinel never
+raises a row max above the true running max, i.e. every kept score is `≥ -1e6`)
+and the clean `undef ≡ 0` initial state. -/
+theorem attn_fwd_triton_python_test_shape_output_summary
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 128 96 3)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
+  constructor
+  · exact attn_fwd_triton_surface_toAlgorithm_supported Q K V QScale KScale
+      Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
+      65536 16384 128 1 2 4 128 128 128 64 128 96 3
+  · exact attn_fwd_triton_surface_python_test_shape_compute_correct_genuine Q K V
+      QScale KScale Out s hsb hundef
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
