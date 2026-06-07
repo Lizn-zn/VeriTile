@@ -2358,4 +2358,235 @@ theorem afcPreLoop_eval
     ext idx
     simp only [BlockState.readMem, hmem1, hpids1]
 
+/-! ## FOUNDATION Part 5 — `afcLoopBody_steps` (loop-body execution chain)
+
+The 22 lowered `afcLoopBody` statements (statements 0–21) step the iteration-entry
+state `sin` (with `start_n = SN` and the invariant's register readbacks
+`offs_m`/`offs_n`/`m_i`/`l_i`/`acc`/`q`/`q_scale`/`k_scale`/`K_ptrs`/`K_scale_ptr`/
+`V_ptrs`) to a final state `sF`, exposing the symbolic `m_i`/`l_i`/`acc` register
+values (the kernel's per-block tile arithmetic over the masked `qk`) plus the
+advanced pointers. Threaded through `stepStmts.cons_some` via the banked `afc_*`
+op-eval recipes. Split into a head (0–10) and a tail (11–21) to dodge the
+heartbeat ceiling, mirroring the preLoop split. -/
+
+namespace AfcFoundation
+
+open VeriTile.Triton
+
+/-- **Loop-body head** — statements 0–10 of `afcLoopBody` (`start_n` identity,
+`k_mask`, the `k`/`k_scale` loads, the `qk` dot+scale, the causal `mask`, the
+`-1e6` sentinel `where`, `m_ij`, the max-shift, `p = exp2`, `p` zero-mask). -/
+def afcLoopBodyHead : List Stmt :=
+  (List.take 11 AfcFoundation.afcLoopBody)
+
+/-- **Loop-body tail** — statements 11–21 of `afcLoopBody` (`l_ij`, `alpha`,
+`l_i`, `acc` rescale, the `v` load, the `p` fp16 cast, the `acc` accumulate,
+the `m_i` carry, and the three pointer advances). -/
+def afcLoopBodyTail : List Stmt :=
+  (List.drop 11 AfcFoundation.afcLoopBody)
+
+theorem afcLoopBody_eq_head_tail :
+    AfcFoundation.afcLoopBody = afcLoopBodyHead ++ afcLoopBodyTail := by
+  rw [afcLoopBodyHead, afcLoopBodyTail, List.take_append_drop]
+
+end AfcFoundation
+
+namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
+
+open VeriTile.Triton
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Loop-body head execution.** The 11 head statements (`afcLoopBodyHead`,
+statements 0–10) step the iteration-entry state `sin` (with `start_n`/`offs_m`/
+`offs_n`/`m_i`/`K_ptrs`/`K_scale_ptr`/`q`/`q_scale` set) to a state `s1`, exposing
+the causal `mask` tile, the running max `m_ij`, and the zero-masked `p` tile, while
+preserving the carried `l_i`/`acc`/`V_ptrs` and the index/pointer registers the tail
+consumes. The masked `qk` and its post-shift `exp2` are threaded through the banked
+`afc_*` recipes. -/
+theorem afcLoopBodyHead_steps
+    (sin : BlockState) (SN : Nat)
+    (offsm : Tile .nat [128]) (offsn : Tile .nat [64])
+    (kptrs : Tile .ptr [128, 64]) (ksptr : Tile .ptr [])
+    (mtile : Tile .real [128]) (qtile : Tile .real [128, 128]) (qsc : Tile .real [])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hoffsm : sin.regs .nat [128] "offs_m" = some offsm)
+    (hoffsn : sin.regs .nat [64] "offs_n" = some offsn)
+    (hmi : sin.regs .real [128] "m_i" = some mtile)
+    (hkp : sin.regs .ptr [128, 64] "K_ptrs" = some kptrs)
+    (hksp : sin.regs .ptr [] "K_scale_ptr" = some ksptr)
+    (hq : sin.regs .real [128, 128] "q" = some qtile)
+    (hqsc : sin.regs .real [] "q_scale" = some qsc) :
+    ∃ s1, stepStmts AfcFoundation.afcLoopBodyHead sin = some s1
+      ∧ s1.pids = sin.pids ∧ s1.mem = sin.mem ∧ (∀ rg o, s1.undef rg o = sin.undef rg o)
+      ∧ ∃ (kmaskT : Tile .bool [128, 64]) (ktile : Tile .real [128, 64])
+          (kscT : Tile .real []) (qkdotT : Tile .real [128, 64])
+          (maskT : Tile .bool [128, 64]) (qkSentT : Tile .real [128, 64])
+          (rmaxT mijT : Tile .real [128]) (qkShiftT pExpT pT : Tile .real [128, 64]),
+        -- recipe-produced symbolic tiles
+        (kmaskT = ⟨fun idx : TileIndex [128, 64] =>
+            (ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (128 - SN))
+              && (ComparableDType.nat.lt idx.1.val 96)⟩)
+        ∧ (ktile = ⟨fun i : TileIndex [128, 64] =>
+            if kmaskT.data i then some (sin.readMem (kptrs.data i).1 (kptrs.data i).2)
+            else some (sin.undef (kptrs.data i).1 (kptrs.data i).2)⟩)
+        ∧ (kscT = ⟨fun _ : TileIndex [] =>
+            some (sin.readMem (ksptr.data PUnit.unit).1 (ksptr.data PUnit.unit).2)⟩)
+        ∧ (qkdotT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              ⟨fun i => (Tile.dot [] qtile ktile).data i⟩ qsc) kscT)
+        ∧ (maskT = ⟨fun idx : TileIndex [128, 64] =>
+            ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+              (SN + offsn.data (idx.2.1, PUnit.unit))⟩)
+        ∧ (qkSentT = ⟨fun idx : TileIndex [128, 64] =>
+            if maskT.data idx then qkdotT.data idx
+            else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩)
+        ∧ (Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qkSentT = some rmaxT)
+        ∧ (mijT = Tile.select
+            (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+            mtile rmaxT)
+        ∧ (qkShiftT = Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))
+        ∧ (pExpT = Tile.uop WithBot.realExp2 qkShiftT)
+        ∧ (pT = ⟨fun idx : TileIndex [128, 64] =>
+            if maskT.data idx then pExpT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩)
+        -- register readbacks at s1
+        ∧ s1.regs .real [128] "m_i" = some mtile
+        ∧ s1.regs .real [128] "m_ij" = some mijT
+        ∧ s1.regs .bool [128, 64] "mask" = some maskT
+        ∧ s1.regs .real [128, 64] "p" = some pT
+        ∧ s1.regs .real [128] "l_i" = sin.regs .real [128] "l_i"
+        ∧ s1.regs .real [128, 128] "acc" = sin.regs .real [128, 128] "acc"
+        ∧ s1.regs .real [64, 128] "v" = sin.regs .real [64, 128] "v"
+        ∧ s1.regs .ptr [64, 128] "V_ptrs" = sin.regs .ptr [64, 128] "V_ptrs"
+        ∧ s1.regs .ptr [128, 64] "K_ptrs" = some kptrs
+        ∧ s1.regs .ptr [] "K_scale_ptr" = some ksptr
+        ∧ s1.regs .nat [128] "offs_m" = some offsm
+        ∧ s1.regs .nat [64] "offs_n" = some offsn
+        ∧ s1.regs .nat [] "start_n" = some (Tile.scalar SN) := by
+  -- the symbolic tiles
+  set kmaskT : Tile .bool [128, 64] := ⟨fun idx : TileIndex [128, 64] =>
+      (ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (128 - SN))
+        && (ComparableDType.nat.lt idx.1.val 96)⟩ with hkmaskT
+  set ktile : Tile .real [128, 64] := ⟨fun i : TileIndex [128, 64] =>
+      if kmaskT.data i then some (sin.readMem (kptrs.data i).1 (kptrs.data i).2)
+      else some (sin.undef (kptrs.data i).1 (kptrs.data i).2)⟩ with hktile
+  set kscT : Tile .real [] := ⟨fun _ : TileIndex [] =>
+      some (sin.readMem (ksptr.data PUnit.unit).1 (ksptr.data PUnit.unit).2)⟩ with hkscT
+  set qkdotT : Tile .real [128, 64] := Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        ⟨fun i => (Tile.dot [] qtile ktile).data i⟩ qsc) kscT with hqkdotT
+  set maskT : Tile .bool [128, 64] := ⟨fun idx : TileIndex [128, 64] =>
+      ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+        (SN + offsn.data (idx.2.1, PUnit.unit))⟩ with hmaskT
+  set qkSentT : Tile .real [128, 64] := ⟨fun idx : TileIndex [128, 64] =>
+      if maskT.data idx then qkdotT.data idx
+      else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩ with hqkSentT
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qkSentT = some t :=
+    ⟨_, afc_reduceMaxDrop1_some qkSentT⟩
+  set mijT : Tile .real [128] := Tile.select
+      (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+      mtile rmaxT with hmijT
+  set qkShiftT : Tile .real [128, 64] := Tile.bop NumericDType.real.sub
+      (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT) with hqkShiftT
+  set pExpT : Tile .real [128, 64] := Tile.uop WithBot.realExp2 qkShiftT with hpExpT
+  set pT : Tile .real [128, 64] := ⟨fun idx : TileIndex [128, 64] =>
+      if maskT.data idx then pExpT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpT
+  unfold AfcFoundation.afcLoopBodyHead AfcFoundation.afcLoopBody
+  simp only [List.take_succ_cons, List.take_zero]
+  -- stmt 0: start_n = start_n (identity)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar SN) from by rw [evalOp_ref, hsn]))]
+  -- stmt 1: k_mask
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some kmaskT from by
+      rw [afc_kmask_eval _ SN 128 96 offsn
+        (by simp [BlockState.setReg_ne_name, hoffsn])
+        (by rw [BlockState.setReg_same])]))]
+  -- stmt 2: k = load K_ptrs (masked)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some ktile from by
+      rw [afc_load_k_eval _ 128 64 "K_ptrs" "k_mask" kptrs kmaskT
+        (by simp [BlockState.setReg_ne_name, hkp]) (by rw [BlockState.setReg_same])]
+      rfl))]
+  -- stmt 3: k_scale = load K_scale_ptr (scalar)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some kscT from by
+      rw [afc_load_kscale_eval _ "K_scale_ptr" ksptr
+        (by simp [BlockState.setReg_ne_name, hksp])]
+      rfl))]
+  -- stmt 4: qk = castFloat(q·k) * q_scale * k_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some qkdotT from by
+      rw [afc_qk_dot_eval _ 128 64 128 qtile ktile qsc kscT
+        (by simp [BlockState.setReg_ne_name, hq]) (by simp [BlockState.setReg_ne_name])
+        (by simp [BlockState.setReg_ne_name, hqsc]) (by rw [BlockState.setReg_same])]))]
+  -- stmt 5: mask = offs_m[:,None] >= start_n + offs_n[None,:]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some maskT from by
+      rw [afc_mask_eval _ SN offsm offsn
+        (by simp [BlockState.setReg_ne_name, hoffsm]) (by simp [BlockState.setReg_ne_name, hoffsn])
+        (by simp [BlockState.setReg_ne_name, hsn])]))]
+  -- stmt 6: qk = where(mask, qk, -1e6)  (body uses `Op.const 0.0`, inlined here)
+  have hbcast6 : ∀ t : BlockState, @evalOp TileDType.real [128, 64]
+      (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [128, 64]) t
+      = some (⟨fun _ : TileIndex [128, 64] =>
+          WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩ : Tile .real [128, 64]) := by
+    intro t
+    simp only [evalOp, evalOp_sub, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+    rfl
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.where (Op.ref .bool [128, 64] "mask")
+        (Op.ref .real [128, 64] "qk")
+        (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [128, 64])) _
+        = some qkSentT from by
+      rw [evalOp_where]
+      simp only [evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        hbcast6, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext idx
+      simp only [hqkSentT, Tile.select_data, Tile.scalar]))]
+  -- stmt 7: m_ij = maximum(m_i, max(qk,1))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some mijT from by
+      rw [afc_mij_eval _ mtile qkSentT rmaxT
+        (by simp [BlockState.setReg_ne_name, hmi]) (by rw [BlockState.setReg_same]) hrm]))]
+  -- stmt 8: qk = qk - m_ij[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some qkShiftT from by
+      rw [afc_qk_sub_eval _ (by simp) qkSentT mijT
+        (by simp [BlockState.setReg_ne_name]) (by rw [BlockState.setReg_same])]))]
+  -- stmt 9: p = exp2(qk)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some pExpT from by
+      rw [afc_p_eval _ qkShiftT (by rw [BlockState.setReg_same])]))]
+  -- stmt 10: p = where(mask, p, 0)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some pT from by
+      rw [afc_p_mask_eval _ maskT pExpT
+        (by simp [BlockState.setReg_ne_name]) (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, kmaskT, ktile, kscT, qkdotT, maskT, qkSentT, rmaxT, mijT,
+    qkShiftT, pExpT, pT, rfl, rfl, rfl, rfl, rfl, rfl, hrm, rfl, rfl, rfl, rfl,
+    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_pids]
+  · funext rg o; simp [BlockState.setReg_mem]
+  · intro rg o; simp [BlockState.setReg_undef]
+  · simp [BlockState.setReg_ne_name, hmi]  -- m_i
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]  -- m_ij
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]  -- mask
+  · simp [BlockState.setReg_same]  -- p
+  · simp [BlockState.setReg_ne_name]  -- l_i
+  · simp [BlockState.setReg_ne_name]  -- acc
+  · simp [BlockState.setReg_ne_name]  -- v
+  · simp [BlockState.setReg_ne_name]  -- V_ptrs
+  · simp [BlockState.setReg_ne_name, hkp]  -- K_ptrs
+  · simp [BlockState.setReg_ne_name, hksp]  -- K_scale_ptr
+  · simp [BlockState.setReg_ne_name, hoffsm]  -- offs_m
+  · simp [BlockState.setReg_ne_name, hoffsn]  -- offs_n
+  · simp [BlockState.setReg_ne_name, hsn]  -- start_n
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
