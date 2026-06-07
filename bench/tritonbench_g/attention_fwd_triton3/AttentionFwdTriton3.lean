@@ -4776,6 +4776,85 @@ theorem aft3StateBotK_cancel
   · simp only [Nat.mul_eq_zero, hc0, false_or, OfNat.ofNat_ne_zero, or_self, if_neg]
     exact ⟨rfl, rfl⟩
 
+/-- At window `0` the kernel state `aft3StateBotK` is the seed `(⊥, 1, 0)` =
+`aft3StateBot1` — the preLoop init, making `attnInvariantK … 0` follow from the
+banked `attnInvariant … 0`. -/
+theorem aft3StateBotK_zero
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin 64) (d : Fin 64) :
+    aft3StateBotK qT kT vT keyScale keep 0 i d
+      = aft3StateBot1 qT kT vT keyScale keep 0 i d := by
+  unfold aft3StateBotK aft3StateBot1 aft3KeysUpto
+  rw [if_pos rfl]
+  rw [show (List.finRange 128).filterMap
+        (fun j : Fin 128 => if j.val < 0 ∧ keep i j
+          then some (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
+          else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- **Masked loop invariant (cases 1/2).** Identical to `attnInvariant` but the
+denominator/accumulator carry the faithful kernel state `aft3StateBotK` (seed-1
+at window 0, then the seed-0 ⊥-state). -/
+noncomputable def attnInvariantK
+    (Q K V M Out L : RegionName) (s0 : BlockState)
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
+    (i : Nat) (s : BlockState) : Prop :=
+  let qT := qTile3 s0 Q
+  let kT := kTile3 s0 K
+  let vT := vTile3 s0 V
+  s.pids = s0.pids ∧ i % 64 = 0 ∧ i ≤ 128 ∧
+  (s.regs .real [64] "m_i" = some ⟨fun r : TileIndex [64] =>
+      aft3RunningMax qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩⟩) ∧
+  (s.regs .real [64] "l_i" = some ⟨fun r : TileIndex [64] =>
+      ((aft3StateBotK qT kT vT keyScale3 keep i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [64, 64] "acc" = some ⟨fun idx : TileIndex [64, 64] =>
+      ((aft3StateBotK qT kT vT keyScale3 keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .real [64, 64] "q" = some ⟨fun idx : TileIndex [64, 64] =>
+      some (qT idx)⟩) ∧
+  (s.regs .real [] "qk_scale" = some (Tile.scalar (some ((1 / 8 : ℝ) * 1.4426950408889634)))) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .blockPtr [64, 64] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := K, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [64, 128], blockShape := [64, 64], strides := [1, 64],
+        offsets := [0, i] }⟩)) ∧
+  (s.regs .blockPtr [64, 64] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := V, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+        offsets := [i, 0] }⟩)) ∧
+  (s.regs .ptr [64] "m_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
+        (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val))))) ∧
+  (s.regs .ptr [64] "l_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
+        (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val))))) ∧
+  (s.regs .blockPtr [64, 64] "O_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+        offsets := [s0.pids 0 * 64, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+/-- The base case: the banked `attnInvariant … 0` (which carries `aft3StateBot1`)
+yields `attnInvariantK … 0` (which carries `aft3StateBotK`), since both equal the
+seed `(⊥,1,0)` at window 0. -/
+theorem attnInvariant_zero_to_K
+    (Q K V M Out L : RegionName) (s0 : BlockState)
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
+    (s : BlockState) (h : attnInvariant Q K V M Out L s0 keep 0 s) :
+    attnInvariantK Q K V M Out L s0 keep 0 s := by
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := h
+  refine ⟨hpids, hmod, hile, hmi, ?_, ?_, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩
+  · rw [hli]; simp only [aft3StateBotK_zero]
+  · rw [hacc]; simp only [aft3StateBotK_zero]
+
 set_option maxHeartbeats 1000000 in
 /-- **`l_i' = aft3StateBot((c+1)·64).2.1` (cases 1/2, masked).** From the kernel
 seed state `aft3StateBotK(c·64)` the masked `l_i·α + Σpm` register equals the
