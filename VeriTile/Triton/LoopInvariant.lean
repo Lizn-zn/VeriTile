@@ -187,6 +187,38 @@ theorem forRange_inv
   refine ⟨final, s_final, ?_, hfinal, hP⟩
   simpa [stepForRangeAux.forRange_unfold] using h_aux
 
+/-- **Master invariant principle for `forRangeDyn`.**
+
+Like `forRange_inv`, but the loop bounds come from runtime `Op .nat []`
+expressions evaluated against the entry state. The caller supplies `evalOp`
+evidence resolving `start`/`stop`/`step` to concrete `Nat`s, plus the entry
+invariant and per-iteration step obligation. The final counter is exposed
+existentially (it is the first counter with `stop ≤ final`). -/
+theorem forRangeDyn_inv
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simp only [Option.bind_some]
+  show stepForRangeAux idx start stop step body s_init = some s_final
+  exact h_aux
+
 /-- Scalar-register readout corollary for static `forRange`. -/
 theorem forRange_readout_scalar
     {idx outReg : RegName} {start stop step : Nat} {body : List Stmt}
