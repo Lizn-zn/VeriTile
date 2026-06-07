@@ -1033,6 +1033,34 @@ theorem aft_evalOp_load_ptr_none_of {shape : TileShape}
   ext i
   simp only [BlockState.readMemValue_real, if_true]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **q-load mask** — the preLoop `q = tl.load(Q_ptrs, mask=...)` mask
+`(offs_m[:,None] < 128) & (arange(128) < 96)[None,:]`. Mirror of `aft_kmask_eval`
+with the head-active lane on the column axis. -/
+theorem aft_qmask_eval (s : BlockState)
+    (offsm : Tile .nat [128])
+    (hoffsm : s.regs .nat [128] "offs_m" = some offsm) :
+    evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))) s
+      = some ⟨fun idx : TileIndex [128, 128] =>
+          (ComparableDType.nat.lt (offsm.data (idx.1, PUnit.unit)) 128)
+            && (ComparableDType.nat.lt idx.2.1.val 96)⟩ := by
+  rw [aft_evalOp_boolAnd]
+  simp only [evalOp_lt, evalOp.eq_def, evalOp_constNat, evalOp_arange, hoffsm,
+    Option.bind_eq_bind, Option.bind_some, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex]
+
 /-- The `reduceMaxDrop` over axis 1 of a `[128, 64]` real tile always succeeds
 (axis dim `64 > 0`); the explicit `some`-value form lets the `m_ij` recipe's
 `hrm` hypothesis be discharged for an inferred `qk` tile inside the loop-body chain. -/
@@ -2436,6 +2464,45 @@ theorem aftPreLoop_eval
     simp only [kScalePtrAFT, hpids1, Nat.zero_div, Nat.add_zero]
   · rw [hVp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
     simp only [vPtrsAFT, hbase1, Nat.zero_mul, Nat.add_zero]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Standalone `q`-readback** (kernel-friendly, referenced by name — NOT inlined,
+to dodge the `(kernel) deep recursion` whnf over the `Q_ptrs` ptr-offset bop tree).
+Given the preLoop bindings of `Q_ptrs` (per-lane address
+`baseOffset + (qStart + r)·128 + e`) and `offs_m`, and the standing `undef ≡ 0`
+invariant, the lowered `q = tl.load(Q_ptrs, mask=(offs_m<128) & (arange<96))`
+statement evaluates to `qLoadedAFT`: the masked-load value
+`if qStart+r<128 ∧ e<96 then Q[base + (qStart + r)·128 + e] else 0`. -/
+theorem aft_q_readback
+    (s : BlockState) (Q : RegionName) (qStart base : Nat)
+    (offsm : Tile .nat [128])
+    (hoffsm : s.regs .nat [128] "offs_m" = some offsm)
+    (hoffsmv : ∀ r : Fin 128, offsm.data (r, PUnit.unit) = qStart + r.val)
+    (hQp : s.regs .ptr [128, 128] "Q_ptrs"
+      = some ⟨fun idx : TileIndex [128, 128] =>
+          (Region.cast Q, base + (qStart + idx.1.val) * 128 + idx.2.1.val)⟩)
+    (hbase : base = baseOffsetAFT s)
+    (hqStart : qStart = s.pids 0 * 128)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    evalOp (Op.load .real (.ptr (.ref .ptr [128, 128] "Q_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))) s
+      = some (qLoadedAFT s Q) := by
+  rw [aft_evalOp_load_ptr_mask_of _ _ _ _ _
+    (evalOp_ref _ _ _ _ |>.trans hQp) (aft_qmask_eval s offsm hoffsm)]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨r, e, ⟨⟩⟩ := idx
+  simp only [qLoadedAFT]
+  rw [hoffsmv r, hqStart]
+  by_cases hk : (ComparableDType.nat.lt (s.pids 0 * 128 + r.val) 128) && (ComparableDType.nat.lt e.val 96)
+  · simp only [hk, if_true]
+    rw [show (Region.cast Q : RegionName) = Q from Region.cast_id Q, hbase]
+  · rw [if_neg (by simp_all), if_neg (by simp_all), hundef]
 
 
 /-! ## FOUNDATION Part 5 — loop-body head/tail split + `aftLoopBody_steps`
