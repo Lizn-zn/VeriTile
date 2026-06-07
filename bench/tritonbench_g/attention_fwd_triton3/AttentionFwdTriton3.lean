@@ -4855,6 +4855,20 @@ theorem attnInvariant_zero_to_K
   · rw [hli]; simp only [aft3StateBotK_zero]
   · rw [hacc]; simp only [aft3StateBotK_zero]
 
+/-- **Case-1 mask reconciliation (TRUE by construction).** At loop counter `SN =
+c·64`, the lowered nat-mask cell `aft3MaskCell1 SM (c·64) (i, jL)` equals the
+faithful `natSlidingWindowKeep SM i ⟨c·64 + jL⟩`. The `dist ≥ 0` conjunct is
+vacuous on ℕ. -/
+theorem aft3MaskCell1_eq_keep (SM c : Nat) (i jL : Fin 64)
+    (hb : c * 64 + jL.val < 128) :
+    aft3MaskCell1 SM (c * 64) (i, jL, PUnit.unit)
+      = decide (natSlidingWindowKeep SM i ⟨c * 64 + jL.val, hb⟩) := by
+  unfold aft3MaskCell1 natSlidingWindowKeep natDist3 ComparableDType.ge ComparableDType.lt
+  have hjL : jL.val < 64 := jL.isLt
+  have hmod : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) % 64 = jL.val := by show (c * 64 + jL.val) % 64 = jL.val; omega
+  have hdiv : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) / 64 = c := by show (c * 64 + jL.val) / 64 = c; omega
+  simp only [hmod, hdiv, Nat.zero_le, decide_true, Bool.true_and, Nat.add_zero]
+
 set_option maxHeartbeats 1000000 in
 /-- **`l_i' = aft3StateBot((c+1)·64).2.1` (cases 1/2, masked).** From the kernel
 seed state `aft3StateBotK(c·64)` the masked `l_i·α + Σpm` register equals the
