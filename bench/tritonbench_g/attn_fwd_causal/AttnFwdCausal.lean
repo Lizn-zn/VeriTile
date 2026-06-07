@@ -3628,7 +3628,7 @@ theorem afc_pmT_cell_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fi
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128) (jL : Fin 64) (Mc1 : WithBot ℝ)
     (qkSentT : Tile .real [128, 64]) (mijT : Tile .real [128]) (pT : Tile .real [128, 64])
     (kept : Bool)
-    (hkept : kept = decide (qStartAFC s + i.val ≥ c * 64 + jL.val))
+    (_hkept : kept = decide (qStartAFC s + i.val ≥ c * 64 + jL.val))
     (hsent : qkSentT.data (i, jL, PUnit.unit)
         = if kept then
             (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
