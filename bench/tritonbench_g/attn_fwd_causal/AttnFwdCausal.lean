@@ -2268,7 +2268,13 @@ theorem afcPreLoopTail_eval
       ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ s0.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))
       ∧ s0.regs .real [] "q_scale" = some ⟨fun _ : TileIndex [] =>
-          some (s1.readMem QScale ((s1.pids 1 * ((128 + 128 - 1) / 128) + s1.pids 0)))⟩ := by
+          some (s1.readMem QScale ((s1.pids 1 * ((128 + 128 - 1) / 128) + s1.pids 0)))⟩
+      ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s1 K 0)
+      ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s1 KScale 0)
+      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s1 V 0)
+      ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+          if s1.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96
+          then some (qTileAFC s1 Q idx) else some (0.0 : ℝ)⟩ := by
   unfold AfcFoundation.afcPreLoopTail
   -- stmt 11: Q_ptrs = ptrAdd (ptrBase Q) (qvk + offs_m[:,None]*128 + offs_k[None,:]*1)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
@@ -2414,7 +2420,7 @@ theorem afcPreLoopTail_eval
     (afc_evalOp_load_ptr_none_of (Op.ref .ptr [] "Q_scale_ptr") _ _
       (by rw [evalOp_ref]; rfl)))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rfl  -- pids
   · rfl  -- mem
   · intro rg o; exact hundef rg o  -- undef
@@ -2441,6 +2447,79 @@ theorem afcPreLoopTail_eval
     simp only [BlockState.readMem, BlockState.setReg_mem, castTile_self,
       Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
       Tile.bop_data, Region.cast, NumericDType.nat_add, Nat.zero_add]
+  · -- K_ptrs = kPtrsAFC s1 K 0
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [kPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [kPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, qvkOffAFC, baseOffsetAFC]
+      ring_nf
+  · -- K_scale_ptr = kScalePtrAFC s1 KScale 0
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [kScalePtrAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, Region.cast]
+    · simp only [kScalePtrAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, Nat.zero_add, Nat.add_zero]
+  · -- V_ptrs = vPtrsAFC s1 V 0
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [vPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [vPtrsAFC, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, qvkOffAFC, baseOffsetAFC]
+      ring_nf
+  · -- q = masked load = invariant q form
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some ?_
+    ext idx
+    simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+      TileShape.dropInsertedIndex]
+    rw [show (ComparableDType.nat.lt (s1.pids 0 * 128 + idx.1.val) 128
+          && ComparableDType.nat.lt idx.2.1.val 96)
+        = decide (s1.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96) from by
+      rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+        decide_eq_true_eq]]
+    by_cases hk : s1.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96
+    · rw [if_pos (by simp only [decide_eq_true_eq]; exact hk), if_pos hk]
+      refine congrArg some ?_
+      simp only [qTileAFC, BlockState.readMem, BlockState.setReg_mem, castTile_self,
+        Tile.ptrAdd_data, Tile.scalar, Tile.bop_data,
+        Tile.expandDim_data, Tile.vec_data, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, TileShape.dropInsertedIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.nat_add, NumericDType.nat_mul,
+        Region.cast, qvkOffAFC, baseOffsetAFC]
+      ring_nf
+    · rw [if_neg (by simp only [decide_eq_true_eq]; exact hk), if_neg hk]
+      simp only [BlockState.setReg_undef, hundef]
+      norm_num
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -2479,7 +2558,13 @@ theorem afcPreLoop_eval
       ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ s0.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))
       ∧ s0.regs .real [] "q_scale" = some ⟨fun _ : TileIndex [] =>
-          some (s.readMem QScale ((s.pids 1 * ((128 + 128 - 1) / 128) + s.pids 0)))⟩ := by
+          some (s.readMem QScale ((s.pids 1 * ((128 + 128 - 1) / 128) + s.pids 0)))⟩
+      ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFC s K 0)
+      ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFC s KScale 0)
+      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFC s V 0)
+      ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+          if s.pids 0 * 128 + idx.1.val < 128 ∧ idx.2.1.val < 96
+          then some (qTileAFC s Q idx) else some (0.0 : ℝ)⟩ := by
   rw [AfcFoundation.afcPreLoop_eq_head_tail]
   obtain ⟨s1, hHead, hpids1, hmem1, hundef1, hstartm1, hoffhz1, hqvk1, hqso1, hkso1,
     hoffsm1, hoffsn1, hoffsk1⟩ := afcPreLoopHead_eval s hundef
@@ -2500,10 +2585,18 @@ theorem afcPreLoop_eval
       = some (Tile.vec (fun r : Fin 128 => s1.pids 0 * 128 + r.val)) := by
     rw [hpids1]; exact hoffsm1
   obtain ⟨s0, hTail, hpids0, hmem0, hundef0, hstartm0, hoffhz0, hmi0, hli0, hacc0,
-    hoffsm0, hoffsn0, hoffsk0, hqscale0⟩ :=
+    hoffsm0, hoffsn0, hoffsk0, hqscale0, hkp0, hksp0, hvp0, hq0⟩ :=
     afcPreLoopTail_eval s1 Q K V QScale KScale Out hundef1
       hstartm1' hoffhz1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
-  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  -- base/pid-derived closed forms agree between s1 and s (pids/mem coincide)
+  have hbase : baseOffsetAFC s1 = baseOffsetAFC s := by simp only [baseOffsetAFC, hpids1]
+  have hkpEq : kPtrsAFC s1 K 0 = kPtrsAFC s K 0 := by
+    simp only [kPtrsAFC, hbase]
+  have hkspEq : kScalePtrAFC s1 KScale 0 = kScalePtrAFC s KScale 0 := by
+    simp only [kScalePtrAFC, hpids1]
+  have hvpEq : vPtrsAFC s1 V 0 = vPtrsAFC s V 0 := by
+    simp only [vPtrsAFC, hbase]
+  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpids0, hpids1]
   · rw [hmem0, hmem1]
   · exact hundef0
@@ -2519,6 +2612,13 @@ theorem afcPreLoop_eval
     refine congrArg some ?_
     ext idx
     simp only [BlockState.readMem, hmem1, hpids1]
+  · rw [hkp0, hkpEq]
+  · rw [hksp0, hkspEq]
+  · rw [hvp0, hvpEq]
+  · rw [hq0]
+    refine congrArg some ?_
+    ext idx
+    simp only [hpids1, qTileAFC, BlockState.readMem, hmem1, hbase]
 
 /-! ## FOUNDATION Part 5 — `afcLoopBody_steps` (loop-body execution chain)
 
