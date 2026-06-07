@@ -4812,5 +4812,127 @@ theorem aft_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
   · intro rg o; exact hundefF rg o
   · rw [hmemF, hmem']
 
+/-! ## FINAL Part 4 — `aftPostLoop_eval` (finalize + masked O store off the closed form) -/
+
+/-- Injectivity of the `O_block_ptr` per-lane output addresses (Python shape). -/
+theorem aft_O_offset_injective (s0 : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        baseOffsetAFT s0 + (qStartAFT s0 + idx.1.val) * 128 + idx.2.1.val) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp only at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb; subst db; rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop evaluation.** From a loop-end state satisfying `aftInvariant … 128`
+(with the running max `≠ ⊥` on every output lane — the causal mask keeps key `0`),
+stepping the 2 `aftPostLoop` statements (`acc = acc / l_i[:,None]` finalize + the
+masked `tl.store(O_block_ptr, acc, mask=active)`) lands the genuine closed-form
+attention ratio `attnFwdTritonOutSpec` at every active output lane. -/
+theorem aftPostLoop_eval (Q K V QScale KScale Out : RegionName) (s0 : BlockState) (s : BlockState)
+    (hne : ∀ i d : Fin 128, aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V)
+      (aftKeyScale s0 QScale KScale) (qStartAFT s0) 128 i d ≠ ⊥)
+    (hinv : aftInvariant Q K V QScale KScale Out s0 (aftKeyScale s0 QScale KScale) 128 s) :
+    ∃ sP, stepStmts (AftFoundation.aftPostLoop Out) s = some sP
+      ∧ (∀ idx : TileIndex [128, 128],
+          active s0 128 96 128 idx →
+          sP.readMem Out (outOffset s0 4 65536 16384 128 1 128 idx)
+            = attnFwdTritonOutSpec s0 Q K V (aftKeyScale s0 QScale KScale) idx) := by
+  set keyScale := aftKeyScale s0 QScale KScale with hkeyScale
+  simp only [aftInvariant] at hinv
+  obtain ⟨_, _, _, _, hli, hacc, hoffsm, _, _, _, _, _, _, _, _, _, hOp, _, _⟩ := hinv
+  set liTile : Tile .real [128] :=
+    ⟨fun r : TileIndex [128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩ with hliTile
+  set accTile : Tile .real [128, 128] :=
+    ⟨fun idx : TileIndex [128, 128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 idx.1 idx.2.1).2.2 : ℝ)⟩ with haccTile
+  unfold AftFoundation.aftPostLoop
+  set accFin : Tile .real [128, 128] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      accTile (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
+  -- step 1: acc = acc / l_i[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref TileDType.real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [128] "l_i"))) s
+        = some accFin from by
+      rw [evalOp_div]
+      have hexp : @evalOp TileDType.real [128, 1]
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [128] "l_i")) s
+          = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
+        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hli
+      simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  set s2 := s.setReg "acc" .real [128, 128] accFin with hs2
+  have hOp2 : s2.regs .ptr [128, 128] "O_block_ptr" = some ⟨fun idx : TileIndex [128, 128] =>
+      (Region.cast Out, baseOffsetAFT s0 + (qStartAFT s0 + idx.1.val) * 128 + idx.2.1.val)⟩ := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  have hacc2 : s2.regs .real [128, 128] "acc" = some accFin := by
+    rw [hs2, BlockState.setReg_same]
+  have hoffsm2 : s2.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qStartAFT s0 + r.val)) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsm
+  set oOffFn : TileIndex [128, 128] → Nat :=
+    fun idx => baseOffsetAFT s0 + (qStartAFT s0 + idx.1.val) * 128 + idx.2.1.val with hoOffFn
+  set valFn : TileIndex [128, 128] → ℝ := fun idx => (accFin.data idx).unbotD 0 with hvalFn
+  set P : TileIndex [128, 128] → Prop := fun idx => active s0 128 96 128 idx with hP
+  -- step 2: masked tl.store reduces to the masked scatter foldl
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.store .real [128, 128] (.ptr (.ref .ptr [128, 128] "O_block_ptr"))
+        (Op.ref .real [128, 128] "acc")
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))) s2
+        = some ((TileShape.allIndices [128, 128]).foldl
+            (fun acc idx => if P idx then acc.writeMem Out (oOffFn idx) (valFn idx) else acc) s2)
+      from by
+        simp only [stepStmt, evalOp, evalOp.eq_def, evalOp_ref, hacc2, hOp2, hoffsm2,
+          evalOp_constNat, evalOp_arange, Option.bind_eq_bind, Option.bind_some, Option.map_some,
+          Region.cast_id]
+        refine congrArg some (List.foldl_ext _ _ s2 (fun acc idx _ => ?_))
+        obtain ⟨ir, id, ⟨⟩⟩ := idx
+        have hPunfold : P (ir, id, PUnit.unit) ↔ (s0.pids 0 * 128 + ir.val < 128 ∧ id.val < 96) := by
+          rw [hP]; simp only [active, mIndex, kIndex]
+        have hmaskeq : ((ComparableDType.nat.lt (qStartAFT s0 + ir.val) 128)
+              && (ComparableDType.nat.lt id.val 96)) = decide (P (ir, id, PUnit.unit)) := by
+          rw [Bool.eq_iff_iff, Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+            ComparableDType.nat_lt_eq_true, decide_eq_true_eq, hPunfold, qStartAFT]
+        simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.scalar,
+          Broadcast.leftIndex, Broadcast.rightIndex, TileShape.dropInsertedIndex, hmaskeq]
+        by_cases hpi : P (ir, id, PUnit.unit)
+        · rw [if_pos (by rw [hmaskeq] at *; simpa using hpi), if_pos hpi,
+            BlockState.writeMemTyped_real]
+          simp only [FloatDType.real_storeValue, hoOffFn, hvalFn]
+        · rw [if_neg (by simp [hpi]), if_neg hpi])]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx hactive
+  obtain ⟨ir, id, ⟨⟩⟩ := idx
+  have houtOff : outOffset s0 4 65536 16384 128 1 128 (ir, id, PUnit.unit) = oOffFn (ir, id, PUnit.unit) := by
+    simp only [outOffset, offZ, offH, mIndex, kIndex, hoOffFn, baseOffsetAFT, qStartAFT]; ring
+  rw [houtOff, BlockState.scatter_readback_prop_masked_nd s2 oOffFn valFn P
+    (aft_O_offset_injective s0) (ir, id, PUnit.unit), if_pos hactive]
+  -- valFn = accFin ratio = attnFwdTritonOutSpec
+  have hlival : (aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir ⟨0, by norm_num⟩).2.1
+      = (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir ⟨0, by norm_num⟩).2.1 := by
+    unfold aftStateBotK; rw [if_neg (by norm_num)]
+  have haccval : (aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.2
+      = (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.2 := by
+    unfold aftStateBotK; rw [if_neg (by norm_num)]
+  have hdenom : (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.1
+      = (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir ⟨0, by norm_num⟩).2.1 := by
+    rw [aftStateBot_snd_fst_indep]
+  rw [hvalFn, haccFin]
+  simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+    Option.map₂, Option.bind, Option.map, haccTile, hliTile, hlival, haccval]
+  rw [← hdenom]
+  show (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.2
+      / (aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale (qStartAFT s0) 128 ir id).2.1
+    = attnFwdTritonOutSpec s0 Q K V keyScale (ir, id, PUnit.unit)
+  exact aftStateBot_full_eq_spec s0 Q K V keyScale ir id (hne ir id)
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
