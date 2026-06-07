@@ -2504,6 +2504,59 @@ theorem aft_q_readback
     rw [show (Region.cast Q : RegionName) = Q from Region.cast_id Q, hbase]
   · rw [if_neg (by simp_all), if_neg (by simp_all), hundef]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Score cell (kernel-faithful).** The raw `qk` cell the loop body produces at
+output row `i`, block-key `jL` (block `c`), `qkRawT = ((q · k)·q_scale)·k_scale`,
+equals `q_scale · k_scale · Σ_e (qLoadedAFT i e) · kTileAFT (c·64+jL) e`. The
+loaded `q` carries the head-active mask (`q[e≥96] = 0`), so the `HEAD_DIM = 128`
+contraction is genuinely the `HEAD_ACTIVE = 96` dot. `ktile` is the loop's masked
+`K_ptrs` load; here the kept-lane address `base + e + (c·64+jL)·128` is supplied as
+a hypothesis (`hk`), reading `kTileAFT (c·64+jL) e`. -/
+theorem aft_score_cell (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ) (c : Nat)
+    (i : Fin 128) (jL : Fin 64) (hjL : c * 64 + jL.val < 128)
+    (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64])
+    (hq : qtile = qLoadedAFT s0 Q)
+    (hk : ∀ idx : TileIndex [128, 64],
+        ktile.data idx = some (s0.readMem K
+          (baseOffsetAFT s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128))) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (⟨fun i => (Tile.dot [] qtile ktile).data i⟩ : Tile .real [128, 64])
+          (Tile.scalar (some qsc)))
+        (Tile.scalar (some ksc))).data (i, jL, PUnit.unit)
+      = some (qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
+          ((qLoadedAFT s0 Q).data (i, e, PUnit.unit)).unbotD 0
+            * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+  have hdot : (Tile.dot [] qtile ktile).data (i, jL, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin 128 =>
+          ((qLoadedAFT s0 Q).data (i, e, PUnit.unit)).unbotD 0
+            * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, jL, PUnit.unit))))
+        = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (((qLoadedAFT s0 Q).data (i, e, PUnit.unit)).unbotD 0
+              * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun e _ => by
+          rw [hq, hk (e, jL, PUnit.unit)]
+          -- qLoadedAFT cell is `some _`, so unbotD recovers it
+          rcases hqe : (qLoadedAFT s0 Q).data (i, e, PUnit.unit) with _ | qv
+          · -- impossible: qLoadedAFT is always `some`
+            exfalso; simp only [qLoadedAFT] at hqe; split at hqe <;> exact absurd hqe (by simp)
+          · simp only [Option.map₂, Option.bind, Option.map]
+            refine congrArg some ?_
+            rw [show WithBot.unbotD 0 (some qv) = qv from rfl,
+              show kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)
+                  = s0.readMem K (baseOffsetAFT s0 + e.val + (c * 64 + jL.val) * 128) from by
+              simp only [kTileAFT]; congr 1; ring] )]
+    rw [WithBot.sum_someTerm_eq_some]
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarR,
+    Tile.scalar_data, NumericDType.mul, hdot]
+  refine congrArg some ?_
+  simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  ring
+
 
 /-! ## FOUNDATION Part 5 — loop-body head/tail split + `aftLoopBody_steps`
 
