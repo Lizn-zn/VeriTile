@@ -1157,6 +1157,16 @@ def noWindowKeep {M S : Nat} (_i : Fin M) (_j : Fin S) : Prop := True
 instance noWindowKeepDecidable {M S : Nat} (i : Fin M) (j : Fin S) :
     Decidable (noWindowKeep i j) := by unfold noWindowKeep; infer_instance
 
+/-- Causal keep predicate (`attn_fwd_triton`, `STAGE = 3`): for global query row
+`qg = qStart + i` and global key column `kg = j`, the kernel's
+`tl.where(offs_m[:, None] ≥ start_n + offs_n[None, :], qk, -inf)` keeps a key iff
+`qg ≥ kg`, i.e. `j ≤ qStart + i`. -/
+def causalKeep (qStart : Nat) {M S : Nat} (i : Fin M) (j : Fin S) : Prop :=
+  (j.val : ℤ) ≤ (qStart : ℤ) + i.val
+
+instance causalKeepDecidable (qStart : Nat) {M S : Nat} (i : Fin M) (j : Fin S) :
+    Decidable (causalKeep qStart i j) := by unfold causalKeep; infer_instance
+
 /-- **The unmasked base-2 per-key-scale attention is the no-window predicate
 instance.** Case 3 (`SLIDING_WINDOW = 0`) of `attention_fwd_triton3` reduces to
 the plain `attentionRealBase2PerKeyScale` closed form. -/
