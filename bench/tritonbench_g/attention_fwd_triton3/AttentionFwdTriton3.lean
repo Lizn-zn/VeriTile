@@ -33,8 +33,9 @@ covers every program of the grid.
 
 The four `output_summary` theorems mirror the four Python test cases
 (case1: sliding window, non-complement; case2: complement sliding window;
-case3: no sliding window; case4: `init=False` resume). Each is structurally
-identical:
+case3: no sliding window; case4: `init=False` resume). Cases 1/2/3 are stated
+against genuine faithful closed forms (see "Genuine closed forms" below); case 4
+is a documented trusted host boundary. They share the structure:
 
 ```
 attention_fwd_triton3_python_caseN_output_summary            ← TOP THEOREMS (N = 1..4)
@@ -58,13 +59,53 @@ the identity post-erasure; `@triton.autotune`/`@triton.heuristics` and
 test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=BLOCK_N=64`,
 `sm_scale = 1/8`, contiguous strides, 64 active lanes) with the case-specific
 `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags baked into the launch
-arguments. The `Out`/`M` writebacks are stated against
-`producedAttentionFwdTriton3CaseN{Out,M}Value` (the single-program surface value
-at each offset); the `END`-branch finalize (`acc / l_i`, `m_i + log2 l_i`) is
-reflected in those produced values via the `end_output_formula`/`end_m_formula`
-slices. This is a single-program scope; cross-program composition into the full
-output (and the cross-launch `INIT`/`END` chunked accumulation that case4
-resumes from) is the trusted host boundary.
+arguments.
+
+## Genuine closed forms (cases 1/2/3)
+
+Cases 1, 2 and 3 (`INIT=True`) are stated against **genuine faithful closed
+forms**, not self-referential executed-output carriers:
+
+* **Case 3** (no window): `attentionFwdTriton3Case3OutSpec` = plain base-2
+  per-key-scale softmax.
+* **Case 1** (sliding window): `attentionFwdTriton3Case1OutSpec` = base-2
+  softmax masked by `natSlidingWindowKeep` — the *faithful* nat-truncated
+  distance predicate the kernel actually computes (`dist = (i−jL)+start_m·64 −
+  start_n` with **natural** subtraction; the `dist ≥ 0` clause is vacuous on ℕ).
+* **Case 2** (complement window): `...Case2OutSpec` masked by
+  `natComplementSlidingWindowKeep` (`dist ≥ 64`).
+
+The kernel mask reconciliations `aft3MaskCell{1,2} ↔ natSliding…Keep` are TRUE by
+construction (`aft3MaskCell{1,2}_eq_keep`). At the test shape some windows are
+**fully masked** (case 1 `start_m=1` block 0; case 2 `start_m=0` every row); on an
+all-masked block the kernel registers go to `⊥` (`m_i=⊥, α=exp2(⊥−⊥)=0, l_i=0,
+acc=0`). The `⊥`-carrying running state `aft3StateBotK` (seed `(⊥,1,0)` at window
+`0`, then the seed-`0` `aft3StateBot`) tracks this faithfully through the loop
+invariant `attnInvariantK`, and the empty-window output is reconciled by `0/0 = 0`
+(`aft3StateBotK_full_eq_streaming`). The `M` writeback is the raw finalize
+`attentionFwdTriton3KMSpec = (m_i + log2 l_i).unbotD 0` (well-defined at empty
+rows: `(⊥ + log2 0).unbotD 0 = 0`).
+
+These three summaries take `M ≠ Out` (so the `O` store does not clobber the `M`
+row) and clean input (`undef = 0`), the genuine preconditions of single-program
+correctness.
+
+## Trusted boundary (case 4)
+
+**Case 4** (`INIT=False` cross-launch resume) is NOT closeable to a self-contained
+`Q`/`K`/`V` closed form: the `INIT=False` preLoop branch *reads* the prior
+`m_i`/`l_i`/`acc` from the `M`/`L`/`Out` buffers (`tl.load(m_ptrs)`, etc.), which
+are the running results of *earlier* kernel launches over previous key chunks.
+Expressing case-4's output therefore requires the host's cross-launch chunked
+accumulation state, which is outside the single-program scope — exactly like the
+cross-chunk host boundaries documented for the flash-attention chunked kernels.
+Case 4 is consequently left at its self-referential
+`producedAttentionFwdTriton3Case4{Out,M}Value` carrier (the single-program
+executed surface value at each offset), a **documented trusted host boundary**,
+not a provability gap in the kernel model.
+
+Arithmetic is over `ℝ`; cross-program composition into the full output is the
+trusted host boundary in all cases.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
