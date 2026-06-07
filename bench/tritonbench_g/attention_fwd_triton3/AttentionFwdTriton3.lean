@@ -3835,4 +3835,87 @@ theorem aft3_reduceMaxDrop_row (qk : Tile .real [64, 64]) (rmaxT : Tile .real [6
   simp only [Finset.sup'_eq_sup]
   exact Finset.sup_congr rfl (fun jL _ => hqk jL)
 
+/-- `filterMap`-then-coe `foldr ⊔ ⊥` over `finRange n` equals the masked `Finset.sup`. -/
+theorem aft3_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
+    (sc : Fin n → ℝ) :
+    (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) := by
+  rw [show (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = (List.finRange n).foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : P a <;> simp [ha, ih]]
+  apply le_antisymm
+  · induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih =>
+      simp only [List.foldr_cons]
+      exact sup_le (Finset.le_sup (f := fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+        (Finset.mem_univ a)) ih
+  · apply Finset.sup_le
+    intro j _
+    have key : ∀ (l : List (Fin n)), j ∈ l →
+        (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+          ≤ l.foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ := by
+      intro l hl
+      induction l with
+      | nil => simp at hl
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        rcases List.mem_cons.mp hl with h | h
+        · subst h; exact le_sup_left
+        · exact le_trans (ih h) le_sup_right
+    exact key _ (List.mem_finRange j)
+
+/-- **Block sup (case 3).** The kernel's `tl.max(qk, 1)` over block `c` (every cell
+the raw score `some (sc · Σ q·k)`) equals the `aft3Block`-windowed `foldr ⊔ ⊥`. -/
+theorem aft3Block_noWindow_blockSup (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
+    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128)) :
+    Finset.univ.sup (fun jL : Fin 64 =>
+        ((sc * Finset.univ.sum (fun e : Fin 64 =>
+            qTile3 s0 Q (i, e, PUnit.unit) *
+              kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ))
+      = ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+          (fun i j => noWindowKeep i j) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [show (aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+        (fun i j => noWindowKeep i j) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange 128).filterMap (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+          then some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+                qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit))) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold aft3Block
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 <;>
+      simp [hj, noWindowKeep]]
+  rw [aft3_filterMap_foldr_sup 128
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64)
+    (fun j => keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+        qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit)))]
+  symm
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+    · rw [if_pos hj]
+      have hjL : j.val - c * 64 < 64 := by omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
+      simp only
+      have hfin : (⟨c * 64 + (j.val - c * 64), by omega⟩ : Fin 128) = j := by apply Fin.ext; simp; omega
+      apply le_of_eq
+      rw [hsc, keyScale3, keyScale3]
+      congr 1; rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * 64 + jL.val < 128 := by have := jL.isLt; omega
+    refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin 128)))
+    simp only
+    rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega⟩)]
+    apply le_of_eq
+    rw [hsc, keyScale3, keyScale3]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
