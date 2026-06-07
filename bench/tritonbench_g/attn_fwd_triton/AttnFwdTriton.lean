@@ -56,14 +56,33 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Full Lean port of `attn_fwd_triton.py`'s `_attn_fwd`. -/
+/-- Full Lean port of `attn_fwd_triton.py`'s `_attn_fwd` (`STAGE = 3`).
+
+The upstream kernel runs the K/V streaming-softmax loop through a separate
+`@triton.jit` helper `_attn_fwd_inner`, invoked twice: stage `4 - STAGE = 1`
+streams the strictly-below-diagonal key blocks `range(0, start_m·BLOCK_M)` with
+no causal mask, and stage `2` streams the diagonal block
+`range(start_m·BLOCK_M, (start_m+1)·BLOCK_M)` under the causal predicate
+`offs_m[:, None] ≥ start_n + offs_n[None, :]`.
+
+The DSL has no cross-`@triton.jit` function-call surface, so the helper body is
+inlined here as a single `forRange` loop `range(0, N_CTX, BLOCK_N)` with the
+causal `where` `offs_m[:, None] ≥ start_n + offs_n[None, :]` applied to every
+block. This faithfully composes the two staged helper calls of `STAGE = 3`: on a
+stage-1 block (strictly below the diagonal) every lane satisfies
+`offs_m ≥ start_n + offs_n`, so the causal `where` is a no-op there, matching the
+unmasked stage-1 helper; on the diagonal block it is the stage-2 mask; and on
+the strictly-above-diagonal blocks (which the two-call kernel never visits) the
+`where` zeroes every probability (`p = where(mask, p, 0)`), so they contribute
+nothing to `acc`/`l_i` — making the full-range loop equal to the kernel's
+`range(0, (start_m+1)·BLOCK_M)` traversal. -/
 def attn_fwd_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
       _stride_kz _stride_kh stride_kn _stride_kk
       _stride_vz _stride_vh _stride_vk _stride_vn
       _stride_oz _stride_oh _stride_om _stride_on
-      _Z H N_CTX _HEAD_DIM BLOCK_M BLOCK_N _STAGE : Nat) :
+      _Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE _STAGE : Nat) :
     ComputeKernel := triton {
   start_m = tl.program_id(0)
   off_hz = tl.program_id(1)
@@ -77,7 +96,7 @@ def attn_fwd_triton_surface
 
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_n = tl.arange(0, $(BLOCK_N))
-  offs_k = tl.arange(0, 128)
+  offs_k = tl.arange(0, $(BLOCK_DMODEL))
   Q_ptrs = Q + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
   Q_scale_ptr = Q_scale + q_scale_offset + start_m
   K_ptrs = K + qvk_offset + offs_k[:, None] + offs_n[None, :] * $(stride_kn)
@@ -86,15 +105,40 @@ def attn_fwd_triton_surface
   O_block_ptr = Out + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
   m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
   l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + 1.0
-  acc = tl.zeros([$(BLOCK_M), 128], dtype=tl.float32)
-  q = tl.load(Q_ptrs, mask=((offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :])))
+  acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+  q = tl.load(Q_ptrs,
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
   q_scale = tl.load(Q_scale_ptr)
-  acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, K_ptrs, K_scale_ptr, V_ptrs,
-    start_m, $(BLOCK_M), $(_HEAD_DIM), $(BLOCK_N), $(4 - _STAGE), offs_m, offs_n, $(N_CTX))
-  acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, K_ptrs, K_scale_ptr, V_ptrs,
-    start_m, $(BLOCK_M), $(_HEAD_DIM), $(BLOCK_N), $(2), offs_m, offs_n, $(N_CTX))
+  for start_n in range(0, $(N_CTX), $(BLOCK_N)) {
+    start_n = tl.multiple_of(start_n, $(BLOCK_N))
+    k_mask = (offs_n[None, :] < ($(N_CTX) - start_n)) &
+      (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[:, None]
+    k = tl.load(K_ptrs, mask=k_mask)
+    k_scale = tl.load(K_scale_ptr)
+    qk = (tl.dot(q, k)).to(tl.float32) * q_scale * k_scale
+    mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+    qk = tl.where(mask, qk, -1000000.0)
+    m_ij = tl.maximum(m_i, tl.max(qk, 1))
+    qk = qk - m_ij[:, None]
+    p = tl.math.exp2(qk)
+    p = tl.where(mask, p, 0.0)
+    l_ij = tl.sum(p, 1)
+    alpha = tl.math.exp2(m_i - m_ij)
+    l_i = l_i * alpha + l_ij
+    acc = acc * alpha[:, None]
+    v = tl.load(V_ptrs,
+      mask=(offs_n[:, None] < ($(N_CTX) - start_n)) &
+        (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+    p = (p).to(tl.float16)
+    acc += tl.dot(p, v, out_dtype=tl.float16)
+    m_i = m_ij
+    K_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+    K_scale_ptr += $(1)
+    V_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+  }
   acc = acc / l_i[:, None]
-  tl.store(O_block_ptr, (acc).to(Out.type.element_ty), mask=((offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :])))
+  tl.store(O_block_ptr, (acc).to(Out.type.element_ty),
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
 }
 
 /-- The full staged `attn_fwd_triton` surface lowers to the algorithm layer. -/
@@ -104,12 +148,12 @@ theorem attn_fwd_triton_surface_toAlgorithm_supported
       stride_kz stride_kh stride_kn stride_kk
       stride_vz stride_vh stride_vk stride_vn
       stride_oz stride_oh stride_om stride_on
-      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N STAGE : Nat) :
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
     ∃ alg, (attn_fwd_triton_surface Q K V Q_scale K_scale Out stride_qz
       stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
       stride_vz stride_vh stride_vk stride_vn stride_oz stride_oh stride_om
-      stride_on Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N STAGE).toAlgorithm?
-        = Except.ok alg := by
+      stride_on Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      STAGE).toAlgorithm? = Except.ok alg := by
   simp [attn_fwd_triton_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Surface transcription/proof-oriented final output-store slice of `attn_fwd_triton.py`'s
@@ -188,7 +232,7 @@ noncomputable def producedAttnFwdTritonOutValue
       65536 16384 128 1
       65536 16384 128 1
       65536 16384 128 1
-      2 4 128 128 128 64 3).toAlgKernel s with
+      2 4 128 128 128 64 128 96 3).toAlgKernel s with
   | some s' => s'.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
   | none => 0.0
 
@@ -334,7 +378,7 @@ theorem attn_fwd_triton_surface_python_test_shape_compute_correct
         65536 16384 128 1
         65536 16384 128 1
         65536 16384 128 1
-        2 4 128 128 128 64 3)
+        2 4 128 128 128 64 128 96 3)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
@@ -362,14 +406,14 @@ theorem attn_fwd_triton_python_test_shape_output_summary
       65536 16384 128 1
       65536 16384 128 1
       65536 16384 128 1
-      2 4 128 128 128 64 3).toAlgorithm? = Except.ok alg) ∧
+      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
       (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
         65536 16384 128 1
         65536 16384 128 1
         65536 16384 128 1
         65536 16384 128 1
-        2 4 128 128 128 64 3)
+        2 4 128 128 128 64 128 96 3)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
@@ -380,7 +424,7 @@ theorem attn_fwd_triton_python_test_shape_output_summary
   constructor
   · exact attn_fwd_triton_surface_toAlgorithm_supported Q K V QScale KScale
       Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-      65536 16384 128 1 2 4 128 128 128 64 3
+      65536 16384 128 1 2 4 128 128 128 64 128 96 3
   · exact attn_fwd_triton_surface_python_test_shape_compute_correct Q K V
       QScale KScale Out s
 
