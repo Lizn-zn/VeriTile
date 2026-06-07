@@ -3260,4 +3260,147 @@ theorem afcPostLoop_check (Q K V QScale KScale Out : RegionName) :
       = afcPostLoop Out :=
   rfl
 
+/-! ## Masked-block bridge layer (ported aft3 → afc; [128,64], -1e6 sentinel, HEAD_ACTIVE) -/
+
+/-- Canonical axis-1 index of `[128, 64]`. -/
+abbrev afcAx1 : Fin [128, 64].length := ⟨1, by simp⟩
+
+/-- `filterMap`-then-map-and-sum over `finRange n` equals the masked `Finset.sum`. -/
+theorem afc_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- Any member of a `WithBot ℝ` list is `≤` its `foldr (⊔) ⊥`. -/
+theorem afc_mem_le_foldr_sup (a : WithBot ℝ) :
+    ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
+  intro L
+  induction L with
+  | nil => intro h; simp at h
+  | cons x t ih =>
+    intro h
+    rcases List.mem_cons.mp h with rfl | h
+    · exact le_sup_left
+    · exact le_trans (ih h) le_sup_right
+
+/-- `filterMap`-then-coe `foldr ⊔ ⊥` over `finRange n` equals the masked `Finset.sup`. -/
+theorem afc_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
+    (sc : Fin n → ℝ) :
+    (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) := by
+  rw [show (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = (List.finRange n).foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : P a <;> simp [ha, ih]]
+  apply le_antisymm
+  · induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih =>
+      simp only [List.foldr_cons]
+      exact sup_le (Finset.le_sup (f := fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+        (Finset.mem_univ a)) ih
+  · apply Finset.sup_le
+    intro j _
+    have key : ∀ (l : List (Fin n)), j ∈ l →
+        (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+          ≤ l.foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ := by
+      intro l hl
+      induction l with
+      | nil => simp at hl
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        rcases List.mem_cons.mp hl with h | h
+        · subst h; exact le_sup_left
+        · exact le_trans (ih h) le_sup_right
+    exact key _ (List.mem_finRange j)
+/-- The map-and-sum of `afcBlock` equals a `Fin 64`-masked `Finset.sum`, reindexing
+block `c`'s window onto lanes `jL` (global key `c·64 + jL`). -/
+theorem afcBlock_map_sum
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart c : Nat) (i : Fin 128) (d : Fin 128)
+    (hwin : (c + 1) * 64 ≤ 128) (h : ℝ × ℝ → ℝ) :
+    ((afcBlock qT kT vT keyScale qStart c i d).map h).sum
+      = ∑ jL : Fin 64,
+          (if (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128).val ≤ qStart + i.val then
+            h (afcKV qT kT vT keyScale i d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩)
+           else 0) := by
+  rw [afcBlock, afc_filterMap_finRange_sum 128
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val)
+    (fun j => afcKV qT kT vT keyScale i d j) h]
+  rw [show (∑ j : Fin 128, if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val
+            then h (afcKV qT kT vT keyScale i d j) else 0)
+        = ∑ j ∈ Finset.univ.filter (fun j : Fin 128 => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64),
+            (if j.val ≤ qStart + i.val then h (afcKV qT kT vT keyScale i d j) else 0) from by
+    rw [Finset.sum_filter]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hwj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64
+    · by_cases hcj : j.val ≤ qStart + i.val
+      · rw [if_pos ⟨hwj.1, hwj.2, hcj⟩, if_pos hwj, if_pos hcj]
+      · rw [if_neg (fun hh => hcj hh.2.2), if_pos hwj, if_neg hcj]
+    · rw [if_neg (fun hh => hwj ⟨hh.1, hh.2.1⟩), if_neg hwj]]
+  symm
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * 64 + a.val = c * 64 + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * 64, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- `afcRunningMax` is independent of the channel index `d`. -/
+theorem afcRunningMax_eq
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d d' : Fin 128) :
+    afcRunningMax qT kT vT keyScale qStart hi i d
+      = afcRunningMax qT kT vT keyScale qStart hi i d' := by
+  unfold afcRunningMax afcKeysUpto
+  congr 1
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val < hi ∧ j.val ≤ qStart + i.val <;> simp [afcKV, hj]
+/-- **`afcRunningMax` over a nonempty causal window ≠ ⊥.** For `hi ≥ 1`, key `j = 0`
+is always kept (causal `0 ≤ qStart + i`), so the running max is not `⊥`. -/
+theorem afcRunningMax_ne_bot
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (hhi : 1 ≤ hi) (i d : Fin 128) :
+    afcRunningMax qT kT vT keyScale qStart hi i d ≠ ⊥ := by
+  unfold afcRunningMax afcKeysUpto
+  set sc0 : ℝ := keyScale (⟨0, by norm_num⟩ : Fin 128) *
+      Finset.univ.sum (fun e : Fin 128 => qT (i, e, PUnit.unit) *
+        kT (⟨0, by norm_num⟩, e, PUnit.unit)) with hsc0
+  have hmem : ((sc0 : ℝ) : WithBot ℝ) ∈
+      ((List.finRange 128).filterMap (fun j : Fin 128 =>
+        if j.val < hi ∧ j.val ≤ qStart + i.val
+        then some (afcKV qT kT vT keyScale i d j) else none)).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    rw [List.mem_map]
+    refine ⟨afcKV qT kT vT keyScale i d ⟨0, by norm_num⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨show (0:Nat) < hi from by omega, show (0:Nat) ≤ qStart + i.val from Nat.zero_le _⟩]
+  have hle := afc_mem_le_foldr_sup _ _ hmem
+  intro hbot
+  exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
