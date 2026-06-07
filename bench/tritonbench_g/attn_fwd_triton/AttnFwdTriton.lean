@@ -1033,6 +1033,18 @@ theorem aft_evalOp_load_ptr_none_of {shape : TileShape}
   ext i
   simp only [BlockState.readMemValue_real, if_true]
 
+/-- The `reduceMaxDrop` over axis 1 of a `[128, 64]` real tile always succeeds
+(axis dim `64 > 0`); the explicit `some`-value form lets the `m_ij` recipe's
+`hrm` hypothesis be discharged for an inferred `qk` tile inside the loop-body chain. -/
+theorem aft_reduceMaxDrop1_some (x : Tile .real [128, 64]) :
+    Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) x
+      = some ⟨fun outIdx =>
+          (Finset.univ : Finset (Fin (TileShape.axisDim [128, 64] (⟨1, by simp⟩ : Fin [128, 64].length)))).sup'
+            (by exact ⟨⟨0, by decide⟩, Finset.mem_univ _⟩)
+            (fun k => x.data (TileShape.insertAxisIndex [128, 64] (⟨1, by simp⟩ : Fin [128, 64].length) outIdx k))⟩ := by
+  unfold Tile.reduceMaxDrop
+  rw [dif_pos (by decide : 0 < TileShape.axisDim [128, 64] (⟨1, by simp⟩ : Fin [128, 64].length))]
+
 /-! ## FOUNDATION Part 3 — ⊥-seeded online-softmax recurrence (the loop-invariant math)
 
 The kernel seeds the running max `m_i` at `-inf` (`tl.zeros − float("inf")`, i.e.
