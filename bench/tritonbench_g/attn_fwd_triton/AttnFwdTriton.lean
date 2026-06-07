@@ -964,6 +964,75 @@ theorem aft_advance_kscale_eval (s : BlockState) (name : RegName) (ptr : Tile .p
       = some (Tile.ptrAdd Broadcast.nil ptr (Tile.scalar 1)) := by
   simp only [evalOp, evalOp_ref, evalOp_constNat, hptr, Option.bind_eq_bind, Option.bind_some]
 
+/-! ## PTR-BIND lemma kit (bind-aware `.ptr` stepping)
+
+The preLoop `.ptr` constructions (`Q_ptrs`/`K_ptrs`/`V_ptrs`/`O_block_ptr` =
+`ptrAdd (ptrBase R) <add-with-expandDim>`) and the masked `tl.load`s do not reduce
+under `simp`/`simp only` inside the `stepStmt`/`evalOp` `Option.bind` do-block:
+`evalOp_expandDim_ref_of_regs` fires only on a bare `rw`, not inside the bind chain.
+These reducers take **pre-evaluated** operand values (`evalOp ptr s = some …`,
+`evalOp off s = some …`) and fire the `ptrAdd`/`load` reduction with the operands
+already discharged — so each `expandDim`/`add`/`mul` sub-operand is proved as its own
+`have hexp := evalOp_expandDim_ref_of_regs …` term and threaded in. Keyed to fire
+inside the do-block for `aftPreLoop_eval` and the `aft_load_*` threading. -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- `evalOp (Op.ptrBase R)` — the base pointer tile `(R, 0)` at the empty shape. -/
+theorem aft_evalOp_ptrBase {d : TileDType} (region : Region d) (s : BlockState) :
+    evalOp (Op.ptrBase region) s = some (Tile.scalar (Region.cast region, 0)) := by
+  simp only [evalOp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Bind-aware `ptrAdd` reducer.** Given the operand evaluations
+`evalOp ptr s = some ptrs` and `evalOp off s = some offs`, fire the `ptrAdd`
+reduction inside the `Option.bind` do-block. Threads each `expandDim`-bearing
+offset (pre-proved via `evalOp_expandDim_ref_of_regs` / `evalOp_add` / `evalOp_mul`)
+into the elementwise `Tile.ptrAdd`. -/
+theorem aft_evalOp_ptrAdd_of {a b shape : TileShape}
+    (bc : Broadcast a b shape) (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState)
+    (ptrs : Tile .ptr a) (offs : Tile .nat b)
+    (hptr : evalOp ptr s = some ptrs) (hoff : evalOp off s = some offs) :
+    evalOp (Op.ptrAdd bc ptr off) s = some (Tile.ptrAdd bc ptrs offs) := by
+  simp only [evalOp, hptr, hoff, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Bind-aware masked `.ptr` load reducer.** Given the pointer-tile and mask-tile
+evaluations, fire the masked `tl.load` over an arbitrary evaluated `.ptr` op (not
+just a `ref`): kept lanes read `s.readMem`, masked-out lanes read `s.undef`.
+Generalizes `aft_load_k_eval`/`aft_load_v_eval` to inline (non-`ref`) ptr/mask ops,
+unblocking the preLoop `q` load (inline `boolAnd` mask). -/
+theorem aft_evalOp_load_ptr_mask_of {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (s : BlockState)
+    (ptrs : Tile .ptr shape) (masks : Tile .bool shape)
+    (hptr : evalOp ptrOp s = some ptrs) (hmask : evalOp maskOp s = some masks) :
+    evalOp (.load .real (.ptr ptrOp) (.mask maskOp)) s
+      = some ⟨fun i : TileIndex shape =>
+          if masks.data i then some (s.readMem (ptrs.data i).1 (ptrs.data i).2)
+          else some (s.undef (ptrs.data i).1 (ptrs.data i).2)⟩ := by
+  simp only [evalOp, hptr, hmask, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp only [BlockState.readMemValue_real, if_true]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Bind-aware unmasked `.ptr` load reducer.** Given the pointer-tile evaluation,
+fire the unmasked `tl.load` over an arbitrary evaluated `.ptr` op: every lane reads
+`s.readMem`. Unblocks the preLoop scalar `q_scale` load (over `Q_scale_ptr`). -/
+theorem aft_evalOp_load_ptr_none_of {shape : TileShape}
+    (ptrOp : Op .ptr shape) (s : BlockState) (ptrs : Tile .ptr shape)
+    (hptr : evalOp ptrOp s = some ptrs) :
+    evalOp (.load .real (.ptr ptrOp) .none) s
+      = some ⟨fun i : TileIndex shape =>
+          some (s.readMem (ptrs.data i).1 (ptrs.data i).2)⟩ := by
+  simp only [evalOp, hptr, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp only [BlockState.readMemValue_real, if_true]
+
 /-! ## FOUNDATION Part 3 — ⊥-seeded online-softmax recurrence (the loop-invariant math)
 
 The kernel seeds the running max `m_i` at `-inf` (`tl.zeros − float("inf")`, i.e.
