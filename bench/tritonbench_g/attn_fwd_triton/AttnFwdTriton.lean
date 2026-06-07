@@ -466,6 +466,19 @@ noncomputable def qTileAFT (s : BlockState) (Q : RegionName) :
     TileIndex [128, 128] → ℝ :=
   fun (i, e, _) => s.readMem Q (baseOffsetAFT s + (s.pids 0 * 128 + i.val) * 128 + e.val)
 
+/-- **Masked query tile** (HEAD_ACTIVE faithful): the kernel loads `q` through the
+`(offs_m < 128) & (arange < 96)` mask, so the genuine score only sees head lanes
+`e < 96` (and only rows `qStart + i < 128`). This is the q the kernel's `tl.dot`
+actually contracts — `qMaskedAFT i e = if (qStart + i < 128 ∧ e < 96) then
+qTileAFT i e else 0`. The closed-form spec is stated over this masked q (faithful
+to `qLoadedAFT`), so the score `Σ_{e<128} qMasked·k = Σ_{e<96} qTile·k`. -/
+noncomputable def qMaskedAFT (s : BlockState) (Q : RegionName) :
+    TileIndex [128, 128] → ℝ :=
+  fun (i, e, _) =>
+    if (s.pids 0 * 128 + i.val < 128 ∧ e.val < 96) then
+      s.readMem Q (baseOffsetAFT s + (s.pids 0 * 128 + i.val) * 128 + e.val)
+    else 0
+
 /-- Key tile: row `j` (global key), head lane `e`. -/
 noncomputable def kTileAFT (s : BlockState) (K : RegionName) :
     TileIndex [128, 128] → ℝ :=
@@ -485,7 +498,7 @@ mask, for an arbitrary per-key score-scale carrier `keyScale`. -/
 noncomputable def attnFwdTritonOutSpec
     (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (idx : TileIndex [128, 128]) : ℝ :=
-  attentionRealBase2PerKeyScalePred (qTileAFT s Q) (kTileAFT s K) (vTileAFT s V)
+  attentionRealBase2PerKeyScalePred (qMaskedAFT s Q) (kTileAFT s K) (vTileAFT s V)
     keyScale (fun i j => causalKeep (qStartAFT s) i j) idx
 
 /-- Streaming bridge: the closed form equals the `osStep` online-softmax fold
@@ -493,13 +506,13 @@ over the causal-masked key list — the form the exec loop realizes. -/
 theorem attnFwdTritonOutSpec_eq_streaming
     (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ) (i d : Fin 128) :
     attnFwdTritonOutSpec s Q K V keyScale (i, d, PUnit.unit)
-      = (let st := (attnKeyListPred (qTileAFT s Q) (kTileAFT s K) (vTileAFT s V)
+      = (let st := (attnKeyListPred (qMaskedAFT s Q) (kTileAFT s K) (vTileAFT s V)
             keyScale (fun i j => causalKeep (qStartAFT s) i j) i d).foldl
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attnFwdTritonOutSpec] using
     VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
-      (qTileAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
+      (qMaskedAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
       (fun i j => causalKeep (qStartAFT s) i j) i d
 
 /-! ## Forward-loop per-statement op-eval recipes (RECIPE LAYER)
@@ -1517,9 +1530,9 @@ theorem aftKeysUpto_full_eq_pred
 `aftStateBot(128).acc / aftStateBot(128).denom = attnFwdTritonOutSpec`. -/
 theorem aftStateBot_full_eq_spec
     (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ) (i d : Fin 128)
-    (hne : aftRunningMax (qTileAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
+    (hne : aftRunningMax (qMaskedAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
       (qStartAFT s) 128 i d ≠ ⊥) :
-    (let st := aftStateBot (qTileAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
+    (let st := aftStateBot (qMaskedAFT s Q) (kTileAFT s K) (vTileAFT s V) keyScale
         (qStartAFT s) 128 i d
      st.2.2 / st.2.1)
       = attnFwdTritonOutSpec s Q K V keyScale (i, d, PUnit.unit) := by
@@ -1528,6 +1541,103 @@ theorem aftStateBot_full_eq_spec
   rw [aftKeysUpto_full_eq_pred]
   rw [attnFwdTritonOutSpec_eq_streaming]
   rw [VeriTile.Triton.osStep_foldl_eq_batch]
+
+/-! ## StateBot1 / StateBotK — kernel `l_i = 1` seed reconciliation
+
+The kernel seeds `l_i = 1` (`tl.zeros + 1.0`) at preLoop (window `[0,0)`). On a
+fully-masked block the kernel still *executes* the block (the masked `α =
+exp2(⊥ − ⊥) = 0` annihilates the seed-`1`), so the faithful running state is the
+seed-`1` `(⊥,1,0)` at window `0` and the seed-`0` ⊥-state for every later window.
+`aftStateBotK` carries this; `aftStateBot1` (a pure `(⊥,1,0)`-seed fold) bridges. -/
+
+/-- ⊥-seeded online-softmax fold from the kernel's `l_i = 1` seed. -/
+noncomputable def aftStateBot1
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
+  (aftKeysUpto qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 1, 0)
+
+/-- From a `⊥` running-max seed, the first `osStepBot` step wipes the `l`/`acc`
+seed (`α = exp2(⊥ − s) = 0`), so a nonempty fold is seed-independent. -/
+theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
+    (l acc l' acc' : ℝ) :
+    xs.foldl osStepBot (⊥, l, acc) = xs.foldl osStepBot (⊥, l', acc') := by
+  obtain ⟨x, t, rfl⟩ := List.exists_cons_of_ne_nil hne
+  obtain ⟨sv, v⟩ := x
+  have hstep : ∀ L A : ℝ, osStepBot (⊥, L, A) (sv, v)
+      = (((sv : ℝ) : WithBot ℝ), pow2 (sv - sv), pow2 (sv - sv) * v) := by
+    intro L A
+    simp only [osStepBot, bot_sup_eq]
+    have hα : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) ((sv : ℝ) : WithBot ℝ))).unbotD 0 = 0 := by
+      rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    have hub : (((sv : ℝ) : WithBot ℝ)).unbotD 0 = sv := by rfl
+    rw [hα, hub]; simp
+  simp only [List.foldl_cons, hstep]
+
+/-- The seed-`1` state equals the seed-`0` state whenever the window is nonempty. -/
+theorem aftStateBot1_eq_aftStateBot
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128)
+    (hne : aftRunningMax qT kT vT keyScale qStart hi i d ≠ ⊥) :
+    aftStateBot1 qT kT vT keyScale qStart hi i d
+      = aftStateBot qT kT vT keyScale qStart hi i d := by
+  have hxs : aftKeysUpto qT kT vT keyScale qStart hi i d ≠ [] := by
+    intro h; apply hne; unfold aftRunningMax; rw [h]; rfl
+  unfold aftStateBot1 aftStateBot
+  exact osStepBot_bot_seed_indep _ hxs 1 0 0 0
+
+/-- **Faithful kernel running state** (`l_i = 1` seed): `(⊥,1,0)` at window `0`,
+the seed-`0` ⊥-state for later windows. -/
+noncomputable def aftStateBotK
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
+  if hi = 0 then (⊥, 1, 0)
+  else aftStateBot qT kT vT keyScale qStart hi i d
+
+/-- The running max of `aftStateBotK` is `aftRunningMax`. -/
+theorem aftStateBotK_fst
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) :
+    (aftStateBotK qT kT vT keyScale qStart hi i d).1
+      = aftRunningMax qT kT vT keyScale qStart hi i d := by
+  unfold aftStateBotK
+  split
+  · rename_i h; subst h; rw [aftRunningMax_zero]
+  · rw [aftStateBot_fst_eq_runningMax]
+
+/-- At window `0` the kernel state is the `(⊥,1,0)` seed. -/
+theorem aftStateBotK_zero
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart : Nat) (i : Fin 128) (d : Fin 128) :
+    aftStateBotK qT kT vT keyScale qStart 0 i d = (⊥, 1, 0) := by
+  unfold aftStateBotK; rw [if_pos rfl]
+
+/-- **Seed cancellation.** From the kernel state `aftStateBotK(c·64)`, multiplying
+`l`/`acc` by the next-block rescale `α = exp2(M_c − Mc1)` gives the same result as
+from `aftStateBot(c·64)`: at `c = 0` the running max is `⊥` so `α = 0` kills the
+seed-`1`; for `c > 0` the two states are definitionally equal. -/
+theorem aftStateBotK_cancel
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart c : Nat) (i : Fin 128) (d : Fin 128) (Mc1 : WithBot ℝ) :
+    let m := (aftStateBot qT kT vT keyScale qStart (c * 64) i d).1
+    let α := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+    (aftStateBotK qT kT vT keyScale qStart (c * 64) i d).2.1 * α
+        = (aftStateBot qT kT vT keyScale qStart (c * 64) i d).2.1 * α
+      ∧ (aftStateBotK qT kT vT keyScale qStart (c * 64) i d).2.2 * α
+        = (aftStateBot qT kT vT keyScale qStart (c * 64) i d).2.2 * α := by
+  intro m α
+  unfold aftStateBotK
+  by_cases hc0 : c = 0
+  · subst hc0
+    simp only [Nat.zero_mul, if_pos rfl]
+    have hmbot : m = ⊥ := by
+      show (aftStateBot qT kT vT keyScale qStart (0 * 64) i d).1 = ⊥
+      rw [aftStateBot_fst_eq_runningMax, Nat.zero_mul, aftRunningMax_zero]
+    have hα0 : α = 0 := by
+      show (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 = 0
+      rw [hmbot, WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    rw [hα0]; simp
+  · simp only [Nat.mul_eq_zero, hc0, false_or, OfNat.ofNat_ne_zero, or_self, if_neg]
+    exact ⟨rfl, rfl⟩
 
 /-! ## FOUNDATION Part 1 — `aftBody_split` (preLoop ++ forRange aftLoopBody :: postLoop)
 
@@ -1935,25 +2045,28 @@ noncomputable def aftInvariant
     (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
     (keyScale : Fin 128 → ℝ) (i : Nat) (s : BlockState) : Prop :=
   let qStart := qStartAFT s0
-  let qT := qTileAFT s0 Q
+  let qT := qMaskedAFT s0 Q
   let kT := kTileAFT s0 K
   let vT := vTileAFT s0 V
   s.pids = s0.pids ∧ i % 64 = 0 ∧ i ≤ 128 ∧
   (s.regs .real [128] "m_i" = some ⟨fun r : TileIndex [128] =>
       aftRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩) ∧
   (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
-      ((aftStateBot qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
+      ((aftStateBotK qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
-      ((aftStateBot qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+      ((aftStateBotK qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qStart + r.val))) ∧
   (s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))) ∧
   (s.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
   (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
   (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .real [128, 128] "q" = some (qLoadedAFT s0 Q)) ∧
   (s.regs .real [] "q_scale" = some (qScaleAFT s0 QScale)) ∧
   (s.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFT s0 K i)) ∧
   (s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFT s0 KScale i)) ∧
   (s.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFT s0 V i)) ∧
+  (s.regs .ptr [128, 128] "O_block_ptr" = some ⟨fun idx : TileIndex [128, 128] =>
+      (Region.cast Out, baseOffsetAFT s0 + (qStartAFT s0 + idx.1.val) * 128 + idx.2.1.val)⟩) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
@@ -1965,23 +2078,23 @@ open VeriTile.Triton VeriTile.Bench.TritonBenchG.AttnFwdTriton
 math (reads off `aftRunningMax_zero`/`aftStateBot_zero`); the exec preLoop step
 supplies the register equalities, this supplies the value normalization. -/
 theorem aftInvariant_running_zero
-    (Q K V : RegionName) (s0 : BlockState) (keyScale : Fin 128 → ℝ) :
+    (qT kT vT : TileIndex [128, 128] → ℝ) (s0 : BlockState) (keyScale : Fin 128 → ℝ) :
     (⟨fun r : TileIndex [128] =>
-        aftRunningMax (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+        aftRunningMax qT kT vT keyScale
           (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩⟩ : Tile .real [128])
         = ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
       ∧ (⟨fun r : TileIndex [128] =>
-        ((aftStateBot (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+        ((aftStateBotK qT kT vT keyScale
           (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩ : Tile .real [128])
-        = ⟨fun _ : TileIndex [128] => (some (0 : ℝ) : WithBot ℝ)⟩
+        = ⟨fun _ : TileIndex [128] => (some (1 : ℝ) : WithBot ℝ)⟩
       ∧ (⟨fun idx : TileIndex [128, 128] =>
-        ((aftStateBot (qTileAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
+        ((aftStateBotK qT kT vT keyScale
           (qStartAFT s0) 0 idx.1 idx.2.1).2.2 : ℝ)⟩ : Tile .real [128, 128])
         = ⟨fun _ : TileIndex [128, 128] => (some (0 : ℝ) : WithBot ℝ)⟩ := by
   refine ⟨?_, ?_, ?_⟩
   · ext r; simp only [aftRunningMax_zero]
-  · ext r; simp only [aftStateBot_zero]; rfl
-  · ext idx; simp only [aftStateBot_zero]; rfl
+  · ext r; simp only [aftStateBotK_zero]; rfl
+  · ext idx; simp only [aftStateBotK_zero]; rfl
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
 
@@ -2173,6 +2286,13 @@ theorem aftPreLoopTail_eval
           (Region.cast KScale, s1.pids 1 * ((128 + 64 - 1) / 64))⟩
       ∧ s0.regs .ptr [64, 128] "V_ptrs" = some ⟨fun idx : TileIndex [64, 128] =>
           (Region.cast V, qvkOffAFT s1 + idx.1.val * 128 + idx.2.1.val)⟩
+      ∧ s0.regs .ptr [128, 128] "O_block_ptr" = some ⟨fun idx : TileIndex [128, 128] =>
+          (Region.cast Out, qvkOffAFT s1 + (s1.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val)⟩
+      ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+          if (ComparableDType.nat.lt (s1.pids 0 * 128 + idx.1.val) 128
+              && ComparableDType.nat.lt idx.2.1.val 96) then
+            some (s1.readMem Q (qvkOffAFT s1 + (s1.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val))
+          else some (0 : ℝ)⟩
  := by
   unfold AftFoundation.aftPreLoopTail
   -- stmt 11: Q_ptrs = ptrAdd (ptrBase Q) (qvk + offs_m[:,None]*128 + offs_k[None,:]*1)
@@ -2319,7 +2439,7 @@ theorem aftPreLoopTail_eval
     (aft_evalOp_load_ptr_none_of (Op.ref .ptr [] "Q_scale_ptr") _ _
       (by rw [evalOp_ref]; rfl)))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rfl  -- pids
   · rfl  -- mem
   · intro rg o; exact hundef rg o  -- undef
@@ -2376,6 +2496,42 @@ theorem aftPreLoopTail_eval
       Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
       TileShape.dropInsertedIndex, NumericDType.nat_add, NumericDType.nat_mul, Prod.mk.injEq,
       Nat.zero_add, Nat.mul_one, and_self]
+  · -- O_block_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.expandDim_data,
+      Tile.vec, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      TileShape.dropInsertedIndex, NumericDType.nat_add, NumericDType.nat_mul, Prod.mk.injEq,
+      Nat.zero_add, Nat.mul_one, and_self]
+  · -- q (masked load)
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    obtain ⟨r, e, ⟨⟩⟩ := idx
+    simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec, Tile.scalar_data,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, TileShape.dropInsertedIndex]
+    by_cases hk : (ComparableDType.nat.lt (s1.pids 0 * 128 + r.val) 128)
+        && (ComparableDType.nat.lt e.val 96)
+    · rw [if_pos hk, if_pos hk]
+      simp only [BlockState.readMem, BlockState.setReg_mem, castTile_self,
+        Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.expandDim_data, Tile.vec,
+        Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        TileShape.dropInsertedIndex, Region.cast, NumericDType.nat_add, NumericDType.nat_mul,
+        Nat.zero_add, Nat.mul_one]
+    · rw [if_neg hk, if_neg hk]
+      simp only [BlockState.setReg_undef, hundef]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -2416,7 +2572,10 @@ theorem aftPreLoop_eval
       ∧ s0.regs .real [] "q_scale" = some (qScaleAFT s QScale)
       ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFT s K 0)
       ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFT s KScale 0)
-      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFT s V 0) := by
+      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFT s V 0)
+      ∧ s0.regs .real [128, 128] "q" = some (qLoadedAFT s Q)
+      ∧ s0.regs .ptr [128, 128] "O_block_ptr" = some ⟨fun idx : TileIndex [128, 128] =>
+          (Region.cast Out, baseOffsetAFT s + (s.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val)⟩ := by
   rw [AftFoundation.aftPreLoop_eq_head_tail]
   obtain ⟨s1, hHead, hpids1, hmem1, hundef1, hstartm1, hoffhz1, hqvk1, hqso1, hkso1,
     hoffsm1, hoffsn1, hoffsk1⟩ := aftPreLoopHead_eval s hundef
@@ -2437,11 +2596,11 @@ theorem aftPreLoop_eval
       = some (Tile.vec (fun r : Fin 128 => s1.pids 0 * 128 + r.val)) := by
     rw [hpids1]; exact hoffsm1
   obtain ⟨s0, hTail, hpids0, hmem0, hundef0, hstartm0, hoffhz0, hmi0, hli0, hacc0,
-    hoffsm0, hoffsn0, hoffsk0, hqscale0, hKp0, hKsp0, hVp0⟩ :=
+    hoffsm0, hoffsn0, hoffsk0, hqscale0, hKp0, hKsp0, hVp0, hOp0, hq0⟩ :=
     aftPreLoopTail_eval s1 Q K V QScale KScale Out hundef1
       hstartm1' hoffhz1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
   have hbase1 : qvkOffAFT s1 = baseOffsetAFT s := by simp only [qvkOffAFT, baseOffsetAFT, hpids1]
-  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpids0, hpids1]
   · rw [hmem0, hmem1]
   · exact hundef0
@@ -2464,6 +2623,13 @@ theorem aftPreLoop_eval
     simp only [kScalePtrAFT, hpids1, Nat.zero_div, Nat.add_zero]
   · rw [hVp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
     simp only [vPtrsAFT, hbase1, Nat.zero_mul, Nat.add_zero]
+  · -- q
+    rw [hq0]; refine congrArg some (Tile.ext (fun idx => ?_))
+    obtain ⟨r, e, ⟨⟩⟩ := idx
+    simp only [qLoadedAFT, hpids1, hbase1, BlockState.readMem, hmem1]
+  · -- O_block_ptr
+    rw [hOp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
+    simp only [hbase1, hpids1, Nat.zero_mul, Nat.add_zero]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -3267,5 +3433,363 @@ theorem aftLoopBody_steps
   · exact hKpF
   · exact hKspF
   · exact hVpF
+
+/-! ## FINAL Part 1 — masked block bridges (single-pT) + StateBot1 + aftScoreBound
+
+The kernel masks `qk` with the **real `-1e6` sentinel** (`tl.where(mask, qk, -1e6)`),
+NOT a true `-inf`/`⊥`. So the per-block `reduceMax` carries a `-1e6` floor on
+masked lanes. The running-max bridge `aft_mij_reg_eq` therefore needs an
+`aftScoreBound` precondition (every kept score `≥ -1e6`), which keeps the floor
+from ever raising the row max above the genuine `aftRunningMax`. The causal mask
+keeps key `0` for every row, so the running max is `≠ ⊥` from block `0` on.
+
+Unlike triton3 (separate `pmT`), aft folds the mask directly into `pT`
+(`pT = if mask then exp2 else 0`), so the denominator/accumulator bridges run
+against that single masked tile (`l_ij = Σ pT`, `acc += Σ pT·v`). -/
+
+open VeriTile.Triton
+
+/-- `((qLoadedAFT s0 Q).data (i,e)).unbotD 0 = qMaskedAFT s0 Q (i,e)` — the loaded
+masked q cell decodes to the masked-q spec carrier. -/
+theorem qLoaded_unbotD_eq_qMasked (s0 : BlockState) (Q : RegionName)
+    (i e : Fin 128) :
+    ((qLoadedAFT s0 Q).data (i, e, PUnit.unit)).unbotD 0
+      = qMaskedAFT s0 Q (i, e, PUnit.unit) := by
+  simp only [qLoadedAFT, qMaskedAFT]
+  by_cases hc : (ComparableDType.nat.lt (s0.pids 0 * 128 + i.val) 128
+      && ComparableDType.nat.lt e.val 96)
+  · rw [if_pos hc]
+    have hc' : s0.pids 0 * 128 + i.val < 128 ∧ e.val < 96 := by
+      simp only [ComparableDType.lt, Bool.and_eq_true, decide_eq_true_eq] at hc; exact hc
+    rw [if_pos hc']; rfl
+  · rw [if_neg hc]
+    have hc' : ¬ (s0.pids 0 * 128 + i.val < 128 ∧ e.val < 96) := by
+      simp only [ComparableDType.lt, Bool.and_eq_true, decide_eq_true_eq] at hc; exact hc
+    rw [if_neg hc']; rfl
+
+/-- **Score cell (masked-q spec carrier).** The raw `qk` cell at row `i`,
+block-key `jL` (block `c`) is `some (qsc·ksc·Σ_e qMaskedAFT(i,e)·kTileAFT(c·64+jL,e))`. -/
+theorem aft_score_cell_masked (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ) (c : Nat)
+    (i : Fin 128) (jL : Fin 64) (hjL : c * 64 + jL.val < 128)
+    (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64])
+    (hq : qtile = qLoadedAFT s0 Q)
+    (hk : ∀ idx : TileIndex [128, 64],
+        ktile.data idx = some (s0.readMem K
+          (baseOffsetAFT s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128))) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (⟨fun i => (Tile.dot [] qtile ktile).data i⟩ : Tile .real [128, 64])
+          (Tile.scalar (some qsc)))
+        (Tile.scalar (some ksc))).data (i, jL, PUnit.unit)
+      = some (qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
+          qMaskedAFT s0 Q (i, e, PUnit.unit)
+            * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+  rw [aft_score_cell s0 Q K qsc ksc c i jL hjL qtile ktile hq hk]
+  refine congrArg some ?_
+  rw [show (fun e : Fin 128 => ((qLoadedAFT s0 Q).data (i, e, PUnit.unit)).unbotD 0
+          * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))
+        = (fun e : Fin 128 => qMaskedAFT s0 Q (i, e, PUnit.unit)
+          * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))
+      from by funext e; rw [qLoaded_unbotD_eq_qMasked]]
+
+/-- The per-block causal score scaled by `qsc·ksc`, used as the per-key score in the
+spec key list when `keyScale = fun _ => qsc·ksc`. -/
+noncomputable def aftBlockScore (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ)
+    (i : Fin 128) (j : Fin 128) : ℝ :=
+  qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
+    qMaskedAFT s0 Q (i, e, PUnit.unit) * kTileAFT s0 K (j, e, PUnit.unit))
+
+/-- **Score bound precondition.** The kernel's `-1e6` mask sentinel never raises a
+row's running max above the genuine `aftRunningMax`, provided every kept score is
+`≥ -1e6` (`= 0 - 1000000`). With the causal mask (key `0` always kept) this makes
+the floor inert from block `0` on. -/
+def aftScoreBound (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ) : Prop :=
+  ∀ (i j : Fin 128), j.val ≤ qStartAFT s0 + i.val →
+    (0.0 : ℝ) - (1000000.0 : ℝ) ≤ aftBlockScore s0 Q K qsc ksc i j
+
+/-- Abbreviation for the per-key score carrier used everywhere below: the constant
+per-key scale `fun _ => qsc·ksc`. With it, `aftKV`'s `.1` score at key `j` is
+exactly `aftBlockScore i j`. -/
+noncomputable abbrev aftKeyScaleC (qsc ksc : ℝ) : Fin 128 → ℝ := fun _ => qsc * ksc
+
+/-- Any member of a `WithBot ℝ` list is `≤` its `foldr (⊔) ⊥`. -/
+theorem aft_mem_le_foldr_sup (a : WithBot ℝ) :
+    ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
+  intro L
+  induction L with
+  | nil => intro h; simp at h
+  | cons x t ih =>
+    intro h
+    simp only [List.foldr_cons]
+    rcases List.mem_cons.mp h with h | h
+    · rw [h]; exact le_sup_left
+    · exact le_trans (ih h) le_sup_right
+
+/-- For the causal keep, key `0` (in block `0`) is kept for every row, so the
+running max over a nonempty window `[0, hi)` (`hi > 0`) is `≠ ⊥`. -/
+theorem aftRunningMax_causal_ne_bot (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+    (hi : Nat) (hhi : 0 < hi) (i d : Fin 128) :
+    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        (qStartAFT s0) hi i d ≠ ⊥ := by
+  unfold aftRunningMax aftKeysUpto
+  set sc := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      i d ⟨0, by norm_num⟩ |>.1 with hsc
+  have hmem : ((sc : ℝ) : WithBot ℝ) ∈
+      ((List.finRange 128).filterMap (fun j : Fin 128 =>
+        if j.val < hi ∧ j.val ≤ qStartAFT s0 + i.val then
+          some (aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
+            (aftKeyScaleC qsc ksc) i d j)
+        else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    rw [List.mem_map]
+    refine ⟨aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      i d ⟨0, by norm_num⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨hhi, by simp⟩]
+  have hle := aft_mem_le_foldr_sup _ _ hmem
+  intro hbot
+  exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
+
+/-- `aftRunningMax` over the causal window equals the windowed `foldr ⊔ ⊥` of the
+coerced block scores; spelled directly via `aftBlock`. -/
+theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128) :
+    Finset.univ.sup (fun jL : Fin 64 =>
+        if (c * 64 + jL.val ≤ qStartAFT s0 + i.val) then
+          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+          (qStartAFT s0) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [show (aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        (qStartAFT s0) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange 128).filterMap (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+          then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold aftBlock
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+    · simp only [hj, if_true]; rfl
+    · simp [hj]]
+  rw [show (((List.finRange 128).filterMap (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+          then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+          then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) from by
+    rw [show (((List.finRange 128).filterMap (fun j : Fin 128 =>
+            if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+            then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+              (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+        = (List.finRange 128).foldr (fun j a =>
+            (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+              then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥
+        from by
+      induction (List.finRange 128) with
+      | nil => simp
+      | cons a t ih =>
+        by_cases ha : c * 64 ≤ a.val ∧ a.val < (c + 1) * 64 ∧ a.val ≤ qStartAFT s0 + i.val <;>
+          simp [ha, ih]]
+    apply le_antisymm
+    · induction (List.finRange 128) with
+      | nil => simp
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        exact sup_le (Finset.le_sup (f := fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+          then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+          (Finset.mem_univ a)) ih
+    · apply Finset.sup_le; intro j _
+      have key : ∀ (l : List (Fin 128)), j ∈ l →
+          (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+            then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+            ≤ l.foldr (fun j a =>
+              (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+                then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥ := by
+        intro l hl
+        induction l with
+        | nil => simp at hl
+        | cons a t ih =>
+          simp only [List.foldr_cons]
+          rcases List.mem_cons.mp hl with h | h
+          · subst h; exact le_sup_left
+          · exact le_trans (ih h) le_sup_right
+      exact key _ (List.mem_finRange j)]
+  -- relate the [128]-indexed sup to the [64]-indexed sup
+  symm
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
+    · rw [if_pos hj]
+      have hjL : j.val - c * 64 < 64 := by omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
+      simp only
+      have hfin : c * 64 + (j.val - c * 64) = j.val := by omega
+      rw [if_pos (show c * 64 + (⟨j.val - c * 64, hjL⟩ : Fin 64).val ≤ qStartAFT s0 + i.val from by
+        simp only; rw [hfin]; exact hj.2.2)]
+      apply le_of_eq
+      congr 2
+      apply Fin.ext; simp only; rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * 64 + jL.val < 128 := by have := jL.isLt; omega
+    by_cases hkeep : c * 64 + jL.val ≤ qStartAFT s0 + i.val
+    · rw [if_pos hkeep]
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin 128)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
+    · rw [if_neg hkeep]; exact bot_le
+
+/-- Canonical axis-1 index of `[128, 64]`. -/
+abbrev aftAx1 : Fin [128, 64].length := ⟨1, by simp⟩
+
+/-- **`reduceMax` row.** The `tl.max(qk, 1)` cell at row `i` equals the `Finset.sup`
+over the block lanes of the row cells. -/
+theorem aft_reduceMaxDrop_row (qk : Tile .real [128, 64]) (rmaxT : Tile .real [128])
+    (hrm : Tile.reduceMaxDrop aftAx1 qk = some rmaxT)
+    (i : Fin 128) (g : Fin 64 → WithBot ℝ)
+    (hqk : ∀ jL : Fin 64, qk.data (i, jL, PUnit.unit) = g jL) :
+    rmaxT.data (i, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [128, 64] aftAx1 from by decide)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
+/-- **`m_ij = aftRunningMax((c+1)·64)` (single-pT, `-1e6` floor).** The kernel
+running max after block `c` equals the genuine `aftRunningMax`. The `-1e6`
+`where`-sentinel floor is inert because (a) `aftScoreBound` keeps every kept score
+`≥ -1e6` and (b) the causal mask keeps key `0`, so the running max `≥` some kept
+score `≥ -1e6` from block `0` on. -/
+theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128)
+    (hbound : aftScoreBound s0 Q K qsc ksc)
+    (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64]) (qkRawT : Tile .real [128, 64])
+    (maskT : Tile .bool [128, 64]) (mtile rmaxT qk6T : Tile .real [128])
+    (qk6 : Tile .real [128, 64])
+    (hq : qtile = qLoadedAFT s0 Q)
+    (hk : ∀ idx : TileIndex [128, 64],
+        ktile.data idx = some (s0.readMem K
+          (baseOffsetAFT s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128)))
+    (hqkRaw : qkRawT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (⟨fun i => (Tile.dot [] qtile ktile).data i⟩ : Tile .real [128, 64])
+          (Tile.scalar (some qsc))) (Tile.scalar (some ksc)))
+    (hmask : ∀ jL : Fin 64, maskT.data (i, jL, PUnit.unit)
+        = ComparableDType.nat.ge (qStartAFT s0 + i.val) (c * 64 + jL.val))
+    (hqk6 : ∀ jL : Fin 64, qk6.data (i, jL, PUnit.unit)
+        = if maskT.data (i, jL, PUnit.unit) then qkRawT.data (i, jL, PUnit.unit)
+          else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+            (qStartAFT s0) (c * 64) i ⟨0, by norm_num⟩)
+    (hrmax : Tile.reduceMaxDrop aftAx1 qk6 = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+        mtile rmaxT).data (i, PUnit.unit)
+      = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+          (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
+  set qT := qMaskedAFT s0 Q
+  set kT := kTileAFT s0 K
+  set vT := vTileAFT s0 V
+  set kc := aftKeyScaleC qsc ksc
+  set qStart := qStartAFT s0
+  -- the floor value as WithBot
+  set floor : WithBot ℝ := WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)) with hfloor
+  have hfloorR : floor = ((0.0 - 1000000.0 : ℝ) : WithBot ℝ) := by
+    rw [hfloor]; rfl
+  -- per-lane cell value
+  have hcell : ∀ jL : Fin 64, qk6.data (i, jL, PUnit.unit)
+      = if (c * 64 + jL.val ≤ qStart + i.val) then
+          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        else floor := by
+    intro jL
+    rw [hqk6 jL, hmask jL]
+    by_cases hkp : c * 64 + jL.val ≤ qStart + i.val
+    · have hb : ComparableDType.nat.ge (qStart + i.val) (c * 64 + jL.val) = Bool.true := by
+        rw [ComparableDType.nat_ge_eq_true]; omega
+      rw [hb, if_pos rfl, if_pos hkp, hqkRaw]
+      have := aft_score_cell_masked s0 Q K qsc ksc c i jL (by have := jL.isLt; omega) qtile ktile hq hk
+      rw [this]; rfl
+    · have hb : ComparableDType.nat.ge (qStart + i.val) (c * 64 + jL.val) = Bool.false := by
+        rw [← Bool.not_eq_true, ComparableDType.nat_ge_eq_true]; omega
+      rw [hb, if_neg (by simp), if_neg hkp]
+  -- rmax cell = sup over jL of qk6 cells
+  have hrmaxcell : rmaxT.data (i, PUnit.unit) = Finset.univ.sup (fun jL : Fin 64 =>
+      if (c * 64 + jL.val ≤ qStart + i.val) then
+        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+      else floor) :=
+    aft_reduceMaxDrop_row qk6 rmaxT hrmax i _ hcell
+  -- aftRunningMax((c+1)·64) = aftRunningMax(c·64) ⊔ blockSup
+  rw [aftRunningMax_succ qT kT vT kc qStart c i ⟨0, by norm_num⟩]
+  rw [← aftBlock_blockSup s0 Q K V qsc ksc c hc1 i ⟨0, by norm_num⟩]
+  -- the select is max(mtile, rmax)
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
+  set M := aftRunningMax qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩ with hM
+  set S := Finset.univ.sup (fun jL : Fin 64 =>
+      if (c * 64 + jL.val ≤ qStart + i.val) then
+        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+      else floor) with hS
+  set BS := Finset.univ.sup (fun jL : Fin 64 =>
+      if (c * 64 + jL.val ≤ qStart + i.val) then
+        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+      else (⊥ : WithBot ℝ)) with hBS
+  -- `BS ≤ S ≤ BS ⊔ floor` (each S-term is a BS-term or `floor`)
+  have hBSleS : BS ≤ S := by
+    rw [hBS, hS]; apply Finset.sup_mono_fun; intro jL _
+    by_cases hkp : c * 64 + jL.val ≤ qStart + i.val
+    · rw [if_pos hkp, if_pos hkp]
+    · rw [if_neg hkp, if_neg hkp]; exact bot_le
+  have hSleBSfloor : S ≤ BS ⊔ floor := by
+    rw [hS]; apply Finset.sup_le; intro jL _
+    by_cases hkp : c * 64 + jL.val ≤ qStart + i.val
+    · rw [if_pos hkp]
+      refine le_sup_of_le_left ?_
+      rw [hBS]
+      have hle := Finset.le_sup (f := fun jL : Fin 64 =>
+        if (c * 64 + jL.val ≤ qStart + i.val) then
+          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ)) (Finset.mem_univ jL)
+      simp only [if_pos hkp] at hle
+      exact hle
+    · rw [if_neg hkp]; exact le_sup_right
+  -- `floor ≤ aftRunningMax((c+1)·64) = M ⊔ BS` (key 0 is kept, score ≥ -1e6)
+  have hfloorLe : floor ≤ M ⊔ BS := by
+    rw [hM, hBS]
+    rw [aftBlock_blockSup s0 Q K V qsc ksc c hc1 i ⟨0, by norm_num⟩]
+    rw [← aftRunningMax_succ qT kT vT kc qStart c i ⟨0, by norm_num⟩]
+    -- the running max over [0,(c+1)·64) contains key 0's score ≥ -1e6
+    have hmem : (((aftBlockScore s0 Q K qsc ksc i ⟨0, by norm_num⟩ : ℝ) : WithBot ℝ))
+        ≤ aftRunningMax qT kT vT kc qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
+      unfold aftRunningMax aftKeysUpto
+      apply aft_mem_le_foldr_sup
+      rw [List.mem_map]
+      refine ⟨aftKV qT kT vT kc i ⟨0, by norm_num⟩ ⟨0, by norm_num⟩, ?_, ?_⟩
+      · rw [List.mem_filterMap]
+        refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
+        rw [if_pos (show (⟨0, by norm_num⟩ : Fin 128).val < (c + 1) * 64
+            ∧ (⟨0, by norm_num⟩ : Fin 128).val ≤ qStart + i.val from
+          ⟨by simp only; omega, by simp⟩)]
+      · simp only [aftKV, aftBlockScore, kc, aftKeyScaleC, qT, kT]
+    refine le_trans ?_ hmem
+    rw [hfloorR]
+    apply WithBot.coe_le_coe.mpr
+    have := hbound i ⟨0, by norm_num⟩ (by simp)
+    simpa [aftBlockScore] using this
+  have hkey : M ⊔ S = M ⊔ BS := by
+    apply le_antisymm
+    · calc M ⊔ S ≤ M ⊔ (BS ⊔ floor) := sup_le_sup_left hSleBSfloor M
+        _ = (M ⊔ BS) ⊔ floor := by rw [sup_assoc]
+        _ = M ⊔ BS := by rw [sup_eq_left.mpr hfloorLe]
+    · exact sup_le_sup_left hBSleS M
+  -- the select `if M > S then M else S` is `max M S`; rewrite via hkey to `max M BS`
+  rw [show (if decide (M > S) = Bool.true then M else S) = M ⊔ S from by
+    by_cases h : M ≤ S
+    · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+    · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]]
+  rw [hkey]
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
