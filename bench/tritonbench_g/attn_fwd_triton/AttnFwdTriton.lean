@@ -2344,4 +2344,26 @@ theorem aftPreLoop_eval
     ext idx
     simp only [BlockState.readMem, hmem1, hpids1]
 
+/-! ## FOUNDATION Part 5 — loop-body head/tail split + `aftLoopBody_steps`
+
+The 22-statement `aftLoopBody` is split into a **head** (statements 0–10: the
+`start_n`/`k_mask`/`k`/`k_scale`/`qk`-dot/`mask`/`where qk`/`m_ij`/`qk`-sub/`p`-exp2/
+`p`-where chain that builds the masked block weights) and a **tail** (statements
+11–21: `l_ij`/`alpha`/`l_i`/`acc`-rescale/`v`-load/`p`-fp16/`acc`-dot/`m_i`-carry +
+the three pointer advances). Each half steps under `set_option maxHeartbeats
+1600000` to dodge the 4M-heartbeat ceiling, composed via `stepStmts.append_some`.
+Mirrors flash's `flashLoopBody_steps`. -/
+
+open VeriTile.Triton
+
+/-- **Loop-body head** — statements 0–10 of `aftLoopBody` (`= aftLoopBody.take 11`). -/
+def aftLoopBodyHead : List Stmt := List.take 11 AftFoundation.aftLoopBody
+
+/-- **Loop-body tail** — statements 11–21 of `aftLoopBody` (`= aftLoopBody.drop 11`). -/
+def aftLoopBodyTail : List Stmt := List.drop 11 AftFoundation.aftLoopBody
+
+/-- `aftLoopBody = aftLoopBodyHead ++ aftLoopBodyTail`. Checked by `rfl`. -/
+theorem aftLoopBody_eq_head_tail :
+    AftFoundation.aftLoopBody = aftLoopBodyHead ++ aftLoopBodyTail := rfl
+
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
