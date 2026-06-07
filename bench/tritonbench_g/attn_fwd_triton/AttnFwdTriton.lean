@@ -1853,14 +1853,56 @@ theorem aftPreLoop_check (Q K V QScale KScale Out : RegionName) :
       = AftFoundation.aftPreLoop Q K V QScale KScale Out :=
   rfl
 
+/-- The loaded (masked) query tile the preLoop binds to `q`: lane `(i, e)` reads
+`Q[baseOffset + (qStart + i)·128 + e]` when `qStart + i < 128 ∧ e < 96`, else the
+zero `undef` cell. Carried by the invariant so the step lemma threads it through
+the per-block `q·k` dot. -/
+noncomputable def qLoadedAFT (s0 : BlockState) (Q : RegionName) :
+    Tile .real [128, 128] :=
+  ⟨fun idx : TileIndex [128, 128] =>
+    if (ComparableDType.nat.lt (s0.pids 0 * 128 + idx.1.val) 128
+        && ComparableDType.nat.lt idx.2.1.val 96) then
+      some (s0.readMem Q (baseOffsetAFT s0 + (s0.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val))
+    else some (0 : ℝ)⟩
+
+/-- The scalar `q_scale` the preLoop binds: `QScale[q_scale_offset + start_m]`. -/
+noncomputable def qScaleAFT (s0 : BlockState) (QScale : RegionName) :
+    Tile .real [] :=
+  ⟨fun _ : TileIndex [] =>
+    some (s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0))⟩
+
+/-- `K_ptrs` after `c = i/64` blocks: lane `(e, j)` (head-channel `e`, block-key
+`j`) addresses `K` at `baseOffset + e + j·128 + i·128`. The `+ i·128` accumulates
+the `c` `BLOCK_N·HEAD_DIM = 64·128`-element pointer advances; at global key
+`i + j` the cell is `K[baseOffset + (i + j)·128 + e] = kTileAFT (i+j) e`. -/
+noncomputable def kPtrsAFT (s0 : BlockState) (K : RegionName) (i : Nat) :
+    Tile .ptr [128, 64] :=
+  ⟨fun idx : TileIndex [128, 64] =>
+    (Region.cast K, baseOffsetAFT s0 + idx.1.val + idx.2.1.val * 128 + i * 128)⟩
+
+/-- `V_ptrs` after `c = i/64` blocks: lane `(j, e)` (block-key `j`, head-channel
+`e`) addresses `V` at `baseOffset + j·128 + e + i·128`; at global key `i + j` the
+cell is `V[baseOffset + (i + j)·128 + e] = vTileAFT (i+j) e`. -/
+noncomputable def vPtrsAFT (s0 : BlockState) (V : RegionName) (i : Nat) :
+    Tile .ptr [64, 128] :=
+  ⟨fun idx : TileIndex [64, 128] =>
+    (Region.cast V, baseOffsetAFT s0 + idx.1.val * 128 + idx.2.1.val + i * 128)⟩
+
+/-- `K_scale_ptr` after `c = i/64` blocks: scalar pointer to `KScale` at
+`k_scale_offset + c`. -/
+noncomputable def kScalePtrAFT (s0 : BlockState) (KScale : RegionName) (i : Nat) :
+    Tile .ptr [] :=
+  ⟨fun _ : TileIndex [] =>
+    (Region.cast KScale, s0.pids 1 * ((128 + 64 - 1) / 64) + i / 64)⟩
+
 /-- **Loop invariant** for the AFT streaming loop (counter `i = c·64`, window
 `hi_c = i`). Binds the running-state registers after `c` blocks to the ⊥-seeded
 `aftStateBot`/`aftRunningMax` over the first `i` keys, per output row `r` (channel
 `d` for `acc`), keyed by the per-key score scale `keyScale`. Also binds the static
 index vectors (`offs_m`/`offs_n`/`offs_k`), the loaded `q`/`q_scale`, the program
-ids, and preserves `undef`/`mem`. The pointer registers (`K_ptrs`/`K_scale_ptr`/
-`V_ptrs` advanced by `i`) are tracked by the step lemma via the recipe pointer
-advances; here we keep the running-state heart, which the readback needs. -/
+ids, and the three streamed pointer tiles (`K_ptrs`/`K_scale_ptr`/`V_ptrs`
+advanced by `i = c·64` with exact addresses — `kPtrsAFT`/`kScalePtrAFT`/
+`vPtrsAFT`), and preserves `undef`/`mem`. -/
 noncomputable def aftInvariant
     (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
     (keyScale : Fin 128 → ℝ) (i : Nat) (s : BlockState) : Prop :=
@@ -1880,6 +1922,10 @@ noncomputable def aftInvariant
   (s.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
   (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
   (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .real [] "q_scale" = some (qScaleAFT s0 QScale)) ∧
+  (s.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFT s0 K i)) ∧
+  (s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFT s0 KScale i)) ∧
+  (s.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFT s0 V i)) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
@@ -2059,7 +2105,7 @@ theorem regs_setReg_chain {d d' : TileDType} {sh sh' : TileShape}
   simp only [BlockState.setReg_ne_name, ne_eq, hne, not_false_eq_true, h]
 
 set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
+set_option maxRecDepth 100000 in
 /-- **PreLoop tail execution.** The 11 pointer/seed/load statements
 (`aftPreLoopTail`) step an abstract head-exit state `s1` (with the head readbacks
 supplied as hypotheses) to the loop-entry state `s0`, exposing the seeds
@@ -2092,7 +2138,14 @@ theorem aftPreLoopTail_eval
       ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ s0.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))
       ∧ s0.regs .real [] "q_scale" = some ⟨fun _ : TileIndex [] =>
-          some (s1.readMem QScale ((s1.pids 1 * ((128 + 128 - 1) / 128) + s1.pids 0)))⟩ := by
+          some (s1.readMem QScale ((s1.pids 1 * ((128 + 128 - 1) / 128) + s1.pids 0)))⟩
+      ∧ s0.regs .ptr [128, 64] "K_ptrs" = some ⟨fun idx : TileIndex [128, 64] =>
+          (Region.cast K, qvkOffAFT s1 + idx.1.val + idx.2.1.val * 128)⟩
+      ∧ s0.regs .ptr [] "K_scale_ptr" = some ⟨fun _ : TileIndex [] =>
+          (Region.cast KScale, s1.pids 1 * ((128 + 64 - 1) / 64))⟩
+      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some ⟨fun idx : TileIndex [64, 128] =>
+          (Region.cast V, qvkOffAFT s1 + idx.1.val * 128 + idx.2.1.val)⟩
+ := by
   unfold AftFoundation.aftPreLoopTail
   -- stmt 11: Q_ptrs = ptrAdd (ptrBase Q) (qvk + offs_m[:,None]*128 + offs_k[None,:]*1)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
@@ -2238,7 +2291,7 @@ theorem aftPreLoopTail_eval
     (aft_evalOp_load_ptr_none_of (Op.ref .ptr [] "Q_scale_ptr") _ _
       (by rw [evalOp_ref]; rfl)))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rfl  -- pids
   · rfl  -- mem
   · intro rg o; exact hundef rg o  -- undef
@@ -2265,6 +2318,36 @@ theorem aftPreLoopTail_eval
     simp only [BlockState.readMem, BlockState.setReg_mem, castTile_self,
       Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
       Tile.bop_data, Region.cast, NumericDType.nat_add, Nat.zero_add]
+  · -- K_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.expandDim_data,
+      Tile.vec, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      TileShape.dropInsertedIndex, NumericDType.nat_add, NumericDType.nat_mul, Prod.mk.injEq,
+      Nat.zero_add, Nat.mul_one, and_self]
+  · -- K_scale_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some (Tile.ext (fun _ => ?_))
+    simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_add, Nat.zero_add]
+  · -- V_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.expandDim_data,
+      Tile.vec, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      TileShape.dropInsertedIndex, NumericDType.nat_add, NumericDType.nat_mul, Prod.mk.injEq,
+      Nat.zero_add, Nat.mul_one, and_self]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -2302,8 +2385,10 @@ theorem aftPreLoop_eval
       ∧ s0.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val))
       ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ s0.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))
-      ∧ s0.regs .real [] "q_scale" = some ⟨fun _ : TileIndex [] =>
-          some (s.readMem QScale ((s.pids 1 * ((128 + 128 - 1) / 128) + s.pids 0)))⟩ := by
+      ∧ s0.regs .real [] "q_scale" = some (qScaleAFT s QScale)
+      ∧ s0.regs .ptr [128, 64] "K_ptrs" = some (kPtrsAFT s K 0)
+      ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFT s KScale 0)
+      ∧ s0.regs .ptr [64, 128] "V_ptrs" = some (vPtrsAFT s V 0) := by
   rw [AftFoundation.aftPreLoop_eq_head_tail]
   obtain ⟨s1, hHead, hpids1, hmem1, hundef1, hstartm1, hoffhz1, hqvk1, hqso1, hkso1,
     hoffsm1, hoffsn1, hoffsk1⟩ := aftPreLoopHead_eval s hundef
@@ -2324,10 +2409,11 @@ theorem aftPreLoop_eval
       = some (Tile.vec (fun r : Fin 128 => s1.pids 0 * 128 + r.val)) := by
     rw [hpids1]; exact hoffsm1
   obtain ⟨s0, hTail, hpids0, hmem0, hundef0, hstartm0, hoffhz0, hmi0, hli0, hacc0,
-    hoffsm0, hoffsn0, hoffsk0, hqscale0⟩ :=
+    hoffsm0, hoffsn0, hoffsk0, hqscale0, hKp0, hKsp0, hVp0⟩ :=
     aftPreLoopTail_eval s1 Q K V QScale KScale Out hundef1
       hstartm1' hoffhz1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
-  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  have hbase1 : qvkOffAFT s1 = baseOffsetAFT s := by simp only [qvkOffAFT, baseOffsetAFT, hpids1]
+  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpids0, hpids1]
   · rw [hmem0, hmem1]
   · exact hundef0
@@ -2340,9 +2426,17 @@ theorem aftPreLoop_eval
   · exact hoffsn0
   · exact hoffsk0
   · rw [hqscale0]
+    simp only [qScaleAFT]
     refine congrArg some ?_
     ext idx
     simp only [BlockState.readMem, hmem1, hpids1]
+  · rw [hKp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
+    simp only [kPtrsAFT, hbase1, Nat.zero_mul, Nat.add_zero]
+  · rw [hKsp0]; refine congrArg some (Tile.ext (fun _ => Prod.ext rfl ?_))
+    simp only [kScalePtrAFT, hpids1, Nat.zero_div, Nat.add_zero]
+  · rw [hVp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
+    simp only [vPtrsAFT, hbase1, Nat.zero_mul, Nat.add_zero]
+
 
 /-! ## FOUNDATION Part 5 — loop-body head/tail split + `aftLoopBody_steps`
 
