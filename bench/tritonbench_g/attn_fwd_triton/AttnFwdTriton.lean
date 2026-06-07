@@ -2042,6 +2042,44 @@ noncomputable def kScalePtrAFT (s0 : BlockState) (KScale : RegionName) (i : Nat)
   ⟨fun _ : TileIndex [] =>
     (Region.cast KScale, s0.pids 1 * ((128 + 64 - 1) / 64) + i / 64)⟩
 
+/-- One-block advance of `K_ptrs`: the loop-body `ptrAdd … (64·128)` maps
+`kPtrsAFT s0 K i` to `kPtrsAFT s0 K (i + 64)`. -/
+theorem kPtrsAFT_succ (s0 : BlockState) (K : RegionName) (i : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (kPtrsAFT s0 K i)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))
+      = kPtrsAFT s0 K (i + 64) := by
+  ext idx
+  · rfl
+  · simp only [kPtrsAFT, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
+/-- One-block advance of `V_ptrs`: the loop-body `ptrAdd … (64·128)` maps
+`vPtrsAFT s0 V i` to `vPtrsAFT s0 V (i + 64)`. -/
+theorem vPtrsAFT_succ (s0 : BlockState) (V : RegionName) (i : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (vPtrsAFT s0 V i)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar 64) (Tile.scalar 128))
+      = vPtrsAFT s0 V (i + 64) := by
+  ext idx
+  · rfl
+  · simp only [vPtrsAFT, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
+/-- One-block advance of `K_scale_ptr`: the loop-body `ptrAdd … 1` maps
+`kScalePtrAFT s0 KScale i` to `kScalePtrAFT s0 KScale (i + 64)` (when `i % 64 = 0`). -/
+theorem kScalePtrAFT_succ (s0 : BlockState) (KScale : RegionName) (i : Nat) (hi : i % 64 = 0) :
+    Tile.ptrAdd Broadcast.nil (kScalePtrAFT s0 KScale i) (Tile.scalar 1)
+      = kScalePtrAFT s0 KScale (i + 64) := by
+  ext idx
+  · rfl
+  · simp only [kScalePtrAFT, Tile.ptrAdd_data, Tile.scalar,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, NumericDType.nat_add]
+    have : (i + 64) / 64 = i / 64 + 1 := by omega
+    rw [this]; omega
+
 /-- **Loop invariant** for the AFT streaming loop (counter `i = c·64`, window
 `hi_c = i`). Binds the running-state registers after `c` blocks to the ⊥-seeded
 `aftStateBot`/`aftRunningMax` over the first `i` keys, per output row `r` (channel
@@ -2253,6 +2291,72 @@ theorem regs_setReg_chain {d d' : TileDType} {sh sh' : TileShape}
     (hne : n ≠ n') (h : s.regs d sh n = some v) :
     (s.setReg n' d' sh' w).regs d sh n = some v := by
   simp only [BlockState.setReg_ne_name, ne_eq, hne, not_false_eq_true, h]
+
+/-- Predicate: statement `st` is an assign that does not target register `name`
+(non-assign statements are excluded — `aftLoopBody` is all assigns). -/
+def stmtNotAssign (name : RegName) : Stmt → Prop
+  | .assign _ _ n' _ => n' ≠ name
+  | _ => False
+
+/-- A single `stepStmt` of an assign that does not target `name` preserves the
+`(d, sh, name)` register. -/
+theorem stepStmt_regs_frame {d : TileDType} {sh : TileShape} {name : RegName}
+    {st : Stmt} {s s' : BlockState} (hna : stmtNotAssign name st)
+    (h : stepStmt st s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  cases st with
+  | assign d' sh' n' e =>
+    have hne : n' ≠ name := hna
+    cases hv : evalOp e s with
+    | none =>
+      rw [show stepStmt (.assign d' sh' n' e) s = none from by
+        simp only [stepStmt, hv]; rfl] at h
+      exact absurd h (by simp)
+    | some v =>
+      rw [show stepStmt (.assign d' sh' n' e) s = some (s.setReg n' d' sh' v) from by
+        simp only [stepStmt, hv]; rfl] at h
+      rw [← Option.some.inj h]
+      exact BlockState.setReg_ne_name s n' name d' d sh' sh v (Ne.symm hne)
+  | _ => exact absurd hna (by simp [stmtNotAssign])
+
+/-- Every statement of `aftLoopBody` leaves any register distinct from the body's
+assigned names unassigned. The name-distinctness side condition is `by decide`. -/
+theorem aftLoopBody_stmtNotAssign (name : RegName)
+    (hne : name ≠ "start_n" ∧ name ≠ "k_mask" ∧ name ≠ "k" ∧ name ≠ "k_scale" ∧
+      name ≠ "qk" ∧ name ≠ "mask" ∧ name ≠ "m_ij" ∧ name ≠ "p" ∧ name ≠ "l_ij" ∧
+      name ≠ "alpha" ∧ name ≠ "l_i" ∧ name ≠ "acc" ∧ name ≠ "v" ∧ name ≠ "m_i" ∧
+      name ≠ "K_ptrs" ∧ name ≠ "K_scale_ptr" ∧ name ≠ "V_ptrs") :
+    ∀ st ∈ AftFoundation.aftLoopBody, stmtNotAssign name st := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩ := hne
+  intro st hst
+  simp only [AftFoundation.aftLoopBody, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h|h <;> rw [h] <;>
+    simp only [stmtNotAssign] <;>
+    first
+      | exact h1.symm | exact h2.symm | exact h3.symm | exact h4.symm | exact h5.symm
+      | exact h6.symm | exact h7.symm | exact h8.symm | exact h9.symm | exact h10.symm
+      | exact h11.symm | exact h12.symm | exact h13.symm | exact h14.symm | exact h15.symm
+      | exact h16.symm | exact h17.symm
+
+/-- **Register frame for `stepStmts`.** If every statement in `body` leaves
+`name` unassigned and the body steps successfully, the `(d, sh, name)` register is
+unchanged. Used to carry the loop-invariant registers the body never touches
+(`offs_k`/`start_m`/`off_hz`/`O_block_ptr`) through `aftLoopBody`. -/
+theorem stepStmts_regs_frame {d : TileDType} {sh : TileShape} {name : RegName}
+    {body : List Stmt} {s s' : BlockState}
+    (hna : ∀ st ∈ body, stmtNotAssign name st)
+    (h : stepStmts body s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  induction body generalizing s with
+  | nil => rw [stepStmts] at h; rw [← Option.some.inj h]
+  | cons st rest ih =>
+    rw [stepStmts] at h
+    cases hst : stepStmt st s with
+    | none => rw [hst] at h; exact absurd h (by simp)
+    | some mid =>
+      rw [hst] at h
+      rw [ih (fun st' hst' => hna st' (List.mem_cons_of_mem _ hst')) h]
+      exact stepStmt_regs_frame (hna st (List.mem_cons_self ..)) hst
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 100000 in
@@ -3476,6 +3580,37 @@ theorem qLoaded_unbotD_eq_qMasked (s0 : BlockState) (Q : RegionName)
       simp only [ComparableDType.lt, Bool.and_eq_true, decide_eq_true_eq] at hc; exact hc
     rw [if_neg hc']; rfl
 
+/-- **K head-mask irrelevance.** The kernel loads `k` through the `arange < 96`
+head-active mask (so `ktile = 0` at lanes `e ≥ 96`), but the dot with the loaded
+masked-`q` (`qLoadedAFT`, also `0` at `e ≥ 96`) is unchanged by replacing the
+masked `ktile` with the *full* (unmasked) `k` readback: the `e ≥ 96` dot terms
+vanish because the `q` factor is `0` there. This lets the score bridges
+(`aft_score_cell`/`_masked`) take the unconditional full-`k` readback `hk` even
+though the loop only supplies the masked `ktile`. -/
+theorem aft_dot_kmask_irrel (s0 : BlockState) (Q : RegionName)
+    (i : Fin 128) (jL : Fin 64)
+    (ktile kfull : Tile .real [128, 64])
+    (hagree : ∀ e : Fin 128, e.val < 96 → ktile.data (e, jL, PUnit.unit) = kfull.data (e, jL, PUnit.unit))
+    (hksome : ∀ e : Fin 128, 96 ≤ e.val → (∃ v : ℝ, ktile.data (e, jL, PUnit.unit) = some v))
+    (hfsome : ∀ e : Fin 128, 96 ≤ e.val → (∃ w : ℝ, kfull.data (e, jL, PUnit.unit) = some w)) :
+    (Tile.dot [] (qLoadedAFT s0 Q) ktile).data (i, jL, PUnit.unit)
+      = (Tile.dot [] (qLoadedAFT s0 Q) kfull).data (i, jL, PUnit.unit) := by
+  rw [Tile.dot_nil_data, Tile.dot_nil_data]
+  refine Finset.sum_congr rfl (fun e _ => ?_)
+  by_cases he : e.val < 96
+  · rw [hagree e he]
+  · -- qLoadedAFT cell is `some 0` at e ≥ 96, so both products are `some 0`
+    have hge : 96 ≤ e.val := by omega
+    have hq0 : (qLoadedAFT s0 Q).data (i, e, PUnit.unit) = some (0 : ℝ) := by
+      simp only [qLoadedAFT]
+      rw [if_neg (by
+        simp only [ComparableDType.lt, Bool.and_eq_true, decide_eq_true_eq]
+        rintro ⟨_, h⟩; exact he h)]
+    obtain ⟨v, hv⟩ := hksome e hge
+    obtain ⟨w, hw⟩ := hfsome e hge
+    rw [hq0, hv, hw]
+    simp only [Option.map₂, Option.bind, Option.map, zero_mul]
+
 /-- **Score cell (masked-q spec carrier).** The raw `qk` cell at row `i`,
 block-key `jL` (block `c`) is `some (qsc·ksc·Σ_e qMaskedAFT(i,e)·kTileAFT(c·64+jL,e))`. -/
 theorem aft_score_cell_masked (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ) (c : Nat)
@@ -4289,5 +4424,334 @@ theorem aftKeyScale_block (s0 : BlockState) (QScale KScale : RegionName) (c : Na
   unfold aftKeyScale
   have hdiv : (c * 64 + jL.val) / 64 = c := by have := jL.isLt; omega
   simp only [hdiv]
+
+/-! ## FINAL Part 3 — `aft_attn_step` (single streaming block step over `aftLoopBody`)
+
+From a state satisfying `aftInvariant … i` (after `c = i/64` blocks), stepping the
+22-statement `aftLoopBody` advances to a state satisfying `aftInvariant … (i+64)`.
+Threads `aftLoopBody_steps` (the masked block-eval) through the genuine bridges
+`aft_mij_reg_eq` / `aft_pT_cell` / `aft_denom_reg_eq` / `aft_acc_reg_eq` against
+the per-block `keyScale = aftKeyScale` (via `aftKeyScale_block`), reconciling the
+loop's masked `k`-load to the full `k` readback the bridges want via
+`aft_dot_kmask_irrel`. The `set`-shield on the supplied K/V tiles dodges the
+nested-state stack overflow. -/
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **AFT streaming block step.** `aftInvariant i → aftInvariant (i+64)` over
+`aftLoopBody`, given the score bound (`-1e6` floor inert). -/
+theorem aft_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
+    (i : Nat) (s : BlockState) (hilt : i < 128) (himod : i % 64 = 0)
+    (hsb : aftScoreBound s0 Q K (aftKeyScale s0 QScale KScale))
+    (hinv : aftInvariant Q K V QScale KScale Out s0 (aftKeyScale s0 QScale KScale) i s) :
+    ∃ s', stepStmts AftFoundation.aftLoopBody (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ aftInvariant Q K V QScale KScale Out s0 (aftKeyScale s0 QScale KScale) (i + 64) s' := by
+  set keyScale := aftKeyScale s0 QScale KScale with hkeyScale
+  set qStart := qStartAFT s0 with hqStart
+  simp only [aftInvariant] at hinv
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hoffsm, hoffsn, hoffsk, hstartm, hoffhz,
+    hq, hqs, hKp, hKsp, hVp, hOp, hundef, hmem⟩ := hinv
+  set c := i / 64 with hc_def
+  have hi : i = c * 64 := by omega
+  have hc1 : (c + 1) * 64 ≤ 128 := by omega
+  set sin := s.setReg "start_n" .nat [] (Tile.scalar i) with hsin
+  have hpids' : sin.pids = s0.pids := by rw [hsin]; simpa using hpids
+  have hmem' : sin.mem = s0.mem := by
+    rw [hsin]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have hundef' : ∀ rg o, sin.undef rg o = 0 := by
+    intro rg o; rw [hsin, BlockState.setReg_undef]; exact hundef rg o
+  -- scalar scales
+  set qsc : ℝ := s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0) with hqscv
+  set ksc : ℝ := s0.readMem KScale (s0.pids 1 * ((128 + 64 - 1) / 64) + c) with hkscv
+  -- the supplied k_mask / k tiles (set-shielded)
+  set kmaskTile : Tile .bool [128, 64] :=
+    ⟨fun idx : TileIndex [128, 64] =>
+      (ComparableDType.nat.lt ((Tile.vec (fun j : Fin 64 => j.val)).data (idx.2.1, PUnit.unit)) (128 - i))
+        && (ComparableDType.nat.lt idx.1.val 96)⟩ with hkmaskTile
+  set ktileB : Tile .real [128, 64] :=
+    ⟨fun idx : TileIndex [128, 64] =>
+      if kmaskTile.data idx then some (sin.readMem ((kPtrsAFT s0 K i).data idx).1 ((kPtrsAFT s0 K i).data idx).2)
+      else some (sin.undef ((kPtrsAFT s0 K i).data idx).1 ((kPtrsAFT s0 K i).data idx).2)⟩ with hktileB
+  set kscT : Tile .real [] :=
+    ⟨fun _ : TileIndex [] => some (sin.readMem ((kScalePtrAFT s0 KScale i).data PUnit.unit).1
+      ((kScalePtrAFT s0 KScale i).data PUnit.unit).2)⟩ with hkscT
+  set vmaskTile : Tile .bool [64, 128] :=
+    ⟨fun idx : TileIndex [64, 128] =>
+      (ComparableDType.nat.lt ((Tile.vec (fun j : Fin 64 => j.val)).data (idx.1, PUnit.unit)) (128 - i))
+        && (ComparableDType.nat.lt idx.2.1.val 96)⟩ with hvmaskTile
+  set vtileB : Tile .real [64, 128] :=
+    ⟨fun idx : TileIndex [64, 128] =>
+      if vmaskTile.data idx then some (sin.readMem ((vPtrsAFT s0 V i).data idx).1 ((vPtrsAFT s0 V i).data idx).2)
+      else some (sin.undef ((vPtrsAFT s0 V i).data idx).1 ((vPtrsAFT s0 V i).data idx).2)⟩ with hvtileB
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF,
+      maskT, qkRawT, qk6T, rmaxT, mijT, pT, lijT, alphaT,
+      hmaskd, hqkRawd, hqk6d, hrm, hmijd, hpd, hlijd, halphad, hFmi, hFli, hFacc, hFKp, hFKsp, hFVp⟩ :=
+    aftLoopBody_steps sin i
+      (Tile.vec (fun r : Fin 128 => qStart + r.val)) (Tile.vec (fun j : Fin 64 => j.val))
+      (qLoadedAFT s0 Q) (qScaleAFT s0 QScale) kscT
+      ktileB kmaskTile vtileB vmaskTile
+      ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      ⟨fun r : TileIndex [128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
+      ⟨fun idx : TileIndex [128, 128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (kPtrsAFT s0 K i) (kScalePtrAFT s0 KScale i) (vPtrsAFT s0 V i)
+      (by rw [hsin]; simpa using BlockState.setReg_same _ _ _ _ _)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsm)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsn)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKp)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKsp)
+      (by rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)
+      (fun idx => rfl)
+      (fun idx => rfl)
+      rfl
+      (fun idx => rfl)
+      (fun idx => rfl)
+      hundef'
+  refine ⟨sF, hchain, ?_⟩
+  -- k_scale cell value
+  have hkscData : kscT.data PUnit.unit = some ksc := by
+    rw [hkscT]; simp only [kScalePtrAFT, Region.cast, hkscv]
+    refine congrArg some ?_
+    show sin.readMem KScale (s0.pids 1 * ((128 + 64 - 1) / 64) + i / 64) = s0.readMem KScale _
+    rw [show i / 64 = c from by rw [hc_def]]
+    unfold BlockState.readMem; rw [hmem']
+  -- keyScale at a block-c key = qsc * ksc
+  have hkeyBlock : ∀ jL : Fin 64,
+      keyScale (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128) = qsc * ksc := by
+    intro jL
+    rw [hkeyScale, aftKeyScale_block s0 QScale KScale c jL (by have := jL.isLt; omega), ← hqscv, ← hkscv]
+  -- full-k readback tile (the bridges want this); equals masked dot via aft_dot_kmask_irrel
+  set kfullT : Tile .real [128, 64] :=
+    ⟨fun idx : TileIndex [128, 64] => some (s0.readMem K
+      (baseOffsetAFT s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128))⟩ with hkfullT
+  have hkfull : ∀ idx : TileIndex [128, 64],
+      kfullT.data idx = some (s0.readMem K (baseOffsetAFT s0 + idx.1.val + (c * 64 + idx.2.1.val) * 128)) :=
+    fun idx => rfl
+  -- masked ktile agrees with full at e < 96
+  have hkagree : ∀ (jL : Fin 64) (e : Fin 128), e.val < 96 →
+      ktileB.data (e, jL, PUnit.unit) = kfullT.data (e, jL, PUnit.unit) := by
+    intro jL e he
+    rw [hktileB, hkfullT]
+    have hmaskTrue : kmaskTile.data (e, jL, PUnit.unit) = Bool.true := by
+      rw [hkmaskTile]; simp only [Tile.vec_data]
+      rw [Bool.and_eq_true]; constructor
+      · rw [ComparableDType.nat_lt_eq_true]; have := jL.isLt; omega
+      · rw [ComparableDType.nat_lt_eq_true]; exact he
+    simp only [hmaskTrue, if_true, kPtrsAFT, Region.cast]
+    refine congrArg some ?_
+    show sin.readMem K _ = s0.readMem K _
+    rw [show baseOffsetAFT s0 + e.val + jL.val * 128 + i * 128
+          = baseOffsetAFT s0 + e.val + (c * 64 + jL.val) * 128 from by rw [hi]; ring]
+    unfold BlockState.readMem; rw [hmem']
+  have hksome : ∀ (jL : Fin 64) (e : Fin 128), 96 ≤ e.val →
+      ∃ v : ℝ, ktileB.data (e, jL, PUnit.unit) = some v := by
+    intro jL e he
+    rw [hktileB]; cases h : kmaskTile.data (e, jL, PUnit.unit) <;> simp [h]
+  have hfsome : ∀ (jL : Fin 64) (e : Fin 128), 96 ≤ e.val →
+      ∃ w : ℝ, kfullT.data (e, jL, PUnit.unit) = some w := fun jL e _ => ⟨_, rfl⟩
+  -- the dot tiles agree (masked k vs full k), so loop qkRawT = full qkRawT
+  have hdoteq : (⟨fun ix => (Tile.dot [] (qLoadedAFT s0 Q) ktileB).data ix⟩ : Tile .real [128, 64])
+      = ⟨fun ix => (Tile.dot [] (qLoadedAFT s0 Q) kfullT).data ix⟩ := by
+    refine Tile.ext (fun ix => ?_)
+    obtain ⟨ir, jL, ⟨⟩⟩ := ix
+    exact aft_dot_kmask_irrel s0 Q ir jL ktileB kfullT (hkagree jL) (hksome jL) (hfsome jL)
+  set qkRawFull : Tile .real [128, 64] :=
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (⟨fun ix => (Tile.dot [] (qLoadedAFT s0 Q) kfullT).data ix⟩ : Tile .real [128, 64])
+        (Tile.scalar (some qsc))) (Tile.scalar (some ksc)) with hqkRawFull
+  have hqScaleEq : qScaleAFT s0 QScale = Tile.scalar (some qsc) := by
+    refine Tile.ext (fun u => ?_); obtain ⟨⟩ := u
+    show some (s0.readMem QScale _) = some qsc
+    rw [← hqscv]
+  have hkscEq : kscT = Tile.scalar (some ksc) := by
+    refine Tile.ext (fun u => ?_); obtain ⟨⟩ := u
+    show kscT.data PUnit.unit = (Tile.scalar (some ksc)).data PUnit.unit
+    rw [hkscData]; rfl
+  have hqkRawEq : qkRawT = qkRawFull := by
+    rw [hqkRawd, hqkRawFull, hdoteq, hqScaleEq, hkscEq]
+  -- mask cell: ge(qStart + i, c*64 + jL)
+  have hmaskcell : ∀ (ir : Fin 128) (jL : Fin 64),
+      maskT.data (ir, jL, PUnit.unit)
+        = ComparableDType.nat.ge (qStart + ir.val) (c * 64 + jL.val) := by
+    intro ir jL
+    rw [hmaskd]; simp only [Tile.vec_data, hi]
+  -- qk6 cell in bridge form
+  have hqk6cell : ∀ (ir : Fin 128) (jL : Fin 64),
+      qk6T.data (ir, jL, PUnit.unit)
+        = if maskT.data (ir, jL, PUnit.unit) then qkRawFull.data (ir, jL, PUnit.unit)
+          else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)) := by
+    intro ir jL; rw [hqk6d, hqkRawEq]
+  -- assemble the new invariant
+  simp only [aftInvariant, ← hqStart]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, hpids']
+  · omega
+  · omega
+  · -- m_i = aftRunningMax (i+64)
+    rw [hFmi, hmijd]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hbr := aft_mij_reg_eq s0 Q K V keyScale qsc ksc c hc1 ir hkeyBlock hsb
+      (qLoadedAFT s0 Q) kfullT qkRawFull maskT
+      ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      rmaxT rmaxT qk6T rfl hkfull hqkRawFull
+      (fun jL => hmaskcell ir jL) (fun jL => hqk6cell ir jL)
+      (by simp only [hi]; rfl) hrm
+    rw [hbr, show ((c + 1) * 64 : Nat) = i + 64 from by omega]
+  · -- l_i = aftStateBotK (i+64) .2.1
+    rw [hFli]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ := by
+      rw [hmijd]
+      exact aft_mij_reg_eq s0 Q K V keyScale qsc ksc c hc1 ir hkeyBlock hsb
+        (qLoadedAFT s0 Q) kfullT qkRawFull maskT
+        ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+        rmaxT rmaxT qk6T rfl hkfull hqkRawFull
+        (fun jL => hmaskcell ir jL) (fun jL => hqk6cell ir jL)
+        (by simp only [hi]; rfl) hrm
+    have hpc : ∀ jL : Fin 64, pT.data (ir, jL, PUnit.unit)
+        = some (if c * 64 + jL.val ≤ qStart + ir.val then
+            pow2 (aftBlockScore s0 Q K keyScale ir ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩).unbotD 0)
+            else 0) := by
+      intro jL
+      exact aft_pT_cell s0 Q K V keyScale qsc ksc c ir jL (by have := jL.isLt; omega) (hkeyBlock jL)
+        (qLoadedAFT s0 Q) kfullT qkRawFull qk6T maskT mijT pT rfl hkfull hqkRawFull
+        (hmaskcell ir jL) (hqk6cell ir jL) hmijcell
+        (by rw [hpd])
+        (fun hkp => aftRunningMax_succ_ne_bot_of_kept s0 Q K V keyScale c ir ⟨0, by norm_num⟩ jL (by have := jL.isLt; omega) hkp)
+    have hbr := aft_denom_reg_eq s0 Q K V keyScale c hc1 ir
+      ⟨fun r : TileIndex [128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
+      ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      mijT alphaT pT
+      (by simp only [hi]; rfl) (by simp only [hi]; rfl) hmijcell halphad hpc
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) _ lijT).data (ir, PUnit.unit)
+      = ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart (i + 64) ir ⟨0, by norm_num⟩).2.1 : ℝ)
+    rw [hlijd, show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
+      show aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩
+          = aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩
+        from by unfold aftStateBotK; exact if_neg (show (c + 1) * 64 ≠ 0 by omega)]
+    exact hbr
+  · -- acc = aftStateBotK (i+64) .2.2
+    rw [hFacc]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ := by
+      rw [hmijd]
+      exact aft_mij_reg_eq s0 Q K V keyScale qsc ksc c hc1 ir hkeyBlock hsb
+        (qLoadedAFT s0 Q) kfullT qkRawFull maskT
+        ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+        rmaxT rmaxT qk6T rfl hkfull hqkRawFull
+        (fun jL => hmaskcell ir jL) (fun jL => hqk6cell ir jL)
+        (by simp only [hi]; rfl) hrm
+    have hpc : ∀ jL : Fin 64, pT.data (ir, jL, PUnit.unit)
+        = some (if c * 64 + jL.val ≤ qStart + ir.val then
+            pow2 (aftBlockScore s0 Q K keyScale ir ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩).unbotD 0)
+            else 0) := by
+      intro jL
+      exact aft_pT_cell s0 Q K V keyScale qsc ksc c ir jL (by have := jL.isLt; omega) (hkeyBlock jL)
+        (qLoadedAFT s0 Q) kfullT qkRawFull qk6T maskT mijT pT rfl hkfull hqkRawFull
+        (hmaskcell ir jL) (hqk6cell ir jL) hmijcell
+        (by rw [hpd])
+        (fun hkp => aftRunningMax_succ_ne_bot_of_kept s0 Q K V keyScale c ir ⟨0, by norm_num⟩ jL (by have := jL.isLt; omega) hkp)
+    -- the masked v-load cell = vMaskedAFT value
+    have hvload : ∀ jL : Fin 64,
+        (⟨fun i => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (pT.data i))⟩ : Tile .real [128, 64]).data (ir, jL, PUnit.unit)
+          = pT.data (ir, jL, PUnit.unit) := by
+      intro jL
+      simp only [FloatDType.cast, FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot,
+        FloatDType.fp16_toWithBot, FloatDType.real_ofWithBot]
+    -- the masked v-load: full readback form expected by aft_acc_reg_eq (`hv`)
+    have hvfull : ∀ idx : TileIndex [64, 128],
+        vtileB.data idx = some (vMaskedAFT s0 V
+          (⟨c * 64 + idx.1.val, by have := idx.1.isLt; omega⟩, idx.2.1, PUnit.unit)) := by
+      rintro ⟨jr, jd, ⟨⟩⟩
+      rw [hvtileB, hvmaskTile]; simp only [Tile.vec_data, vPtrsAFT, Region.cast, vMaskedAFT, vTileAFT]
+      by_cases hjd : jd.val < 96
+      · have hmt : ((ComparableDType.nat.lt jr.val (128 - i)) && (ComparableDType.nat.lt jd.val 96)) = Bool.true := by
+          rw [Bool.and_eq_true]
+          refine ⟨?_, ?_⟩
+          · rw [ComparableDType.nat_lt_eq_true]; have := jr.isLt; omega
+          · rw [ComparableDType.nat_lt_eq_true]; exact hjd
+        rw [if_pos hmt, if_pos hjd]
+        refine congrArg some ?_
+        show sin.readMem V _ = s0.readMem V _
+        rw [show baseOffsetAFT s0 + jr.val * 128 + jd.val + i * 128
+              = baseOffsetAFT s0 + (c * 64 + jr.val) * 128 + jd.val from by rw [hi]; ring]
+        unfold BlockState.readMem; rw [hmem']
+      · have hmf : ((ComparableDType.nat.lt jr.val (128 - i)) && (ComparableDType.nat.lt jd.val 96)) = Bool.false := by
+          rw [Bool.and_eq_false_iff]; right
+          rw [← Bool.not_eq_true, ComparableDType.nat_lt_eq_true]; omega
+        rw [if_neg (by rw [hmf]; simp), if_neg hjd]
+        exact congrArg some (hundef' _ _)
+    have hbr := aft_acc_reg_eq s0 Q K V keyScale c hc1 ir id
+      ⟨fun idx : TileIndex [128, 128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        ⟨fun idx : TileIndex [128, 128] => ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+        (Tile.expandDim ⟨1, by simp⟩ alphaT))
+      ⟨fun ix => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (pT.data ix))⟩
+      vtileB
+      ⟨fun r : TileIndex [128] => aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      mijT alphaT
+      hvfull
+      (by simp only [hi]; rfl) (by simp only [hi]; rfl) hmijcell halphad rfl
+      (fun jL => by
+        show (⟨fun ix => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (pT.data ix))⟩ : Tile .real [128, 64]).data (ir, jL, PUnit.unit) = _
+        rw [hvload jL]; exact hpc jL)
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) _
+        (Tile.dot [] _ vtileB)).data (ir, id, PUnit.unit)
+      = ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart (i + 64) ir id).2.2 : ℝ)
+    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
+      show aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir id
+          = aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale qStart ((c + 1) * 64) ir id
+        from by unfold aftStateBotK; exact if_neg (show (c + 1) * 64 ≠ 0 by omega)]
+    exact hbr
+  · -- offs_m (unassigned by the body → frame preserved)
+    rw [stepStmts_regs_frame (d := .nat) (sh := [128]) (name := "offs_m")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsm
+  · -- offs_n
+    rw [stepStmts_regs_frame (d := .nat) (sh := [64]) (name := "offs_n")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsn
+  · -- offs_k
+    rw [stepStmts_regs_frame (d := .nat) (sh := [128]) (name := "offs_k")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsk
+  · -- start_m
+    rw [stepStmts_regs_frame (d := .nat) (sh := []) (name := "start_m")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hstartm
+  · -- off_hz
+    rw [stepStmts_regs_frame (d := .nat) (sh := []) (name := "off_hz")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffhz
+  · -- q (unassigned)
+    rw [stepStmts_regs_frame (d := .real) (sh := [128, 128]) (name := "q")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq
+  · -- q_scale (unassigned)
+    rw [stepStmts_regs_frame (d := .real) (sh := []) (name := "q_scale")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs
+  · -- K_ptrs (advanced)
+    rw [hFKp, kPtrsAFT_succ]
+  · -- K_scale_ptr (advanced)
+    rw [hFKsp, kScalePtrAFT_succ s0 KScale i himod]
+  · -- V_ptrs (advanced)
+    rw [hFVp, vPtrsAFT_succ]
+  · -- O_block_ptr (unassigned)
+    rw [stepStmts_regs_frame (d := .ptr) (sh := [128, 128]) (name := "O_block_ptr")
+      (aftLoopBody_stmtNotAssign _ (by decide)) hchain]
+    rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  · intro rg o; exact hundefF rg o
+  · rw [hmemF, hmem']
+
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
