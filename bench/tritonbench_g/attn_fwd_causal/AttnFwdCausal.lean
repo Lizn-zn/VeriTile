@@ -4071,6 +4071,47 @@ theorem afc_acc_reg_eq_masked
 
 /-! ## Step lemma + postLoop + top theorem (assembly) -/
 
+/-- **Generic register-frame lemma.** If every statement in `body`, when stepped,
+preserves the register `(d, sh, name)`, then so does the whole `stepStmts` run. -/
+theorem stepStmts_regs_preserved {body : List Stmt} {s s' : BlockState}
+    {d : TileDType} {sh : TileShape} {name : RegName}
+    (hpre : ∀ st s1 s2, st ∈ body → stepStmt st s1 = some s2 → s2.regs d sh name = s1.regs d sh name)
+    (h : stepStmts body s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  induction body generalizing s with
+  | nil => simp only [stepStmts] at h; rw [← Option.some.inj h]
+  | cons st rest ih =>
+    unfold stepStmts at h
+    cases hst : stepStmt st s with
+    | none => rw [hst] at h; simp at h
+    | some mid =>
+      rw [hst] at h
+      have hmid := hpre st s mid (by simp) hst
+      rw [ih (fun st' s1 s2 hmem hstep => hpre st' s1 s2 (by simp [hmem]) hstep) h, hmid]
+
+/-- An `assign` to register `name'` preserves any other register `(d, sh, name)`
+(`name ≠ name'`), whatever the assigned value. -/
+theorem stepStmt_assign_regs_ne {d d' : TileDType} {sh sh' : TileShape}
+    {name name' : RegName} {e : Op d' sh'} {s s' : BlockState}
+    (hne : name ≠ name') (h : stepStmt (.assign d' sh' name' e) s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  cases hev : evalOp e s with
+  | none => rw [show stepStmt (.assign d' sh' name' e) s = none from by simp [stepStmt, hev]] at h
+            exact absurd h.symm (Option.some_ne_none s')
+  | some v =>
+      rw [stepStmt_assign_eq_some hev] at h
+      rw [← Option.some.inj h, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- The loop body `afcLoopBody` does not assign `O_block_ptr`, so it is preserved
+through the streaming loop iteration. -/
+theorem afcLoopBody_preserves_OblockPtr {s s' : BlockState}
+    (h : stepStmts AfcFoundation.afcLoopBody s = some s') :
+    s'.regs .ptr [128, 128] "O_block_ptr" = s.regs .ptr [128, 128] "O_block_ptr" := by
+  refine stepStmts_regs_preserved (fun st s1 s2 hmem hstep => ?_) h
+  fin_cases hmem <;> exact stepStmt_assign_regs_ne (by decide) hstep
+
 /-- **The kernel's per-key score scale carrier** `qk_scale = q_scale · k_scale`,
 loaded once per program (`q_scale = QScale[off_hz·1 + start_m]`) and once per key
 block (`k_scale = KScale[off_hz·2 + start_n/BLOCK_N]`). Key `j` lives in block
