@@ -2607,6 +2607,19 @@ noncomputable def attnInvariant
       { region := V, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
         parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
         offsets := [i, 0] }⟩)) ∧
+  (s.regs .ptr [64] "m_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
+        (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val))))) ∧
+  (s.regs .ptr [64] "l_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
+        (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val))))) ∧
+  (s.regs .blockPtr [64, 64] "O_block_ptr" = some
+    (⟨fun _ : TileIndex [64, 64] =>
+      { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+        parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+        offsets := [s0.pids 0 * 64, 0] }⟩)) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 /-! ### preLoop evaluation (deliverable 4) -/
@@ -2743,7 +2756,20 @@ theorem aft3PreLoopScalars_eval (Q K V M Out L : RegionName) (s : BlockState) :
           (⟨fun _ : TileIndex [64, 64] =>
             { region := V, baseOffset := s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192,
               parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
-              offsets := [0, 0] }⟩) := by
+              offsets := [0, 0] }⟩)
+      ∧ s11.regs .blockPtr [64, 64] "O_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := Out, baseOffset := s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192,
+              parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+              offsets := [s.pids 0 * 64, 0] }⟩)
+      ∧ s11.regs .ptr [64] "m_ptrs" = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * 128))
+              (Tile.vec (fun r : Fin 64 => s.pids 0 * 64 + r.val))))
+      ∧ s11.regs .ptr [64] "l_ptrs" = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * 128))
+              (Tile.vec (fun r : Fin 64 => s.pids 0 * 64 + r.val)))) := by
   unfold aft3PreLoopScalars aft3PreLoop
   simp only [List.take_succ_cons, List.take_zero, List.append_nil]
   -- stmt 0: start_m = programId 0
@@ -2865,7 +2891,7 @@ theorem aft3PreLoopScalars_eval (Q K V M Out L : RegionName) (s : BlockState) :
         ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
         Option.bind_eq_bind, Option.bind_some]; rfl))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [BlockState.setReg_pids]
   · funext rg o; simp only [BlockState.setReg_mem]
   · funext rg o; simp only [BlockState.setReg_undef]
@@ -2879,6 +2905,12 @@ theorem aft3PreLoopScalars_eval (Q K V M Out L : RegionName) (s : BlockState) :
       BlockState.setReg_same, Nat.reduceDiv, Nat.div_one]
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same, Nat.reduceDiv, Nat.div_one]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
 
 /-- The 3 `INIT` then-branch statements step `m_i = ⊥`, `l_i = 1`, `acc = 0`. -/
 theorem aft3_init_steps (s : BlockState) :
@@ -2924,7 +2956,7 @@ theorem aft3PreLoop_eval
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ s', stepStmts (aft3PreLoop Q K V M Out L) s = some s'
       ∧ attnInvariant Q K V M Out L s keep 0 s' := by
-  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp⟩ :=
+  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
     aft3PreLoopScalars_eval Q K V M Out L s
   -- split body into prefix ++ [INIT, qk1, qk2, qload]
   rw [show aft3PreLoop Q K V M Out L
@@ -2975,7 +3007,7 @@ theorem aft3PreLoop_eval
   refine ⟨_, rfl, ?_⟩
   -- now establish attnInvariant ... 0
   simp only [attnInvariant]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- pids
     simp only [BlockState.setReg_pids]; exact hpids
   · -- 0 % 64 = 0
@@ -3048,6 +3080,18 @@ theorem aft3PreLoop_eval
     simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
     rw [hVp]
+  · -- m_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hMptr]
+  · -- l_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hLptr]
+  · -- O_block_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hOp]
   · -- undef = 0
     intro rg o
     simp only [BlockState.setReg_undef]
@@ -3419,6 +3463,10 @@ theorem aft3LoopBody3_steps (sin : BlockState) (SM SN ohz : Nat)
     (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
     (qtile : Tile .real [64, 64]) (mtile ltile : Tile .real [64]) (acctile : Tile .real [64, 64])
     (ktile vtile : Tile .real [64, 64]) (sc : ℝ)
+    (mptrs lptrs : Tile .ptr [64]) (oblk : Tile .blockPtr [64, 64])
+    (hmptrs : sin.regs .ptr [64] "m_ptrs" = some mptrs)
+    (hlptrs : sin.regs .ptr [64] "l_ptrs" = some lptrs)
+    (hoblk : sin.regs .blockPtr [64, 64] "O_block_ptr" = some oblk)
     (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
     (hoff : sin.regs .nat [] "off_hz" = some (Tile.scalar ohz))
     (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
@@ -3454,6 +3502,9 @@ theorem aft3LoopBody3_steps (sin : BlockState) (SM SN ohz : Nat)
           (⟨fun _ : TileIndex [64, 64] =>
             { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
               blockShape := [64, 64], strides := [64, 1], offsets := [vrow + 64, 0] }⟩)
+      ∧ sF.regs .ptr [64] "m_ptrs" = some mptrs
+      ∧ sF.regs .ptr [64] "l_ptrs" = some lptrs
+      ∧ sF.regs .blockPtr [64, 64] "O_block_ptr" = some oblk
       ∧ ∃ (qkT : Tile .real [64, 64]) (rmaxT mijT alphaT lijT : Tile .real [64])
             (pT acc1T : Tile .real [64, 64]),
           (qkT = Tile.bop NumericDType.real.mul Broadcast.scalarR
@@ -3589,7 +3640,7 @@ theorem aft3LoopBody3_steps (sin : BlockState) (SM SN ohz : Nat)
     (aft3_advance_k_eval _ Kreg kbase 64 128 64 64 1 64 kcol 64 "K_block_ptr"
       (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
     rfl, hrm, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
   · simp only [BlockState.setReg_pids]
   · funext rg o; simp only [BlockState.setReg_mem]
@@ -3605,6 +3656,12 @@ theorem aft3LoopBody3_steps (sin : BlockState) (SM SN ohz : Nat)
   · simp only [BlockState.setReg_same]
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hmptrs
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hlptrs
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hoblk
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
@@ -4318,7 +4375,7 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
     ∃ s', stepStmts aft3LoopBody3 (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
       ∧ attnInvariant Q K V M Out L s0 (fun i j => noWindowKeep i j) (i + 64) s' := by
   simp only [attnInvariant] at hinv
-  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hundef, hmem⟩ := hinv
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
   set c := i / 64 with hc_def
   have hi : i = c * 64 := by omega
   have hc1 : (c + 1) * 64 ≤ 128 := by omega
@@ -4332,6 +4389,7 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
     simp [hbase, baseOffset3]
   -- run the loop body chain
   obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hoffF, hKpF, hVpF,
+      hMptrF, hLptrF, hOpF,
       qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
       hqkData, hrm, hmijd, halphad, hpTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
     aft3LoopBody3_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i (s0.pids 1)
@@ -4342,7 +4400,10 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
       (⟨fun idx : TileIndex [64, 64] => ((aft3StateBot1 qT kT vT keyScale3 kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
       (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩)
       (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩)
-      sc0
+      sc0 _ _ _
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp)
       (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
       (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff)
       (by simp [BlockState.setReg_same])
@@ -4394,7 +4455,7 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
     · rw [hmicell r]
     · exact hrm
   -- pT cell = exp2(qk - mij)
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpidsF, BlockState.setReg_pids, hpids]
   · omega
   · omega
@@ -4441,6 +4502,9 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
   · -- K_block_ptr advanced: kcol = i, base = baseOffset3 s0
     rw [hKpF, ← hbaseEq]
   · rw [hVpF, ← hbaseEq]
+  · rw [hMptrF]
+  · rw [hLptrF]
+  · rw [hOpF]
   · exact hundefF
   · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
 
