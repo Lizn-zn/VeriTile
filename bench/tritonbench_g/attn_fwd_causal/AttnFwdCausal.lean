@@ -3446,4 +3446,178 @@ theorem afc_score_cell (s0 : BlockState) (qStart SN : Nat) (jL : Fin 64)
   simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
 
 
+/-- **`reduceMax` row (AFC, [128,64]).** -/
+theorem afc_reduceMaxDrop_row (qk : Tile .real [128, 64]) (rmaxT : Tile .real [128])
+    (hrm : Tile.reduceMaxDrop afcAx1 qk = some rmaxT)
+    (i : Fin 128) (g : Fin 64 → WithBot ℝ)
+    (hqk : ∀ jL : Fin 64, qk.data (TileShape.insertAxisIndex [128, 64] afcAx1 (i, PUnit.unit) jL) = g jL) :
+    rmaxT.data (i, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [128, 64] afcAx1 from by decide)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+/-- **Block sup (AFC).** -/
+theorem afcBlock_blockSup
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart c : Nat) (i d : Fin 128) (hc1 : (c + 1) * 64 ≤ 128) :
+    ((afcBlock qT kT vT keyScale qStart c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun jL : Fin 64 =>
+          if (c * 64 + jL.val) ≤ qStart + i.val then
+            (((afcKV qT kT vT keyScale i d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ)) := by
+  rw [show (afcBlock qT kT vT keyScale qStart c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange 128).filterMap (fun j : Fin 128 =>
+          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val
+          then some ((afcKV qT kT vT keyScale i d j).1) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold afcBlock
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val <;> simp [hj]]
+  rw [afc_filterMap_foldr_sup 128
+    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val)
+    (fun j => (afcKV qT kT vT keyScale i d j).1)]
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val
+    · rw [if_pos hj]
+      have hjL : j.val - c * 64 < 64 := by omega
+      have hfin : (⟨c * 64 + (j.val - c * 64), by omega⟩ : Fin 128) = j := by apply Fin.ext; simp only; omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
+      simp only
+      rw [if_pos (show c * 64 + (j.val - c * 64) ≤ qStart + i.val from by have := hj.2.2; omega)]
+      apply le_of_eq
+      rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * 64 + jL.val < 128 := by have := jL.isLt; omega
+    by_cases hkeep : c * 64 + jL.val ≤ qStart + i.val
+    · rw [if_pos hkeep]
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin 128)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
+    · rw [if_neg hkeep]; exact bot_le
+/-- Helper: `WithBot.realSub (some 0) (some 1e6) = some (-1000000)`. -/
+theorem afc_sentinel_eq : WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)) = some (-1000000.0 : ℝ) := by
+  simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map]; norm_num
+
+/-- Under `afcScoreBound`, every causally-kept key's coerced score exceeds the
+`-1e6` sentinel; hence the running max over a nonempty window does too. -/
+theorem afcRunningMax_gt_sentinel
+    (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ) (qStart hi : Nat)
+    (hhi : 1 ≤ hi) (i d : Fin 128)
+    (hsb : afcScoreBound (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale qStart) :
+    afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale qStart hi i d
+      > some (-1000000.0 : ℝ) := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  unfold afcRunningMax afcKeysUpto
+  -- every coerced score in the list is > some(-1e6); the foldr ⊔ ⊥ inherits it via the nonempty key 0
+  have hkey0 : ((afcKV qT kT vT keyScale i d ⟨0, by norm_num⟩).1 : ℝ) > -1000000.0 := by
+    have := hsb ⟨0, by norm_num⟩ i d
+    simpa [afcKV] using this
+  -- key 0 is in the list
+  have hmem : ((((afcKV qT kT vT keyScale i d ⟨0, by norm_num⟩).1 : ℝ)) : WithBot ℝ) ∈
+      ((List.finRange 128).filterMap (fun j : Fin 128 =>
+        if j.val < hi ∧ j.val ≤ qStart + i.val
+        then some (afcKV qT kT vT keyScale i d j) else none)).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    rw [List.mem_map]
+    refine ⟨afcKV qT kT vT keyScale i d ⟨0, by norm_num⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
+  -- and every element of the list is ≤ the foldr; combine with: foldr ≥ key0 > -1e6
+  have hle := afc_mem_le_foldr_sup _ _ hmem
+  refine lt_of_lt_of_le ?_ hle
+  exact (WithBot.coe_lt_coe).mpr hkey0
+set_option maxHeartbeats 1600000 in
+/-- **`m_ij = afcRunningMax((c+1)·64)` (AFC, masked with -1e6 sentinel).** -/
+theorem afc_mij_reg_eq_masked (s : BlockState) (Q K V : RegionName)
+    (keyScale : Fin 128 → ℝ) (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128)
+    (hsb : afcScoreBound (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s))
+    (qkSentT : Tile .real [128, 64]) (mtile rmaxT mijT : Tile .real [128])
+    (hsent : ∀ jL : Fin 64, qkSentT.data (TileShape.insertAxisIndex [128, 64] afcAx1 (i, PUnit.unit) jL)
+        = if qStartAFC s + i.val ≥ c * 64 + jL.val then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hrmax : Tile.reduceMaxDrop afcAx1 qkSentT = some rmaxT)
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) (c * 64) i ⟨0, by norm_num⟩)
+    (hmij : mijT = Tile.select
+        (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT) :
+    mijT.data (i, PUnit.unit)
+      = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  set qStart := qStartAFC s
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = Finset.univ.sup (fun jL : Fin 64 =>
+          if qStart + i.val ≥ c * 64 + jL.val then
+            (((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ)) :=
+    afc_reduceMaxDrop_row qkSentT rmaxT hrmax i _ hsent
+  rw [afcRunningMax_succ qT kT vT keyScale qStart c i ⟨0, by norm_num⟩]
+  rw [afcBlock_blockSup qT kT vT keyScale qStart c i ⟨0, by norm_num⟩ hc1]
+  set BSk : WithBot ℝ := Finset.univ.sup (fun jL : Fin 64 =>
+      if (c * 64 + jL.val) ≤ qStart + i.val then
+        (((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+      else (⊥ : WithBot ℝ)) with hBSk
+  set M := afcRunningMax qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩ with hMdef
+  -- BSk ≤ rmaxT ≤ BSk ⊔ some(-1e6)
+  have hBSk_le : BSk ≤ rmaxT.data (i, PUnit.unit) := by
+    rw [hrmaxcell, hBSk]
+    apply Finset.sup_le; intro jL _
+    split
+    · rename_i hk
+      refine Finset.le_sup_of_le (Finset.mem_univ jL) ?_
+      rw [if_pos (show qStart + i.val ≥ c * 64 + jL.val from by omega)]
+    · exact bot_le
+  have hr_le : rmaxT.data (i, PUnit.unit) ≤ BSk ⊔ ((-1000000.0 : ℝ) : WithBot ℝ) := by
+    rw [hrmaxcell, hBSk]
+    apply Finset.sup_le; intro jL _
+    split
+    · rename_i hk
+      refine le_sup_of_le_left (Finset.le_sup_of_le (Finset.mem_univ jL) ?_)
+      rw [if_pos (show c * 64 + jL.val ≤ qStart + i.val from by omega)]
+    · exact le_sup_right
+  -- M ⊔ BSk ≥ some(-1e6): the total window [0,(c+1)·64) is nonempty (key 0 kept)
+  have hMBSk_sentinel : ((-1000000.0 : ℝ) : WithBot ℝ) ≤ M ⊔ BSk := by
+    by_cases hc0 : c = 0
+    · -- key 0 lives in block 0 = BSk
+      subst hc0
+      refine le_sup_of_le_right ?_
+      rw [hBSk]
+      refine Finset.le_sup_of_le (Finset.mem_univ (0 : Fin 64)) ?_
+      rw [if_pos (show 0 * 64 + (0 : Fin 64).val ≤ qStart + i.val from by simp)]
+      refine le_of_lt ?_
+      rw [WithBot.coe_lt_coe]
+      have hbnd := hsb ⟨0 * 64 + (0 : Fin 64).val, by simp⟩ i ⟨0, by norm_num⟩
+      simpa [afcKV] using hbnd
+    · -- key 0 lives in the prefix window c·64 ≥ 64, so M > some(-1e6)
+      refine le_sup_of_le_left (le_of_lt ?_)
+      rw [hMdef]
+      exact afcRunningMax_gt_sentinel s Q K V keyScale qStart (c * 64) (by omega) i ⟨0, by norm_num⟩ hsb
+  have hdom : M ⊔ (BSk ⊔ ((-1000000.0 : ℝ) : WithBot ℝ)) = M ⊔ BSk := by
+    rw [← sup_assoc, sup_eq_left.mpr hMBSk_sentinel]
+  -- mijT = max(M, rmaxT) and squeeze
+  rw [hmij, Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile]
+  -- goal: (if decide (M > rmaxT.data) then M else rmaxT.data) = M ⊔ BSk
+  have hsqueeze : M ⊔ rmaxT.data (i, PUnit.unit) = M ⊔ BSk := by
+    apply le_antisymm
+    · exact sup_le_sup_left (le_trans hr_le (le_of_eq rfl)) M |>.trans (le_of_eq hdom) |>.trans (le_refl _)
+    · exact sup_le_sup_left hBSk_le M
+  by_cases hcmp : M > rmaxT.data (i, PUnit.unit)
+  · rw [if_pos (by simpa using hcmp)]
+    rw [← hsqueeze, max_eq_left (le_of_lt hcmp)]
+  · rw [if_neg (by simpa using hcmp)]
+    rw [← hsqueeze, max_eq_right (not_lt.mp hcmp)]
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
