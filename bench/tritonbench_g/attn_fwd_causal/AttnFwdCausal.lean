@@ -3835,4 +3835,150 @@ theorem afc_acc_dot_block_masked (s : BlockState) (Q K V : RegionName) (keyScale
         if_neg (show ¬ c * 64 + jL.val ≤ qStart + i.val from hkp)]
 
 
+/-- **Seed-1 vs seed-0 carry cancellation (AFC).** At the block-`c` transition the
+rescale factor `α = exp2(m ⊖ Mc1)` (with `m = afcRunningMax(c·64)`) annihilates the
+difference between the seed-`1` state `afcStateBot1(c·64)` and the seed-`0` state
+`afcStateBot(c·64)`: when `c = 0` the running max is `⊥` so `α = 0`; when `c ≥ 1`
+the two states coincide. -/
+theorem afcStateBot1_cancel
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart c : Nat) (i d : Fin 128) (Mc1 : WithBot ℝ) :
+    let m := (afcStateBot qT kT vT keyScale qStart (c * 64) i d).1
+    let α := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+    (afcStateBot1 qT kT vT keyScale qStart (c * 64) i d).2.1 * α
+        = (afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.1 * α
+      ∧ (afcStateBot1 qT kT vT keyScale qStart (c * 64) i d).2.2 * α
+        = (afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.2 * α := by
+  intro m α
+  by_cases hc0 : c = 0
+  · subst hc0
+    have hmbot : m = ⊥ := by
+      show (afcStateBot qT kT vT keyScale qStart (0 * 64) i d).1 = ⊥
+      rw [afcStateBot_fst_eq_runningMax, Nat.zero_mul, afcRunningMax_zero]
+    have hα0 : α = 0 := by
+      show (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 = 0
+      rw [hmbot, WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    rw [hα0]; simp
+  · have hne : afcRunningMax qT kT vT keyScale qStart (c * 64) i d ≠ ⊥ :=
+      afcRunningMax_ne_bot qT kT vT keyScale qStart (c * 64) (by omega) i d
+    rw [afcStateBot1_eq_afcStateBot qT kT vT keyScale qStart (c * 64) i d hne]
+    exact ⟨rfl, rfl⟩
+/-- If the ⊥-seeded running max over `[0, hi)` is `⊥`, the key list is empty, so its
+`pow2`-score (resp. `·v`) sum is `0`. -/
+theorem afcKeysUpto_sum_zero_of_bot
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i d : Fin 128)
+    (hbot : afcRunningMax qT kT vT keyScale qStart hi i d = ⊥) (h : ℝ × ℝ → ℝ) :
+    ((afcKeysUpto qT kT vT keyScale qStart hi i d).map h).sum = 0 := by
+  rw [show afcKeysUpto qT kT vT keyScale qStart hi i d = [] from ?_, List.map_nil, List.sum_nil]
+  by_contra hne
+  obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+  have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+      (afcKeysUpto qT kT vT keyScale qStart hi i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+    List.mem_map_of_mem hp
+  have := afc_mem_le_foldr_sup _ _ hmem
+  rw [← afcRunningMax, hbot] at this
+  exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+
+/-- ⊥-seeded denominator anchor: `l = κ(M_c)·L_c`. -/
+theorem afc_denom_anchor
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i d : Fin 128) :
+    (afcStateBot qT kT vT keyScale qStart hi i d).2.1
+      = ((afcStateBot qT kT vT keyScale qStart hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUpto qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1)).sum) := by
+  rw [afcStateBot_snd_fst, afcStateBot_fst_eq_runningMax]
+
+/-- ⊥-seeded accumulator anchor: `acc = κ(M_c)·T_c`. -/
+theorem afc_acc_anchor
+    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
+    (qStart hi : Nat) (i d : Fin 128) :
+    (afcStateBot qT kT vT keyScale qStart hi i d).2.2
+      = ((afcStateBot qT kT vT keyScale qStart hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUpto qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  rw [afcStateBot_snd_snd, afcStateBot_fst_eq_runningMax]
+set_option maxHeartbeats 1600000 in
+/-- **`l_i' = afcStateBot((c+1)·64).2.1` (AFC, masked).** The kernel's denominator
+carry `l_i·α + l_ij` (with `l_i = afcStateBot1(c·64).2.1`) lands on the seed-0
+⊥-state denominator after `c+1` blocks (= seed-1 on the nonempty `(c+1)·64` window). -/
+theorem afc_denom_reg_eq_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128)
+    (qkSentT : Tile .real [128, 64]) (mtile mijT alphaT litile lijT : Tile .real [128])
+    (pT : Tile .real [128, 64])
+    (hsent : ∀ jL : Fin 64, qkSentT.data (i, jL, PUnit.unit)
+        = if qStartAFC s + i.val ≥ c * 64 + jL.val then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hlitile : litile.data (i, PUnit.unit) = some
+        ((afcStateBot1 (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) (c * 64) i ⟨0, by norm_num⟩).2.1))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) (c * 64) i ⟨0, by norm_num⟩)
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hlijT : lijT = Tile.reduceSumDrop afcAx1 pT)
+    (hpT : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
+        = if (qStartAFC s + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) litile alphaT) lijT).data (i, PUnit.unit)
+      = some ((afcStateBot (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩).2.1) := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  set qStart := qStartAFC s
+  set m := (afcStateBot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).1 with hm_def
+  set Mc := afcRunningMax qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩ with hMc
+  set Mc1 := afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
+  have hmMc : m = Mc := by rw [hm_def, hMc, afcStateBot_fst_eq_runningMax]
+  have hMsucc : Mc1 = m ⊔ ((afcBlock qT kT vT keyScale qStart c i ⟨0, by norm_num⟩).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, afcRunningMax_succ, hmMc, ← hMc]
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub, ← hMc, ← hMc1, hmMc]
+  have hsum := afc_nume_row_sum_masked s Q K V keyScale c hc1 i ⟨0, by norm_num⟩ qkSentT mijT pT hsent hmij hpT
+  have hblockEq := osStepBot_block_eq m
+    ((afcStateBot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).2.1)
+    ((afcStateBot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).2.2)
+    ((afcKeysUpto qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).map (fun p => pow2 p.1 * p.2)).sum
+    ((afcKeysUpto qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum
+    (afcBlock qT kT vT keyScale qStart c i ⟨0, by norm_num⟩)
+    (by rw [afc_denom_anchor, zero_add, hm_def])
+    (by rw [afc_acc_anchor, zero_add, hm_def])
+    (fun hbot => afcKeysUpto_sum_zero_of_bot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩
+      (by rw [← afcStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => afcKeysUpto_sum_zero_of_bot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩
+      (by rw [← afcStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  rw [show (afcStateBot qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩).2.1
+        = (Mc1, (afcStateBot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).2.1
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((afcBlock qT kT vT keyScale qStart c i ⟨0, by norm_num⟩).map (fun p => pow2 (p.1 - Mc1.unbotD 0))).sum,
+            _).2.1 from by
+    rw [afcStateBot_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  have hcancel := (afcStateBot1_cancel qT kT vT keyScale qStart c i ⟨0, by norm_num⟩ Mc1).1
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  rw [hlijT]
+  erw [hsum]
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    hlitile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [show (afcStateBot1 qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).2.1 * α
+        = (afcStateBot qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩).2.1 * α from by
+    have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
