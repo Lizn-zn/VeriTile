@@ -3403,4 +3403,47 @@ theorem afcRunningMax_ne_bot
   exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
 
 
+/-- **The `q·k` score cell (AFC, HEAD_ACTIVE).** With the invariant's masked `q`
+(zero on head lanes `e ≥ 96`) and the loaded `k` block (`kmaskT(e,jL) =
+(jL < 128 - SN) ∧ (e < 96)`, masked-out lanes reading `undef = 0`), the kernel's
+`qk` dot cell `(i, jL)` equals
+`(Σ_{e<128} qm(i,e)·kread e jL) · qsc · ksc`, where `qm` zeros `e ≥ 96`. -/
+theorem afc_score_cell (s0 : BlockState) (qStart SN : Nat) (jL : Fin 64)
+    (i : Fin 128) (qsc ksc : ℝ)
+    (qm : TileIndex [128, 128] → ℝ) (kread : Fin 128 → Fin 64 → ℝ)
+    (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64])
+    (kscT : Tile .real [])
+    (hjLwin : jL.val < 128 - SN)
+    (hqtile : ∀ e : Fin 128, qtile.data (i, e, PUnit.unit)
+        = some (if e.val < 96 then qm (i, e, PUnit.unit) else 0))
+    (hktile : ∀ e : Fin 128, ktile.data (e, jL, PUnit.unit)
+        = some (if jL.val < 128 - SN ∧ e.val < 96 then kread e jL else 0))
+    (hkscT : kscT.data PUnit.unit = some ksc) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          ⟨fun ix => (Tile.dot [] qtile ktile).data ix⟩
+          (Tile.scalar (some qsc))) kscT).data (i, jL, PUnit.unit)
+      = some ((Finset.univ.sum (fun e : Fin 128 =>
+          (if e.val < 96 then qm (i, e, PUnit.unit) else 0) * kread e jL)) * qsc * ksc) := by
+  have hdot : (Tile.dot [] qtile ktile).data (i, jL, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin 128 =>
+          (if e.val < 96 then qm (i, e, PUnit.unit) else 0) * kread e jL)) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, jL, PUnit.unit))))
+        = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => (some ((if e.val < 96 then qm (i, e, PUnit.unit) else 0) * kread e jL) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun e _ => by
+          rw [hqtile e, hktile e]
+          simp only [Option.map₂, Option.bind, Option.map]
+          refine congrArg some ?_
+          by_cases he : e.val < 96
+          · rw [if_pos he, if_pos ⟨hjLwin, he⟩]
+          · rw [if_neg he, if_neg (by simp [he])]; ring)]
+    rw [WithBot.sum_someTerm_eq_some]
+  simp only [Tile.bop_data, Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Tile.scalar, NumericDType.mul, hdot, hkscT]
+  simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
