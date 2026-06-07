@@ -3620,4 +3620,123 @@ theorem afc_mij_reg_eq_masked (s : BlockState) (Q K V : RegionName)
     rw [← hsqueeze, max_eq_right (not_lt.mp hcmp)]
 
 
+set_option maxHeartbeats 1600000 in
+/-- **Masked `pT` cell (AFC).** The kernel's masked `p` tile cell on lane `jL` is
+`some (pow2(score − Mc1))` when causally kept, `some 0` when masked — given the
+`mij` cell `= Mc1` (`= afcRunningMax((c+1)·64) ≠ ⊥`). -/
+theorem afc_pmT_cell_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128) (jL : Fin 64) (Mc1 : WithBot ℝ)
+    (qkSentT : Tile .real [128, 64]) (mijT : Tile .real [128]) (pT : Tile .real [128, 64])
+    (kept : Bool)
+    (hkept : kept = decide (qStartAFC s + i.val ≥ c * 64 + jL.val))
+    (hsent : qkSentT.data (i, jL, PUnit.unit)
+        = if kept then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = Mc1)
+    (hkeptbot : kept = Bool.true → Mc1 ≠ ⊥)
+    (hpT : pT.data (i, jL, PUnit.unit)
+        = if kept then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    pT.data (i, jL, PUnit.unit)
+      = some (if kept then
+          pow2 ((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+            ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 - Mc1.unbotD 0)
+          else 0) := by
+  rw [hpT]
+  by_cases hk : kept = Bool.true
+  · rw [if_pos hk]
+    obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+      cases hh : Mc1 with
+      | coe x => exact ⟨x, rfl⟩
+      | bot => exact absurd hh (hkeptbot hk)
+    simp only [Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, NumericDType.sub, hmij, hMr,
+      WithBot.unbotD_coe]
+    rw [show qkSentT.data (i, jL, PUnit.unit) =
+          (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+              ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ) from by
+      rw [hsent, if_pos hk]]
+    rw [if_pos hk]
+    simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+    refine congrArg some ?_
+    simp only [pow2]; ring_nf
+  · rw [if_neg hk, if_neg hk]
+    norm_num
+set_option maxHeartbeats 1600000 in
+/-- **`Σ_jL pT[i,jL] = afcBlock` pow2-score sum (AFC, masked).** The kernel's masked
+`p` reduceSum equals the windowed `afcBlock` pow2-score sum (shifted by `Mc1 =
+afcRunningMax((c+1)·64)`). -/
+theorem afc_nume_row_sum_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128)
+    (qkSentT : Tile .real [128, 64]) (mijT : Tile .real [128]) (pT : Tile .real [128, 64])
+    (hsent : ∀ jL : Fin 64, qkSentT.data (i, jL, PUnit.unit)
+        = if qStartAFC s + i.val ≥ c * 64 + jL.val then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩)
+    (hpT : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
+        = if (qStartAFC s + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.reduceSumDrop afcAx1 pT).data (i, PUnit.unit)
+      = some ((afcBlock (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) c i d).map
+          (fun p => pow2 (p.1 - (afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale
+            (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0))).sum := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  set qStart := qStartAFC s
+  set Mc1 := afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
+  have hMc1bot : Mc1 ≠ ⊥ := by
+    rw [hMc1]; exact afcRunningMax_ne_bot qT kT vT keyScale qStart ((c + 1) * 64) (by omega) i ⟨0, by norm_num⟩
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ jL : Fin 64,
+      pT.data (TileShape.insertAxisIndex [128, 64] afcAx1 (i, PUnit.unit) jL)
+        = some (if decide (qStart + i.val ≥ c * 64 + jL.val) then
+            pow2 ((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 - Mc1.unbotD 0)
+            else 0) := by
+    intro jL
+    rw [show (TileShape.insertAxisIndex [128, 64] afcAx1 (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
+    have hsentR : qkSentT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * 64 + jL.val) then
+            (((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+      rw [hsent jL]; by_cases h : qStart + i.val ≥ c * 64 + jL.val <;> simp [h]
+    have hpTR : pT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ) := by
+      rw [hpT jL]; by_cases h : qStart + i.val ≥ c * 64 + jL.val
+      · rw [if_pos h, if_pos (decide_eq_true h)]
+      · rw [if_neg h, if_neg (by simp [h])]
+    exact afc_pmT_cell_masked s Q K V keyScale c hc1 i jL Mc1 qkSentT mijT pT
+      (decide (qStart + i.val ≥ c * 64 + jL.val)) (by rfl) hsentR
+      (by rw [hmij]) (fun _ => hMc1bot) hpTR
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [afcBlock_map_sum qT kT vT keyScale qStart c i d hc1
+      (fun p => pow2 (p.1 - Mc1.unbotD 0))]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  simp only [decide_eq_true_eq]
+  by_cases hkp : (c * 64 + jL.val) ≤ qStart + i.val
+  · rw [if_pos (show qStart + i.val ≥ c * 64 + jL.val from by omega),
+        if_pos (show c * 64 + jL.val ≤ qStart + i.val from hkp)]
+    rfl
+  · rw [if_neg (show ¬ qStart + i.val ≥ c * 64 + jL.val from by omega),
+        if_neg (show ¬ c * 64 + jL.val ≤ qStart + i.val from hkp)]
+
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
