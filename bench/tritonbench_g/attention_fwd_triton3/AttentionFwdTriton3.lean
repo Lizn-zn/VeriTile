@@ -3700,4 +3700,139 @@ theorem aft3RunningMax_succ
   | nil => simp
   | cons a t ih => simp only [List.foldr_cons, ih, sup_assoc]
 
+/-! ### Case 3 per-channel register bridges (no-window)
+
+These specialize the flash-attn bridge layer to the `noWindowKeep` predicate (every
+key kept). Because there is no mask, the kernel's `qk` cell is the raw score and the
+`reduceMax`/`reduceSum`/`dot` reductions equal the `aft3Block` list sums directly. -/
+
+/-- Any member of a `WithBot ℝ` list is `≤` its `foldr (⊔) ⊥`. -/
+theorem aft3_mem_le_foldr_sup (a : WithBot ℝ) :
+    ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
+  intro L
+  induction L with
+  | nil => intro h; simp at h
+  | cons x t ih =>
+    intro h
+    simp only [List.foldr_cons]
+    rcases List.mem_cons.mp h with h | h
+    · rw [h]; exact le_sup_left
+    · exact le_trans (ih h) le_sup_right
+
+/-- `aft3RunningMax` over the full window `[0,128)` for `noWindowKeep` is `≠ ⊥`:
+key 0 is always kept, so the score list is nonempty. -/
+theorem aft3RunningMax_noWindow_ne_bot (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
+    aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+        (fun i j => noWindowKeep i j) 128 i d ≠ ⊥ := by
+  unfold aft3RunningMax aft3KeysUpto
+  set sc := keyScale3 (⟨0, by norm_num⟩ : Fin 128) *
+      Finset.univ.sum (fun e : Fin 64 => qTile3 s Q (i, e, PUnit.unit) *
+        kTile3 s K (⟨0, by norm_num⟩, e, PUnit.unit)) with hsc
+  set L := ((List.finRange 128).filterMap (fun j : Fin 128 =>
+      if j.val < 128 ∧ noWindowKeep i j then
+        some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
+                qTile3 s Q (i, e, PUnit.unit) * kTile3 s K (j, e, PUnit.unit)),
+              vTile3 s V (j, d, PUnit.unit))
+      else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) with hL
+  have hmemL : ((sc : ℝ) : WithBot ℝ) ∈ L := by
+    rw [hL, List.mem_map]
+    refine ⟨(sc, vTile3 s V (⟨0, by norm_num⟩, d, PUnit.unit)), ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨by norm_num, by trivial⟩]
+  have hle : ((sc : ℝ) : WithBot ℝ) ≤ L.foldr (· ⊔ ·) ⊥ := aft3_mem_le_foldr_sup _ L hmemL
+  intro hbot
+  exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
+
+/-- If the ⊥-seeded running max over `[0, hi)` is `⊥`, the key list is empty, hence
+its `pow2`-score (resp. `·v`) sum is `0`. -/
+theorem aft3KeysUpto_sum_zero_of_bot
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64)
+    (hbot : aft3RunningMax qT kT vT keyScale keep hi i d = ⊥) (h : ℝ × ℝ → ℝ) :
+    ((aft3KeysUpto qT kT vT keyScale keep hi i d).map h).sum = 0 := by
+  rw [show aft3KeysUpto qT kT vT keyScale keep hi i d = [] from ?_, List.map_nil, List.sum_nil]
+  by_contra hne
+  obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+  have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+      (aft3KeysUpto qT kT vT keyScale keep hi i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+    List.mem_map_of_mem hp
+  have := aft3_mem_le_foldr_sup _ _ hmem
+  rw [← aft3RunningMax, hbot] at this
+  exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+
+/-- The ⊥-seeded denominator after `c` blocks: `l = κ(M_c)·L_c`. -/
+theorem aft3_denom_anchor
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64) :
+    (aft3StateBot qT kT vT keyScale keep hi i d).2.1
+      = ((aft3StateBot qT kT vT keyScale keep hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((aft3KeysUpto qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1)).sum) := by
+  rw [aft3StateBot_snd_fst, aft3StateBot_fst_eq_runningMax, zero_add]
+
+/-- The ⊥-seeded accumulator after `c` blocks: `acc = κ(M_c)·T_c`. -/
+theorem aft3_acc_anchor
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64) :
+    (aft3StateBot qT kT vT keyScale keep hi i d).2.2
+      = ((aft3StateBot qT kT vT keyScale keep hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((aft3KeysUpto qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  rw [aft3StateBot_snd_snd, aft3StateBot_fst_eq_runningMax, zero_add]
+
+/-- Canonical axis-1 index of `[64, 64]`. -/
+def aft3Ax1 : Fin [64, 64].length := ⟨1, by decide⟩
+
+/-- **The `q·k` score cell (case 3).** With `q` loaded as `some (qT idx)` and the K
+block reading `kT` at global key `c·64 + jL`, the case-3 `qk` tile cell `(i, jL)`
+(= `(0 + dot q k)·sc`) is `some (sc · Σ_e qT(i,e)·kT(c·64+jL, e))`. -/
+theorem aft3_score_cell (s0 : BlockState) (Q K : RegionName) (sc : ℝ) (c : Nat)
+    (i jL : Fin 64) (hjL : c * 64 + jL.val < 128)
+    (qtile : Tile .real [64, 64]) (ktile : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64))) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
+        (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+      = some (sc * Finset.univ.sum (fun e : Fin 64 =>
+          qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+  have hdot : (Tile.dot [] qtile ktile).data (i, jL, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin 64 =>
+          qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+          (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, jL, PUnit.unit))))
+        = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (qTile3 s0 Q (i, e, PUnit.unit)
+              * kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun e _ => by
+          simp only [hq, hk (e, jL, PUnit.unit), Option.map₂, Option.bind, Option.map]
+          refine congrArg some ?_
+          rw [show kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)
+                = s0.readMem K (baseOffset3 s0 + e.val * 1 + (c * 64 + jL.val) * 64) from by
+            simp only [kTile3]; congr 1; ring])]
+    rw [WithBot.sum_someTerm_eq_some]
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarR,
+    Tile.scalar_data, NumericDType.mul, NumericDType.add, hdot]
+  show some _ = _
+  refine congrArg some ?_
+  simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map, zero_add]
+  ring
+
+/-- **`reduceMax` row (case 3).** -/
+theorem aft3_reduceMaxDrop_row (qk : Tile .real [64, 64]) (rmaxT : Tile .real [64])
+    (hrm : Tile.reduceMaxDrop aft3Ax1 qk = some rmaxT)
+    (i : Fin 64) (g : Fin 64 → WithBot ℝ)
+    (hqk : ∀ jL : Fin 64, qk.data (i, jL, PUnit.unit) = g jL) :
+    rmaxT.data (i, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop aft3Ax1 at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) from by decide)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
