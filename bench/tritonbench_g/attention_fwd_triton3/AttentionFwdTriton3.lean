@@ -5917,6 +5917,67 @@ theorem aft3_attn_exec
     aft3PostLoop_eval Q K V M Out L s sL hMO hinvL
   refine ⟨sF, hpost, hO, hM⟩
 
+/-- Genuine `M`-row spec (cases 1/2): the raw `(M ⊔ … + log2 l).unbotD` finalize
+(over the faithful `keep` predicate), well-defined at empty-window rows too. -/
+noncomputable def attentionFwdTriton3KMSpec
+    (s : BlockState) (Q K V : RegionName) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin 64) : ℝ :=
+  (WithBot.realAdd
+      (aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 keep 128 i ⟨0, by norm_num⟩)
+      (WithBot.realLog2 (((aft3StateBotK (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+        keep 128 i ⟨0, by norm_num⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Full kernel execution (case 1, sliding window).** Mirrors `aft3_attn_exec`
+but with the masked loop body, the ⊥-carry invariant `attnInvariantK`
+(`natSlidingWindowKeep`), and the empty-window-safe postLoop. The `O` writeback
+realizes the faithful case-1 closed form `attentionFwdTriton3Case1OutSpec`
+(`0/0 = 0` at fully-masked rows); the `M` writeback realizes the raw finalize. -/
+theorem aft3_attn_exec1
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel.body s = some sF
+      ∧ (∀ idx : TileIndex [64, 64],
+          sF.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
+            = attentionFwdTriton3Case1OutSpec s Q K V idx)
+      ∧ (∀ i : Fin 64,
+          sF.readMem M (lRowOffset s (s.pids 1) 128 64 i)
+            = attentionFwdTriton3KMSpec s Q K V
+                (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
+  rw [aft3_body_split]
+  obtain ⟨sp, hpre, hinv0⟩ :=
+    aft3PreLoop_eval Q K V M Out L s (fun i j => natSlidingWindowKeep (s.pids 0) i j) hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
+      (body := aft3LoopBody)
+      (P := fun i st => attnInvariantK Q K V M Out L s
+        (fun i j => natSlidingWindowKeep (s.pids 0) i j) i st)
+      (s_init := sp)
+      (by norm_num)
+      (attnInvariant_zero_to_K Q K V M Out L s _ sp hinv0)
+      (fun i st hi hP => aft3_attn_step1 Q K V M Out L s i st hi
+        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+  rw [stepStmts.cons_some hloop]
+  have hfinal : final = 128 := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  subst hfinal
+  obtain ⟨sF, hpost, hO, hM⟩ :=
+    aft3PostLoop_eval_K Q K V M Out L s sL hMO (fun i j => natSlidingWindowKeep (s.pids 0) i j) hinvL
+  refine ⟨sF, hpost, ?_, ?_⟩
+  · intro idx
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    rw [hO (ir, id, PUnit.unit)]
+    rw [aft3StateBotK_full_eq_streaming (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
+      (fun i j => natSlidingWindowKeep (s.pids 0) i j) ir id]
+    rw [aft3KeysUpto_full]
+    exact (attentionFwdTriton3Case1OutSpec_eq_streaming s Q K V ir id).symm
+  · intro i; rw [hM i, attentionFwdTriton3KMSpec]
+
 /-! ## Case 3 genuine closed-form output summary
 
 The case-3 `Out`/`M` writebacks at the Python test shape equal their genuine
