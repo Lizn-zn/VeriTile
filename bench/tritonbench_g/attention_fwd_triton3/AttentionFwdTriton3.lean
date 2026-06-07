@@ -3788,6 +3788,24 @@ theorem aft3RunningMax_eq
   intro j _
   by_cases hj : j.val < hi ∧ keep i j <;> simp [hj]
 
+/-- The ⊥-seeded denominator (`aft3StateBot.2.1`) is independent of the channel
+index `d` — it depends on `d` only through the (d-independent) running max and the
+score-only key list. -/
+theorem aft3StateBot_snd_fst_indep
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d d' : Fin 64) :
+    (aft3StateBot qT kT vT keyScale keep hi i d).2.1
+      = (aft3StateBot qT kT vT keyScale keep hi i d').2.1 := by
+  rw [aft3StateBot_snd_fst, aft3StateBot_snd_fst,
+    aft3RunningMax_eq qT kT vT keyScale keep hi i d d']
+  congr 2
+  unfold aft3KeysUpto
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val < hi ∧ keep i j <;> simp [hj]
+
 /-! ### Case 3 per-channel register bridges (no-window)
 
 These specialize the flash-attn bridge layer to the `noWindowKeep` predicate (every
@@ -4507,5 +4525,264 @@ theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
   · rw [hOpF]
   · exact hundefF
   · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+
+/-! ### postLoop evaluation (case 3, no window) -/
+
+/-- A `foldl` of `writeMem`s into region `R'` preserves `readMem R o` whenever the
+read region `R` differs from the written region `R'`. -/
+theorem aft3_foldl_writeMem_readMem_other_region {α : Type} (R R' : RegionName)
+    (hRR' : R ≠ R') (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α)
+    (s : BlockState) :
+    ((l.foldl (fun acc k => acc.writeMem R' (offsetFn k) (valueFn k)) s).readMem R o)
+      = s.readMem R o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.foldl_cons, ih]
+    exact BlockState.writeMem_readMem_of_ne_region s R' (offsetFn hd) (valueFn hd) R o hRR'
+
+/-- Injectivity of the case-3 `O` block-pointer store addresses (Python shape). -/
+theorem aft3_O_blockptr_offset_injective (base p0 : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] => base + (p0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp only at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb; subst db; rfl
+
+/-- Injectivity of the case-3 `M` row store addresses (Python shape). -/
+theorem aft3_M_ptr_offset_injective (p0 p1 : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [64] => p1 * 128 + (p0 * 64 + idx.1.val)) := by
+  rintro ⟨⟨a, ha⟩, _⟩ ⟨⟨b, hb⟩, _⟩ h
+  simp only at h
+  have : a = b := by omega
+  subst b; rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readbacks (case 3, no window).** Stepping the
+3 post-loop statements (END finalize + M-row store + O block-ptr store) from a
+loop-end state satisfying `attnInvariant … noWindowKeep 128`, the kernel's `O`
+store holds the genuine closed-form attention ratio
+(`attentionFwdTriton3Case3OutSpec`) at every injective output lane, and the `M`
+store holds the genuine finalize value `m_i + log2 l_i` (running max + log2 of the
+denominator) at every injective row lane. -/
+theorem aft3PostLoop_eval
+    (Q K V M Out L : RegionName) (s0 : BlockState) (s : BlockState)
+    (hMO : M ≠ Out)
+    (hinv : attnInvariant Q K V M Out L s0 (fun i j => noWindowKeep i j) 128 s) :
+    ∃ sP, stepStmts (aft3PostLoop M Out L) s = some sP
+      ∧ (∀ idx : TileIndex [64, 64],
+          sP.readMem Out (outOffset s0 4 32768 8192 64 1 64 idx)
+            = attentionFwdTriton3Case3OutSpec s0 Q K V idx)
+      ∧ (∀ i : Fin 64,
+          sP.readMem M (lRowOffset s0 (s0.pids 1) 128 64 i)
+            = (aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+                  (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).unbotD 0
+              + Real.log
+                ((aft3StateBot1 (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
+                    (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).2.1) / Real.log 2) := by
+  simp only [attnInvariant] at hinv
+  obtain ⟨hpids, _, _, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ :=
+    hinv
+  set qT := qTile3 s0 Q with hqT
+  set kT := kTile3 s0 K with hkT
+  set vT := vTile3 s0 V with hvT
+  set kp : Fin 64 → Fin 128 → Prop := fun i j => noWindowKeep i j with hkp
+  -- register tiles at loop end
+  set miTile : Tile .real [64] :=
+    ⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp 128 r.1 ⟨0, by norm_num⟩⟩
+    with hmiTile
+  set liTile : Tile .real [64] :=
+    ⟨fun r : TileIndex [64] => ((aft3StateBot1 qT kT vT keyScale3 kp 128 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
+    with hliTile
+  set accTile : Tile .real [64, 64] :=
+    ⟨fun idx : TileIndex [64, 64] => ((aft3StateBot1 qT kT vT keyScale3 kp 128 idx.1 idx.2.1).2.2 : ℝ)⟩
+    with haccTile
+  unfold aft3PostLoop
+  -- stmt 0: END ifThenElse (constexpr true): m_i += log2 l_i ; acc = acc / l_i[:, None]
+  -- finalized m_i tile
+  set miFin : Tile .real [64] :=
+    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) miTile
+      (Tile.uop WithBot.realLog2 liTile) with hmiFin
+  set accFin : Tile .real [64, 64] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil)) accTile
+      (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
+  rw [stepStmts.cons_some
+    (show stepStmt _ s = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true s)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil)
+            (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "l_i").log2) s
+            = some miFin from by
+          rw [evalOp_add]
+          simp only [evalOp, evalOp.eq_def, evalOp_ref, hmi, hli, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.div NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref TileDType.real [64, 64] "acc")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [64] "l_i"))) _
+            = some accFin from by
+          have hexp : @evalOp TileDType.real [64, 1]
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [64] "l_i"))
+                (s.setReg "m_i" .real [64] miFin)
+              = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+          rw [evalOp_div]
+          simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+            not_false_eq_true, BlockState.setReg_same, hexp, hacc, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.nil])]
+  -- state after the END finalize
+  set s2 := (s.setReg "m_i" .real [64] miFin).setReg "acc" .real [64, 64] accFin with hs2
+  -- m_ptrs / l_ptrs readbacks in s2
+  have hMptr2 : s2.regs .ptr [64] "m_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
+          (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val)))) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
+  have hmi2 : s2.regs .real [64] "m_i" = some miFin := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- M store address function and value function
+  set mOffFn : TileIndex [64] → Nat :=
+    fun r => s0.pids 1 * 128 + (s0.pids 0 * 64 + r.1.val) with hmOffFn
+  set mValTile : Tile .real [64] := miFin with hmValTile
+  -- stmt 1: store M via m_ptrs (m_i = miFin)
+  have hmptrEval : evalOp (Op.ref TileDType.ptr [64] "m_ptrs") s2
+      = some (⟨fun r : TileIndex [64] => (M.cast, mOffFn r)⟩ : Tile .ptr [64]) := by
+    rw [evalOp_ref, hMptr2]
+    refine congrArg some ?_; ext r
+    · rfl
+    · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add, hmOffFn]
+  have hstore1 : stepStmt (Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs"))
+      (Op.ref TileDType.real [64] "m_i") MaskOpt.none) s2
+      = some ((TileShape.allIndices [64]).foldl
+          (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2) := by
+    simp only [stepStmt, evalOp_ref, hmi2, hmptrEval, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some, if_true, Region.cast_id, mValTile]
+  rw [stepStmts.cons_some hstore1]
+  set s3 := (TileShape.allIndices [64]).foldl
+      (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2 with hs3
+  -- O_block_ptr / acc readbacks in s3 (stores only touch memory)
+  have hOp3 : s3.regs .blockPtr [64, 64] "O_block_ptr" = some
+      (⟨fun _ : TileIndex [64, 64] =>
+        { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+          parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+          offsets := [s0.pids 0 * 64, 0] }⟩) := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  have hacc3 : s3.regs .real [64, 64] "acc" = some accFin := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_same]
+  -- O store address / value functions
+  set oOffFn : TileIndex [64, 64] → Nat :=
+    fun idx => s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1
+    with hoOffFn
+  set oValFn : TileIndex [64, 64] → WithBot ℝ := fun idx => accFin.data idx with hoValFn
+  -- stmt 2: store O via O_block_ptr (acc = accFin)
+  have hOpref : @evalOp TileDType.blockPtr [64, 64] (Op.ref .blockPtr [64, 64] "O_block_ptr") s3
+      = some (⟨fun _ : TileIndex [64, 64] =>
+          { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+            parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+            offsets := [s0.pids 0 * 64, 0] }⟩
+          : Tile .blockPtr [64, 64]) := by rw [evalOp_ref]; exact hOp3
+  have hstore2 : stepStmt (Stmt.store TileDType.real [64, 64]
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "O_block_ptr") [])
+      (Op.ref TileDType.real [64, 64] "acc") MaskOpt.none) s3
+      = some ((TileShape.allIndices [64, 64]).foldl
+          (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3) := by
+    simp only [stepStmt, evalOp_ref, hacc3, hOp3, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s3 ?_
+    intro acc idx _
+    simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil, Bool.and_true,
+      Bool.true_and, if_true]
+    have haddr : BlockPtr.address
+        { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
+          parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
+          offsets := [s0.pids 0 * 64, 0] }
+        [idx.1.val, idx.2.1.val]
+        = oOffFn idx := by
+      show s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 +
+          ((s0.pids 0 * 64 + idx.1.val) * 64 + (0 + idx.2.1.val) * 1) = _
+      rw [Nat.zero_add, hoOffFn]; ring
+    rw [haddr]
+  rw [stepStmts.cons_some hstore2, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · -- O readback: genuine attention ratio
+    intro idx
+    have hinjO : Function.Injective oOffFn := by
+      rw [hoOffFn]; exact aft3_O_blockptr_offset_injective _ (s0.pids 0)
+    -- outOffset = oOffFn
+    have houtOff : outOffset s0 4 32768 8192 64 1 64 idx = oOffFn idx := by
+      simp only [outOffset, offZ, offH, mIndex, kIndex, hoOffFn]
+    rw [houtOff]
+    -- O store readback (writeMemTyped real → writeMem with storeValue)
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := Out) s3 oOffFn
+      (fun idx => FloatDType.real.storeValue (oValFn idx)) hinjO idx]
+    -- decode: accFin / liFin = StateBot ratio = spec
+    simp only [FloatDType.real_storeValue, hoValFn, haccFin]
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hne : aft3RunningMax qT kT vT keyScale3 kp 128 ir id ≠ ⊥ :=
+      aft3RunningMax_noWindow_ne_bot s0 Q K V 128 (by norm_num) ir id
+    have hne' : aft3RunningMax qT kT vT keyScale3 kp 128 ir ⟨0, by norm_num⟩ ≠ ⊥ :=
+      aft3RunningMax_noWindow_ne_bot s0 Q K V 128 (by norm_num) ir ⟨0, by norm_num⟩
+    -- accTile / liTile cell: (accFin.data).unbotD 0 = accTile/liTile real ratio
+    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+      Option.map₂, Option.bind, Option.map, haccTile, hliTile, WithBot.unbotD_coe]
+    rw [aft3StateBot1_eq_aft3StateBot qT kT vT keyScale3 kp 128 ir id hne,
+      aft3StateBot1_eq_aft3StateBot qT kT vT keyScale3 kp 128 ir ⟨0, by norm_num⟩ hne']
+    rw [show ((aft3StateBot qT kT vT keyScale3 kp 128 ir ⟨0, by norm_num⟩).2.1 : ℝ)
+          = (aft3StateBot qT kT vT keyScale3 kp 128 ir id).2.1 from
+        aft3StateBot_snd_fst_indep qT kT vT keyScale3 kp 128 ir ⟨0, by norm_num⟩ id]
+    rw [← aft3StateBot_full_eq_spec_case3 s0 Q K V ir id hne]
+    rfl
+  · -- M readback: genuine finalize value (running max + log2 denom)
+    intro i
+    have hinjM : Function.Injective mOffFn := by
+      rw [hmOffFn]; exact aft3_M_ptr_offset_injective (s0.pids 0) (s0.pids 1)
+    -- the O store (region Out) and O_block_ptr setReg preserve readMem M
+    rw [show (lRowOffset s0 (s0.pids 1) 128 64 i) = mOffFn (i, PUnit.unit) from by
+      simp only [lRowOffset, hmOffFn]]
+    rw [show ((TileShape.allIndices [64, 64]).foldl
+            (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3).readMem M
+              (mOffFn (i, PUnit.unit))
+          = s3.readMem M (mOffFn (i, PUnit.unit)) from by
+      simp only [BlockState.writeMemTyped_real]
+      exact aft3_foldl_writeMem_readMem_other_region M Out hMO oOffFn
+        (fun idx => FloatDType.real.storeValue (oValFn idx)) (mOffFn (i, PUnit.unit))
+        (TileShape.allIndices [64, 64]) s3]
+    -- s3 is the M scatter
+    rw [hs3]
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := M) s2 mOffFn
+      (fun r => FloatDType.real.storeValue (miFin.data r)) hinjM (i, PUnit.unit)]
+    -- decode miFin cell = running max + log2 denom
+    simp only [FloatDType.real_storeValue, miFin, Tile.bop_data, Tile.uop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, hmiTile, hliTile]
+    have hne : aft3RunningMax qT kT vT keyScale3 kp 128 i ⟨0, by norm_num⟩ ≠ ⊥ :=
+      aft3RunningMax_noWindow_ne_bot s0 Q K V 128 (by norm_num) i ⟨0, by norm_num⟩
+    obtain ⟨mr, hmr⟩ := WithBot.ne_bot_iff_exists.mp hne
+    rw [← hmr]
+    rw [show ((aft3StateBot1 qT kT vT keyScale3 kp 128 i ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
+          = some ((aft3StateBot1 qT kT vT keyScale3 kp 128 i ⟨0, by norm_num⟩).2.1) from rfl]
+    rw [WithBot.realLog2_some]
+    simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map, WithBot.unbotD_coe]
+    rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
