@@ -3739,4 +3739,100 @@ theorem afc_nume_row_sum_masked (s : BlockState) (Q K V : RegionName) (keyScale 
 
 
 
+set_option maxHeartbeats 1600000 in
+/-- **`Σ_jL pT[i,jL]·v[jL,d] = afcBlock` pow2-score·value sum (AFC, masked).** The
+kernel's `dot(p, v)` numerator increment equals the windowed `afcBlock`
+pow2-score·value sum. `vval jL = vTileAFC-value at global key c·64+jL, channel d`
+(carried by the masked v load: for `d < 96` it is `vTileAFC(c·64+jL, d)`). -/
+theorem afc_acc_dot_block_masked (s : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128)
+    (qkSentT : Tile .real [128, 64]) (mijT : Tile .real [128]) (pT : Tile .real [128, 64])
+    (vtile : Tile .real [64, 128]) (vval : Fin 64 → ℝ)
+    (hsent : ∀ jL : Fin 64, qkSentT.data (i, jL, PUnit.unit)
+        = if qStartAFC s + i.val ≥ c * 64 + jL.val then
+            (((afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i ⟨0, by norm_num⟩
+                ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩)
+    (hpT : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
+        = if (qStartAFC s + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ))
+    (hv : ∀ jL : Fin 64, vtile.data (jL, d, PUnit.unit) = some (vval jL))
+    (hvval : ∀ jL : Fin 64, vval jL
+        = (afcKV (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale i d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).2) :
+    (Tile.dot [] pT vtile).data (i, d, PUnit.unit)
+      = some ((afcBlock (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale (qStartAFC s) c i d).map
+          (fun p => pow2 (p.1 - (afcRunningMax (qTileAFC s Q) (kTileAFC s K) (vTileAFC s V) keyScale
+            (qStartAFC s) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0) * p.2)).sum := by
+  set qT := qTileAFC s Q
+  set kT := kTileAFC s K
+  set vT := vTileAFC s V
+  set qStart := qStartAFC s
+  set Mc1 := afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
+  have hMc1bot : Mc1 ≠ ⊥ := by
+    rw [hMc1]; exact afcRunningMax_ne_bot qT kT vT keyScale qStart ((c + 1) * 64) (by omega) i ⟨0, by norm_num⟩
+  -- the masked pT cell value
+  have hpcell : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
+      = some (if decide (qStart + i.val ≥ c * 64 + jL.val) then
+          pow2 ((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 - Mc1.unbotD 0)
+          else 0) := by
+    intro jL
+    have hsentR : qkSentT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * 64 + jL.val) then
+            (((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+      rw [hsent jL]; by_cases h : qStart + i.val ≥ c * 64 + jL.val <;> simp [h]
+    have hpTR : pT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * 64 + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ) := by
+      rw [hpT jL]; by_cases h : qStart + i.val ≥ c * 64 + jL.val
+      · rw [if_pos h, if_pos (decide_eq_true h)]
+      · rw [if_neg h, if_neg (by simp [h])]
+    have := afc_pmT_cell_masked s Q K V keyScale c hc1 i jL Mc1 qkSentT mijT pT
+      (decide (qStart + i.val ≥ c * 64 + jL.val)) (by rfl) hsentR (by rw [hmij]) (fun _ => hMc1bot) hpTR
+    rw [this]
+  rw [Tile.dot_nil_data]
+  have hterm : ∀ jL : Fin 64,
+      Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (if (qStart + i.val ≥ c * 64 + jL.val) then
+            pow2 ((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 - Mc1.unbotD 0)
+              * vval jL
+            else 0) := by
+    intro jL
+    rw [hpcell jL, hv jL]
+    simp only [Option.map₂, Option.bind, Option.map, decide_eq_true_eq]
+    refine congrArg some ?_
+    by_cases h : qStart + i.val ≥ c * 64 + jL.val
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h]; ring
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun jL => Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))))
+      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (if (qStart + i.val ≥ c * 64 + jL.val) then
+              pow2 ((afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 - Mc1.unbotD 0)
+                * vval jL else 0) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hterm jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [afcBlock_map_sum qT kT vT keyScale qStart c i d hc1
+      (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : (c * 64 + jL.val) ≤ qStart + i.val
+  · rw [if_pos (show qStart + i.val ≥ c * 64 + jL.val from by omega),
+        if_pos (show c * 64 + jL.val ≤ qStart + i.val from hkp)]
+    rw [hvval jL,
+      show (afcKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1
+          = (afcKV qT kT vT keyScale i d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 from by
+        simp only [afcKV]]
+  · rw [if_neg (show ¬ qStart + i.val ≥ c * 64 + jL.val from by omega),
+        if_neg (show ¬ c * 64 + jL.val ≤ qStart + i.val from hkp)]
+
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
