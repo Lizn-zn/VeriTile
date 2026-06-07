@@ -489,11 +489,16 @@ noncomputable def vTileAFC (s : BlockState) (V : RegionName) :
 def qStartAFC (s : BlockState) : Nat := s.pids 0 * 128
 
 /-- **Masked query tile** — the tile the kernel actually loads: `qTileAFC` but
-zeroed on the head-inactive lanes `e ≥ 96` (the `q = tl.load(..., mask=(... &
-(arange < HEAD_ACTIVE)))` head-active mask, with `HEAD_ACTIVE = 96`). -/
+zeroed on the head-inactive lanes `e ≥ 96` and on out-of-range query rows
+`qStart + i ≥ N_CTX = 128` (the `q = tl.load(..., mask=((offs_m < N_CTX) &
+(arange < HEAD_ACTIVE)))` load mask, with `HEAD_ACTIVE = 96`). The query-row
+boundary clause is vacuous on the active output lanes (`offs_m < 128`), so this
+matches `qTileAFC` head-masked there; it only zeroes the masked-off rows the
+final store discards. -/
 noncomputable def qTileAFCm (s : BlockState) (Q : RegionName) :
     TileIndex [128, 128] → ℝ :=
-  fun (i, e, u) => if e.val < 96 then qTileAFC s Q (i, e, u) else 0
+  fun (i, e, u) =>
+    if qStartAFC s + i.val < 128 ∧ e.val < 96 then qTileAFC s Q (i, e, u) else 0
 
 /-- **Masked value tile** — the tile the kernel actually loads: `vTileAFC` but
 zeroed on the head-inactive lanes `d ≥ 96` (the `v = tl.load(..., mask=(... &
@@ -2061,9 +2066,6 @@ noncomputable def afcInvariant
       ((afcStateBot1 qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => qStart + r.val))) ∧
   (s.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))) ∧
-  (s.regs .nat [128] "offs_k" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
-  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
-  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
   (s.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
       if qStart + idx.1.val < 128 ∧ idx.2.1.val < 96 then some (qTileAFC s0 Q idx) else some (0.0 : ℝ)⟩) ∧
   (s.regs .real [] "q_scale" = some (Tile.scalar
@@ -2658,8 +2660,8 @@ theorem afcPreLoop_invariant
       Q K V s keyScale
   refine ⟨s0, hstep, ?_⟩
   simp only [afcInvariant, qStartAFC]
-  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-    ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
+  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
   · -- m_i = afcRunningMax ... 0 = ⊥
     rw [hmi]; exact congrArg some hzm.symm
   · -- l_i = afcStateBot1 ... 0 .2.1 = 1
@@ -2670,12 +2672,6 @@ theorem afcPreLoop_invariant
     rw [hoffsm]
   · -- offs_n
     exact hoffsn
-  · -- offs_k
-    exact hoffsk
-  · -- start_m
-    rw [hstartm]
-  · -- off_hz
-    rw [hoffhz]
   · -- q
     rw [hq]; rfl
   · -- q_scale
@@ -4072,5 +4068,298 @@ theorem afc_acc_reg_eq_masked
         = (afcStateBot qT kT vT keyScale qStart (c * 64) i d).2.2 * α from by
     have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
 
+
+/-! ## Step lemma + postLoop + top theorem (assembly) -/
+
+/-- **The kernel's per-key score scale carrier** `qk_scale = q_scale · k_scale`,
+loaded once per program (`q_scale = QScale[off_hz·1 + start_m]`) and once per key
+block (`k_scale = KScale[off_hz·2 + start_n/BLOCK_N]`). Key `j` lives in block
+`j / 64`, so its scale is `q_scale · KScale[off_hz·2 + j/64]`. -/
+noncomputable def keyScaleAFC (s : BlockState) (QScale KScale : RegionName) :
+    Fin 128 → ℝ :=
+  fun j => s.readMem QScale (s.pids 1 * 1 + s.pids 0)
+            * s.readMem KScale (s.pids 1 * 2 + j.val / 64)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Step lemma (AFC, causal, masked).** -/
+theorem afc_attn_step (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
+    (i : Nat) (s : BlockState) (hilt : i < 128) (himod : i % 64 = 0)
+    (hsb : afcScoreBound (qTileAFCm s0 Q) (kTileAFC s0 K) (vTileAFCm s0 V)
+      (keyScaleAFC s0 QScale KScale) (qStartAFC s0))
+    (hinv : afcInvariant Q K V QScale KScale Out s0 (keyScaleAFC s0 QScale KScale) i s) :
+    ∃ s', stepStmts AfcFoundation.afcLoopBody (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ afcInvariant Q K V QScale KScale Out s0 (keyScaleAFC s0 QScale KScale) (i + 64) s' := by
+  set keyScale := keyScaleAFC s0 QScale KScale with hkeyScale
+  set qStart := qStartAFC s0 with hqStart
+  set qT := qTileAFCm s0 Q with hqT
+  set kT := kTileAFC s0 K with hkT
+  set vT := vTileAFCm s0 V with hvT
+  simp only [afcInvariant] at hinv
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hoffsm, hoffsn,
+    hq, hqs, hKp, hKsp, hVp, hundef, hmem⟩ := hinv
+  set c := i / 64 with hc_def
+  have hi : i = c * 64 := by omega
+  have hc1 : (c + 1) * 64 ≤ 128 := by omega
+  set sin := s.setReg "start_n" .nat [] (Tile.scalar i) with hsin
+  have hpids' : sin.pids = s0.pids := by rw [hsin]; simpa using hpids
+  have hmem' : sin.mem = s0.mem := by
+    rw [hsin]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have hundef' : ∀ rg o, sin.undef rg o = 0 := by
+    intro rg o; rw [hsin, BlockState.setReg_undef]; exact hundef rg o
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF,
+      kmaskT, ktile, kscT, qkdotT, maskT, qkSentT, rmaxT, mijT, pT, lijT, alphaT,
+      vmaskT, vtile, pf16,
+      hkmaskT, hktile, hkscT, hqkdotT, hmaskT, hqkSentT, hrm, hmijT, hpT, hlijT, halphaT,
+      hvmaskT, hvtile, hpf16, hFmi, hFli, hFacc, hFoffsm, hFoffsn, hFq, hFqsc, hFKp, hFKsp, hFVp⟩ :=
+    afcLoopBody_steps sin i
+      (Tile.vec (fun r : Fin 128 => qStart + r.val)) (Tile.vec (fun j : Fin 64 => j.val))
+      (kPtrsAFC s0 K c) (kScalePtrAFC s0 KScale c) (vPtrsAFC s0 V c)
+      ⟨fun r : TileIndex [128] => afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      ⟨fun idx : TileIndex [128, 128] =>
+        if qStart + idx.1.val < 128 ∧ idx.2.1.val < 96 then some (qTileAFC s0 Q idx) else some (0.0 : ℝ)⟩
+      (Tile.scalar (some (s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0))))
+      ⟨fun r : TileIndex [128] => ((afcStateBot1 qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
+      ⟨fun idx : TileIndex [128, 128] => ((afcStateBot1 qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (by rw [hsin]; simpa using rfl)
+      (by rw [hsin]; simpa using hoffsm)
+      (by rw [hsin]; simpa using hoffsn)
+      (by rw [hsin]; simpa using hmi)
+      (by rw [hsin]; simpa using hli)
+      (by rw [hsin]; simpa using hacc)
+      (by rw [hsin]; simpa using hq)
+      (by rw [hsin]; simpa using hqs)
+      (by rw [hsin, hc_def]; simpa using hKp)
+      (by rw [hsin, hc_def]; simpa using hKsp)
+      (by rw [hsin, hc_def]; simpa using hVp)
+  refine ⟨sF, hchain, ?_⟩
+  -- scalar scales
+  set qsc : ℝ := s0.readMem QScale (s0.pids 1 * ((128 + 128 - 1) / 128) + s0.pids 0) with hqscv
+  set ksc : ℝ := s0.readMem KScale (s0.pids 1 * ((128 + 64 - 1) / 64) + c) with hkscv
+  -- k_scale cell
+  have hkscData : kscT.data PUnit.unit = some ksc := by
+    rw [hkscT]; simp only [kScalePtrAFC, Region.cast, hkscv]
+    refine congrArg some ?_
+    unfold BlockState.readMem; rw [hmem']
+  -- keyScale at a block-c key
+  have hkeyBlock : ∀ jL : Fin 64,
+      keyScale (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128) = qsc * ksc := by
+    intro jL
+    have hdiv : (c * 64 + jL.val) / 64 = c := by
+      have := jL.isLt; omega
+    simp only [hkeyScale, keyScaleAFC, hqscv, hkscv, hdiv]
+  -- the q register cell in afc_score_cell `hqtile` form (qm = qT = qTileAFCm)
+  have hqcell : ∀ (ir : Fin 128) (e : Fin 128),
+      (⟨fun idx : TileIndex [128, 128] =>
+        if qStart + idx.1.val < 128 ∧ idx.2.1.val < 96 then some (qTileAFC s0 Q idx) else some (0.0 : ℝ)⟩
+          : Tile .real [128, 128]).data (ir, e, PUnit.unit)
+        = some (if e.val < 96 then qT (ir, e, PUnit.unit) else 0) := by
+    intro ir e
+    show (if qStart + ir.val < 128 ∧ e.val < 96 then some (qTileAFC s0 Q (ir, e, PUnit.unit)) else some (0.0 : ℝ))
+        = some (if e.val < 96 then qT (ir, e, PUnit.unit) else 0)
+    rw [hqT]; simp only [qTileAFCm, hqStart]
+    by_cases he : e.val < 96
+    · by_cases hb : qStartAFC s0 + ir.val < 128
+      · rw [if_pos ⟨hb, he⟩, if_pos he, if_pos ⟨hb, he⟩]
+      · rw [if_neg (fun h => hb h.1), if_pos he, if_neg (fun h => hb h.1)]; norm_num
+    · rw [if_neg (fun h => he h.2), if_neg he]; norm_num
+  -- the k load cell in afc_score_cell `hktile` form (kread = kT global key)
+  have hkcell : ∀ (e : Fin 128) (jL : Fin 64),
+      ktile.data (e, jL, PUnit.unit)
+        = some (if jL.val < 128 - i ∧ e.val < 96 then
+            kT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit) else 0) := by
+    intro e jL
+    rw [hktile]; simp only [hkmaskT, kPtrsAFC, Region.cast, Tile.vec]
+    rw [show (ComparableDType.nat.lt jL.val (128 - i) && ComparableDType.nat.lt e.val 96)
+          = decide (jL.val < 128 - i ∧ e.val < 96) from by
+      rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+        decide_eq_true_eq]]
+    by_cases hb : jL.val < 128 - i ∧ e.val < 96
+    · rw [if_pos (by simp only [decide_eq_true_eq]; exact hb), if_pos hb]
+      refine congrArg some ?_
+      rw [hkT, kTileAFC]
+      rw [show baseOffsetAFC s0 + e.val + (c * 64 + jL.val) * 128
+            = baseOffsetAFC s0 + (c * 64 + jL.val) * 128 + e.val from by omega]
+      show sin.readMem _ _ = s0.readMem K _
+      unfold BlockState.readMem; rw [hmem']
+    · rw [if_neg (by simp only [decide_eq_true_eq]; exact hb), if_neg hb]
+      refine congrArg some ?_
+      exact hundef' _ _
+  -- masked q tile is already 0 on e ≥ 96
+  have hqTmask : ∀ (ir e : Fin 128), (if e.val < 96 then qT (ir, e, PUnit.unit) else 0) = qT (ir, e, PUnit.unit) := by
+    intro ir e
+    by_cases he : e.val < 96
+    · rw [if_pos he]
+    · rw [if_neg he, hqT]; simp only [qTileAFCm]; rw [if_neg (fun h => he h.2)]
+  -- jL window: c ≤ 1 so jL.val < 128 - i always
+  have hjLwin : ∀ jL : Fin 64, jL.val < 128 - i := by
+    intro jL; have := jL.isLt; omega
+  -- the qk dot cell equals the afcKV score (per kept key)
+  have hqkcell : ∀ (ir : Fin 128) (d : Fin 128) (jL : Fin 64),
+      qkdotT.data (ir, jL, PUnit.unit)
+        = some ((afcKV qT kT vT keyScale ir d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1) := by
+    intro ir d jL
+    rw [hqkdotT]
+    have hsc := afc_score_cell s0 qStart i jL ir qsc ksc qT
+      (fun e jL => kT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))
+      ⟨fun idx : TileIndex [128, 128] =>
+        if qStart + idx.1.val < 128 ∧ idx.2.1.val < 96 then some (qTileAFC s0 Q idx) else some (0.0 : ℝ)⟩
+      ktile kscT (hjLwin jL)
+      (fun e => hqcell ir e) (fun e => hkcell e jL) hkscData
+    rw [hsc]
+    refine congrArg some ?_
+    simp only [afcKV, hkeyBlock jL]
+    rw [show (Finset.univ.sum (fun e : Fin 128 => (if e.val < 96 then qT (ir, e, PUnit.unit) else 0)
+            * kT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)))
+          = Finset.univ.sum (fun e : Fin 128 => qT (ir, e, PUnit.unit)
+            * kT (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))
+        from Finset.sum_congr rfl (fun e _ => by rw [hqTmask ir e])]
+    ring
+  -- the causal mask cell
+  have hmaskcell : ∀ (ir : Fin 128) (jL : Fin 64),
+      maskT.data (ir, jL, PUnit.unit) = decide (qStart + ir.val ≥ c * 64 + jL.val) := by
+    intro ir jL
+    rw [hmaskT]; simp only [Tile.vec]
+    rw [show (ComparableDType.nat.ge (qStart + ir.val) (i + jL.val))
+          = decide (qStart + ir.val ≥ c * 64 + jL.val) from by
+      rw [Bool.eq_iff_iff]; simp only [ComparableDType.nat_ge_eq_true, decide_eq_true_eq]
+      omega]
+  -- the sentinel cell: kept → afcKV score, else −1e6
+  have hsentcell : ∀ (ir : Fin 128) (d : Fin 128) (jL : Fin 64),
+      qkSentT.data (ir, jL, PUnit.unit)
+        = if qStart + ir.val ≥ c * 64 + jL.val then
+            (((afcKV qT kT vT keyScale ir d ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+    intro ir d jL
+    rw [hqkSentT]; simp only [hmaskcell ir jL, decide_eq_true_eq]
+    by_cases hk : qStart + ir.val ≥ c * 64 + jL.val
+    · rw [if_pos hk, if_pos hk]
+      exact hqkcell ir d jL
+    · rw [if_neg hk, if_neg hk]
+      exact afc_sentinel_eq
+  -- assemble the new invariant
+  simp only [afcInvariant, ← hqStart, ← hqT, ← hkT, ← hvT]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    rw [hpidsF, hpids']
+  · -- (i + 64) % 64 = 0
+    omega
+  · -- i + 64 ≤ 128
+    omega
+  · -- m_i = afcRunningMax (i+64)
+    rw [hFmi]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hbr := afc_mij_reg_eq_masked qT kT vT qStart keyScale c hc1 ir hsb
+      qkSentT ⟨fun r : TileIndex [128] =>
+        afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩ rmaxT mijT
+      (fun jL => by
+        rw [show (TileShape.insertAxisIndex [128, 64] afcAx1 (ir, PUnit.unit) jL)
+              = (ir, jL, PUnit.unit) from rfl]
+        rw [hsentcell ir ⟨0, by norm_num⟩ jL])
+      hrm (by simp only [hi]) hmijT
+    rw [hbr, show ((c + 1) * 64 : Nat) = i + 64 from by omega]
+  · -- l_i = afcStateBot1 (i+64) .2.1
+    rw [hFli]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ := by
+      refine afc_mij_reg_eq_masked qT kT vT qStart keyScale c hc1 ir hsb
+        qkSentT ⟨fun r : TileIndex [128] =>
+          afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩ rmaxT mijT
+        (fun jL => by
+          rw [show (TileShape.insertAxisIndex [128, 64] afcAx1 (ir, PUnit.unit) jL)
+                = (ir, jL, PUnit.unit) from rfl]
+          rw [hsentcell ir ⟨0, by norm_num⟩ jL])
+        hrm (by simp only [hi]) hmijT
+    have hbr := afc_denom_reg_eq_masked qT kT vT qStart keyScale c hc1 ir
+      qkSentT ⟨fun r : TileIndex [128] => afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      mijT alphaT ⟨fun r : TileIndex [128] => ((afcStateBot1 qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
+      lijT pT
+      (fun jL => by rw [hsentcell ir ⟨0, by norm_num⟩ jL])
+      (by simp only [hi]; rfl) (by simp only [hi]) hmijcell
+      halphaT hlijT
+      (fun jL => by
+        rw [hpT]; simp only [hmaskcell ir jL, decide_eq_true_eq])
+    have hne : afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ ≠ ⊥ :=
+      afcRunningMax_ne_bot qT kT vT keyScale qStart ((c + 1) * 64) (by omega) ir ⟨0, by norm_num⟩
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hbr, show ((i + 64) : Nat) = (c + 1) * 64 from by omega]
+    exact congrArg (fun st : WithBot ℝ × ℝ × ℝ => (st.2.1 : WithBot ℝ))
+      (afcStateBot1_eq_afcStateBot qT kT vT keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ hne).symm
+  · -- acc = afcStateBot1 (i+64) .2.2
+    rw [hFacc, hpf16]
+    -- fp16 round-trip is identity at the algorithm layer
+    simp only [FloatDType.cast, FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot,
+      FloatDType.fp16_toWithBot, FloatDType.real_ofWithBot]
+    refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) ir ⟨0, by norm_num⟩ := by
+      refine afc_mij_reg_eq_masked qT kT vT qStart keyScale c hc1 ir hsb
+        qkSentT ⟨fun r : TileIndex [128] =>
+          afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩ rmaxT mijT
+        (fun jL => by
+          rw [show (TileShape.insertAxisIndex [128, 64] afcAx1 (ir, PUnit.unit) jL)
+                = (ir, jL, PUnit.unit) from rfl]
+          rw [hsentcell ir ⟨0, by norm_num⟩ jL])
+        hrm (by simp only [hi]) hmijT
+    -- masked v-load cell = vTileAFCm value = afcKV.2
+    have hvload : ∀ jL : Fin 64,
+        vtile.data (jL, id, PUnit.unit)
+          = some ((afcKV qT kT vT keyScale ir id ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).2) := by
+      intro jL
+      rw [hvtile]; simp only [hvmaskT, Tile.vec, vPtrsAFC, Region.cast]
+      rw [show (ComparableDType.nat.lt jL.val (128 - i) && ComparableDType.nat.lt id.val 96)
+            = decide (jL.val < 128 - i ∧ id.val < 96) from by
+        rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+          decide_eq_true_eq]]
+      simp only [afcKV, hvT, vTileAFCm]
+      by_cases hid : id.val < 96
+      · rw [if_pos (by simp only [decide_eq_true_eq]; exact ⟨hjLwin jL, hid⟩), if_pos hid]
+        refine congrArg some ?_
+        show sin.readMem _ (baseOffsetAFC s0 + (c * 64 + jL.val) * 128 + id.val) = _
+        rw [vTileAFC]
+        unfold BlockState.readMem; rw [hmem']
+      · rw [if_neg (by simp only [decide_eq_true_eq, not_and]; intro _ h; exact hid h), if_neg hid]
+        exact congrArg some (hundef' _ _)
+    have hbr := afc_acc_reg_eq_masked qT kT vT qStart keyScale c hc1 ir id
+      qkSentT ⟨fun r : TileIndex [128] => afcRunningMax qT kT vT keyScale qStart i r.1 ⟨0, by norm_num⟩⟩
+      mijT alphaT
+      ⟨fun idx : TileIndex [128, 128] => ((afcStateBot1 qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        ⟨fun idx : TileIndex [128, 128] => ((afcStateBot1 qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+        (Tile.expandDim ⟨1, by simp⟩ alphaT))
+      pT vtile (fun jL => (afcKV qT kT vT keyScale ir id ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩).2)
+      (fun jL => by rw [hsentcell ir ⟨0, by norm_num⟩ jL])
+      (by simp only [hi]; rfl) (by simp only [hi]) hmijcell halphaT rfl
+      (fun jL => by
+        rw [hpT]; simp only [hmaskcell ir jL, decide_eq_true_eq])
+      hvload (fun jL => rfl)
+    have hne : afcRunningMax qT kT vT keyScale qStart ((c + 1) * 64) ir id ≠ ⊥ := by
+      rw [afcRunningMax_eq qT kT vT keyScale qStart ((c + 1) * 64) ir id ⟨0, by norm_num⟩]
+      exact afcRunningMax_ne_bot qT kT vT keyScale qStart ((c + 1) * 64) (by omega) ir ⟨0, by norm_num⟩
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) _
+      (Tile.dot [] pT vtile)).data _ = _
+    rw [hbr, show ((i + 64) : Nat) = (c + 1) * 64 from by omega]
+    exact congrArg (fun st : WithBot ℝ × ℝ × ℝ => (st.2.2 : WithBot ℝ))
+      (afcStateBot1_eq_afcStateBot qT kT vT keyScale qStart ((c + 1) * 64) ir id hne).symm
+  · -- offs_m
+    rw [hFoffsm]
+  · -- offs_n
+    rw [hFoffsn]
+  · -- q
+    rw [hFq]
+  · -- q_scale
+    rw [hFqsc]
+  · -- K_ptrs (i/64 + 1 = (i+64)/64)
+    rw [hFKp, kPtrsAFC_succ, show (i + 64) / 64 = c + 1 from by omega]
+  · -- K_scale_ptr
+    rw [hFKsp, kScalePtrAFC_succ, show (i + 64) / 64 = c + 1 from by omega]
+  · -- V_ptrs
+    rw [hFVp, vPtrsAFC_succ, show (i + 64) / 64 = c + 1 from by omega]
+  · -- undef
+    intro rg o; rw [hundefF, hundef']
+  · -- mem
+    rw [hmemF, hmem']
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
