@@ -4864,6 +4864,51 @@ theorem attnInvariant_zero_to_K
   · rw [hli]; simp only [aft3StateBotK_zero]
   · rw [hacc]; simp only [aft3StateBotK_zero]
 
+/-- **Empty-window `0/0` reconciliation.** At the full window the raw kernel ratio
+`(aft3StateBotK 128).2.2 / (aft3StateBotK 128 ·⟨0⟩).2.1` equals the streaming
+`osStep` ratio over the kept keys — for *every* row, including the empty-window
+rows where the running max is `⊥` (both sides are `0/0 = 0` there). -/
+theorem aft3StateBotK_full_eq_streaming
+    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
+    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (i d : Fin 64) :
+    ((aft3StateBotK qT kT vT keyScale keep 128 i d).2.2)
+        / ((aft3StateBotK qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1)
+      = (let st := (aft3KeysUpto qT kT vT keyScale keep 128 i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  have hK : aft3StateBotK qT kT vT keyScale keep 128 i d
+      = aft3StateBot qT kT vT keyScale keep 128 i d := by
+    unfold aft3StateBotK; rw [if_neg (by norm_num)]
+  have hK0 : aft3StateBotK qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩
+      = aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ := by
+    unfold aft3StateBotK; rw [if_neg (by norm_num)]
+  rw [hK, hK0]
+  by_cases hne : aft3RunningMax qT kT vT keyScale keep 128 i d = ⊥
+  · -- empty window: both ratios are 0/0
+    have hden : (aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1 = 0 := by
+      rw [aft3StateBot_snd_fst]
+      rw [aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩
+        (by rw [aft3RunningMax_eq qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ d]; exact hne) _,
+        mul_zero]
+    have hnum : (aft3StateBot qT kT vT keyScale keep 128 i d).2.2 = 0 := by
+      rw [aft3StateBot_snd_snd]
+      rw [aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale keep 128 i d hne _, mul_zero]
+    have hkeys : aft3KeysUpto qT kT vT keyScale keep 128 i d = [] := by
+      by_contra hc
+      obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hc
+      have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+          (aft3KeysUpto qT kT vT keyScale keep 128 i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+        List.mem_map_of_mem hp
+      have := aft3_mem_le_foldr_sup _ _ hmem
+      rw [← aft3RunningMax, hne] at this
+      exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+    rw [hnum, hden, hkeys]; simp
+  · -- nonempty window: K = StateBot ratio = streaming ratio
+    rw [show (aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1
+          = (aft3StateBot qT kT vT keyScale keep 128 i d).2.1 from
+        aft3StateBot_snd_fst_indep qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ d]
+    exact aft3StateBot_ratio_eq qT kT vT keyScale keep 128 i d hne
+
 /-- **Case-1 mask reconciliation (TRUE by construction).** At loop counter `SN =
 c·64`, the lowered nat-mask cell `aft3MaskCell1 SM (c·64) (i, jL)` equals the
 faithful `natSlidingWindowKeep SM i ⟨c·64 + jL⟩`. The `dist ≥ 0` conjunct is
