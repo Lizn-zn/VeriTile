@@ -3492,25 +3492,22 @@ theorem aft_score_cell_masked (s0 : BlockState) (Q K : RegionName) (qsc ksc : �
           * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))
       from by funext e; rw [qLoaded_unbotD_eq_qMasked]]
 
-/-- The per-block causal score scaled by `qsc·ksc`, used as the per-key score in the
-spec key list when `keyScale = fun _ => qsc·ksc`. -/
-noncomputable def aftBlockScore (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ)
+/-- The per-key causal score `keyScale j · (qMasked row i · k row j)` — `aftKV`'s
+`.1` for the masked-q tiles. The program's per-key `keyScale` carries `q_scale`
+times the per-block `k_scale` (`keyScale j = q_scale · k_scale[j/64]`), so it
+varies across key blocks. -/
+noncomputable def aftBlockScore (s0 : BlockState) (Q K : RegionName) (keyScale : Fin 128 → ℝ)
     (i : Fin 128) (j : Fin 128) : ℝ :=
-  qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
+  keyScale j * Finset.univ.sum (fun e : Fin 128 =>
     qMaskedAFT s0 Q (i, e, PUnit.unit) * kTileAFT s0 K (j, e, PUnit.unit))
 
 /-- **Score bound precondition.** The kernel's `-1e6` mask sentinel never raises a
 row's running max above the genuine `aftRunningMax`, provided every kept score is
 `≥ -1e6` (`= 0 - 1000000`). With the causal mask (key `0` always kept) this makes
 the floor inert from block `0` on. -/
-def aftScoreBound (s0 : BlockState) (Q K : RegionName) (qsc ksc : ℝ) : Prop :=
+def aftScoreBound (s0 : BlockState) (Q K : RegionName) (keyScale : Fin 128 → ℝ) : Prop :=
   ∀ (i j : Fin 128), j.val ≤ qStartAFT s0 + i.val →
-    (0.0 : ℝ) - (1000000.0 : ℝ) ≤ aftBlockScore s0 Q K qsc ksc i j
-
-/-- Abbreviation for the per-key score carrier used everywhere below: the constant
-per-key scale `fun _ => qsc·ksc`. With it, `aftKV`'s `.1` score at key `j` is
-exactly `aftBlockScore i j`. -/
-noncomputable abbrev aftKeyScaleC (qsc ksc : ℝ) : Fin 128 → ℝ := fun _ => qsc * ksc
+    (0.0 : ℝ) - (1000000.0 : ℝ) ≤ aftBlockScore s0 Q K keyScale i j
 
 /-- Any member of a `WithBot ℝ` list is `≤` its `foldr (⊔) ⊥`. -/
 theorem aft_mem_le_foldr_sup (a : WithBot ℝ) :
@@ -3527,21 +3524,21 @@ theorem aft_mem_le_foldr_sup (a : WithBot ℝ) :
 
 /-- For the causal keep, key `0` (in block `0`) is kept for every row, so the
 running max over a nonempty window `[0, hi)` (`hi > 0`) is `≠ ⊥`. -/
-theorem aftRunningMax_causal_ne_bot (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aftRunningMax_causal_ne_bot (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (hi : Nat) (hhi : 0 < hi) (i d : Fin 128) :
-    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
         (qStartAFT s0) hi i d ≠ ⊥ := by
   unfold aftRunningMax aftKeysUpto
-  set sc := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+  set sc := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       i d ⟨0, by norm_num⟩ |>.1 with hsc
   have hmem : ((sc : ℝ) : WithBot ℝ) ∈
       ((List.finRange 128).filterMap (fun j : Fin 128 =>
         if j.val < hi ∧ j.val ≤ qStartAFT s0 + i.val then
           some (aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
-            (aftKeyScaleC qsc ksc) i d j)
+            keyScale i d j)
         else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
     rw [List.mem_map]
-    refine ⟨aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+    refine ⟨aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       i d ⟨0, by norm_num⟩, ?_, rfl⟩
     rw [List.mem_filterMap]
     refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
@@ -3552,19 +3549,19 @@ theorem aftRunningMax_causal_ne_bot (s0 : BlockState) (Q K V : RegionName) (qsc 
 
 /-- `aftRunningMax` over the causal window equals the windowed `foldr ⊔ ⊥` of the
 coerced block scores; spelled directly via `aftBlock`. -/
-theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128) :
     Finset.univ.sup (fun jL : Fin 64 =>
         if (c * 64 + jL.val ≤ qStartAFT s0 + i.val) then
-          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+          ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
         else (⊥ : WithBot ℝ))
-      = ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-  rw [show (aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+  rw [show (aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
         (qStartAFT s0) c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
       = ((List.finRange 128).filterMap (fun j : Fin 128 =>
           if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-          then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+          then some (aftBlockScore s0 Q K keyScale i j) else none)).map
             (fun x => ((x : ℝ) : WithBot ℝ)) from by
     unfold aftBlock
     rw [List.map_filterMap, List.map_filterMap]
@@ -3575,18 +3572,18 @@ theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
     · simp [hj]]
   rw [show (((List.finRange 128).filterMap (fun j : Fin 128 =>
           if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-          then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+          then some (aftBlockScore s0 Q K keyScale i j) else none)).map
             (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
       = Finset.univ.sup (fun j : Fin 128 =>
           if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-          then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) from by
+          then ((aftBlockScore s0 Q K keyScale i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) from by
     rw [show (((List.finRange 128).filterMap (fun j : Fin 128 =>
             if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-            then some (aftBlockScore s0 Q K qsc ksc i j) else none)).map
+            then some (aftBlockScore s0 Q K keyScale i j) else none)).map
               (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
         = (List.finRange 128).foldr (fun j a =>
             (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-              then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥
+              then ((aftBlockScore s0 Q K keyScale i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥
         from by
       induction (List.finRange 128) with
       | nil => simp
@@ -3600,15 +3597,15 @@ theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
         simp only [List.foldr_cons]
         exact sup_le (Finset.le_sup (f := fun j : Fin 128 =>
           if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-          then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+          then ((aftBlockScore s0 Q K keyScale i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
           (Finset.mem_univ a)) ih
     · apply Finset.sup_le; intro j _
       have key : ∀ (l : List (Fin 128)), j ∈ l →
           (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-            then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+            then ((aftBlockScore s0 Q K keyScale i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
             ≤ l.foldr (fun j a =>
               (if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStartAFT s0 + i.val
-                then ((aftBlockScore s0 Q K qsc ksc i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥ := by
+                then ((aftBlockScore s0 Q K keyScale i j : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ)) ⊔ a) ⊥ := by
         intro l hl
         induction l with
         | nil => simp at hl
@@ -3664,9 +3661,10 @@ running max after block `c` equals the genuine `aftRunningMax`. The `-1e6`
 `where`-sentinel floor is inert because (a) `aftScoreBound` keeps every kept score
 `≥ -1e6` and (b) the causal mask keeps key `0`, so the running max `≥` some kept
 score `≥ -1e6` from block `0` on. -/
-theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ) (qsc ksc : ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128)
-    (hbound : aftScoreBound s0 Q K qsc ksc)
+    (hks : ∀ jL : Fin 64, keyScale ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ = qsc * ksc)
+    (hbound : aftScoreBound s0 Q K keyScale)
     (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64]) (qkRawT : Tile .real [128, 64])
     (maskT : Tile .bool [128, 64]) (mtile rmaxT qk6T : Tile .real [128])
     (qk6 : Tile .real [128, 64])
@@ -3684,17 +3682,16 @@ theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
         = if maskT.data (i, jL, PUnit.unit) then qkRawT.data (i, jL, PUnit.unit)
           else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)))
     (hmtile : mtile.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) (c * 64) i ⟨0, by norm_num⟩)
     (hrmax : Tile.reduceMaxDrop aftAx1 qk6 = some rmaxT) :
     (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
         mtile rmaxT).data (i, PUnit.unit)
-      = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
   set qT := qMaskedAFT s0 Q
   set kT := kTileAFT s0 K
   set vT := vTileAFT s0 V
-  set kc := aftKeyScaleC qsc ksc
   set qStart := qStartAFT s0
   -- the floor value as WithBot
   set floor : WithBot ℝ := WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)) with hfloor
@@ -3703,7 +3700,7 @@ theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
   -- per-lane cell value
   have hcell : ∀ jL : Fin 64, qk6.data (i, jL, PUnit.unit)
       = if (c * 64 + jL.val ≤ qStart + i.val) then
-          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+          ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
         else floor := by
     intro jL
     rw [hqk6 jL, hmask jL]
@@ -3712,30 +3709,34 @@ theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
         rw [ComparableDType.nat_ge_eq_true]; omega
       rw [hb, if_pos rfl, if_pos hkp, hqkRaw]
       have := aft_score_cell_masked s0 Q K qsc ksc c i jL (by have := jL.isLt; omega) qtile ktile hq hk
-      rw [this]; rfl
+      rw [this]
+      rw [show ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+            = some (qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
+                qMaskedAFT s0 Q (i, e, PUnit.unit) * kTileAFT s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)))
+          from by rw [aftBlockScore, hks jL]; rfl]
     · have hb : ComparableDType.nat.ge (qStart + i.val) (c * 64 + jL.val) = Bool.false := by
         rw [← Bool.not_eq_true, ComparableDType.nat_ge_eq_true]; omega
       rw [hb, if_neg (by simp), if_neg hkp]
   -- rmax cell = sup over jL of qk6 cells
   have hrmaxcell : rmaxT.data (i, PUnit.unit) = Finset.univ.sup (fun jL : Fin 64 =>
       if (c * 64 + jL.val ≤ qStart + i.val) then
-        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
       else floor) :=
     aft_reduceMaxDrop_row qk6 rmaxT hrmax i _ hcell
   -- aftRunningMax((c+1)·64) = aftRunningMax(c·64) ⊔ blockSup
-  rw [aftRunningMax_succ qT kT vT kc qStart c i ⟨0, by norm_num⟩]
-  rw [← aftBlock_blockSup s0 Q K V qsc ksc c hc1 i ⟨0, by norm_num⟩]
+  rw [aftRunningMax_succ qT kT vT keyScale qStart c i ⟨0, by norm_num⟩]
+  rw [← aftBlock_blockSup s0 Q K V keyScale c hc1 i ⟨0, by norm_num⟩]
   -- the select is max(mtile, rmax)
   rw [Tile.select_data, Tile.cop_data]
   simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
-  set M := aftRunningMax qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩ with hM
+  set M := aftRunningMax qT kT vT keyScale qStart (c * 64) i ⟨0, by norm_num⟩ with hM
   set S := Finset.univ.sup (fun jL : Fin 64 =>
       if (c * 64 + jL.val ≤ qStart + i.val) then
-        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
       else floor) with hS
   set BS := Finset.univ.sup (fun jL : Fin 64 =>
       if (c * 64 + jL.val ≤ qStart + i.val) then
-        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+        ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
       else (⊥ : WithBot ℝ)) with hBS
   -- `BS ≤ S ≤ BS ⊔ floor` (each S-term is a BS-term or `floor`)
   have hBSleS : BS ≤ S := by
@@ -3751,7 +3752,7 @@ theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
       rw [hBS]
       have hle := Finset.le_sup (f := fun jL : Fin 64 =>
         if (c * 64 + jL.val ≤ qStart + i.val) then
-          ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
+          ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : ℝ) : WithBot ℝ)
         else (⊥ : WithBot ℝ)) (Finset.mem_univ jL)
       simp only [if_pos hkp] at hle
       exact hle
@@ -3759,21 +3760,21 @@ theorem aft_mij_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
   -- `floor ≤ aftRunningMax((c+1)·64) = M ⊔ BS` (key 0 is kept, score ≥ -1e6)
   have hfloorLe : floor ≤ M ⊔ BS := by
     rw [hM, hBS]
-    rw [aftBlock_blockSup s0 Q K V qsc ksc c hc1 i ⟨0, by norm_num⟩]
-    rw [← aftRunningMax_succ qT kT vT kc qStart c i ⟨0, by norm_num⟩]
+    rw [aftBlock_blockSup s0 Q K V keyScale c hc1 i ⟨0, by norm_num⟩]
+    rw [← aftRunningMax_succ qT kT vT keyScale qStart c i ⟨0, by norm_num⟩]
     -- the running max over [0,(c+1)·64) contains key 0's score ≥ -1e6
-    have hmem : (((aftBlockScore s0 Q K qsc ksc i ⟨0, by norm_num⟩ : ℝ) : WithBot ℝ))
-        ≤ aftRunningMax qT kT vT kc qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
+    have hmem : (((aftBlockScore s0 Q K keyScale i ⟨0, by norm_num⟩ : ℝ) : WithBot ℝ))
+        ≤ aftRunningMax qT kT vT keyScale qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
       unfold aftRunningMax aftKeysUpto
       apply aft_mem_le_foldr_sup
       rw [List.mem_map]
-      refine ⟨aftKV qT kT vT kc i ⟨0, by norm_num⟩ ⟨0, by norm_num⟩, ?_, ?_⟩
+      refine ⟨aftKV qT kT vT keyScale i ⟨0, by norm_num⟩ ⟨0, by norm_num⟩, ?_, ?_⟩
       · rw [List.mem_filterMap]
         refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
         rw [if_pos (show (⟨0, by norm_num⟩ : Fin 128).val < (c + 1) * 64
             ∧ (⟨0, by norm_num⟩ : Fin 128).val ≤ qStart + i.val from
           ⟨by simp only; omega, by simp⟩)]
-      · simp only [aftKV, aftBlockScore, kc, aftKeyScaleC, qT, kT]
+      · simp only [aftKV, aftBlockScore, qT, kT]
     refine le_trans ?_ hmem
     rw [hfloorR]
     apply WithBot.coe_le_coe.mpr
@@ -3854,15 +3855,15 @@ theorem aftBlock_map_sum
   · intro jL _; rfl
 
 /-- A kept lane forces the running max `≠ ⊥` (its score is in the windowed prefix). -/
-theorem aftRunningMax_succ_ne_bot_of_kept (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aftRunningMax_succ_ne_bot_of_kept (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (i d : Fin 128) (jL : Fin 64) (hb : c * 64 + jL.val < 128)
     (hkp : c * 64 + jL.val ≤ qStartAFT s0 + i.val) :
-    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
         (qStartAFT s0) ((c + 1) * 64) i d ≠ ⊥ := by
-  set p := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+  set p := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       i d ⟨c * 64 + jL.val, hb⟩ with hp
   have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
-      ((aftKeysUpto (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      ((aftKeysUpto (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
         (qStartAFT s0) ((c + 1) * 64) i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ))) := by
     rw [List.mem_map]
     refine ⟨p, ?_, rfl⟩
@@ -3881,8 +3882,9 @@ set_option maxHeartbeats 1600000 in
 /-- **Masked `pT` cell** (single-pT). The kernel's masked `p` cell on lane `jL` is
 `some (exp2(score − Mr))` when causally kept, `some 0` when masked — given `mij`
 cell `= aftRunningMax((c+1)·64) = some Mr`. -/
-theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ) (c : Nat)
+theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ) (qsc ksc : ℝ) (c : Nat)
     (i : Fin 128) (jL : Fin 64) (hjL : c * 64 + jL.val < 128)
+    (hks : keyScale ⟨c * 64 + jL.val, hjL⟩ = qsc * ksc)
     (qtile : Tile .real [128, 128]) (ktile : Tile .real [128, 64]) (qkRawT qk6T : Tile .real [128, 64])
     (maskT : Tile .bool [128, 64]) (mijT : Tile .real [128]) (pT : Tile .real [128, 64])
     (hq : qtile = qLoadedAFT s0 Q)
@@ -3899,7 +3901,7 @@ theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ) (c : 
         = if maskT.data (i, jL, PUnit.unit) then qkRawT.data (i, jL, PUnit.unit)
           else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ)))
     (hmij : mijT.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩)
     (hpT : pT.data (i, jL, PUnit.unit)
         = if maskT.data (i, jL, PUnit.unit)
@@ -3907,12 +3909,12 @@ theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ) (c : 
             (mijT.data (i, PUnit.unit)))
           else (some (0.0 : ℝ) : WithBot ℝ))
     (hMij_kept : c * 64 + jL.val ≤ qStartAFT s0 + i.val →
-        aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ ≠ ⊥) :
     pT.data (i, jL, PUnit.unit)
       = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-          pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, hjL⟩
-            - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+          pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, hjL⟩
+            - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
                 (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0)
           else 0) := by
   rw [hpT, hmask]
@@ -3921,9 +3923,9 @@ theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ) (c : 
       rw [ComparableDType.nat_ge_eq_true]; omega
     rw [hge, if_pos rfl, if_pos hkp]
     obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
-        (aftKeyScaleC qsc ksc) (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ = (Mr : WithBot ℝ) := by
+        keyScale (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ = (Mr : WithBot ℝ) := by
       cases hh : aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
-          (aftKeyScaleC qsc ksc) (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ with
+          keyScale (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ with
       | coe x => exact ⟨x, rfl⟩
       | bot => exact absurd hh (hMij_kept hkp)
     rw [hqk6, hmask, hge, if_pos rfl, hqkRaw]
@@ -3931,9 +3933,10 @@ theorem aft_pT_cell (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ) (c : 
     rw [hmij, hMr, WithBot.unbotD_coe]
     rw [show (qsc * ksc * Finset.univ.sum (fun e : Fin 128 =>
             qMaskedAFT s0 Q (i, e, PUnit.unit) * kTileAFT s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)))
-          = aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, hjL⟩ from rfl]
+          = aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, hjL⟩ from by
+        simp only [aftBlockScore, hks]]
     show WithBot.realExp2 (WithBot.realSub
-        ((aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, hjL⟩ : ℝ) : WithBot ℝ) ((Mr : ℝ) : WithBot ℝ)) = _
+        ((aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, hjL⟩ : ℝ) : WithBot ℝ) ((Mr : ℝ) : WithBot ℝ)) = _
     rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe]
     refine congrArg some ?_
     simp only [pow2]; ring_nf
@@ -3975,26 +3978,26 @@ theorem aftStateBot_snd_fst_indep (qT kT vT : TileIndex [128, 128] → ℝ) (key
 /-- **`Σ_jL pT[i,jL]` cell sum (single-pT).** Given the `pT` cell decoded form
 (per `aft_pT_cell`), the `aftBlock` pow2-score sum over kept lanes. The shared
 `pT`-cell hypothesis `hpc` is supplied by the caller (from `aft_pT_cell`). -/
-theorem aft_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aft_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128) (pT : Tile .real [128, 64])
     (hpc : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
                   (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0)
             else 0)) :
     (Tile.reduceSumDrop aftAx1 pT).data (i, PUnit.unit)
-      = some ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = some ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) c i d).map (fun p =>
             pow2 (p.1 - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
-              (aftKeyScaleC qsc ksc) (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0))).sum := by
-  set Mc1 := aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+              keyScale (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0))).sum := by
+  set Mc1 := aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
   rw [Tile.reduceSumDrop_data]
   have hcell : ∀ jL : Fin 64,
       pT.data (TileShape.insertAxisIndex [128, 64] aftAx1 (i, PUnit.unit) jL)
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
             else 0) := by
     intro jL
     rw [show TileShape.insertAxisIndex [128, 64] aftAx1 (i, PUnit.unit) jL = (i, jL, PUnit.unit) from rfl]
@@ -4002,7 +4005,7 @@ theorem aft_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
   simp only [hcell]
   rw [WithBot.sum_someTerm_eq_some]
   refine congrArg some ?_
-  rw [aftBlock_map_sum (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+  rw [aftBlock_map_sum (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       (qStartAFT s0) c i d hc1 (fun p => pow2 (p.1 - Mc1.unbotD 0))]
   refine Finset.sum_congr rfl (fun jL _ => ?_)
   by_cases hkp : c * 64 + jL.val ≤ qStartAFT s0 + i.val
@@ -4010,29 +4013,29 @@ theorem aft_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
   · rw [if_neg hkp, if_neg hkp]
 
 /-- **`Σ_jL pT[i,jL]·v[jL,d]` cell sum (single-pT).** -/
-theorem aft_acc_dot_block (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aft_acc_dot_block (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128)
     (pT : Tile .real [128, 64]) (vtile : Tile .real [64, 128])
     (hv : ∀ idx : TileIndex [64, 128],
         vtile.data idx = some (s0.readMem V (baseOffsetAFT s0 + (c * 64 + idx.1.val) * 128 + idx.2.1.val)))
     (hpc : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
                   (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0)
             else 0)) :
     (Tile.dot [] pT vtile).data (i, d, PUnit.unit)
-      = some ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = some ((aftBlock (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) c i d).map (fun p =>
             pow2 (p.1 - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V)
-              (aftKeyScaleC qsc ksc) (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0) * p.2)).sum := by
-  set Mc1 := aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+              keyScale (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0) * p.2)).sum := by
+  set Mc1 := aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
   rw [Tile.dot_nil_data]
   have hcell : ∀ jL : Fin 64,
       Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
               * vTileAFT s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
             else 0) := by
     intro jL
@@ -4047,13 +4050,13 @@ theorem aft_acc_dot_block (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
         (fun k => Option.map₂ (· * ·) (pT.data (i, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
       = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ (fun jL =>
           (some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-              pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
+              pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ - Mc1.unbotD 0)
                 * vTileAFT s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
               else 0) : WithBot ℝ))
       from Finset.sum_congr rfl (fun jL _ => hcell jL)]
   rw [WithBot.sum_someTerm_eq_some]
   refine congrArg some ?_
-  rw [aftBlock_map_sum (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+  rw [aftBlock_map_sum (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
       (qStartAFT s0) c i d hc1 (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)]
   refine Finset.sum_congr rfl (fun jL _ => ?_)
   by_cases hkp : c * 64 + jL.val ≤ qStartAFT s0 + i.val
@@ -4090,33 +4093,33 @@ set_option maxHeartbeats 1000000 in
 /-- **`l_i' = aftStateBot((c+1)·64).2.1` (single-pT).** From the kernel seed state
 `aftStateBotK(c·64)` the masked `l_i·α + Σ pT` register equals the seed-`0`
 denominator after `c+1` blocks. -/
-theorem aft_denom_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aft_denom_reg_eq (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i : Fin 128)
     (ltile mtile mijT alphaT : Tile .real [128]) (pT : Tile .real [128, 64])
     (hltile : ltile.data (i, PUnit.unit) = some
-        ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) (c * 64) i ⟨0, by norm_num⟩).2.1))
     (hmtile : mtile.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) (c * 64) i ⟨0, by norm_num⟩)
     (hmij : mijT.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩)
     (halpha : alphaT = Tile.uop WithBot.realExp2
         (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
     (hpc : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
                   (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0)
             else 0)) :
     (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
         (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT)
         (Tile.reduceSumDrop aftAx1 pT)).data (i, PUnit.unit)
-      = some ((aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = some ((aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).2.1) := by
   set qT := qMaskedAFT s0 Q; set kT := kTileAFT s0 K; set vT := vTileAFT s0 V
-  set kc := aftKeyScaleC qsc ksc; set qStart := qStartAFT s0
+  set kc := keyScale; set qStart := qStartAFT s0
   set m := (aftStateBot qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩).1 with hm_def
   set Mc := aftRunningMax qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩ with hMc
   set Mc1 := aftRunningMax qT kT vT kc qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
@@ -4132,7 +4135,7 @@ theorem aft_denom_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
     rw [halpha]; show WithBot.realExp2 _ = _
     simp only [Tile.bop_data, Tile.uop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
       NumericDType.sub, ← hMc, ← hMc1, hmMc]
-  have hsum := aft_nume_row_sum s0 Q K V qsc ksc c hc1 i ⟨0, by norm_num⟩ pT hpc
+  have hsum := aft_nume_row_sum s0 Q K V keyScale c hc1 i ⟨0, by norm_num⟩ pT hpc
   have hblockEq := osStepBot_block_eq m
     ((aftStateBot qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩).2.1)
     ((aftStateBot qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩).2.2)
@@ -4169,20 +4172,20 @@ theorem aft_denom_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
 
 set_option maxHeartbeats 1000000 in
 /-- **`acc' = aftStateBot((c+1)·64).2.2` (single-pT).** -/
-theorem aft_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
+theorem aft_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
     (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 128)
     (acctile acc1T : Tile .real [128, 128]) (pT : Tile .real [128, 64]) (vtile : Tile .real [64, 128])
     (mtile mijT alphaT : Tile .real [128])
     (hv : ∀ idx : TileIndex [64, 128],
         vtile.data idx = some (s0.readMem V (baseOffsetAFT s0 + (c * 64 + idx.1.val) * 128 + idx.2.1.val)))
     (hacctile : acctile.data (i, d, PUnit.unit) = some
-        ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        ((aftStateBotK (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) (c * 64) i d).2.2))
     (hmtile : mtile.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) (c * 64) i ⟨0, by norm_num⟩)
     (hmij : mijT.data (i, PUnit.unit)
-        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+        = aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
             (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩)
     (halpha : alphaT = Tile.uop WithBot.realExp2
         (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
@@ -4190,16 +4193,16 @@ theorem aft_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
         acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
     (hpc : ∀ jL : Fin 64, pT.data (i, jL, PUnit.unit)
         = some (if c * 64 + jL.val ≤ qStartAFT s0 + i.val then
-            pow2 (aftBlockScore s0 Q K qsc ksc i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+            pow2 (aftBlockScore s0 Q K keyScale i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
+              - (aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
                   (qStartAFT s0) ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0)
             else 0)) :
     (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
         acc1T (Tile.dot [] pT vtile)).data (i, d, PUnit.unit)
-      = some ((aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) (aftKeyScaleC qsc ksc)
+      = some ((aftStateBot (qMaskedAFT s0 Q) (kTileAFT s0 K) (vTileAFT s0 V) keyScale
           (qStartAFT s0) ((c + 1) * 64) i d).2.2) := by
   set qT := qMaskedAFT s0 Q; set kT := kTileAFT s0 K; set vT := vTileAFT s0 V
-  set kc := aftKeyScaleC qsc ksc; set qStart := qStartAFT s0
+  set kc := keyScale; set qStart := qStartAFT s0
   set m := (aftStateBot qT kT vT kc qStart (c * 64) i d).1 with hm_def
   set Mc := aftRunningMax qT kT vT kc qStart (c * 64) i ⟨0, by norm_num⟩ with hMc
   set Mc1 := aftRunningMax qT kT vT kc qStart ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
@@ -4218,7 +4221,7 @@ theorem aft_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (qsc ksc : ℝ)
     rw [halpha]; show WithBot.realExp2 _ = _
     simp only [Tile.bop_data, Tile.uop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
       NumericDType.sub, ← hMc, ← hMc1, hmMc]
-  have hdot := aft_acc_dot_block s0 Q K V qsc ksc c hc1 i d pT vtile hv hpc
+  have hdot := aft_acc_dot_block s0 Q K V keyScale c hc1 i d pT vtile hv hpc
   have hblockEq := osStepBot_block_eq m
     ((aftStateBot qT kT vT kc qStart (c * 64) i d).2.1)
     ((aftStateBot qT kT vT kc qStart (c * 64) i d).2.2)
