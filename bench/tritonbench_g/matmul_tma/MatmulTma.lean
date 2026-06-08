@@ -149,6 +149,39 @@ def cOffset (stride_cm stride_cn : Nat)
     (idx : TileIndex [BLOCK_M, BLOCK_N]) : Nat :=
   idx.1.val * stride_cm + idx.2.1.val * stride_cn
 
+/-- **Reusable discharge for the `hInj` precondition of the closed-form theorems.**
+
+For a contiguous row-major `C` tile (`stride_cn = 1`, with the row stride at least
+the tile width, `BLOCK_N ≤ stride_cm` — always true for a valid tiling) the output
+address map `cOffset (i,j) = i·stride_cm + j` is injective: the column offset `j <
+BLOCK_N ≤ stride_cm` never spills into the next row, so `(i,j) ↦ address` is a
+base-`stride_cm` encoding. The closed-form theorems keep the fully general abstract
+`Function.Injective` hypothesis (covering any non-aliasing layout, e.g. transposed
+`C`); this lemma discharges it for the common row-major case. -/
+theorem cOffset_injective_of_rowMajor {BLOCK_M BLOCK_N stride_cm stride_cn : Nat}
+    (hcn : stride_cn = 1) (hcm : BLOCK_N ≤ stride_cm) :
+    Function.Injective
+      (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn) := by
+  subst hcn
+  intro a b h
+  obtain ⟨ai, aj, au⟩ := a
+  obtain ⟨bi, bj, bu⟩ := b
+  simp only [cOffset, Nat.mul_one] at h
+  have ha : aj.val < stride_cm := lt_of_lt_of_le aj.isLt hcm
+  have hb : bj.val < stride_cm := lt_of_lt_of_le bj.isLt hcm
+  have hpos : 0 < stride_cm := by omega
+  have l1 : (ai.val * stride_cm + aj.val) / stride_cm = ai.val := by
+    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt ha,
+      Nat.zero_add]
+  have l2 : (bi.val * stride_cm + bj.val) / stride_cm = bi.val := by
+    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt hb,
+      Nat.zero_add]
+  have hrow : ai.val = bi.val := by rw [← l1, ← l2, h]
+  have hmul : ai.val * stride_cm = bi.val * stride_cm := by rw [hrow]
+  have hcol : aj.val = bj.val := by omega
+  cases au; cases bu
+  rw [Fin.ext hrow, Fin.ext hcol]
+
 /-! ## exec-stepping helpers -/
 
 /-- `tl.make_block_ptr` (offsets `(0,0)`) eval: every lane is the same
@@ -667,50 +700,5 @@ theorem matmul_tma_f16_closed_form_correct
       stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s0 = some s' := hExec
   rw [hExec2] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
-
-/-! ## Python test-shape coverage -/
-
-/-- Contiguous `128 × 128` output tiles (the Python TMA tests' single full-tile
-launch, `stride_cm = 128`, `stride_cn = 1`) have injective addresses. -/
-theorem matmul_tma_output_offset_injective :
-    Function.Injective (cOffset (BLOCK_M := 128) (BLOCK_N := 128) 128 1) := by
-  intro a b h
-  simp only [cOffset] at h
-  ext <;> omega
-
-/-- **Public test-shape summary** (no transpose, float32 output — Python
-`test_case_1`): the surface lowers and realizes the genuine matrix product
-`Σ_{e<128} A[i,e]·B[e,j]` (over ℝ). -/
-theorem matmul_tma_python_f32_output_summary
-    (A B C : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_tma_f32_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_tma_f32_surface A B C 128 128 128 128 1 128 1 128 1 128 128 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] => some (C, cOffset 128 1 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        matmulSpec s A B 128 1 128 1 128 idx.1.val idx.2.1.val)) :=
-  ⟨matmul_tma_f32_surface_toAlgorithm_supported A B C 128 128 128 128 1 128 1 128 1 128 128 128,
-   matmul_tma_f32_closed_form_correct A B C s 128 128 128 128 1 128 1 128 1 128 128 128
-     matmul_tma_output_offset_injective⟩
-
-/-- **Public test-shape summary** (no transpose, fp16 output — Python
-`test_case_5`): the surface realizes `fp16(Σ_{e<128} A[i,e]·B[e,j])`. -/
-theorem matmul_tma_python_f16_output_summary
-    (A B C : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_tma_f16_surface A B C
-      128 128 128 128 1 128 1 128 1 128 128 128).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_tma_f16_surface A B C 128 128 128 128 1 128 1 128 1 128 128 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] => some (C, cOffset 128 1 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 128 1 128 1 128 idx.1.val idx.2.1.val))))) :=
-  ⟨matmul_tma_f16_surface_toAlgorithm_supported A B C 128 128 128 128 1 128 1 128 1 128 128 128,
-   matmul_tma_f16_closed_form_correct A B C s 128 128 128 128 1 128 1 128 1 128 128 128
-     matmul_tma_output_offset_injective⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulTma
