@@ -782,6 +782,20 @@ theorem matmul_kernel_exec_closed_form (C A B : RegionName) (s : BlockState)
   rw [hexec]
   exact hpost idx
 
+/-- The contiguous `4096 × 4096` output tile addresses are injective whenever the
+column-block width fits a row (`BN ≤ 4096`), which holds for every valid tiling.
+(`cOffset = 4096·(pid_m·BM + i) + (pid_n·BN + j)` is then a proper base-`4096`
+encoding in `(i,j)`.) -/
+theorem matmul_kernel_output_offset_injective
+    (s : BlockState) {BM BN : Nat} (hBN : BN ≤ 4096) :
+    Function.Injective (cOffset s BM BN) := by
+  intro a b h
+  simp only [cOffset, rowGlobal, colGlobal] at h
+  have ha : a.2.1.val < BN := a.2.1.isLt
+  have hb : b.2.1.val < BN := b.2.1.isLt
+  have hi : a.1.val = b.1.val ∧ a.2.1.val = b.2.1.val := by omega
+  ext <;> omega
+
 /-- **Closed-form correctness for `matmul_kernel` (general statement).**
 
 For arbitrary 2-D program coordinates `(pid_m, pid_n)`, tile dims `BM`/`BN`,
@@ -795,12 +809,13 @@ Layout: `A[i,k]` at `A + offs_am(i) · 4096 + k`, `B[k,j]` at
 `B + k · 4096 + offs_bn(j)`, `C[i,j]` at `C + 4096 · offs_cm(i) + offs_cn(j)`,
 with `offs_am(i) = (pid_m·BM + i) % 4096`, `offs_bn(j) = (pid_n·BN + j) % 4096`
 (the kernel's row-major pointer arithmetic with `% 4096` wrap). Preconditions:
-output-offset injectivity (distinct lanes hit distinct addresses) and clean
-initial `undef`. -/
+`BN ≤ 4096` (column-block width ≤ the row stride 4096, always true for a valid
+tiling — this discharges output-offset injectivity via
+`matmul_kernel_output_offset_injective`) and clean initial `undef`. -/
 theorem matmul_kernel_closed_form_correct
     (C A B : RegionName) (s : BlockState)
     (BM BN BLOCK_K numKBlocks : Nat)
-    (hInj : Function.Injective (cOffset s BM BN))
+    (hBN : BN ≤ 4096)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := matmul_kernel_surface C A B BM BN BLOCK_K numKBlocks)
@@ -815,98 +830,10 @@ theorem matmul_kernel_closed_form_correct
   intro s0 s' hExec hs0
   subst hs0
   intro idx
+  have hInj : Function.Injective (cOffset s0 BM BN) := matmul_kernel_output_offset_injective s0 hBN
   have hmain := matmul_kernel_exec_closed_form C A B s0 BM BN BLOCK_K numKBlocks hInj hundef idx
   have hExec2 : exec (matmul_kernel_surface C A B BM BN BLOCK_K numKBlocks) s0 = some s' := hExec
   rw [hExec2] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
-
-/-! ## Python test-shape coverage -/
-
-/-- The contiguous `4096 × 4096` output tile addresses are injective whenever the
-column-block width fits a row (`BN ≤ 4096`), which holds for every Python block
-shape. (`cOffset = 4096·(pid_m·BM + i) + (pid_n·BN + j)` is then a proper
-base-`4096` encoding in `(i,j)`.) -/
-theorem matmul_kernel_output_offset_injective
-    (s : BlockState) {BM BN : Nat} (hBN : BN ≤ 4096) :
-    Function.Injective (cOffset s BM BN) := by
-  intro a b h
-  simp only [cOffset, rowGlobal, colGlobal] at h
-  have ha : a.2.1.val < BN := a.2.1.isLt
-  have hb : b.2.1.val < BN := b.2.1.isLt
-  have hi : a.1.val = b.1.val ∧ a.2.1.val = b.2.1.val := by omega
-  ext <;> omega
-
-/-- **Public test-shape summary** for Python block shape `(64, 128, 64)`
-(`test_case_1`): the full surface lowers and realizes the genuine matrix product
-`fp16( Σ_{k<64·numKBlocks} A[i,k]·B[k,j] )`. -/
-theorem matmul_kernel_python_case1_output_summary
-    (C A B : RegionName) (s : BlockState) (numKBlocks : Nat)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_kernel_surface C A B 64 128 64 numKBlocks).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface C A B 64 128 64 numKBlocks)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 128] => some (C, cOffset s 64 128 idx))
-      (expected := fun idx : TileIndex [64, 128] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 64 128 64 numKBlocks idx.1 idx.2.1))))) :=
-  ⟨matmul_kernel_surface_toAlgorithm_supported C A B 64 128 64 numKBlocks,
-   matmul_kernel_closed_form_correct C A B s 64 128 64 numKBlocks
-     (matmul_kernel_output_offset_injective s (by omega)) hundef⟩
-
-/-- **Public test-shape summary** for Python block shape `(128, 64, 128)`
-(`test_case_2`). -/
-theorem matmul_kernel_python_case2_output_summary
-    (C A B : RegionName) (s : BlockState) (numKBlocks : Nat)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_kernel_surface C A B 128 64 128 numKBlocks).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface C A B 128 64 128 numKBlocks)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] => some (C, cOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 128 64 128 numKBlocks idx.1 idx.2.1))))) :=
-  ⟨matmul_kernel_surface_toAlgorithm_supported C A B 128 64 128 numKBlocks,
-   matmul_kernel_closed_form_correct C A B s 128 64 128 numKBlocks
-     (matmul_kernel_output_offset_injective s (by omega)) hundef⟩
-
-/-- **Public test-shape summary** for Python block shape `(256, 256, 64)`
-(`test_case_3`). -/
-theorem matmul_kernel_python_case3_output_summary
-    (C A B : RegionName) (s : BlockState) (numKBlocks : Nat)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_kernel_surface C A B 256 256 64 numKBlocks).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface C A B 256 256 64 numKBlocks)
-      (initialState := s)
-      (write := fun idx : TileIndex [256, 256] => some (C, cOffset s 256 256 idx))
-      (expected := fun idx : TileIndex [256, 256] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 256 256 64 numKBlocks idx.1 idx.2.1))))) :=
-  ⟨matmul_kernel_surface_toAlgorithm_supported C A B 256 256 64 numKBlocks,
-   matmul_kernel_closed_form_correct C A B s 256 256 64 numKBlocks
-     (matmul_kernel_output_offset_injective s (by omega)) hundef⟩
-
-/-- **Public test-shape summary** for Python block shape `(32, 32, 32)`
-(`test_case_4`). -/
-theorem matmul_kernel_python_case4_output_summary
-    (C A B : RegionName) (s : BlockState) (numKBlocks : Nat)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_kernel_surface C A B 32 32 32 numKBlocks).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface C A B 32 32 32 numKBlocks)
-      (initialState := s)
-      (write := fun idx : TileIndex [32, 32] => some (C, cOffset s 32 32 idx))
-      (expected := fun idx : TileIndex [32, 32] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 32 32 32 numKBlocks idx.1 idx.2.1))))) :=
-  ⟨matmul_kernel_surface_toAlgorithm_supported C A B 32 32 32 numKBlocks,
-   matmul_kernel_closed_form_correct C A B s 32 32 32 numKBlocks
-     (matmul_kernel_output_offset_injective s (by omega)) hundef⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulKernel

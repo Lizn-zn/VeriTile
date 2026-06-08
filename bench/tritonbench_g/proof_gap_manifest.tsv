@@ -130,10 +130,6 @@ bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_output_
 bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	bgmv_expand_one_block_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	slice
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case1_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case2_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case3_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case4_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_python_case2_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
