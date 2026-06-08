@@ -3,7 +3,6 @@ bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean	update_fn_kernel_ou
 bench/tritonbench_g/add_example/AddExample.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_python_test_shape_output_summary	public_summary_with_proof_gap	attention-fwd-triton1-bo-bhpre-producers	#165	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case1_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
@@ -188,7 +187,7 @@ bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_output_su
 bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_triton_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	one-block
+bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_output_summary	full_value_candidate	none		full multi-block proven (Full.Final2.rmsnorm_full_correct)
 bench/tritonbench_g/rope_backward_transform/RopeBackwardTransform.lean	rope_backward_python_backward_output_summary	public_summary_with_proof_gap	rope-head-slice-lift	#153	self-referential expected (= executed kernel output)
 bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
