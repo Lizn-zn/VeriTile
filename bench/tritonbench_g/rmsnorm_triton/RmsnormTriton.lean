@@ -4,6 +4,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.Math.OffsetInjective
 
 /-!
 # `rmsnorm_triton` — strict per-kernel correctness
@@ -1101,10 +1102,11 @@ always true for a real tensor). The constant `(pid_batch, pid_m)` base cancels;
 `Function.Injective` hypothesis from a single numeric fact. -/
 theorem outOff_injective_of_pos (s : BlockState) (sob som sok N : Nat) (hsok : 0 < sok) :
     Function.Injective (fun k : Fin N => outOff s sob som sok k.val) := by
-  intro a b h
-  simp only [outOff] at h
-  have hmul : a.val * sok = b.val * sok := by omega
-  exact Fin.ext (Nat.eq_of_mul_eq_mul_right hsok hmul)
+  have heq : (fun k : Fin N => outOff s sob som sok k.val)
+      = (fun k : Fin N => (s.pids 0 * sob + s.pids 1 * som) + k.val * sok) := by
+    funext k; simp only [outOff]
+  rw [heq]
+  exact VeriTile.Triton.Math.affine1D_inj _ sok hsok
 
 theorem rmsnorm_full_correct
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)

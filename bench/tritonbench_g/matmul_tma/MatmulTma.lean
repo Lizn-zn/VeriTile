@@ -2,6 +2,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Matmul
+import VeriTile.Triton.Math.OffsetInjective
 
 /-!
 # `matmul_tma` — closed-form GEMM correctness
@@ -51,6 +53,7 @@ satisfy.
 namespace VeriTile.Bench.TritonBenchG.MatmulTma
 
 open VeriTile.Triton
+open VeriTile.Triton.Math
 
 set_option linter.unusedSimpArgs false
 
@@ -163,24 +166,11 @@ theorem cOffset_injective_of_rowMajor {BLOCK_M BLOCK_N stride_cm stride_cn : Nat
     Function.Injective
       (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn) := by
   subst hcn
-  intro a b h
-  obtain ⟨ai, aj, au⟩ := a
-  obtain ⟨bi, bj, bu⟩ := b
-  simp only [cOffset, Nat.mul_one] at h
-  have ha : aj.val < stride_cm := lt_of_lt_of_le aj.isLt hcm
-  have hb : bj.val < stride_cm := lt_of_lt_of_le bj.isLt hcm
-  have hpos : 0 < stride_cm := by omega
-  have l1 : (ai.val * stride_cm + aj.val) / stride_cm = ai.val := by
-    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt ha,
-      Nat.zero_add]
-  have l2 : (bi.val * stride_cm + bj.val) / stride_cm = bi.val := by
-    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt hb,
-      Nat.zero_add]
-  have hrow : ai.val = bi.val := by rw [← l1, ← l2, h]
-  have hmul : ai.val * stride_cm = bi.val * stride_cm := by rw [hrow]
-  have hcol : aj.val = bj.val := by omega
-  cases au; cases bu
-  rw [Fin.ext hrow, Fin.ext hcol]
+  have heq : cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm 1
+      = fun idx : TileIndex [BLOCK_M, BLOCK_N] => 0 + idx.1.val * stride_cm + idx.2.1.val := by
+    funext idx; simp only [cOffset]; ring
+  rw [heq]
+  exact rowMajor2D_inj _ stride_cm hcm
 
 /-! ## exec-stepping helpers -/
 
@@ -216,22 +206,6 @@ theorem load_blockPtr_eval {BR BC : Nat} (s : BlockState) (R : RegionName)
   obtain ⟨i, j, u⟩ := idx
   simp only [TileShape.indexToList, BlockState.readMemValue_real, BlockPtr.inBounds,
     List.all_nil, if_true, BlockPtr.address_2d_zero_offsets, Nat.zero_add]
-
-/-- The masked-free dot of two all-`some` loaded tiles, lane `(i,j)`, equals
-`some (Σ_e fx e · fy e)`. -/
-theorem dot_xy (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
-    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
-    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
-    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
-    (Tile.dot [] x y).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
-  rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
-        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
-  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
-  rw [← WithBot.coe_sum]; rfl
 
 /-- `tl.dot(a, b)` statement eval: evaluates to `Tile.dot [] at_ bt` given the
 register values of `a`/`b`. -/
@@ -503,7 +477,7 @@ theorem matmul_tma_f32_exec_closed_form
       (Tile.dot [] aT bT).data idx = cTile.data idx := by
     intro idx
     obtain ⟨i, j, u⟩ := idx
-    rw [dot_xy BLOCK_M BLOCK_K BLOCK_N aT bT i j
+    rw [tile_dot_data BLOCK_M BLOCK_K BLOCK_N aT bT i j
           (fun e => aElem s A stride_am stride_ak i.val e.val)
           (fun e => bElem s B stride_bk stride_bn e.val j.val)
           (fun e => by rw [haT]; rfl) (fun e => by rw [hbT]; rfl)]
@@ -649,7 +623,7 @@ theorem matmul_tma_f16_exec_closed_form
     intro idx
     obtain ⟨i, j, u⟩ := idx
     simp only [hcTile]
-    rw [dot_xy BLOCK_M BLOCK_K BLOCK_N aT bT i j
+    rw [tile_dot_data BLOCK_M BLOCK_K BLOCK_N aT bT i j
           (fun e => aElem s A stride_am stride_ak i.val e.val)
           (fun e => bElem s B stride_bk stride_bn e.val j.val)
           (fun e => by rw [haT]; rfl) (fun e => by rw [hbT]; rfl)]

@@ -3,6 +3,8 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Matmul
+import VeriTile.Triton.Math.OffsetInjective
 
 /-!
 # `matmul_kernel` — closed-form GEMM correctness
@@ -48,6 +50,7 @@ exactly as the kernel's pointer arithmetic constructs them.
 namespace VeriTile.Bench.TritonBenchG.MatmulKernel
 
 open VeriTile.Triton
+open VeriTile.Triton.Math
 
 set_option linter.unusedSimpArgs false
 
@@ -208,22 +211,6 @@ theorem bptr_adv_eval (s : BlockState) (K N BK : Nat) (bp : Tile .ptr [K, N])
   rw [evalOp_ptrAdd]
   simp [evalOp_ref, hb, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
 
-/-- The masked dot of two all-`some` loaded tiles, lane `(i,j)`, equals
-`some (Σ_e fx e · fy e)`. -/
-theorem dot_xy (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
-    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
-    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
-    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
-    (Tile.dot [] x y).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
-  rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
-        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
-  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
-  rw [← WithBot.coe_sum]; rfl
-
 /-- **`accumulator = tl.dot(a, b, accumulator)` statement eval** (fused form
 `dot a b + accumulator`). -/
 theorem accdot_op_eval (M K N : Nat) (st : BlockState)
@@ -281,33 +268,28 @@ noncomputable def bElem (s : BlockState) (B : RegionName) (BN : Nat)
     (j : Fin BN) (k : Nat) : ℝ :=
   s.readMem B (k * 4096 + colIndex s BN j)
 
-/-- **Genuine GEMM spec** (over ℝ): `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`. -/
+/-- **Genuine GEMM spec** (over ℝ): `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`,
+an instance of the shared `gemmSum` (`Math.Matmul`) with this kernel's `A`/`B`
+layout accessors. -/
 noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
     (BM BN BLOCK_K numKBlocks : Nat) (i : Fin BM) (j : Fin BN) : ℝ :=
-  (Finset.range (BLOCK_K * numKBlocks)).sum
-    (fun k => aElem s A BM i k * bElem s B BN j k)
+  gemmSum (aElem s A BM i) (bElem s B BN j) (BLOCK_K * numKBlocks)
 
 /-- Partial GEMM accumulator after `c` K-blocks: `Σ_{k < c·BLOCK_K} A·B`. -/
 noncomputable def accPartial (s : BlockState) (A B : RegionName)
     (BM BN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
-  (Finset.range (c * BLOCK_K)).sum
-    (fun k => aElem s A BM i k * bElem s B BN j k)
+  gemmSum (aElem s A BM i) (bElem s B BN j) (c * BLOCK_K)
 
 /-- One-block step of the partial accumulator: the new block's dot is over the
-`BLOCK_K` keys `c·BLOCK_K + e`. -/
+`BLOCK_K` keys `c·BLOCK_K + e` (the shared `gemmSum_blockSucc`). -/
 theorem accPartial_succ (s : BlockState) (A B : RegionName)
     (BM BN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) :
     accPartial s A B BM BN BLOCK_K i j (c + 1)
       = accPartial s A B BM BN BLOCK_K i j c
         + (Finset.univ.sum fun e : Fin BLOCK_K =>
             aElem s A BM i (c * BLOCK_K + e.val)
-              * bElem s B BN j (c * BLOCK_K + e.val)) := by
-  unfold accPartial
-  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
-  rw [h, Finset.sum_range_add]
-  congr 1
-  rw [Finset.sum_range fun e => aElem s A BM i (c * BLOCK_K + e)
-        * bElem s B BN j (c * BLOCK_K + e)]
+              * bElem s B BN j (c * BLOCK_K + e.val)) :=
+  gemmSum_blockSucc (aElem s A BM i) (bElem s B BN j) BLOCK_K c
 
 /-! ## Body decomposition (prefix ++ for-loop ++ cast/offs/store) -/
 
@@ -464,7 +446,7 @@ theorem preLoop (C A B : RegionName) (s : BlockState)
       not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
     refine congrArg some ?_
     ext idx
-    simp only [accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+    simp only [accPartial, Nat.zero_mul, gemmSum_zero]
   · simp [hm]
   · simp [hn]
   · simp [hk]
@@ -554,7 +536,7 @@ theorem matmul_step (A B : RegionName) (s0 : BlockState)
         (Finset.univ.sum fun e : Fin BLOCK_K =>
           aElem s0 A BM idx.1 (c * BLOCK_K + e.val) * bElem s0 B BN idx.2.1 (c * BLOCK_K + e.val))
         (accPartial s0 A B BM BN BLOCK_K idx.1 idx.2.1 c)
-        (dot_xy BM BLOCK_K BN asub bsub idx.1 idx.2.1 _ _ has hbs)
+        (tile_dot_data BM BLOCK_K BN asub bsub idx.1 idx.2.1 _ _ has hbs)
         (by rw [hzT])]
     show some _ = some (accPartial s0 A B BM BN BLOCK_K idx.1 idx.2.1 (c + 1))
     rw [accPartial_succ]
@@ -789,12 +771,13 @@ encoding in `(i,j)`.) -/
 theorem matmul_kernel_output_offset_injective
     (s : BlockState) {BM BN : Nat} (hBN : BN ≤ 4096) :
     Function.Injective (cOffset s BM BN) := by
-  intro a b h
-  simp only [cOffset, rowGlobal, colGlobal] at h
-  have ha : a.2.1.val < BN := a.2.1.isLt
-  have hb : b.2.1.val < BN := b.2.1.isLt
-  have hi : a.1.val = b.1.val ∧ a.2.1.val = b.2.1.val := by omega
-  ext <;> omega
+  -- `cOffset = 4096·(P·BM + i) + (Q·BN + j) = (4096·P·BM + Q·BN) + i·4096 + j`
+  have heq : cOffset s BM BN
+      = fun idx : TileIndex [BM, BN] =>
+          (4096 * (s.pids 0 * BM) + s.pids 1 * BN) + idx.1.val * 4096 + idx.2.1.val := by
+    funext idx; simp only [cOffset, rowGlobal, colGlobal]; ring
+  rw [heq]
+  exact rowMajor2D_inj _ 4096 hBN
 
 /-- **Closed-form correctness for `matmul_kernel` (general statement).**
 
