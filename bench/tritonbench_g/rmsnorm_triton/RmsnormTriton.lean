@@ -26,7 +26,7 @@ quantified, the per-program statement covers every program of the grid.
 
 ## Proof architecture
 
-There are two verified results:
+The verified result is the FULL multi-block correctness:
 
 ```
 Full.Final2.rmsnorm_full_output_summary       ← FULL multi-block TOP THEOREM
@@ -34,10 +34,6 @@ Full.Final2.rmsnorm_full_output_summary       ← FULL multi-block TOP THEOREM
   └─ Full.Final2.rmsnorm_full_compute_correct ← ComputeCorrect over the masked store
        └─ Full.Final2.rmsnorm_full_correct    ← per global lane k < N_SIZE readback,
                                                  GENERAL ⌈N_SIZE/BLOCK_N_SIZE⌉-iteration loops
-
-rmsnorm_triton_output_summary                 ← one-block specialization (kept)
-  └─ rmsnorm_triton_compute_correct
-       └─ rmsnorm_triton_correct              (launch shape N_SIZE ≤ BLOCK_N_SIZE)
 ```
 
 The **full** development (namespace `Full`) verifies both tiled loops over
@@ -51,11 +47,6 @@ global output-offset injectivity). The combinatorial heart
 mean. Final claim: for every `k < N_SIZE`,
 `out[k] = x[k] · rsqrt((Σ_{k'<N} x[k']²)/N_SIZE + eps) · w[k]` (`rmsSpecFull`).
 
-The **one-block** spec (kept intact) threads `rmsVarCarrier`
-(`reduceSum (x*x) / N_SIZE`) and `rmsInvCarrier` (`rsqrt (var + eps)`) into
-`rmsnormSpec = (x * inv) * w` lane-wise. In-bounds lanes hold `rmsnormSpec`,
-out-of-bounds lanes are preserved.
-
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
@@ -66,9 +57,10 @@ exact `WithBot.realRsqrt`. The **full** theorem holds for arbitrary `N_SIZE` and
 `BLOCK_N_SIZE` (`0 < BLOCK_N_SIZE`, `0 < N_SIZE`), with the tiled loops running
 `⌈N_SIZE/BLOCK_N_SIZE⌉` times; masked lanes load `0` (matching `other=0.0`). It
 assumes the output region is distinct from the input regions (`o ≠ x`, `o ≠ w`)
-and that the per-program output offsets over global lanes are injective (`hinj`).
-The one-block theorem is the specialization to the wrapper launch shape
-(`N_SIZE ≤ BLOCK_N_SIZE`, here `N_SIZE = K`, `BLOCK_N_SIZE = 1024`).
+and that the output column stride is nonzero (`0 < stride_out_k`, the one-glance
+well-formedness bound that yields per-lane output-offset injectivity via
+`outOff_injective_of_pos`). The wrapper launch shape is the special case
+`N_SIZE ≤ BLOCK_N_SIZE` (here `N_SIZE = K`, `BLOCK_N_SIZE = 1024`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormTriton
@@ -114,196 +106,6 @@ def rmsnorm_triton
     tl.store(output_ptr + out_off, out, mask=x_ptr_mask)
   }
 }
-
-def xOffset
-    (s : BlockState) (stride_x_batch stride_x_m stride_x_k : Nat)
-    (i : Fin BLOCK_N_SIZE) : Nat :=
-  s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + i.val * stride_x_k
-
-def wOffset (stride_rms_w : Nat) (i : Fin BLOCK_N_SIZE) : Nat :=
-  i.val * stride_rms_w
-
-def outOffset
-    (s : BlockState) (stride_out_batch stride_out_m stride_out_k : Nat)
-    (i : Fin BLOCK_N_SIZE) : Nat :=
-  s.pids 0 * stride_out_batch + s.pids 1 * stride_out_m + i.val * stride_out_k
-
-noncomputable def rmsInputTile
-    (s : BlockState) (x_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat) :
-    Tile .real [BLOCK_N_SIZE] :=
-  { data := fun idx =>
-      if idx.1.val < N_SIZE then
-        some (s.readMem x_ptr
-          (xOffset s stride_x_batch stride_x_m stride_x_k idx.1))
-      else some (0.0 : ℝ) }
-
-noncomputable def rmsVarCarrier
-    (s : BlockState) (x_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat) :
-    WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
-    ((Tile.reduceSum (shape := [BLOCK_N_SIZE]) ⟨0, by simp⟩ Bool.false
-      (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-        (rmsInputTile s x_ptr stride_x_batch stride_x_m stride_x_k
-          N_SIZE BLOCK_N_SIZE)
-        (rmsInputTile s x_ptr stride_x_batch stride_x_m stride_x_k
-          N_SIZE BLOCK_N_SIZE))).data PUnit.unit)
-    ((Tile.scalar (dtype := .real) (some (N_SIZE : ℝ) : WithBot ℝ)).data PUnit.unit)
-
-noncomputable def rmsInvCarrier
-    (s : BlockState) (x_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) : WithBot ℝ :=
-  WithBot.realRsqrt
-    (Option.map (fun a => a + eps)
-      (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
-        N_SIZE BLOCK_N_SIZE))
-
-noncomputable def rmsnormSpec
-    (s : BlockState) (x_ptr rms_w_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (i : Fin BLOCK_N_SIZE) : ℝ :=
-  WithBot.unbotD 0
-    (Option.map₂ (fun scaled w => scaled * w)
-      (Option.map₂ (fun x inv => x * inv)
-        (some (s.readMem x_ptr
-          (xOffset s stride_x_batch stride_x_m stride_x_k i)))
-        (rmsInvCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
-          N_SIZE BLOCK_N_SIZE eps))
-      (some (s.readMem rms_w_ptr (wOffset stride_rms_w i))))
-
-/-- Algorithm-layer correctness under the wrapper's one-block launch shape
-(`N_SIZE <= BLOCK_N_SIZE`). -/
-theorem rmsnorm_triton_correct
-    (x_ptr rms_w_ptr output_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N_SIZE =>
-        outOffset s stride_out_batch stride_out_m stride_out_k i))
-    (hExec : exec (rmsnorm_triton x_ptr rms_w_ptr output_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps) s =
-        some s') :
-    ∀ i : Fin BLOCK_N_SIZE,
-      s'.readMem output_ptr
-          (outOffset s stride_out_batch stride_out_m stride_out_k i) =
-        if i.val < N_SIZE then
-          rmsnormSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m stride_x_k
-            stride_rms_w N_SIZE BLOCK_N_SIZE eps i
-        else s.readMem output_ptr
-          (outOffset s stride_out_batch stride_out_m stride_out_k i) := by
-  intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N_SIZE] =>
-        s.pids 0 * stride_out_batch + s.pids 1 * stride_out_m +
-          idx.1.val * stride_out_k) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [outOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
-  by_cases hB : 0 < BLOCK_N_SIZE
-  · have hStep : BLOCK_N_SIZE ≠ 0 := Nat.ne_of_gt hB
-    simp [exec, rmsnorm_triton, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          stepForRangeAux.step_lt, stepForRangeAux.step_ge,
-          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
-          Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
-          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
-          NumericDType.div, ComparableDType.lt, hNpos, hNle,
-          Nat.not_lt.mpr hNle, hStep] at hExec
-    subst s'
-    simp only [outOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
-    by_cases hi : i.val < N_SIZE
-    · simp only [hi, ↓reduceIte]
-      simp [hi, rmsnormSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
-            xOffset, wOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
-            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-            WithBot.realRsqrt, NumericDType.mul, FloatDType.cast]
-      rfl
-    · simp [hi]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- Compute-facing correctness under the wrapper's one-block launch shape
-(`N_SIZE <= BLOCK_N_SIZE`). -/
-theorem rmsnorm_triton_compute_correct
-    (x_ptr rms_w_ptr output_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N_SIZE =>
-        outOffset s stride_out_batch stride_out_m stride_out_k i)) :
-    ComputeCorrect.Realizes
-      (kernel := rmsnorm_triton x_ptr rms_w_ptr output_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N_SIZE => i.val < N_SIZE)
-        (fun i => (output_ptr,
-          outOffset s stride_out_batch stride_out_m stride_out_k i)))
-      (expected := fun i =>
-        rmsnormSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m stride_x_k
-          stride_rms_w N_SIZE BLOCK_N_SIZE eps i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [rmsnorm_triton, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := rmsnorm_triton_correct x_ptr rms_w_ptr output_ptr
-    stride_x_batch stride_x_m stride_x_k stride_rms_w
-    stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
-    s s' hNpos hNle hOutInj hExec i
-  simpa [hActive] using h
-
-/-- Per-kernel output summary for `rmsnorm_triton`: the DSL surface lowers to the
-algorithm layer, and the masked store to `output_ptr` is compute-correct under
-the wrapper's one-block launch shape (`N_SIZE ≤ BLOCK_N_SIZE`) — every in-bounds
-lane holds `rmsnormSpec`, out-of-bounds lanes are preserved. -/
-theorem rmsnorm_triton_output_summary
-    (x_ptr rms_w_ptr output_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N_SIZE =>
-        outOffset s stride_out_batch stride_out_m stride_out_k i)) :
-    (∃ alg, (rmsnorm_triton x_ptr rms_w_ptr output_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := rmsnorm_triton x_ptr rms_w_ptr output_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N_SIZE => i.val < N_SIZE)
-        (fun i => (output_ptr,
-          outOffset s stride_out_batch stride_out_m stride_out_k i)))
-      (expected := fun i =>
-        rmsnormSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m stride_x_k
-          stride_rms_w N_SIZE BLOCK_N_SIZE eps i) := by
-  refine ⟨?_, ?_⟩
-  · simp [rmsnorm_triton, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  · exact rmsnorm_triton_compute_correct x_ptr rms_w_ptr output_ptr
-      stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
-      s hNpos hNle hOutInj
-
 
 /-! ## Full multi-block correctness (general `N_SIZE`, no `N_SIZE ≤ BLOCK` hypothesis)
 
@@ -1290,14 +1092,30 @@ noncomputable def rstdVal (s : BlockState) (x : RegionName) (sxb sxm sxk N : Nat
 noncomputable def rmsSpecFull (s : BlockState) (x w : RegionName) (sxb sxm sxk srw N : Nat) (eps : ℝ) (k : Nat) : ℝ :=
   s.readMem x (xOff s sxb sxm sxk k) * (WithBot.unbotD 0 (WithBot.realRsqrt (some (meanSq s x sxb sxm sxk N + eps)))) * s.readMem w (k*srw)
 
+/-- **Output-offset injectivity from a one-glance well-formedness bound.**
+
+`outOff k = pid_batch·sob + pid_m·som + k·sok` is injective over global lanes as
+soon as the output column stride is nonzero (`0 < sok` ≡ `0 < stride_out_k`,
+always true for a real tensor). The constant `(pid_batch, pid_m)` base cancels;
+`k·sok = k'·sok` with `sok > 0` forces `k = k'`. Discharges the abstract
+`Function.Injective` hypothesis from a single numeric fact. -/
+theorem outOff_injective_of_pos (s : BlockState) (sob som sok N : Nat) (hsok : 0 < sok) :
+    Function.Injective (fun k : Fin N => outOff s sob som sok k.val) := by
+  intro a b h
+  simp only [outOff] at h
+  have hmul : a.val * sok = b.val * sok := by omega
+  exact Fin.ext (Nat.eq_of_mul_eq_mul_right hsok hmul)
+
 theorem rmsnorm_full_correct
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
     (s s' : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)
-    (hinj : Function.Injective (fun k : Fin N => outOff s sob som sok k.val))
+    (hsok : 0 < sok)
     (hExec : exec (VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o sxb sxm sxk srw sob som sok N B eps) s = some s') :
     ∀ k : Fin N, s'.readMem o (outOff s sob som sok k.val)
       = rmsSpecFull s x w sxb sxm sxk srw N eps k.val := by
+  have hinj : Function.Injective (fun k : Fin N => outOff s sob som sok k.val) :=
+    outOff_injective_of_pos s sob som sok N hsok
   -- decompose exec
   rw [exec, body_decomp] at hExec
   simp only [List.append_assoc] at hExec
@@ -1368,7 +1186,7 @@ theorem rmsnorm_full_compute_correct
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
     (s : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)
-    (hinj : Function.Injective (fun k : Fin N => outOff s sob som sok k.val)) :
+    (hsok : 0 < sok) :
     ComputeCorrect.Realizes
       (kernel := VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
         sxb sxm sxk srw sob som sok N B eps)
@@ -1384,17 +1202,17 @@ theorem rmsnorm_full_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro k _
-  exact rmsnorm_full_correct x w o sxb sxm sxk srw sob som sok N B eps s s' hB hNpos hox how hinj hExec k
+  exact rmsnorm_full_correct x w o sxb sxm sxk srw sob som sok N B eps s s' hB hNpos hox how hsok hExec k
 
 /-- **Full output summary**: the surface lowers to the algorithm layer, and the
 masked store realizes the genuine multi-block RMS-norm closed form at every
-global lane `k < N_SIZE`. The general counterpart of the one-block
-`rmsnorm_triton_output_summary` — no `N_SIZE ≤ BLOCK_N_SIZE` hypothesis. -/
+global lane `k < N_SIZE`. Holds for arbitrary `N_SIZE` — no
+`N_SIZE ≤ BLOCK_N_SIZE` hypothesis. -/
 theorem rmsnorm_full_output_summary
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
     (s : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)
-    (hinj : Function.Injective (fun k : Fin N => outOff s sob som sok k.val)) :
+    (hsok : 0 < sok) :
     (∃ alg, (VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
         sxb sxm sxk srw sob som sok N B eps).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
@@ -1405,7 +1223,7 @@ theorem rmsnorm_full_output_summary
         (fun _ : Fin N => True)
         (fun k => (o, outOff s sob som sok k.val)))
       (expected := fun k : Fin N => rmsSpecFull s x w sxb sxm sxk srw N eps k.val) := by
-  refine ⟨?_, rmsnorm_full_compute_correct x w o sxb sxm sxk srw sob som sok N B eps s hB hNpos hox how hinj⟩
+  refine ⟨?_, rmsnorm_full_compute_correct x w o sxb sxm sxk srw sob som sok N B eps s hB hNpos hox how hsok⟩
   simp [VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
