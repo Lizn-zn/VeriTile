@@ -664,6 +664,41 @@ theorem matmul_triton1_exec_closed_form (X Y Z : RegionName) (s : BlockState)
   rw [hexec]
   exact hpost idx
 
+/-- **Output-offset injectivity from a geometric well-formedness bound.**
+
+`zOffset` is the row-major map `lane (i,j) ↦ rowIndex i · n_size + colIndex j`.
+It is injective as soon as the tile width does not exceed the row stride
+(`N ≤ NS`, i.e. `BLOCK_N ≤ n_size`) — which always holds for a valid tiling, a
+tile cannot be wider than the matrix. Geometrically: the in-row column offset
+never spills into the next row, so `(row, col)` ↔ address is a bijection. This
+discharges the abstract `Function.Injective` hypothesis from a one-glance bound. -/
+theorem zOffset_injective_of_le (s : BlockState) (NS N M : Nat) (hN : N ≤ NS) :
+    Function.Injective (zOffset s NS N M) := by
+  intro a b h
+  obtain ⟨ai, aj, au⟩ := a
+  obtain ⟨bi, bj, bu⟩ := b
+  simp only [zOffset, rowIndex, colIndex] at h
+  have haj : aj.val < NS := lt_of_lt_of_le aj.isLt hN
+  have hbj : bj.val < NS := lt_of_lt_of_le bj.isLt hN
+  have hpos : 0 < NS := by omega
+  set R := s.pids 0 / numNBlocks NS N * M with hR
+  set Q := s.pids 0 % numNBlocks NS N * N with hQ
+  -- h : (R + ai)·NS + (Q + aj) = (R + bi)·NS + (Q + bj); cancel the common Q
+  have h2 : (R + ai.val) * NS + aj.val = (R + bi.val) * NS + bj.val := by omega
+  -- recover the quotients by Euclidean division (remainders aj, bj < NS)
+  have l1 : ((R + ai.val) * NS + aj.val) / NS = R + ai.val := by
+    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt haj,
+      Nat.zero_add]
+  have l2 : ((R + bi.val) * NS + bj.val) / NS = R + bi.val := by
+    rw [Nat.add_comm, Nat.mul_comm, Nat.add_mul_div_left _ _ hpos, Nat.div_eq_of_lt hbj,
+      Nat.zero_add]
+  have hRai : R + ai.val = R + bi.val := by rw [← l1, ← l2, h2]
+  have hi : ai.val = bi.val := by omega
+  have hmul : (R + ai.val) * NS = (R + bi.val) * NS := by rw [hRai]
+  have hj : aj.val = bj.val := by omega
+  cases au; cases bu
+  rw [Fin.ext hi, Fin.ext hj]
+
 /-- **Closed-form correctness for `matmul_triton1` (general statement).**
 
 For arbitrary `n_size`, tile dims `M`/`N`, K-block size `BLOCK_K`, and K-block
@@ -674,14 +709,14 @@ tiles — NOT the kernel's own executed value.
 
 Layout: `X[i,k]` at `X + rowIndex i · k_size + k`, `Y[k,j]` at
 `Y + k · n_size + colIndex j`, `Z[i,j]` at `Z + rowIndex i · n_size + colIndex j`
-(the kernel's row-major pointer arithmetic). Preconditions: `0 < BLOCK_K`,
-output-offset injectivity (distinct lanes hit distinct addresses), clean initial
-`undef`. The Python test case (`m_size = k_size = n_size = 16`, block sizes equal
-to the matrix dims so `numKBlocks = 1`) is the special case. -/
+(the kernel's row-major pointer arithmetic). Preconditions: `0 < BLOCK_K` and
+`N ≤ NS` (tile width `BLOCK_N` ≤ row stride `n_size`, always true for a valid
+tiling — this discharges output-offset injectivity via `zOffset_injective_of_le`),
+plus a clean initial `undef`. -/
 theorem matmul_triton1_closed_form_correct
     (X Y Z : RegionName) (s : BlockState)
     (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
-    (hInj : Function.Injective (zOffset s NS N M))
+    (hN : N ≤ NS)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N)
@@ -694,34 +729,11 @@ theorem matmul_triton1_closed_form_correct
   intro s0 s' hExec hs0
   subst hs0
   intro idx
-  have hmain := matmul_triton1_exec_closed_form X Y Z s0 NS M BLOCK_K N numKBlocks hBK hInj hundef idx
+  have hmain := matmul_triton1_exec_closed_form X Y Z s0 NS M BLOCK_K N numKBlocks hBK
+    (zOffset_injective_of_le s0 NS N M hN) hundef idx
   have hExec2 : exec (matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N) s0
       = some s' := hExec
   rw [hExec2] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_real] using hmain
-
-/-- The Python test-shape (`16 × 16`, block sizes = matrix dims, `numKBlocks = 1`)
-output-offset injectivity. -/
-theorem matmul_triton1_python_test_shape_offset_injective (s : BlockState) :
-    Function.Injective (zOffset s 16 16 16) := by
-  intro a b h
-  simp only [zOffset, rowIndex, colIndex, numNBlocks, cdiv] at h
-  ext <;> omega
-
-/-- **Public Python test-shape summary**: the full `16 × 16` matmul surface
-realizes the genuine matrix product `Σ_{k<16} X[i,k]·Y[k,j]`. -/
-theorem matmul_triton1_python_test_shape_output_summary
-    (X Y Z : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_triton1_surface X Y Z 0 16 16 16 16 16).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_triton1_surface X Y Z 0 16 16 16 16 16)
-      (initialState := s)
-      (write := fun idx : TileIndex [16, 16] => some (Z, zOffset s 16 16 16 idx))
-      (expected := fun idx : TileIndex [16, 16] =>
-        matmulSpec s X Y 16 16 16 16 16 16 1 idx.1 idx.2.1)) := by
-  refine ⟨matmul_triton1_surface_toAlgorithm_supported X Y Z 0 16 16 16 16 16, ?_⟩
-  have h := matmul_triton1_closed_form_correct X Y Z s 16 16 16 16 1 (by norm_num)
-    (matmul_triton1_python_test_shape_offset_injective s) hundef
-  simpa using h
 
 end VeriTile.Bench.TritonBenchG.MatmulTriton1
