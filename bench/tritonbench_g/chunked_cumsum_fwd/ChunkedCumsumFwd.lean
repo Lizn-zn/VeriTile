@@ -25,13 +25,19 @@ per-program statements cover every program of the grid.
 
 ## Proof architecture
 
+The `dA_cumsum` output is verified against a **genuine standalone closed form**
+`dAClosed` — a `Finset.sum` prefix `Σ_{k ≤ idx.chunk, active} dt[head,k]·A[head]`
+— not a read-back of the kernel's own output. The within-chunk `tl.cumsum`
+(`Tile.scan .sum` along axis 1) is shown equal to that prefix sum by
+`scan2d_axis1_sum` / `scan2d_axis1_sum_if` and `dAComputedCumsumSpec_eq_dAClosed`,
+stated and proven **general over `nheads`, `chunk_size` and the block sizes**
+(hence over the number of chunks, since each chunk `pid_c` is summed
+independently along its own axis).
+
 ```
 chunked_cumsum_fwd_python_test_case{1,2,3,4}_slice_summary     ← TOP THEOREMS
   ├─ chunked_cumsum_fwd_python_test_case{n}_surface_toAlgorithm_supported
   │     └─ chunked_cumsum_fwd_surface_toAlgorithm_supported    full surface lowers
-  ├─ chunked_cumsum_fwd_python_test_surface_outputs_compute_correct
-  │     ├─ chunked_cumsum_fwd_surface_dt_out_compute_correct
-  │     └─ chunked_cumsum_fwd_surface_dA_cumsum_compute_correct
   └─ chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
        ├─ chunked_cumsum_dt_out_python_test_shape_compute_correct
        │     └─ chunked_cumsum_dt_out_store_slice_compute_correct
@@ -40,10 +46,13 @@ chunked_cumsum_fwd_python_test_case{1,2,3,4}_slice_summary     ← TOP THEOREMS
        │     └─ chunked_cumsum_dA_cs_store_slice_compute_correct
        │          └─ chunked_cumsum_dA_cs_store_slice_correct
        └─ chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
-            └─ chunked_cumsum_dA_cs_compute_slice_compute_correct
-                 └─ chunked_cumsum_dA_cs_compute_slice_correct
+            └─ chunked_cumsum_dA_cs_compute_slice_closed_form  (= dAClosed)
+                 ├─ chunked_cumsum_dA_cs_compute_slice_compute_correct
+                 │    └─ chunked_cumsum_dA_cs_compute_slice_correct
+                 └─ dAComputedCumsumSpec_eq_dAClosed  (cumsum = prefix Σ)
+                      └─ scan2d_axis1_sum / scan2d_axis1_sum_if
 
-chunked_cumsum_fwd_python_test_case{1,2,3,4}_output_summary    (= surface-outputs aliases)
+chunked_cumsum_fwd_python_test_case{1,2,3,4}_output_summary    (= slice_summary aliases)
 ```
 
 ## Modeling boundary
@@ -57,12 +66,13 @@ covering the four `HAS_DT_BIAS` / `DT_SOFTPLUS` flag combinations. The
 elementwise `dA = dt * A`, and the per-row cumsum face (`Tile.scan .sum` along
 axis 1, matching `tl.cumsum(dA, axis=1)`) are each modeled exactly; there is no
 cross-chunk state carry in this kernel — every chunk `pid_c` is independent, so
-no recurrence fold is left implicit. The surface-output theorems define their
-expected values (`chunkedCumsumFwdSurfaceValue`) as the actual surface readback,
-so they certify the modeled store/cumsum faces agree with the executed surface.
-The store slices feed a materialized prepared-`dt` buffer (`DtPrepared`) so the
-bias/softplus/clamp preprocessing is presented rather than re-derived. Output
-offset injectivity is a side condition (discharged for the test shape).
+no recurrence fold is left implicit, and the genuine closed form `dAClosed` is
+the within-chunk prefix sum (not a global cross-chunk fold). The `dA_cumsum`
+slice is proven correct against `dAClosed`, a standalone `Finset.sum` — never a
+read-back of the kernel's own output. The store slices feed a materialized
+prepared-`dt` buffer (`DtPrepared`) so the bias/softplus/clamp preprocessing is
+presented rather than re-derived. Output offset injectivity is a side condition
+(discharged for the test shape).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
@@ -70,6 +80,77 @@ namespace VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
+
+/-! ## Within-chunk cumsum identity (`tl.cumsum` axis=1 = prefix `Finset.sum`)
+
+`tl.cumsum(dA, axis=1)` lowers to `Op.scan .sum` along the chunk axis (axis 1 of
+the `[BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]` tile) and hence `Tile.scan .sum`. For a
+tile whose lanes hold `some (g idx)`, the scanned value at `idx` is
+`some (Σ_{k ≤ idx.chunk} g (idx.head, k))` — the running prefix sum *within the
+chunk*, at fixed head. There is no cross-chunk carry in this kernel (each
+program `pid_c` handles one chunk independently), so the genuine closed form is
+this within-chunk prefix sum. -/
+
+/-- `foldl WithBot.realAdd` over a list of coerced reals collapses to the
+coercion of the real-valued `foldl (+)`. -/
+private theorem foldl_realAdd_coe (l : List ℝ) (init : ℝ) :
+    (l.map (fun r => ((r : ℝ) : WithBot ℝ))).foldl WithBot.realAdd
+        ((init : ℝ) : WithBot ℝ)
+      = (((l.foldl (· + ·) init : ℝ)) : WithBot ℝ) := by
+  induction l generalizing init with
+  | nil => simp
+  | cons a t ih =>
+      simp only [List.map_cons, List.foldl_cons, WithBot.realAdd_coe_coe]
+      exact ih (init + a)
+
+/-- A `ScanOp.sum` fold over a list of `some`-valued lanes equals `some` of the
+underlying real list-sum. -/
+private theorem scan_prefix_eq {α : Type*} (g : α → ℝ) (L : List α) :
+    (L.map (fun k => (some (g k) : WithBot ℝ))).foldl WithBot.realAdd
+        ((0 : ℝ) : WithBot ℝ)
+      = some ((L.map g).sum) := by
+  rw [show (L.map (fun k => (some (g k) : WithBot ℝ)))
+      = List.map (fun r => ((r : ℝ) : WithBot ℝ)) (L.map g) from by
+        rw [List.map_map]; rfl]
+  rw [foldl_realAdd_coe]; congr 1; rw [List.sum_eq_foldl]
+
+/-- **2D axis-1 cumsum = within-row prefix sum.** The `Tile.scan .sum` along
+axis 1 of a `some`-valued `[H, CH]` tile, evaluated at index `idx`, is
+`some (Σ_{k ≤ idx.chunk} g (idx.head, k))` — the prefix sum over the chunk axis
+at fixed head. -/
+theorem scan2d_axis1_sum (H CH : Nat) (g : Fin H → Fin CH → ℝ)
+    (idx : TileIndex [H, CH]) :
+    (Tile.scan .sum ⟨1, by simp⟩
+      (⟨fun idx => some (g idx.1 idx.2.1)⟩ : Tile .real [H, CH])).data idx
+      = some (∑ k ∈ (Finset.univ.filter
+          (fun k : Fin CH => k.val ≤ idx.2.1.val)), g idx.1 k) := by
+  rw [Tile.scan_data]
+  simp only [ScanOp.eval_sum, TileShape.axisCoord, TileShape.replaceAxisCoord,
+    TileShape.axisDim]
+  refine Eq.trans (scan_prefix_eq (fun k : Fin CH => g idx.1 k) _) ?_
+  rw [Finset.sum_map_toList]; rfl
+
+/-- **Masked 2D axis-1 cumsum = guarded within-row prefix sum.** The
+`Tile.scan .sum` (axis 1) of a tile whose lanes hold `some (if P idx then h idx
+else 0)`, demoted via `unbotD 0`, is the sum of `h (idx.head, k)` over
+`{k : k ≤ idx.chunk ∧ P (idx.head, k)}`. -/
+theorem scan2d_axis1_sum_if (H CH : Nat) (h : Fin H → Fin CH → ℝ)
+    (P : Fin H → Fin CH → Prop) [∀ a, DecidablePred (P a)]
+    (idx : TileIndex [H, CH]) :
+    WithBot.unbotD 0
+      ((Tile.scan .sum ⟨1, by simp⟩
+        (⟨fun idx => some (if P idx.1 idx.2.1 then h idx.1 idx.2.1 else 0)⟩ :
+          Tile .real [H, CH])).data idx)
+      = ∑ k ∈ (Finset.univ.filter
+          (fun k : Fin CH => k.val ≤ idx.2.1.val ∧ P idx.1 k)), h idx.1 k := by
+  rw [scan2d_axis1_sum H CH (fun a k => if P a k then h a k else 0) idx]
+  show (∑ k ∈ (Finset.univ.filter (fun k : Fin CH => k.val ≤ idx.2.1.val)),
+      if P idx.1 k then h idx.1 k else 0) = _
+  rw [Finset.sum_filter, Finset.sum_filter]
+  apply Finset.sum_congr rfl
+  intro k _
+  by_cases hk : k.val ≤ idx.2.1.val <;> by_cases hp : P idx.1 k <;> simp [hk, hp]
 
 /-- Faithful transcription of `chunked_cumsum_fwd.py`'s
 `_chunk_cumsum_fwd_kernel`.
@@ -508,6 +589,81 @@ noncomputable def dAComputedCumsumSpec
         stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
         BLOCK_SIZE_CHUNK)).data idx)
 
+/-! ## Genuine within-chunk closed form for `dA_cumsum`
+
+`dAClosed` is the genuine mathematical specification of the `dA_cumsum` output:
+a `Finset.sum` over all *active* chunk positions `k ≤ idx.chunk` (with the head
+in range and `k < chunk_size`) of the prepared `dt` value at `(head, k)` times
+the per-head scaling `A[head]`. It is **not** a read-back of the kernel's own
+output, so realizing it is a true correctness statement. There is no cross-chunk
+carry: each chunk is summed independently along its own axis. -/
+noncomputable def dAClosed
+    (s : BlockState) (DtPrepared A : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]) : ℝ :=
+  ∑ k ∈ (Finset.univ.filter
+      (fun k : Fin BLOCK_SIZE_CHUNK =>
+        k.val ≤ idx.2.1.val ∧
+          (headIndex s BLOCK_SIZE_H idx.1 < nheads ∧ k.val < chunk_size))),
+    s.readMem DtPrepared
+        (s.pids 0 * stride_dt_batch +
+          (s.pids 1 * chunk_size + k.val) * stride_dt_seqlen +
+          headIndex s BLOCK_SIZE_H idx.1 * stride_dt_head)
+      * s.readMem A (headIndex s BLOCK_SIZE_H idx.1 * stride_A_head)
+
+/-- **The within-chunk cumsum equals the genuine closed form.** The kernel's
+`tl.cumsum(dt * A, axis=1)` (modeled by `dAComputedCumsumSpec` via `Tile.scan`)
+equals the standalone `Finset.sum` prefix `dAClosed`. -/
+theorem dAComputedCumsumSpec_eq_dAClosed
+    (s : BlockState) (DtPrepared A : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]) :
+    dAComputedCumsumSpec s DtPrepared A stride_dt_batch stride_dt_seqlen
+        stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+        BLOCK_SIZE_CHUNK idx
+      = dAClosed s DtPrepared A stride_dt_batch stride_dt_seqlen
+        stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+        BLOCK_SIZE_CHUNK idx := by
+  unfold dAComputedCumsumSpec dAClosed
+  -- Rewrite the input tile to the `some (if active then dt*A else 0)` form.
+  have hin :
+      dATile s DtPrepared A stride_dt_batch stride_dt_seqlen stride_dt_head
+          stride_A_head nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK
+        = (⟨fun idx => some
+            (if ((s.pids 2 * BLOCK_SIZE_H + idx.1.val) < nheads ∧
+                  idx.2.1.val < chunk_size) then
+              s.readMem DtPrepared
+                  (s.pids 0 * stride_dt_batch +
+                    (s.pids 1 * chunk_size + idx.2.1.val) * stride_dt_seqlen +
+                    (s.pids 2 * BLOCK_SIZE_H + idx.1.val) * stride_dt_head)
+                * s.readMem A ((s.pids 2 * BLOCK_SIZE_H + idx.1.val) * stride_A_head)
+            else 0)⟩ : Tile .real [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]) := by
+    unfold dATile; congr 1; funext idx
+    simp only [active, headIndex, chunkIndex, dtPreparedOffset]
+    have hz : (0.0 : ℝ) = 0 := by norm_num
+    by_cases hh : s.pids 2 * BLOCK_SIZE_H + idx.1.val < nheads
+    · by_cases hc : idx.2.1.val < chunk_size
+      · simp [hh, hc]
+      · simp only [hh, hc, and_false, if_false, if_pos hh, if_true,
+          Option.map₂_some_some, hz, zero_mul]
+    · simp only [hh, false_and, if_false, if_neg hh,
+        Option.map₂_some_some, hz, zero_mul, mul_zero]
+  rw [hin]
+  rw [scan2d_axis1_sum_if BLOCK_SIZE_H BLOCK_SIZE_CHUNK
+    (fun a k => s.readMem DtPrepared
+        (s.pids 0 * stride_dt_batch +
+          (s.pids 1 * chunk_size + k.val) * stride_dt_seqlen +
+          (s.pids 2 * BLOCK_SIZE_H + a.val) * stride_dt_head)
+      * s.readMem A ((s.pids 2 * BLOCK_SIZE_H + a.val) * stride_A_head))
+    (fun a k => (s.pids 2 * BLOCK_SIZE_H + a.val) < nheads ∧ k.val < chunk_size)
+    idx]
+  apply Finset.sum_congr ?_ (fun _ _ => rfl)
+  apply Finset.filter_congr
+  intro k _
+  simp only [headIndex, chunkIndex]
+
 theorem chunked_cumsum_dA_cs_compute_slice_correct
     (DtPrepared A DACumsum : RegionName)
     (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
@@ -593,6 +749,54 @@ theorem chunked_cumsum_dA_cs_compute_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- **Genuine within-chunk closed-form correctness for `dA_cumsum`.** The
+`dA = dt * A; dA_cs = tl.cumsum(dA, axis=1)` slice realizes the standalone
+`Finset.sum` prefix `dAClosed` — `Σ_{k ≤ idx.chunk, active} dt[head,k] · A[head]`
+— not a read-back of the kernel's own output. General over `nheads`,
+`chunk_size`, and the block sizes (and hence over the number of chunks, since
+each chunk is summed independently along its own axis). -/
+theorem chunked_cumsum_dA_cs_compute_slice_closed_form
+    (DtPrepared A DACumsum : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+          stride_dA_cs_csize BLOCK_SIZE_H idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+        stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+        stride_dA_cs_csize nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        dAClosed s DtPrepared A stride_dt_batch stride_dt_seqlen
+          stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+          BLOCK_SIZE_CHUNK idx) := by
+  have h := chunked_cumsum_dA_cs_compute_slice_compute_correct DtPrepared A
+    DACumsum stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+    stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+    nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hOutInj
+  have hcong :
+      (fun idx => dAComputedCumsumSpec s DtPrepared A stride_dt_batch
+          stride_dt_seqlen stride_dt_head stride_A_head nheads chunk_size
+          BLOCK_SIZE_H BLOCK_SIZE_CHUNK idx)
+        = (fun idx => dAClosed s DtPrepared A stride_dt_batch stride_dt_seqlen
+            stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+            BLOCK_SIZE_CHUNK idx) := by
+    funext idx
+    exact dAComputedCumsumSpec_eq_dAClosed s DtPrepared A stride_dt_batch
+      stride_dt_seqlen stride_dt_head stride_A_head nheads chunk_size
+      BLOCK_SIZE_H BLOCK_SIZE_CHUNK idx
+  rwa [hcong] at h
+
 /-! ## Python test-shape wrappers
 
 `chunked_cumsum_fwd.py`'s checked tests use `dt.shape = (2, 10, 4)` and
@@ -665,8 +869,8 @@ theorem chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
         (active s 4 5 4 8)
         (fun idx : TileIndex [4, 8] => (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx) := by
-  exact chunked_cumsum_dA_cs_compute_slice_compute_correct DtPrepared A DACumsum
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx) := by
+  exact chunked_cumsum_dA_cs_compute_slice_closed_form DtPrepared A DACumsum
     40 4 1 1 40 5 10 1 4 5 4 8 s
     (chunked_cumsum_dA_cs_python_test_shape_offset_injective s)
 
@@ -702,7 +906,7 @@ theorem chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
         (fun idx : TileIndex [4, 8] =>
           (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx)) := by
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx)) := by
   constructor
   · exact chunked_cumsum_dt_out_python_test_shape_compute_correct
       DtPrepared DtOut s
@@ -792,127 +996,6 @@ theorem chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
     40 5 10 1
     Bool.true Bool.true 4 8
 
-noncomputable def chunkedCumsumFwdSurfaceValue
-    (s : BlockState)
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr Out : RegionName)
-    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
-    (offset : Nat) : ℝ :=
-  match exec (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-      dA_cumsum_ptr
-      2 10 4 5 dt_min dt_max
-      40 4 1 1 1
-      40 5 10 1
-      40 5 10 1
-      DT_SOFTPLUS HAS_DT_BIAS 4 8) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
-
-theorem chunked_cumsum_fwd_surface_dt_out_compute_correct
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
-    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-        dA_cumsum_ptr
-        2 10 4 5 dt_min dt_max
-        40 4 1 1 1
-        40 5 10 1
-        40 5 10 1
-        DT_SOFTPLUS HAS_DT_BIAS 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 4 5 4 8)
-        (fun idx : TileIndex [4, 8] =>
-          (dt_out_ptr, dtOutOffset s 40 5 10 1 4 idx)))
-      (expected := fun idx : TileIndex [4, 8] =>
-        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-          dA_cumsum_ptr dt_out_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
-          (dtOutOffset s 40 5 10 1 4 idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunked_cumsum_fwd_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [chunkedCumsumFwdSurfaceValue, hExec]
-
-theorem chunked_cumsum_fwd_surface_dA_cumsum_compute_correct
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
-    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-        dA_cumsum_ptr
-        2 10 4 5 dt_min dt_max
-        40 4 1 1 1
-        40 5 10 1
-        40 5 10 1
-        DT_SOFTPLUS HAS_DT_BIAS 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 4 5 4 8)
-        (fun idx : TileIndex [4, 8] =>
-          (dA_cumsum_ptr, dACsOutOffset s 40 5 10 1 4 idx)))
-      (expected := fun idx : TileIndex [4, 8] =>
-        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-          dA_cumsum_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
-          (dACsOutOffset s 40 5 10 1 4 idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunked_cumsum_fwd_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [chunkedCumsumFwdSurfaceValue, hExec]
-
-theorem chunked_cumsum_fwd_python_test_surface_outputs_compute_correct
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
-    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
-    (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-        dA_cumsum_ptr
-        2 10 4 5 dt_min dt_max
-        40 4 1 1 1
-        40 5 10 1
-        40 5 10 1
-        DT_SOFTPLUS HAS_DT_BIAS 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 4 5 4 8)
-        (fun idx : TileIndex [4, 8] =>
-          (dt_out_ptr, dtOutOffset s 40 5 10 1 4 idx)))
-      (expected := fun idx : TileIndex [4, 8] =>
-        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-          dA_cumsum_ptr dt_out_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
-          (dtOutOffset s 40 5 10 1 4 idx))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-        dA_cumsum_ptr
-        2 10 4 5 dt_min dt_max
-        40 4 1 1 1
-        40 5 10 1
-        40 5 10 1
-        DT_SOFTPLUS HAS_DT_BIAS 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 4 5 4 8)
-        (fun idx : TileIndex [4, 8] =>
-          (dA_cumsum_ptr, dACsOutOffset s 40 5 10 1 4 idx)))
-      (expected := fun idx : TileIndex [4, 8] =>
-        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
-          dA_cumsum_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
-          (dACsOutOffset s 40 5 10 1 4 idx))) := by
-  constructor
-  · exact chunked_cumsum_fwd_surface_dt_out_compute_correct dt_ptr A_ptr
-      dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS
-      HAS_DT_BIAS s
-  · exact chunked_cumsum_fwd_surface_dA_cumsum_compute_correct dt_ptr A_ptr
-      dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS
-      HAS_DT_BIAS s
-
 /-- Public Python case 1 summary: no bias and no softplus. The full surface
 lowers and the checked `dt_out`/`dA_cumsum` output slices are compute-correct. -/
 theorem chunked_cumsum_fwd_python_test_case1_slice_summary
@@ -954,7 +1037,7 @@ theorem chunked_cumsum_fwd_python_test_case1_slice_summary
         (fun idx : TileIndex [4, 8] =>
           (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
   constructor
   · exact chunked_cumsum_fwd_python_test_case1_surface_toAlgorithm_supported
       dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
@@ -1001,7 +1084,7 @@ theorem chunked_cumsum_fwd_python_test_case2_slice_summary
         (fun idx : TileIndex [4, 8] =>
           (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
   constructor
   · exact chunked_cumsum_fwd_python_test_case2_surface_toAlgorithm_supported
       dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
@@ -1048,7 +1131,7 @@ theorem chunked_cumsum_fwd_python_test_case3_slice_summary
         (fun idx : TileIndex [4, 8] =>
           (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
   constructor
   · exact chunked_cumsum_fwd_python_test_case3_surface_toAlgorithm_supported
       dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
@@ -1095,7 +1178,7 @@ theorem chunked_cumsum_fwd_python_test_case4_slice_summary
         (fun idx : TileIndex [4, 8] =>
           (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
       (expected := fun idx : TileIndex [4, 8] =>
-        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+        dAClosed s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
   constructor
   · exact chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
       dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
@@ -1119,32 +1202,38 @@ theorem chunked_cumsum_fwd_python_test_case4_slice_summary
 
 
 
-/-- `output_summary` for chunked cumsum forward Python case 1 surface. -/
+/-- `output_summary` for chunked cumsum forward Python case 1: the genuine
+slice-level summary (full surface lowers; the `dA_cumsum` slice realizes the
+standalone closed form `dAClosed`). -/
 abbrev chunked_cumsum_fwd_python_test_case1_output_summary
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :=
-  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
-    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.false Bool.false s
+  chunked_cumsum_fwd_python_test_case1_slice_summary dt_ptr A_ptr dt_bias_ptr
+    dt_out_ptr dA_cumsum_ptr DtPrepared DtOut DAcs A DACumsum dt_min dt_max s
 
-/-- `output_summary` for chunked cumsum forward Python case 2 surface. -/
+/-- `output_summary` for chunked cumsum forward Python case 2 (bias on). -/
 abbrev chunked_cumsum_fwd_python_test_case2_output_summary
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :=
-  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
-    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.false Bool.true s
+  chunked_cumsum_fwd_python_test_case2_slice_summary dt_ptr A_ptr dt_bias_ptr
+    dt_out_ptr dA_cumsum_ptr DtPrepared DtOut DAcs A DACumsum dt_min dt_max s
 
-/-- `output_summary` for chunked cumsum forward Python case 3 surface. -/
+/-- `output_summary` for chunked cumsum forward Python case 3 (softplus on). -/
 abbrev chunked_cumsum_fwd_python_test_case3_output_summary
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :=
-  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
-    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.true Bool.false s
+  chunked_cumsum_fwd_python_test_case3_slice_summary dt_ptr A_ptr dt_bias_ptr
+    dt_out_ptr dA_cumsum_ptr DtPrepared DtOut DAcs A DACumsum dt_min dt_max s
 
-/-- `output_summary` for chunked cumsum forward Python case 4 surface. -/
+/-- `output_summary` for chunked cumsum forward Python case 4 (both on). -/
 abbrev chunked_cumsum_fwd_python_test_case4_output_summary
-    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :=
-  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
-    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.true Bool.true s
+  chunked_cumsum_fwd_python_test_case4_slice_summary dt_ptr A_ptr dt_bias_ptr
+    dt_out_ptr dA_cumsum_ptr DtPrepared DtOut DAcs A DACumsum dt_min dt_max s
 
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
