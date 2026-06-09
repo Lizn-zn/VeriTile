@@ -170,6 +170,93 @@ theorem attentionRealBase2PerKeyScale_eq_streaming {M S D : Nat}
     Function.comp]
   rfl
 
+/-! ### Causal base-2 per-key-scale attention
+
+Streaming flash kernels with a causal mask (e.g. `flash_attn.py`'s
+`tl.where(off_m[:,None] >= start_n+off_n[None,:], qk, -inf)`) mask each *future*
+key's score to `-inf`, so its softmax weight `2^(score)` is `0`. The genuine
+closed form is therefore the base-2 per-key-scale softmax restricted to keys
+`j ≤ qStart + i` (global query row `qStart + i`). This section gives that closed
+form and its bridge to the same `osStep` online-softmax fold over a *causally
+filtered* key list — the exec-side loop only has to realize this fold. -/
+
+/-- Causal base-2 per-key-scale attention: key `j` contributes to output row `i`
+exactly when its global index `j ≤ qStart + i.val`; future keys carry zero
+softmax mass (the `-inf`-masked score). -/
+noncomputable def attentionRealBase2PerKeyScaleCausal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (qStart : Nat) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let raw := fun j : Fin S =>
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+    let weight := fun j : Fin S =>
+      if j.val ≤ qStart + i.val then pow2 (keyScale j * raw j) else 0
+    let denom := Finset.univ.sum (fun j : Fin S => weight j)
+    let numer := Finset.univ.sum (fun j : Fin S => weight j * V (j, d, PUnit.unit))
+    numer / denom
+
+/-- Causally-filtered streamed key list for output `(i, d)`: only keys with
+global index `≤ qStart + i.val` are emitted (future keys are dropped, exactly the
+`-inf`-masked / zero-weight keys), each as a `(score, value)` pair with score
+`keyScale j · (Q row i · K row j)`. -/
+noncomputable def attnKeyListCausal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (qStart : Nat) (i : Fin M) (d : Fin D) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val ≤ qStart + i.val then
+      some (keyScale j * Finset.univ.sum (fun e : Fin D =>
+              Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)),
+            V (j, d, PUnit.unit))
+    else none)
+
+/-- Sum of a `filterMap (if p then some (g·) else none)` collapses the guard into
+the summand. -/
+private theorem list_sum_filterMap_ite {α β : Type*} [AddCommMonoid β]
+    (l : List α) (p : α → Prop) [DecidablePred p] (g : α → β) :
+    ((l.filterMap (fun a => if p a then some (g a) else none))).sum
+      = (l.map (fun a => if p a then g a else 0)).sum := by
+  induction l with
+  | nil => simp
+  | cons a t ih => by_cases ha : p a <;> simp [ha, ih]
+
+/-- `h`-image sum of a causally filtered `finRange` list = the masked
+`Finset.sum` over `Fin n`. The list/Finset bridge for the causal numerator and
+denominator. -/
+private theorem list_sum_filterMap_finRange {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [list_sum_filterMap_ite (List.finRange n) p (fun j => h (g j))]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- **Bridge: causal base-2 per-key-scale attention IS the online-softmax fold
+over the causally filtered key list.** The eventual `exec` proof only has to show
+the kernel's masked loop realizes this fold; this lemma then delivers the causal
+closed form (`attentionRealBase2PerKeyScaleCausal`). -/
+theorem attentionRealBase2PerKeyScaleCausal_eq_streaming {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (qStart : Nat) (i : Fin M) (d : Fin D) :
+    attentionRealBase2PerKeyScaleCausal Q K V keyScale qStart (i, d, PUnit.unit)
+      = (let st := (attnKeyListCausal Q K V keyScale qStart i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [osStep_foldl_eq_batch]
+  simp only [attentionRealBase2PerKeyScaleCausal, attnKeyListCausal]
+  congr 1
+  · rw [list_sum_filterMap_finRange S (fun j => j.val ≤ qStart + i.val)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1 * p.2)]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hj : j.val ≤ qStart + i.val <;> simp [hj]
+  · rw [list_sum_filterMap_finRange S (fun j => j.val ≤ qStart + i.val)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1)]
+
 /-! ### Block-level online softmax (matching the kernel's loop)
 
 The kernel does not stream one key at a time; each loop iteration absorbs a whole
@@ -259,6 +346,52 @@ theorem osBlockStep_foldl_eq_batch (blocks : List (List (ℝ × ℝ))) :
   by_cases hm : pow2 (-(blocks.foldl osBlockStep (0, 0, 0)).1) = 0
   · exact absurd hm (ne_of_gt (pow2_pos _))
   · rw [zero_add, zero_add, mul_div_mul_left _ _ hm]
+
+/-- The running max after folding `osStep` over a list is `blockMax`. -/
+theorem osStep_foldl_fst (xs : List (ℝ × ℝ)) (m l acc : ℝ) :
+    (xs.foldl osStep (m, l, acc)).1 = blockMax m xs := by
+  induction xs generalizing m l acc with
+  | nil => simp [blockMax]
+  | cons x xs ih =>
+    obtain ⟨s, v⟩ := x
+    simp only [List.foldl_cons, osStep, blockMax, List.foldl_cons]
+    exact ih (max m s) _ _
+
+/-- **One block step = the per-key `osStep` fold over that block.** The kernel
+takes the block max and rescales once per block; this equals streaming the block's
+keys one at a time. Both keep `l = 2^(-m)·Σ2^s`, `acc = 2^(-m)·Σ2^s·v` and end at
+the same running max `blockMax`. -/
+theorem osBlockStep_eq_foldl_osStep (st : ℝ × ℝ × ℝ) (block : List (ℝ × ℝ)) :
+    osBlockStep st block = block.foldl osStep st := by
+  obtain ⟨m, l, acc⟩ := st
+  set m' := blockMax m block with hm'
+  have hfst : (block.foldl osStep (m, l, acc)).1 = m' := osStep_foldl_fst block m l acc
+  -- both consistency facts at the same anchor L = 2^m·l, T = 2^m·acc
+  have hlL : l = pow2 (-m) * (pow2 m * l) := by
+    rw [← mul_assoc, ← pow2_add]; ring_nf; simp
+  have haccT : acc = pow2 (-m) * (pow2 m * acc) := by
+    rw [← mul_assoc, ← pow2_add]; ring_nf; simp
+  obtain ⟨hl1, ha1⟩ := osStep_foldl_consistent block m l acc (pow2 m * acc) (pow2 m * l) hlL haccT
+  obtain ⟨hl2, ha2⟩ := osBlockStep_foldl_consistent [block] m l acc (pow2 m * acc) (pow2 m * l) hlL haccT
+  simp only [List.foldl_cons, List.foldl_nil, List.flatten_cons, List.flatten_nil,
+    List.append_nil] at hl2 ha2
+  apply Prod.ext
+  · -- max components
+    show (osBlockStep (m, l, acc) block).1 = (block.foldl osStep (m, l, acc)).1
+    rw [hfst]; rfl
+  apply Prod.ext
+  · -- l components
+    show (osBlockStep (m, l, acc) block).2.1 = (block.foldl osStep (m, l, acc)).2.1
+    rw [hl1, hl2]
+    congr 1
+    show pow2 (-(osBlockStep (m, l, acc) block).1) = pow2 (-(block.foldl osStep (m, l, acc)).1)
+    rw [hfst]; rfl
+  · -- acc components
+    show (osBlockStep (m, l, acc) block).2.2 = (block.foldl osStep (m, l, acc)).2.2
+    rw [ha1, ha2]
+    congr 1
+    show pow2 (-(osBlockStep (m, l, acc) block).1) = pow2 (-(block.foldl osStep (m, l, acc)).1)
+    rw [hfst]; rfl
 
 /-- Summing `h` over the flattened block grid `[[g 0 0, g 0 1, …], [g 1 0, …], …]`
 equals the double sum. Bridges the kernel's block-indexed loop (a list of blocks)
@@ -909,5 +1042,61 @@ def slice4DFlat {B H S D : Nat} (Bk numKVBlocks : Nat)
     T (b, h, ⟨j.val, by
       have := j.isLt
       omega⟩, d, PUnit.unit)
+
+/-! ### Base-2 attention with a scalar score scale and an additive bias
+
+Matches relative-position-bias flash kernels (`attention_kernel_aligned`) that
+(a) use `exp2` for the softmax, (b) fold a *scalar* score scale `qk_scale =
+sm_scale · log2(e)` into `q` (so every key shares the same scale), and (c) add a
+per-`(query, key)` bias `bias i j` to the score *after* scaling — here
+`bias i j = b0 + b1` of the fused `rel_h + rel_w` position table. For query `i`,
+output channel `d`:
+
+`out[i,d] = (Σ_j 2^(scale · raw i j + bias i j) · V[j,d])
+              / (Σ_j 2^(scale · raw i j + bias i j))`,
+
+where `raw i j = Σ_e Q[i,e] · K[j,e]`. Using `2^x = exp(log 2 · x)`, this is the
+base-`e` softmax of `log 2 · (scale · raw + bias)`. With `bias ≡ 0` it
+specialises to `attentionRealBase2PerKeyScale` with the constant key scale
+`scale`. -/
+noncomputable def attentionRealBase2ScalarScaleBias {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let raw := fun j : Fin S =>
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+    let weight := fun j : Fin S => Real.exp (Real.log 2 * (scale * raw j + bias i j))
+    let denom := Finset.univ.sum (fun j : Fin S => weight j)
+    let numer := Finset.univ.sum (fun j : Fin S => weight j * V (j, d, PUnit.unit))
+    numer / denom
+
+/-- The streamed `(score, value)` list the aligned kernel folds over: score
+`scale · raw i j + bias i j` (the `qk` register after the dot, scale-folded into
+`q`, and the `b0 + b1` bias add), value `V[j,d]`. -/
+noncomputable def attnKeyListBias {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) (i : Fin M) (d : Fin D) :
+    List (ℝ × ℝ) :=
+  List.ofFn (fun j : Fin S =>
+    (scale * Finset.univ.sum (fun e : Fin D =>
+        Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)) + bias i j,
+      V (j, d, PUnit.unit)))
+
+/-- **Bridge: the base-2 scalar-scale + additive-bias attention spec IS the
+online-softmax fold.** Mirrors `attentionRealBase2PerKeyScale_eq_streaming`: the
+closed form equals the `acc / l` ratio produced by streaming `osStep` over
+`attnKeyListBias` from the neutral start. The remaining `exec` proof only has to
+show the kernel's loop realizes this fold; this lemma then delivers the closed
+form. -/
+theorem attentionRealBase2ScalarScaleBias_eq_streaming {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) (i : Fin M) (d : Fin D) :
+    attentionRealBase2ScalarScaleBias Q K V scale bias (i, d, PUnit.unit)
+      = (let st := (attnKeyListBias Q K V scale bias i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [osStep_foldl_eq_batch]
+  simp only [attentionRealBase2ScalarScaleBias, attnKeyListBias, List.map_ofFn,
+    List.sum_ofFn, Function.comp]
+  rfl
 
 end VeriTile.Triton
