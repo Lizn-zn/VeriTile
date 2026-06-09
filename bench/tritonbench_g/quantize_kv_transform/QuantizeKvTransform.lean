@@ -29,33 +29,39 @@ the grid; destination-index injectivity is supplied as a no-collision lemma.
 ## Proof architecture
 
 ```
-destindex_copy_quantize_kv_transform_python_h12_d96_output_summary   ← TOP THEOREM
-  ├─ ..._transform_real_surface_toAlgorithm_supported    surface lowers to the algorithm layer
-  ├─ ..._transform_surface_value_output_compute_correct  value store ComputeCorrect
-  └─ ..._transform_surface_scale_output_compute_correct  scale store ComputeCorrect
-       ├─ ..._transform_value_store_slice_compute_correct / _correct / _active   value readback
-       ├─ ..._transform_scale_store_slice_compute_correct / _correct             scale readback
-       └─ ..._transform_python_..._offset_injective / _no_collision              no-collision lemmas
+destindex_copy_quantize_kv_transform_python_h12_d96_output_summary       ← TOP THEOREM (genuine)
+  ├─ ..._transform_real_surface_toAlgorithm_supported                    surface lowers to the algorithm layer
+  ├─ ..._transform_real_surface_active_value_output_compute_correct      genuine int8 value readback (active lanes)
+  │    ├─ scatter_readback_int_prop_masked_nd_of_true                    per-lane int store readback (no-collision)
+  │    ├─ foldl_writeMem_prop_masked_readMemValue_int_other              peel trailing real scale store
+  │    └─ ..._transform_python_h12_d96_active_no_collision               no-collision lemma
+  └─ ..._transform_real_surface_scale_output_compute_correct             genuine real scale readback
+       ├─ BlockState.scatter_readback_prop_masked_nd                     per-head real store readback
+       ├─ foldl_writeMemTyped_int_prop_masked_readMem_other              peel prior int value store
+       └─ ..._transform_python_h12_scale_offset_injective                no-collision lemma
 ```
 
-Three shapes (h12_d96, h8_d64, h1_d1) mirror the Python test sizes, including
-the degenerate `head_dim` cases the dim mask is built for. The value spec is the
-destination-indexed scaled store `src / scale`; the scale spec is the stored
-per-head scalar.
+The genuine value spec (`quantizeKvTransformSurfaceIntValue`) is the int8 cast of
+`src / (max(|src|, axis=1)/127)` read back through `readMemValue .int Out`; the
+genuine scale spec (`quantizeKvTransformScaleCell`) is the stored real value of
+`max(|src|, axis=1)/127` read back through `readMem OutScale`. Both are computed
+from the kernel inputs, so the top summary is not self-referential. The
+slice-based `quantizeKvTransformValueSpec` / `quantizeKvTransformScaleSpec` (with
+a precomputed scale) remain as supporting per-store coverage and as the basis of
+the h8_d64 / h1_d1 summaries.
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ`, not bit-accurate IEEE float. The honesty point is the
 quantization tail. The proofs model: the per-head scale `max(|src|) / 127`, the
 combined head-and-dim mask with `other=0.0` load default, the
-destination-indexed addressing, and the real-valued scaled value `src / scale`;
-the value-store slices take the per-head scale as a precomputed `OutScale` input
-and prove the masked writeback up to the fixed-width cast. The full surface
-(including the scale's `.to(...)` output-dtype annotation and the quotient's
-`(src / scale).to(tl.int8)` annotation) lowers through algorithm erasure, where
-those casts are the **identity over `ℝ`**. The bit-accurate effect of the
-scale-dtype rounding and the int8 saturating cast is **not** numerically
-modeled. `@triton.autotune` is not present here.
+destination-indexed addressing, and the real-valued scaled value `src / scale`.
+Unlike `quantize_copy_kv`, the scale cast `.to(OutScale.dtype.element_ty)` lowers
+as the **identity over `ℝ`** (the DSL erases `element_ty` casts), so the scale
+store writes the real channel; the quotient `(src / scale).to(tl.int8)` writes
+the int channel through the fixed-width int8 cast surface. The bit-accurate
+effect of the scale-dtype rounding and the int8 saturating cast is **not**
+numerically modeled. `@triton.autotune` is not present here.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeKvTransform
@@ -63,6 +69,225 @@ namespace VeriTile.Bench.TritonBenchG.QuantizeKvTransform
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+
+/-! ## Integer scatter / cross-channel memory infra
+
+The genuine value store writes an `.int` channel (the `.to(tl.int8)` quotient).
+The scale store writes the `.real` channel (the `.to(OutScale.dtype.element_ty)`
+cast is the identity over `ℝ`). The lemmas below are the `.int` analogue of the
+`.real` scatter-readback in `VeriTile.Triton.Semantics.State`, plus the
+cross-channel preservation lemmas that peel one store off the other's readback
+by region distinctness. -/
+
+/-- `.int` masked-foldl preservation: writes whose (masked) offsets all miss `o`
+leave `readMemValue .int region o` unchanged. -/
+private theorem foldl_writeMemTyped_int_masked_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → Int) (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, mask k = Bool.true → offsetFn k ≠ o) →
+      BlockState.readMemValue ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s))
+          .int region o
+      = s.readMemValue .int region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    rw [List.foldl_cons]
+    have htl : ∀ k ∈ tl, mask k = Bool.true → offsetFn k ≠ o :=
+      fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+    by_cases hmaskhd : mask hd = Bool.true
+    · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+      simp only [hmaskhd, if_true]
+      rw [ih _ htl]
+      rw [BlockState.writeMemTyped_int_readMemValue_int]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd
+          else s.readMemValue TileDType.int region o) =
+        s.readMemValue TileDType.int region o
+      rw [if_neg]
+      rintro ⟨_, h_eq⟩
+      exact hhd h_eq.symm
+    · have hmaskhd' : mask hd = Bool.false := by
+        rcases hmaskFalse : mask hd
+        · rfl
+        · exact absurd hmaskFalse hmaskhd
+      simp only [hmaskhd', if_false, Bool.false_eq_true]
+      exact ih _ htl
+
+/-- `.int` scatter readback: reading `readMemValue .int` of the masked
+`writeMemTyped .int` foldl at lane `i` returns the stored value if `P i`, else
+the prior value. -/
+theorem scatter_readback_int_prop_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → Int) (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    BlockState.readMemValue ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s)
+      .int region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .int region (offsetFn i) := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change BlockState.readMemValue ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s))
+      .int region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .int region (offsetFn i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  have hstep :
+      (fun (acc : BlockState) k =>
+        if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  rw [hstep]
+  rw [foldl_writeMemTyped_int_masked_preserves offsetFn valueFn (fun k => decide (P k))
+    (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hPi : P i
+  · simp only [hPi, if_true]
+    rw [BlockState.writeMemTyped_int_readMemValue_int]
+    show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _) = valueFn i
+    exact if_pos ⟨rfl, rfl⟩
+  · simp only [hPi, if_false]
+    rw [foldl_writeMemTyped_int_masked_preserves offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₁]
+    exact h_l1_not_in
+
+/-- `.int` active-lane scatter readback: when lane `i` is active and no other
+active lane collides on its offset, the masked `.int` store foldl reads back the
+stored value at `i`. Padded lanes may alias but are masked off. -/
+theorem scatter_readback_int_prop_masked_nd_of_true {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → Int) (P : TileIndex shape → Prop) [DecidablePred P]
+    (i : TileIndex shape) (hPi : P i)
+    (h_no_collision : ∀ k, P k → offsetFn k = offsetFn i → k = i) :
+    BlockState.readMemValue ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s)
+      .int region (offsetFn i)
+    = valueFn i := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change BlockState.readMemValue ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s))
+      .int region (offsetFn i) = valueFn i
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
+    intro k hk hmk heq
+    have hki : k = i := h_no_collision k (by simpa using hmk) heq
+    subst hki
+    exact hi_notin_l2 hk
+  have hstep :
+      (fun (acc : BlockState) k =>
+        if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  rw [hstep]
+  rw [foldl_writeMemTyped_int_masked_preserves offsetFn valueFn (fun k => decide (P k))
+    (offsetFn i) l₂ _ h_l2_not_in]
+  simp only [decide_eq_true_eq, hPi, if_true]
+  rw [BlockState.writeMemTyped_int_readMemValue_int]
+  show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _) = valueFn i
+  exact if_pos ⟨rfl, rfl⟩
+
+/-- `.int` typed masked-foldl preserves the register file (Prop mask). Needed so
+the trailing scale store's `offs_h` register read reduces past the value store. -/
+@[simp] theorem foldl_writeMemTyped_int_prop_masked_regs {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → Int)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (dtype' : TileDType) (shape : TileShape) (name : RegName) :
+    ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s).regs
+        dtype' shape name)
+      = s.regs dtype' shape name := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hP : P hd
+      · simp [hP]
+      · simp [hP]
+
+/-- A masked `.real` store foldl to `OutScale` leaves `readMemValue .int` on a
+different region `Out` unchanged. The value readback reads `.int Out`; the
+trailing real scale store to `OutScale` is peeled off with this. -/
+theorem foldl_writeMem_prop_masked_readMemValue_int_other {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat) (hRR : R ≠ region) :
+    BlockState.readMemValue ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s))
+      .int R off
+      = s.readMemValue .int R off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hhd : P hd
+      · simp only [hhd, if_true]
+        rw [ih]
+        unfold BlockState.writeMem BlockState.readMemValue BlockState.readMemTyped
+        simp only
+        rw [if_neg]
+        rintro ⟨hR, _⟩
+        exact hRR hR
+      · simp only [hhd, if_false]
+        exact ih _
+
+/-- A masked `.int` store foldl to `Out` leaves `readMem` (real) on a different
+region `OutScale` unchanged. The scale readback reads `.real OutScale`; the
+prior int value store to `Out` is peeled off with this. -/
+theorem foldl_writeMemTyped_int_prop_masked_readMem_other {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → Int)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat) (hRR : R ≠ region) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s))
+      R off
+      = s.readMem R off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hhd : P hd
+      · simp only [hhd, if_true]
+        rw [ih]
+        unfold BlockState.writeMemTyped BlockState.readMem
+        simp only
+        rw [if_neg]
+        rintro ⟨hR, _⟩
+        exact hRR hR
+      · simp only [hhd, if_false]
+        exact ih _
 
 /-- Real-valued surface of `quantize_kv_transform.py`'s
 `_fwd_kernel_destindex_copy_quantize_kv`.
@@ -406,86 +631,6 @@ theorem destindex_copy_quantize_kv_transform_value_store_slice_active_compute_co
   rw [hExec] at hRead
   exact Option.some.inj hRead
 
-/-- Named value writeback coverage for Python test case 1
-(`H = 12`, `D = 96`, so `BLOCK_HEAD = 16`, `BLOCK_DMODEL = 128`). -/
-theorem destindex_copy_quantize_kv_transform_test_h12_d96_value_store_compute_correct
-    (K DestLoc Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [16, 128] =>
-        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-        stride_o_h stride_o_d stride_os_bs stride_os_h 12 96 16 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 12 96 16 128)
-        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
-          stride_o_d idx)))
-      (expected := fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
-          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
-  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
-    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-    stride_o_h stride_o_d stride_os_bs stride_os_h 12 96 16 128 s hOutInj
-
-/-- Named value writeback coverage for Python test cases 2 and 3
-(`H = 8`, `D = 64`). -/
-theorem destindex_copy_quantize_kv_transform_test_h8_d64_value_store_compute_correct
-    (K DestLoc Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [8, 64] =>
-        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-        stride_o_h stride_o_d stride_os_bs stride_os_h 8 64 8 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 64 8 64)
-        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
-          stride_o_d idx)))
-      (expected := fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
-          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
-  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
-    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-    stride_o_h stride_o_d stride_os_bs stride_os_h 8 64 8 64 s hOutInj
-
-/-- Named value writeback coverage for Python test case 4 (`H = 1`, `D = 1`). -/
-theorem destindex_copy_quantize_kv_transform_test_h1_d1_value_store_compute_correct
-    (K DestLoc Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [1, 1] =>
-        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-        stride_o_h stride_o_d stride_os_bs stride_os_h 1 1 1 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 1 1 1 1)
-        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
-          stride_o_d idx)))
-      (expected := fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
-          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
-  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
-    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
-    stride_o_h stride_o_d stride_os_bs stride_os_h 1 1 1 1 s hOutInj
-
 /-- Proof-oriented scale-writeback slice of `quantize_kv_transform.py`'s
 `_fwd_kernel_destindex_copy_quantize_kv`. Companion to the value-store slice:
 covers the 1D `Out_scale` writeback from a precomputed `Scale` tile under the
@@ -616,74 +761,6 @@ theorem destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- Named scale writeback coverage for Python test case 1
-(`H = 12`, `BLOCK_HEAD = 16`). -/
-theorem destindex_copy_quantize_kv_transform_test_h12_scale_store_compute_correct
-    (Scale DestLoc OutScale : RegionName)
-    (stride_s_bs stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin 16 =>
-        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 12 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (scaleActive 12 16)
-        (fun i => (OutScale,
-          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
-      (expected := fun i =>
-        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
-  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
-    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 12 16
-    s hOutInj
-
-/-- Named scale writeback coverage for Python test cases 2 and 3
-(`H = 8`, `BLOCK_HEAD = 8`). -/
-theorem destindex_copy_quantize_kv_transform_test_h8_scale_store_compute_correct
-    (Scale DestLoc OutScale : RegionName)
-    (stride_s_bs stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin 8 =>
-        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 8 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (scaleActive 8 8)
-        (fun i => (OutScale,
-          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
-      (expected := fun i =>
-        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
-  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
-    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 8 8
-    s hOutInj
-
-/-- Named scale writeback coverage for Python test case 4
-(`H = 1`, `BLOCK_HEAD = 1`). -/
-theorem destindex_copy_quantize_kv_transform_test_h1_scale_store_compute_correct
-    (Scale DestLoc OutScale : RegionName)
-    (stride_s_bs stride_os_bs stride_os_h : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin 1 =>
-        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 1 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (scaleActive 1 1)
-        (fun i => (OutScale,
-          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
-      (expected := fun i =>
-        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
-  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
-    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 1 1
-    s hOutInj
 
 /-! ## Python test-shape wrappers
 
@@ -761,6 +838,236 @@ theorem destindex_copy_quantize_kv_transform_python_h12_scale_offset_injective
   intro a b h
   simp [scaleOutOffset, destIndex] at h
   exact Fin.ext (by omega)
+
+/-! ## Genuine value/scale specs for the full real surface
+
+The specs below are computed entirely from the kernel **inputs** (`K`,
+`DestLoc`, the strides, `head_num`, `head_dim`); they do not reference the
+executed state, so the resulting `..._real_surface_..._compute_correct` theorems
+are not self-referential. The combined head-and-dim load mask
+(`(offs_h < head_num) & (offs_d < head_dim)`, `other=0.0`) and the per-head
+`max(|src|, axis=1) / 127` reduction are modeled exactly. Unlike
+`quantize_copy_kv`, the scale cast `.to(OutScale.dtype.element_ty)` lowers as the
+identity over `ℝ` (the DSL erases `element_ty` casts), so the scale store writes
+the real channel and the genuine scale spec is the real value of
+`max(|src|, axis=1) / 127`. The quotient `(src / scale).to(tl.int8)` writes the
+int channel; the int8 saturation is the trusted fixed-width cast surface. -/
+
+/-- The masked source lane value (`tl.load(..., other=0.0)`): the head- and
+dim-masked `K[cur_index, h, d]` as a `WithBot ℝ`. -/
+noncomputable def maskedSrc
+    (s : BlockState) (K : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim : Nat)
+    (h d : Nat) : WithBot ℝ :=
+  if h < head_num ∧ d < head_dim then
+    some (s.readMem K (s.pids 0 * stride_k_bs + h * stride_k_h + stride_k_d * d))
+  else some (0.0 : ℝ)
+
+/-- The per-head `data_scale` *value* (`max(|src|, axis=1) / 127`): the row
+reduce-max of `|maskedSrc|` divided by `127`, as a real value. The
+`.to(OutScale.dtype.element_ty)` cast in the surface is the identity over `ℝ`. -/
+noncomputable def quantizeKvTransformScaleValue
+    (s : BlockState) (K : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL : Nat)
+    (hD : 0 < BLOCK_DMODEL) (h : Nat) : WithBot ℝ :=
+  Option.map (· / 127.0)
+    ((Finset.univ.sup'
+        (⟨⟨0, hD⟩, Finset.mem_univ _⟩ : (Finset.univ : Finset (Fin BLOCK_DMODEL)).Nonempty)
+        (fun x : Fin BLOCK_DMODEL =>
+          if maskedSrc s K stride_k_bs stride_k_h stride_k_d head_num head_dim h x.val
+              < (some 0 : WithBot ℝ) then
+            NumericDType.real.sub (some 0)
+              (maskedSrc s K stride_k_bs stride_k_h stride_k_d head_num head_dim h x.val)
+          else maskedSrc s K stride_k_bs stride_k_h stride_k_d head_num head_dim h x.val) :
+      WithBot ℝ))
+
+/-- Genuine quantized value spec (`(src / data_scale).to(int8)`): the int8 cast
+of the masked source lane divided by the per-head scale. -/
+noncomputable def quantizeKvTransformSurfaceIntValue
+    (s : BlockState) (K : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL : Nat)
+    (hD : 0 < BLOCK_DMODEL) (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Int :=
+  WithBot.realToInt8
+    (FloatDType.real.cast FloatDType.real
+      (Option.map₂ (fun x1 x2 => x1 / x2)
+        (maskedSrc s K stride_k_bs stride_k_h stride_k_d head_num head_dim
+          idx.1.val idx.2.1.val)
+        (quantizeKvTransformScaleValue s K stride_k_bs stride_k_h stride_k_d
+          head_num head_dim BLOCK_DMODEL hD idx.1.val)))
+
+/-- Genuine scale store cell (`data_scale`): the real value the kernel writes to
+`Out_scale`, observed through `readMem`. -/
+noncomputable def quantizeKvTransformScaleCell
+    (s : BlockState) (K : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL : Nat)
+    (hD : 0 < BLOCK_DMODEL) (h : Nat) : ℝ :=
+  WithBot.unbotD 0
+    (quantizeKvTransformScaleValue s K stride_k_bs stride_k_h stride_k_d
+      head_num head_dim BLOCK_DMODEL hD h)
+
+/-- **Genuine value-output correctness for the full real surface.** The
+destination-indexed int8 value store realizes `quantizeKvTransformSurfaceIntValue`
+(read back via `readMemValue .int Out`). Not self-referential: the expected
+value is computed from the inputs. -/
+theorem destindex_copy_quantize_kv_transform_real_surface_value_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) (hD : 0 < BLOCK_DMODEL) (hOut : Out ≠ OutScale)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
+    ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      let outAddr := outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+            stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+            BLOCK_HEAD) s).map (·.readMemValue .int Out outAddr)
+        = some (if active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx then
+            quantizeKvTransformSurfaceIntValue s K stride_k_bs stride_k_h stride_k_d
+              head_num head_dim BLOCK_DMODEL hD idx
+          else s.readMemValue .int Out outAddr) := by
+  intro idx
+  simp only [outOffset, destIndex, headIndex, dimIndex]
+  simp [exec, destindex_copy_quantize_kv_transform_real_surface, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop,
+        Tile.expandDim, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, dif_pos hD]
+  rw [foldl_writeMem_prop_masked_readMemValue_int_other OutScale _ _
+    (fun i : TileIndex [BLOCK_HEAD, 1] => i.1.val < head_num) _ _ Out _ hOut]
+  rw [scatter_readback_int_prop_masked_nd (region := Out) (shape := [BLOCK_HEAD, BLOCK_DMODEL])
+    _ (fun i => s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs +
+        stride_o_h * i.1.val + stride_o_d * i.2.1.val)
+    _ (fun i => i.1.val < head_num ∧ i.2.1.val < head_dim) ?_ idx]
+  · simp only [active, headIndex, dimIndex]
+    by_cases h : idx.1.val < head_num ∧ idx.2.1.val < head_dim
+    · rw [if_pos h, if_pos h]
+      simp only [quantizeKvTransformSurfaceIntValue, quantizeKvTransformScaleValue,
+        maskedSrc, if_pos h, if_pos h.1, Option.map]
+      rfl
+    · rw [if_neg h, if_neg h]
+      simp only [BlockState.setReg_readMemValue]
+  · simpa [outOffset, destIndex, headIndex, dimIndex, BlockState.readMemValue] using hOutInj
+
+/-- **Genuine active-lane value-output correctness for the full real surface.**
+For Python shapes with padded block dimensions (`BLOCK_DMODEL > head_dim`), the
+full tile offset map is not injective — padded lanes alias active lanes under the
+physical strides — but the masked store only writes active lanes. This variant
+takes a no-collision hypothesis among active lanes and proves the int8 value
+readback at every active lane. Not self-referential. -/
+theorem destindex_copy_quantize_kv_transform_real_surface_active_value_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) (hD : 0 < BLOCK_DMODEL) (hOut : Out ≠ OutScale)
+    (hNoCollision :
+      ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+        active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx →
+        ∀ k : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+          active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL k →
+          outOffset s DestLoc stride_o_bs stride_o_h stride_o_d k =
+            outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx →
+          k = idx) :
+    ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx →
+      let outAddr := outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+            stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+            BLOCK_HEAD) s).map (·.readMemValue .int Out outAddr)
+        = some (quantizeKvTransformSurfaceIntValue s K stride_k_bs stride_k_h
+            stride_k_d head_num head_dim BLOCK_DMODEL hD idx) := by
+  intro idx hActive
+  simp only [outOffset, destIndex, headIndex, dimIndex]
+  simp [exec, destindex_copy_quantize_kv_transform_real_surface, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop,
+        Tile.expandDim, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, dif_pos hD]
+  rw [foldl_writeMem_prop_masked_readMemValue_int_other OutScale _ _
+    (fun i : TileIndex [BLOCK_HEAD, 1] => i.1.val < head_num) _ _ Out _ hOut]
+  rw [scatter_readback_int_prop_masked_nd_of_true (region := Out)
+    (shape := [BLOCK_HEAD, BLOCK_DMODEL])
+    _ (fun i => s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs +
+        stride_o_h * i.1.val + stride_o_d * i.2.1.val)
+    _ (fun i => i.1.val < head_num ∧ i.2.1.val < head_dim) idx ?_ ?_]
+  · have h : idx.1.val < head_num ∧ idx.2.1.val < head_dim := by
+      simpa [active, headIndex, dimIndex] using hActive
+    simp only [quantizeKvTransformSurfaceIntValue, quantizeKvTransformScaleValue,
+      maskedSrc, if_pos h, if_pos h.1, Option.map]
+    rfl
+  · simpa [active, headIndex, dimIndex] using hActive
+  · intro k hPk heq
+    exact hNoCollision idx hActive k
+      (by simpa [active, headIndex, dimIndex] using hPk)
+      (by simpa [outOffset, destIndex, headIndex, dimIndex,
+        BlockState.readMemValue] using heq)
+
+/-- **Genuine scale-output correctness for the full real surface.** The
+destination-indexed scale store realizes `quantizeKvTransformScaleCell` (read
+back via `readMem OutScale`). Not self-referential. -/
+theorem destindex_copy_quantize_kv_transform_real_surface_scale_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) (hD : 0 < BLOCK_DMODEL) (hOut : OutScale ≠ Out)
+    (hScaleInj : Function.Injective
+      (fun i : Fin BLOCK_HEAD =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ∀ i : Fin BLOCK_HEAD,
+      let outAddr := scaleOutOffset s DestLoc stride_os_bs stride_os_h i
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+            stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+            BLOCK_HEAD) s).map (·.readMem OutScale outAddr)
+        = some (if scaleActive head_num BLOCK_HEAD i then
+            quantizeKvTransformScaleCell s K stride_k_bs stride_k_h stride_k_d
+              head_num head_dim BLOCK_DMODEL hD i.val
+          else s.readMem OutScale outAddr) := by
+  intro i
+  simp only [scaleOutOffset, destIndex]
+  simp [exec, destindex_copy_quantize_kv_transform_real_surface, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop,
+        Tile.expandDim, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, dif_pos hD]
+  rw [BlockState.scatter_readback_prop_masked_nd (region := OutScale) (shape := [BLOCK_HEAD, 1])
+    _ (fun j => s.readMemValue .nat DestLoc (s.pids 0) * stride_os_bs + stride_os_h * j.1.val)
+    _ (fun j => j.1.val < head_num) ?_ (i, ⟨0, by omega⟩, PUnit.unit)]
+  · simp only [scaleActive]
+    show (if i.val < head_num then _ else _) = (if i.val < head_num then _ else _)
+    by_cases h : i.val < head_num
+    · rw [if_pos h, if_pos h]
+      simp only [quantizeKvTransformScaleCell, quantizeKvTransformScaleValue, maskedSrc,
+        if_pos h, Option.map]
+      rfl
+    · rw [if_neg h, if_neg h]
+      rw [foldl_writeMemTyped_int_prop_masked_readMem_other (region := Out)
+        (P := fun k : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+          k.1.val < head_num ∧ k.2.1.val < head_dim)
+        (hRR := hOut)]
+      simp only [BlockState.setReg_readMem]
+  · intro a b hab
+    have h1 : a.1 = b.1 := by
+      apply hScaleInj
+      simpa [scaleOutOffset, destIndex, BlockState.readMemValue] using hab
+    obtain ⟨a1, a2, a3⟩ := a
+    obtain ⟨b1, b2, b3⟩ := b
+    simp only at h1
+    subst h1
+    have : a2 = b2 := Subsingleton.elim _ _
+    subst this
+    rfl
 
 theorem destindex_copy_quantize_kv_transform_python_h12_d96_value_store_compute_correct
     (K DestLoc Out OutScale : RegionName) (s : BlockState) :
@@ -942,79 +1249,6 @@ theorem destindex_copy_quantize_kv_transform_python_h1_d1_all_outputs_compute_co
   · exact destindex_copy_quantize_kv_transform_python_h1_scale_store_compute_correct
       Scale DestLoc OutScale s
 
-noncomputable def quantizeKvTransformSurfaceValue
-    (s : BlockState) (K DestLoc Out OutScale ReadOut : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h stride_os_d
-      head_num head_dim BLOCK_DMODEL BLOCK_HEAD offset : Nat) : ℝ :=
-  match exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
-      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
-      BLOCK_HEAD) s with
-  | some s' => s'.readMem ReadOut offset
-  | none => 0.0
-
-theorem destindex_copy_quantize_kv_transform_surface_value_output_compute_correct
-    (K DestLoc Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h stride_os_d
-      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out
-        OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h
-        stride_o_d stride_os_bs stride_os_h stride_os_d head_num head_dim
-        BLOCK_DMODEL BLOCK_HEAD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL)
-        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)))
-      (expected := fun idx =>
-        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale Out
-          stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-          stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
-          BLOCK_HEAD (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [destindex_copy_quantize_kv_transform_real_surface,
-      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [quantizeKvTransformSurfaceValue, hExec]
-
-theorem destindex_copy_quantize_kv_transform_surface_scale_output_compute_correct
-    (K DestLoc Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_d
-      stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h stride_os_d
-      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out
-        OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h
-        stride_o_d stride_os_bs stride_os_h stride_os_d head_num head_dim
-        BLOCK_DMODEL BLOCK_HEAD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (scaleActive head_num BLOCK_HEAD)
-        (fun i => (OutScale, scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
-      (expected := fun i =>
-        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale OutScale
-          stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-          stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
-          BLOCK_HEAD (scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [destindex_copy_quantize_kv_transform_real_surface,
-      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [quantizeKvTransformSurfaceValue, hExec]
-
 /-- Public Python `H = 12, D = 96` summary: the checked shape covers the full
 surface syntax and the two externally visible outputs (values and scales). -/
 theorem destindex_copy_quantize_kv_transform_python_h12_d96_summary
@@ -1135,78 +1369,56 @@ abbrev destindex_copy_quantize_kv_transform_python_h1_d1_output_summary
   destindex_copy_quantize_kv_transform_python_h1_d1_summary K Scale DestLoc
     Out OutScale s
 
-/-- Complete checked-shape target for `quantize_kv_transform.py`.
+/-- **Public Python `H = 12, D = 96` summary (genuine, gap-free).** The checked
+Python shape (`H = 12`, `D = 96`, `BLOCK_HEAD = 16`, `BLOCK_DMODEL = 128`, K/Out
+strides `(1152, 96, 1)`, `Out_scale` strides `(12, 1, 1)`) covers the full
+faithful surface syntax (the combined head-and-dim mask, `tl.abs`,
+`tl.max(..., axis=1)`, the `element_ty` scale cast, the int8 quotient cast, the
+destination-indexed masked stores) and the two externally visible outputs:
 
-This collects all Python-tested shapes while preserving the faithful
-max/scale/int8-cast surface and the corresponding value/scale output proofs. -/
-abbrev destindex_copy_quantize_kv_transform_python_test_shape_complete_summary
-    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
-  And.intro
-    (destindex_copy_quantize_kv_transform_python_h12_d96_summary K Scale
-      DestLoc Out OutScale s)
-    (And.intro
-      (destindex_copy_quantize_kv_transform_python_h8_d64_summary K Scale
-        DestLoc Out OutScale s)
-      (destindex_copy_quantize_kv_transform_python_h1_d1_summary K Scale
-        DestLoc Out OutScale s))
+* **value**: `Out[dest_index, h, d]` (read back via `readMemValue .int`) equals
+  `(K[cur_index, h, d] / (max(|K[cur_index,h,·<head_dim]|)/127)).to(int8)` on
+  active lanes (`h < head_num ∧ d < head_dim`);
+* **scale**: `Out_scale[dest_index, h]` (read back via `readMem`) equals the real
+  value of `max(|K[cur_index,h,·<head_dim]|)/127` on active heads, unchanged
+  otherwise.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+Both expected values are computed from the kernel **inputs**, so this summary is
+not self-referential. The value output uses the active-lane variant because the
+`BLOCK_DMODEL = 128 > head_dim = 96` padding makes the full tile offset map
+non-injective. `hOut : Out ≠ OutScale` is the region-distinctness no-aliasing
+hypothesis. -/
 theorem destindex_copy_quantize_kv_transform_python_h12_d96_output_summary
-    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) (hOut : Out ≠ OutScale) :
     (∃ alg,
       (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         1152 96 1 1152 96 1 12 1 1 12 96 128 16).toAlgorithm? =
           Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc
-        Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 12 96 16 128)
-        (fun idx => (Out, outOffset s DestLoc 1152 96 1 idx)))
-      (expected := fun idx =>
-        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale Out 1152 96
-          1 1152 96 1 12 1 1 12 96 128 16
-          (outOffset s DestLoc 1152 96 1 idx))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc
-        Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (scaleActive 12 16)
-        (fun i => (OutScale, scaleOutOffset s DestLoc 12 1 i)))
-      (expected := fun i =>
-        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale OutScale
-          1152 96 1 1152 96 1 12 1 1 12 96 128 16
-          (scaleOutOffset s DestLoc 12 1 i))) := by
-  constructor
+    (∀ idx : TileIndex [16, 128],
+      active s 12 96 16 128 idx →
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            1152 96 1 1152 96 1 12 1 1 12 96 128 16) s).map
+          (·.readMemValue .int Out (outOffset s DestLoc 1152 96 1 idx))
+        = some (quantizeKvTransformSurfaceIntValue s K 1152 96 1 12 96 128 (by norm_num) idx)) ∧
+    (∀ i : Fin 16,
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            1152 96 1 1152 96 1 12 1 1 12 96 128 16) s).map
+          (·.readMem OutScale (scaleOutOffset s DestLoc 12 1 i))
+        = some (if scaleActive 12 16 i then
+            quantizeKvTransformScaleCell s K 1152 96 1 12 96 128 (by norm_num) i.val
+          else s.readMem OutScale (scaleOutOffset s DestLoc 12 1 i))) := by
+  refine ⟨?_, ?_, ?_⟩
   · exact
       destindex_copy_quantize_kv_transform_real_surface_toAlgorithm_supported K
         DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16
-  · constructor
-    · exact
-        destindex_copy_quantize_kv_transform_surface_value_output_compute_correct
-          K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s
-    · exact
-        destindex_copy_quantize_kv_transform_surface_scale_output_compute_correct
-          K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s
+  · exact
+      destindex_copy_quantize_kv_transform_real_surface_active_value_output_compute_correct
+        K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s (by norm_num) hOut
+        (destindex_copy_quantize_kv_transform_python_h12_d96_active_no_collision s DestLoc)
+  · exact
+      destindex_copy_quantize_kv_transform_real_surface_scale_output_compute_correct
+        K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s (by norm_num)
+        (fun h => hOut h.symm)
+        (destindex_copy_quantize_kv_transform_python_h12_scale_offset_injective s DestLoc)
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform
