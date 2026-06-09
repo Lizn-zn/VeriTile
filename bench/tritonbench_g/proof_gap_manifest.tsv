@@ -215,7 +215,7 @@ bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_lla
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_python_test_shape_output_summary	public_summary_with_proof_gap	attention-backward-score-reduction	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_python_test_shape_output_summary	public_summary_with_proof_gap	attention-backward-score-reduction	#162	self-referential expected (= executed kernel output)
-bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_store_slice_output_summary	public_summary_with_proof_gap	matmul-dot-accumulator	#148	precomputed
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		genuine spec: im2col conv2d sum over kernel window + in-feat axis, padding/boundary masking proven sorry-free
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_kernel_triton_small_length_output_summary	full_value_candidate	none		no proof-gap marker in summary context
