@@ -5,6 +5,7 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.OffsetInjective
 import VeriTile.Triton.ScatterStore
+import VeriTile.Triton.EvalHelpers
 
 /-!
 # `bgmv_expand_slice` — strict per-kernel correctness
@@ -295,15 +296,6 @@ set_option linter.unusedSimpArgs false
       (s.regs .nat [M] name).bind (fun v =>
         some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
   unfold evalOp; simp [Tile.expandDim]; rfl
-
-theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
-    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
-    evalOp (.ptrAdd bc ptr off) s = (do
-      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
-      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
-
-theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
-    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
 
 -- current_n eval
 theorem currentn_eval (BLOCK_N c : Nat) (s : BlockState)
