@@ -5,6 +5,7 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.Attention
 import VeriTile.Triton.Math.OffsetInjective
+import VeriTile.Triton.ScatterStore
 
 /-!
 # `rmsnorm_triton` — strict per-kernel correctness
@@ -349,61 +350,7 @@ def outOff (s : BlockState) (sob som sok : Nat) (k : Nat) : Nat :=
 noncomputable def wbSpec (s0 : BlockState) (x w : RegionName) (sxb sxm sxk srw N : Nat) (rstd : ℝ) (k : Nat) : ℝ :=
   s0.readMem x (ScratchRms.xOff s0 sxb sxm sxk k) * rstd * s0.readMem w (k*srw)
 
-theorem foldl_store_preserve {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α)
-    (s : BlockState) (hnot : ∀ k ∈ l, mask k → offsetFn k ≠ o) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o
-      = s.readMem region o := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]
-    cases hm : mask hd
-    · simp only [hm, Bool.false_eq_true, if_false]
-      exact ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)
-    · simp only [hm, if_true]
-      rw [ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)]
-      exact BlockState.writeMem_readMem_of_ne_offset s region (offsetFn hd) (valueFn hd) region o
-        (hnot hd (List.mem_cons_self) (by rw [hm])).symm
-
 end Wb
-
-namespace Wb2
-open Wb ScratchRms
-
--- readback of a one-block masked store at outOff offsets, evaluated at global lane k
--- store writes value V[j] at offset (offsets j = outOff (c*B+j)) when mask (c*B+j < N)
--- generic: readback at offset O of an "active-masked" store-foldl, where active lane writes
--- value vfn at offset ofn. If some active member writes O, get its value; else preserved.
--- Active members writing O are unique (offsets distinct among active members at O).
-theorem foldl_store_at {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (O : Nat) (l : List α)
-    (s : BlockState) (a : α) (ha : a ∈ l) (hma : mask a) (hoa : ofn a = O)
-    (huniq : ∀ b ∈ l, mask b → ofn b = O → b = a)
-    (hnodup : l.Nodup) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).readMem region O
-      = vfn a := by
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem ha
-  subst hl
-  rw [List.foldl_append, List.foldl_cons]
-  rw [List.nodup_append, List.nodup_cons] at hnodup
-  obtain ⟨hnd1, ⟨ha_notin2, hnd2⟩, hdisj⟩ := hnodup
-  have h2 : ∀ b ∈ l₂, mask b → ofn b ≠ O := by
-    intro b hb hmb heq
-    have : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact ha_notin2 (this ▸ hb)
-  rw [foldl_store_preserve ofn vfn mask O l₂ _ (fun b hb hmb => h2 b hb hmb)]
-  simp only [hma, if_true]
-  rw [hoa]
-  rw [BlockState.writeMem_readMem]
-  have h1 : ∀ b ∈ l₁, mask b → ofn b ≠ O := by
-    intro b hb hmb heq
-    have hb' : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact (hdisj b hb a (List.mem_cons_self)) hb'
-  rw [foldl_store_preserve ofn vfn mask O l₁ _ (fun b hb hmb => h1 b hb hmb)]
-  simp
-
-end Wb2
 
 namespace VarLoop
 open ScratchRms
@@ -501,12 +448,6 @@ end MathHeart
 
 namespace Mean
 open ScratchRms VarLoop MathHeart Finset
-
-theorem withBot_sum_some {B : Nat} (g : Fin B → ℝ) :
-    @Finset.sum (Fin B) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
-      = some (Finset.univ.sum g) := by
-  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
-  exact (WithBot.coe_sum Finset.univ g).symm
 
 theorem var_sum (s0 : BlockState) (x : RegionName) (sxb sxm sxk N B c : Nat) (s : BlockState)
     (hvar : s.regs .real [B] "var" = some ⟨fun idx : TileIndex [B] => some (varAcc s0 x sxb sxm sxk N B c idx.1)⟩) :
@@ -613,34 +554,6 @@ theorem store_step (o : RegionName) (B : Nat) (s : BlockState)
     Option.map, Tile.vec, Tile.scalar, Region.cast, BlockState.writeMemTyped_real,
     FloatDType.real_storeValue, WithBot.unbotD_some]
 
-
-theorem foldl_store_regs {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (dtype : TileDType) (shape : TileShape) (name : RegName) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).regs dtype shape name
-      = s.regs dtype shape name := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_store_pids {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).pids = s.pids := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_store_other_region {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (r : RegionName) (ofs : Nat) (hr : r ≠ region) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).readMem r ofs
-      = s.readMem r ofs := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]; cases mask hd
-    · simp only [Bool.false_eq_true, if_false]; exact ih _
-    · simp only [if_true]; rw [ih]; exact BlockState.writeMem_readMem_of_ne_region s region (ofn hd) (vfn hd) r ofs hr
 
 end StoreLemma
 
@@ -783,7 +696,7 @@ theorem wbStep (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (s0 
             (((if c*B + j.1.val < N then s0.readMem x (xOff s0 sxb sxm sxk (c*B+j.1.val)) else 0) * RS) * (if c*B + j.1.val < N then s2.readMem w ((c*B+j.1.val)*srw) else s2.undef w ((c*B+j.1.val)*srw)))
           else acc) s7 with hsF
   have hs7pids : s7.pids = s0.pids := by rw [hs7]; simp only [BlockState.setReg_pids]; exact hpids6
-  have hsFpids : sF.pids = s0.pids := by rw [hsF, StoreLemma.foldl_store_pids]; exact hs7pids
+  have hsFpids : sF.pids = s0.pids := by rw [hsF, foldl_store_pids]; exact hs7pids
   -- register facts at s7
   have hpb7 : s7.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)) := by
     rw [hs7, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("pid_batch":RegName) ≠ "out_off" by decide)]
@@ -820,13 +733,13 @@ theorem wbStep (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (s0 
   have hs7rmAll : ∀ (rg : RegionName) (ofs : Nat), s7.readMem rg ofs = s.readMem rg ofs := by
     intro rg ofs; rw [hs7, hs6, hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
   refine ⟨sF, rfl, hsFpids, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [hsF, StoreLemma.foldl_store_regs]; exact hpb7
-  · rw [hsF, StoreLemma.foldl_store_regs]; exact hpm7
-  · rw [hsF, StoreLemma.foldl_store_regs]; exact hbN7
-  · rw [hsF, StoreLemma.foldl_store_regs]; exact hom7
-  · rw [hsF, StoreLemma.foldl_store_regs]; exact hrs7
-  · funext ofs; rw [hsF, StoreLemma.foldl_store_other_region _ _ _ _ _ _ _ (Ne.symm hox), hs7rmAll]
-  · funext ofs; rw [hsF, StoreLemma.foldl_store_other_region _ _ _ _ _ _ _ (Ne.symm how), hs7rmAll]
+  · rw [hsF, foldl_store_regs]; exact hpb7
+  · rw [hsF, foldl_store_regs]; exact hpm7
+  · rw [hsF, foldl_store_regs]; exact hbN7
+  · rw [hsF, foldl_store_regs]; exact hom7
+  · rw [hsF, foldl_store_regs]; exact hrs7
+  · funext ofs; rw [hsF, foldl_store_other_region _ _ _ _ _ _ _ (Ne.symm hox), hs7rmAll]
+  · funext ofs; rw [hsF, foldl_store_other_region _ _ _ _ _ _ _ (Ne.symm how), hs7rmAll]
   · -- the readback
     intro k
     rw [hsF]
@@ -838,7 +751,7 @@ theorem wbStep (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (s0 
       set jk : Fin B := ⟨k.val - c*B, by omega⟩ with hjk_def
       have hofeq : outOff s0 sob som sok (c*B + jk.val) = outOff s0 sob som sok k.val := by
         simp only [hjk_def]; rw [hjk]
-      rw [Wb2.foldl_store_at
+      rw [foldl_store_at
             (fun j : TileIndex [B] => outOff s0 sob som sok (c*B+j.1.val))
             (fun j : TileIndex [B] => ((if c*B + j.1.val < N then s0.readMem x (xOff s0 sxb sxm sxk (c*B+j.1.val)) else 0) * RS) * (if c*B + j.1.val < N then s2.readMem w ((c*B+j.1.val)*srw) else s2.undef w ((c*B+j.1.val)*srw)))
             (fun j : TileIndex [B] => decide (c*B + j.1.val < N))
@@ -862,7 +775,7 @@ theorem wbStep (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (s0 
       rw [if_pos hk, if_pos hk, hrm2w]
     · -- k not in this block: preserved
       rw [if_neg hin]
-      rw [Wb.foldl_store_preserve
+      rw [foldl_store_preserve
             (fun j : TileIndex [B] => outOff s0 sob som sok (c*B+j.1.val))
             (fun j : TileIndex [B] => ((if c*B + j.1.val < N then s0.readMem x (xOff s0 sxb sxm sxk (c*B+j.1.val)) else 0) * RS) * (if c*B + j.1.val < N then s2.readMem w ((c*B+j.1.val)*srw) else s2.undef w ((c*B+j.1.val)*srw)))
             (fun j : TileIndex [B] => decide (c*B + j.1.val < N))
