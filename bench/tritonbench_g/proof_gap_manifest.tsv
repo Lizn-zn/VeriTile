@@ -188,7 +188,7 @@ bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_clo
 bench/tritonbench_g/sin_computation/SinComputation.lean	sin_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/sin_kernel/SinKernel.lean	kernel_function_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_output_summary	public_summary_with_proof_gap	attention-online-softmax-recurrence	#162	slice
-bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_python_test_shape_output_summary	public_summary_with_proof_gap	token-attention-reduction	#162	self-referential expected (= executed kernel output)
+bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_python_test_shape_output_summary	full_value_candidate	none		genuine spec: weighted-sum softmax (Σ exp(qk-max)·v)/(Σ exp(qk-max)), proven sorry-free
 bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
