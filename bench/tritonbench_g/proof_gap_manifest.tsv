@@ -25,7 +25,7 @@ bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_closed_form_cor
 bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_closed_form_correct	full_value_candidate	none		genuine spec: full batched-matmul closed form proven sorry-free
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_python_test_shape_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
+bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_python_test_shape_output_summary	full_value_candidate	none		genuine spec: global cumsum (prefix sum ∑ flat ≤ pid·BT+i of S) with carry, proven sorry-free
 bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_python_case1_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
 bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_python_case2_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
 bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_python_case3_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
