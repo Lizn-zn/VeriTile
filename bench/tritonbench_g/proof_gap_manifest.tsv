@@ -137,9 +137,6 @@ bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrel
 bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_python_test_shape_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_python_case1_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_python_case2_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case2_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case3_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	load_reduce_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean	kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_kernel_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
