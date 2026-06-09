@@ -3,7 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `attention_forward_triton` — closed-form correctness (WIP scaffold)
@@ -55,17 +55,10 @@ compiled body reduces by `rfl`, so
 then `simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind]` steps
 all assigns (the `@[simp] evalOp_*` and `setReg` lemmas thread register lookups
 through the accumulated `setReg` chain automatically). -/
-theorem evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.floorDiv h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
-
-theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.mod h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
-  simp [evalOp]
+-- `evalOp_floorDiv` and `evalOp_mod` now live in `VeriTile.Triton.Kernel`
+-- (EvalHelpers) and are reused from there via the `import` above. The former
+-- local copies (byte-identical) were removed to avoid an ambiguous-name clash
+-- for downstream files that import both this module and the Kernel lib.
 
 /-- Eval helper for `boolAnd` (the `k_mask` boundary∧head masks): no `@[simp]`
 form exists, like `floorDiv`/`mod`. -/
@@ -96,17 +89,9 @@ broadcast in the `Q_ptrs`/`O_block_ptr` pointer offsets). -/
         some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
   unfold evalOp; simp [Tile.expandDim]; rfl
 
-/-- Eval helper for `ptrAdd` (the `Q_ptrs`/`K_ptrs`/`V_ptrs`/`O_block_ptr`
-constructions). -/
-theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
-    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
-    evalOp (.ptrAdd bc ptr off) s = (do
-      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
-      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
-
-/-- Eval helper for `ptrBase` (the base region pointer `Q`/`K`/`V`/`Out`). -/
-theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
-    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
+-- `evalOp_ptrAdd` and `evalOp_ptrBase` also now live in
+-- `VeriTile.Triton.Kernel` (EvalHelpers) and are reused from there via the
+-- `import` above (former byte-identical local copies removed; see note above).
 
 /-- Eval helper for `exp2` (`tl.math.exp2`): `Tile.uop realExp2` over the operand. -/
 theorem evalOp_exp2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
