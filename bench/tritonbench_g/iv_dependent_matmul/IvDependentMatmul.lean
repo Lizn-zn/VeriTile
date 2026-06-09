@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Kernel
 import VeriTile.Triton.LoopInvariant
 
 /-!
@@ -142,33 +143,12 @@ theorem iv_dependent_matmul_pre_load_surface_toAlgorithm_supported
         some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
   unfold evalOp; simp [Tile.expandDim]; rfl
 
-theorem evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.floorDiv h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
-
-theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.mod h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
-  simp [evalOp]
-
 theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
     (x : Op .bool a) (y : Op .bool b) (s : BlockState) :
     evalOp (.boolAnd bc x y) s = (do
       let vx ← evalOp x s; let vy ← evalOp y s;
       some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
   simp [evalOp]
-
-theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
-    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
-    evalOp (.ptrAdd bc ptr off) s = (do
-      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
-      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
-
-theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
-    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
 
 /-- `a_ptr` base eval: cell `(i,e) = (A, offs_am i · stride_am + e · stride_ak)`. -/
 theorem aptr_eval (s : BlockState) (A : RegionName) (M K SAM SAK : Nat) (gm : Fin M → Nat)
@@ -236,22 +216,6 @@ theorem bptrs_recompute_eval (s : BlockState) (K N BK SBK c : Nat) (bp : Tile .p
     Broadcast.leftIndex, Broadcast.rightIndex, Option.bind, Option.bind_some, Option.bind_eq_bind]
   rfl
 
-/-- The masked dot of two all-`some` loaded tiles, lane `(i,j)`, equals
-`some (Σ_e fx e · fy e)`. -/
-theorem dot_ab (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
-    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
-    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
-    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
-    (Tile.dot [] x y).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
-  rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
-        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
-  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
-  rw [← WithBot.coe_sum]; rfl
-
 /-- **`accumulator = accumulator + tl.dot(a, b)` statement eval.** -/
 theorem accdot_op_eval (M K N : Nat) (st : BlockState)
     (zt : Tile .real [M, N]) (xt : Tile .real [M, K]) (yt : Tile .real [K, N])
@@ -280,9 +244,6 @@ theorem accadd_eval (M N : Nat) (zt dt : Tile .real [M, N]) (i : Fin M) (j : Fin
     WithBot.realAdd, Option.map₂, Option.bind, Option.map]
 
 /-! ## GEMM closed-form spec -/
-
-/-- Ceiling division `⌈a / b⌉`, matching Triton's `tl.cdiv`. -/
-def cdiv (a b : Nat) : Nat := (a + b - 1) / b
 
 /-- The kernel's `num_pid_n = cdiv N BN`. -/
 def numPidN (N BN : Nat) : Nat := cdiv N BN
@@ -314,133 +275,28 @@ noncomputable def bElem (s : BlockState) (B : RegionName) (PN BN N SBK SBN : Nat
 /-- **Genuine GEMM spec**: `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`. -/
 noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K numKBlocks : Nat) (i : Fin BM) (j : Fin BN) : ℝ :=
-  (Finset.range (BLOCK_K * numKBlocks)).sum
-    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+  gemmSum (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) (BLOCK_K * numKBlocks)
 
 /-- Partial GEMM accumulator after `c` K-blocks: `Σ_{k < c·BLOCK_K} A·B`. -/
 noncomputable def accPartial (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
-  (Finset.range (c * BLOCK_K)).sum
-    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+  gemmSum (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) (c * BLOCK_K)
 
-/-- One-block step of the partial accumulator. -/
+/-- One-block step of the partial accumulator (the shared `gemmSum_blockSucc`). -/
 theorem accPartial_succ (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) :
     accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j (c + 1)
       = accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j c
         + (Finset.univ.sum fun e : Fin BLOCK_K =>
             aElem s A PM BM M SAM SAK i (c * BLOCK_K + e.val)
-              * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e.val)) := by
-  unfold accPartial
-  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
-  rw [h, Finset.sum_range_add]
-  congr 1
-  rw [Finset.sum_range fun e => aElem s A PM BM M SAM SAK i (c * BLOCK_K + e)
-        * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e)]
+              * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e.val)) :=
+  gemmSum_blockSucc (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) BLOCK_K c
 
 /-! ## Masked fp16 output-store machinery -/
 
 def cOffset (_s : BlockState) (PM PN BM BN stride_cm stride_cn : Nat)
     (idx : TileIndex [BM, BN]) : Nat :=
   stride_cm * rowIndex PM BM idx.1 + stride_cn * colIndex PN BN idx.2.1
-
-private theorem foldl_writeMemTyped_fp16_preserves {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
-    (mask : α → Bool) (o : Nat) (l : List α) :
-    ∀ s : BlockState,
-      (∀ k ∈ l, mask k = Bool.true → offsetFn k ≠ o) →
-        ((l.foldl
-          (fun acc k =>
-            if mask k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
-          s).mem region o) = s.mem region o := by
-  induction l with
-  | nil =>
-      intro s _h
-      rfl
-  | cons hd tl ih =>
-      intro s h
-      rw [List.foldl_cons]
-      have htl : ∀ k ∈ tl, mask k = Bool.true → offsetFn k ≠ o :=
-        fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
-      by_cases hmaskhd : mask hd = Bool.true
-      · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
-        simp only [hmaskhd, if_true]
-        rw [ih _ htl]
-        unfold BlockState.writeMemTyped BlockState.writeMemAs
-        change
-          (if region = region ∧ o = offsetFn hd then
-            MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn hd)))
-          else
-            s.mem region o) = s.mem region o
-        rw [if_neg (by
-          intro hsame
-          exact hhd hsame.2.symm)]
-      · have hmaskhd' : mask hd = Bool.false := by
-          cases hm : mask hd
-          · rfl
-          · exact False.elim (hmaskhd hm)
-        simp only [hmaskhd', if_false, Bool.false_eq_true]
-        exact ih _ htl
-
-private theorem scatter_memcell_fp16_prop_masked_nd {region : RegionName} {shape : TileShape}
-    (s : BlockState) (offsetFn : TileIndex shape → Nat)
-    (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
-    (P : TileIndex shape → Prop) [DecidablePred P]
-    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
-    ((TileShape.allIndices shape).foldl
-       (fun acc k =>
-         if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
-       s).mem region (offsetFn i)
-    = if P i then
-        MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-      else
-        s.mem region (offsetFn i) := by
-  let l := TileShape.allIndices shape
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
-  have h_nodup := TileShape.allIndices_nodup shape
-  change ((l.foldl
-       (fun acc k =>
-         if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
-       s).mem region (offsetFn i))
-    = if P i then
-        MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-      else
-        s.mem region (offsetFn i)
-  rw [hl] at h_nodup
-  rw [List.nodup_append, List.nodup_cons] at h_nodup
-  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
-  have hl' : l = l₁ ++ i :: l₂ := by
-    simpa [l] using hl
-  rw [hl', List.foldl_append, List.foldl_cons]
-  have h_l1_not_in : ∀ k ∈ l₁, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
-    intro k hk _hmk heq
-    have hki : k = i := h_inj heq
-    rw [hki] at hk
-    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
-  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
-    intro k hk _hmk heq
-    have hki : k = i := h_inj heq
-    subst hki
-    exact hi_notin_l2 hk
-  have hstep :
-      (fun (acc : BlockState) k =>
-        if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
-        =
-      (fun (acc : BlockState) k =>
-        if decide (P k) then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc) := by
-    funext acc k
-    by_cases hk : P k <;> simp [hk]
-  rw [hstep]
-  rw [foldl_writeMemTyped_fp16_preserves offsetFn valueFn (fun k => decide (P k))
-    (offsetFn i) l₂ _ h_l2_not_in]
-  by_cases hPi : P i
-  · simp only [hPi, if_true]
-    unfold BlockState.writeMemTyped BlockState.writeMemAs
-    simp
-  · simp only [hPi, if_false]
-    rw [foldl_writeMemTyped_fp16_preserves offsetFn valueFn (fun k => decide (P k))
-      (offsetFn i) l₁]
-    exact h_l1_not_in
 
 /-! ## Body decomposition -/
 
@@ -672,7 +528,7 @@ theorem ivdm_preLoop (A B C : RegionName) (s : BlockState)
       not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
     refine congrArg some ?_
     ext idx
-    simp only [accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+    simp only [accPartial, Nat.zero_mul, gemmSum_zero]
   · simp [hpm]
   · simp [hpn]
   · simp [ham]
@@ -795,7 +651,7 @@ theorem ivdm_step (A B : RegionName) (s0 : BlockState)
         (Finset.univ.sum fun e : Fin BK =>
           aElem s0 A PM BM M SAM SAK idx.1 (c * BK + e.val) * bElem s0 B PN BN N SBK SBN idx.2.1 (c * BK + e.val))
         (by rw [hzT])
-        (dot_ab BM BK BN asub bsub idx.1 idx.2.1 _ _ has hbs)]
+        (tile_dot_data BM BK BN asub bsub idx.1 idx.2.1 _ _ has hbs)]
     show some _ = some (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BK idx.1 idx.2.1 (c + 1))
     rw [accPartial_succ]
   · simp [hsk4, hsk3, hsk2, hsk1, hsk, hpm]
@@ -1109,7 +965,7 @@ product. -/
 theorem iv_dependent_matmul_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N SAM SAK SBK SBN SCM SCN BM BN BK numKBlocks : Nat) (hBK : 0 < BK)
-    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) N BN) (pidN (s.pids 0) N BN) BM BN SCM SCN))
+    (hcn : SCN = 1) (hbnle : BN ≤ SCM)
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) N BN) BM i < M)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) N BN) BN j < N)
     (hundef : ∀ rg o, s.undef rg o = 0) :
@@ -1121,39 +977,22 @@ theorem iv_dependent_matmul_closed_form_correct
       (expected := fun idx : TileIndex [BM, BN] =>
         outputCell s A B (pidM (s.pids 0) N BN) (pidN (s.pids 0) N BN)
           BM BN M N SAM SAK SBK SBN BK numKBlocks idx) := by
+  subst hcn
+  have hInj : Function.Injective
+      (cOffset s (pidM (s.pids 0) N BN) (pidN (s.pids 0) N BN) BM BN SCM 1) := by
+    have heq : cOffset s (pidM (s.pids 0) N BN) (pidN (s.pids 0) N BN) BM BN SCM 1
+        = fun idx : TileIndex [BM, BN] =>
+            (SCM * (pidM (s.pids 0) N BN * BM) + pidN (s.pids 0) N BN * BN)
+              + idx.1.val * SCM + idx.2.1.val := by
+      funext idx; simp only [cOffset, rowIndex, colIndex]; ring
+    rw [heq]; exact rowMajor2D_inj _ SCM hbnle
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [iv_dependent_matmul_pre_load_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst hs0
   intro idx
-  have hmain := ivdm_exec_closed_form A B C s0 M N SAM SAK SBK SBN SCM SCN BM BN BK numKBlocks hBK hInj hmlt hnlt hundef idx
+  have hmain := ivdm_exec_closed_form A B C s0 M N SAM SAK SBK SBN SCM 1 BM BN BK numKBlocks hBK hInj hmlt hnlt hundef idx
   rw [hExec] at hmain
   exact hmain
-
-/-- **Public Python test-shape summary** (`256×256 @ 256×256`,
-`BLOCK_M = BLOCK_N = BLOCK_K = 32`, so `numKBlocks = 8`, contiguous row-major
-strides `a=(256,1)`, `b=(256,1)`, `c=(256,1)`): the full `iv_dependent_matmul`
-`pre_load` surface lowers to the algorithm layer and realizes the genuine matrix
-product `fp16(Σ_{k<256} A[i,k]·B[k,j])` on every in-bounds output lane. The
-in-bounds / output-injectivity hypotheses are kept because they depend on the
-runtime `pid`. -/
-theorem iv_dependent_matmul_python_test_shape_summary
-    (A B C : RegionName) (s : BlockState)
-    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) 256 32) (pidN (s.pids 0) 256 32) 32 32 256 1))
-    (hmlt : ∀ i : Fin 32, rowIndex (pidM (s.pids 0) 256 32) 32 i < 256)
-    (hnlt : ∀ j : Fin 32, colIndex (pidN (s.pids 0) 256 32) 32 j < 256)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (iv_dependent_matmul_pre_load_surface A B C 256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := iv_dependent_matmul_pre_load_surface A B C 256 256 256 256 1 256 1 256 1 32 32 32)
-      (initialState := s)
-      (write := fun idx : TileIndex [32, 32] =>
-        some (C, cOffset s (pidM (s.pids 0) 256 32) (pidN (s.pids 0) 256 32) 32 32 256 1 idx))
-      (expected := fun idx : TileIndex [32, 32] =>
-        outputCell s A B (pidM (s.pids 0) 256 32) (pidN (s.pids 0) 256 32)
-          32 32 256 256 256 1 256 1 32 8 idx) := by
-  refine ⟨iv_dependent_matmul_pre_load_surface_toAlgorithm_supported A B C 256 256 256 256 1 256 1 256 1 32 32 32, ?_⟩
-  exact iv_dependent_matmul_closed_form_correct A B C s 256 256 256 1 256 1 256 1 32 32 32 8
-    (by norm_num) hInj hmlt hnlt hundef
 
 end VeriTile.Bench.TritonBenchG.IvDependentMatmul
