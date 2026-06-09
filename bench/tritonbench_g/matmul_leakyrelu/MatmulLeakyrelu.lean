@@ -6,6 +6,7 @@ import VeriTile.Triton.ScatterStore
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.Matmul
 import VeriTile.Triton.Math.OffsetInjective
+import VeriTile.Triton.EvalHelpers
 
 /-!
 # `matmul_leakyrelu` — closed-form matmul + leaky-ReLU correctness
@@ -187,18 +188,6 @@ theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
       let v ← evalOp a s; some (Tile.remap map v)) := by
   simp [evalOp]
 
-theorem evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.floorDiv h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
-
-theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.mod h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
-  simp [evalOp]
-
 @[simp] theorem evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
     @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
       (s.regs .nat [D] name).bind (fun v =>
@@ -210,15 +199,6 @@ theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
       (s.regs .nat [M] name).bind (fun v =>
         some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
   unfold evalOp; simp [Tile.expandDim]; rfl
-
-theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
-    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
-    evalOp (.ptrAdd bc ptr off) s = (do
-      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
-      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
-
-theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
-    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
 
 /-- `a_ptrs` eval: cell `(i,e) = (A, offs_am i · stride_am + e · stride_ak)`. -/
 theorem aptrs_eval (s : BlockState) (A : RegionName) (M K SAM SAK : Nat) (gm : Fin M → Nat)
@@ -307,9 +287,6 @@ theorem accadd_eval (M N : Nat) (zt dt : Tile .real [M, N]) (i : Fin M) (j : Fin
     WithBot.realAdd, Option.map₂, Option.bind, Option.map]
 
 /-! ## GEMM + leaky-ReLU closed-form spec -/
-
-/-- Ceiling division `⌈a / b⌉`, matching Triton's `tl.cdiv`. -/
-def cdiv (a b : Nat) : Nat := (a + b - 1) / b
 
 /-- Leaky-ReLU activation `if v ≥ 0 then v else 0.01·v`. -/
 noncomputable def leakyrelu (v : ℝ) : ℝ := if v ≥ 0 then v else (1e-2 : ℝ) * v
