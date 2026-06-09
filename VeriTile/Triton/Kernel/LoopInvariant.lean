@@ -278,11 +278,17 @@ theorem forRangeDyn_single_step
   rw [stepForRangeAux.step_lt hstep hlt, hBody]
   simp [Option.bind, stepForRangeAux.step_ge hstep hle]
 
-/-- Invariant-driven evaluation for `forRangeDyn` with runtime-resolved bounds.
-Given a step relation that advances a predicate `P` by `step` per iteration from
-a base case at `start`, the whole dynamic loop executes to a final state at some
-counter `final ≥ stop` still satisfying `P`. This is the streaming-loop driver
-used by the attention exec assemblies. -/
+/-- **Master invariant principle for dynamic `forRangeDyn`.**
+
+The mirror of `forRange_inv` for loops whose bounds come from runtime register
+values. The caller supplies the resolved `start`/`stop`/`step` Nats together
+with the corresponding `evalOp` evidence; the loop then runs the same
+`stepForRangeAux` machinery as the static `forRange`, so the rest of the
+interface (positive step, entry invariant, per-iteration step obligation,
+existential final counter) is identical.
+
+This unblocks any kernel whose iteration bound is `cdiv(K, BLOCK_K)` or another
+runtime-computed value (e.g. GEMM K-loops). -/
 theorem forRangeDyn_inv
     {idx : RegName} {startOp stopOp stepOp : Op .nat []}
     {start stop step : Nat} {body : List Stmt}
@@ -304,6 +310,6 @@ theorem forRangeDyn_inv
     forRangeAux_inv hstep h_step start s_init h_init
   refine ⟨final, s_final, ?_, hfinal, hP⟩
   rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
-  simpa using h_aux
+  simpa [Option.bind] using h_aux
 
 end VeriTile.Triton
