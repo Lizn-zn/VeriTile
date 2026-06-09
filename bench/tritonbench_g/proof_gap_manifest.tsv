@@ -147,7 +147,7 @@ bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_gl
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_python_case3_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_python_case4_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_python_d256_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_python_d64_output_summary	public_summary_with_proof_gap	quantization-semantic-followup	#158	self-referential expected (= executed kernel output)
+bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_python_d64_output_summary	full_value_candidate	none		genuine spec: int8 KV quant value = int8(K / fp16(max|K|/127)) + fp16 scale, proven sorry-free
 bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_python_n1024_bs1024_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_python_n2048_bs1024_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_python_n2048_bs2048_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
