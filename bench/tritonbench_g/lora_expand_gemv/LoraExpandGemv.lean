@@ -3,6 +3,9 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Matmul
+import VeriTile.Triton.Math.OffsetInjective
+import VeriTile.Triton.ScatterStore
 
 /-!
 # `lora_expand_gemv` — strict per-kernel correctness
@@ -47,9 +50,6 @@ clobber earlier ones (`hinj`, global output-offset injectivity). The reduction
 bridge `reduceSum_active_eq_spec` collapses the `tl.sum` over `BLOCK_K` keys to
 `Σ_{k<K}` (using `K ≤ BLOCK_K`, the kernel's `next_power_of_2(K)` choice).
 
-The earlier one-block development (`bgmv_expand_one_block_*`, spec `bgmvSpec`) is
-kept as a proof-oriented specialization to one `n`-block.
-
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
@@ -69,6 +69,7 @@ from `lora_indices`); the per-lane global output-offset injectivity `hinj` and
 namespace VeriTile.Bench.TritonBenchG.LoraExpandGemv
 
 open VeriTile.Triton
+open VeriTile.Triton.Math
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -140,239 +141,6 @@ theorem bgmv_expand_surface_toAlgorithm_supported
         cn_stride BLOCK_N BLOCK_K SPLIT_N EVEN_K ADD_INPUTS CAST_TYPE).toAlgorithm? =
         Except.ok alg := by
   simp [bgmv_expand_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-
-/-- Proof-oriented one-output-block slice of `lora_expand_gemv.py`'s
-`_bgmv_expand_kernel`.
-
-This captures the ADD_INPUTS=false, no-cast path for one `n` block. Unlike
-`bgmv_expand_slice.py`, the output base has no `slice_offset` term. -/
-def bgmv_expand_one_block
-    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K : Nat) :
-    ComputeKernel := triton {
-  pid_sn = tl.program_id(axis=0)
-  cur_batch = tl.program_id(axis=1)
-  lora_index = tl.load(lora_indices + cur_batch)
-  offset_k = tl.arange(0, $(BLOCK_K))
-  offset_n = tl.arange(0, $(BLOCK_N))
-  tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),
-    mask=offset_k < $(K), other=0.0)
-  b_ptr = lora_ptr + $(l0_stride) * lora_index +
-    pid_sn * $(split_n_length) * $(lora_k_stride)
-  c_ptr = out_ptr + cur_batch * $(cm_stride) + pid_sn * $(split_n_length)
-  current_n = offset_n
-  tiled_b = tl.load(
-    b_ptr + current_n[:, None] * $(lora_k_stride) +
-      offset_k[None, :] * $(lora_n_stride),
-    mask=(current_n[:, None] < $(split_n_length)) and (offset_k[None, :] < $(K)),
-    other=0.0)
-  accumulator = tl.sum(tiled_a * tiled_b, 1)
-  tl.store(c_ptr + current_n * $(cn_stride), accumulator,
-    mask=current_n < $(split_n_length))
-}
-
-def nIndex (i : Fin BLOCK_N) : Nat :=
-  i.val
-
-def loraIndex (s : BlockState) (lora_indices : RegionName) : Nat :=
-  s.readMemValue .nat lora_indices (s.pids 1)
-
-def outOffset
-    (s : BlockState) (split_n_length cm_stride cn_stride BLOCK_N : Nat)
-    (i : Fin BLOCK_N) : Nat :=
-  s.pids 1 * cm_stride + s.pids 0 * split_n_length + nIndex i * cn_stride
-
-def inputOffset
-    (s : BlockState) (xm_stride xk_stride : Nat) (j : Fin BLOCK_K) : Nat :=
-  s.pids 1 * xm_stride + j.val * xk_stride
-
-def loraOffset
-    (s : BlockState) (lora_indices : RegionName)
-    (split_n_length l0_stride lora_k_stride lora_n_stride : Nat)
-    (i : Fin BLOCK_N) (j : Fin BLOCK_K) : Nat :=
-  l0_stride * loraIndex s lora_indices +
-    s.pids 0 * split_n_length * lora_k_stride +
-    i.val * lora_k_stride + j.val * lora_n_stride
-
-noncomputable def bgmvProdTile
-    (s : BlockState) (input_ptr lora_ptr lora_indices : RegionName)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride BLOCK_N BLOCK_K : Nat) :
-    Tile .real [BLOCK_N, BLOCK_K] :=
-  { data := fun idx =>
-      let ni := (TileShape.dropInsertedIndex [BLOCK_N] 1 1 (idx.1, 0, PUnit.unit)).1
-      let kj := (TileShape.dropInsertedIndex [BLOCK_K] 0 1 (0, idx.2.1, PUnit.unit)).1
-      Option.map₂ (fun a b => a * b)
-        (if kj.val < K then
-          some (s.readMem input_ptr (inputOffset s xm_stride xk_stride kj))
-        else some (0.0 : ℝ))
-        (if ni.val < split_n_length ∧ kj.val < K then
-          some (s.readMem lora_ptr
-            (loraOffset s lora_indices split_n_length l0_stride lora_k_stride
-              lora_n_stride ni kj))
-        else some (0.0 : ℝ)) }
-
-noncomputable def bgmvSpec
-    (s : BlockState) (input_ptr lora_ptr lora_indices : RegionName)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride BLOCK_N BLOCK_K : Nat)
-    (i : Fin BLOCK_N) : ℝ :=
-  WithBot.unbotD 0
-    ((Tile.reduceSum (shape := [BLOCK_N, BLOCK_K]) ⟨1, by simp⟩ Bool.false
-      (bgmvProdTile s input_ptr lora_ptr lora_indices K split_n_length
-        xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
-        BLOCK_N BLOCK_K)).data (i, PUnit.unit))
-
-/-- Algorithm-layer correctness for the one-block LoRA expand GEMV slice. -/
-theorem bgmv_expand_one_block_correct
-    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N =>
-        outOffset s split_n_length cm_stride cn_stride BLOCK_N i))
-    (hExec : exec (bgmv_expand_one_block input_ptr lora_ptr out_ptr
-        lora_indices K split_n_length xm_stride xk_stride l0_stride
-        lora_k_stride lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K) s =
-        some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem out_ptr
-          (outOffset s split_n_length cm_stride cn_stride BLOCK_N i) =
-        if nIndex i < split_n_length then
-          bgmvSpec s input_ptr lora_ptr lora_indices K split_n_length
-            xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
-            BLOCK_N BLOCK_K i
-        else
-          s.readMem out_ptr
-            (outOffset s split_n_length cm_stride cn_stride BLOCK_N i) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] =>
-        s.pids 1 * cm_stride + s.pids 0 * split_n_length +
-          idx.1.val * cn_stride) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [outOffset, nIndex] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
-  by_cases hBN : 0 < BLOCK_N
-  · simp [exec, bgmv_expand_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-          Option.bind, Option.map,
-          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex,
-          NumericDType.add, NumericDType.mul, ComparableDType.lt,
-          BlockState.readMemValue, hBN] at hExec
-    rw [← hExec]
-    simp only [outOffset, nIndex]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
-    by_cases hi : i.val < split_n_length
-    · simp [hi, bgmvSpec, bgmvProdTile, inputOffset, loraOffset, loraIndex,
-            outOffset, nIndex, Tile.reduceSum, Tile.reduceSumDrop,
-            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-            BlockState.readMemValue]
-      congr 1
-      apply Finset.sum_congr rfl
-      intro x _
-      change Option.map₂ (fun x1 x2 => x1 * x2)
-          (if x.val < K then
-            some (s.readMem input_ptr
-              (s.pids 1 * xm_stride + x.val * xk_stride))
-          else some 0.0)
-          (if x.val < K then
-            some (s.readMem lora_ptr
-              ((l0_stride * loraIndex s lora_indices) +
-                s.pids 0 * split_n_length * lora_k_stride +
-                i.val * lora_k_stride + x.val * lora_n_stride))
-          else some 0.0) =
-        Option.map₂ (fun x1 x2 => x1 * x2)
-          (if x.val < K then
-            some (s.readMem input_ptr
-              (s.pids 1 * xm_stride + x.val * xk_stride))
-          else some 0.0)
-          (if i.val < split_n_length ∧ x.val < K then
-            some (s.readMem lora_ptr
-              ((l0_stride * loraIndex s lora_indices) +
-                s.pids 0 * split_n_length * lora_k_stride +
-                i.val * lora_k_stride + x.val * lora_n_stride))
-          else some 0.0)
-      by_cases hxK : x.val < K
-      · simp [hxK, hi]
-      · simp [hxK]
-    · simp [hi]
-  · exact False.elim (hBN (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- Compute-facing correctness for the one-block LoRA expand GEMV slice. -/
-theorem bgmv_expand_one_block_compute_correct
-    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N =>
-        outOffset s split_n_length cm_stride cn_stride BLOCK_N i)) :
-    ComputeCorrect.Realizes
-      (kernel := bgmv_expand_one_block input_ptr lora_ptr out_ptr
-        lora_indices K split_n_length xm_stride xk_stride l0_stride
-        lora_k_stride lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex i < split_n_length)
-        (fun i => (out_ptr, outOffset s split_n_length cm_stride cn_stride BLOCK_N i)))
-      (expected := fun i =>
-        bgmvSpec s input_ptr lora_ptr lora_indices K split_n_length
-          xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
-          BLOCK_N BLOCK_K i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [bgmv_expand_one_block]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := bgmv_expand_one_block_correct input_ptr lora_ptr out_ptr
-    lora_indices K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-    lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K s s' hOutInj hExec i
-  simpa [hActive] using h
-
-/-- Per-kernel output summary for the one-block LoRA expand GEMV slice: the DSL
-surface lowers to the algorithm layer, and the masked GEMV store to `out_ptr` is
-compute-correct — under the no-duplicate-destination hypothesis `hOutInj`, every
-active lane (`n < split_n_length`) holds the rank-`K` reduction `bgmvSpec`. -/
-theorem bgmv_expand_one_block_output_summary
-    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N =>
-        outOffset s split_n_length cm_stride cn_stride BLOCK_N i)) :
-    (∃ alg, (bgmv_expand_one_block input_ptr lora_ptr out_ptr
-        lora_indices K split_n_length xm_stride xk_stride l0_stride
-        lora_k_stride lora_n_stride cm_stride cn_stride BLOCK_N
-        BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := bgmv_expand_one_block input_ptr lora_ptr out_ptr
-        lora_indices K split_n_length xm_stride xk_stride l0_stride
-        lora_k_stride lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex i < split_n_length)
-        (fun i => (out_ptr, outOffset s split_n_length cm_stride cn_stride BLOCK_N i)))
-      (expected := fun i =>
-        bgmvSpec s input_ptr lora_ptr lora_indices K split_n_length
-          xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
-          BLOCK_N BLOCK_K i) := by
-  refine ⟨?_, ?_⟩
-  · simp [bgmv_expand_one_block, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  · exact bgmv_expand_one_block_compute_correct input_ptr lora_ptr out_ptr
-      lora_indices K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K s hOutInj
 
 /-! ## Full multi-block GEMV correctness
 
@@ -460,10 +228,9 @@ noncomputable def gemvSpec (s : BlockState) (input_ptr lora_ptr : RegionName)
     (lora_indices : Region .nat)
     (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride : Nat) (m : Nat) : ℝ :=
-  (Finset.range K).sum (fun k =>
-    aElem s input_ptr xm_stride xk_stride k *
-      bElem s lora_ptr lora_indices split_n_length l0_stride lora_k_stride
-        lora_n_stride m k)
+  gemmSum (fun k => aElem s input_ptr xm_stride xk_stride k)
+    (fun k => bElem s lora_ptr lora_indices split_n_length l0_stride lora_k_stride
+      lora_n_stride m k) K
 
 /-- Global output offset for lane `m`: `cur_batch·cm + pid_sn·snl + m·cn`. -/
 def outOffG (s : BlockState) (split_n_length cm_stride cn_stride : Nat)
@@ -935,7 +702,7 @@ theorem reduceSum_active_eq_spec
         Option.bind, Option.map]
       norm_num
       rfl
-  rw [Finset.sum_congr rfl (fun k _ => hterm k), ← WithBot.coe_sum, gemvSpec,
+  rw [Finset.sum_congr rfl (fun k _ => hterm k), ← WithBot.coe_sum, gemvSpec, gemmSum,
       ← sum_fin_ite_range BLOCK_K K hKB
         (fun k => aElem s input_ptr xm_stride xk_stride k *
           bElem s lora_ptr lora_indices split_n_length l0_stride lora_k_stride lora_n_stride
@@ -967,79 +734,6 @@ theorem accT_data_some (BN BK : Nat) (ga : Fin BK → ℝ) (gb : Fin BN → Fin 
         ← WithBot.coe_sum]
     rfl
   rw [h]; rfl
-
-/-- Foldl-of-masked-writes preserves a target offset not hit by any active member. -/
-theorem foldl_writeMem_preserve {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α)
-    (s : BlockState) (hnot : ∀ k ∈ l, mask k → offsetFn k ≠ o) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o
-      = s.readMem region o := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]
-    cases hm : mask hd
-    · simp only [hm, Bool.false_eq_true, if_false]
-      exact ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)
-    · simp only [hm, if_true]
-      rw [ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)]
-      exact BlockState.writeMem_readMem_of_ne_offset s region (offsetFn hd) (valueFn hd) region o
-        (hnot hd (List.mem_cons_self) (by rw [hm])).symm
-
-theorem foldl_writeMem_regs {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (dtype : TileDType) (shape : TileShape) (name : RegName) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).regs dtype shape name
-      = s.regs dtype shape name := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_writeMem_pids {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).pids = s.pids := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_writeMem_other_region {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (r : RegionName) (ofs : Nat) (hr : r ≠ region) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem r ofs
-      = s.readMem r ofs := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]; cases mask hd
-    · simp only [Bool.false_eq_true, if_false]; exact ih _
-    · simp only [if_true]; rw [ih]
-      exact BlockState.writeMem_readMem_of_ne_region s region (offsetFn hd) (valueFn hd) r ofs hr
-
-/-- Readback of a masked-write foldl at an offset hit by a *unique* active member. -/
-theorem foldl_writeMem_at {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (O : Nat) (l : List α)
-    (s : BlockState) (a : α) (ha : a ∈ l) (hma : mask a) (hoa : offsetFn a = O)
-    (huniq : ∀ b ∈ l, mask b → offsetFn b = O → b = a) (hnodup : l.Nodup) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region O
-      = valueFn a := by
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem ha
-  subst hl
-  rw [List.foldl_append, List.foldl_cons]
-  rw [List.nodup_append, List.nodup_cons] at hnodup
-  obtain ⟨hnd1, ⟨ha_notin2, hnd2⟩, hdisj⟩ := hnodup
-  have h2 : ∀ b ∈ l₂, mask b → offsetFn b ≠ O := by
-    intro b hb hmb heq
-    have : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact ha_notin2 (this ▸ hb)
-  rw [foldl_writeMem_preserve offsetFn valueFn mask O l₂ _ (fun b hb hmb => h2 b hb hmb)]
-  simp only [hma, if_true, hoa]
-  rw [BlockState.writeMem_readMem]
-  have h1 : ∀ b ∈ l₁, mask b → offsetFn b ≠ O := by
-    intro b hb hmb heq
-    have hb' : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact (hdisj b hb a (List.mem_cons_self)) hb'
-  rw [foldl_writeMem_preserve offsetFn valueFn mask O l₁ _ (fun b hb hmb => h1 b hb hmb)]
-  simp
 
 /-- The masked GEMV store reduces to a `writeMem` foldl over local lanes. -/
 theorem store_step (out_ptr : RegionName) (split_n_length cn_stride cpvo BLOCK_N : Nat)
@@ -1169,7 +863,7 @@ theorem gemvWbInv_step
           if mskF idx then acc.writeMem out_ptr (offF idx) (valF idx) else acc) s3 with hfoldS
     refine ⟨foldS, rfl, ?_⟩
     have hfpids : foldS.pids = s0.pids := by
-      rw [hfoldS, foldl_writeMem_pids, hs3, BlockState.setReg_pids, hs2,
+      rw [hfoldS, foldl_store_pids, hs3, BlockState.setReg_pids, hs2,
         BlockState.setReg_pids, hs1, BlockState.setReg_pids, hskpids]
     -- value at active lane jm equals gemvSpec(c*BLOCK_N + jm)
     have hvalSpec : ∀ jm : Fin BLOCK_N, c*BLOCK_N + jm.val < split_n_length →
@@ -1184,22 +878,22 @@ theorem gemvWbInv_step
         from by rw [haccT]; exact hb]
       rfl
     refine ⟨hfpids, ⟨c+1, by ring⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-    · rw [hfoldS, foldl_writeMem_regs, hs3,
+    · rw [hfoldS, foldl_store_regs, hs3,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("offset_k":RegName) ≠ "accumulator" by decide), hs2,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("offset_k":RegName) ≠ "tiled_b" by decide)]; exact hok1
-    · rw [hfoldS, foldl_writeMem_regs, hs3,
+    · rw [hfoldS, foldl_store_regs, hs3,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("offset_n":RegName) ≠ "accumulator" by decide), hs2,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("offset_n":RegName) ≠ "tiled_b" by decide), hs1,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("offset_n":RegName) ≠ "current_n" by decide)]; exact hon_sk
-    · rw [hfoldS, foldl_writeMem_regs, hs3,
+    · rw [hfoldS, foldl_store_regs, hs3,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("tiled_a":RegName) ≠ "accumulator" by decide)]
       exact hta2
-    · rw [hfoldS, foldl_writeMem_regs, hs3,
+    · rw [hfoldS, foldl_store_regs, hs3,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("b_ptr":RegName) ≠ "accumulator" by decide), hs2,
         BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (show ("b_ptr":RegName) ≠ "tiled_b" by decide)]; exact hbp1
-    · rw [hfoldS, foldl_writeMem_regs]; exact hcp3
+    · rw [hfoldS, foldl_store_regs]; exact hcp3
     · funext ofs
-      rw [hfoldS, foldl_writeMem_other_region offF valF mskF _ _ lora_ptr ofs hol.symm, hs3,
+      rw [hfoldS, foldl_store_other_region offF valF mskF _ _ lora_ptr ofs hol.symm, hs3,
         BlockState.setReg_readMem, hs2, BlockState.setReg_readMem]
       exact congrFun hs1rml ofs
     · -- readback per global lane
@@ -1215,7 +909,7 @@ theorem gemvWbInv_step
         have hofeq : offF (jm, PUnit.unit) = outOffG s0 split_n_length cm_stride cn_stride m.val := by
           simp only [hoffF, outOffG, hjmeq]
         rw [hfoldS, ← hofeq]
-        rw [foldl_writeMem_at offF valF mskF (offF (jm, PUnit.unit)) (TileShape.allIndices [BLOCK_N]) s3
+        rw [foldl_store_at offF valF mskF (offF (jm, PUnit.unit)) (TileShape.allIndices [BLOCK_N]) s3
           (jm, PUnit.unit) (TileShape.mem_allIndices [BLOCK_N] _)
           (by simp only [hmskF]; exact decide_eq_true (by rw [hjmeq]; exact hmN))
           rfl
@@ -1235,7 +929,7 @@ theorem gemvWbInv_step
         rw [if_pos (by omega : m.val < c*BLOCK_N + BLOCK_N), hjmeq]
       · -- m not in this block: preserved from s, dispatch on m < c*BLOCK_N
         rw [hfoldS]
-        rw [foldl_writeMem_preserve offF valF mskF (outOffG s0 split_n_length cm_stride cn_stride m.val)
+        rw [foldl_store_preserve offF valF mskF (outOffG s0 split_n_length cm_stride cn_stride m.val)
           (TileShape.allIndices [BLOCK_N]) s3
           (by intro b hb hmb hofb
               have hbN : c*BLOCK_N + b.1.val < split_n_length := by simpa [hmskF] using hmb
@@ -1278,8 +972,7 @@ theorem gemv_exec_correct
       cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
     (s s' : BlockState) (hBN : 0 < BLOCK_N) (hKB : K ≤ BLOCK_K) (hol : out_ptr ≠ lora_ptr)
     (hundef : ∀ rg o, s.undef rg o = 0)
-    (hinj : Function.Injective
-      (fun m : Fin split_n_length => outOffG s split_n_length cm_stride cn_stride m.val))
+    (hcn : 0 < cn_stride)
     (hExec : exec (bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K) s = some s') :
@@ -1287,6 +980,13 @@ theorem gemv_exec_correct
       s'.readMem out_ptr (outOffG s split_n_length cm_stride cn_stride m.val)
         = gemvSpec s input_ptr lora_ptr lora_indices K split_n_length
             xm_stride xk_stride l0_stride lora_k_stride lora_n_stride m.val := by
+  have hinj : Function.Injective
+      (fun m : Fin split_n_length => outOffG s split_n_length cm_stride cn_stride m.val) := by
+    have heq : (fun m : Fin split_n_length => outOffG s split_n_length cm_stride cn_stride m.val)
+        = (fun m : Fin split_n_length =>
+            (s.pids 1 * cm_stride + s.pids 0 * split_n_length) + m.val * cn_stride) := by
+      funext m; simp only [outOffG]
+    rw [heq]; exact affine1D_inj _ cn_stride hcn
   -- prefix establishes P 0
   obtain ⟨sp, hsp, hP0⟩ := prefix_inv input_ptr lora_ptr out_ptr lora_indices K split_n_length
     xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
@@ -1322,8 +1022,7 @@ theorem gemv_compute_correct
       cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
     (s : BlockState) (hBN : 0 < BLOCK_N) (hKB : K ≤ BLOCK_K) (hol : out_ptr ≠ lora_ptr)
     (hundef : ∀ rg o, s.undef rg o = 0)
-    (hinj : Function.Injective
-      (fun m : Fin split_n_length => outOffG s split_n_length cm_stride cn_stride m.val)) :
+    (hcn : 0 < cn_stride) :
     ComputeCorrect.Realizes
       (kernel := bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
@@ -1343,7 +1042,7 @@ theorem gemv_compute_correct
   intro m _
   exact gemv_exec_correct input_ptr lora_ptr out_ptr lora_indices K split_n_length
     xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
-    BLOCK_N BLOCK_K s s' hBN hKB hol hundef hinj hExec m
+    BLOCK_N BLOCK_K s s' hBN hKB hol hundef hcn hExec m
 
 /-- **Full output summary**: the full LoRA expand GEMV surface lowers to the
 algorithm layer, and the masked store realizes the genuine matrix-vector product
@@ -1355,8 +1054,7 @@ theorem gemv_full_output_summary
       cm_stride cn_stride BLOCK_N BLOCK_K : Nat)
     (s : BlockState) (hBN : 0 < BLOCK_N) (hKB : K ≤ BLOCK_K) (hol : out_ptr ≠ lora_ptr)
     (hundef : ∀ rg o, s.undef rg o = 0)
-    (hinj : Function.Injective
-      (fun m : Fin split_n_length => outOffG s split_n_length cm_stride cn_stride m.val)) :
+    (hcn : 0 < cn_stride) :
     (∃ alg, (bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
@@ -1376,7 +1074,7 @@ theorem gemv_full_output_summary
       cm_stride cn_stride BLOCK_N BLOCK_K,
     gemv_compute_correct input_ptr lora_ptr out_ptr lora_indices K split_n_length
       xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
-      BLOCK_N BLOCK_K s hBN hKB hol hundef hinj⟩
+      BLOCK_N BLOCK_K s hBN hKB hol hundef hcn⟩
 
 end Full
 
