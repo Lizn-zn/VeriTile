@@ -3,7 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `attention_fwd_triton1` — strict per-kernel correctness

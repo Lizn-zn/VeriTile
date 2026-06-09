@@ -25,42 +25,56 @@ program of the grid.
 
 ## Proof architecture
 
+This kernel is a **global, per-column** cumulative sum: each output `[flat, j]`
+holds `Σ_{m ≤ flat} s[m, j]`. The genuine closed-form spec is a standalone
+`Finset.sum` (`globalCumsumVectorClosed` / `singleBlockCumsumVectorClosed`),
+never a read-back of the kernel's own output.
+
 ```
 chunk_cumsum_vector_python_case{1,2,3}_slice_summary           ← TOP THEOREMS
   ├─ chunk_cumsum_vector_python_case{n}_surface_toAlgorithm_supported
   │     └─ chunk_cumsum_vector_surface_toAlgorithm_supported   full surface lowers
-  ├─ chunk_cumsum_vector_single_block_python_case{n}_compute_correct
-  │     └─ chunk_cumsum_vector_single_block_surface_active_compute_correct
-  │          └─ chunk_cumsum_vector_single_block_surface_correct
+  ├─ chunk_cumsum_vector_single_block_python_case{n}_closed_form
+  │     └─ chunk_cumsum_vector_single_block_surface_closed_form
+  │          ├─ chunk_cumsum_vector_single_block_surface_active_compute_correct
+  │          └─ singleBlockStoreValue_eq_closed   (lower-tri dot = prefix Σ)
   ├─ chunk_cumsum_vector_store_python_case{n}_compute_correct
   │     └─ chunk_cumsum_vector_store_slice_active_compute_correct
-  │          └─ chunk_cumsum_vector_store_slice_correct
-  └─ chunk_cumsum_vector_cumsum_python_case{n}_compute_correct
-       └─ chunk_cumsum_vector_cumsum_slice_active_compute_correct
-            └─ chunk_cumsum_vector_cumsum_slice_correct
+  └─ chunk_cumsum_vector_cumsum_python_case{n}_closed_form
+       └─ chunk_cumsum_vector_cumsum_slice_closed_form  (under per-column carry hyp.)
+            ├─ chunk_cumsum_vector_cumsum_slice_active_compute_correct
+            └─ cumsumStoreValue_eq_globalCumsumVectorClosed  (carry + dot = global Σ)
 
-chunk_cumsum_vector_python_case{1,2,3}_output_summary          (= surface-outputs aliases)
-chunk_cumsum_vector_python_case{n}_surface_outputs_compute_correct
-  └─ chunk_cumsum_vector_surface_output_compute_correct
+mathematical core (the carry-fold + within-chunk identity):
+  dotLowerTri_sum_if_some / dotLowerTri_sum_if   `tl.dot(m_s,·)` = guarded prefix Σ
+  singleBlockStoreValue_eq_closed                single chunk (carry=0) = global prefix Σ
+  cumsumStoreValue_eq_globalCumsumVectorClosed   carry[j] + within-chunk Σ = global prefix Σ,
+                                                 given carry[j] = Σ_{flat<c·BT, flat<T} s[flat,j]
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
-`BT ∈ {16,32,64}` config set) is not modeled — proofs fix the three checked
-Python shapes (`T,S = 4,5`; `8,10`; `1,5`) with `BS = 32`. The `.to(tl.float32)`
-/ `.to(p_z.dtype.element_ty)` casts erase to the identity at the algorithm
-layer (post-erasure all dtypes unify to `ℝ`). The in-chunk prefix sum is modeled
-exactly as the lower-triangular matmul `lowerTriTile · sourceTile` (matching the
-kernel's `tl.dot(m_s, b_s)`); the chunk-local store is modeled exactly; the
-cross-chunk fold that threads the column-vector carry `b_z` over multiple
-iterations is left as the trusted boundary — the carry is presented as a
-materialized buffer (`Carry`) in `chunk_cumsum_vector_cumsum_slice`, and the
-single-block surface covers the single-chunk case where the carry is the initial
-zero. The Python shapes here all have `T ≤ BT`, so the single-block surface is
-exact. Output non-collision is a side condition (discharged per Python case via
-`*_active_no_collision`). Side conditions: store offsets do not collide on
-active lanes.
+`BT ∈ {16,32,64}` config set) is not modeled — the public Python-case theorems
+fix the three checked shapes (`T,S = 4,5`; `8,10`; `1,5`) with `BS = 32`,
+`BT = 16` (so each chunk loop runs once with carry `= 0`); the closed-form
+lemmas (`dotLowerTri_sum_if*`, `*_eq_closed`,
+`cumsumStoreValue_eq_globalCumsumVectorClosed`, and the
+`*_surface_closed_form` / `*_cumsum_slice_closed_form` realizers) are stated and
+proven **general over `T`, `S`, `BT`, `BS` and the number of chunks**. The
+`.to(tl.float32)` / `.to(p_z.dtype.element_ty)` casts erase to the identity at
+the algorithm layer. The in-chunk prefix sum is modeled exactly as the
+lower-triangular matmul `lowerTriTile · sourceTile` (matching `tl.dot(m_s, b_s)`)
+and shown equal to the genuine per-column prefix `Finset.sum`
+(`dotLowerTri_sum_if`). The cross-chunk carry recurrence threaded by `b_z` is
+`carry_{c+1}[j] = carry_c[j] + Σ chunk_c[·,j]`; its invariant
+`carry_c[j] = Σ_{flat < c·BT, flat < T} s[i_bh·s_s_h + flat·s_s_t + j·s_s_d]` is
+the explicit hypothesis of `cumsumStoreValue_eq_globalCumsumVectorClosed` — under
+it, each chunk's store equals the genuine global cumulative sum. The carry is
+materialized in a buffer (`Carry`) in `chunk_cumsum_vector_cumsum_slice`; the
+single-Python-chunk surface realizes the global prefix sum end-to-end with
+`carry = 0`. Output non-collision is a side condition (discharged per Python
+case via `*_active_no_collision`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkCumsumVector
@@ -333,6 +347,285 @@ noncomputable def singleBlockStoreValue
     ((Tile.dot [] (lowerTriTile BT)
       (singleBlockSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
         (idx.1, idx.2.1, PUnit.unit))
+
+/-! ## Within-chunk lower-triangular dot = guarded prefix `Finset.sum`
+
+`tl.dot(m_s, b_s)` with `m_s` the lower-triangular ones matrix computes, at row
+`i` and column `j`, the within-chunk prefix sum `∑_{k ≤ i} b_s[k, j]`. The
+following lemma turns that register-level matmul into a genuine `Finset.sum`
+over the guarded prefix, for any column-keyed source `f`. -/
+
+/-- A `Finset.sum` of coerced lanes over `WithBot ℝ` collapses to the coercion
+of the underlying real sum. (Instance-safe restatement of `WithBot.coe_sum`.) -/
+private theorem sum_some_eq_some {ι : Type*} (s : Finset ι) (g : ι → ℝ) :
+    (∑ k ∈ s, ((g k : ℝ) : WithBot ℝ)) = ((∑ k ∈ s, g k : ℝ) : WithBot ℝ) :=
+  (WithBot.coe_sum s g).symm
+
+/-- **Lower-triangular dot = guarded prefix sum (`some`-valued).** For a source
+tile whose lane `(k, j)` holds `some (if P k j then f k j else 0)`, the
+lower-triangular dot at `(i, j)` is `some` of the sum of `f · j` over the guarded
+prefix `{k : k ≤ i ∧ P k j}`. This is the 2D (per-column) analogue of
+`scan1d_sum_if`. -/
+theorem dotLowerTri_sum_if_some (BT BS : Nat) (f : Fin BT → Fin BS → ℝ)
+    (P : Fin BT → Fin BS → Prop) [∀ k j, Decidable (P k j)]
+    (i : Fin BT) (j : Fin BS) :
+    ((Tile.dot [] (lowerTriTile BT)
+        (⟨fun idx => some (if P idx.1 idx.2.1 then f idx.1 idx.2.1 else 0)⟩ :
+          Tile .real [BT, BS])).data (i, j, PUnit.unit))
+      = some (∑ k ∈ (Finset.univ.filter
+          (fun k : Fin BT => k.val ≤ i.val ∧ P k j)), f k j) := by
+  rw [Tile.dot_nil_data]
+  have e : (fun k : Fin BT => Option.map₂ (fun x1 x2 => x1 * x2)
+      ((lowerTriTile BT).data (i, k, PUnit.unit))
+      ((⟨fun idx => some (if P idx.1 idx.2.1 then f idx.1 idx.2.1 else 0)⟩ :
+        Tile .real [BT, BS]).data (k, j, PUnit.unit)))
+      = (fun k : Fin BT => ((((if k.val ≤ i.val then (1:ℝ) else 0) *
+          (if P k j then f k j else 0)) : ℝ) : WithBot ℝ)) := by
+    funext k
+    simp only [lowerTriTile, ge_iff_le]
+    split <;> (rw [Option.map₂_some_some, WithBot.some_eq_coe]; congr 1; norm_num)
+  rw [e, sum_some_eq_some, WithBot.some_eq_coe]
+  congr 1
+  rw [← Finset.sum_filter_of_ne (p := fun k : Fin BT => k.val ≤ i.val ∧ P k j)]
+  · apply Finset.sum_congr rfl
+    intro k hk
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hk
+    simp [hk.1, hk.2]
+  · intro k _ hne
+    by_contra hc
+    push Not at hc
+    by_cases hki : k.val ≤ i.val <;> simp_all
+
+/-- The `unbotD`-demoted form of `dotLowerTri_sum_if_some`. -/
+theorem dotLowerTri_sum_if (BT BS : Nat) (f : Fin BT → Fin BS → ℝ)
+    (P : Fin BT → Fin BS → Prop) [∀ k j, Decidable (P k j)]
+    (i : Fin BT) (j : Fin BS) :
+    WithBot.unbotD 0
+      ((Tile.dot [] (lowerTriTile BT)
+        (⟨fun idx => some (if P idx.1 idx.2.1 then f idx.1 idx.2.1 else 0)⟩ :
+          Tile .real [BT, BS])).data (i, j, PUnit.unit))
+      = ∑ k ∈ (Finset.univ.filter
+          (fun k : Fin BT => k.val ≤ i.val ∧ P k j)), f k j := by
+  rw [dotLowerTri_sum_if_some]; rfl
+
+/-! ## Genuine chunked-cumsum closed form (vector / per-column)
+
+`globalCumsumVectorClosed` is the genuine mathematical specification — for each
+feature column `j` it is a `Finset.sum` over all *flat* time indices
+`flat ≤ i_t·BT + i` (with `flat < T`) of the source value at the 2D address
+`i_bh·s_s_h + flat·s_s_t + (i_s·BS + j)·s_s_d`. It is **not** a read-back of the
+kernel's own output, so realizing it is a true correctness statement. Padded
+feature lanes (`i_s·BS + j ≥ S`) hold `0`, matching the masked store. This is
+the 2D analogue of the scalar `globalCumsumClosed`, carrying the column index
+`j` through the prefix sum. -/
+noncomputable def globalCumsumVectorClosed
+    (s : BlockState) (SReg : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  if sIndex s BS idx.2.1 < S then
+    ∑ flat ∈ (Finset.range T).filter
+        (fun flat => flat ≤ s.pids 2 * BT + idx.1.val),
+      s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+        sIndex s BS idx.2.1 * s_s_d)
+  else 0
+
+/-- Genuine closed form for the single-Python-chunk path (`i_t = 0`, carry `= 0`):
+for each feature column `j`, the prefix sum of all source entries up to and
+including flat index `i`. -/
+noncomputable def singleBlockCumsumVectorClosed
+    (s : BlockState) (SReg : RegionName) (s_s_h s_s_t s_s_d T S BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  if sIndex s BS idx.2.1 < S then
+    ∑ flat ∈ (Finset.range T).filter (fun flat => flat ≤ idx.1.val),
+      s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+        sIndex s BS idx.2.1 * s_s_d)
+  else 0
+
+/-- **The carry-fold recurrence (vector).** When the carry buffer `Carry` holds,
+per active feature column, the genuine prefix sum of *all prior chunks* (every
+flat index `< i_t·BT`, clamped to `< T`), the per-chunk store value
+`cumsumStoreValue` — the within-chunk lower-triangular dot plus that carry —
+equals the genuine global cumulative sum `globalCumsumVectorClosed`. This is the
+exact recurrence threaded by `b_z` across the `forRange` loop:
+`carry_{c+1}[j] = carry_c[j] + Σ chunk_c[·,j]`, with the invariant
+`carry_c[j] = Σ_{flat < c·BT, flat < T} s[i_bh·s_s_h + flat·s_s_t + j·s_s_d]`. -/
+theorem cumsumStoreValue_eq_globalCumsumVectorClosed
+    (s : BlockState) (SReg Carry : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS])
+    (hcarry : sIndex s BS idx.2.1 < S →
+      s.readMem Carry (s.pids 1 * s_s_h + sIndex s BS idx.2.1 * s_s_d)
+        = ∑ flat ∈ (Finset.range T).filter (fun flat => flat < s.pids 2 * BT),
+            s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+              sIndex s BS idx.2.1 * s_s_d)) :
+    cumsumStoreValue s SReg Carry s_s_h s_s_t s_s_d T S BT BS idx
+      = globalCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx := by
+  unfold cumsumStoreValue globalCumsumVectorClosed carryValue
+  -- The dot operand `sourceTile` is exactly the guarded-`some` tile.
+  have hsrc : sourceTile s SReg s_s_h s_s_t s_s_d T S BT BS
+      = (⟨fun p => some (if active s T S BT BS (p.1, p.2.1, PUnit.unit) then
+          s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS (p.1, p.2.1, PUnit.unit))
+          else 0)⟩ : Tile .real [BT, BS]) := by
+    unfold sourceTile; congr 1; funext p
+    obtain ⟨a, b, u⟩ := p
+    by_cases h : active s T S BT BS (a, b, PUnit.unit)
+    · simp [h]
+    · simp only [h, if_false]; norm_num
+  rw [hsrc]
+  have hdot := dotLowerTri_sum_if_some BT BS
+    (fun k j => s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS (k, j, PUnit.unit)))
+    (fun k j => active s T S BT BS (k, j, PUnit.unit)) idx.1 idx.2.1
+  rw [hdot]
+  by_cases hcol : sIndex s BS idx.2.1 < S
+  · -- active column: carry + within-chunk dot = global prefix sum
+    rw [if_pos hcol, if_pos hcol, Option.map₂_some_some]
+    show _ + _ = _
+    rw [hcarry hcol]
+    -- now: (Σ within-chunk) + carry = global prefix sum
+    -- Step 1: reindex the within-chunk sum to flat segment indices.
+    have hreindex :
+        (∑ k ∈ Finset.univ.filter
+            (fun k : Fin BT => k.val ≤ idx.1.val ∧
+              active s T S BT BS (k, idx.2.1, PUnit.unit)),
+          s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS (k, idx.2.1, PUnit.unit)))
+        = ∑ flat ∈ (Finset.range T).filter
+            (fun flat => s.pids 2 * BT ≤ flat ∧ flat ≤ s.pids 2 * BT + idx.1.val),
+            s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+              sIndex s BS idx.2.1 * s_s_d) := by
+      simp only [active, tIndex, tileOffset, hcol, and_true]
+      apply Finset.sum_nbij'
+        (i := fun k : Fin BT => s.pids 2 * BT + k.val)
+        (j := fun flat => (⟨if h : flat - s.pids 2 * BT < BT then
+            flat - s.pids 2 * BT else 0, by
+            split
+            · assumption
+            · exact idx.1.pos⟩ : Fin BT))
+      · intro a ha
+        simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+        simp only [Finset.mem_range, Finset.mem_filter]
+        exact ⟨ha.2, by omega, by omega⟩
+      · intro a ha
+        simp only [Finset.mem_filter, Finset.mem_range] at ha
+        simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+        have hd : a - s.pids 2 * BT < BT := by omega
+        rw [dif_pos hd]; exact ⟨by omega, by omega⟩
+      · intro a ha
+        simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+        apply Fin.ext
+        have hd : s.pids 2 * BT + a.val - s.pids 2 * BT < BT := by omega
+        simp only [dif_pos hd]; omega
+      · intro a ha
+        simp only [Finset.mem_filter, Finset.mem_range] at ha
+        have hd : a - s.pids 2 * BT < BT := by omega
+        simp only [dif_pos hd]; omega
+      · intro a ha
+        simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+        rfl
+    rw [hreindex]
+    -- Step 2: split `globalCumsumClosed` by `flat < i_t·BT`. The store value is
+    -- `carry + within`, so the carry segment (`flat < i_t·BT`) comes first.
+    rw [← Finset.sum_filter_add_sum_filter_not
+          ((Finset.range T).filter (fun flat => flat ≤ s.pids 2 * BT + idx.1.val))
+          (fun flat => flat < s.pids 2 * BT)]
+    congr 1
+    · rw [Finset.filter_filter]
+      apply Finset.sum_congr ?_ (fun _ _ => rfl)
+      apply Finset.filter_congr
+      intro flat hflat
+      simp only [Finset.mem_range] at hflat
+      constructor
+      · intro h; exact ⟨by omega, h⟩
+      · rintro ⟨_, h2⟩; exact h2
+    · rw [Finset.filter_filter]
+      apply Finset.sum_congr ?_ (fun _ _ => rfl)
+      apply Finset.filter_congr
+      intro flat hflat
+      simp only [Finset.mem_range, not_lt] at hflat ⊢
+      constructor
+      · rintro ⟨h1, h2⟩; exact ⟨h2, h1⟩
+      · rintro ⟨h1, h2⟩; exact ⟨h2, h1⟩
+  · rw [if_neg hcol, if_neg hcol]
+    have hempty : Finset.univ.filter
+        (fun k : Fin BT => k.val ≤ idx.1.val ∧
+          active s T S BT BS (k, idx.2.1, PUnit.unit)) = ∅ := by
+      apply Finset.filter_eq_empty_iff.mpr
+      intro k _
+      simp only [active, not_and]
+      intro _
+      simp only [not_lt] at *
+      omega
+    rw [hempty, Finset.sum_empty, Option.map₂_some_some]
+    show _ + _ = _
+    norm_num
+
+/-- **Single-chunk correctness against the genuine closed form (vector).** With
+the carry at its initial zero (`i_t = 0`), the within-chunk lower-triangular dot
+store value is, per active feature column, the genuine global prefix sum
+`Σ_{flat ≤ i, flat < T} s[i_bh·s_s_h + flat·s_s_t + j·s_s_d]`. This is the
+sorry-free end-to-end correctness of the actual Python single-chunk path. -/
+theorem singleBlockStoreValue_eq_closed
+    (s : BlockState) (SReg : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
+      = singleBlockCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BS idx := by
+  unfold singleBlockStoreValue singleBlockCumsumVectorClosed
+  have hsrc : singleBlockSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS
+      = (⟨fun p => some (if singleBlockActive s T S BS (p.1, p.2.1, PUnit.unit) then
+          s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+            (p.1, p.2.1, PUnit.unit))
+          else 0)⟩ : Tile .real [BT, BS]) := by
+    unfold singleBlockSourceTile; congr 1; funext p
+    obtain ⟨a, b, u⟩ := p
+    by_cases h : singleBlockActive s T S BS (a, b, PUnit.unit)
+    · simp [h]
+    · simp only [h, if_false]; norm_num
+  rw [hsrc, dotLowerTri_sum_if_some BT BS
+    (fun k j => s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+      (k, j, PUnit.unit)))
+    (fun k j => singleBlockActive s T S BS (k, j, PUnit.unit)) idx.1 idx.2.1]
+  show WithBot.unbotD 0 (some _) = _
+  by_cases hcol : sIndex s BS idx.2.1 < S
+  · rw [if_pos hcol]
+    show (∑ k ∈ Finset.univ.filter
+        (fun k : Fin BT => k.val ≤ idx.1.val ∧
+          singleBlockActive s T S BS (k, idx.2.1, PUnit.unit)),
+        s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+          (k, idx.2.1, PUnit.unit))) = _
+    -- reindex `{k : Fin BT | k ≤ i ∧ (k < T ∧ col)}` to `{flat ∈ range T | flat ≤ i}`
+    simp only [singleBlockActive, hcol, and_true, singleBlockTileOffset, sIndex]
+    apply Finset.sum_nbij' (i := fun k : Fin BT => k.val)
+      (j := fun flat => (⟨if h : flat < BT then flat else 0, by
+          split
+          · assumption
+          · exact idx.1.pos⟩ : Fin BT))
+    · intro a ha
+      simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+      simp only [Finset.mem_range, Finset.mem_filter]
+      exact ⟨ha.2.1, ha.1⟩
+    · intro a ha
+      simp only [Finset.mem_filter, Finset.mem_range] at ha
+      simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+      have hd : a < BT := by have : a ≤ idx.1.val := ha.2; omega
+      rw [dif_pos hd]; exact ⟨ha.2, ha.1, hcol⟩
+    · intro a ha
+      simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+      apply Fin.ext
+      simp only [dif_pos a.isLt]
+    · intro a ha
+      simp only [Finset.mem_filter, Finset.mem_range] at ha
+      have hd : a < BT := by have : a ≤ idx.1.val := ha.2; omega
+      simp only [dif_pos hd]
+    · intro a _; rfl
+  · rw [if_neg hcol]
+    have hempty : Finset.univ.filter
+        (fun k : Fin BT => k.val ≤ idx.1.val ∧
+          singleBlockActive s T S BS (k, idx.2.1, PUnit.unit)) = ∅ := by
+      apply Finset.filter_eq_empty_iff.mpr
+      intro k _
+      simp only [singleBlockActive, not_and]
+      intro _
+      simp only [not_lt] at *
+      omega
+    rw [hempty, Finset.sum_empty]
+    rfl
 
 set_option maxHeartbeats 800000 in
 theorem chunk_cumsum_vector_single_block_surface_correct
@@ -638,6 +931,80 @@ theorem chunk_cumsum_vector_cumsum_slice_active_compute_correct
   exact hNoCollision idx hActive k hk
     (by simpa [offsetFn, tileOffset, tIndex, sIndex] using heq)
 
+/-! ## Genuine closed-form realizers
+
+These wrap the `*_active_compute_correct` realizers with the closed-form
+equivalence lemmas, so the realized `expected` is a standalone `Finset.sum`
+specification (the genuine chunked cumulative sum), never a read-back of the
+kernel's own output. -/
+
+/-- **Genuine single-chunk correctness (vector).** The single-Python-chunk
+surface (the actual `S → Z` path, carry `= 0`) realizes the genuine closed-form
+per-column global prefix sum `singleBlockCumsumVectorClosed`. -/
+theorem chunk_cumsum_vector_single_block_surface_closed_form
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
+      ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
+          singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        singleBlockCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BS idx) := by
+  have h := chunk_cumsum_vector_single_block_surface_active_compute_correct
+    SReg Z s_s_h s_s_t s_s_d T S BT BS s hNoCollision
+  have hcong : (fun idx : TileIndex [BT, BS] =>
+      singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)
+      = (fun idx : TileIndex [BT, BS] =>
+        singleBlockCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BS idx) := by
+    funext idx; exact singleBlockStoreValue_eq_closed s SReg s_s_h s_s_t s_s_d T S BT BS idx
+  rwa [hcong] at h
+
+/-- **Genuine per-chunk carry-fold correctness (vector).** Given the carry
+buffer holds, per active feature column, the genuine prefix sum of all prior
+chunks, the cumsum slice realizes the genuine global cumulative sum
+`globalCumsumVectorClosed`. This is the inductive step of the carry recurrence
+threaded by `b_z`. -/
+theorem chunk_cumsum_vector_cumsum_slice_closed_form
+    (SReg Carry Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+      ∀ k : TileIndex [BT, BS], active s T S BT BS k →
+        tileOffset s s_s_h s_s_t s_s_d BT BS k =
+          tileOffset s s_s_h s_s_t s_s_d BT BS idx → k = idx)
+    (hcarry : ∀ idx : TileIndex [BT, BS], sIndex s BS idx.2.1 < S →
+      s.readMem Carry (s.pids 1 * s_s_h + sIndex s BS idx.2.1 * s_s_d)
+        = ∑ flat ∈ (Finset.range T).filter (fun flat => flat < s.pids 2 * BT),
+            s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+              sIndex s BS idx.2.1 * s_s_d)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_cumsum_slice SReg Carry Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        globalCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  have h := chunk_cumsum_vector_cumsum_slice_active_compute_correct
+    SReg Carry Z s_s_h s_s_t s_s_d T S BT BS s hNoCollision
+  have hcong : (fun idx : TileIndex [BT, BS] =>
+      cumsumStoreValue s SReg Carry s_s_h s_s_t s_s_d T S BT BS idx)
+      = (fun idx : TileIndex [BT, BS] =>
+        globalCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+    funext idx
+    exact cumsumStoreValue_eq_globalCumsumVectorClosed s SReg Carry s_s_h s_s_t
+      s_s_d T S BT BS idx (hcarry idx)
+  rwa [hcong] at h
+
 theorem chunk_cumsum_vector_python_case1_active_no_collision
     (s : BlockState) :
     ∀ idx : TileIndex [16, 32], active s 4 5 16 32 idx →
@@ -881,83 +1248,136 @@ theorem chunk_cumsum_vector_python_case3_surface_toAlgorithm_supported
   exact chunk_cumsum_vector_surface_toAlgorithm_supported SReg Z
     5 5 1 1 5 16 32
 
-noncomputable def chunkCumsumVectorSurfaceValue
-    (s : BlockState) (SReg Z Out : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) (offset : Nat) : ℝ :=
-  match exec (chunk_cumsum_vector_surface SReg Z s_s_h s_s_t s_s_d T S BT BS) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
+/-! ## Genuine closed-form Python-case wrappers
 
-theorem chunk_cumsum_vector_surface_output_compute_correct
-    (SReg Z Out : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_cumsum_vector_surface SReg Z s_s_h s_s_t s_s_d T S BT BS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
-        (fun idx => (Out, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
-      (expected := fun idx : TileIndex [BT, BS] =>
-        chunkCumsumVectorSurfaceValue s SReg Z Out s_s_h s_s_t s_s_d T S BT BS
-          (tileOffset s s_s_h s_s_t s_s_d BT BS idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_cumsum_vector_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [chunkCumsumVectorSurfaceValue, hExec]
+For the checked Python shapes (`BS = 32`, `BT = 16`, all with `T ≤ BT` so the
+chunk loop runs once with carry `= 0`), the single-Python-chunk surface is the
+actual `S → Z` path. It realizes the genuine per-column global prefix sum
+`singleBlockCumsumVectorClosed` — a standalone `Finset.sum`, not a read-back of
+the kernel's own output. The carry-fold slice realizes the genuine global
+cumulative sum `globalCumsumVectorClosed` under the per-column carry invariant
+(the cross-chunk threading of `b_z`, which is the trusted launch boundary). -/
 
-theorem chunk_cumsum_vector_python_case1_surface_outputs_compute_correct
+theorem chunk_cumsum_vector_single_block_python_case1_closed_form
     (SReg Z : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
-      (kernel := chunk_cumsum_vector_surface SReg Z 20 5 1 4 5 16 32)
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 20 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 20 5 1 4 5 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_closed_form SReg Z
+    20 5 1 4 5 16 32 s
+    (chunk_cumsum_vector_single_block_python_case1_active_no_collision s)
+
+theorem chunk_cumsum_vector_single_block_python_case2_closed_form
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 80 10 1 8 10 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 8 10 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 80 10 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 80 10 1 8 10 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_closed_form SReg Z
+    80 10 1 8 10 16 32 s
+    (chunk_cumsum_vector_single_block_python_case2_active_no_collision s)
+
+theorem chunk_cumsum_vector_single_block_python_case3_closed_form
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 5 5 1 1 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 1 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 5 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 5 5 1 1 5 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_closed_form SReg Z
+    5 5 1 1 5 16 32 s
+    (chunk_cumsum_vector_single_block_python_case3_active_no_collision s)
+
+theorem chunk_cumsum_vector_cumsum_python_case1_closed_form
+    (SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 5 →
+      s.readMem Carry (s.pids 1 * 20 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 4).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 20 + flat * 5 + sIndex s 32 idx.2.1 * 1)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_cumsum_slice SReg Carry Z 20 5 1 4 5 16 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx)
         (fun idx => (Z, tileOffset s 20 5 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        chunkCumsumVectorSurfaceValue s SReg Z Z 20 5 1 4 5 16 32
-          (tileOffset s 20 5 1 16 32 idx)) := by
-  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+        globalCumsumVectorClosed s SReg 20 5 1 4 5 16 32 idx) := by
+  exact chunk_cumsum_vector_cumsum_slice_closed_form SReg Carry Z
     20 5 1 4 5 16 32 s
+    (chunk_cumsum_vector_python_case1_active_no_collision s) hcarry
 
-theorem chunk_cumsum_vector_python_case2_surface_outputs_compute_correct
-    (SReg Z : RegionName) (s : BlockState) :
+theorem chunk_cumsum_vector_cumsum_python_case2_closed_form
+    (SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 10 →
+      s.readMem Carry (s.pids 1 * 80 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 8).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 80 + flat * 10 + sIndex s 32 idx.2.1 * 1)) :
     ComputeCorrect.Realizes
-      (kernel := chunk_cumsum_vector_surface SReg Z 80 10 1 8 10 16 32)
+      (kernel := chunk_cumsum_vector_cumsum_slice SReg Carry Z 80 10 1 8 10 16 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [16, 32] => active s 8 10 16 32 idx)
         (fun idx => (Z, tileOffset s 80 10 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        chunkCumsumVectorSurfaceValue s SReg Z Z 80 10 1 8 10 16 32
-          (tileOffset s 80 10 1 16 32 idx)) := by
-  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+        globalCumsumVectorClosed s SReg 80 10 1 8 10 16 32 idx) := by
+  exact chunk_cumsum_vector_cumsum_slice_closed_form SReg Carry Z
     80 10 1 8 10 16 32 s
+    (chunk_cumsum_vector_python_case2_active_no_collision s) hcarry
 
-theorem chunk_cumsum_vector_python_case3_surface_outputs_compute_correct
-    (SReg Z : RegionName) (s : BlockState) :
+theorem chunk_cumsum_vector_cumsum_python_case3_closed_form
+    (SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 5 →
+      s.readMem Carry (s.pids 1 * 5 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 1).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 5 + flat * 5 + sIndex s 32 idx.2.1 * 1)) :
     ComputeCorrect.Realizes
-      (kernel := chunk_cumsum_vector_surface SReg Z 5 5 1 1 5 16 32)
+      (kernel := chunk_cumsum_vector_cumsum_slice SReg Carry Z 5 5 1 1 5 16 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [16, 32] => active s 1 5 16 32 idx)
         (fun idx => (Z, tileOffset s 5 5 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        chunkCumsumVectorSurfaceValue s SReg Z Z 5 5 1 1 5 16 32
-          (tileOffset s 5 5 1 16 32 idx)) := by
-  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+        globalCumsumVectorClosed s SReg 5 5 1 1 5 16 32 idx) := by
+  exact chunk_cumsum_vector_cumsum_slice_closed_form SReg Carry Z
     5 5 1 1 5 16 32 s
+    (chunk_cumsum_vector_python_case3_active_no_collision s) hcarry
 
-/-- Public Python case 1 summary: full vector-cumsum surface plus both
-boundary store and carry-cumsum output slices for `B = 2`, `H = 3`, `T = 4`,
-`S = 5`. -/
+/-- **Public Python case 1 summary (`B = 2`, `H = 3`, `T = 4`, `S = 5`).** The
+full vector-cumsum surface lowers to the algorithm layer; the single-Python-chunk
+surface (the `S → Z` path, carry `= 0`) realizes the genuine per-column global
+prefix sum `singleBlockCumsumVectorClosed`; the boundary store slice passes a
+precomputed tile through; and the carry-fold slice realizes the genuine global
+cumulative sum `globalCumsumVectorClosed` under the per-column carry invariant.
+Every `expected` is a standalone `Finset.sum` — never a read-back of the
+kernel's own output. -/
 theorem chunk_cumsum_vector_python_case1_slice_summary
-    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (BC SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 5 →
+      s.readMem Carry (s.pids 1 * 20 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 4).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 20 + flat * 5 + sIndex s 32 idx.2.1 * 1)) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 20 5 1 4 5 16 32).toAlgorithm? =
       Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 20 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 20 5 1 4 5 32 idx)) ∧
     (ComputeCorrect.Realizes
       (kernel := chunk_cumsum_vector_store_slice BC Z 20 5 1 4 5 16 32)
       (initialState := s)
@@ -973,22 +1393,30 @@ theorem chunk_cumsum_vector_python_case1_slice_summary
         (fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx)
         (fun idx => (Z, tileOffset s 20 5 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 20 5 1 4 5 16 32 idx)) := by
-  constructor
-  · exact chunk_cumsum_vector_python_case1_surface_toAlgorithm_supported
-      SReg Z
-  constructor
-  · exact chunk_cumsum_vector_store_python_case1_compute_correct BC Z s
-  · exact chunk_cumsum_vector_cumsum_python_case1_compute_correct
-      SReg Carry Z s
+        globalCumsumVectorClosed s SReg 20 5 1 4 5 16 32 idx)) := by
+  refine ⟨chunk_cumsum_vector_python_case1_surface_toAlgorithm_supported SReg Z,
+    chunk_cumsum_vector_single_block_python_case1_closed_form SReg Z s,
+    chunk_cumsum_vector_store_python_case1_compute_correct BC Z s,
+    chunk_cumsum_vector_cumsum_python_case1_closed_form SReg Carry Z s hcarry⟩
 
-/-- Public Python case 2 summary: full vector-cumsum surface plus both
-boundary store and carry-cumsum output slices for `B = H = 1`, `T = 8`,
-`S = 10`. -/
+/-- **Public Python case 2 summary (`B = H = 1`, `T = 8`, `S = 10`).** See
+`chunk_cumsum_vector_python_case1_slice_summary`. -/
 theorem chunk_cumsum_vector_python_case2_slice_summary
-    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (BC SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 10 →
+      s.readMem Carry (s.pids 1 * 80 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 8).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 80 + flat * 10 + sIndex s 32 idx.2.1 * 1)) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 80 10 1 8 10 16 32).toAlgorithm? =
       Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 80 10 1 8 10 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 8 10 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 80 10 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 80 10 1 8 10 32 idx)) ∧
     (ComputeCorrect.Realizes
       (kernel := chunk_cumsum_vector_store_slice BC Z 80 10 1 8 10 16 32)
       (initialState := s)
@@ -1004,21 +1432,30 @@ theorem chunk_cumsum_vector_python_case2_slice_summary
         (fun idx : TileIndex [16, 32] => active s 8 10 16 32 idx)
         (fun idx => (Z, tileOffset s 80 10 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 80 10 1 8 10 16 32 idx)) := by
-  constructor
-  · exact chunk_cumsum_vector_python_case2_surface_toAlgorithm_supported
-      SReg Z
-  constructor
-  · exact chunk_cumsum_vector_store_python_case2_compute_correct BC Z s
-  · exact chunk_cumsum_vector_cumsum_python_case2_compute_correct
-      SReg Carry Z s
+        globalCumsumVectorClosed s SReg 80 10 1 8 10 16 32 idx)) := by
+  refine ⟨chunk_cumsum_vector_python_case2_surface_toAlgorithm_supported SReg Z,
+    chunk_cumsum_vector_single_block_python_case2_closed_form SReg Z s,
+    chunk_cumsum_vector_store_python_case2_compute_correct BC Z s,
+    chunk_cumsum_vector_cumsum_python_case2_closed_form SReg Carry Z s hcarry⟩
 
-/-- Public Python case 3 summary: full vector-cumsum surface plus both
-boundary store and carry-cumsum output slices for `B = H = T = 1`, `S = 5`. -/
+/-- **Public Python case 3 summary (`B = H = T = 1`, `S = 5`).** See
+`chunk_cumsum_vector_python_case1_slice_summary`. -/
 theorem chunk_cumsum_vector_python_case3_slice_summary
-    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (BC SReg Carry Z : RegionName) (s : BlockState)
+    (hcarry : ∀ idx : TileIndex [16, 32], sIndex s 32 idx.2.1 < 5 →
+      s.readMem Carry (s.pids 1 * 5 + sIndex s 32 idx.2.1 * 1)
+        = ∑ flat ∈ (Finset.range 1).filter (fun flat => flat < s.pids 2 * 16),
+            s.readMem SReg (s.pids 1 * 5 + flat * 5 + sIndex s 32 idx.2.1 * 1)) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 5 5 1 1 5 16 32).toAlgorithm? =
       Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 5 5 1 1 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 1 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 5 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockCumsumVectorClosed s SReg 5 5 1 1 5 32 idx)) ∧
     (ComputeCorrect.Realizes
       (kernel := chunk_cumsum_vector_store_slice BC Z 5 5 1 1 5 16 32)
       (initialState := s)
@@ -1034,14 +1471,11 @@ theorem chunk_cumsum_vector_python_case3_slice_summary
         (fun idx : TileIndex [16, 32] => active s 1 5 16 32 idx)
         (fun idx => (Z, tileOffset s 5 5 1 16 32 idx)))
       (expected := fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 5 5 1 1 5 16 32 idx)) := by
-  constructor
-  · exact chunk_cumsum_vector_python_case3_surface_toAlgorithm_supported
-      SReg Z
-  constructor
-  · exact chunk_cumsum_vector_store_python_case3_compute_correct BC Z s
-  · exact chunk_cumsum_vector_cumsum_python_case3_compute_correct
-      SReg Carry Z s
+        globalCumsumVectorClosed s SReg 5 5 1 1 5 16 32 idx)) := by
+  refine ⟨chunk_cumsum_vector_python_case3_surface_toAlgorithm_supported SReg Z,
+    chunk_cumsum_vector_single_block_python_case3_closed_form SReg Z s,
+    chunk_cumsum_vector_store_python_case3_compute_correct BC Z s,
+    chunk_cumsum_vector_cumsum_python_case3_closed_form SReg Carry Z s hcarry⟩
 
 
 
@@ -1060,19 +1494,21 @@ theorem chunk_cumsum_vector_python_case3_slice_summary
 
 
 
-/-- `output_summary` for vector chunk-cumsum Python case 1 surface. -/
+/-- `output_summary` for vector chunk-cumsum Python case 1: the genuine
+single-Python-chunk closed-form correctness (`S → Z` realizes the per-column
+prefix sum). -/
 abbrev chunk_cumsum_vector_python_case1_output_summary
     (SReg Z : RegionName) (s : BlockState) :=
-  chunk_cumsum_vector_python_case1_surface_outputs_compute_correct SReg Z s
+  chunk_cumsum_vector_single_block_python_case1_closed_form SReg Z s
 
-/-- `output_summary` for vector chunk-cumsum Python case 2 surface. -/
+/-- `output_summary` for vector chunk-cumsum Python case 2. -/
 abbrev chunk_cumsum_vector_python_case2_output_summary
     (SReg Z : RegionName) (s : BlockState) :=
-  chunk_cumsum_vector_python_case2_surface_outputs_compute_correct SReg Z s
+  chunk_cumsum_vector_single_block_python_case2_closed_form SReg Z s
 
-/-- `output_summary` for vector chunk-cumsum Python case 3 surface. -/
+/-- `output_summary` for vector chunk-cumsum Python case 3. -/
 abbrev chunk_cumsum_vector_python_case3_output_summary
     (SReg Z : RegionName) (s : BlockState) :=
-  chunk_cumsum_vector_python_case3_surface_outputs_compute_correct SReg Z s
+  chunk_cumsum_vector_single_block_python_case3_closed_form SReg Z s
 
 end VeriTile.Bench.TritonBenchG.ChunkCumsumVector
