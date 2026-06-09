@@ -16,7 +16,7 @@ import VeriTile.Triton.MemoryFrame
 import VeriTile.Triton.MemoryFootprint
 import VeriTile.Triton.Concurrency
 import VeriTile.Triton.Launch
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 import VeriTile.Examples.TritonSmoke
 import VeriTile.Examples.MemorySafety
 import VeriTile.Examples.MemoryFrame

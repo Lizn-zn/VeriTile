@@ -3,7 +3,6 @@ bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean	update_fn_kernel_ou
 bench/tritonbench_g/add_example/AddExample.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_python_test_shape_output_summary	public_summary_with_proof_gap	attention-fwd-triton1-bo-bhpre-producers	#165	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case1_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
@@ -18,16 +17,12 @@ bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_c
 bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case4_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
-bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_python_test_shape_output_summary	public_summary_with_proof_gap	gemv-k-loop-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_expand_slice_one_block_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	slice
+bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	full_value_candidate	none		genuine spec: out = Σ_k A·B (gemvSpec); full K-loop GEMV proven sorry-free
+bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	Full.Final.bgmv_full_output_summary	full_value_candidate	none		full general for-n loop + sentinel guard proven sorry-free: bgmvFullSpec rank-K reduction at every output lane
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case1_output_summary	public_summary_with_proof_gap	dense-attention-acc-store	#166	self-referential expected (= executed kernel output)
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case2_output_summary	public_summary_with_proof_gap	dense-attention-acc-store	#166	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case1_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case2_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case1_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case2_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case3_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case4_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
+bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_closed_form_correct	full_value_candidate	none		genuine spec: batched-matmul backward closed form proven sorry-free
+bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_closed_form_correct	full_value_candidate	none		genuine spec: full batched-matmul closed form proven sorry-free
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_python_test_shape_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
@@ -100,7 +95,7 @@ bench/tritonbench_g/index_select_bwd/IndexSelectBwd.lean	index_select_cat_bwd_ke
 bench/tritonbench_g/index_select_cat/IndexSelectCat.lean	index_select_cat_fwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_python_case1_output_summary	public_summary_with_proof_gap	quantization-semantic-followup	#158	self-referential expected (= executed kernel output)
 bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_python_case2_output_summary	public_summary_with_proof_gap	quantization-semantic-followup	#158	self-referential expected (= executed kernel output)
-bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_python_test_shape_output_summary	public_summary_with_proof_gap	iv-dependent-matmul-output-store	#148	self-referential expected (= executed kernel output)
+bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_closed_form_correct	full_value_candidate	none		genuine spec: out = fp16(Σ_k A·B); full K-loop proven sorry-free
 bench/tritonbench_g/kcache_copy_triton/KcacheCopyTriton.lean	copy_to_kcache_seqlen_n1_surface_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/kldiv_compute/KldivCompute.lean	kldivergence_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/ksoftmax_triton/KsoftmaxTriton.lean	ksoftmax_forward_plain_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -127,29 +122,14 @@ bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_t
 bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	bgmv_expand_one_block_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	slice
+bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	Full.gemv_full_output_summary	full_value_candidate	none		full multi-block for-n loop proven against genuine GEMV out[m]=Σ_{k<K} x[k]·W[m,k] over ℝ
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case1_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case2_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case3_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_python_case4_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_python_case2_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_python_case2_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_python_case3_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_python_case4_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_python_f32_output_summary	public_summary_with_proof_gap	matmul-tma-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_python_f32_branch_output_summary	public_summary_with_proof_gap	matmul-tma-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_python_f16_output_summary	public_summary_with_proof_gap	matmul-tma-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_python_f16_branch_output_summary	public_summary_with_proof_gap	matmul-tma-output-store-accumulator	#148	self-referential expected (= executed kernel output)
+bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_closed_form_correct	full_value_candidate	matmul-activation-tail-accumulator	#148	genuine spec: out = fp16(leakyrelu(Σ_k A·B)); full K-loop + activation proven sorry-free
+bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_closed_form_correct	full_value_candidate	matmul-activation-tail-accumulator	#148	genuine spec: out = fp16(leakyrelu(Σ_k A·B)); full K-loop + activation proven sorry-free
 bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_python_test_shape_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_python_case1_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_python_case2_output_summary	public_summary_with_proof_gap	matmul-output-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case2_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_python_case3_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	load_reduce_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean	kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_kernel_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -180,15 +160,15 @@ bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_cop
 bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_python_h1_d1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_python_h12_d96_output_summary	public_summary_with_proof_gap	quantization-semantic-followup	#158	self-referential expected (= executed kernel output)
 bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case1_output_summary	public_summary_with_proof_gap	reverse-cumsum-directional-scan	#94	self-referential expected (= executed kernel output)
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case2_output_summary	public_summary_with_proof_gap	reverse-cumsum-directional-scan	#94	self-referential expected (= executed kernel output)
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case3_output_summary	public_summary_with_proof_gap	reverse-cumsum-directional-scan	#94	self-referential expected (= executed kernel output)
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case4_output_summary	public_summary_with_proof_gap	reverse-cumsum-directional-scan	#94	self-referential expected (= executed kernel output)
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case1_output_summary	full_value_candidate	none		genuine reverse-cumsum closed form proven sorry-free
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case2_output_summary	full_value_candidate	none		genuine reverse-cumsum closed form proven sorry-free
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case3_output_summary	full_value_candidate	none		genuine reverse-cumsum closed form proven sorry-free
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case4_output_summary	full_value_candidate	none		genuine reverse-cumsum closed form proven sorry-free
 bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_triton_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	one-block
+bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_output_summary	full_value_candidate	none		full multi-block proven (Full.Final2.rmsnorm_full_correct)
 bench/tritonbench_g/rope_backward_transform/RopeBackwardTransform.lean	rope_backward_python_backward_output_summary	public_summary_with_proof_gap	rope-head-slice-lift	#153	self-referential expected (= executed kernel output)
 bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -204,7 +184,7 @@ bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_pytho
 bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_python_surfaces_output_summary	public_summary_with_proof_gap	rotary-cache-path	#153	self-referential expected (= executed kernel output)
 bench/tritonbench_g/rowwise_quantization_triton/RowwiseQuantizationTriton.lean	quantize_rowwise_python_case1_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/rowwise_quantization_triton/RowwiseQuantizationTriton.lean	quantize_rowwise_python_case3_blocked_output_summary	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
-bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_one_row_block_output_summary	public_summary_with_proof_gap	matmul-dot-accumulator	#148	slice
+bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_closed_form_correct	full_value_candidate	none		genuine spec proven sorry-free
 bench/tritonbench_g/sin_computation/SinComputation.lean	sin_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/sin_kernel/SinKernel.lean	kernel_function_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_output_summary	public_summary_with_proof_gap	attention-online-softmax-recurrence	#162	slice
@@ -235,7 +215,7 @@ bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_lla
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_python_test_shape_output_summary	public_summary_with_proof_gap	attention-backward-score-reduction	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_python_test_shape_output_summary	public_summary_with_proof_gap	attention-backward-score-reduction	#162	self-referential expected (= executed kernel output)
-bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_store_slice_output_summary	public_summary_with_proof_gap	matmul-dot-accumulator	#148	precomputed
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		genuine spec: im2col conv2d sum over kernel window + in-feat axis, padding/boundary masking proven sorry-free
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_kernel_triton_small_length_output_summary	full_value_candidate	none		no proof-gap marker in summary context
