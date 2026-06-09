@@ -507,7 +507,7 @@ theorem matmul_tma_f32_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
-    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
+    (hcn : stride_cn = 1) (hcm : BLOCK_N ≤ stride_cm) :
     ComputeCorrect.Realizes
       (kernel := matmul_tma_f32_surface A B C M N K stride_am stride_ak
         stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
@@ -517,6 +517,7 @@ theorem matmul_tma_f32_closed_form_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
           idx.1.val idx.2.1.val) := by
+  have hInj := cOffset_injective_of_rowMajor (BLOCK_M := BLOCK_M) hcn hcm
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [matmul_tma_f32_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -651,7 +652,7 @@ theorem matmul_tma_f16_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
-    (hInj : Function.Injective (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
+    (hcn : stride_cn = 1) (hcm : BLOCK_N ≤ stride_cm) :
     ComputeCorrect.Realizes
       (kernel := matmul_tma_f16_surface A B C M N K stride_am stride_ak
         stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
@@ -663,6 +664,7 @@ theorem matmul_tma_f16_closed_form_correct
           (FloatDType.real.cast FloatDType.fp16
             (some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
               idx.1.val idx.2.1.val)))) := by
+  have hInj := cOffset_injective_of_rowMajor (BLOCK_M := BLOCK_M) hcn hcm
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [matmul_tma_f16_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
