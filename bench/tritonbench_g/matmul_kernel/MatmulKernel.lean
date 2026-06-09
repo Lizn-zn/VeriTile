@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.ScatterStore
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.Matmul
 import VeriTile.Triton.Math.OffsetInjective
@@ -569,71 +570,6 @@ theorem matmul_step (A B : RegionName) (s0 : BlockState)
 (the kernel's `c_ptrs`, which uses the **un-wrapped** `offs_cm` / `offs_cn`). -/
 def cOffset (s0 : BlockState) (BM BN : Nat) (idx : TileIndex [BM, BN]) : Nat :=
   4096 * rowGlobal s0 BM idx.1 + 1 * colGlobal s0 BN idx.2.1
-
-/-- fp16 scatter preservation away from the target offset. -/
-private theorem foldl_writeMemTyped_fp16_preserves {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
-    (o : Nat) (l : List α) :
-    ∀ s : BlockState,
-      (∀ k ∈ l, offsetFn k ≠ o) →
-        ((l.foldl
-          (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-          s).mem region o) = s.mem region o := by
-  induction l with
-  | nil => intro s _h; rfl
-  | cons hd tl ih =>
-      intro s h
-      rw [List.foldl_cons]
-      have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
-        fun k hk => h k (List.mem_cons_of_mem hd hk)
-      have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
-      rw [ih _ htl]
-      unfold BlockState.writeMemTyped BlockState.writeMemAs
-      change
-        (if region = region ∧ o = offsetFn hd then
-          MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn hd)))
-        else s.mem region o) = s.mem region o
-      rw [if_neg (by intro hsame; exact hhd hsame.2.symm)]
-
-/-- fp16 scatter readback at an injective offset. -/
-private theorem scatter_memcell_fp16_nd {region : RegionName} {shape : TileShape}
-    (s : BlockState) (offsetFn : TileIndex shape → Nat)
-    (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
-    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
-    ((TileShape.allIndices shape).foldl
-       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-       s).mem region (offsetFn i)
-    = MemCell.of .fp16
-        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i))) := by
-  let l := TileShape.allIndices shape
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
-  have h_nodup := TileShape.allIndices_nodup shape
-  change ((l.foldl
-       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-       s).mem region (offsetFn i))
-    = MemCell.of .fp16
-        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-  rw [hl] at h_nodup
-  rw [List.nodup_append, List.nodup_cons] at h_nodup
-  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
-  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
-  rw [hl', List.foldl_append, List.foldl_cons]
-  have h_l2_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := by
-    intro k hk heq
-    have hki : k = i := h_inj heq
-    subst hki
-    exact hi_notin_l2 hk
-  rw [foldl_writeMemTyped_fp16_preserves offsetFn valueFn (offsetFn i) l₂ _ h_l2_not_in]
-  unfold BlockState.writeMemTyped BlockState.writeMemAs
-  change
-    (if region = region ∧ offsetFn i = offsetFn i then
-      MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-    else
-      (List.foldl
-        (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
-        s l₁).mem region (offsetFn i))
-      = MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
-  rw [if_pos ⟨rfl, rfl⟩]
 
 /-- `offs_cm` / `offs_cn` eval (the **un-wrapped** global index, no `% 4096`). -/
 theorem offscm_eval (s : BlockState) (M BM : Nat) (pm : Nat) (pidReg : RegName)

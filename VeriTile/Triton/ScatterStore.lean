@@ -107,4 +107,172 @@ theorem withBot_sum_some {B : Nat} (g : Fin B → ℝ) :
   show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
   exact (WithBot.coe_sum Finset.univ g).symm
 
+/-! ## fp16 typed scatter stores
+
+The fp16 analogues of the `real` lemmas above, for kernels whose output store is
+`writeMemTyped .fp16` (matmul + activation, attention output, …). Two flavours:
+an unconditional store and a `P`-masked store. -/
+
+/-- Unconditional fp16 scatter `foldl` preserves an offset not hit by any lane. -/
+theorem foldl_writeMemTyped_fp16_preserve {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
+    (o : Nat) (l : List α) :
+    ∀ s : BlockState,
+      (∀ k ∈ l, offsetFn k ≠ o) →
+        ((l.foldl
+          (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+          s).mem region o) = s.mem region o := by
+  induction l with
+  | nil => intro s _h; rfl
+  | cons hd tl ih =>
+      intro s h
+      rw [List.foldl_cons]
+      have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
+        fun k hk => h k (List.mem_cons_of_mem hd hk)
+      have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
+      rw [ih _ htl]
+      unfold BlockState.writeMemTyped BlockState.writeMemAs
+      change
+        (if region = region ∧ o = offsetFn hd then
+          MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn hd)))
+        else s.mem region o) = s.mem region o
+      rw [if_neg (by intro hsame; exact hhd hsame.2.symm)]
+
+/-- `P`-masked fp16 scatter `foldl` preserves an offset not hit by any *active* lane. -/
+theorem foldl_writeMemTyped_fp16_preserve_masked {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
+    (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ s : BlockState,
+      (∀ k ∈ l, mask k = Bool.true → offsetFn k ≠ o) →
+        ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
+          s).mem region o) = s.mem region o := by
+  induction l with
+  | nil => intro s _h; rfl
+  | cons hd tl ih =>
+      intro s h
+      rw [List.foldl_cons]
+      have htl : ∀ k ∈ tl, mask k = Bool.true → offsetFn k ≠ o :=
+        fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+      by_cases hmaskhd : mask hd = Bool.true
+      · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+        simp only [hmaskhd, if_true]
+        rw [ih _ htl]
+        unfold BlockState.writeMemTyped BlockState.writeMemAs
+        change
+          (if region = region ∧ o = offsetFn hd then
+            MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn hd)))
+          else s.mem region o) = s.mem region o
+        rw [if_neg (by intro hsame; exact hhd hsame.2.symm)]
+      · have hmaskhd' : mask hd = Bool.false := by
+          cases hm : mask hd
+          · rfl
+          · exact False.elim (hmaskhd hm)
+        simp only [hmaskhd', if_false, Bool.false_eq_true]
+        exact ih _ htl
+
+/-- Readback of an unconditional fp16 scatter store at an output lane `i`'s offset:
+the stored fp16 value, given injective offsets. -/
+theorem scatter_memcell_fp16_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+       s).mem region (offsetFn i)
+    = MemCell.of .fp16
+        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i))) := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change ((l.foldl
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+       s).mem region (offsetFn i))
+    = MemCell.of .fp16
+        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := by
+    intro k hk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [foldl_writeMemTyped_fp16_preserve offsetFn valueFn (offsetFn i) l₂ _ h_l2_not_in]
+  unfold BlockState.writeMemTyped BlockState.writeMemAs
+  change
+    (if region = region ∧ offsetFn i = offsetFn i then
+      MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+    else
+      (List.foldl
+        (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+        s l₁).mem region (offsetFn i))
+      = MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+  rw [if_pos ⟨rfl, rfl⟩]
+
+/-- Readback of a `P`-masked fp16 scatter store at lane `i`'s offset: the stored
+fp16 value if `P i`, else the prior contents, given injective offsets. -/
+theorem scatter_memcell_fp16_prop_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
+    (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
+       s).mem region (offsetFn i)
+    = if P i then
+        MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+      else
+        s.mem region (offsetFn i) := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
+       s).mem region (offsetFn i))
+    = if P i then
+        MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+      else
+        s.mem region (offsetFn i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by
+    simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = Bool.true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  have hstep :
+      (fun (acc : BlockState) k =>
+        if P k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  rw [hstep]
+  rw [foldl_writeMemTyped_fp16_preserve_masked offsetFn valueFn (fun k => decide (P k))
+    (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hPi : P i
+  · simp only [hPi, if_true]
+    unfold BlockState.writeMemTyped BlockState.writeMemAs
+    simp
+  · simp only [hPi, if_false]
+    rw [foldl_writeMemTyped_fp16_preserve_masked offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₁]
+    exact h_l1_not_in
+
 end VeriTile.Triton
