@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `batched_vecmat_mult` — strict per-kernel correctness
@@ -24,42 +25,43 @@ every program of the grid.
 
 ## Proof architecture
 
-```
-batched_vecmat_python_test_shape_output_summary  ← TOP THEOREM
-  ├─ batched_vecmat_python_test_surface_toAlgorithm_supported  surface lowers
-  │    └─ batched_vecmat_surface_toAlgorithm_supported
-  └─ batched_vecmat_surface_output_compute_correct  ← ComputeCorrect over output
+The headline result is a **genuine closed-form GEMV** over the full dynamic
+K-loop: every output cell of the computed `BLOCK_M × BLOCK_N` tile equals the
+independent batched vector-matrix reference
+`out[m,n] = Σ_{kk < dim_k} A[m,kk] · B[m,n,kk]` (over `ℝ`), NOT the kernel's own
+emitted value.
 
-batched_vecmat_python_test_shape_store_summary   ← K-accum + store slice summary
-  └─ batched_vecmat_python_test_shape_all_outputs_compute_correct
-       ├─ batched_vecmat_one_row_const_k_accum_slice_compute_correct  (per K block)
-       │    └─ batched_vecmat_one_row_const_k_accum_slice_correct  (vecmatConstKAccumSpec)
-       └─ batched_vecmat_block_output_store_slice_compute_correct
-            └─ batched_vecmat_block_output_store_slice_correct  ← 2D output readback
-
-supporting reduction slices (verified):
-  batched_vecmat_one_row_block_correct      ← vecmatSpec  (the tl.sum reduction)
-  batched_vecmat_one_row_k_block_correct    ← vecmatSpecK (one K-block, with k offset)
-  batched_vecmat_one_row_k_accum_slice_correct  ← vecmatAccumSpecK (accum += reduction)
 ```
+batched_vecmat_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+  └─ batched_vecmat_exec_closed_form               ← exec-side closed form (every cell = ∑ A·B)
+       ├─ vecmat_preLoop      (P 0: vecmat = 0, scalar regs seeded)
+       ├─ vecmat_step         (one K-block: vecmat += trans(reduceSum(a·b)) advances the partial sum)
+       ├─ vecmat_postLoop     (final unmasked store = the closed form)
+       └─ forRangeDyn_inv     (dynamic-loop invariant principle, drives the K-loop)
+```
+
+`forRangeDyn_inv` is the master invariant principle for the *dynamic*
+`Stmt.forRangeDyn` that `for k_index in range(k_blocks)` lowers to (the K-block
+count `k_blocks = dim_k // block_k` is a runtime register, not a literal). It
+resolves the runtime bounds via `evalOp` and then drives the loop body by the
+caller's invariant `P`, built here on top of the existing `forRangeAux_inv`.
+
+The supporting one-row reduction slices (`vecmatSpec`, `vecmatSpecK`,
+`vecmatAccumSpecK`, the block output store) remain as verified lemmas.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
-**K-loop dot/reduction accumulator** `vecmat += tl.trans(tl.sum(expanded_a * b,
-axis=2))`. Unlike the matmul ports, the per-iteration reduction itself **is**
-modeled: `vecmatSpec`/`vecmatSpecK` are genuine `Tile.reduceSum` specs and the
-one-row slices prove the masked store equals that reduction; the
-`*_const_k_accum_slice` theorems prove a single materialized accumulator step
-`acc_out = acc_in + reduction` (`vecmatConstKAccumSpec`). What is **left as a
-blocker** is the full fold across all `dim_k // block_k` iterations: the
-top-level `batched_vecmat_python_test_shape_output_summary` characterizes the
-`output` store via the opaque `batchedVecmatSurfaceValue` (whatever the full
-surface accumulated), and the store-summary chains only two concrete K-block
-steps for the tested `128×128×128`, `block_k=64` shape rather than a general
-induction over k. So the multi-step accumulation across K blocks is the
-trusted/blocked part. `num_warps`/`num_stages` are not modeled. No
-output/input disjointness is assumed beyond an injective output offset map.
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `num_warps`/`num_stages`
+are not modeled. The host launch (grid `(M//block_m, N//block_n)`, scheduling,
+and how the runtime composes per-program writes into one buffer) is the trusted
+boundary; the per-program statement is universally quantified over the initial
+state `s`, so it covers every program of the grid. The layout contract is the
+kernel's own row-major pointer arithmetic: `A[m,kk]` at `A + m·dim_k + kk`,
+`B[m,n,kk]` at `B + m·dim_n·dim_k + n·dim_k + kk`, `out[m,n]` at
+`output + m·dim_n + n`. The contracted dimension is `dim_k = BLOCK_K · numKBlocks`
+(the kernel asserts `K % block_k == 0`); the loop runs `numKBlocks` iterations.
+Preconditions: `0 < BLOCK_K`, output-offset injectivity (distinct lanes hit
+distinct addresses), and a clean initial `undef`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.BatchedVecmatMult
@@ -68,6 +70,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
 
@@ -924,149 +927,670 @@ theorem batched_vecmat_python_test_surface_toAlgorithm_supported
   exact batched_vecmat_surface_toAlgorithm_supported A B output
     128 128 128 16 32 64
 
-noncomputable def batchedVecmatSurfaceValue
-    (s : BlockState) (A B output Out : RegionName)
-    (dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K offset : Nat) : ℝ :=
-  match exec (batched_vecmat_surface A B output dim_m dim_n dim_k BLOCK_M
-      BLOCK_N BLOCK_K) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
 
-theorem batched_vecmat_surface_output_compute_correct
-    (A B output : RegionName)
-    (dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) (s : BlockState) :
+/-! ## Genuine GEMV closed-form correctness over the full dynamic K-loop
+
+`for k_index in range(k_blocks)` (with `k_blocks = dim_k // block_k` a runtime
+register) lowers to `Stmt.forRangeDyn`. The lemmas below build a closed-form
+characterization of the kernel's `output` against the independent batched
+vector-matrix reference `out[m,n] = Σ_{kk < dim_k} A[m,kk] · B[m,n,kk]`. -/
+
+/-- Master invariant principle for the *dynamic* `forRangeDyn` loop. Resolves
+the runtime bounds via `evalOp`, then drives the body by the caller's invariant
+`P`, exposing the loop-exit counter `final` (with `stop ≤ final`). -/
+theorem forRangeDyn_inv
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simp only [Option.bind]
+  exact h_aux
+
+/-! ### Genuine batched vector-matrix (GEMV) spec -/
+
+/-- Global output row of tile lane `i`: `m_index · BLOCK_M + i`. -/
+def gRow (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 0 * BLOCK_M + i.val
+
+/-- Global output column of tile lane `j`: `n_index · BLOCK_N + j`. -/
+def gCol (s : BlockState) (BLOCK_N : Nat) (j : Fin BLOCK_N) : Nat :=
+  s.pids 1 * BLOCK_N + j.val
+
+/-- `A[m, kk] = readMem A (gRow i · dim_k + kk)` (the kernel's row-major A layout). -/
+noncomputable def aElem (s : BlockState) (A : RegionName) (dim_k BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (kk : Nat) : ℝ :=
+  s.readMem A (gRow s BLOCK_M i * dim_k + kk)
+
+/-- `B[m, n, kk] = readMem B (gRow i · dim_n · dim_k + gCol j · dim_k + kk)`
+(the kernel's row-major B layout). -/
+noncomputable def bElem (s : BlockState) (B : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) (kk : Nat) : ℝ :=
+  s.readMem B (gRow s BLOCK_M i * dim_n * dim_k + gCol s BLOCK_N j * dim_k + kk)
+
+/-- **Genuine GEMV spec**: `out[i,j] = Σ_{kk < BLOCK_K·numKBlocks} A[i,kk] · B[i,j,kk]`. -/
+noncomputable def gemvSpec (s : BlockState) (A B : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) : ℝ :=
+  (Finset.range (BLOCK_K * numKBlocks)).sum
+    (fun kk => aElem s A dim_k BLOCK_M i kk
+      * bElem s B dim_n dim_k BLOCK_M BLOCK_N i j kk)
+
+/-- Partial GEMV accumulator after `c` K-blocks: `Σ_{kk < c·BLOCK_K} A·B`. -/
+noncomputable def gemvPartial (s : BlockState) (A B : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) (c : Nat) : ℝ :=
+  (Finset.range (c * BLOCK_K)).sum
+    (fun kk => aElem s A dim_k BLOCK_M i kk
+      * bElem s B dim_n dim_k BLOCK_M BLOCK_N i j kk)
+
+/-- One-block step of the partial accumulator: the new block contributes the
+dot over the `BLOCK_K` keys `c·BLOCK_K + e`. -/
+theorem gemvPartial_succ (s : BlockState) (A B : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) (c : Nat) :
+    gemvPartial s A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K i j (c + 1)
+      = gemvPartial s A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K i j c
+        + (Finset.univ.sum fun e : Fin BLOCK_K =>
+            aElem s A dim_k BLOCK_M i (c * BLOCK_K + e.val)
+              * bElem s B dim_n dim_k BLOCK_M BLOCK_N i j (c * BLOCK_K + e.val)) := by
+  unfold gemvPartial
+  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
+  rw [h, Finset.sum_range_add]
+  congr 1
+  rw [Finset.sum_range fun e => aElem s A dim_k BLOCK_M i (c * BLOCK_K + e)
+        * bElem s B dim_n dim_k BLOCK_M BLOCK_N i j (c * BLOCK_K + e)]
+
+/-! ### Body decomposition (prefix ++ for-loop ++ store) -/
+
+/-- The 6-statement K-loop body, transcribed from the elaborated surface. -/
+def vecmatLoopBody (A B : RegionName) (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    List Stmt :=
+  [ Stmt.assign TileDType.nat [BLOCK_M, BLOCK_K] "a_tile"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩
+            (Op.add NumericDType.nat Broadcast.scalarL
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+              (Op.arange BLOCK_M)))
+          (Op.constNat dim_k))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.add NumericDType.nat Broadcast.scalarL
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "k_index") (Op.constNat BLOCK_K))
+            (Op.arange BLOCK_K)))),
+    Stmt.assign TileDType.real [BLOCK_M, BLOCK_K] "a"
+      (Op.load TileDType.real (MemAccess.region A (Op.ref TileDType.nat [BLOCK_M, BLOCK_K] "a_tile")) MaskOpt.none),
+    Stmt.assign TileDType.nat [BLOCK_N, BLOCK_M, BLOCK_K] "b_tile"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR.consR
+        (Op.add NumericDType.nat Broadcast.nil.consSame.consR.consL
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.mul NumericDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨2, by simp⟩
+                (Op.expandDim ⟨0, by simp⟩
+                  (Op.add NumericDType.nat Broadcast.scalarL
+                    (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+                    (Op.arange BLOCK_M))))
+              (Op.constNat dim_n))
+            (Op.constNat dim_k))
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨2, by simp⟩
+              (Op.expandDim ⟨1, by simp⟩
+                (Op.add NumericDType.nat Broadcast.scalarL
+                  (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "n_index") (Op.constNat BLOCK_N))
+                  (Op.arange BLOCK_N))))
+            (Op.constNat dim_k)))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.add NumericDType.nat Broadcast.scalarL
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "k_index") (Op.constNat BLOCK_K))
+              (Op.arange BLOCK_K))))),
+    Stmt.assign TileDType.real [BLOCK_N, BLOCK_M, BLOCK_K] "b"
+      (Op.load TileDType.real (MemAccess.region B (Op.ref TileDType.nat [BLOCK_N, BLOCK_M, BLOCK_K] "b_tile")) MaskOpt.none),
+    Stmt.assign TileDType.real [1, BLOCK_M, BLOCK_K] "expanded_a"
+      (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [BLOCK_M, BLOCK_K] "a")),
+    Stmt.assign TileDType.real [BLOCK_M, BLOCK_N] "vecmat"
+      (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+        (Op.ref TileDType.real [BLOCK_M, BLOCK_N] "vecmat")
+        (Op.transpose (batch := []) (M := BLOCK_N) (N := BLOCK_M)
+          (Op.reduceSum ⟨2, by simp⟩ Bool.false
+            (Op.mul NumericDType.real Broadcast.nil.consSame.consSame.consL
+              (Op.ref TileDType.real [1, BLOCK_M, BLOCK_K] "expanded_a")
+              (Op.ref TileDType.real [BLOCK_N, BLOCK_M, BLOCK_K] "b"))))) ]
+
+/-- Post-loop unmasked store of `vecmat` to `output_tile`. -/
+def vecmatStoreStmt (output : RegionName) (BLOCK_M BLOCK_N : Nat) : Stmt :=
+  Stmt.store TileDType.real [BLOCK_M, BLOCK_N]
+    (MemAccess.region output (Op.ref TileDType.nat [BLOCK_M, BLOCK_N] "output_tile"))
+    (Op.ref TileDType.real [BLOCK_M, BLOCK_N] "vecmat") MaskOpt.none
+
+/-- Body decomposition: prefix (5) ++ [forRangeDyn loop, store]. By `rfl`. -/
+theorem vecmat_body_split (A B output : RegionName)
+    (_dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    (batched_vecmat_surface A B output _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body
+      = (batched_vecmat_surface A B output _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body.take 5
+        ++ (Stmt.forRangeDyn "k_index" (Op.constNat 0) (Op.ref TileDType.nat [] "k_blocks") (Op.constNat 1)
+              (vecmatLoopBody A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K)
+            :: vecmatStoreStmt output BLOCK_M BLOCK_N :: []) := by
+  rfl
+
+/-! ### Loop invariant -/
+
+/-- **Loop invariant** (counter `c` = number of K-blocks done so far).
+
+After `c` K-blocks: program ids and `mem`/`undef` fixed; the `m_index` /
+`n_index` / `output_tile` registers seeded; and `vecmat` equals the partial
+GEMV accumulator `gemvPartial … c`. -/
+noncomputable def vecmatInvariant
+    (A B output : RegionName) (s0 : BlockState)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids ∧
+  (s.regs .nat [] "m_index" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "n_index" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .nat [BLOCK_M, BLOCK_N] "output_tile" = some
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        (s0.pids 0 * BLOCK_M + idx.1.val) * dim_n + (s0.pids 1 * BLOCK_N + idx.2.1.val)⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_N] "vecmat" = some
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        some (gemvPartial s0 A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K idx.1 idx.2.1 c)⟩) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+/-! ### evalOp helpers for the loop-body statements -/
+
+/-- `a_tile` eval: cell `(i,k) = (gRow i)·dim_k + (c·BLOCK_K + k)`. -/
+theorem vecmat_atile_eval (s : BlockState) (dim_k BLOCK_M BLOCK_K mi ki : Nat)
+    (hm : s.regs .nat [] "m_index" = some (Tile.scalar mi))
+    (hk : s.regs .nat [] "k_index" = some (Tile.scalar ki)) :
+    evalOp
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩
+            (Op.add NumericDType.nat Broadcast.scalarL
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+              (Op.arange BLOCK_M)))
+          (Op.constNat dim_k))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.add NumericDType.nat Broadcast.scalarL
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "k_index") (Op.constNat BLOCK_K))
+            (Op.arange BLOCK_K)))) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_K] =>
+          (mi * BLOCK_M + idx.1.val) * dim_k + (ki * BLOCK_K + idx.2.1.val)⟩ : Tile .nat [BLOCK_M, BLOCK_K]) := by
+  simp only [evalOp.eq_def, hm, hk, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, Tile.expandDim, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+    Broadcast.rightIndex, TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul]
+
+/-- `b_tile` eval: cell `(j,i,k) = (gRow i)·dim_n·dim_k + (gCol j)·dim_k + (c·BLOCK_K + k)`. -/
+theorem vecmat_btile_eval (s : BlockState) (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K mi ni ki : Nat)
+    (hm : s.regs .nat [] "m_index" = some (Tile.scalar mi))
+    (hn : s.regs .nat [] "n_index" = some (Tile.scalar ni))
+    (hk : s.regs .nat [] "k_index" = some (Tile.scalar ki)) :
+    evalOp
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR.consR
+        (Op.add NumericDType.nat Broadcast.nil.consSame.consR.consL
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.mul NumericDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨2, by simp⟩
+                (Op.expandDim ⟨0, by simp⟩
+                  (Op.add NumericDType.nat Broadcast.scalarL
+                    (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+                    (Op.arange BLOCK_M))))
+              (Op.constNat dim_n))
+            (Op.constNat dim_k))
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨2, by simp⟩
+              (Op.expandDim ⟨1, by simp⟩
+                (Op.add NumericDType.nat Broadcast.scalarL
+                  (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "n_index") (Op.constNat BLOCK_N))
+                  (Op.arange BLOCK_N))))
+            (Op.constNat dim_k)))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.add NumericDType.nat Broadcast.scalarL
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "k_index") (Op.constNat BLOCK_K))
+              (Op.arange BLOCK_K))))) s
+      = some (⟨fun idx : TileIndex [BLOCK_N, BLOCK_M, BLOCK_K] =>
+          (mi * BLOCK_M + idx.2.1.val) * dim_n * dim_k
+            + (ni * BLOCK_N + idx.1.val) * dim_k
+            + (ki * BLOCK_K + idx.2.2.1.val)⟩ : Tile .nat [BLOCK_N, BLOCK_M, BLOCK_K]) := by
+  simp only [evalOp.eq_def, hm, hn, hk, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, Tile.expandDim, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+    Broadcast.rightIndex, TileShape.dropInsertedIndex, TileShape.insertAxis,
+    NumericDType.add, NumericDType.mul]
+
+/-- No-mask region load eval: reads `readMem` at each offset. -/
+theorem vecmat_load_eval {shape : TileShape} (s : BlockState) (R : RegionName) (name : RegName)
+    (offs : Tile .nat shape) (h : s.regs .nat shape name = some offs) :
+    evalOp (Op.load TileDType.real (MemAccess.region R (Op.ref TileDType.nat shape name)) MaskOpt.none) s
+      = some (⟨fun i => some (s.readMem R (offs.data i))⟩ : Tile .real shape) := by
+  simp only [evalOp_load_region_none, evalOp_ref, h, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockState.readMemValue_real]
+
+/-- **`vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))` eval.**
+
+Given the loaded `expanded_a`/`b` tiles whose lanes are the genuine `A`/`B`
+elements at K-offset `c·BLOCK_K + k`, and `vecmat` holding the partial sum after
+`c` blocks, the update yields the partial sum after `c + 1` blocks. -/
+theorem vecmat_update_eval (s s0 : BlockState) (A B : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K c : Nat)
+    (aT : Tile .real [BLOCK_M, BLOCK_K]) (bT : Tile .real [BLOCK_N, BLOCK_M, BLOCK_K])
+    (hvm : s.regs .real [BLOCK_M, BLOCK_N] "vecmat" = some
+        ⟨fun idx => some (gemvPartial s0 A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K idx.1 idx.2.1 c)⟩)
+    (hea : s.regs .real [1, BLOCK_M, BLOCK_K] "expanded_a" = some (Tile.expandDim ⟨0, by simp⟩ aT))
+    (hb : s.regs .real [BLOCK_N, BLOCK_M, BLOCK_K] "b" = some bT)
+    (haval : ∀ (i : Fin BLOCK_M) (k : Fin BLOCK_K),
+        aT.data (i, k, PUnit.unit) = some (aElem s0 A dim_k BLOCK_M i (c * BLOCK_K + k.val)))
+    (hbval : ∀ (j : Fin BLOCK_N) (i : Fin BLOCK_M) (k : Fin BLOCK_K),
+        bT.data (j, i, k, PUnit.unit)
+          = some (bElem s0 B dim_n dim_k BLOCK_M BLOCK_N i j (c * BLOCK_K + k.val))) :
+    evalOp
+      (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+        (Op.ref TileDType.real [BLOCK_M, BLOCK_N] "vecmat")
+        (Op.transpose (batch := []) (M := BLOCK_N) (N := BLOCK_M)
+          (Op.reduceSum ⟨2, by simp⟩ Bool.false
+            (Op.mul NumericDType.real Broadcast.nil.consSame.consSame.consL
+              (Op.ref TileDType.real [1, BLOCK_M, BLOCK_K] "expanded_a")
+              (Op.ref TileDType.real [BLOCK_N, BLOCK_M, BLOCK_K] "b"))))) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          some (gemvPartial s0 A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K idx.1 idx.2.1 (c + 1))⟩
+            : Tile .real [BLOCK_M, BLOCK_N]) := by
+  simp only [evalOp.eq_def, hvm, hea, hb, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  -- reduce the per-lane value to vecmat[i,j] + Σ_k a[i,k]·b[j,i,k]
+  simp only [Tile.bop, Tile.transpose, Tile.expandDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul, WithBot.realAdd]
+  rw [Tile.reduceSum_false, Tile.reduceSumDrop_data]
+  simp only [TileShape.insertAxisIndex, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.dropInsertedIndex, haval, hbval, WithBot.realMul, Option.map₂,
+    Option.bind, Option.map, WithBot.some_eq_coe]
+  -- the block sum is now `∑ ↑(aElem · bElem)`; collapse to `↑(∑ …)` and fold
+  rw [← WithBot.coe_sum, gemvPartial_succ]
+  rfl
+
+
+set_option maxHeartbeats 4000000 in
+/-- **Step lemma**: one K-loop body iteration advances the invariant by one
+block. The `vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))` update adds the
+`c`-th block's dot to the partial GEMV accumulator. -/
+theorem vecmat_step (A B output : RegionName) (s0 : BlockState)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (c : Nat) (s : BlockState)
+    (hinv : vecmatInvariant A B output s0 dim_n dim_k BLOCK_M BLOCK_N BLOCK_K c s) :
+    ∃ s', stepStmts (vecmatLoopBody A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K)
+        (s.setReg "k_index" .nat [] (Tile.scalar c)) = some s'
+      ∧ vecmatInvariant A B output s0 dim_n dim_k BLOCK_M BLOCK_N BLOCK_K (c + 1) s' := by
+  obtain ⟨hpids, hm, hn, hot, hvm, hundef, hmem⟩ := hinv
+  set sk := s.setReg "k_index" .nat [] (Tile.scalar c) with hsk
+  have hmk : sk.regs .nat [] "m_index" = some (Tile.scalar (s0.pids 0)) := by simp [hsk, hm]
+  have hnk : sk.regs .nat [] "n_index" = some (Tile.scalar (s0.pids 1)) := by simp [hsk, hn]
+  have hkk : sk.regs .nat [] "k_index" = some (Tile.scalar c) := by simp [hsk]
+  have hvmk : sk.regs .real [BLOCK_M, BLOCK_N] "vecmat" = some
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        some (gemvPartial s0 A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K idx.1 idx.2.1 c)⟩ := by
+    simp [hsk, hvm]
+  have hrmem : ∀ (R : RegionName) (o : Nat), sk.readMem R o = s0.readMem R o := by
+    intro R o; simp only [hsk, BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  -- a_tile / b_tile offset tiles
+  set atT : Tile .nat [BLOCK_M, BLOCK_K] :=
+    ⟨fun idx => (s0.pids 0 * BLOCK_M + idx.1.val) * dim_k + (c * BLOCK_K + idx.2.1.val)⟩ with hatT
+  set btT : Tile .nat [BLOCK_N, BLOCK_M, BLOCK_K] :=
+    ⟨fun idx => (s0.pids 0 * BLOCK_M + idx.2.1.val) * dim_n * dim_k
+        + (s0.pids 1 * BLOCK_N + idx.1.val) * dim_k + (c * BLOCK_K + idx.2.2.1.val)⟩ with hbtT
+  set aT : Tile .real [BLOCK_M, BLOCK_K] :=
+    ⟨fun i => some (sk.readMem A (atT.data i))⟩ with haT
+  set bT : Tile .real [BLOCK_N, BLOCK_M, BLOCK_K] :=
+    ⟨fun i => some (sk.readMem B (btT.data i))⟩ with hbT
+  -- chain the six assigns
+  simp only [vecmatLoopBody]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_atile_eval sk dim_k BLOCK_M BLOCK_K (s0.pids 0) c hmk hkk))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_load_eval _ A "a_tile" atT (by simp [haT, hatT])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_btile_eval _ dim_n dim_k BLOCK_M BLOCK_N BLOCK_K (s0.pids 0) (s0.pids 1) c
+          (by simp [hmk]) (by simp [hnk]) (by simp [hkk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_load_eval _ B "b_tile" btT (by simp [hbtT])))]
+  -- expanded_a = expandDim 0 a
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (shape := [1, BLOCK_M, BLOCK_K]) (name := "expanded_a")
+        (e := Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [BLOCK_M, BLOCK_K] "a"))
+        (v := Tile.expandDim ⟨0, by simp⟩ aT)
+        (by
+          refine evalOp_expandDim_ref_of_regs _ _ _ _ _ aT ?_
+          simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+            String.reduceEq, not_false_eq_true, haT, BlockState.setReg_readMem]))]
+  -- vecmat += trans(reduceSum(expanded_a * b, axis 2))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_update_eval _ s0 A B dim_n dim_k BLOCK_M BLOCK_N BLOCK_K c aT bT
+          (by simp [hvmk])
+          (by simp only [BlockState.setReg_same]; rfl)
+          (by simp [hbT, BlockState.setReg_readMem])
+          (by
+            intro i k
+            simp only [haT, hatT, aElem, gRow, hrmem])
+          (by
+            intro j i k
+            simp only [hbT, hbtT, bElem, gRow, gCol, hrmem])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    simp [hsk, hpids]
+  · -- m_index
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true, hsk, hm]
+  · -- n_index
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true, hsk, hn]
+  · -- output_tile
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true, hsk, hot]
+  · -- vecmat = gemvPartial (c+1)
+    simp only [BlockState.setReg_same]
+  · -- undef
+    intro rg o; simp [hsk, hundef]
+  · -- mem
+    funext region offset
+    simp only [BlockState.setReg_mem]
+    rw [show sk.mem region offset = s.mem region offset from by simp [hsk], hmem]
+
+/-! ### preLoop and postLoop -/
+
+/-- `output_tile` eval: cell `(i,j) = (gRow i)·dim_n + (gCol j)`. -/
+theorem vecmat_otile_eval (s : BlockState) (dim_n BLOCK_M BLOCK_N mi ni : Nat)
+    (hm : s.regs .nat [] "m_index" = some (Tile.scalar mi))
+    (hn : s.regs .nat [] "n_index" = some (Tile.scalar ni)) :
+    evalOp
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩
+            (Op.add NumericDType.nat Broadcast.scalarL
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+              (Op.arange BLOCK_M)))
+          (Op.constNat dim_n))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.add NumericDType.nat Broadcast.scalarL
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "n_index") (Op.constNat BLOCK_N))
+            (Op.arange BLOCK_N)))) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          (mi * BLOCK_M + idx.1.val) * dim_n + (ni * BLOCK_N + idx.2.1.val)⟩ : Tile .nat [BLOCK_M, BLOCK_N]) := by
+  simp only [evalOp.eq_def, hm, hn, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, Tile.expandDim, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+    Broadcast.rightIndex, TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul]
+
+set_option maxHeartbeats 2000000 in
+/-- **preLoop** (statements 0–4): from a clean input state (`undef = 0`), the
+prologue (`m_index`, `n_index`, `output_tile`, `vecmat = 0`, `k_blocks`) steps to
+a state satisfying `vecmatInvariant … 0` — the base case (`vecmat = 0`). -/
+theorem vecmat_preLoop (A B output : RegionName) (s : BlockState)
+    (_dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts ((batched_vecmat_surface A B output _dim_m dim_n dim_k BLOCK_M
+        BLOCK_N BLOCK_K).toAlgKernel.body.take 5) s = some s'
+      ∧ vecmatInvariant A B output s dim_n dim_k BLOCK_M BLOCK_N BLOCK_K 0 s'
+      ∧ s'.regs .nat [] "k_blocks" = some (Tile.scalar (dim_k / BLOCK_K)) := by
+  rw [show (batched_vecmat_surface A B output _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K).toAlgKernel.body.take 5
+        = [Stmt.assign .nat [] "m_index" (Op.programId 0),
+           Stmt.assign .nat [] "n_index" (Op.programId 1),
+           Stmt.assign .nat [BLOCK_M, BLOCK_N] "output_tile"
+             (Op.add NumericDType.nat Broadcast.nil.consL.consR
+               (Op.mul NumericDType.nat Broadcast.scalarR
+                 (Op.expandDim ⟨1, by simp⟩
+                   (Op.add NumericDType.nat Broadcast.scalarL
+                     (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "m_index") (Op.constNat BLOCK_M))
+                     (Op.arange BLOCK_M)))
+                 (Op.constNat dim_n))
+               (Op.expandDim ⟨0, by simp⟩
+                 (Op.add NumericDType.nat Broadcast.scalarL
+                   (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "n_index") (Op.constNat BLOCK_N))
+                   (Op.arange BLOCK_N)))),
+           Stmt.assign .real [BLOCK_M, BLOCK_N] "vecmat" (Op.full [BLOCK_M, BLOCK_N] (Op.const 0)),
+           Stmt.assign .nat [] "k_blocks"
+             (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat dim_k) (Op.constNat BLOCK_K))]
+      from rfl]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (e := Op.programId 0)
+        (v := Tile.scalar (s.pids 0)) (by simp [evalOp]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (e := Op.programId 1)
+        (v := Tile.scalar (s.pids 1)) (by simp [evalOp]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (vecmat_otile_eval _ dim_n BLOCK_M BLOCK_N (s.pids 0) (s.pids 1)
+          (by simp [BlockState.setReg_ne_name]) (by simp [BlockState.setReg_same])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (e := Op.full [BLOCK_M, BLOCK_N] (Op.const 0))
+        (v := (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N]))
+        (by simp [evalOp_full, evalOp_const, Option.bind]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (e := Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat dim_k) (Op.constNat BLOCK_K))
+        (v := Tile.scalar (dim_k / BLOCK_K))
+        (by simp [evalOp, Tile.bop, IntegralDType.floorDiv, NumericDType.div]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_⟩
+  · simp
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · -- output_tile seeded
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true]
+  · -- vecmat = 0 = gemvPartial 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    refine congrArg some ?_
+    ext idx
+    simp only [gemvPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+  · intro rg o
+    simp [hundef]
+  · funext region offset
+    simp only [BlockState.setReg_mem]
+  · -- k_blocks readback
+    simp only [BlockState.setReg_same]
+
+/-- The output store address for tile lane `(i,j)`: `gRow i · dim_n + gCol j`. -/
+def vecmatOutOffset (s : BlockState) (dim_n BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Nat :=
+  gRow s BLOCK_M idx.1 * dim_n + gCol s BLOCK_N idx.2.1
+
+set_option maxHeartbeats 2000000 in
+/-- **postLoop**: from the invariant at `numKBlocks` blocks, the unmasked store
+of `vecmat` to `output_tile` writes the genuine GEMV value `gemvSpec` at every
+output lane (given the output-offset map is injective). -/
+theorem vecmat_postLoop (A B output : RegionName) (s0 : BlockState)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
+    (hInj : Function.Injective (vecmatOutOffset s0 dim_n BLOCK_M BLOCK_N))
+    (st : BlockState)
+    (hinv : vecmatInvariant A B output s0 dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K
+        numKBlocks st) :
+    ∃ sfin, stepStmts (vecmatStoreStmt output BLOCK_M BLOCK_N :: []) st = some sfin
+      ∧ ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+          sfin.readMem output (vecmatOutOffset s0 dim_n BLOCK_M BLOCK_N idx)
+            = gemvSpec s0 A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K numKBlocks
+                idx.1 idx.2.1 := by
+  obtain ⟨hpids, hm, hn, hot, hvm, hundef, hmem⟩ := hinv
+  set vmT : Tile .real [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx => some (gemvPartial s0 A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K
+        idx.1 idx.2.1 numKBlocks)⟩ with hvmT
+  set otT : Tile .nat [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx => (s0.pids 0 * BLOCK_M + idx.1.val) * dim_n + (s0.pids 1 * BLOCK_N + idx.2.1.val)⟩
+    with hotT
+  -- the store evaluates to the scatter foldl
+  have hstore : stepStmt (vecmatStoreStmt output BLOCK_M BLOCK_N) st
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_N]).foldl
+          (fun acc i =>
+            acc.writeMem output (vecmatOutOffset s0 dim_n BLOCK_M BLOCK_N i)
+              (gemvPartial s0 A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K
+                i.1 i.2.1 numKBlocks)) st) := by
+    simp only [vecmatStoreStmt, stepStmt]
+    rw [show evalOp (Op.ref .real [BLOCK_M, BLOCK_N] "vecmat") st = some vmT from by
+          rw [evalOp_ref, hvm]]
+    rw [show evalOp (Op.ref .nat [BLOCK_M, BLOCK_N] "output_tile") st = some otT from by
+          rw [evalOp_ref, hot]]
+    simp only [bind, Option.bind_some]
+    refine congrArg some (List.foldl_ext _ _ st (fun acc i _ => ?_))
+    simp only [if_true, otT, hotT, vecmatOutOffset, gRow, gCol, vmT, hvmT,
+      BlockState.writeMemTyped_real, Region.cast_id, FloatDType.real_storeValue,
+      WithBot.unbotD_some]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  rw [BlockState.scatter_readback_nd (region := output) (s := st)
+      (offsetFn := vecmatOutOffset s0 dim_n BLOCK_M BLOCK_N)
+      (valueFn := fun i => gemvPartial s0 A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K
+        i.1 i.2.1 numKBlocks)
+      hInj idx]
+  simp only [gemvSpec, gemvPartial, Nat.mul_comm numKBlocks BLOCK_K]
+
+/-! ### Composition: full exec closed form -/
+
+set_option maxHeartbeats 4000000 in
+/-- **Top exec reduction**: composes `vecmat_preLoop` + `vecmat_step` (driven by
+`forRangeDyn_inv`) + `vecmat_postLoop` into the full `exec` result. Every output
+lane equals the genuine GEMV value `gemvSpec`. -/
+theorem vecmat_exec_closed_form (A B output : RegionName) (s : BlockState)
+    (_dim_m dim_n BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
+    (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBK : 0 < BLOCK_K)
+    (hInj : Function.Injective (vecmatOutOffset s dim_n BLOCK_M BLOCK_N))
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) :
+    (match exec (batched_vecmat_surface A B output _dim_m dim_n (BLOCK_K * numKBlocks)
+        BLOCK_M BLOCK_N BLOCK_K) s with
+      | some s' => s'.readMem output (vecmatOutOffset s dim_n BLOCK_M BLOCK_N idx)
+      | none => (0.0 : ℝ)) =
+      gemvSpec s A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K numKBlocks
+        idx.1 idx.2.1 := by
+  set dim_k := BLOCK_K * numKBlocks with hdimk
+  -- preLoop establishes the invariant at c = 0 and the k_blocks readback
+  obtain ⟨s0, hpre_eq, hP0, hkb⟩ :=
+    vecmat_preLoop A B output s _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K hundef
+  -- k_blocks resolves to numKBlocks
+  have hnum : dim_k / BLOCK_K = numKBlocks := by
+    rw [hdimk, Nat.mul_comm, Nat.mul_div_cancel _ hBK]
+  -- drive the dynamic K-loop, carrying `c ≤ numKBlocks` so the exit counter pins down
+  obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+    forRangeDyn_inv (idx := "k_index")
+      (start := 0) (stop := numKBlocks) (step := 1)
+      (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "k_blocks") (stepOp := Op.constNat 1)
+      (s_init := s0)
+      (P := fun c st =>
+        vecmatInvariant A B output s dim_n dim_k BLOCK_M BLOCK_N BLOCK_K c st ∧ c ≤ numKBlocks)
+      (by simp [evalOp])
+      (by rw [evalOp_ref, hkb, hnum])
+      (by simp [evalOp])
+      (by omega) ⟨hP0, by omega⟩
+      (fun c st hlt ⟨hinv, _⟩ => by
+        obtain ⟨st', hstep, hinv'⟩ :=
+          vecmat_step A B output s dim_n dim_k BLOCK_M BLOCK_N BLOCK_K c st hinv
+        exact ⟨st', by simpa using hstep, hinv', by omega⟩)
+  -- loop exit: final = numKBlocks
+  have hfinalEq : final = numKBlocks := le_antisymm hPLoop.2 hfinal
+  subst hfinalEq
+  -- postLoop reads off the closed form
+  obtain ⟨sfin, hTail, hpost⟩ :=
+    vecmat_postLoop A B output s dim_n dim_k BLOCK_M BLOCK_N BLOCK_K final
+      hInj sLoop hPLoop.1
+  have hexec : exec (batched_vecmat_surface A B output _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K) s
+      = some sfin := by
+    rw [exec, vecmat_body_split A B output _dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K,
+      stepStmts.append_some hpre_eq, stepStmts.cons_some hLoopStmt, hTail]
+  rw [hexec]
+  exact hpost idx
+
+/-- **Closed-form GEMV correctness for `batched_vecmat_mult` (general statement).**
+
+For arbitrary `dim_n`, tile dims `BLOCK_M`/`BLOCK_N`, K-block size `BLOCK_K`, and
+K-block count `numKBlocks` (so the contracted dim is `dim_k = BLOCK_K · numKBlocks`),
+every output cell of the computed `BLOCK_M × BLOCK_N` tile equals the genuine
+batched vector-matrix value `Σ_{kk < dim_k} A[m,kk] · B[m,n,kk]` (over ℝ) — NOT
+the kernel's own executed value.
+
+Layout: `A[m,kk]` at `A + m·dim_k + kk`, `B[m,n,kk]` at
+`B + m·dim_n·dim_k + n·dim_k + kk`, `out[m,n]` at `output + m·dim_n + n` (the
+kernel's row-major pointer arithmetic). Preconditions: `0 < BLOCK_M`,
+`0 < BLOCK_N`, `0 < BLOCK_K`, output-offset injectivity, clean initial `undef`. -/
+theorem batched_vecmat_closed_form_correct
+    (A B output : RegionName) (s : BlockState)
+    (_dim_m dim_n BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
+    (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBK : 0 < BLOCK_K)
+    (hInj : Function.Injective (vecmatOutOffset s dim_n BLOCK_M BLOCK_N))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
-      (kernel := batched_vecmat_surface A B output dim_m dim_n dim_k
+      (kernel := batched_vecmat_surface A B output _dim_m dim_n (BLOCK_K * numKBlocks)
         BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)
       (write := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        some (output, blockOutOffset s dim_n BLOCK_M BLOCK_N idx))
-      (expected := fun idx =>
-        batchedVecmatSurfaceValue s A B output output dim_m dim_n dim_k
-          BLOCK_M BLOCK_N BLOCK_K (blockOutOffset s dim_n BLOCK_M BLOCK_N idx)) := by
+        some (output, vecmatOutOffset s dim_n BLOCK_M BLOCK_N idx))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        gemvSpec s A B dim_n (BLOCK_K * numKBlocks) BLOCK_M BLOCK_N BLOCK_K numKBlocks
+          idx.1 idx.2.1) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [batched_vecmat_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
-  subst s0
+  subst hs0
   intro idx
-  simp [batchedVecmatSurfaceValue, hExec]
+  have hmain := vecmat_exec_closed_form A B output s0 _dim_m dim_n BLOCK_M BLOCK_N BLOCK_K
+    numKBlocks hBM hBN hBK hInj hundef idx
+  have hExec2 : exec (batched_vecmat_surface A B output _dim_m dim_n (BLOCK_K * numKBlocks)
+      BLOCK_M BLOCK_N BLOCK_K) s0 = some s' := hExec
+  rw [hExec2] at hmain
+  simpa only [ComputeCorrect.OutputReadable.read_real] using hmain
 
-/-- Python `test_vecmat` all-output proof-slice coverage: the two concrete
-K-block accumulator updates and the final `16 × 32` output block writeback all
-realize the checked `(128, 128, 128)` shape. -/
-theorem batched_vecmat_python_test_shape_all_outputs_compute_correct
-    (Acc0 Acc1 A B VecmatPre output : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc0 A B Acc1
-        128 128 128 128 32 64 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => nIndex s 32 i < 128)
-        (fun i => (Acc1, outOffset s 128 32 i)))
-      (expected := fun i =>
-        vecmatConstKAccumSpec s Acc0 A B 128 128 128 128 32 64 0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc1 A B VecmatPre
-        128 128 128 128 32 64 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => nIndex s 32 i < 128)
-        (fun i => (VecmatPre, outOffset s 128 32 i)))
-      (expected := fun i =>
-        vecmatConstKAccumSpec s Acc1 A B 128 128 128 128 32 64 1 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_block_output_store_slice VecmatPre output
-        128 16 32)
-      (initialState := s)
-      (write := fun idx : TileIndex [16, 32] =>
-        some (output, blockOutOffset s 128 16 32 idx))
-      (expected := fun idx =>
-        blockOutputStoreSpec s VecmatPre 128 16 32 idx)) := by
-  constructor
-  · exact batched_vecmat_test_first_k_accum_slice_compute_correct
-      Acc0 A B Acc1 128 128 128 32 s
-      (batched_vecmat_python_row_output_offset_injective s)
-  constructor
-  · exact batched_vecmat_test_second_k_accum_slice_compute_correct
-      Acc1 A B VecmatPre 128 128 128 32 s
-      (batched_vecmat_python_row_output_offset_injective s)
-  · exact batched_vecmat_block_output_store_slice_compute_correct VecmatPre
-      output 128 16 32 s
-      (batched_vecmat_python_block_output_offset_injective s)
+/-! ## Python test-shape summary
 
-/-- Public Python `test_vecmat` summary: the full vectorized surface lowers for
-the checked `128 × 128 × 128` shape, and the two materialized K-block
-accumulator updates plus the final output block store realize the observable
-output proof slices. -/
-theorem batched_vecmat_python_test_shape_store_summary
-    (Acc0 Acc1 A B VecmatPre output : RegionName) (s : BlockState) :
-    (∃ alg, (batched_vecmat_surface A B output
-      128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
-      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc0 A B Acc1
-        128 128 128 128 32 64 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => nIndex s 32 i < 128)
-        (fun i => (Acc1, outOffset s 128 32 i)))
-      (expected := fun i =>
-        vecmatConstKAccumSpec s Acc0 A B 128 128 128 128 32 64 0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc1 A B VecmatPre
-        128 128 128 128 32 64 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => nIndex s 32 i < 128)
-        (fun i => (VecmatPre, outOffset s 128 32 i)))
-      (expected := fun i =>
-        vecmatConstKAccumSpec s Acc1 A B 128 128 128 128 32 64 1 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_block_output_store_slice VecmatPre output
-        128 16 32)
-      (initialState := s)
-      (write := fun idx : TileIndex [16, 32] =>
-        some (output, blockOutOffset s 128 16 32 idx))
-      (expected := fun idx =>
-        blockOutputStoreSpec s VecmatPre 128 16 32 idx))) := by
-  constructor
-  · exact batched_vecmat_python_test_surface_toAlgorithm_supported A B output
-  · exact batched_vecmat_python_test_shape_all_outputs_compute_correct
-      Acc0 Acc1 A B VecmatPre output s
+`test_vecmat` runs `M = N = K = 128`, `block_m = 16`, `block_n = 32`,
+`block_k = 64`, so `numKBlocks = 128 / 64 = 2`. -/
 
+/-- Output-offset injectivity for the checked `16 × 32` tile shape. -/
+theorem batched_vecmat_python_test_shape_offset_injective (s : BlockState) :
+    Function.Injective (vecmatOutOffset s 128 16 32) := by
+  intro a b h
+  simp only [vecmatOutOffset, gRow, gCol] at h
+  obtain ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ := a
+  obtain ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ := b
+  simp only at h ⊢
+  have hm : ma = mb := by omega
+  have hn : na = nb := by omega
+  subst hm; subst hn; rfl
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/-- **Public Python `test_vecmat` summary**: the full `128 × 128 × 128` batched
+vecmat surface (`block_m = 16`, `block_n = 32`, `block_k = 64`, two K-blocks)
+lowers to the algorithm layer and realizes the genuine batched vector-matrix
+reference `out[m,n] = Σ_{kk < 128} A[m,kk]·B[m,n,kk]`. -/
 theorem batched_vecmat_python_test_shape_output_summary
-    (A B output : RegionName) (s : BlockState) :
-    (∃ alg, (batched_vecmat_surface A B output
-      128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
+    (A B output : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (batched_vecmat_surface A B output 128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes
       (kernel := batched_vecmat_surface A B output 128 128 128 16 32 64)
       (initialState := s)
       (write := fun idx : TileIndex [16, 32] =>
-        some (output, blockOutOffset s 128 16 32 idx))
-      (expected := fun idx =>
-        batchedVecmatSurfaceValue s A B output output 128 128 128 16 32 64
-          (blockOutOffset s 128 16 32 idx))) := by
-  constructor
-  · exact batched_vecmat_python_test_surface_toAlgorithm_supported A B output
-  · exact batched_vecmat_surface_output_compute_correct A B output
-      128 128 128 16 32 64 s
+        some (output, vecmatOutOffset s 128 16 32 idx))
+      (expected := fun idx : TileIndex [16, 32] =>
+        gemvSpec s A B 128 128 16 32 64 2 idx.1 idx.2.1)) := by
+  refine ⟨batched_vecmat_surface_toAlgorithm_supported A B output 128 128 128 16 32 64, ?_⟩
+  have h := batched_vecmat_closed_form_correct A B output s 128 128 16 32 64 2
+    (by norm_num) (by norm_num) (by norm_num)
+    (batched_vecmat_python_test_shape_offset_injective s) hundef
+  simpa using h
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult
