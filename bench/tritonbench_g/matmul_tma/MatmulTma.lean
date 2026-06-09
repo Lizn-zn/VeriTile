@@ -2,9 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.ScatterStore
-import VeriTile.Triton.Math.Matmul
-import VeriTile.Triton.Math.OffsetInjective
+import VeriTile.Triton.Kernel
 
 /-!
 # `matmul_tma` — closed-form GEMM correctness
@@ -54,7 +52,6 @@ satisfy.
 namespace VeriTile.Bench.TritonBenchG.MatmulTma
 
 open VeriTile.Triton
-open VeriTile.Triton.Math
 
 set_option linter.unusedSimpArgs false
 

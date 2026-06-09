@@ -2,10 +2,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Math.OffsetInjective
-import VeriTile.Triton.ScatterStore
 
 /-!
 # `rmsnorm_triton` — strict per-kernel correctness
@@ -1019,7 +1017,7 @@ theorem outOff_injective_of_pos (s : BlockState) (sob som sok N : Nat) (hsok : 0
       = (fun k : Fin N => (s.pids 0 * sob + s.pids 1 * som) + k.val * sok) := by
     funext k; simp only [outOff]
   rw [heq]
-  exact VeriTile.Triton.Math.affine1D_inj _ sok hsok
+  exact affine1D_inj _ sok hsok
 
 theorem rmsnorm_full_correct
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)

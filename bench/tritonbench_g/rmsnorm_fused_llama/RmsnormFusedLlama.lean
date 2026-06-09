@@ -2,7 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.ScatterStore
+import VeriTile.Triton.Kernel
 
 /-!
 # `rmsnorm_fused_llama` — strict per-kernel correctness
