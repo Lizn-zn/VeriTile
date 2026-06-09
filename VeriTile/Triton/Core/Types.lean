@@ -131,6 +131,24 @@ def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
       (nthD ptr.offsets axis + nthD idx axis) * nthD ptr.strides axis
   ptr.baseOffset + axisOffsets.sum
 
+@[simp] theorem address_1d
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] =
+        base + (off + i) * stride := by
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]
+
+@[simp] theorem inBounds_1d
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] [0] =
+        decide (off + i < len) := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
 @[simp] theorem address_2d_zero_offsets
     (region : RegionName) (base rows cols BT BS strideT strideS : Nat)
     (i j : Nat) :
@@ -175,7 +193,8 @@ def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
         decide (i < rows ∧ colOff + j < cols) := by
   simp [BlockPtr.inBounds, checkedInBounds, nthD]
 
-/-- 2D block-pointer address with arbitrary offsets on both axes. -/
+/-- General 2D address with arbitrary per-axis offsets `[rowOff, colOff]`:
+each axis contributes `(offset + index) · stride`. -/
 @[simp] theorem address_2d_offsets
     (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff : Nat)
     (i j : Nat) :
@@ -185,10 +204,10 @@ def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
         offsets := [rowOff, colOff] }
       [i, j] =
         base + (rowOff + i) * strideT + (colOff + j) * strideS := by
-  simp [BlockPtr.address, nthD, List.range, List.range.loop]; omega
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]
+  omega
 
-/-- 2D block-pointer in-bounds with arbitrary offsets on both axes,
-checked axes `[0, 1]`. -/
+/-- General 2D `inBounds` with arbitrary offsets `[rowOff, colOff]`. -/
 @[simp] theorem inBounds_2d_offsets
     (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff : Nat)
     (i j : Nat) :
@@ -200,11 +219,59 @@ checked axes `[0, 1]`. -/
         decide (rowOff + i < rows ∧ colOff + j < cols) := by
   simp [BlockPtr.inBounds, checkedInBounds, nthD]
 
+/-- 2D address with a row offset only (`[rowOff, 0]`). -/
+@[simp] theorem address_2d_row_offset
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
+    (i j : Nat) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, 0] }
+      [i, j] =
+        base + (rowOff + i) * strideT + j * strideS := by
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]
+  omega
+
+/-- 2D `inBounds` with a row offset only (`[rowOff, 0]`). -/
+@[simp] theorem inBounds_2d_row_offset
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
+    (i j : Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, 0] }
+      [i, j] [0, 1] =
+        decide (rowOff + i < rows ∧ j < cols) := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
+/-- An empty boundary-check list checks no axes, so `inBounds` is unconditionally
+`true` (the all-`[]` quantifier). This is the block-ptr load's "no boundary
+check" case (`tl.load` without `boundary_check`). -/
+@[simp] theorem inBounds_nil_checkedAxes (ptr : BlockPtr) (idx : List Nat) :
+    BlockPtr.inBounds ptr idx [] = true := by
+  simp [BlockPtr.inBounds]
+
 def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
   let offsets :=
     (List.range (max ptr.offsets.length deltas.length)).map
       (fun axis => nthD ptr.offsets axis + nthD deltas axis)
   { ptr with offsets := offsets }
+
+/-- `advance` on a well-formed 2D block-pointer adds the per-axis deltas to the
+per-axis offsets (`[rowOff, colOff]` advanced by `[dRow, dCol]`). The `region`,
+`baseOffset`, `parentShape`, `blockShape`, `strides` are unchanged. -/
+@[simp] theorem advance_2d_offsets
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff
+      dRow dCol : Nat) :
+    BlockPtr.advance
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, colOff] }
+      [dRow, dCol] =
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff + dRow, colOff + dCol] } := by
+  simp [BlockPtr.advance, nthD, List.range, List.range.loop]
 
 @[simp] theorem inBounds_empty_parent_axis0 (ptr : BlockPtr) (idx : List Nat) :
     BlockPtr.inBounds { ptr with parentShape := [0], offsets := [0] } idx [0] = false := by
