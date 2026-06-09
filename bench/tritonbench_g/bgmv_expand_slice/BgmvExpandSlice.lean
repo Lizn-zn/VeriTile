@@ -4,6 +4,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Triton.Math.OffsetInjective
+import VeriTile.Triton.ScatterStore
 
 /-!
 # `bgmv_expand_slice` — strict per-kernel correctness
@@ -410,12 +411,6 @@ theorem tiledb_eval (lora_ptr : RegionName) (lbase K split_n_length lora_k_strid
   by_cases h1 : c*BLOCK_N + idx.1.val < split_n_length <;> by_cases h2 : idx.2.1.val < K <;>
     simp [h1, h2]
 
-theorem withBot_sum_some_real {B : Nat} (g : Fin B → ℝ) :
-    @Finset.sum (Fin B) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
-      = some (Finset.univ.sum g) := by
-  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
-  exact (WithBot.coe_sum Finset.univ g).symm
-
 -- accumulator eval: reduceSum over K of product = bgmvFullSpec lane i
 theorem acc_eval (input_ptr lora_ptr : RegionName)
     (li K split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K c : Nat)
@@ -438,7 +433,7 @@ theorem acc_eval (input_ptr lora_ptr : RegionName)
   simp only [Tile.reduceSum_false, Tile.reduceSumDrop_data, TileShape.axisDim, TileShape.eraseAxis,
     TileShape.insertAxisIndex, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
   rw [bgmvFullSpec]
-  rw [← withBot_sum_some_real]
+  rw [← withBot_sum_some]
   apply Finset.sum_congr rfl
   intro k _
   rw [prodGK]
@@ -465,80 +460,6 @@ theorem cptrs_eval (out_ptr : RegionName) (cbase cn_stride BLOCK_N c : Nat) (s :
   · simp [Tile.ptrAdd, Tile.bop, Tile.vec, Tile.scalar_data, NumericDType.add, NumericDType.mul,
       Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
       Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR]
-
-
--- foldl-store helpers (ported from rmsnorm)
-theorem foldl_store_preserve {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α)
-    (s : BlockState) (hnot : ∀ k ∈ l, mask k → offsetFn k ≠ o) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o
-      = s.readMem region o := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]
-    cases hm : mask hd
-    · simp only [hm, Bool.false_eq_true, if_false]
-      exact ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)
-    · simp only [hm, if_true]
-      rw [ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk)]
-      exact BlockState.writeMem_readMem_of_ne_offset s region (offsetFn hd) (valueFn hd) region o
-        (hnot hd (List.mem_cons_self) (by rw [hm])).symm
-
-theorem foldl_store_at {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (O : Nat) (l : List α)
-    (s : BlockState) (a : α) (ha : a ∈ l) (hma : mask a) (hoa : ofn a = O)
-    (huniq : ∀ b ∈ l, mask b → ofn b = O → b = a)
-    (hnodup : l.Nodup) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).readMem region O
-      = vfn a := by
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem ha
-  subst hl
-  rw [List.foldl_append, List.foldl_cons]
-  rw [List.nodup_append, List.nodup_cons] at hnodup
-  obtain ⟨hnd1, ⟨ha_notin2, hnd2⟩, hdisj⟩ := hnodup
-  have h2 : ∀ b ∈ l₂, mask b → ofn b ≠ O := by
-    intro b hb hmb heq
-    have : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact ha_notin2 (this ▸ hb)
-  rw [foldl_store_preserve ofn vfn mask O l₂ _ (fun b hb hmb => h2 b hb hmb)]
-  simp only [hma, if_true]
-  rw [hoa]
-  rw [BlockState.writeMem_readMem]
-  have h1 : ∀ b ∈ l₁, mask b → ofn b ≠ O := by
-    intro b hb hmb heq
-    have hb' : b = a := huniq b (by simp [List.mem_append, hb]) hmb heq
-    exact (hdisj b hb a (List.mem_cons_self)) hb'
-  rw [foldl_store_preserve ofn vfn mask O l₁ _ (fun b hb hmb => h1 b hb hmb)]
-  simp
-
-theorem foldl_store_regs {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (dtype : TileDType) (shape : TileShape) (name : RegName) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).regs dtype shape name
-      = s.regs dtype shape name := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_store_pids {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).pids = s.pids := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih => rw [List.foldl_cons]; cases mask hd <;> simp [ih]
-
-theorem foldl_store_other_region {α : Type} {region : RegionName}
-    (ofn : α → Nat) (vfn : α → ℝ) (mask : α → Bool) (l : List α) (s : BlockState)
-    (r : RegionName) (ofs : Nat) (hr : r ≠ region) :
-    (l.foldl (fun acc k => if mask k then acc.writeMem region (ofn k) (vfn k) else acc) s).readMem r ofs
-      = s.readMem r ofs := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-    rw [List.foldl_cons]; cases mask hd
-    · simp only [Bool.false_eq_true, if_false]; exact ih _
-    · simp only [if_true]; rw [ih]; exact BlockState.writeMem_readMem_of_ne_region s region (ofn hd) (vfn hd) r ofs hr
 
 
 -- store step: the masked ptr store folds to writeMem over lanes
