@@ -4,7 +4,7 @@ VeriTile.Examples.LoopInvariant
 Small sanity proofs for the Triton `forLoop_inv` API.
 -/
 
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 namespace VeriTile.Examples.LoopInvariant
 
