@@ -4,7 +4,7 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 import VeriTile.Triton.Semantics.BlockPtrEval
 import VeriTile.Examples.FlashAttention1
 
