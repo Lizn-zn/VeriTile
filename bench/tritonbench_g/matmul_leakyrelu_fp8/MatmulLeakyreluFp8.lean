@@ -2,7 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.ScatterStore
+import VeriTile.Triton.Kernel
 
 /-!
 # `matmul_leakyrelu_fp8` — strict per-kernel correctness

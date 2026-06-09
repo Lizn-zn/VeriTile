@@ -2,10 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
-import VeriTile.Triton.Math.OffsetInjective
-import VeriTile.Triton.ScatterStore
-import VeriTile.Triton.EvalHelpers
+import VeriTile.Triton.Kernel
 
 /-!
 # `bgmv_expand_slice` — strict per-kernel correctness
@@ -1006,7 +1003,7 @@ theorem bgmv_full_correct
             (s.pids 1 * cm_stride + s.pids 0 * split_n_length + slice_offset * cn_stride)
               + g.val * cn_stride) := by
       funext g; simp only [cOff]
-    rw [heq]; exact VeriTile.Triton.Math.affine1D_inj _ cn_stride hcn
+    rw [heq]; exact affine1D_inj _ cn_stride hcn
   obtain ⟨final, sw, hsw, hle, hinvW⟩ := wb_forRange input_ptr lora_ptr out_ptr li K split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K
     s s3 hBN hinjs hoi hol s'' hinvP
   rw [stepStmts.cons_some hsw, stepStmts.nil] at hloop

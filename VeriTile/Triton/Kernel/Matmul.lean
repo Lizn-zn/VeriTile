@@ -15,7 +15,7 @@ import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Tactic
 import VeriTile.Triton.Semantics
 
-namespace VeriTile.Triton.Math
+namespace VeriTile.Triton
 
 open VeriTile.Triton
 
@@ -58,4 +58,4 @@ theorem tile_dot_data (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, 
   show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
   rw [← WithBot.coe_sum]; rfl
 
-end VeriTile.Triton.Math
+end VeriTile.Triton

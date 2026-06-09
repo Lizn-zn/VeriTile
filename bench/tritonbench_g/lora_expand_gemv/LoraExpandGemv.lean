@@ -2,10 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
-import VeriTile.Triton.Math.Matmul
-import VeriTile.Triton.Math.OffsetInjective
-import VeriTile.Triton.ScatterStore
+import VeriTile.Triton.Kernel
 
 /-!
 # `lora_expand_gemv` — strict per-kernel correctness
@@ -69,7 +66,6 @@ from `lora_indices`); the per-lane global output-offset injectivity `hinj` and
 namespace VeriTile.Bench.TritonBenchG.LoraExpandGemv
 
 open VeriTile.Triton
-open VeriTile.Triton.Math
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

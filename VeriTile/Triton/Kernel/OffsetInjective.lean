@@ -13,7 +13,7 @@ import Mathlib.Algebra.Order.Group.Nat
 import Mathlib.Tactic
 import VeriTile.Triton.Core.Shape
 
-namespace VeriTile.Triton.Math
+namespace VeriTile.Triton
 
 open VeriTile.Triton
 
@@ -54,4 +54,4 @@ theorem rowMajor2D_inj {I J : Nat} (C S : Nat) (hJ : J ≤ S) :
   cases au; cases bu
   rw [Fin.ext hi, Fin.ext hj]
 
-end VeriTile.Triton.Math
+end VeriTile.Triton
