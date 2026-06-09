@@ -126,7 +126,7 @@ bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_t
 bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_python_test_shape_output_summary	public_summary_with_proof_gap	attention-forward-online-softmax-recurrence	#162	self-referential expected (= executed kernel output)
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	bgmv_expand_one_block_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	slice
+bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	Full.gemv_full_output_summary	full_value_candidate	none		full multi-block for-n loop proven against genuine GEMV out[m]=Σ_{k<K} x[k]·W[m,k] over ℝ
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_python_case1_output_summary	public_summary_with_proof_gap	matmul-activation-tail-accumulator	#148	self-referential expected (= executed kernel output)
