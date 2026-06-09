@@ -3,6 +3,8 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Matmul
+import VeriTile.Triton.Math.OffsetInjective
 
 /-!
 # `matmul_triton_autotune` — closed-form matmul+activation correctness
@@ -57,6 +59,7 @@ addresses) is the only assumed disjointness.
 namespace VeriTile.Bench.TritonBenchG.MatmulTritonAutotune
 
 open VeriTile.Triton
+open VeriTile.Triton.Math
 
 set_option linter.unusedSimpArgs false
 
@@ -251,22 +254,6 @@ theorem bptr_adv_eval (s : BlockState) (K N BK sbk : Nat) (bp : Tile .ptr [K, N]
   rw [evalOp_ptrAdd]
   simp [evalOp_ref, hb, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
 
-/-- The dot of two all-`some` loaded tiles, lane `(i,j)`, equals
-`some (Σ_e fx e · fy e)`. -/
-theorem dot_xy (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
-    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
-    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
-    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
-    (Tile.dot [] x y).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
-  rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
-        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
-  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
-  rw [← WithBot.coe_sum]; rfl
-
 /-- **`accumulator = tl.dot(a, b, accumulator)` statement eval** (fused form
 `dot a b + accumulator`). -/
 theorem accdot_op_eval (M K N : Nat) (st : BlockState)
@@ -364,29 +351,23 @@ noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
     (M N BM BN GM sam sak sbk sbn BLOCK_K numKBlocks : Nat) (ACTIVATION : Bool)
     (i : Fin BM) (j : Fin BN) : ℝ :=
   act ACTIVATION
-    ((Finset.range (BLOCK_K * numKBlocks)).sum
-      (fun k => aElem s A M N BM BN GM sam sak i k * bElem s B M N BM BN GM sbk sbn j k))
+    (gemmSum (aElem s A M N BM BN GM sam sak i) (bElem s B M N BM BN GM sbk sbn j)
+      (BLOCK_K * numKBlocks))
 
 /-- Partial GEMM accumulator after `c` K-blocks: `Σ_{k < c·BLOCK_K} A·B`. -/
 noncomputable def accPartial (s : BlockState) (A B : RegionName)
     (M N BM BN GM sam sak sbk sbn BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
-  (Finset.range (c * BLOCK_K)).sum
-    (fun k => aElem s A M N BM BN GM sam sak i k * bElem s B M N BM BN GM sbk sbn j k)
+  gemmSum (aElem s A M N BM BN GM sam sak i) (bElem s B M N BM BN GM sbk sbn j) (c * BLOCK_K)
 
-/-- One-block step of the partial accumulator. -/
+/-- One-block step of the partial accumulator (the shared `gemmSum_blockSucc`). -/
 theorem accPartial_succ (s : BlockState) (A B : RegionName)
     (M N BM BN GM sam sak sbk sbn BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) :
     accPartial s A B M N BM BN GM sam sak sbk sbn BLOCK_K i j (c + 1)
       = accPartial s A B M N BM BN GM sam sak sbk sbn BLOCK_K i j c
         + (Finset.univ.sum fun e : Fin BLOCK_K =>
             aElem s A M N BM BN GM sam sak i (c * BLOCK_K + e.val)
-              * bElem s B M N BM BN GM sbk sbn j (c * BLOCK_K + e.val)) := by
-  unfold accPartial
-  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
-  rw [h, Finset.sum_range_add]
-  congr 1
-  rw [Finset.sum_range fun e => aElem s A M N BM BN GM sam sak i (c * BLOCK_K + e)
-        * bElem s B M N BM BN GM sbk sbn j (c * BLOCK_K + e)]
+              * bElem s B M N BM BN GM sbk sbn j (c * BLOCK_K + e.val)) :=
+  gemmSum_blockSucc (aElem s A M N BM BN GM sam sak i) (bElem s B M N BM BN GM sbk sbn j) BLOCK_K c
 
 /-! ## Body decomposition -/
 
@@ -644,7 +625,7 @@ theorem preLoop (A B C : RegionName) (s : BlockState)
       not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
     refine congrArg some ?_
     ext idx
-    simp only [accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+    simp only [accPartial, Nat.zero_mul, gemmSum_zero]
   · simp [hm]
   · simp [hn]
   · simp [hk]
@@ -843,7 +824,7 @@ theorem matmul_step (A B : RegionName) (s0 : BlockState)
           aElem s0 A M N BM BN GM sam sak idx.1 (c * BLOCK_K + e.val)
             * bElem s0 B M N BM BN GM sbk sbn idx.2.1 (c * BLOCK_K + e.val))
         (accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 c)
-        (dot_xy BM BLOCK_K BN asub bsub idx.1 idx.2.1 _ _ has hbs)
+        (tile_dot_data BM BLOCK_K BN asub bsub idx.1 idx.2.1 _ _ has hbs)
         (by rw [hzT])]
     show some _ = some (accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 (c + 1))
     rw [accPartial_succ, add_comm]
@@ -1289,7 +1270,7 @@ theorem matmul_autotune_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N BM BN GM sam sak sbk sbn scm scn BLOCK_K numKBlocks : Nat) (K : Nat)
     (hK : K = BLOCK_K * numKBlocks) (ACTIVATION : Bool)
-    (hInj : Function.Injective (cOffset s M N BM BN GM scm scn))
+    (hcn : scn = 1) (hbnle : BN ≤ scm)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn
@@ -1302,6 +1283,15 @@ theorem matmul_autotune_closed_form_correct
         MemCell.of .fp16
           (FloatDType.real.cast FloatDType.fp16
             (some (matmulSpec s A B M N BM BN GM sam sak sbk sbn BLOCK_K numKBlocks ACTIVATION idx.1 idx.2.1)))) := by
+  subst hcn
+  -- output-offset injectivity from the row-major bound `BN ≤ scm` (col stride 1)
+  have hInj : Function.Injective (cOffset s M N BM BN GM scm 1) := by
+    have heq : cOffset s M N BM BN GM scm 1
+        = fun idx : TileIndex [BM, BN] =>
+            (scm * (pidM (s.pids 0) M N BM BN GM * BM) + pidN (s.pids 0) M N BM BN GM * BN)
+              + idx.1.val * scm + idx.2.1.val := by
+      funext idx; simp only [cOffset, rowGlobal, colGlobal]; ring
+    rw [heq]; exact rowMajor2D_inj _ scm hbnle
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [matmul_autotune_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -1309,100 +1299,11 @@ theorem matmul_autotune_closed_form_correct
   subst hs0
   intro idx hActive
   have hmain := matmul_autotune_exec_closed_form A B C s0 M N BM BN GM sam sak sbk sbn
-    scm scn BLOCK_K numKBlocks K hK ACTIVATION hInj hundef idx
-  have hExec2 : exec (matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn
+    scm 1 BLOCK_K numKBlocks K hK ACTIVATION hInj hundef idx
+  have hExec2 : exec (matmul_autotune_surface A B C M N K sam sak sbk sbn scm 1
       BM BN BLOCK_K GM numKBlocks ACTIVATION) s0 = some s' := hExec
   rw [hExec2] at hmain
   rw [if_pos hActive] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
-
-/-! ## Python test-shape coverage -/
-
-/-- The contiguous row-major output offsets `N·(pid_m·BM + i) + (pid_n·BN + j)`
-are injective whenever the column-block width fits a row (`BN ≤ N`), which holds
-for every Python block shape. -/
-theorem matmul_autotune_output_offset_injective
-    (s : BlockState) {M N BM BN GM : Nat} (hBN : BN ≤ N) :
-    Function.Injective (cOffset s M N BM BN GM N 1) := by
-  intro a b h
-  simp only [cOffset, rowGlobal, colGlobal, Nat.mul_add, Nat.one_mul] at h
-  have ha : a.2.1.val < N := lt_of_lt_of_le a.2.1.isLt hBN
-  have hb : b.2.1.val < N := lt_of_lt_of_le b.2.1.isLt hBN
-  -- after distributing+cancelling, the surviving equation is N·a.1 + a.2 = N·b.1 + b.2
-  have hcore : N * a.1.val + a.2.1.val = N * b.1.val + b.2.1.val := by
-    have hP : N * (pidM (s.pids 0) M N BM BN GM * BM) =
-        N * (pidM (s.pids 0) M N BM BN GM * BM) := rfl
-    -- cancel the common `N·pm·BM` and `pn·BN` summands
-    omega
-  have h1 : a.1.val = b.1.val := by
-    have e1 : (N * a.1.val + a.2.1.val) / N = a.1.val := by
-      rw [Nat.mul_add_div (by omega : 0 < N), Nat.div_eq_of_lt ha, Nat.add_zero]
-    have e2 : (N * b.1.val + b.2.1.val) / N = b.1.val := by
-      rw [Nat.mul_add_div (by omega : 0 < N), Nat.div_eq_of_lt hb, Nat.add_zero]
-    rw [hcore] at e1; omega
-  have h2 : a.2.1.val = b.2.1.val := by
-    rw [h1] at hcore; omega
-  ext <;> omega
-
-/-- **Public Python case 1 summary** (`M=128, K=64, N=256`, no activation,
-`numKBlocks = 1`): the full surface lowers and realizes the genuine matrix product
-`fp16( Σ_{k<64} A[i,k]·B[k,j] )`. -/
-theorem matmul_autotune_python_case1_output_summary
-    (A B C : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_autotune_surface A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_autotune_surface A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 128 256 128 256 8)
-        (fun idx => (C, cOffset s 128 256 128 256 8 256 1 idx)))
-      (expected := fun idx : TileIndex [128, 256] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 128 256 128 256 8 64 1 256 1 64 1 Bool.false idx.1 idx.2.1))))) :=
-  ⟨matmul_autotune_surface_toAlgorithm_supported A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.false,
-   matmul_autotune_closed_form_correct A B C s 128 256 128 256 8 64 1 256 1 256 1 64 1 64 rfl Bool.false
-     (matmul_autotune_output_offset_injective s (by omega)) hundef⟩
-
-/-- **Public Python case 2 summary** (`M=128, K=64, N=256`, leaky-ReLU activation):
-realizes `fp16( leakyReLU( Σ_{k<64} A·B ) )`. -/
-theorem matmul_autotune_python_case2_output_summary
-    (A B C : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_autotune_surface A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.true).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_autotune_surface A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 128 256 128 256 8)
-        (fun idx => (C, cOffset s 128 256 128 256 8 256 1 idx)))
-      (expected := fun idx : TileIndex [128, 256] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 128 256 128 256 8 64 1 256 1 64 1 Bool.true idx.1 idx.2.1))))) :=
-  ⟨matmul_autotune_surface_toAlgorithm_supported A B C 128 256 64 64 1 256 1 256 1 128 256 64 8 1 Bool.true,
-   matmul_autotune_closed_form_correct A B C s 128 256 128 256 8 64 1 256 1 256 1 64 1 64 rfl Bool.true
-     (matmul_autotune_output_offset_injective s (by omega)) hundef⟩
-
-/-- **Public Python case 3 summary** (`M=256, K=128, N=512`, no activation,
-`numKBlocks = 2`). -/
-theorem matmul_autotune_python_case3_output_summary
-    (A B C : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_autotune_surface A B C 256 512 128 128 1 512 1 512 1 128 256 64 8 2 Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_autotune_surface A B C 256 512 128 128 1 512 1 512 1 128 256 64 8 2 Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 256 512 128 256 8)
-        (fun idx => (C, cOffset s 256 512 128 256 8 512 1 idx)))
-      (expected := fun idx : TileIndex [128, 256] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (matmulSpec s A B 256 512 128 256 8 128 1 512 1 64 2 Bool.false idx.1 idx.2.1))))) :=
-  ⟨matmul_autotune_surface_toAlgorithm_supported A B C 256 512 128 128 1 512 1 512 1 128 256 64 8 2 Bool.false,
-   matmul_autotune_closed_form_correct A B C s 256 512 128 256 8 128 1 512 1 512 1 64 2 128 rfl Bool.false
-     (matmul_autotune_output_offset_injective s (by omega)) hundef⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulTritonAutotune
