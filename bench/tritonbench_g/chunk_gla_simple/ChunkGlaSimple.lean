@@ -2,7 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `chunk_gla_simple` — closed-form correctness
@@ -125,7 +125,7 @@ theorem load_bp_1d (rg : RegionName) (s : BlockState)
   refine congrArg some ?_
   ext idx
   obtain ⟨i, rest⟩ := idx
-  simp only [TileShape.indexToList, BlockPtr.address_1d_offset, BlockPtr.inBounds_1d_offset,
+  simp only [TileShape.indexToList, BlockPtr.address_1d, BlockPtr.inBounds_1d,
     BlockState.readMemValue_real]
   by_cases h : off + i.val < len
   · simp only [h, decide_true, if_true]
@@ -175,7 +175,7 @@ theorem load_bp_1d_ref (rg : RegionName) (s : BlockState) (name : RegName)
   refine congrArg some ?_
   ext idx
   obtain ⟨i, rest⟩ := idx
-  simp only [TileShape.indexToList, BlockPtr.address_1d_offset, BlockPtr.inBounds_1d_offset,
+  simp only [TileShape.indexToList, BlockPtr.address_1d, BlockPtr.inBounds_1d,
     BlockState.readMemValue_real]
   by_cases h : off + i.val < len
   · simp only [h, decide_true, if_true]
