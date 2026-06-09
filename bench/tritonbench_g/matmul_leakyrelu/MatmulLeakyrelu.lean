@@ -3,6 +3,8 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Matmul
+import VeriTile.Triton.Math.OffsetInjective
 
 /-!
 # `matmul_leakyrelu` — closed-form matmul + leaky-ReLU correctness
@@ -55,6 +57,7 @@ injectivity; clean initial `undef`.
 namespace VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
 
 open VeriTile.Triton
+open VeriTile.Triton.Math
 
 set_option linter.unusedSimpArgs false
 
@@ -274,21 +277,6 @@ theorem bptr_adv_eval (s : BlockState) (K N BK SBK : Nat) (bp : Tile .ptr [K, N]
   rw [evalOp_ptrAdd]
   simp [evalOp_ref, hy, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
 
-/-- The masked dot of two all-`some` loaded tiles, lane `(i,j)`, equals
-`some (Σ_e fx e · fy e)`. -/
-theorem dot_ab (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
-    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
-    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
-    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
-    (Tile.dot [] x y).data (i, j, PUnit.unit)
-      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
-  rw [Tile.dot_nil_data]
-  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
-        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
-      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
-  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
-  rw [← WithBot.coe_sum]; rfl
 
 /-- **`accumulator = accumulator + tl.dot(a, b)` statement eval.** -/
 theorem accdot_op_eval (M K N : Nat) (st : BlockState)
@@ -365,29 +353,22 @@ noncomputable def bElem (s : BlockState) (B : RegionName) (PN BN N SBK SBN : Nat
 /-- **Genuine GEMM spec**: `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`. -/
 noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K numKBlocks : Nat) (i : Fin BM) (j : Fin BN) : ℝ :=
-  (Finset.range (BLOCK_K * numKBlocks)).sum
-    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+  gemmSum (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) (BLOCK_K * numKBlocks)
 
 /-- Partial GEMM accumulator after `c` K-blocks: `Σ_{k < c·BLOCK_K} A·B`. -/
 noncomputable def accPartial (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
-  (Finset.range (c * BLOCK_K)).sum
-    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+  gemmSum (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) (c * BLOCK_K)
 
-/-- One-block step of the partial accumulator. -/
+/-- One-block step of the partial accumulator (the shared `gemmSum_blockSucc`). -/
 theorem accPartial_succ (s : BlockState) (A B : RegionName)
     (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) :
     accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j (c + 1)
       = accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j c
         + (Finset.univ.sum fun e : Fin BLOCK_K =>
             aElem s A PM BM M SAM SAK i (c * BLOCK_K + e.val)
-              * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e.val)) := by
-  unfold accPartial
-  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
-  rw [h, Finset.sum_range_add]
-  congr 1
-  rw [Finset.sum_range fun e => aElem s A PM BM M SAM SAK i (c * BLOCK_K + e)
-        * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e)]
+              * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e.val)) :=
+  gemmSum_blockSucc (aElem s A PM BM M SAM SAK i) (bElem s B PN BN N SBK SBN j) BLOCK_K c
 
 /-! ## Masked fp16 output-store machinery (reused for the activated store) -/
 
@@ -759,7 +740,7 @@ theorem mlr_preLoop (A B C : RegionName) (s : BlockState)
       not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
     refine congrArg some ?_
     ext idx
-    simp only [accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+    simp only [accPartial, Nat.zero_mul, gemmSum_zero]
   · simp [hpm]
   · simp [hpn]
   · simp [ham]
@@ -873,7 +854,7 @@ theorem mlr_step (A B : RegionName) (s0 : BlockState)
         (Finset.univ.sum fun e : Fin BK =>
           aElem s0 A PM BM M SAM SAK idx.1 (c * BK + e.val) * bElem s0 B PN BN N SBK SBN idx.2.1 (c * BK + e.val))
         (by rw [hzT])
-        (dot_ab BM BK BN asub bsub idx.1 idx.2.1 _ _ has hbs)]
+        (tile_dot_data BM BK BN asub bsub idx.1 idx.2.1 _ _ has hbs)]
     show some _ = some (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BK idx.1 idx.2.1 (c + 1))
     rw [accPartial_succ]
   · simp [hsk2, hsk1, hsk, hpm]
@@ -1240,7 +1221,7 @@ injectivity; clean initial `undef`. -/
 theorem matmul_leakyrelu_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) (hBK : 0 < BK)
-    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM SCN))
+    (hscn : SCN = 1) (hbnle : BN ≤ SCM)
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) M N BM BN GROUP) BM i < M)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) M N BM BN GROUP) BN j < N)
     (hundef : ∀ rg o, s.undef rg o = 0) :
@@ -1252,39 +1233,23 @@ theorem matmul_leakyrelu_closed_form_correct
       (expected := fun idx : TileIndex [BM, BN] =>
         outputCell s A B (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP)
           BM BN M N SAM SAK SBK SBN BK numKBlocks idx) := by
+  subst hscn
+  -- output-offset injectivity from the row-major bound `BN ≤ SCM` (col stride 1)
+  have hInj : Function.Injective
+      (cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM 1) := by
+    have heq : cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM 1
+        = fun idx : TileIndex [BM, BN] =>
+            (SCM * (pidM (s.pids 0) M N BM BN GROUP * BM)
+              + pidN (s.pids 0) M N BM BN GROUP * BN) + idx.1.val * SCM + idx.2.1.val := by
+      funext idx; simp only [cOffset, rowIndex, colIndex]; ring
+    rw [heq]; exact rowMajor2D_inj _ SCM hbnle
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [matmul_leaky_relu_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst hs0
   intro idx
-  have hmain := mlr_exec_closed_form A B C s0 M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks hBK hInj hmlt hnlt hundef idx
+  have hmain := mlr_exec_closed_form A B C s0 M N SAM SAK SBK SBN SCM 1 BM BN BK GROUP numKBlocks hBK hInj hmlt hnlt hundef idx
   rw [hExec] at hmain
   exact hmain
-
-/-- **Public Python test-shape summary** (`64×128 @ 128×64`, leaky-ReLU enabled,
-`BLOCK_M = BLOCK_N = BLOCK_K = 32`, `GROUP_SIZE_M = 4`, so `numKBlocks = 4`,
-strides `a=(128,1)`, `b=(64,1)`, `c=(64,1)`): the full `matmul_leakyrelu` surface
-lowers to the algorithm layer and realizes the genuine fused matrix product
-`fp16(leakyrelu(Σ_{k<128} A[i,k]·B[k,j]))` on every in-bounds output lane. The
-in-bounds / output-injectivity hypotheses are kept because they depend on the
-runtime grouped `pid`. -/
-theorem matmul_leakyrelu_python_test_shape_summary
-    (A B C : RegionName) (s : BlockState)
-    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4) 32 32 64 1))
-    (hmlt : ∀ i : Fin 32, rowIndex (pidM (s.pids 0) 64 64 32 32 4) 32 i < 64)
-    (hnlt : ∀ j : Fin 32, colIndex (pidN (s.pids 0) 64 64 32 32 4) 32 j < 64)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_leaky_relu_surface A B C 64 64 128 128 1 64 1 64 1 32 32 32 4).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := matmul_leaky_relu_surface A B C 64 64 128 128 1 64 1 64 1 32 32 32 4)
-      (initialState := s)
-      (write := fun idx : TileIndex [32, 32] =>
-        some (C, cOffset s (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4) 32 32 64 1 idx))
-      (expected := fun idx : TileIndex [32, 32] =>
-        outputCell s A B (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4)
-          32 32 64 64 128 1 64 1 32 4 idx) := by
-  refine ⟨matmul_leaky_relu_surface_toAlgorithm_supported A B C 64 64 128 128 1 64 1 64 1 32 32 32 4, ?_⟩
-  exact matmul_leakyrelu_closed_form_correct A B C s 64 64 128 1 64 1 64 1 32 32 32 4 4
-    (by norm_num) hInj hmlt hnlt hundef
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
