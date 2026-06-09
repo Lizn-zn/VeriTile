@@ -23,10 +23,7 @@ bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_pyt
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case2_output_summary	public_summary_with_proof_gap	dense-attention-acc-store	#166	self-referential expected (= executed kernel output)
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case1_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case2_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case1_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case2_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case3_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_python_case4_output_summary	public_summary_with_proof_gap	bmm-final-store-accumulator	#148	self-referential expected (= executed kernel output)
+bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_closed_form_correct	full_value_candidate	none		genuine spec: full batched-matmul closed form proven sorry-free
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_python_test_shape_output_summary	public_summary_with_proof_gap	chunk-cumsum-carry-fold	#185	self-referential expected (= executed kernel output)
