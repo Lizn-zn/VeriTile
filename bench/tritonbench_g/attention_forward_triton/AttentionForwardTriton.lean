@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.Kernel
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -297,9 +298,6 @@ the loaded Q/K/V tiles under the per-block key scale, mirroring
 contracts `stride_qm = stride_kn = HEAD_DIM`, head stride `1`, every loaded
 element sits at `base + row · HEAD_DIM + col`; masked-off head lanes load `0`,
 so summing over the `HEAD_ACTIVE` active lanes is the full contraction. -/
-
-/-- Ceiling division `⌈a / b⌉`, matching Triton's `tl.cdiv`. -/
-def cdiv (a b : Nat) : Nat := (a + b - 1) / b
 
 /-- Batch/head base offset `off_z · stride_qz + off_h · stride_qh`. -/
 def baseOffset (s : BlockState) (H stride_qz stride_qh : Nat) : Nat :=

@@ -3,7 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `attention_forward_triton` — closed-form correctness (WIP scaffold)
