@@ -7,7 +7,7 @@ FA-1 forward kernel DSL surfaces shared by the proof modules.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
