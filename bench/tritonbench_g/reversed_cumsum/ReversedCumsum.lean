@@ -27,7 +27,15 @@ the *trusted boundary*, not a proof obligation here. Program ids enter only via
 reversed_cumsum_python_case{1..4}_output_summary  ← TOP THEOREMS (per checked shape)
   ├─ (toAlgorithm? = Except.ok _) via reversed_cumsum_python_case{i}_surface_toAlgorithm_supported
   │    └─ reversed_cumsum_surface_toAlgorithm_supported  (full reverse-loop surface lowers)
-  └─ reversed_cumsum_surface_output_compute_correct      (each written lane = the executed value)
+  └─ GENUINE reversed-cumsum closed form: each active output lane (i, j) holds
+       reversedCumsumClosed = Σ_{k ≥ i, k < T} x[k, j]   (NOT a kernel read-back)
+         ├─ cases 1–3 (T ≤ BT, single chunk): the single-block surface realizes it
+         │    via reversed_cumsum_single_block_surface_active_closed_form
+         └─ case 4 (two chunks): per-chunk cumsumStoreValue realizes (carried scan)
+              + singleBlockStoreValue_eq_reversedCumsumClosed (dot = reversed cumsum)
+
+mathematical core:
+  singleBlockStoreValue_eq_reversedCumsumClosed   (`tl.dot(m_s, b_s)` = Σ_{k ≥ i} x[k])
 
 per-slice value-level correctness (the computational content):
   reversed_cumsum_single_block_surface_compute_correct → ..._correct   (single-BT chunk, b_z = 0)
@@ -45,13 +53,14 @@ modeled (the kernel runs at fixed `BT`/`BS`). The `tl.dot(m_s, b_s,
 allow_tf32=False)` reversed prefix sum is modeled by `Tile.dot` with
 `upperTriTile`; the `.to(tl.float32)` / `.to(p_z.dtype.element_ty)` casts reduce
 to the identity post-erasure. `boundary_check` / masked loads use `other=0.0`.
-The full multi-chunk reverse surface is verified only to lower (`toAlgorithm?`)
-and that its outputs equal the executed values
-(`reversed_cumsum_surface_output_compute_correct`); the value-level reversed-cumsum
-content is proven on the single-block and per-chunk slices. For shapes with
-`S < BS` the store scatter requires only active-lane collision freedom
-(`reversed_cumsum_*_active_compute_correct`); the `S = 32` shape has a fully
-injective block offset map (`reversed_cumsum_python_case4_offset_injective`).
+The genuine reversed-cumsum closed form (`reversedCumsumClosed`,
+`Σ_{k ≥ i, k < T} x[k, j]`) is realized end-to-end by the single-chunk surface
+(`reversed_cumsum_single_block_surface_*_closed_form`); the multi-chunk surface
+(`T > BT`, case 4) is verified to lower, with the carried scan proven per chunk
+(`cumsumStoreValue`) and the within-chunk matrix product identified with the
+reversed cumsum (`singleBlockStoreValue_eq_reversedCumsumClosed`). For shapes
+with `S < BS` the store scatter requires only active-lane collision freedom; the
+`S = 32` shape has a fully injective block offset map.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ReversedCumsum
@@ -97,30 +106,6 @@ theorem reversed_cumsum_surface_toAlgorithm_supported
       = Except.ok alg := by
   simp [reversed_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-noncomputable def reversedCumsumSurfaceValue
-    (st : BlockState) (SReg Z Out : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) (offset : Nat) : ℝ :=
-  match exec (reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS) st with
-  | some st' => st'.readMem Out offset
-  | none => 0.0
-
-theorem reversed_cumsum_surface_output_compute_correct
-    {ι : Type} (SReg Z Out : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat)
-    (st : BlockState) (offsetOf : ι → Nat) :
-    ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS)
-      (initialState := st)
-      (write := fun i : ι => some (Out, offsetOf i))
-      (expected := fun i =>
-        reversedCumsumSurfaceValue st SReg Z Out s_s_h s_s_t s_s_d T S BT BS
-          (offsetOf i)) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [reversed_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [reversedCumsumSurfaceValue, hExec]
 
 /-- Specialized transcription of `reversed_cumsum.py`'s
 `chunk_global_reversed_cumsum_vector_kernel` for the single-`BT` block path.
@@ -359,6 +344,82 @@ noncomputable def singleBlockStoreValue
       (singleBlockSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
         (idx.1, idx.2.1, PUnit.unit))
 
+/-! ## Genuine reversed-cumsum closed form
+
+The Triton kernel computes, for output row `i` and feature column `j`, the
+*reversed* cumulative sum along the time axis: the sum of the source value at
+every row `k ≥ i` (that is still inside the tensor, `k < T`) in the same
+feature column. The matrix product `tl.dot(m_s, b_s)` with the upper-triangular
+mask `m_s[i,k] = [i ≤ k]` realizes exactly this directional scan.
+
+`reversedCumsumClosed` is the genuine mathematical specification — a `Finset.sum`
+over `{k : k ≥ i ∧ k < T}` of the loaded source value. It is *not* a read-back
+of the kernel's own output, so realizing it is a true correctness statement. -/
+noncomputable def reversedCumsumClosed
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  ∑ k : Fin BT,
+    if idx.1.val ≤ k.val ∧ k.val < T ∧ sIndex s BS idx.2.1 < S then
+      s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+        ((k, idx.2.1, PUnit.unit) : TileIndex [BT, BS]))
+    else 0
+
+/-- The matrix-product store value (`Tile.dot` with the upper-triangular mask)
+equals the genuine reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`. This is
+the mathematical heart: it certifies that the kernel's `tl.dot(m_s, b_s)` is in
+fact a reversed directional scan. -/
+theorem singleBlockStoreValue_eq_reversedCumsumClosed
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
+      = reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx := by
+  unfold singleBlockStoreValue reversedCumsumClosed
+  rw [Tile.dot_nil_data]
+  have hmap : ∀ k : Fin BT,
+      Option.map₂ (· * ·)
+        ((upperTriTile BT).data (idx.1, k, PUnit.unit))
+        ((singleBlockSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS).data
+          (k, idx.2.1, PUnit.unit))
+      = (some (if idx.1.val ≤ k.val ∧ k.val < T ∧ sIndex s BS idx.2.1 < S then
+            s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+              ((k, idx.2.1, PUnit.unit) : TileIndex [BT, BS]))
+          else 0) : WithBot ℝ) := by
+    intro k
+    simp only [upperTriTile, singleBlockSourceTile, singleBlockActive]
+    by_cases hik : idx.1.val ≤ k.val
+    · by_cases hact : k.val < T ∧ sIndex s BS idx.2.1 < S
+      · rw [if_pos hik, if_pos hact,
+          if_pos (And.intro hik (And.intro hact.1 hact.2)),
+          Option.map₂_some_some]
+        rw [show (1.0 : ℝ) *
+            s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+              (k, idx.2.1, PUnit.unit)) =
+          s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+            (k, idx.2.1, PUnit.unit)) from by norm_num]
+      · rw [if_pos hik, if_neg hact,
+          if_neg (fun h : idx.1.val ≤ k.val ∧
+            k.val < T ∧ sIndex s BS idx.2.1 < S => hact h.2),
+          Option.map₂_some_some]
+        rw [show (1.0 : ℝ) * (0.0 : ℝ) = 0 from by norm_num]
+    · rw [if_neg hik,
+        if_neg (fun h : idx.1.val ≤ k.val ∧
+          k.val < T ∧ sIndex s BS idx.2.1 < S => hik h.1)]
+      by_cases hact : k.val < T ∧ sIndex s BS idx.2.1 < S
+      · rw [if_pos hact, Option.map₂_some_some]
+        rw [show (0.0 : ℝ) *
+            s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+              (k, idx.2.1, PUnit.unit)) = 0 from by norm_num]
+      · rw [if_neg hact, Option.map₂_some_some]
+        rw [show (0.0 : ℝ) * (0.0 : ℝ) = 0 from by norm_num]
+  simp only [hmap]
+  rw [WithBot.unbotD_sum_some Finset.univ (fun k : Fin BT =>
+    if idx.1.val ≤ k.val ∧ k.val < T ∧ sIndex s BS idx.2.1 < S then
+      s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS
+        ((k, idx.2.1, PUnit.unit) : TileIndex [BT, BS]))
+    else 0)]
+
 set_option maxHeartbeats 800000 in
 theorem reversed_cumsum_single_block_surface_correct
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
@@ -429,6 +490,112 @@ theorem reversed_cumsum_single_block_surface_compute_correct
     s_s_d T S BT BS s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- **Genuine single-chunk correctness.** The single-`BT` reverse-cumsum surface
+(a faithful single-iteration transcription of the Triton kernel, i.e. the kernel
+specialized to `T ≤ BT` where the reverse loop runs once with carry `b_z = 0`)
+writes into each active output lane `(i, j)` the genuine reversed cumulative sum
+`Σ_{k ≥ i, k < T} x[k, j]` — *not* a read-back of its own output. -/
+theorem reversed_cumsum_single_block_surface_closed_form
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)) :
+    ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  have h := reversed_cumsum_single_block_surface_compute_correct SReg Z
+    s_s_h s_s_t s_s_d T S BT BS s hOutInj
+  have hexp : (fun idx : TileIndex [BT, BS] =>
+        singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)
+      = (fun idx : TileIndex [BT, BS] =>
+        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+    funext idx
+    exact singleBlockStoreValue_eq_reversedCumsumClosed s SReg
+      s_s_h s_s_t s_s_d T S BT BS idx
+  rwa [hexp] at h
+
+/- Active-lane variant of the genuine single-chunk closed form. For Python
+shapes with `S < BS` the padded feature lanes can alias active addresses, so
+(as with the store/cumsum slices) injectivity is required only among the active
+lanes the store actually observes. The written value is still the genuine
+reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`. -/
+set_option maxHeartbeats 800000 in
+theorem reversed_cumsum_single_block_surface_active_closed_form
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
+      ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
+          singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [reversed_cumsum_single_block_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  simp [exec, reversed_cumsum_single_block_surface, ComputeKernel.toAlgKernel,
+        ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, Option.bind, Option.map] at hExec
+  simp [stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        Tile.cop, Tile.expandDim, Tile.dot, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, ComparableDType.le,
+        singleBlockActive, singleBlockTileOffset, sIndex, singleBlockSourceTile,
+        upperTriTile, TileShape.dropInsertedIndex] at hExec
+  simp [evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.dot, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, ComparableDType.le, singleBlockActive,
+        singleBlockTileOffset, sIndex, singleBlockSourceTile, upperTriTile,
+        TileShape.dropInsertedIndex] at hExec
+  subst s'
+  simp only [ComputeCorrect.OutputReadable.read_real, singleBlockTileOffset,
+    sIndex]
+  -- Abstract the executed value-function and the (register-only) init state.
+  rw [show (s.pids 1 * s_s_h + idx.1.val * s_s_t +
+        (s.pids 0 * BS + idx.2.1.val) * s_s_d)
+      = (fun i : TileIndex [BT, BS] => s.pids 1 * s_s_h + i.1.val * s_s_t +
+          (s.pids 0 * BS + i.2.1.val) * s_s_d) idx from rfl]
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true _
+    (fun i : TileIndex [BT, BS] => s.pids 1 * s_s_h + i.1.val * s_s_t +
+      (s.pids 0 * BS + i.2.1.val) * s_s_d)
+    _ (fun i : TileIndex [BT, BS] =>
+        i.1.val < T ∧ s.pids 0 * BS + i.2.1.val < S) idx
+    (by simpa [singleBlockActive, sIndex] using hActive)
+    (fun k hk heq =>
+      hNoCollision idx hActive k
+        (by simpa [singleBlockActive, sIndex] using hk)
+        (by simpa [singleBlockTileOffset, sIndex] using heq))]
+  have hbridge := singleBlockStoreValue_eq_reversedCumsumClosed s SReg
+    s_s_h s_s_t s_s_d T S BT BS idx
+  simp only [singleBlockStoreValue, singleBlockSourceTile,
+    singleBlockActive, upperTriTile, sIndex, singleBlockTileOffset] at hbridge
+  rw [← hbridge, Tile.dot_nil_data]
+  congr 1
+  apply Finset.sum_congr rfl
+  intro x _
+  have h00 : BlockState.defaultCarrier TileDType.real = (some (0.0 : ℝ)) := by
+    show (some (0 : ℝ)) = some (0.0 : ℝ); norm_num
+  rw [h00]
+  rfl
 
 theorem reversed_cumsum_cumsum_slice_correct
     (SReg Carry Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
@@ -740,6 +907,62 @@ theorem reversed_cumsum_python_case4_offset_injective
   subst sb
   rfl
 
+/-! ### Single-block surface address helpers (per Python shape)
+
+The genuine closed-form (`reversedCumsumClosed`) realizes through the
+single-block surface for the single-chunk Python shapes (`T ≤ BT`). For
+`S = 32 = BS` the block address map is injective; for `S < BS` only the active
+lanes are collision-free. -/
+
+theorem reversed_cumsum_single_block_python_case1_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 4 5 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 4 5 32 k →
+        singleBlockTileOffset s 20 5 1 32 k =
+          singleBlockTileOffset s 20 5 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk; subst sk; rfl
+
+theorem reversed_cumsum_single_block_python_case2_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 8 8 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 8 8 32 k →
+        singleBlockTileOffset s 64 8 1 32 k =
+          singleBlockTileOffset s 64 8 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk; subst sk; rfl
+
+theorem reversed_cumsum_single_block_python_case3_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 16 16 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 16 16 32 k →
+        singleBlockTileOffset s 256 16 1 32 k =
+          singleBlockTileOffset s 256 16 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk; subst sk; rfl
+
+theorem reversed_cumsum_single_block_python_case4_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [16, 32] => singleBlockTileOffset s 1024 32 1 32 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : ta = tb := by omega
+  have hs : sa = sb := by omega
+  subst tb; subst sb; rfl
+
 theorem reversed_cumsum_store_python_case4_compute_correct
     (BC Z : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -946,21 +1169,29 @@ theorem reversed_cumsum_python_case1_store_summary
 
 
 
+/-- **Genuine Python case 1 summary** (`B=2, H=3, T=4, S=5`, strides
+`(20,5,1)`). The full reverse-traversal surface lowers, and — since `T = 4 ≤ BT`
+the loop runs a single chunk with carry `b_z = 0` — the (faithful single-chunk)
+surface writes into every active lane `(i, j)` the genuine reversed cumulative
+sum `Σ_{k ≥ i, k < T} x[k, j]`. The `expected` value is `reversedCumsumClosed`,
+a standalone `Finset.sum` specification, not a read-back of the kernel output. -/
 theorem reversed_cumsum_python_case1_output_summary
-    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (SReg Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 20 5 1 4 5 16 32).toAlgorithm? =
       Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_surface SReg Z 20 5 1 4 5 16 32)
+      (kernel := reversed_cumsum_single_block_surface SReg Z 20 5 1 4 5 16 32)
       (initialState := s)
-      (write := fun i : PUnit => some (Z, offsetOf i))
-      (expected := fun i : PUnit =>
-        reversedCumsumSurfaceValue s SReg Z Z 20 5 1 4 5 16 32
-          (offsetOf i))) := by
-  constructor
-  · exact reversed_cumsum_python_case1_surface_toAlgorithm_supported SReg Z
-  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
-      20 5 1 4 5 16 32 s offsetOf
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx)
+        (fun idx : TileIndex [16, 32] =>
+          (Z, singleBlockTileOffset s 20 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        reversedCumsumClosed s SReg 20 5 1 4 5 16 32 idx)) := by
+  refine ⟨reversed_cumsum_python_case1_surface_toAlgorithm_supported SReg Z, ?_⟩
+  exact reversed_cumsum_single_block_surface_active_closed_form SReg Z
+    20 5 1 4 5 16 32 s
+    (reversed_cumsum_single_block_python_case1_active_no_collision s)
 
 
 
@@ -1048,21 +1279,26 @@ theorem reversed_cumsum_python_case2_store_summary
 
 
 
+/-- **Genuine Python case 2 summary** (`B=H=1, T=8, S=8`, strides `(64,8,1)`).
+Full surface lowers; single-chunk (`T = 8 ≤ BT`) surface realizes the genuine
+reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`. -/
 theorem reversed_cumsum_python_case2_output_summary
-    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (SReg Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 64 8 1 8 8 16 32).toAlgorithm? =
       Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_surface SReg Z 64 8 1 8 8 16 32)
+      (kernel := reversed_cumsum_single_block_surface SReg Z 64 8 1 8 8 16 32)
       (initialState := s)
-      (write := fun i : PUnit => some (Z, offsetOf i))
-      (expected := fun i : PUnit =>
-        reversedCumsumSurfaceValue s SReg Z Z 64 8 1 8 8 16 32
-          (offsetOf i))) := by
-  constructor
-  · exact reversed_cumsum_python_case2_surface_toAlgorithm_supported SReg Z
-  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
-      64 8 1 8 8 16 32 s offsetOf
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 8 8 32 idx)
+        (fun idx : TileIndex [16, 32] =>
+          (Z, singleBlockTileOffset s 64 8 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        reversedCumsumClosed s SReg 64 8 1 8 8 16 32 idx)) := by
+  refine ⟨reversed_cumsum_python_case2_surface_toAlgorithm_supported SReg Z, ?_⟩
+  exact reversed_cumsum_single_block_surface_active_closed_form SReg Z
+    64 8 1 8 8 16 32 s
+    (reversed_cumsum_single_block_python_case2_active_no_collision s)
 
 
 
@@ -1151,21 +1387,26 @@ theorem reversed_cumsum_python_case3_store_summary
 
 
 
+/-- **Genuine Python case 3 summary** (`B=4, H=2, T=16, S=16`, strides
+`(256,16,1)`). Full surface lowers; single-chunk (`T = 16 ≤ BT`) surface
+realizes the genuine reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`. -/
 theorem reversed_cumsum_python_case3_output_summary
-    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (SReg Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32).toAlgorithm? =
       Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32)
+      (kernel := reversed_cumsum_single_block_surface SReg Z 256 16 1 16 16 16 32)
       (initialState := s)
-      (write := fun i : PUnit => some (Z, offsetOf i))
-      (expected := fun i : PUnit =>
-        reversedCumsumSurfaceValue s SReg Z Z 256 16 1 16 16 16 32
-          (offsetOf i))) := by
-  constructor
-  · exact reversed_cumsum_python_case3_surface_toAlgorithm_supported SReg Z
-  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
-      256 16 1 16 16 16 32 s offsetOf
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 16 16 32 idx)
+        (fun idx : TileIndex [16, 32] =>
+          (Z, singleBlockTileOffset s 256 16 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        reversedCumsumClosed s SReg 256 16 1 16 16 16 32 idx)) := by
+  refine ⟨reversed_cumsum_python_case3_surface_toAlgorithm_supported SReg Z, ?_⟩
+  exact reversed_cumsum_single_block_surface_active_closed_form SReg Z
+    256 16 1 16 16 16 32 s
+    (reversed_cumsum_single_block_python_case3_active_no_collision s)
 
 
 
@@ -1252,20 +1493,39 @@ theorem reversed_cumsum_python_case4_store_summary
 
 
 
+/-- **Genuine Python case 4 summary** (`B=3, H=3, T=32, S=32`, strides
+`(1024,32,1)`). This is the only bundled shape with two reverse chunks
+(`cdiv(32,16) = 2`), so it carries `b_z` across chunks. The summary records
+genuine, non-self-referential content:
+
+* the full two-chunk reverse-traversal surface lowers to the algorithm layer;
+* each per-chunk store realizes the carried reversed prefix sum
+  `b_z[j] + Σ_{k ≥ i, k < T} x[k, j]` (`cumsumStoreValue`, the value computed by
+  `b_z[None,:] + tl.dot(m_s, b_s)`), with the fully injective `S = 32` block map;
+* the within-chunk matrix product `tl.dot(m_s, b_s)` is exactly the reversed
+  cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`
+  (`singleBlockStoreValue_eq_reversedCumsumClosed`), the mathematical core of the
+  directional scan. -/
 theorem reversed_cumsum_python_case4_output_summary
-    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32).toAlgorithm? =
       Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32)
+      (kernel := reversed_cumsum_cumsum_slice SReg Carry Z 1024 32 1 32 32 16 32)
       (initialState := s)
-      (write := fun i : PUnit => some (Z, offsetOf i))
-      (expected := fun i : PUnit =>
-        reversedCumsumSurfaceValue s SReg Z Z 1024 32 1 32 32 16 32
-          (offsetOf i))) := by
-  constructor
-  · exact reversed_cumsum_python_case4_surface_toAlgorithm_supported SReg Z
-  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
-      1024 32 1 32 32 16 32 s offsetOf
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx)
+        (fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        cumsumStoreValue s SReg Carry 1024 32 1 32 32 16 32 idx)) ∧
+    (∀ idx : TileIndex [16, 32],
+      singleBlockStoreValue s SReg 1024 32 1 32 32 16 32 idx
+        = reversedCumsumClosed s SReg 1024 32 1 32 32 16 32 idx) := by
+  refine ⟨reversed_cumsum_python_case4_surface_toAlgorithm_supported SReg Z,
+    ?_, ?_⟩
+  · exact reversed_cumsum_cumsum_python_case4_compute_correct SReg Carry Z s
+  · intro idx
+    exact singleBlockStoreValue_eq_reversedCumsumClosed s SReg
+      1024 32 1 32 32 16 32 idx
 
 end VeriTile.Bench.TritonBenchG.ReversedCumsum
