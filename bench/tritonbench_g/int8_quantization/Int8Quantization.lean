@@ -1252,4 +1252,37 @@ theorem per_block_int8_python_case2_output_summary
   per_block_int8_python_case2_internal_summary Q K QInt8 KInt8 QScalePre
     KScalePre QScale KScale s
 
+/-- **General (dimension-parameterized) per-block int8 quantization correctness.**
+
+For arbitrary token count `L`, channel count `C`, block size `BLK`, scale stride
+`scale_stride` and pre-scale `preScale` (with the row-major output offset
+injective on the `[BLK, C]` block), the value store realizes the genuine
+quantized value `perBlockInt8ScaledSpec` (`= preScale·X / Scale`) on every active
+lane and the scale store realizes `scaleStoreSpec`. The concrete
+`per_block_int8_python_case{1,2}_output_summary` are instantiations of this at the
+two Python test shapes; this theorem is the general closed form (mirrors the
+dimension-parameterized reference `attention_forward_triton_closed_form_correct`). -/
+theorem per_block_int8_closed_form_correct
+    (X XInt8 Scale ScalePre : RegionName)
+    (L C BLK scale_stride : Nat) (preScale : ℝ) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        L C BLK scale_stride preScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s L BLK C)
+        (fun idx => (XInt8, xOffset s L C BLK idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale L C BLK scale_stride preScale idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ => scaleStoreSpec s ScalePre scale_stride)) :=
+  ⟨per_block_int8_scaled_store_slice_compute_correct X XInt8 Scale
+      L C BLK scale_stride preScale s hOutInj,
+   per_block_int8_scale_store_slice_compute_correct ScalePre Scale scale_stride s⟩
+
 end VeriTile.Bench.TritonBenchG.Int8Quantization
