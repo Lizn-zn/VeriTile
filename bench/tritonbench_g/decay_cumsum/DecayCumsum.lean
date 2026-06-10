@@ -2080,6 +2080,17 @@ noncomputable def prepareQgClosed
     Real.exp (s.readMem G (offset s s_qk_h DK t_rel.val BT BK i) * Real.log 2) *
     scale
 
+/-- **Genuine `kg` closed form.** At chunk row `t_rel` and lane `i`, the
+`prepare_qg_kg` kernel writes `k[idx] * exp2(g[row BT-1] - g[idx])` into `KG`,
+where `g[row BT-1]` is the loop-invariant `last_decay`. This is the honest
+pointwise specification of the `k *= exp2(last_decay - g)` map. -/
+noncomputable def prepareKgClosed
+    (s : BlockState) (K G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) : ℝ :=
+  s.readMem K (offset s s_qk_h DK t_rel.val BT BK i) *
+    Real.exp ((s.readMem G (offset s s_qk_h DK (BT - 1) BT BK i) -
+      s.readMem G (offset s s_qk_h DK t_rel.val BT BK i)) * Real.log 2)
+
 set_option maxHeartbeats 2000000 in
 /-- **Row 0 active `qg` closed form.** On an active lane the full `prepare_qg_kg`
 surface writes `q[idx] * exp2(g[idx]) * 1` into `QG` at the row-0 offset. -/
@@ -2230,6 +2241,993 @@ abbrev decay_cumsum_prepare_python_test_shape_output_summary
     (hQG_KG : QG ≠ KG) :=
   decay_cumsum_prepare_python_test_shape_closed_output_summary
     Q K G QG KG t_rel s hQ_QG hQ_KG hG_QG hG_KG hQG_KG
+
+/-! ## General (dimension-parameterized) `prepare_qg_kg` closed forms
+
+The pinned `prepare_qg_kg` proofs above fix `BT,BK,DK = 2,4,8`. The theorems
+below remove that pinning via a genuine loop invariant (`prepInv`) advanced one
+masked-load/scale/masked-store iteration at a time (`prepare_qg_kg_step`) and
+driven through the `range(BT)` loop by `forRange_inv`. Unlike forward, there is
+no cross-step accumulator: each row is an independent pointwise map. The only
+loop-invariant scalar tile is `last_decay` (= `G` at chunk row `BT-1`). -/
+
+/-- `last_decay` register tile: lane `i` reads `G` at chunk row `BT-1`. -/
+noncomputable def prepLastDecayTile
+    (s : BlockState) (G : RegionName)
+    (s_qk_h DK BT BK : Nat) : Tile .real [BK] :=
+  ⟨fun idx => some (s.readMem G (offset s s_qk_h DK (BT - 1) BT BK idx.1))⟩
+
+/-- `offs` register tile (`arange BK`): lane `i` holds `i`. -/
+def prepOffsTile (BK : Nat) : Tile .nat [BK] := Tile.vec (fun i : Fin BK => i.val)
+
+/-- Generic per-row pointer tile for region `R` at row `m`. -/
+def prepPtrTile
+    (s : BlockState) (R : RegionName)
+    (s_qk_h DK BT BK : Nat) (m : Nat) : Tile .ptr [BK] :=
+  ⟨fun idx => (R, offset s s_qk_h DK m BT BK idx.1)⟩
+
+/-- The masked-loaded `q` tile at row `m`: active lanes read `Q`, inactive 0. -/
+noncomputable def prepLoadTile
+    (s : BlockState) (R : RegionName)
+    (s_qk_h DK BT BK : Nat) (m : Nat) : Tile .real [BK] :=
+  ⟨fun idx => if active s DK BK idx.1 then
+      some (s.readMem R (offset s s_qk_h DK m BT BK idx.1)) else some 0⟩
+
+/-- The scaled `q_val` tile after `q_val *= exp2(g) * scale` at row `m`
+(active lanes hold `prepareQgClosed`, inactive lanes hold `0`). -/
+noncomputable def prepQValTile
+    (s : BlockState) (Q G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (scale : ℝ) : Tile .real [BK] :=
+  ⟨fun idx => if active s DK BK idx.1 then
+      some (prepareQgClosed s Q G s_qk_h DK BT BK t_rel idx.1 scale) else some 0⟩
+
+/-- The scaled `k_val` tile after `k_val *= exp2(last_decay - g)` at row `m`
+(active lanes hold `prepareKgClosed`, inactive lanes hold `0`). -/
+noncomputable def prepKValTile
+    (s : BlockState) (K G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) : Tile .real [BK] :=
+  ⟨fun idx => if active s DK BK idx.1 then
+      some (prepareKgClosed s K G s_qk_h DK BT BK t_rel idx.1) else some 0⟩
+
+/-- The `prepare_qg_kg` loop invariant after `m` rows. -/
+noncomputable def prepInv
+    (Q K G QG KG : RegionName) (s : BlockState) (s_qk_h DK BT BK : Nat) (scale : ℝ) :
+    Nat → BlockState → Prop :=
+  fun m sc =>
+    sc.pids = s.pids ∧
+    (∀ a, sc.readMem Q a = s.readMem Q a) ∧
+    (∀ a, sc.readMem K a = s.readMem K a) ∧
+    (∀ a, sc.readMem G a = s.readMem G a) ∧
+    sc.regs .ptr [BK] "p_q" = some (prepPtrTile s Q s_qk_h DK BT BK m) ∧
+    sc.regs .ptr [BK] "p_g" = some (prepPtrTile s G s_qk_h DK BT BK m) ∧
+    sc.regs .ptr [BK] "p_k" = some (prepPtrTile s K s_qk_h DK BT BK m) ∧
+    sc.regs .ptr [BK] "p_qg" = some (prepPtrTile s QG s_qk_h DK BT BK m) ∧
+    sc.regs .ptr [BK] "p_kg" = some (prepPtrTile s KG s_qk_h DK BT BK m) ∧
+    sc.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) ∧
+    sc.regs .real [BK] "last_decay" = some (prepLastDecayTile s G s_qk_h DK BT BK) ∧
+    (∀ j, m ≤ j → ∀ i : Fin BK,
+      sc.readMem QG (offset s s_qk_h DK j BT BK i) =
+        s.readMem QG (offset s s_qk_h DK j BT BK i)) ∧
+    (∀ j, m ≤ j → ∀ i : Fin BK,
+      sc.readMem KG (offset s s_qk_h DK j BT BK i) =
+        s.readMem KG (offset s s_qk_h DK j BT BK i)) ∧
+    (∀ j, j < m → ∀ i : Fin BK, ∀ (hj : j < BT),
+      sc.readMem QG (offset s s_qk_h DK j BT BK i) =
+        if active s DK BK i then
+          prepareQgClosed s Q G s_qk_h DK BT BK ⟨j, hj⟩ i scale
+        else s.readMem QG (offset s s_qk_h DK j BT BK i)) ∧
+    (∀ j, j < m → ∀ i : Fin BK, ∀ (hj : j < BT),
+      sc.readMem KG (offset s s_qk_h DK j BT BK i) =
+        if active s DK BK i then
+          prepareKgClosed s K G s_qk_h DK BT BK ⟨j, hj⟩ i
+        else s.readMem KG (offset s s_qk_h DK j BT BK i))
+
+/-- The lowered `prepare_qg_kg` loop body (one row): 3 masked loads (q,k,g),
+2 pointwise scalings (`q *= exp2(g)*scale`, `k *= exp2(last_decay - g)`),
+2 masked stores (KG then QG), 5 pointer increments. -/
+def prepBody (Q K G QG KG : RegionName) (s_qk_h DK BT BK : Nat) (scale : ℝ) : List Stmt :=
+  [Stmt.assign TileDType.real [BK] "q_val"
+      (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_q"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign TileDType.real [BK] "k_val"
+      (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_k"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign TileDType.real [BK] "g_val"
+      (Op.load ComputeDType.fp32.eraseDType (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_g"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign TileDType.real [BK] "q_val"
+      (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "q_val")
+        (Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [BK] "g_val").exp2 (Op.const scale))),
+    Stmt.assign TileDType.real [BK] "k_val"
+      (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "k_val")
+        (Op.sub NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "last_decay")
+            (Op.ref TileDType.real [BK] "g_val")).exp2),
+    Stmt.store TileDType.real [BK] (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_kg"))
+      (Op.ref TileDType.real [BK] "k_val") (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask")),
+    Stmt.store TileDType.real [BK] (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_qg"))
+      (Op.ref TileDType.real [BK] "q_val") (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask")),
+    Stmt.assign TileDType.ptr [BK] "p_q"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_q") (Op.constNat DK)),
+    Stmt.assign TileDType.ptr [BK] "p_g"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_g") (Op.constNat DK)),
+    Stmt.assign TileDType.ptr [BK] "p_k"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_k") (Op.constNat DK)),
+    Stmt.assign TileDType.ptr [BK] "p_kg"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_kg") (Op.constNat DK)),
+    Stmt.assign TileDType.ptr [BK] "p_qg"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_qg") (Op.constNat DK))]
+
+set_option maxHeartbeats 4000000 in
+/-- **One row advances the `prepare_qg_kg` invariant.** -/
+theorem prepare_qg_kg_step
+    (Q K G QG KG : RegionName) (s : BlockState) (s_qk_h DK BT BK : Nat) (scale : ℝ)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) (hBT : 0 < BT)
+    (m : Nat) (hm : m < BT) (sc : BlockState) (hP : prepInv Q K G QG KG s s_qk_h DK BT BK scale m sc) :
+    ∃ s',
+      stepStmts (prepBody Q K G QG KG s_qk_h DK BT BK scale)
+        (sc.setReg "_i" .nat [] (Tile.scalar m)) = some s' ∧
+      prepInv Q K G QG KG s s_qk_h DK BT BK scale (m + 1) s' := by
+  obtain ⟨hpids, hQmem, hKmem, hGmem, hpq, hpg, hpk, hpqg, hpkg, hmask, hld,
+    hUQG, hUKG, hreadQG, hreadKG⟩ := hP
+  set sloop := sc.setReg "_i" .nat [] (Tile.scalar m) with hsloop
+  -- register lookups along sloop
+  have hpq' : sloop.regs .ptr [BK] "p_q" = some (prepPtrTile s Q s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpq
+  have hpg' : sloop.regs .ptr [BK] "p_g" = some (prepPtrTile s G s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpg
+  have hpk' : sloop.regs .ptr [BK] "p_k" = some (prepPtrTile s K s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpk
+  have hpqg' : sloop.regs .ptr [BK] "p_qg" = some (prepPtrTile s QG s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpqg
+  have hpkg' : sloop.regs .ptr [BK] "p_kg" = some (prepPtrTile s KG s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpkg
+  have hmask' : sloop.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by
+    rw [hsloop]; simpa using hmask
+  have hld' : sloop.regs .real [BK] "last_decay" = some (prepLastDecayTile s G s_qk_h DK BT BK) := by
+    rw [hsloop]; simpa using hld
+  -- generic masked-load evaluator for a region R via pointer-tile reg `name`
+  have hloadeval : ∀ (R : RegionName) (name : RegName) (st : BlockState),
+      st.regs .ptr [BK] name = some (prepPtrTile s R s_qk_h DK BT BK m) →
+      st.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) →
+      (∀ a, st.readMem R a = s.readMem R a) →
+      evalOp (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BK] name))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK]))) st
+        = some (prepLoadTile s R s_qk_h DK BT BK m) := by
+    intro R name st hp hmk hmem
+    simp only [evalOp, Option.bind, hp, hmk, evalOp_const]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [prepLoadTile, fwdMaskTile, prepPtrTile]
+    by_cases ha : active s DK BK i
+    · simp only [ha, decide_true, if_true, if_pos]
+      rw [BlockState.readMemValue_real, hmem]
+    · simp only [ha, decide_false, Bool.false_eq_true, if_false]
+      rfl
+  -- (1) q_val load
+  have hqeval := hloadeval Q "p_q" sloop hpq' hmask' (fun a => by rw [hsloop]; simpa using hQmem a)
+  set s1 := sloop.setReg "q_val" .real [BK] (prepLoadTile s Q s_qk_h DK BT BK m) with hs1
+  have hstep1 : stepStmt (Stmt.assign TileDType.real [BK] "q_val"
+      (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_q"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK])))) sloop
+      = some s1 := by
+    rw [hs1]; exact stepStmt_assign_eq_some hqeval
+  -- s1 register lookups
+  have hs1_pk : s1.regs .ptr [BK] "p_k" = some (prepPtrTile s K s_qk_h DK BT BK m) := by rw [hs1]; simpa using hpk'
+  have hs1_mask : s1.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by rw [hs1]; simpa using hmask'
+  have hs1_Kmem : ∀ a, s1.readMem K a = s.readMem K a := by intro a; rw [hs1]; simp only [BlockState.setReg_readMem]; rw [hsloop]; simpa using hKmem a
+  have hkeval := hloadeval K "p_k" s1 hs1_pk hs1_mask hs1_Kmem
+  set s2 := s1.setReg "k_val" .real [BK] (prepLoadTile s K s_qk_h DK BT BK m) with hs2
+  have hstep2 : stepStmt (Stmt.assign TileDType.real [BK] "k_val"
+      (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_k"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK])))) s1
+      = some s2 := by
+    rw [hs2]; exact stepStmt_assign_eq_some hkeval
+  -- (3) g_val load (fp32 erased = real)
+  have hs2_pg : s2.regs .ptr [BK] "p_g" = some (prepPtrTile s G s_qk_h DK BT BK m) := by
+    rw [hs2, hs1]; simpa using hpg'
+  have hs2_mask : s2.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by rw [hs2, hs1]; simpa using hmask'
+  have hs2_Gmem : ∀ a, s2.readMem G a = s.readMem G a := by intro a; rw [hs2, hs1]; simp only [BlockState.setReg_readMem]; rw [hsloop]; simpa using hGmem a
+  have hgeval := hloadeval G "p_g" s2 hs2_pg hs2_mask hs2_Gmem
+  set s3 := s2.setReg "g_val" .real [BK] (prepLoadTile s G s_qk_h DK BT BK m) with hs3
+  have hstep3 : stepStmt (Stmt.assign TileDType.real [BK] "g_val"
+      (Op.load ComputeDType.fp32.eraseDType (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_g"))
+        (MaskOpt.maskOther (Op.ref TileDType.bool [BK] "mask") ((Op.const 0).broadcast [BK])))) s2
+      = some s3 := by
+    rw [hs3]; exact stepStmt_assign_eq_some (by simpa [ComputeDType.eraseDType] using hgeval)
+  -- (4) q_val *= exp2(g_val) * scale
+  have hs3_qval : s3.regs .real [BK] "q_val" = some (prepLoadTile s Q s_qk_h DK BT BK m) := by
+    rw [hs3, hs2]; simp [hs1]
+  have hs3_gval : s3.regs .real [BK] "g_val" = some (prepLoadTile s G s_qk_h DK BT BK m) := by
+    rw [hs3]; simp
+  have hqscaleeval : evalOp (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "q_val")
+      (Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [BK] "g_val").exp2 (Op.const scale))) s3
+      = some (prepQValTile s Q G s_qk_h DK BT BK ⟨m, hm⟩ scale) := by
+    simp only [evalOp, Option.bind, hs3_qval, hs3_gval, evalOp_const]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [prepQValTile, prepLoadTile, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex,
+      Broadcast.rightIndex, NumericDType.mul]
+    by_cases ha : active s DK BK i
+    · simp only [ha, if_true, WithBot.realExp2, WithBot.realMul]
+      simp only [prepareQgClosed, offset, baseOffset, Tile.scalar]
+      simp [Tile.vec, mul_assoc]
+    · simp only [ha, if_false, WithBot.realExp2, WithBot.realMul, Tile.scalar]
+      simp [Tile.vec]
+  set s4 := s3.setReg "q_val" .real [BK] (prepQValTile s Q G s_qk_h DK BT BK ⟨m, hm⟩ scale) with hs4
+  have hstep4 : stepStmt (Stmt.assign TileDType.real [BK] "q_val"
+      (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "q_val")
+        (Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [BK] "g_val").exp2 (Op.const scale)))) s3
+      = some s4 := by
+    rw [hs4]; exact stepStmt_assign_eq_some hqscaleeval
+  -- (5) k_val *= exp2(last_decay - g_val)
+  have hs4_kval : s4.regs .real [BK] "k_val" = some (prepLoadTile s K s_qk_h DK BT BK m) := by
+    rw [hs4, hs3, hs2]; simp
+  have hs4_ld : s4.regs .real [BK] "last_decay" = some (prepLastDecayTile s G s_qk_h DK BT BK) := by
+    rw [hs4, hs3, hs2, hs1]; simpa using hld'
+  have hs4_gval : s4.regs .real [BK] "g_val" = some (prepLoadTile s G s_qk_h DK BT BK m) := by
+    rw [hs4, hs3]; simp
+  have hkscaleeval : evalOp (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "k_val")
+      (Op.sub NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "last_decay")
+          (Op.ref TileDType.real [BK] "g_val")).exp2) s4
+      = some (prepKValTile s K G s_qk_h DK BT BK ⟨m, hm⟩) := by
+    simp only [evalOp, Option.bind, hs4_kval, hs4_ld, hs4_gval]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [prepKValTile, prepLoadTile, prepLastDecayTile, Tile.uop_data, Tile.bop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.sub]
+    by_cases ha : active s DK BK i
+    · simp only [ha, if_true, WithBot.realExp2, WithBot.realMul, WithBot.realSub]
+      simp only [prepareKgClosed, offset, baseOffset]
+      simp [Tile.vec]
+    · simp only [ha, if_false, WithBot.realExp2, WithBot.realMul, WithBot.realSub]
+      simp [Tile.vec]
+  set s5 := s4.setReg "k_val" .real [BK] (prepKValTile s K G s_qk_h DK BT BK ⟨m, hm⟩) with hs5
+  have hstep5 : stepStmt (Stmt.assign TileDType.real [BK] "k_val"
+      (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "k_val")
+        (Op.sub NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [BK] "last_decay")
+            (Op.ref TileDType.real [BK] "g_val")).exp2)) s4
+      = some s5 := by
+    rw [hs5]; exact stepStmt_assign_eq_some hkscaleeval
+  -- (6) masked store of k_val into KG via p_kg
+  have hs5_pkg : s5.regs .ptr [BK] "p_kg" = some (prepPtrTile s KG s_qk_h DK BT BK m) := by
+    rw [hs5, hs4, hs3, hs2, hs1]; simpa using hpkg'
+  have hs5_mask : s5.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by
+    rw [hs5, hs4, hs3, hs2, hs1]; simpa using hmask'
+  have hs5_kval : s5.regs .real [BK] "k_val" = some (prepKValTile s K G s_qk_h DK BT BK ⟨m, hm⟩) := by
+    rw [hs5]; simp
+  set kvfun : TileIndex [BK] → ℝ := fun k =>
+    (prepKValTile s K G s_qk_h DK BT BK ⟨m, hm⟩).data k |>.unbotD 0 with hkvfun
+  set sstK := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem KG (offset s s_qk_h DK m BT BK k.1) (kvfun k)
+      else acc) s5 with hsstK
+  have hstoreK : stepStmt (Stmt.store TileDType.real [BK] (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_kg"))
+      (Op.ref TileDType.real [BK] "k_val") (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) s5
+      = some sstK := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hs5_kval, hs5_pkg, hs5_mask]
+    apply congrArg some
+    rw [hsstK]
+    congr 1
+    funext acc k
+    simp only [prepPtrTile, fwdMaskTile]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]; rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  -- (7) masked store of q_val into QG via p_qg
+  have hsstK_pqg : sstK.regs .ptr [BK] "p_qg" = some (prepPtrTile s QG s_qk_h DK BT BK m) := by
+    rw [hsstK, BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hpqg'
+  have hsstK_mask : sstK.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by
+    rw [hsstK, BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hmask'
+  have hsstK_qval : sstK.regs .real [BK] "q_val" = some (prepQValTile s Q G s_qk_h DK BT BK ⟨m, hm⟩ scale) := by
+    rw [hsstK, BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4]; simp
+  set qvfun : TileIndex [BK] → ℝ := fun k =>
+    (prepQValTile s Q G s_qk_h DK BT BK ⟨m, hm⟩ scale).data k |>.unbotD 0 with hqvfun
+  set sstQ := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem QG (offset s s_qk_h DK m BT BK k.1) (qvfun k)
+      else acc) sstK with hsstQ
+  have hstoreQ : stepStmt (Stmt.store TileDType.real [BK] (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_qg"))
+      (Op.ref TileDType.real [BK] "q_val") (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) sstK
+      = some sstQ := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hsstK_qval, hsstK_pqg, hsstK_mask]
+    apply congrArg some
+    rw [hsstQ]
+    congr 1
+    funext acc k
+    simp only [prepPtrTile, fwdMaskTile]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]; rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  -- generic pointer-increment evaluator
+  have hincr : ∀ (R : RegionName) (name : RegName) (st : BlockState),
+      st.regs .ptr [BK] name = some (prepPtrTile s R s_qk_h DK BT BK m) →
+      evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] name) (Op.constNat DK)) st
+        = some (prepPtrTile s R s_qk_h DK BT BK (m + 1)) := by
+    intro R name st hp
+    simp only [evalOp, Option.bind, hp, evalOp_constNat]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [Tile.ptrAdd_data, Broadcast.leftIndex, Broadcast.rightIndex, prepPtrTile, Tile.scalar]
+    refine Prod.ext rfl ?_
+    simp only [offset, baseOffset]; ring
+  -- sstQ pointer reads (both scatter folds preserve registers)
+  have hsstQ_pq : sstQ.regs .ptr [BK] "p_q" = some (prepPtrTile s Q s_qk_h DK BT BK m) := by
+    rw [hsstQ, BlockState.foldl_writeMem_prop_masked_regs, hsstK,
+      BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hpq'
+  set s6 := sstQ.setReg "p_q" .ptr [BK] (prepPtrTile s Q s_qk_h DK BT BK (m + 1)) with hs6
+  have hstep6 : stepStmt (Stmt.assign TileDType.ptr [BK] "p_q"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_q") (Op.constNat DK))) sstQ = some s6 := by
+    rw [hs6]; exact stepStmt_assign_eq_some (hincr Q "p_q" sstQ hsstQ_pq)
+  have hs6_pg : s6.regs .ptr [BK] "p_g" = some (prepPtrTile s G s_qk_h DK BT BK m) := by
+    rw [hs6, BlockState.setReg_ne_name (h := by decide), hsstQ,
+      BlockState.foldl_writeMem_prop_masked_regs, hsstK,
+      BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hpg'
+  set s7 := s6.setReg "p_g" .ptr [BK] (prepPtrTile s G s_qk_h DK BT BK (m + 1)) with hs7
+  have hstep7 : stepStmt (Stmt.assign TileDType.ptr [BK] "p_g"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_g") (Op.constNat DK))) s6 = some s7 := by
+    rw [hs7]; exact stepStmt_assign_eq_some (hincr G "p_g" s6 hs6_pg)
+  have hs7_pk : s7.regs .ptr [BK] "p_k" = some (prepPtrTile s K s_qk_h DK BT BK m) := by
+    rw [hs7, BlockState.setReg_ne_name (h := by decide),
+      hs6, BlockState.setReg_ne_name (h := by decide), hsstQ,
+      BlockState.foldl_writeMem_prop_masked_regs, hsstK,
+      BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2]; simpa using hpk'
+  set s8 := s7.setReg "p_k" .ptr [BK] (prepPtrTile s K s_qk_h DK BT BK (m + 1)) with hs8
+  have hstep8 : stepStmt (Stmt.assign TileDType.ptr [BK] "p_k"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_k") (Op.constNat DK))) s7 = some s8 := by
+    rw [hs8]; exact stepStmt_assign_eq_some (hincr K "p_k" s7 hs7_pk)
+  have hs8_pkg : s8.regs .ptr [BK] "p_kg" = some (prepPtrTile s KG s_qk_h DK BT BK m) := by
+    rw [hs8, BlockState.setReg_ne_name (h := by decide),
+      hs7, BlockState.setReg_ne_name (h := by decide),
+      hs6, BlockState.setReg_ne_name (h := by decide), hsstQ,
+      BlockState.foldl_writeMem_prop_masked_regs, hsstK,
+      BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hpkg'
+  set s9 := s8.setReg "p_kg" .ptr [BK] (prepPtrTile s KG s_qk_h DK BT BK (m + 1)) with hs9
+  have hstep9 : stepStmt (Stmt.assign TileDType.ptr [BK] "p_kg"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_kg") (Op.constNat DK))) s8 = some s9 := by
+    rw [hs9]; exact stepStmt_assign_eq_some (hincr KG "p_kg" s8 hs8_pkg)
+  have hs9_pqg : s9.regs .ptr [BK] "p_qg" = some (prepPtrTile s QG s_qk_h DK BT BK m) := by
+    rw [hs9, BlockState.setReg_ne_name (h := by decide),
+      hs8, BlockState.setReg_ne_name (h := by decide),
+      hs7, BlockState.setReg_ne_name (h := by decide),
+      hs6, BlockState.setReg_ne_name (h := by decide), hsstQ,
+      BlockState.foldl_writeMem_prop_masked_regs, hsstK,
+      BlockState.foldl_writeMem_prop_masked_regs, hs5, hs4, hs3, hs2, hs1]; simpa using hpqg'
+  set s10 := s9.setReg "p_qg" .ptr [BK] (prepPtrTile s QG s_qk_h DK BT BK (m + 1)) with hs10
+  have hstep10 : stepStmt (Stmt.assign TileDType.ptr [BK] "p_qg"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BK] "p_qg") (Op.constNat DK))) s9 = some s10 := by
+    rw [hs10]; exact stepStmt_assign_eq_some (hincr QG "p_qg" s9 hs9_pqg)
+  refine ⟨s10, ?_, ?_⟩
+  · simp only [prepBody]
+    rw [stepStmts.cons_some hstep1, stepStmts.cons_some hstep2, stepStmts.cons_some hstep3,
+        stepStmts.cons_some hstep4, stepStmts.cons_some hstep5, stepStmts.cons_some hstoreK,
+        stepStmts.cons_some hstoreQ, stepStmts.cons_some hstep6, stepStmts.cons_some hstep7,
+        stepStmts.cons_some hstep8, stepStmts.cons_some hstep9, stepStmts.cons_some hstep10,
+        stepStmts.nil]
+  · -- the invariant at m+1
+    -- offset injectivity for the row-m scatter
+    have hInj : Function.Injective (fun k : TileIndex [BK] =>
+        offset s s_qk_h DK m BT BK k.1) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hab
+      simp only [offset] at hab
+      obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+      rfl
+    -- row-offset separation: for active k and j ≠ m, offset m k ≠ offset j i
+    have hsep : ∀ (j : Nat), j ≠ m → ∀ (i : Fin BK),
+        (∀ k : TileIndex [BK], active s DK BK k.1 →
+          (fun k : TileIndex [BK] => offset s s_qk_h DK m BT BK k.1) k
+            ≠ offset s s_qk_h DK j BT BK i) := by
+      intro j hj i k _
+      simp only [offset, baseOffset]
+      have hik : (i : ℕ) < BK := i.isLt
+      have hiDK : (i : ℕ) < DK := lt_of_lt_of_le hik hBK
+      rcases Nat.lt_or_ge j m with hlt | hge'
+      · have hge : (s.pids 1 * BT + j) * DK + DK ≤ (s.pids 1 * BT + m) * DK := by
+          have : (s.pids 1 * BT + j) + 1 ≤ s.pids 1 * BT + m := by omega
+          calc (s.pids 1 * BT + j) * DK + DK
+              = ((s.pids 1 * BT + j) + 1) * DK := by ring
+            _ ≤ (s.pids 1 * BT + m) * DK := Nat.mul_le_mul_right DK this
+        omega
+      · have hjm' : m < j := by omega
+        have hkBK : (k.1 : ℕ) < BK := k.1.isLt
+        have hkDK : (k.1 : ℕ) < DK := lt_of_lt_of_le hkBK hBK
+        have hge : (s.pids 1 * BT + m) * DK + DK ≤ (s.pids 1 * BT + j) * DK := by
+          have : (s.pids 1 * BT + m) + 1 ≤ s.pids 1 * BT + j := by omega
+          calc (s.pids 1 * BT + m) * DK + DK
+              = ((s.pids 1 * BT + m) + 1) * DK := by ring
+            _ ≤ (s.pids 1 * BT + j) * DK := Nat.mul_le_mul_right DK this
+        omega
+    -- mem reads of QG/KG pass through the 5 pointer setRegs down to sstQ
+    have hmemQG10 : ∀ a, s10.readMem QG a = sstQ.readMem QG a := by
+      intro a; rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_readMem]
+    have hmemKG10 : ∀ a, s10.readMem KG a = sstQ.readMem KG a := by
+      intro a; rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_readMem]
+    -- s5 readMem QG/KG = s.readMem (registers + sloop setReg preserve)
+    have hs5QG : ∀ a, s5.readMem QG a = sc.readMem QG a := by
+      intro a; rw [hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
+      rw [hsloop]; simp only [BlockState.setReg_readMem]
+    have hs5KG : ∀ a, s5.readMem KG a = sc.readMem KG a := by
+      intro a; rw [hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
+      rw [hsloop]; simp only [BlockState.setReg_readMem]
+    -- value-fun readback: active lanes give the closed forms
+    have hqvfun_active : ∀ i : Fin BK, active s DK BK i →
+        qvfun (i, PUnit.unit) = prepareQgClosed s Q G s_qk_h DK BT BK ⟨m, hm⟩ i scale := by
+      intro i ha; simp only [hqvfun, prepQValTile, ha, if_true]; rfl
+    have hkvfun_active : ∀ i : Fin BK, active s DK BK i →
+        kvfun (i, PUnit.unit) = prepareKgClosed s K G s_qk_h DK BT BK ⟨m, hm⟩ i := by
+      intro i ha; simp only [hkvfun, prepKValTile, ha, if_true]; rfl
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · -- pids
+      rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_pids]
+      rw [hsstQ, BlockState.foldl_writeMem_prop_masked_pids,
+        hsstK, BlockState.foldl_writeMem_prop_masked_pids,
+        hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_pids]
+      rw [hsloop]; simp only [BlockState.setReg_pids]; exact hpids
+    · -- Q preserved
+      intro a; rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_readMem]
+      rw [hsstQ, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hQ_QG)]
+      rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hQ_KG)]
+      rw [hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
+      rw [hsloop]; simp only [BlockState.setReg_readMem]; exact hQmem a
+    · -- K preserved
+      intro a; rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_readMem]
+      rw [hsstQ, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hK_QG)]
+      rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hK_KG)]
+      rw [hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
+      rw [hsloop]; simp only [BlockState.setReg_readMem]; exact hKmem a
+    · -- G preserved
+      intro a; rw [hs10, hs9, hs8, hs7, hs6]; simp only [BlockState.setReg_readMem]
+      rw [hsstQ, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hG_QG)]
+      rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hG_KG)]
+      rw [hs5, hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_readMem]
+      rw [hsloop]; simp only [BlockState.setReg_readMem]; exact hGmem a
+    · -- p_q at m+1
+      rw [hs10, BlockState.setReg_ne_name (h := by decide),
+        hs9, BlockState.setReg_ne_name (h := by decide),
+        hs8, BlockState.setReg_ne_name (h := by decide),
+        hs7, BlockState.setReg_ne_name (h := by decide), hs6, BlockState.setReg_same]
+    · -- p_g at m+1
+      rw [hs10, BlockState.setReg_ne_name (h := by decide),
+        hs9, BlockState.setReg_ne_name (h := by decide),
+        hs8, BlockState.setReg_ne_name (h := by decide), hs7, BlockState.setReg_same]
+    · -- p_k at m+1
+      rw [hs10, BlockState.setReg_ne_name (h := by decide),
+        hs9, BlockState.setReg_ne_name (h := by decide), hs8, BlockState.setReg_same]
+    · -- p_qg at m+1
+      rw [hs10, BlockState.setReg_same]
+    · -- p_kg at m+1
+      rw [hs10, BlockState.setReg_ne_name (h := by decide), hs9, BlockState.setReg_same]
+    · -- mask preserved
+      rw [hs10, BlockState.setReg_ne_name (h := by decide),
+        hs9, BlockState.setReg_ne_name (h := by decide),
+        hs8, BlockState.setReg_ne_name (h := by decide),
+        hs7, BlockState.setReg_ne_name (h := by decide),
+        hs6, BlockState.setReg_ne_name (h := by decide)]
+      rw [hsstQ, BlockState.foldl_writeMem_prop_masked_regs,
+        hsstK, BlockState.foldl_writeMem_prop_masked_regs,
+        hs5, hs4, hs3, hs2, hs1]; simpa using hmask'
+    · -- last_decay preserved
+      rw [hs10, BlockState.setReg_ne_name (h := by decide),
+        hs9, BlockState.setReg_ne_name (h := by decide),
+        hs8, BlockState.setReg_ne_name (h := by decide),
+        hs7, BlockState.setReg_ne_name (h := by decide),
+        hs6, BlockState.setReg_ne_name (h := by decide)]
+      rw [hsstQ, BlockState.foldl_writeMem_prop_masked_regs,
+        hsstK, BlockState.foldl_writeMem_prop_masked_regs,
+        hs5, hs4, hs3, hs2, hs1]; simpa using hld'
+    · -- QG untouched at rows ≥ m+1
+      intro j hj i
+      rw [hmemQG10 (offset s s_qk_h DK j BT BK i), hsstQ]
+      rw [BlockState.scatter_prop_masked_preserves_other_offset
+        (region := QG)
+        (offsetFn := fun k : TileIndex [BK] => offset s s_qk_h DK m BT BK k.1)
+        (valueFn := qvfun)
+        (P := fun k : TileIndex [BK] => active s DK BK k.1)
+        (off := offset s s_qk_h DK j BT BK i)
+        (h_ne := hsep j (by omega) i)]
+      rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hQG_KG)]
+      rw [hs5QG]
+      exact hUQG j (by omega) i
+    · -- KG untouched at rows ≥ m+1
+      intro j hj i
+      rw [hmemKG10 (offset s s_qk_h DK j BT BK i), hsstQ]
+      rw [BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := Ne.symm hQG_KG)]
+      rw [hsstK, BlockState.scatter_prop_masked_preserves_other_offset
+        (region := KG)
+        (offsetFn := fun k : TileIndex [BK] => offset s s_qk_h DK m BT BK k.1)
+        (valueFn := kvfun)
+        (P := fun k : TileIndex [BK] => active s DK BK k.1)
+        (off := offset s s_qk_h DK j BT BK i)
+        (h_ne := hsep j (by omega) i)]
+      rw [hs5KG]
+      exact hUKG j (by omega) i
+    · -- QG readback at rows < m+1
+      intro j hj i hjBT
+      rw [hmemQG10 (offset s s_qk_h DK j BT BK i), hsstQ]
+      by_cases hjm : j = m
+      · subst hjm
+        rw [BlockState.scatter_readback_prop_masked_nd sstK
+          (fun k : TileIndex [BK] => offset s s_qk_h DK j BT BK k.1) qvfun
+          (fun k => active s DK BK k.1) hInj (i, PUnit.unit)]
+        by_cases ha : active s DK BK i
+        · rw [if_pos ha, if_pos ha, hqvfun_active i ha]
+        · rw [if_neg ha, if_neg ha]
+          rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+            (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hQG_KG)]
+          rw [hs5QG]
+          exact hUQG j (le_refl j) i
+      · have hjlt : j < m := by omega
+        rw [BlockState.scatter_prop_masked_preserves_other_offset
+          (region := QG)
+          (offsetFn := fun k : TileIndex [BK] => offset s s_qk_h DK m BT BK k.1)
+          (valueFn := qvfun)
+          (P := fun k : TileIndex [BK] => active s DK BK k.1)
+          (off := offset s s_qk_h DK j BT BK i)
+          (h_ne := hsep j (by omega) i)]
+        rw [hsstK, BlockState.scatter_prop_masked_preserves_other_region
+          (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := hQG_KG)]
+        rw [hs5QG]
+        exact hreadQG j hjlt i hjBT
+    · -- KG readback at rows < m+1
+      intro j hj i hjBT
+      rw [hmemKG10 (offset s s_qk_h DK j BT BK i), hsstQ]
+      rw [BlockState.scatter_prop_masked_preserves_other_region
+        (P := fun k : TileIndex [BK] => active s DK BK k.1) (h_ne := Ne.symm hQG_KG)]
+      by_cases hjm : j = m
+      · subst hjm
+        rw [hsstK, BlockState.scatter_readback_prop_masked_nd s5
+          (fun k : TileIndex [BK] => offset s s_qk_h DK j BT BK k.1) kvfun
+          (fun k => active s DK BK k.1) hInj (i, PUnit.unit)]
+        by_cases ha : active s DK BK i
+        · rw [if_pos ha, if_pos ha, hkvfun_active i ha]
+        · rw [if_neg ha, if_neg ha]
+          rw [hs5KG]
+          exact hUKG j (le_refl j) i
+      · have hjlt : j < m := by omega
+        rw [hsstK, BlockState.scatter_prop_masked_preserves_other_offset
+          (region := KG)
+          (offsetFn := fun k : TileIndex [BK] => offset s s_qk_h DK m BT BK k.1)
+          (valueFn := kvfun)
+          (P := fun k : TileIndex [BK] => active s DK BK k.1)
+          (off := offset s s_qk_h DK j BT BK i)
+          (h_ne := hsep j (by omega) i)]
+        rw [hs5KG]
+        exact hreadKG j hjlt i hjBT
+
+set_option maxHeartbeats 4000000 in
+/-- **Drive the `prepare_qg_kg` loop.** Reduces `exec` over the 11 prefix
+statements onto the `forRange` loop, establishes the entry invariant `prepInv 0`,
+and runs `forRange_inv` with `prepare_qg_kg_step`, yielding the final loop state
+together with `prepInv final`. -/
+theorem prepare_qg_kg_loop_drive
+    (Q K G QG KG : RegionName) (s : BlockState) (s_qk_h DK BT BK : Nat) (scale : ℝ)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) (hBT : 0 < BT) :
+    ∃ final s_final,
+      exec (prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale) s = some s_final ∧
+      BT ≤ final ∧ prepInv Q K G QG KG s s_qk_h DK BT BK scale final s_final := by
+  simp only [exec, prepare_qg_kg_surface, ComputeKernel.toAlgKernel,
+    ComputeKernel.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Except.bind, Except.pure, bind, pure]
+  -- prefix states
+  set s_ik := s.setReg "i_k" .nat [] (Tile.scalar (s.pids 0)) with hs_ik
+  set s_ic := s_ik.setReg "i_c" .nat [] (Tile.scalar (s.pids 1)) with hs_ic
+  set s_ibh := s_ic.setReg "i_bh" .nat [] (Tile.scalar (s.pids 2)) with hs_ibh
+  set s_offs := s_ibh.setReg "offs" .nat [BK] (prepOffsTile BK) with hs_offs
+  set s_pq := s_offs.setReg "p_q" .ptr [BK] (prepPtrTile s Q s_qk_h DK BT BK 0) with hs_pq
+  set s_pg := s_pq.setReg "p_g" .ptr [BK] (prepPtrTile s G s_qk_h DK BT BK 0) with hs_pg
+  set s_pk := s_pg.setReg "p_k" .ptr [BK] (prepPtrTile s K s_qk_h DK BT BK 0) with hs_pk
+  set s_pqg := s_pk.setReg "p_qg" .ptr [BK] (prepPtrTile s QG s_qk_h DK BT BK 0) with hs_pqg
+  set s_pkg := s_pqg.setReg "p_kg" .ptr [BK] (prepPtrTile s KG s_qk_h DK BT BK 0) with hs_pkg
+  set s_mask := s_pkg.setReg "mask" .bool [BK] (fwdMaskTile s DK BK) with hs_mask
+  set s11 := s_mask.setReg "last_decay" .real [BK] (prepLastDecayTile s G s_qk_h DK BT BK) with hs11
+  -- pid lookups along the chain
+  have hibh : s_ibh.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by simp [hs_ibh]
+  have hic : s_ibh.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by
+    rw [hs_ibh, hs_ic]; simp
+  have hik : s_ibh.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs_ibh, hs_ic, hs_ik]; simp
+  -- generic pointer-init evaluator (after offs is set)
+  have hptr : ∀ (R : RegionName) (st : BlockState),
+      st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) →
+      st.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) →
+      st.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) →
+      st.regs .nat [BK] "offs" = some (prepOffsTile BK) →
+      evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase R)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs"))) st = some (prepPtrTile s R s_qk_h DK BT BK 0) := by
+    intro R st hbh hc hk ho
+    simp only [evalOp, Option.bind, hbh, hc, hk, ho, evalOp_constNat,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+      Tile.bop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [Tile.ptrAdd_data, prepPtrTile, offset, baseOffset, prepOffsTile,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, Tile.vec]
+    refine Prod.ext rfl ?_
+    ring
+  -- step lemmas for each prefix assignment
+  have hstepK : stepStmt (Stmt.assign TileDType.nat [] "i_k" (Op.programId 0)) s = some s_ik := by
+    rw [hs_ik]; exact stepStmt_assign_eq_some (by simp [evalOp])
+  have hstepC : stepStmt (Stmt.assign TileDType.nat [] "i_c" (Op.programId 1)) s_ik = some s_ic := by
+    rw [hs_ic]; exact stepStmt_assign_eq_some (show evalOp (Op.programId 1) s_ik = _ from by simp [evalOp, hs_ik])
+  have hstepB : stepStmt (Stmt.assign TileDType.nat [] "i_bh" (Op.programId 2)) s_ic = some s_ibh := by
+    rw [hs_ibh]; exact stepStmt_assign_eq_some (show evalOp (Op.programId 2) s_ic = _ from by simp [evalOp, hs_ic, hs_ik])
+  have hstepOffs : stepStmt (Stmt.assign TileDType.nat [BK] "offs" (Op.arange BK)) s_ibh = some s_offs := by
+    rw [hs_offs]; exact stepStmt_assign_eq_some (by simp only [evalOp_arange, prepOffsTile])
+  -- offs lookups (preserved by later setRegs of different names)
+  have hoffs_at : ∀ (st : BlockState), st.regs .nat [BK] "offs" = some (prepOffsTile BK) →
+      True := fun _ _ => trivial
+  have hsoffs_bh : s_offs.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by rw [hs_offs]; simp [hibh]
+  have hsoffs_c : s_offs.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by rw [hs_offs]; simp [hic]
+  have hsoffs_k : s_offs.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_offs]; simp [hik]
+  have hsoffs_o : s_offs.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_offs]; simp
+  have hstepPq : stepStmt (Stmt.assign TileDType.ptr [BK] "p_q"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))) s_offs = some s_pq := by
+    rw [hs_pq]; exact stepStmt_assign_eq_some (hptr Q s_offs hsoffs_bh hsoffs_c hsoffs_k hsoffs_o)
+  have hspq_bh : s_pq.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by rw [hs_pq]; simp [hsoffs_bh]
+  have hspq_c : s_pq.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by rw [hs_pq]; simp [hsoffs_c]
+  have hspq_k : s_pq.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_pq]; simp [hsoffs_k]
+  have hspq_o : s_pq.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_pq]; simp [hsoffs_o]
+  have hstepPg : stepStmt (Stmt.assign TileDType.ptr [BK] "p_g"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase G)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))) s_pq = some s_pg := by
+    rw [hs_pg]; exact stepStmt_assign_eq_some (hptr G s_pq hspq_bh hspq_c hspq_k hspq_o)
+  have hspg_bh : s_pg.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by rw [hs_pg]; simp [hspq_bh]
+  have hspg_c : s_pg.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by rw [hs_pg]; simp [hspq_c]
+  have hspg_k : s_pg.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_pg]; simp [hspq_k]
+  have hspg_o : s_pg.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_pg]; simp [hspq_o]
+  have hstepPk : stepStmt (Stmt.assign TileDType.ptr [BK] "p_k"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))) s_pg = some s_pk := by
+    rw [hs_pk]; exact stepStmt_assign_eq_some (hptr K s_pg hspg_bh hspg_c hspg_k hspg_o)
+  have hspk_bh : s_pk.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by rw [hs_pk]; simp [hspg_bh]
+  have hspk_c : s_pk.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by rw [hs_pk]; simp [hspg_c]
+  have hspk_k : s_pk.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_pk]; simp [hspg_k]
+  have hspk_o : s_pk.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_pk]; simp [hspg_o]
+  have hstepPqg : stepStmt (Stmt.assign TileDType.ptr [BK] "p_qg"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase QG)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))) s_pk = some s_pqg := by
+    rw [hs_pqg]; exact stepStmt_assign_eq_some (hptr QG s_pk hspk_bh hspk_c hspk_k hspk_o)
+  have hspqg_bh : s_pqg.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by rw [hs_pqg]; simp [hspk_bh]
+  have hspqg_c : s_pqg.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by rw [hs_pqg]; simp [hspk_c]
+  have hspqg_k : s_pqg.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_pqg]; simp [hspk_k]
+  have hspqg_o : s_pqg.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_pqg]; simp [hspk_o]
+  have hstepPkg : stepStmt (Stmt.assign TileDType.ptr [BK] "p_kg"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase KG)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))) s_pqg = some s_pkg := by
+    rw [hs_pkg]; exact stepStmt_assign_eq_some (hptr KG s_pqg hspqg_bh hspqg_c hspqg_k hspqg_o)
+  have hspkg_k : s_pkg.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by rw [hs_pkg]; simp [hspqg_k]
+  have hspkg_o : s_pkg.regs .nat [BK] "offs" = some (prepOffsTile BK) := by rw [hs_pkg]; simp [hspqg_o]
+  -- mask eval
+  have hmaskeval : evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+      (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK))
+        (Op.ref TileDType.nat [BK] "offs")) (Op.constNat DK)) s_pkg = some (fwdMaskTile s DK BK) := by
+    simp only [evalOp, Option.bind, hspkg_k, hspkg_o, evalOp_constNat,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Tile.bop, Tile.cop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [fwdMaskTile, active, elemIndex, prepOffsTile, Tile.vec,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    rfl
+  have hstepMask : stepStmt (Stmt.assign TileDType.bool [BK] "mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK))
+          (Op.ref TileDType.nat [BK] "offs")) (Op.constNat DK))) s_pkg = some s_mask := by
+    rw [hs_mask]; exact stepStmt_assign_eq_some hmaskeval
+  have hsmask_bh : s_mask.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by
+    rw [hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq]; simp [hsoffs_bh]
+  have hsmask_c : s_mask.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by
+    rw [hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq]; simp [hsoffs_c]
+  have hsmask_k : s_mask.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq]; simp [hsoffs_k]
+  have hsmask_o : s_mask.regs .nat [BK] "offs" = some (prepOffsTile BK) := by
+    rw [hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq]; simp [hsoffs_o]
+  -- last_decay eval (region load, MaskOpt.none) — uses BT-1 with BT ≥ 1
+  have hldeval : evalOp (Op.load TileDType.real
+      (MemAccess.region G
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.sub NumericDType.nat Broadcast.nil
+                  (Op.add NumericDType.nat Broadcast.nil
+                    (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                    (Op.constNat BT))
+                  (Op.constNat 1))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.ref TileDType.nat [BK] "offs")))
+      MaskOpt.none) s_mask = some (prepLastDecayTile s G s_qk_h DK BT BK) := by
+    simp only [evalOp, Option.bind, hsmask_bh, hsmask_c, hsmask_k, hsmask_o, evalOp_constNat,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul, NumericDType.sub,
+      Tile.bop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [prepLastDecayTile, prepOffsTile, Tile.vec,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    rw [BlockState.readMemValue_real]
+    simp only [offset, baseOffset]
+    rw [show s.pids 1 * BT + BT - 1 = s.pids 1 * BT + (BT - 1) by omega]
+    simp only [if_true]
+    rw [hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+    simp only [BlockState.setReg_readMem]
+    rfl
+  have hstepLd : stepStmt (Stmt.assign TileDType.real [BK] "last_decay"
+      (Op.load TileDType.real
+        (MemAccess.region G
+          (Op.add NumericDType.nat Broadcast.scalarL
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.add NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+                (Op.mul NumericDType.nat Broadcast.nil
+                  (Op.sub NumericDType.nat Broadcast.nil
+                    (Op.add NumericDType.nat Broadcast.nil
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                      (Op.constNat BT))
+                    (Op.constNat 1))
+                  (Op.constNat DK)))
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+            (Op.ref TileDType.nat [BK] "offs")))
+        MaskOpt.none)) s_mask = some s11 := by
+    rw [hs11]; exact stepStmt_assign_eq_some hldeval
+  -- chain the 11 prefix assigns onto the forRange loop
+  rw [stepStmts.cons_some hstepK, stepStmts.cons_some hstepC, stepStmts.cons_some hstepB,
+      stepStmts.cons_some hstepOffs, stepStmts.cons_some hstepPq, stepStmts.cons_some hstepPg,
+      stepStmts.cons_some hstepPk, stepStmts.cons_some hstepPqg, stepStmts.cons_some hstepPkg]
+  erw [stepStmts.cons_some hstepMask]
+  erw [stepStmts.cons_some hstepLd]
+  rw [show ∀ (X : Stmt), stepStmts [X] s11 = stepStmt X s11 from
+      fun X => by cases h : stepStmt X s11 <;> simp [stepStmts, h]]
+  -- entry invariant prepInv 0 s11
+  have hP0 : prepInv Q K G QG KG s s_qk_h DK BT BK scale 0 s11 := by
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_pids]
+    · intro a; rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_readMem]
+    · intro a; rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_readMem]
+    · intro a; rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_readMem]
+    · -- p_q
+      simp only [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- p_g
+      simp only [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- p_k
+      simp only [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- p_qg
+      simp only [hs11, hs_mask, hs_pkg, hs_pqg,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- p_kg
+      simp only [hs11, hs_mask, hs_pkg,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- mask
+      simp only [hs11, hs_mask,
+        BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, reduceCtorEq,
+        not_false_eq_true, String.reduceEq]
+    · -- last_decay
+      rw [hs11, BlockState.setReg_same]
+    · intro j hj i; rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_readMem]
+    · intro j hj i; rw [hs11, hs_mask, hs_pkg, hs_pqg, hs_pk, hs_pg, hs_pq, hs_offs, hs_ibh, hs_ic, hs_ik]
+      simp only [BlockState.setReg_readMem]
+    · intro j hj i hjBT; omega
+    · intro j hj i hjBT; omega
+  -- drive the loop
+  obtain ⟨final, sfinal, hLoop, hfinal, hPfinal⟩ :=
+    forRange_inv (idx := "_i") (start := 0) (stop := BT) (step := 1)
+      (body := prepBody Q K G QG KG s_qk_h DK BT BK scale)
+      (P := prepInv Q K G QG KG s s_qk_h DK BT BK scale) (s_init := s11) (Nat.one_ne_zero) hP0
+      (fun j st hj hPj => prepare_qg_kg_step Q K G QG KG s s_qk_h DK BT BK scale
+        hQ_QG hQ_KG hK_QG hK_KG hG_QG hG_KG hQG_KG hBK hBT j hj st hPj)
+  refine ⟨final, sfinal, ?_, hfinal, hPfinal⟩
+  simp only [prepBody] at hLoop
+  rw [hLoop]
+
+set_option maxHeartbeats 4000000 in
+/-- **Genuine GENERAL `qg` closed form.** For arbitrary `BT BK DK` (`BK ≤ DK`,
+`0 < BT`), at chunk row `t_rel` and lane `i`, the full `prepare_qg_kg` surface
+writes `q[idx] * exp2(g[idx]) * scale` into `QG` on active lanes (and leaves
+`QG` unchanged on inactive lanes). Dimension-parameterized replacement for the
+`BT=2`-pinned `prepare_qg_kg_full_surface_qg_closed`. -/
+theorem prepare_qg_kg_full_surface_qg_closed_general
+    (Q K G QG KG : RegionName)
+    (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT) (i : Fin BK)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
+    (exec (prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale) s).map
+      (·.readMem QG (offset s s_qk_h DK t_rel.val BT BK i))
+      = some (if active s DK BK i then prepareQgClosed s Q G s_qk_h DK BT BK t_rel i scale
+              else s.readMem QG (offset s s_qk_h DK t_rel.val BT BK i)) := by
+  have hBT : 0 < BT := Fin.pos t_rel
+  obtain ⟨final, sfinal, hExec, hfinal, hPfinal⟩ :=
+    prepare_qg_kg_loop_drive Q K G QG KG s s_qk_h DK BT BK scale
+      hQ_QG hQ_KG hK_QG hK_KG hG_QG hG_KG hQG_KG hBK hBT
+  rw [hExec]
+  simp only [Option.map_some]
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hreadQG, _⟩ := hPfinal
+  have ht : t_rel.val < final := lt_of_lt_of_le t_rel.isLt hfinal
+  rw [hreadQG t_rel.val ht i t_rel.isLt]
+
+set_option maxHeartbeats 4000000 in
+/-- **Genuine GENERAL `kg` closed form.** For arbitrary `BT BK DK` (`BK ≤ DK`,
+`0 < BT`), at chunk row `t_rel` and lane `i`, the full `prepare_qg_kg` surface
+writes `k[idx] * exp2(g[row BT-1] - g[idx])` into `KG` on active lanes (and
+leaves `KG` unchanged on inactive lanes). -/
+theorem prepare_qg_kg_full_surface_kg_closed_general
+    (Q K G QG KG : RegionName)
+    (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT) (i : Fin BK)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
+    (exec (prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale) s).map
+      (·.readMem KG (offset s s_qk_h DK t_rel.val BT BK i))
+      = some (if active s DK BK i then prepareKgClosed s K G s_qk_h DK BT BK t_rel i
+              else s.readMem KG (offset s s_qk_h DK t_rel.val BT BK i)) := by
+  have hBT : 0 < BT := Fin.pos t_rel
+  obtain ⟨final, sfinal, hExec, hfinal, hPfinal⟩ :=
+    prepare_qg_kg_loop_drive Q K G QG KG s s_qk_h DK BT BK scale
+      hQ_QG hQ_KG hK_QG hK_KG hG_QG hG_KG hQG_KG hBK hBT
+  rw [hExec]
+  simp only [Option.map_some]
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hreadKG⟩ := hPfinal
+  have ht : t_rel.val < final := lt_of_lt_of_le t_rel.isLt hfinal
+  rw [hreadKG t_rel.val ht i t_rel.isLt]
+
+set_option maxHeartbeats 4000000 in
+/-- **Genuine GENERAL `qg` compute-correctness.** For arbitrary `BT BK DK`
+(`BK ≤ DK`), the full `prepare_qg_kg` surface realizes the honest pointwise
+closed form `prepareQgClosed` (`q * exp2(g) * scale`) at every active `QG` lane
+of loop row `t_rel`. Dimension-parameterized replacement for the `BT=2`-pinned
+`prepare_qg_kg_surface_qg_closed_compute_correct`. -/
+theorem prepare_qg_kg_surface_qg_closed_compute_correct_general
+    (Q K G QG KG : RegionName)
+    (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
+    ComputeCorrect.Realizes
+      (kernel := prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s DK BK)
+        (fun i => (QG, offset s s_qk_h DK t_rel.val BT BK i)))
+      (expected := fun i : Fin BK =>
+        prepareQgClosed s Q G s_qk_h DK BT BK t_rel i scale) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prepare_qg_kg_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := prepare_qg_kg_full_surface_qg_closed_general Q K G QG KG
+    s_qk_h DK BT BK scale s t_rel i
+    hQ_QG hQ_KG hK_QG hK_KG hG_QG hG_KG hQG_KG hBK
+  rw [hExec] at h
+  simp only [Option.map_some] at h
+  rw [Option.some.injEq] at h
+  show s'.readMem QG (offset s s_qk_h DK t_rel.val BT BK i) = _
+  rw [h, if_pos hActive]
+
+set_option maxHeartbeats 4000000 in
+/-- **Genuine GENERAL `kg` compute-correctness.** For arbitrary `BT BK DK`
+(`BK ≤ DK`), the full `prepare_qg_kg` surface realizes the honest pointwise
+closed form `prepareKgClosed` (`k * exp2(g[BT-1] - g)`) at every active `KG`
+lane of loop row `t_rel`. -/
+theorem prepare_qg_kg_surface_kg_closed_compute_correct_general
+    (Q K G QG KG : RegionName)
+    (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
+    (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
+    ComputeCorrect.Realizes
+      (kernel := prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s DK BK)
+        (fun i => (KG, offset s s_qk_h DK t_rel.val BT BK i)))
+      (expected := fun i : Fin BK =>
+        prepareKgClosed s K G s_qk_h DK BT BK t_rel i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prepare_qg_kg_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := prepare_qg_kg_full_surface_kg_closed_general Q K G QG KG
+    s_qk_h DK BT BK scale s t_rel i
+    hQ_QG hQ_KG hK_QG hK_KG hG_QG hG_KG hQG_KG hBK
+  rw [hExec] at h
+  simp only [Option.map_some] at h
+  rw [Option.some.injEq] at h
+  show s'.readMem KG (offset s s_qk_h DK t_rel.val BT BK i) = _
+  rw [h, if_pos hActive]
 
 /-! ## Genuine `bwd_decay_global_cumsum` closed forms
 
