@@ -5375,4 +5375,2110 @@ theorem context_attn_bloom_python_test_shape_output_summary
   · exact context_attn_bloom_surface_python_block64_compute_correct Q K V
       B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
 
+
+/-! ## General (`…G`) dimension-parameterized stack for context_attn_bloom
+
+The pinned proof above hardcodes `BLOCK_M ∈ {128,64}`, `BLOCK_N = BLOCK_DMODEL =
+128`, `head_dim = 96`, the per-axis K/V/Q strides `576/96/1`, and the gather
+strides `7500/1`. The `…G` family below abstracts those over `H`/`BLOCK_M`/
+`BLOCK_N`/`BLOCK_DMODEL`/`head_dim` + all strides (incl. the `Req_to_tokens`
+gather strides). The natural-`exp` in-loop-normalized streaming softmax with the
+`-1e8` causal sentinel is kept exactly. Instantiating the test shape recovers the
+pinned defs/theorems (the pin bridges below). `kv_group_num = 1` (so
+`cur_kv_head = cur_head`). -/
+
+/-- General `Req_to_tokens` gather: physical token slot for streamed key index
+`j`, gather strides free:
+`kv_loc(j) = Req_to_tokens[stride_req_b·req_idx + stride_req_s·j]`. -/
+noncomputable def bloomKvLocG
+    (s : BlockState) (Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s j : Nat) : Nat :=
+  s.readMemValue .nat Req_to_tokens (reqIdx s B_req_idx * stride_req_b + stride_req_s * j)
+
+/-- General coordinate-faithful query tile `Q[gi, e]` at head/stride parameters. -/
+noncomputable def bloomQTileG
+    (s : BlockState) (Q B_Start_Loc : RegionName)
+    (stride_qbs stride_qh stride_qd BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Nat) : ℝ :=
+  s.readMem Q
+    ((startLoc s B_Start_Loc + (s.pids 2 * BLOCK_M + i.val)) * stride_qbs
+      + curHead s * stride_qh + e * stride_qd)
+
+/-- General coordinate-faithful key tile `K[kv_loc(j), cur_head, e]`. -/
+noncomputable def bloomKTileG (s : BlockState) (K Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd S : Nat) (j : Fin S) (e : Nat) : ℝ :=
+  s.readMem K (bloomKvLocG s Req_to_tokens B_req_idx stride_req_b stride_req_s j.val * stride_kbs
+    + curHead s * stride_kh + e * stride_kd)
+
+/-- General coordinate-faithful value tile `V[kv_loc(j), cur_head, d]`. -/
+noncomputable def bloomVTileG (s : BlockState) (V Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s stride_vbs stride_vh stride_vd S : Nat) (j : Fin S) (d : Nat) : ℝ :=
+  s.readMem V (bloomKvLocG s Req_to_tokens B_req_idx stride_req_b stride_req_s j.val * stride_vbs
+    + curHead s * stride_vh + d * stride_vd)
+
+/-- General `block_end_loc`/channel-masked key tile: genuine `bloomKTileG` for
+`j < bel` and channel `e < head_dim`, else `0`. -/
+noncomputable def bloomKTileMG (s : BlockState) (K Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd head_dim S bel : Nat)
+    (j : Fin S) (e : Nat) : ℝ :=
+  if (j.val < bel) ∧ (e < head_dim) then
+    bloomKTileG s K Req_to_tokens B_req_idx stride_req_b stride_req_s stride_kbs stride_kh stride_kd S j e
+  else 0
+
+/-- General `block_end_loc`/channel-masked value tile. -/
+noncomputable def bloomVTileMG (s : BlockState) (V Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s stride_vbs stride_vh stride_vd head_dim S bel : Nat)
+    (j : Fin S) (d : Nat) : ℝ :=
+  if (j.val < bel) ∧ (d < head_dim) then
+    bloomVTileG s V Req_to_tokens B_req_idx stride_req_b stride_req_s stride_vbs stride_vh stride_vd S j d
+  else 0
+
+/-- General row/channel-masked query tile: genuine `bloomQTileG` on active rows
+(`gi < seq_len`) and channel `e < head_dim`, else `0`. -/
+noncomputable def bloomQTileMG
+    (s : BlockState) (Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (stride_qbs stride_qh stride_qd head_dim BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Nat) : ℝ :=
+  if (s.pids 2 * BLOCK_M + i.val < seqLen s B_Seqlen B_Prompt_Cache_Len) ∧ (e < head_dim) then
+    bloomQTileG s Q B_Start_Loc stride_qbs stride_qh stride_qd BLOCK_M i e
+  else 0
+
+/-- General faithful per-key `(base-2 score, value)` the loop folds, with the
+`-1e8` sentinel kept and the `block_end_loc`/channel load masks; score fed
+`/ log 2` so `pow2 score = exp (natural kernel score)`. -/
+noncomputable def bloomKVMG
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel : Nat)
+    (i : Fin BLOCK_M) (d : Nat) (j : Fin S) : ℝ × ℝ :=
+  ((if j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len then
+      sm_scale * Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+        bloomQTileMG s Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len stride_qbs stride_qh stride_qd head_dim BLOCK_M i e.val
+          * bloomKTileMG s K Req_to_tokens B_req_idx stride_req_b stride_req_s stride_kbs stride_kh stride_kd head_dim S bel j e.val)
+    else (0.0 - 10e7 : ℝ)) / Real.log 2,
+    bloomVTileMG s V Req_to_tokens B_req_idx stride_req_b stride_req_s stride_vbs stride_vh stride_vd head_dim S bel j d)
+
+/-- **General faithful kernel value** at output lane `(i,d)`: the block-causal-guarded
+normalized accumulator `gAccN` of the ⊥-seeded online-softmax fold over `bloomKVMG`
+for the full streamed window `[0, S)`. A pure function of `Q`/`K`/`V` memory. -/
+noncomputable def contextAttnBloomExactFoldMG
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M S bel : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  gAccN S BLOCK_N (s.pids 2 * BLOCK_M + idx.1.val + promptLen s B_Prompt_Cache_Len)
+    (bloomKVMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val)
+    (S / BLOCK_N)
+
+/-- **Pin bridge (tiles).** At the test shape the general per-key data coincides
+with the pinned `bloomKVM`. -/
+theorem bloomKVMG_pin
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    bloomKVMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+        576 96 1 7500 1 576 96 1 576 96 1 96 128 BLOCK_M S bel i d.val
+      = bloomKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale 7500 1 BLOCK_M S bel i d := by
+  unfold bloomKVMG bloomKVM bloomKTileMG bloomVTileMG bloomQTileMG bloomKTileG bloomVTileG bloomQTileG
+    bloomKvLocG bloomKTileM bloomVTileM bloomQTileM ctxKTile ctxVTile ctxQTile kvLoc
+  funext j
+  simp only [Nat.mul_one, Nat.one_mul, curHead]
+
+/-- **Pin bridge (fold).** The general exact fold instantiates to the pinned
+`contextAttnBloomExactFoldM` at the test shape. -/
+theorem contextAttnBloomExactFoldMG_pin
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnBloomExactFoldMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+        576 96 1 7500 1 576 96 1 576 96 1 96 128 128 BLOCK_M S bel idx
+      = contextAttnBloomExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale 7500 1 BLOCK_M S bel idx := by
+  unfold contextAttnBloomExactFoldMG contextAttnBloomExactFoldM
+  rw [bloomKVMG_pin]
+
+
+/-! ### General op-eval gather/mask helpers (strides + head_dim free) -/
+
+/-- General masked `kv_loc` gather eval (gather strides free). -/
+theorem bloom_kvloc_gather_evalG {BN : Nat} (s : BlockState)
+    (Req_to_tokens : RegionName) (rqi SN bel stride_req_b stride_req_s : Nat)
+    (hrqi : s.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b) (Op.ref .nat [] "cur_batch_req_idx"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n")))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+            (Op.ref .nat [] "block_end_loc"))
+          (Op.broadcast (Op.constNat 0) [BN]))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          if decide (SN + idx.1.val < bel) then
+            s.readMemValue .nat (Region.cast Req_to_tokens) (stride_req_b * rqi + stride_req_s * (SN + idx.1.val))
+          else 0⟩ : Tile .nat [BN]) := by
+  simp only [evalOp, hrqi, hsn, hn, hbel, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.scalar_data, Tile.scalar_data_index, Tile.vec_data,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, Region.cast_cast]
+  by_cases h : SN + idx.1.val < bel
+  · simp only [h, decide_true, if_true]
+  · simp only [h, decide_false, Bool.false_eq_true, if_false]
+
+/-- General `off_k` gather recipe (K strides + head_dim free, shape `[D, BN]`). -/
+theorem bloom_offk_gather_evalG {BN D : Nat} (s : BlockState) (ckvh : Nat) (kvf : Fin BN → Nat)
+    (stride_kbs stride_kh stride_kd : Nat)
+    (hkvloc : s.regs .nat [BN] "kv_loc" = some (Tile.vec kvf))
+    (hckvh : s.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "kv_loc"))
+            (Op.constNat stride_kbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_kh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat stride_kd))) s
+      = some (⟨fun idx : TileIndex [D, BN] =>
+          kvf idx.2.1 * stride_kbs + ckvh * stride_kh + idx.1.val * stride_kd⟩ : Tile .nat [D, BN]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+    ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hkvloc, hckvh, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- General `off_v` gather recipe (V strides + head_dim free, shape `[BN, D]`). -/
+theorem bloom_offv_gather_evalG {BN D : Nat} (s : BlockState) (ckvh : Nat) (kvf : Fin BN → Nat)
+    (stride_vbs stride_vh stride_vd : Nat)
+    (hkvloc : s.regs .nat [BN] "kv_loc" = some (Tile.vec kvf))
+    (hckvh : s.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "kv_loc"))
+            (Op.constNat stride_vbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_vh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat stride_vd))) s
+      = some (⟨fun idx : TileIndex [BN, D] =>
+          kvf idx.1 * stride_vbs + ckvh * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [BN, D]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+    ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hkvloc, hckvh, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- General `k` masked-load mask (head_dim free, shape `[D, BN]`). -/
+theorem bloomKMask_evalG {BN D : Nat} (s : BlockState) (SN bel head_dim : Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.boolAnd Broadcast.nil.consR.consL
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat head_dim))) s
+      = some (⟨fun idx : TileIndex [D, BN] =>
+          decide (SN + idx.2.1.val < bel) && decide (idx.1.val < head_dim)⟩ : Tile .bool [D, BN]) := by
+  rw [evalOp]
+  rw [evalOp_lt, evalOp_add]
+  erw [ctx_evalOp_expandDim_zero_nat]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_one_nat]
+  simp only [evalOp_ref, evalOp_constNat, hsn, hn, hd, hbel,
+    Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.cop_data, Tile.expandDim, Tile.scalar_data_index,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+
+/-- General `v` masked-load mask (head_dim free, shape `[BN, D]`). -/
+theorem bloomVMask_evalG {BN D : Nat} (s : BlockState) (SN bel head_dim : Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val)))
+    (hbel : s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat head_dim))) s
+      = some (⟨fun idx : TileIndex [BN, D] =>
+          decide (SN + idx.1.val < bel) && decide (idx.2.1.val < head_dim)⟩ : Tile .bool [BN, D]) := by
+  rw [evalOp]
+  rw [evalOp_lt, evalOp_add]
+  erw [ctx_evalOp_expandDim_one_nat]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_zero_nat]
+  simp only [evalOp_ref, evalOp_constNat, hsn, hn, hd, hbel,
+    Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.cop_data, Tile.expandDim, Tile.scalar_data_index,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+
+/-- General `q`/store mask (head_dim free, shape `[BM, D]`). -/
+theorem bloomQMask_evalG {BM D : Nat} (s : BlockState) (gOM : Fin BM → Nat) (sl head_dim : Nat)
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hd : s.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val)))
+    (hsl : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)) :
+    evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat head_dim))) s
+      = some (⟨fun idx : TileIndex [BM, D] =>
+          decide (gOM idx.1 < sl) && decide (idx.2.1.val < head_dim)⟩ : Tile .bool [BM, D]) := by
+  rw [evalOp]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_one_nat]
+  rw [evalOp_lt]
+  erw [ctx_evalOp_expandDim_zero_nat]
+  simp only [evalOp_ref, evalOp_constNat, hm, hd, hsl, Option.bind_eq_bind, Option.bind_some, Option.pure_def]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.cop_data, Tile.expandDim, Tile.scalar_data_index, Tile.vec_data,
+    Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt]
+
+
+/-! ### General loop body + body split -/
+
+/-- General lowered bloom loop-body statements (strides/head_dim/BLOCK_* free). -/
+noncomputable def bloomLoopBodyG (Q K V Req_to_tokens B_req_idx : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .nat [BLOCK_N] "kv_loc"
+      (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b) (Op.ref .nat [] "cur_batch_req_idx"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BLOCK_N] "offs_n")))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BLOCK_N] "offs_n"))
+            (Op.ref .nat [] "block_end_loc"))
+          (Op.broadcast (Op.constNat 0) [BLOCK_N]))),
+    Stmt.assign .nat [BLOCK_DMODEL, BLOCK_N] "off_k"
+      (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "kv_loc"))
+            (Op.constNat stride_kbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_kh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_kd))),
+    Stmt.assign .real [BLOCK_DMODEL, BLOCK_N] "k"
+      (Op.load .real (MemAccess.region K (Op.ref .nat [BLOCK_DMODEL, BLOCK_N] "off_k"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consR.consL
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))
+              (Op.ref .nat [] "block_end_loc"))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+              (Op.constNat head_dim)))
+          ((Op.const (0.0 : ℝ)).broadcast [BLOCK_DMODEL, BLOCK_N]))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.full [BLOCK_M, BLOCK_N] (Op.const (0 : ℝ))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "q") (Op.ref .real [BLOCK_DMODEL, BLOCK_N] "k"))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.const (sm_scale : ℝ))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      ((Op.ge .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))).where
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (100000000.0 : ℝ))).broadcast [BLOCK_M, BLOCK_N])),
+    Stmt.assign .real [BLOCK_M] "m_ij"
+      (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk")),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p"
+      (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "m_ij"))).exp,
+    Stmt.assign .real [BLOCK_M] "l_ij"
+      (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    Stmt.assign .real [BLOCK_M] "m_i_new"
+      ((Op.gt .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_ij")).where
+        (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_ij")),
+    Stmt.assign .real [BLOCK_M] "alpha"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_i_new")).exp,
+    Stmt.assign .real [BLOCK_M] "beta"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "m_ij") (Op.ref .real [BLOCK_M] "m_i_new")).exp,
+    Stmt.assign .real [BLOCK_M] "l_i_new"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "alpha") (Op.ref .real [BLOCK_M] "l_i"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "beta") (Op.ref .real [BLOCK_M] "l_ij"))),
+    Stmt.assign .real [BLOCK_M] "p_scale"
+      (Op.div .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "beta") (Op.ref .real [BLOCK_M] "l_i_new")),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BLOCK_M, BLOCK_N] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "p_scale"))),
+    Stmt.assign .real [BLOCK_M] "acc_scale"
+      (Op.mul .real Broadcast.nil.consSame
+        (Op.div .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "l_i") (Op.ref .real [BLOCK_M] "l_i_new"))
+        (Op.ref .real [BLOCK_M] "alpha")),
+    Stmt.assign .real [BLOCK_M] "acc_scale"
+      ((Op.ge .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BLOCK_M] "offs_m") (Op.ref .nat [] "prompt_cache_len"))
+          (Op.ref .nat [] "start_n")).where
+        (Op.ref .real [BLOCK_M] "acc_scale") ((Op.const (1.0 : ℝ)).broadcast [BLOCK_M])),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "acc_scale"))),
+    Stmt.assign .nat [BLOCK_N, BLOCK_DMODEL] "off_v"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "kv_loc"))
+            (Op.constNat stride_vbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_vh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_vd))),
+    Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "v"
+      (Op.load .real (MemAccess.region V (Op.ref .nat [BLOCK_N, BLOCK_DMODEL] "off_v"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consL.consR
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))
+              (Op.ref .nat [] "block_end_loc"))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+              (Op.constNat head_dim)))
+          ((Op.const (0.0 : ℝ)).broadcast [BLOCK_N, BLOCK_DMODEL]))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p" (Op.ref .real [BLOCK_M, BLOCK_N] "p"),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_N] "p") (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v"))),
+    Stmt.assign .real [BLOCK_M] "l_i" (Op.ref .real [BLOCK_M] "l_i_new"),
+    Stmt.assign .real [BLOCK_M] "m_i" (Op.ref .real [BLOCK_M] "m_i_new") ]
+
+
+/-! ### General preLoop + postLoop + body split -/
+
+/-- General lowered bloom prologue statements (strides/head_dim/BLOCK_* +
+kv_group_num free). -/
+noncomputable def bloomPreLoopG (Q : RegionName)
+    (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+    Stmt.assign .nat [] "cur_head" (Op.programId 1),
+    Stmt.assign .nat [] "start_m" (Op.programId 2),
+    Stmt.assign .nat [] "cur_kv_head"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat kv_group_num)),
+    Stmt.assign .nat [] "cur_batch_in_all_start_index"
+      (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "prompt_cache_len"
+      (Op.load .nat (MemAccess.region b_prompt_cache_len (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.sub .nat Broadcast.nil
+        (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+        (Op.ref .nat [] "prompt_cache_len")),
+    Stmt.assign .nat [] "cur_batch_req_idx"
+      (Op.load .nat (MemAccess.region B_req_idx (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "block_start_loc"
+      (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_M) (Op.ref .nat [] "start_m")),
+    Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+    Stmt.assign .nat [BLOCK_DMODEL] "offs_d" (Op.arange BLOCK_DMODEL),
+    Stmt.assign .nat [BLOCK_M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+    Stmt.assign .nat [BLOCK_M, BLOCK_DMODEL] "off_q"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+            (Op.constNat stride_qbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_qh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_qd))),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+      (Op.load .real (MemAccess.region Q (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_q"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consL.consR
+            (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+              (Op.ref .nat [] "cur_batch_seq_len"))
+            (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+              (Op.constNat head_dim)))
+          ((Op.const (0.0 : ℝ)).broadcast [BLOCK_M, BLOCK_DMODEL]))),
+    Stmt.assign .real [BLOCK_M] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [BLOCK_M] "l_i" (Op.full [BLOCK_M] (Op.const 0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)),
+    Stmt.assign .nat [] "block_mask"
+      ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.ref .nat [] "cur_batch_seq_len")).where
+        (Op.constNat 1) (Op.constNat 0)),
+    Stmt.assign .nat [] "block_end_loc"
+      ((Op.lt .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))).where
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+          (Op.ref .nat [] "prompt_cache_len"))) ]
+
+/-- General lowered bloom post-loop statements (NO `acc /= l_i`; in-loop
+normalized). -/
+noncomputable def bloomPostLoopG (Out : RegionName)
+    (stride_obs stride_oh stride_od head_dim BLOCK_DMODEL BLOCK_M : Nat) : List Stmt :=
+  [ Stmt.assign .nat [BLOCK_M, BLOCK_DMODEL] "off_o"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+            (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_od))),
+    Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_o")),
+    Stmt.store .real [BLOCK_M, BLOCK_DMODEL] (MemAccess.ptr (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (MaskOpt.mask
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+            (Op.constNat head_dim)))) ]
+
+/-- **General body decomposition.** The general surface body splits as
+`bloomPreLoopG ++ (forRangeDyn … bloomLoopBodyG :: bloomPostLoopG)` by `rfl`. -/
+theorem bloomBody_splitG (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    (context_attn_bloom_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+        Req_to_tokens B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body
+      = bloomPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+          stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+              (Op.constNat BLOCK_N)
+              (bloomLoopBodyG Q K V Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s
+                stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M BLOCK_N)
+            :: bloomPostLoopG Out stride_obs stride_oh stride_od head_dim BLOCK_DMODEL BLOCK_M) := by
+  rfl
+
+/-- General preLoop take: surface body `take 19 = bloomPreLoopG`. -/
+theorem bloomPreLoopG_take (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    (context_attn_bloom_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+        Req_to_tokens B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body.take 19
+      = bloomPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+          stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N := by
+  rfl
+
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General LoopBody execution.** Mirror of `bloomLoopBody_steps` over symbolic
+dims/strides + free gather/head_dim. Threads `0 < BLOCK_N` (for `reduceMaxDrop`
+totality). -/
+theorem bloomLoopBody_stepsG (Q K V Req_to_tokens B_req_idx : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N)
+    (sin : BlockState) (SN : Nat)
+    (gOM : Fin BLOCK_M → Nat) (cb ckvh ch plen sl bel cbsi rqi : Nat)
+    (qtile : Tile .real [BLOCK_M, BLOCK_DMODEL]) (mtile ltile : Tile .real [BLOCK_M])
+    (acctile : Tile .real [BLOCK_M, BLOCK_DMODEL])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hcb : sin.regs .nat [] "cur_batch" = some (Tile.scalar cb))
+    (hckvh : sin.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hch : sin.regs .nat [] "cur_head" = some (Tile.scalar ch))
+    (hplen : sin.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen))
+    (hsl : sin.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl))
+    (hbel : sin.regs .nat [] "block_end_loc" = some (Tile.scalar bel))
+    (hcbsi : sin.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar cbsi))
+    (hrqi : sin.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi))
+    (hm : sin.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec gOM))
+    (hn : sin.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hd : sin.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)))
+    (hq : sin.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qtile)
+    (hmi : sin.regs .real [BLOCK_M] "m_i" = some mtile)
+    (hli : sin.regs .real [BLOCK_M] "l_i" = some ltile)
+    (hacc : sin.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some acctile)
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts (bloomLoopBodyG Q K V Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s
+        stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M BLOCK_N) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .nat [] "start_n" = some (Tile.scalar SN)
+      ∧ sF.regs .nat [] "cur_batch" = some (Tile.scalar cb)
+      ∧ sF.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh)
+      ∧ sF.regs .nat [] "cur_head" = some (Tile.scalar ch)
+      ∧ sF.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen)
+      ∧ sF.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)
+      ∧ sF.regs .nat [] "block_end_loc" = some (Tile.scalar bel)
+      ∧ sF.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar cbsi)
+      ∧ sF.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi)
+      ∧ sF.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec gOM)
+      ∧ sF.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ sF.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+      ∧ sF.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qtile
+      ∧ ∃ (kloadT : Tile .real [BLOCK_DMODEL, BLOCK_N]) (vloadT : Tile .real [BLOCK_N, BLOCK_DMODEL])
+            (qkT : Tile .real [BLOCK_M, BLOCK_N])
+            (rmaxT miNewT alphaT betaT lijT pscaleT liNewT accscale2T : Tile .real [BLOCK_M])
+            (pexpT p2T : Tile .real [BLOCK_M, BLOCK_N]) (acc1T : Tile .real [BLOCK_M, BLOCK_DMODEL]),
+          kloadT = (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+              if decide (SN + idx.2.1.val < bel) && decide (idx.1.val < head_dim) then
+                sin.readMemValue .real (Region.cast K)
+                  ((if decide (SN + idx.2.1.val < bel) then
+                      sin.readMemValue .nat (Region.cast Req_to_tokens) (stride_req_b * rqi + stride_req_s * (SN + idx.2.1.val))
+                    else 0) * stride_kbs + ckvh * stride_kh + idx.1.val * stride_kd)
+              else some (0.0 : ℝ)⟩ : Tile .real [BLOCK_DMODEL, BLOCK_N])
+          ∧ vloadT = (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+              if decide (SN + idx.1.val < bel) && decide (idx.2.1.val < head_dim) then
+                sin.readMemValue .real (Region.cast V)
+                  ((if decide (SN + idx.1.val < bel) then
+                      sin.readMemValue .nat (Region.cast Req_to_tokens) (stride_req_b * rqi + stride_req_s * (SN + idx.1.val))
+                    else 0) * stride_vbs + ckvh * stride_vh + idx.2.1.val * stride_vd)
+              else some (0.0 : ℝ)⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL])
+          ∧ qkT = Tile.select
+              (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BLOCK_M, BLOCK_N])
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+                  (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                  (Tile.dot [] qtile kloadT))
+                (Tile.scalar (some sm_scale)))
+              (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0.0 - 100000000.0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qkT = some rmaxT
+          ∧ pexpT = Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame
+              qkT (Tile.expandDim ⟨1, by simp⟩ rmaxT))
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) pexpT
+          ∧ miNewT = Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT)
+          ∧ betaT = Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT)
+          ∧ liNewT = Tile.bop NumericDType.real.add Broadcast.nil.consSame
+              (Tile.bop NumericDType.real.mul Broadcast.nil.consSame alphaT ltile)
+              (Tile.bop NumericDType.real.mul Broadcast.nil.consSame betaT lijT)
+          ∧ pscaleT = Tile.bop NumericDType.real.div Broadcast.nil.consSame betaT liNewT
+          ∧ p2T = Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame pexpT (Tile.expandDim ⟨1, by simp⟩ pscaleT)
+          ∧ accscale2T = Tile.select
+              (⟨fun idx : TileIndex [BLOCK_M] => decide (SN ≤ gOM idx.1 + plen)⟩ : Tile .bool [BLOCK_M])
+              (Tile.bop NumericDType.real.mul Broadcast.nil.consSame
+                (Tile.bop NumericDType.real.div Broadcast.nil.consSame ltile liNewT) alphaT)
+              (⟨fun _ : TileIndex [BLOCK_M] => some (1.0 : ℝ)⟩ : Tile .real [BLOCK_M])
+          ∧ acc1T = Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame acctile (Tile.expandDim ⟨1, by simp⟩ accscale2T)
+          ∧ sF.regs .real [BLOCK_M] "m_i" = some miNewT
+          ∧ sF.regs .real [BLOCK_M] "l_i" = some liNewT
+          ∧ sF.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+              acc1T (Tile.dot [] p2T vloadT)) := by
+  set kvf : Fin BLOCK_N → Nat := fun j : Fin BLOCK_N =>
+      if decide (SN + j.val < bel) then
+        sin.readMemValue .nat (Region.cast Req_to_tokens) (stride_req_b * rqi + stride_req_s * (SN + j.val))
+      else 0 with hkvf
+  set kloadT : Tile .real [BLOCK_DMODEL, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+      if decide (SN + idx.2.1.val < bel) && decide (idx.1.val < head_dim) then
+        sin.readMemValue .real (Region.cast K) (kvf idx.2.1 * stride_kbs + ckvh * stride_kh + idx.1.val * stride_kd)
+      else some (0.0 : ℝ)⟩ with hkl
+  set vloadT : Tile .real [BLOCK_N, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+      if decide (SN + idx.1.val < bel) && decide (idx.2.1.val < head_dim) then
+        sin.readMemValue .real (Region.cast V) (kvf idx.1 * stride_vbs + ckvh * stride_vh + idx.2.1.val * stride_vd)
+      else some (0.0 : ℝ)⟩ with hvl
+  set qkdotT : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+      (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N]) (Tile.dot [] qtile kloadT) with hqkdot
+  set qkscaleT : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.mul Broadcast.scalarR qkdotT
+      (Tile.scalar (some sm_scale)) with hqkscale
+  set qkT : Tile .real [BLOCK_M, BLOCK_N] := Tile.select
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BLOCK_M, BLOCK_N])
+      qkscaleT
+      (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0.0 - 100000000.0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N]) with hqk
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [BLOCK_M, BLOCK_N] (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) from hBN)]⟩
+  set rmaxT' : Tile .real [BLOCK_M] := rmaxT with hrmaxT'
+  set pexpT : Tile .real [BLOCK_M, BLOCK_N] := Tile.uop WithBot.realExp
+      (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT (Tile.expandDim ⟨1, by simp⟩ rmaxT')) with hpexp
+  set lijT : Tile .real [BLOCK_M] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) pexpT with hlij
+  set miNewT : Tile .real [BLOCK_M] := Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mtile rmaxT) mtile rmaxT with hminew
+  set alphaT : Tile .real [BLOCK_M] := Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT) with hal
+  set betaT : Tile .real [BLOCK_M] := Tile.uop WithBot.realExp (Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT) with hbeta
+  set liNewT : Tile .real [BLOCK_M] := Tile.bop NumericDType.real.add Broadcast.nil.consSame
+      (Tile.bop NumericDType.real.mul Broadcast.nil.consSame alphaT ltile)
+      (Tile.bop NumericDType.real.mul Broadcast.nil.consSame betaT lijT) with hlinew
+  set pscaleT : Tile .real [BLOCK_M] := Tile.bop NumericDType.real.div Broadcast.nil.consSame betaT liNewT with hpscale
+  set p2T : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame pexpT (Tile.expandDim ⟨1, by simp⟩ pscaleT) with hp2
+  set accscale1T : Tile .real [BLOCK_M] := Tile.bop NumericDType.real.mul Broadcast.nil.consSame
+      (Tile.bop NumericDType.real.div Broadcast.nil.consSame ltile liNewT) alphaT with hascale1
+  set accscale2T : Tile .real [BLOCK_M] := Tile.select
+      (⟨fun idx : TileIndex [BLOCK_M] => decide (SN ≤ gOM idx.1 + plen)⟩ : Tile .bool [BLOCK_M]) accscale1T
+      (⟨fun _ : TileIndex [BLOCK_M] => some (1.0 : ℝ)⟩ : Tile .real [BLOCK_M]) with hascale2
+  set acc1T : Tile .real [BLOCK_M, BLOCK_DMODEL] := Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame acctile (Tile.expandDim ⟨1, by simp⟩ accscale2T) with hacc1
+  unfold bloomLoopBodyG
+  -- stmt 0: start_n = ref start_n
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar SN) from by rw [evalOp_ref]; exact hsn))]
+  -- stmt 1: kv_loc = masked gather
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloom_kvloc_gather_evalG _ Req_to_tokens rqi SN bel stride_req_b stride_req_s
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hrqi]) (by simp only [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hbel])))]
+  -- stmt 2: off_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloom_offk_gather_evalG _ ckvh kvf stride_kbs stride_kh stride_kd
+      (by rw [BlockState.setReg_same, hkvf]; refine congrArg some ?_; ext idx;
+          simp only [Tile.vec, BlockState.setReg_readMemValue])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hckvh]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd])))]
+  -- stmt 3: k = masked load (2-cond)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther K (Op.ref .nat [BLOCK_DMODEL, BLOCK_N] "off_k") _ _ _
+      (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] => kvf idx.2.1 * stride_kbs + ckvh * stride_kh + idx.1.val * stride_kd⟩ : Tile .nat [BLOCK_DMODEL, BLOCK_N])
+      (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] => decide (SN + idx.2.1.val < bel) && decide (idx.1.val < head_dim)⟩ : Tile .bool [BLOCK_DMODEL, BLOCK_N])
+      (⟨fun _ : TileIndex [BLOCK_DMODEL, BLOCK_N] => some (0.0 : ℝ)⟩ : Tile .real [BLOCK_DMODEL, BLOCK_N])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (bloomKMask_evalG _ SN bel head_dim (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsn])
+        (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hbel]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 4: qk = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (bloomQkFull_eval _))]
+  -- stmt 5: qk = qk + dot q k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomQkAddDot_eval _ (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N]) qtile kloadT
+      (by simp only [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hq])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same, hkl];
+          refine congrArg some ?_; ext idx; simp only [BlockState.setReg_readMemValue])))]
+  -- stmt 6: qk = qk * sm_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomQkScale_eval _ sm_scale qkdotT (by simp only [BlockState.setReg_same, hqkdot])))]
+  -- stmt 7: qk = where(ge, qk, -1e8)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomQkWhere_eval _ BLOCK_M BLOCK_N plen SN gOM qkscaleT
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hm]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hplen]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsn])
+      (by simp only [BlockState.setReg_same, hqkscale])))]
+  -- stmt 8: m_ij = reduceMax
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BLOCK_M] "m_ij"
+    (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk")) _ rmaxT
+    (bloomMij_eval _ qkT rmaxT (by simp only [BlockState.setReg_same, hqk]) hrm))]
+  -- stmt 9: p = exp(qk - m_ij)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomP_eval _ qkT rmaxT (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hqk]) (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 10: l_ij = sum p 1
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BLOCK_M] "l_ij"
+    (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p")) _ lijT
+    (bloomLij_eval _ pexpT (by simp only [BlockState.setReg_same, hpexp]; try rfl)))]
+  -- stmt 11: m_i_new = maximum(m_i, m_ij)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomMiNew_eval _ mtile rmaxT (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hmi]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 12: alpha = exp(m_i - m_i_new)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomExpSub_eval _ "m_i" "m_i_new" mtile miNewT (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hmi]) (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 13: beta = exp(m_ij - m_i_new)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomExpSub_eval _ "m_ij" "m_i_new" rmaxT miNewT (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 14: l_i_new = alpha*l_i + beta*l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomLiNew_eval _ alphaT ltile betaT lijT
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hli])
+      (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 15: p_scale = beta / l_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomPscale_eval _ betaT liNewT (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl) (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 16: p = p * p_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomP2_eval _ pexpT pscaleT
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 17: acc_scale = (l_i/l_i_new)*alpha
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomAccScale1_eval _ ltile liNewT alphaT
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hli])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 18: acc_scale = where(ge, acc_scale, 1)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomAccScale2_eval _ BLOCK_M plen SN gOM accscale1T
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hm])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hplen])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsn])
+      (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 19: acc = acc * acc_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomAcc1_eval _ acctile accscale2T
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hacc])
+      (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)))]
+  -- stmt 20: off_v = gather
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloom_offv_gather_evalG _ ckvh kvf stride_vbs stride_vh stride_vd
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hkvf];
+          refine congrArg some ?_; ext idx; simp only [Tile.vec, BlockState.setReg_readMemValue])
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hckvh]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd])))]
+  -- stmt 21: v = masked load (2-cond)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther V (Op.ref .nat [BLOCK_N, BLOCK_DMODEL] "off_v") _ _ _
+      (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => kvf idx.1 * stride_vbs + ckvh * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [BLOCK_N, BLOCK_DMODEL])
+      (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => decide (SN + idx.1.val < bel) && decide (idx.2.1.val < head_dim)⟩ : Tile .bool [BLOCK_N, BLOCK_DMODEL])
+      (⟨fun _ : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (0.0 : ℝ)⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (bloomVMask_evalG _ SN bel head_dim (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsn])
+        (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd]) (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hbel]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 22: p = ref p (noop)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [BLOCK_M, BLOCK_N] "p") _ = some p2T from by rw [evalOp_ref]; simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hp2]; try rfl))]
+  -- stmt 23: acc = acc + dot(p, v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bloomAcc2_eval _ acc1T p2T vloadT
+      (by simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by simp only [BlockState.setReg_same, hpexp, hlij, hminew, hal, hbeta, hlinew, hpscale, hp2, hascale1, hascale2, hacc1]; try rfl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same, hvl];
+          refine congrArg some ?_; ext idx; simp only [BlockState.setReg_readMemValue])))]
+  -- stmt 24: l_i = ref l_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [BLOCK_M] "l_i_new") _ = some liNewT from by rw [evalOp_ref]; simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hlinew]; try rfl))]
+  -- stmt 25: m_i = ref m_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [BLOCK_M] "m_i_new") _ = some miNewT from by rw [evalOp_ref]; simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hminew]; try rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    kloadT, vloadT, qkT, rmaxT, miNewT, alphaT, betaT, lijT, pscaleT, liNewT, accscale2T,
+    pexpT, p2T, acc1T,
+    rfl, rfl, rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hcb]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hckvh]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hch]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hplen]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsl]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hbel]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hcbsi]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hrqi]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hm]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hq]
+  · rw [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+
+
+/-! ### General per-key data + streaming-loop invariant -/
+
+/-- General per-key data (`bloomKVMG`) carried by the loop registers at output
+lane `(i, d)`. -/
+noncomputable def bloomGG
+    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel : Nat)
+    (i : Fin BLOCK_M) (d : Nat) : Fin S → ℝ × ℝ :=
+  bloomKVMG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+    stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel i d
+
+/-- **General streaming-loop invariant** unifying `bloomInvariant`/`bloomInvariant64`
+over `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`head_dim`, the gather strides and the K/V/Q
+strides. After `c` blocks the in-loop-normalized registers carry the ⊥-seeded fold
+`gStateBot (c·BLOCK_N)` over `bloomGG`: `m_i = log2·(running max)`, `l_i = (running
+denom)`, `acc = gAccN` (normalized accumulator). `kv_group_num = 1`; `0 <
+BLOCK_DMODEL` for the channel-0 score lane. -/
+noncomputable def bloomInvariantG
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M : Nat) (hD : 0 < BLOCK_DMODEL)
+    (S bel : Nat) (c : Nat) (s : BlockState) : Prop :=
+  let plen := promptLen s0 B_Prompt_Cache_Len
+  let sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len
+  let g := fun (i : Fin BLOCK_M) (d : Nat) =>
+    bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel i d
+  s.pids = s0.pids ∧ s.mem = s0.mem ∧ (∀ rg o, s.undef rg o = 0) ∧
+  (s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "cur_kv_head" = some (Tile.scalar (s0.pids 1 / 1))) ∧
+  (s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen)) ∧
+  (s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)) ∧
+  (s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) ∧
+  (s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s0 B_Start_Loc))) ∧
+  (s.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar (reqIdx s0 B_req_idx))) ∧
+  (s.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val))) ∧
+  (s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))) ∧
+  (s.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      if decide (s0.pids 2 * BLOCK_M + idx.1.val < sl) && decide (idx.2.1.val < head_dim) then
+        s0.readMemValue .real (Region.cast Q)
+          ((startLoc s0 B_Start_Loc + (s0.pids 2 * BLOCK_M + idx.1.val)) * stride_qbs
+            + s0.pids 1 * stride_qh + idx.2.1.val * stride_qd)
+      else some (0.0 : ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M] "m_i" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      (gStateBot S (c * BLOCK_N) (g r.1 (⟨0, hD⟩ : Fin BLOCK_DMODEL).val)).1.map (· * Real.log 2)⟩) ∧
+  (s.regs .real [BLOCK_M] "l_i" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      some (gStateBot S (c * BLOCK_N) (g r.1 (⟨0, hD⟩ : Fin BLOCK_DMODEL).val)).2.1⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c)⟩) ∧
+  (c * BLOCK_N ≤ S)
+
+/-- **Pin bridge (per-key data).** At the test shape, `bloomGG` coincides with the
+pinned `bloomG` (BLOCK_M=128). -/
+theorem bloomGG_pin
+    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ) (S bel : Nat) (i d : Fin 128) :
+    bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+        576 96 1 7500 1 576 96 1 576 96 1 96 128 128 S bel i d.val
+      = bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale S bel i d := by
+  unfold bloomGG bloomG
+  rw [bloomKVMG_pin]
+
+
+/-! ### General preLoop eval (→ `bloomInvariantG 0`) -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `bloomPreLoopG_eval`.** The general prologue steps to a state seeding
+the loop-entry invariant (mirror of `bloomPreLoop_eval`, strides/head_dim/BLOCK_*
++ kv_group_num free; bloom pid layout `pids 0/1/2 = cur_batch/cur_head/start_m`). -/
+theorem bloomPreLoopG_eval
+    (s : BlockState) (Q : RegionName)
+    (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (bloomPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+            stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "cur_batch" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 2))
+      ∧ s0.regs .nat [] "cur_kv_head" = some (Tile.scalar (s.pids 1 / kv_group_num))
+      ∧ s0.regs .nat [] "prompt_cache_len"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)))
+      ∧ s0.regs .nat [] "cur_batch_in_all_start_index"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 0)))
+      ∧ s0.regs .nat [] "cur_batch_req_idx"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_req_idx) (s.pids 0)))
+      ∧ s0.regs .nat [] "cur_batch_seq_len"
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)))
+      ∧ s0.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s0.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+      ∧ s0.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 2 * BLOCK_M + r.val))
+      ∧ s0.regs .real [BLOCK_M] "m_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M] "l_i" = some ⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0 : ℝ)⟩
+      ∧ s0.regs .nat [] "block_end_loc"
+          = some (Tile.scalar
+              (let a := (s.pids 2 + 1) * BLOCK_M + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+               let b := (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+                   - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0))
+                 + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+               if a < b then a else b))
+      ∧ s0.regs .nat [] "block_mask"
+          = some (Tile.scalar
+              (if BLOCK_M * s.pids 2 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+                  - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0) then 1 else 0))
+      ∧ s0.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          if decide (s.pids 2 * BLOCK_M + idx.1.val
+              < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+                - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)) && decide (idx.2.1.val < head_dim) then
+            s.readMemValue .real (Region.cast Q)
+              ((s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 0) + (s.pids 2 * BLOCK_M + idx.1.val))
+                  * stride_qbs + s.pids 1 * stride_qh + idx.2.1.val * stride_qd)
+          else some (0.0 : ℝ)⟩ := by
+  unfold bloomPreLoopG
+  -- stmt 0: cur_batch = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: cur_head = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: start_m = programId 2
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 2 _))]
+  -- stmt 3: cur_kv_head = cur_head // kv_group_num
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat kv_group_num)) _
+        = some (Tile.scalar (s.pids 1 / kv_group_num)) from by
+      rw [ctx_evalOp_floorDiv]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 4: cur_batch_in_all_start_index = load(B_Start_Loc + cur_batch)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_scalar_nat B_Start_Loc (Op.ref .nat [] "cur_batch") _ (s.pids 0)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids])))]
+  -- stmt 5: prompt_cache_len = load(bpc + cur_batch)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_scalar_nat b_prompt_cache_len (Op.ref .nat [] "cur_batch") _ (s.pids 0)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids])))]
+  -- stmt 6: cur_batch_seq_len = load(B_Seqlen + cur_batch) - prompt_cache_len
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.sub .nat Broadcast.nil
+        (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+        (Op.ref .nat [] "prompt_cache_len")) _
+        = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0))) from by
+      rw [evalOp_sub, ctx_evalOp_load_scalar_nat B_Seqlen (Op.ref .nat [] "cur_batch") _ (s.pids 0)
+        (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids])]
+      simp only [evalOp_ref, BlockState.setReg_same, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 7: cur_batch_req_idx = load(B_req_idx + cur_batch)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_scalar_nat B_req_idx (Op.ref .nat [] "cur_batch") _ (s.pids 0)
+      (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids])))]
+  -- stmt 8: block_start_loc = BLOCK_M * start_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_M) (Op.ref .nat [] "start_m")) _
+        = some (Tile.scalar (BLOCK_M * s.pids 2)) from by
+      rw [evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 9: offs_n = arange BLOCK_N
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_N) _ = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) from evalOp_arange BLOCK_N _))]
+  -- stmt 10: offs_d = arange BLOCK_DMODEL
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_DMODEL) _ = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)) from evalOp_arange BLOCK_DMODEL _))]
+  -- stmt 11: offs_m = start_m * BLOCK_M + arange BLOCK_M
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)) _
+        = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 2 * BLOCK_M + r.val)) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_arange, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext r
+      simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]))]
+  -- stmt 12: off_q
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+            (Op.constNat stride_qbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_qh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_qd))) _
+        = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+            (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 0) + (s.pids 2 * BLOCK_M + idx.1.val))
+                * stride_qbs + s.pids 1 * stride_qh + idx.2.1.val * stride_qd⟩ : Tile .nat [BLOCK_M, BLOCK_DMODEL]) from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+        ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+        BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, reduceCtorEq, BlockState.setReg_pids, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 13: q = masked load (2-cond)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther Q (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_q") _ _ _
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 0) + (s.pids 2 * BLOCK_M + idx.1.val))
+              * stride_qbs + s.pids 1 * stride_qh + idx.2.1.val * stride_qd⟩ : Tile .nat [BLOCK_M, BLOCK_DMODEL])
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => decide (s.pids 2 * BLOCK_M + idx.1.val
+          < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)) && decide (idx.2.1.val < head_dim)⟩ : Tile .bool [BLOCK_M, BLOCK_DMODEL])
+      (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0.0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (bloomQMask_evalG _ (fun r : Fin BLOCK_M => s.pids 2 * BLOCK_M + r.val) _ head_dim
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 14: m_i = full 0 + (-inf) = full ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rfl))]
+  -- stmt 15: l_i = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_M] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 16: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 17: block_mask = where (block_start_loc < seqlen) 1 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc")
+            (Op.ref .nat [] "cur_batch_seq_len")).where (Op.constNat 1) (Op.constNat 0)) _
+        = some (Tile.scalar (if BLOCK_M * s.pids 2 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0) then 1 else 0)) from by
+      rw [evalOp_where]
+      simp only [evalOp_lt, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext _idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.scalar_data_index, ComparableDType.lt]
+      by_cases h : BLOCK_M * s.pids 2 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+      · simp [h]
+      · simp [h]))]
+  -- stmt 18: block_end_loc
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.lt .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))).where
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+            (Op.ref .nat [] "prompt_cache_len"))) _
+        = some (Tile.scalar
+            (let a := (s.pids 2 + 1) * BLOCK_M + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+             let b := (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+                 - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0))
+               + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+             if a < b then a else b)) from by
+      rw [evalOp_where]
+      simp only [evalOp_lt, evalOp_add, evalOp_mul, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext _idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.scalar_data_index,
+        ComparableDType.lt, NumericDType.add, NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex]
+      by_cases h : ((s.pids 2 + 1) * BLOCK_M + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0))
+          < (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 0)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0))
+            + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 0)
+      · simp [h]
+      · simp [h]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  all_goals
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
+      BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+
+
+/-! ### General `bloom_attn_stepG` (loop body advances `bloomInvariantG` one block) -/
+
+set_option maxHeartbeats 2400000 in
+set_option maxRecDepth 8000 in
+/-- **General `bloom_attn_stepG`.** The streaming loop body advances `bloomInvariantG`
+by one block. Mirror of `bloom_attn_step` over symbolic dims/strides + free gather
+strides/head_dim (`kv_group_num = 1`; `0 < BLOCK_DMODEL` for the channel-0 score
+lane, `0 < BLOCK_N` for the block reductions). Natural-exp in-loop normalization is
+preserved: `m_i = log2·runningmax`, `l_i = denom`, `acc = gAccN` (normalized). -/
+theorem bloom_attn_stepG
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd
+      BLOCK_DMODEL BLOCK_N BLOCK_M head_dim : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (S bel : Nat) (c : Nat) (i : Nat) (s : BlockState)
+    (hwin : (c + 1) * BLOCK_N ≤ S) (hieq : i = c * BLOCK_N)
+    (hinv : bloomInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+        sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel c s) :
+    ∃ s', stepStmts (bloomLoopBodyG Q K V Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s
+            stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M BLOCK_N)
+          (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ bloomInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel (c + 1) s' := by
+  subst hieq
+  set plen := promptLen s0 B_Prompt_Cache_Len with hplend
+  set sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len with hsld
+  set d0 : Nat := (⟨0, hD⟩ : Fin BLOCK_DMODEL).val with hd0def
+  set g := fun (i : Fin BLOCK_M) (d : Nat) =>
+    bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel i d with hgd
+  simp only [bloomInvariantG] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
+      hq, hmi, hli, hacc, hcle⟩ := hinv
+  set rqi : Nat := reqIdx s0 B_req_idx with hrqid
+  set qtile : Tile .real [BLOCK_M, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      if decide (s0.pids 2 * BLOCK_M + idx.1.val < sl) && decide (idx.2.1.val < head_dim) then
+        s0.readMemValue .real (Region.cast Q)
+          ((startLoc s0 B_Start_Loc + (s0.pids 2 * BLOCK_M + idx.1.val)) * stride_qbs
+            + s0.pids 1 * stride_qh + idx.2.1.val * stride_qd)
+      else some (0.0 : ℝ)⟩ with hqtile
+  set mtile : Tile .real [BLOCK_M] := ⟨fun r : TileIndex [BLOCK_M] =>
+      (gStateBot S (c * BLOCK_N) (g r.1 d0)).1.map (· * Real.log 2)⟩ with hmtile
+  set ltile : Tile .real [BLOCK_M] := ⟨fun r : TileIndex [BLOCK_M] =>
+      some (gStateBot S (c * BLOCK_N) (g r.1 d0)).2.1⟩ with hltile
+  set acctile : Tile .real [BLOCK_M, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c)⟩ with hacctile
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hsnF, hcbF, hckvhF, hchF, hplenF, hslF, hbelF,
+      hcbsiF, hrqiF, homF, honF, hodF, hqF,
+      kloadT, vloadT, qkT, rmaxT, miNewT, alphaT, betaT, lijT, pscaleT, liNewT, accscale2T,
+      pexpT, p2T, acc1T,
+      hkleq, hvleq, hqkeq, hrm, hpexpeq, hlijeq, hminew, haleq, hbetaeq, hlineweq, hpscaleeq, hp2eq,
+      hascale2eq, hacc1eq, hm_iF, hl_iF, haccF⟩ :=
+    bloomLoopBody_stepsG Q K V Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s
+      stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M BLOCK_N hBN
+      (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))) (c * BLOCK_N)
+      (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val)
+      (s0.pids 0) (s0.pids 1 / 1) (s0.pids 1) plen sl bel
+      (startLoc s0 B_Start_Loc) rqi
+      qtile mtile ltile acctile
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcb)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hckvh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hch)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hplen)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbel)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcbsi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hrqi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hon)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hod)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by intro rg o; simp [BlockState.setReg_undef, hundef])
+  refine ⟨sF, hchain, ?_⟩
+  have hckvhd : s0.pids 1 / 1 = s0.pids 1 := Nat.div_one _
+  have hrmem : ∀ (R : RegionName) (o : Nat),
+      (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))).readMem R o = s0.readMem R o := by
+    intro R o; rw [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  have hrmemN : ∀ (R : RegionName) (o : Nat),
+      s.readMemValue .nat R o = s0.readMemValue .nat R o := by
+    intro R o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  have hrmemR : ∀ (R : RegionName) (o : Nat), s.readMem R o = s0.readMem R o := by
+    intro R o; unfold BlockState.readMem; rw [hmem]
+  -- per-cell q readback: qtile = bloomQTileMG
+  have hqf : ∀ (a : Fin BLOCK_M) (e : Fin BLOCK_DMODEL),
+      qtile.data (a, e, PUnit.unit)
+        = some (bloomQTileMG s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len stride_qbs stride_qh stride_qd head_dim BLOCK_M a e.val) := by
+    intro a e
+    rw [hqtile]
+    show (if decide (s0.pids 2 * BLOCK_M + a.val < sl) && decide (e.val < head_dim) then
+        s0.readMemValue .real (Region.cast Q)
+          ((startLoc s0 B_Start_Loc + (s0.pids 2 * BLOCK_M + a.val)) * stride_qbs + s0.pids 1 * stride_qh + e.val * stride_qd)
+      else some (0.0 : ℝ)) = _
+    simp only [bloomQTileMG, bloomQTileG, curHead, ← hsld]
+    by_cases h1 : s0.pids 2 * BLOCK_M + a.val < sl
+    · by_cases h2 : e.val < head_dim
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h1, h2⟩),
+          if_pos (And.intro h1 h2)]
+        simp only [BlockState.readMemValue_real, Region.cast_id]
+      · rw [if_neg (by simp only [decide_eq_false_iff_not.mpr h2, Bool.and_false, Bool.false_eq_true, not_false_eq_true]),
+          if_neg (fun hcon => h2 hcon.2)]; norm_num
+    · rw [if_neg (by simp only [decide_eq_false_iff_not.mpr h1, Bool.false_and, Bool.false_eq_true, not_false_eq_true]),
+        if_neg (fun hcon => h1 hcon.1)]; norm_num
+  -- per-cell k readback: kloadT = bloomKTileMG (at global key c*BN+jL)
+  have hkf : ∀ (jL : Fin BLOCK_N) (e : Fin BLOCK_DMODEL),
+      kloadT.data (e, jL, PUnit.unit)
+        = some (bloomKTileMG s0 K Req_to_tokens B_req_idx stride_req_b stride_req_s stride_kbs stride_kh stride_kd head_dim S bel
+            ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩ e.val) := by
+    intro jL e
+    rw [hkleq]
+    show (if decide (c * BLOCK_N + jL.val < bel) && decide (e.val < head_dim) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))).readMemValue .real (Region.cast K)
+          ((if decide (c * BLOCK_N + jL.val < bel) then
+              (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))).readMemValue .nat (Region.cast Req_to_tokens)
+                (stride_req_b * rqi + stride_req_s * (c * BLOCK_N + jL.val))
+            else 0) * stride_kbs + (s0.pids 1 / 1) * stride_kh + e.val * stride_kd)
+        else some (0.0 : ℝ)) = _
+    simp only [bloomKTileMG, bloomKTileG, bloomKvLocG, curHead]
+    by_cases h : c * BLOCK_N + jL.val < bel
+    · by_cases h2 : e.val < head_dim
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h, h2⟩),
+          if_pos (And.intro h h2), if_pos (by simp only [decide_eq_true_eq]; exact h)]
+        simp only [BlockState.setReg_readMem, BlockState.setReg_readMemValue,
+          BlockState.readMemValue_real, Region.cast_id, hckvhd, hrqid, hrmemN, hrmemR,
+          Nat.mul_comm stride_req_b (reqIdx s0 B_req_idx)]
+      · rw [if_neg (by simp [h2]), if_neg (by simp [h2])]; norm_num
+    · rw [if_neg (by simp [h]), if_neg (by simp [h])]; norm_num
+  -- per-cell v readback: vloadT = bloomVTileMG
+  have hvf : ∀ (jL : Fin BLOCK_N) (d : Fin BLOCK_DMODEL),
+      vloadT.data (jL, d, PUnit.unit)
+        = some (bloomVTileMG s0 V Req_to_tokens B_req_idx stride_req_b stride_req_s stride_vbs stride_vh stride_vd head_dim S bel
+            ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩ d.val) := by
+    intro jL d
+    rw [hvleq]
+    show (if decide (c * BLOCK_N + jL.val < bel) && decide (d.val < head_dim) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))).readMemValue .real (Region.cast V)
+          ((if decide (c * BLOCK_N + jL.val < bel) then
+              (s.setReg "start_n" .nat [] (Tile.scalar (c * BLOCK_N))).readMemValue .nat (Region.cast Req_to_tokens)
+                (stride_req_b * rqi + stride_req_s * (c * BLOCK_N + jL.val))
+            else 0) * stride_vbs + (s0.pids 1 / 1) * stride_vh + d.val * stride_vd)
+        else some (0.0 : ℝ)) = _
+    simp only [bloomVTileMG, bloomVTileG, bloomKvLocG, curHead]
+    by_cases h : c * BLOCK_N + jL.val < bel
+    · by_cases h2 : d.val < head_dim
+      · rw [if_pos (by simp only [decide_eq_true_eq, Bool.and_eq_true]; exact ⟨h, h2⟩),
+          if_pos (And.intro h h2), if_pos (by simp only [decide_eq_true_eq]; exact h)]
+        simp only [BlockState.setReg_readMem, BlockState.setReg_readMemValue,
+          BlockState.readMemValue_real, Region.cast_id, hckvhd, hrqid, hrmemN, hrmemR,
+          Nat.mul_comm stride_req_b (reqIdx s0 B_req_idx)]
+      · rw [if_neg (by simp [h2]), if_neg (by simp [h2])]; norm_num
+    · rw [if_neg (by simp [h]), if_neg (by simp [h])]; norm_num
+  -- the score cell (natural) = (g a dd ⟨c*BN+jL⟩).1 · log 2
+  have hscorelog : ∀ (a : Fin BLOCK_M) (jL : Fin BLOCK_N) (dd : Nat),
+      bloomQkCell (D := BLOCK_DMODEL) sm_scale (c * BLOCK_N) plen (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val)
+          (fun a e => bloomQTileMG s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len stride_qbs stride_qh stride_qd head_dim BLOCK_M a e.val)
+          (fun jK e => bloomKTileMG s0 K Req_to_tokens B_req_idx stride_req_b stride_req_s stride_kbs stride_kh stride_kd head_dim S bel
+            ⟨c * BLOCK_N + jK.val, gBlock_idx_lt S BLOCK_N c hwin jK⟩ e.val)
+          a jL
+        = (g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 * Real.log 2 := by
+    intro a jL dd
+    simp only [hgd, bloomGG, bloomKVMG, bloomQkCell]
+    by_cases h : c * BLOCK_N + jL.val ≤ s0.pids 2 * BLOCK_M + a.val + plen
+    · rw [if_pos h, if_pos (by rw [hplend] at *; omega)]
+      rw [div_mul_cancel₀ _ (by positivity : Real.log 2 ≠ 0)]
+    · rw [if_neg h, if_neg (by rw [hplend] at *; omega)]
+      rw [div_mul_cancel₀ _ (by positivity : Real.log 2 ≠ 0)]; norm_num
+  -- qkT cell = some (score · log 2)
+  have hqk : ∀ (a : Fin BLOCK_M) (jL : Fin BLOCK_N) (dd : Nat),
+      qkT.data (a, jL, PUnit.unit) = some ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 * Real.log 2) := by
+    intro a jL dd
+    rw [hqkeq]
+    rw [bloom_qkT_cell sm_scale (c * BLOCK_N) plen (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val)
+      qtile kloadT
+      (fun aa ee => bloomQTileMG s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len stride_qbs stride_qh stride_qd head_dim BLOCK_M aa ee.val)
+      (fun jK ee => bloomKTileMG s0 K Req_to_tokens B_req_idx stride_req_b stride_req_s stride_kbs stride_kh stride_kd head_dim S bel
+        ⟨c * BLOCK_N + jK.val, gBlock_idx_lt S BLOCK_N c hwin jK⟩ ee.val)
+      hqf hkf a jL]
+    rw [hscorelog a jL dd]
+  set st := gStateBot S (c * BLOCK_N) with hstdef
+  set M' := fun (a : Fin BLOCK_M) (dd : Nat) => (gStateBot S ((c + 1) * BLOCK_N) (g a dd)).1 with hM'def
+  have hsucc : ∀ (a : Fin BLOCK_M) (dd : Nat),
+      gStateBot S ((c + 1) * BLOCK_N) (g a dd)
+        = (M' a dd,
+           (st (g a dd)).2.1 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin BLOCK_N =>
+                 pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (M' a dd).unbotD 0)),
+           (st (g a dd)).2.2 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin BLOCK_N =>
+                 pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (M' a dd).unbotD 0)
+                   * (g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).2)) := by
+    intro a dd
+    have he := gStateBot_succ_explicit S BLOCK_N c (g a dd) hwin
+    simp only [] at he
+    have hM'eq : M' a dd = (gStateBot S (c * BLOCK_N) (g a dd)).1 ⊔ Finset.univ.sup (fun jL : Fin BLOCK_N =>
+        ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ)) := by
+      rw [hM'def]; simp only []; rw [he]
+    rw [hM'eq]; exact he
+  have hM'ne : ∀ (a : Fin BLOCK_M) (dd : Nat), M' a dd ≠ ⊥ := by
+    intro a dd
+    rw [hM'def]; simp only []
+    rw [gStateBot_fst_eq_runningMax]
+    exact gRunningMax_succ_ne_bot S BLOCK_N c (g a dd) hBN hwin
+  have hMdd : ∀ (a : Fin BLOCK_M) (dd : Nat), M' a d0 = M' a dd := by
+    intro a dd
+    rw [hM'def]; simp only []
+    exact (gStateBot_score_congr S ((c + 1) * BLOCK_N) _ _
+      (fun j => by simp only [hgd, bloomGG, bloomKVMG])).1
+  have hst1 : ∀ (a : Fin BLOCK_M) (dd : Nat), (st (g a d0)).1 = (st (g a dd)).1 := by
+    intro a dd
+    rw [hstdef]
+    exact (gStateBot_score_congr S (c * BLOCK_N) _ _
+      (fun j => by simp only [hgd, bloomGG, bloomKVMG])).1
+  have hlog2pos : (0 : ℝ) < Real.log 2 := Real.log_pos (by norm_num)
+  set L : ℝ := Real.log 2 with hLdef
+  have hmapsup2 : ∀ x y : WithBot ℝ, (x.map (· * L)) ⊔ (y.map (· * L)) = (x ⊔ y).map (· * L) := by
+    intro x y
+    cases x with
+    | bot => simp
+    | coe xr => cases y with
+      | bot => simp
+      | coe yr =>
+        simp only [WithBot.map_coe, ← WithBot.coe_sup, WithBot.coe_le_coe]
+        rcases le_total xr yr with h | h
+        · rw [sup_eq_right.mpr h, sup_eq_right.mpr (mul_le_mul_of_nonneg_right h hlog2pos.le)]
+        · rw [sup_eq_left.mpr h, sup_eq_left.mpr (mul_le_mul_of_nonneg_right h hlog2pos.le)]
+  have hmapFsup : ∀ (f : Fin BLOCK_N → WithBot ℝ),
+      Finset.univ.sup (fun jL : Fin BLOCK_N => (f jL).map (· * L)) = (Finset.univ.sup f).map (· * L) := by
+    intro f
+    refine Finset.cons_induction ?_ ?_ (Finset.univ : Finset (Fin BLOCK_N))
+    · simp
+    · intro a s ha ih
+      rw [Finset.sup_cons, Finset.sup_cons, ih, hmapsup2]
+  have hexpmap : ∀ x y : WithBot ℝ,
+      WithBot.realExp (WithBot.realSub (x.map (· * L)) (y.map (· * L)))
+        = WithBot.realExp2 (WithBot.realSub x y) := by
+    intro x y
+    cases x with
+    | bot => cases y <;> rfl
+    | coe xr => cases y with
+      | bot => rfl
+      | coe yr =>
+        show WithBot.realExp (some (xr * L - yr * L)) = WithBot.realExp2 (some (xr - yr))
+        rw [WithBot.realExp2_some]
+        show some (Real.exp (xr * L - yr * L)) = some (Real.exp ((xr - yr) * Real.log 2))
+        rw [hLdef]; congr 1; congr 1; ring
+  -- m_ij cell = (block base-2 sup) · L
+  have hmijc : ∀ a : Fin BLOCK_M, rmaxT.data (a, PUnit.unit)
+      = (Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          ((g a d0 ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ))).map (· * L) := by
+    intro a
+    rw [ctxg_reduceMaxDrop_data_row hBN qkT rmaxT hrm a
+      (fun jL => ((g a d0 ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ).map (· * L))
+      (fun jL => by rw [hqk a jL d0]; rfl)]
+    exact hmapFsup _
+  have hminewc : ∀ a : Fin BLOCK_M, miNewT.data (a, PUnit.unit) = (M' a d0).map (· * L) := by
+    intro a
+    rw [hminew]
+    rw [ctxg_mij_max mtile rmaxT a ((st (g a d0)).1.map (· * L)) _
+      (by rw [hmtile]) (hmijc a)]
+    rw [hM'def]; simp only []
+    rw [congrArg Prod.fst (gStateBot_succ_explicit S BLOCK_N c (g a d0) hwin)]
+    simp only []
+    rw [hmapsup2]
+  have halc : ∀ (a : Fin BLOCK_M) (dd : Nat), alphaT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0) := by
+    intro a dd
+    rw [haleq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT).data (a, PUnit.unit)) = _
+    have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile miNewT).data (a, PUnit.unit)
+        = WithBot.realSub ((st (g a dd)).1.map (· * L)) ((M' a dd).map (· * L)) := by
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+      rw [hmtile]; simp only []
+      rw [hminewc a, hMdd a dd, hst1 a dd]
+    rw [hinner, hexpmap]
+    exact (ctxg_realExp2_eq_some_unbotD _)
+  set Bsup := fun (a : Fin BLOCK_M) (dd : Nat) => Finset.univ.sup (fun jL : Fin BLOCK_N =>
+      ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ)) with hBsupdef
+  have hBsupne : ∀ (a : Fin BLOCK_M) (dd : Nat), Bsup a dd ≠ ⊥ := by
+    intro a dd
+    rw [hBsupdef]; simp only []
+    intro hcon
+    have h0 := Finset.le_sup (f := fun jL : Fin BLOCK_N =>
+        ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ))
+      (Finset.mem_univ (⟨0, hBN⟩ : Fin BLOCK_N))
+    rw [hcon] at h0; exact absurd (le_bot_iff.mp h0) (by simp)
+  have hBsupdd : ∀ (a : Fin BLOCK_M) (dd : Nat), Bsup a d0 = Bsup a dd := by
+    intro a dd
+    rw [hBsupdef]; simp only []
+    refine Finset.sup_congr rfl (fun jL _ => ?_)
+    simp only [hgd, bloomGG, bloomKVMG]
+  have hBsup0 : ∀ a : Fin BLOCK_M, Bsup a d0
+      = Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          ((g a d0 ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 : WithBot ℝ)) := by
+    intro a; rw [hBsupdef]
+  have hrmaxc : ∀ (a : Fin BLOCK_M) (dd : Nat), rmaxT.data (a, PUnit.unit) = some ((Bsup a dd).unbotD 0 * L) := by
+    intro a dd
+    rw [hmijc a, ← hBsup0 a, hBsupdd a dd]
+    rcases hB : Bsup a dd with _ | br
+    · exact absurd hB (hBsupne a dd)
+    · simp [WithBot.map]
+  have hpc : ∀ (a : Fin BLOCK_M) (jL : Fin BLOCK_N) (dd : Nat), pexpT.data (a, jL, PUnit.unit)
+      = some (pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (Bsup a dd).unbotD 0)) := by
+    intro a jL dd
+    rw [hpexpeq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT
+        (Tile.expandDim ⟨1, by simp⟩ rmaxT)).data (a, jL, PUnit.unit)) = _
+    rw [ctx_qk_sub_mij_cell qkT rmaxT a jL _ _ (hqk a jL dd) (hrmaxc a dd)]
+    show WithBot.realExp (some _) = _
+    simp only [WithBot.realExp, pow2]
+    rw [show (g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 * L - (Bsup a dd).unbotD 0 * L
+          = Real.log 2 * ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (Bsup a dd).unbotD 0)
+        from by rw [hLdef]; ring]
+  have hlijc : ∀ (a : Fin BLOCK_M) (dd : Nat), lijT.data (a, PUnit.unit)
+      = some (Finset.univ.sum (fun jL : Fin BLOCK_N =>
+          pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (Bsup a dd).unbotD 0))) := by
+    intro a dd
+    rw [hlijeq, Tile.reduceSumDrop_data]
+    simp only [TileShape.insertAxisIndex]
+    refine Eq.trans (Finset.sum_congr rfl (fun (jL : Fin BLOCK_N) _ => hpc a jL dd)) ?_
+    exact ctxg_withBot_sum_some
+      (fun jL : Fin BLOCK_N => pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (Bsup a dd).unbotD 0))
+  have hbetav : ∀ (a : Fin BLOCK_M) (dd : Nat), betaT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0) := by
+    intro a dd
+    rw [hbetaeq]
+    show WithBot.realExp ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT).data (a, PUnit.unit)) = _
+    have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame rmaxT miNewT).data (a, PUnit.unit)
+        = WithBot.realSub ((Bsup a dd).map (· * L)) ((M' a dd).map (· * L)) := by
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+      rw [hmijc a, hminewc a, ← hBsup0 a, hBsupdd a dd, hMdd a dd]
+    rw [hinner, hexpmap]
+    exact (ctxg_realExp2_eq_some_unbotD _)
+  have hbetapow : ∀ (a : Fin BLOCK_M) (jL : Fin BLOCK_N) (dd : Nat),
+      (WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0
+        * pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (Bsup a dd).unbotD 0)
+      = pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (M' a dd).unbotD 0) := by
+    intro a jL dd
+    rcases hB : Bsup a dd with _ | br
+    · exact absurd hB (hBsupne a dd)
+    · rcases hM : M' a dd with _ | Mr
+      · exact absurd hM (hM'ne a dd)
+      · have hfac : (WithBot.realExp2 (WithBot.realSub (some br) (some Mr))).unbotD 0
+            = Real.exp ((br - Mr) * Real.log 2) := rfl
+        have hb' : (WithBot.unbotD 0 (some br) : ℝ) = br := rfl
+        have hm' : (WithBot.unbotD 0 (some Mr) : ℝ) = Mr := rfl
+        rw [hfac, hb', hm', pow2, pow2, ← Real.exp_add]
+        congr 1; ring
+  have hliNewv : ∀ (a : Fin BLOCK_M) (dd : Nat), liNewT.data (a, PUnit.unit)
+      = some ((gStateBot S ((c + 1) * BLOCK_N) (g a dd)).2.1) := by
+    intro a dd
+    rw [hlineweq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+    rw [halc a dd, show ltile.data (a, PUnit.unit) = some (st (g a dd)).2.1 from by
+        rw [hltile]; simp only []; rw [hstdef]
+        exact congrArg some (gStateBot_score_congr S (c * BLOCK_N) (g a d0) (g a dd)
+          (fun j => by simp only [hgd, bloomGG, bloomKVMG])).2,
+      hbetav a dd, hlijc a dd]
+    rw [hsucc a dd]; simp only []
+    show WithBot.realAdd (WithBot.realMul (some _) (some _)) (WithBot.realMul (some _) (some _)) = _
+    simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [Finset.mul_sum]
+    rw [Finset.sum_congr rfl (fun (jL : Fin BLOCK_N) _ => hbetapow a jL dd)]
+    ring
+  have hpscalev : ∀ (a : Fin BLOCK_M) (dd : Nat), pscaleT.data (a, PUnit.unit)
+      = some ((WithBot.realExp2 (WithBot.realSub (Bsup a dd) (M' a dd))).unbotD 0
+          / (gStateBot S ((c + 1) * BLOCK_N) (g a dd)).2.1) := by
+    intro a dd
+    rw [hpscaleeq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div]
+    rw [hbetav a dd, hliNewv a dd]; rfl
+  have hp2c : ∀ (a : Fin BLOCK_M) (jL : Fin BLOCK_N) (dd : Nat), p2T.data (a, jL, PUnit.unit)
+      = some (pow2 ((g a dd ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (M' a dd).unbotD 0)
+          / (gStateBot S ((c + 1) * BLOCK_N) (g a dd)).2.1) := by
+    intro a jL dd
+    rw [hp2eq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, TileShape.insertAxisIndex, NumericDType.mul]
+    rw [hpc a jL dd, hpscalev a dd]
+    show WithBot.realMul (some _) (some _) = _
+    simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [← hbetapow a jL dd]; ring
+  have hascale2c : ∀ (a : Fin BLOCK_M) (dd : Nat), accscale2T.data (a, PUnit.unit)
+      = some (if c * BLOCK_N ≤ s0.pids 2 * BLOCK_M + a.val + plen then
+          ((st (g a dd)).2.1 / (gStateBot S ((c + 1) * BLOCK_N) (g a dd)).2.1)
+            * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+          else 1) := by
+    intro a dd
+    rw [hascale2eq]
+    rw [Tile.select_data]
+    have hcond : (⟨fun idx : TileIndex [BLOCK_M] => decide (c * BLOCK_N ≤ (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val) idx.1 + plen)⟩ : Tile .bool [BLOCK_M]).data (a, PUnit.unit)
+        = decide (c * BLOCK_N ≤ s0.pids 2 * BLOCK_M + a.val + plen) := rfl
+    rw [hcond]
+    by_cases hg : c * BLOCK_N ≤ s0.pids 2 * BLOCK_M + a.val + plen
+    · rw [if_pos (by simp only [decide_eq_true_eq]; exact hg), if_pos hg]
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.div]
+      rw [show ltile.data (a, PUnit.unit) = some (st (g a dd)).2.1 from by
+          rw [hltile]; simp only []; rw [hstdef]
+          exact congrArg some (gStateBot_score_congr S (c * BLOCK_N) (g a d0) (g a dd)
+            (fun j => by simp only [hgd, bloomGG, bloomKVMG])).2,
+        hliNewv a dd, halc a dd]
+      show WithBot.realMul (WithBot.realDiv (some _) (some _)) (some _) = _
+      simp only [WithBot.realMul, WithBot.realDiv, Option.map₂, Option.bind, Option.map]
+    · rw [if_neg (by simp only [decide_eq_true_eq]; exact hg), if_neg hg]; norm_num
+  have hacc1c : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL], acc1T.data idx
+      = some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c
+          * (if c * BLOCK_N ≤ s0.pids 2 * BLOCK_M + idx.1.val + plen then
+              ((st (g idx.1 idx.2.1.val)).2.1 / (gStateBot S ((c + 1) * BLOCK_N) (g idx.1 idx.2.1.val)).2.1)
+                * (WithBot.realExp2 (WithBot.realSub (st (g idx.1 idx.2.1.val)).1 (M' idx.1 idx.2.1.val))).unbotD 0
+              else 1)) := by
+    intro idx
+    rw [hacc1eq]
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, TileShape.insertAxisIndex, NumericDType.mul]
+    rw [show acctile.data idx = some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c) from by
+        rw [hacctile], hascale2c idx.1 idx.2.1.val]
+    show WithBot.realMul (some _) (some _) = _
+    simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  -- build invariant at (c+1)
+  have hgapp : ∀ (a : Fin BLOCK_M) (d : Nat),
+      bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+        stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel a d = g a d :=
+    fun a d => rfl
+  simp only [bloomInvariantG, hgapp]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids]; exact hpids
+  · rw [hmemF]; exact hmem
+  · exact hundefF
+  · rw [hcbF]
+  · rw [hckvhF]
+  · rw [hchF]
+  · rw [hplenF]
+  · rw [hslF]
+  · rw [hbelF]
+  · rw [hcbsiF]
+  · rw [hrqiF]
+  · rw [homF]
+  · rw [honF]
+  · rw [hodF]
+  · rw [hqF]
+  · rw [hm_iF]; refine congrArg some ?_; ext a
+    show miNewT.data a = (gStateBot S ((c + 1) * BLOCK_N) (g a.1 d0)).1.map (· * Real.log 2)
+    rw [hminewc a.1, hM'def, ← hLdef]
+  · rw [hl_iF]; refine congrArg some ?_; ext a
+    show liNewT.data a = some (gStateBot S ((c + 1) * BLOCK_N) (g a.1 d0)).2.1
+    rw [hliNewv a.1 d0]
+  · rw [haccF]; refine congrArg some ?_; ext idx
+    show (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acc1T (Tile.dot [] p2T vloadT)).data idx
+        = some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) (c + 1))
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+    have hdotc : (Tile.dot [] p2T vloadT).data (idx.1, idx.2.1, PUnit.unit)
+        = some (Finset.univ.sum (fun jL : Fin BLOCK_N =>
+            pow2 ((g idx.1 idx.2.1.val ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1 - (M' idx.1 idx.2.1.val).unbotD 0)
+              * (g idx.1 idx.2.1.val ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).2)
+            / (gStateBot S ((c + 1) * BLOCK_N) (g idx.1 idx.2.1.val)).2.1) := by
+      rw [ctxg_dot_row p2T vloadT idx.1 idx.2.1 _ _ (fun jL => hp2c idx.1 jL idx.2.1.val)
+        (fun jL => by rw [hvf jL idx.2.1])]
+      refine congrArg some ?_
+      rw [Finset.sum_div]
+      refine Finset.sum_congr rfl (fun jL _ => ?_)
+      simp only [hgd, bloomGG, bloomKVMG]
+      ring
+    rw [hdotc, hacc1c idx]
+    show WithBot.realAdd (some _) (some _) = _
+    simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [gAccN_succ]
+    simp only [hstdef, hM'def]
+    have hincr : (gStateBot S ((c + 1) * BLOCK_N) (g idx.1 idx.2.1.val)).2.2
+          - (gStateBot S (c * BLOCK_N) (g idx.1 idx.2.1.val)).2.2
+              * (WithBot.realExp2 (WithBot.realSub (gStateBot S (c * BLOCK_N) (g idx.1 idx.2.1.val)).1
+                  (gStateBot S ((c + 1) * BLOCK_N) (g idx.1 idx.2.1.val)).1)).unbotD 0
+        = Finset.univ.sum (fun jL : Fin BLOCK_N =>
+            pow2 ((g idx.1 idx.2.1.val ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).1
+                - ((gStateBot S ((c + 1) * BLOCK_N) (g idx.1 idx.2.1.val)).1).unbotD 0)
+              * (g idx.1 idx.2.1.val ⟨c * BLOCK_N + jL.val, gBlock_idx_lt S BLOCK_N c hwin jL⟩).2) := by
+      conv_lhs => rw [hsucc idx.1 idx.2.1.val]
+      simp only [hstdef, hM'def]; ring
+    rw [hincr]
+  · exact hwin
+
+
+/-! ### General postLoop eval (masked store off the faithful general fold) -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `bloomPostLoopG_eval`.** The in-loop-normalized `acc` (no final divide)
+is masked-stored, reading off the faithful general fold `contextAttnBloomExactFoldMG`.
+Mirror of `bloomPostLoop_eval` over symbolic dims/strides/head_dim; output-offset
+injectivity is a hypothesis. -/
+theorem bloomPostLoopG_eval
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_N BLOCK_M : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (S bel : Nat) (c : Nat) (s : BlockState) (hSc : S = c * BLOCK_N)
+    (hOInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
+    (hinv : bloomInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+        sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel c s) :
+    ∃ sP, stepStmts (bloomPostLoopG Out stride_obs stride_oh stride_od head_dim BLOCK_DMODEL BLOCK_M) s = some sP
+      ∧ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          sP.readMem Out (outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)
+            = if active s0 B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx then
+                contextAttnBloomExactFoldMG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+                  Req_to_tokens B_req_idx sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s
+                  stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M S bel idx
+              else s0.readMem Out (outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) := by
+  subst hSc
+  set plen := promptLen s0 B_Prompt_Cache_Len with hplend
+  set sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len with hsld
+  set g := fun (i : Fin BLOCK_M) (d : Nat) =>
+    bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M (c * BLOCK_N) bel i d with hgd
+  simp only [bloomInvariantG] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
+      hq, hmi, hli, hacc, hcle⟩ := hinv
+  set accTile : Tile .real [BLOCK_M, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      some (gAccN (c * BLOCK_N) BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c)⟩
+    with haccTile
+  have haccref0 : s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some accTile := by
+    rw [hacc]
+  unfold bloomPostLoopG
+  set offoTile : Tile .nat [BLOCK_M, BLOCK_DMODEL] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx⟩ with hoffo
+  -- stmt 0: off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+            (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_od))) s = some offoTile from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+        ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+        hcbsi, hch, hom, hod, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [hoffo, outOffset, startLoc, mIndex, dIndex,
+        Tile.bop_data, Tile.scalar_data, Tile.vec_data,
+        Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]))]
+  set s1 := s.setReg "off_o" .nat [BLOCK_M, BLOCK_DMODEL] offoTile with hs1
+  -- stmt 1: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_o")) s1
+        = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+            (Out, offoTile.data idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) from by
+      simp only [evalOp, hs1, BlockState.setReg_same, Region.cast_id,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+          Nat.zero_add]))]
+  set s2 := s1.setReg "out_ptrs" .ptr [BLOCK_M, BLOCK_DMODEL]
+    (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out, offoTile.data idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) with hs2
+  -- stmt 2: masked store of acc into Out (2D boolAnd mask)
+  set P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
+    fun idx => s0.pids 2 * BLOCK_M + idx.1.val < sl ∧ idx.2.1.val < head_dim with hP
+  have hmaskev : evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat head_dim))) s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          decide (s0.pids 2 * BLOCK_M + idx.1.val < sl) && decide (idx.2.1.val < head_dim)⟩ : Tile .bool [BLOCK_M, BLOCK_DMODEL]) := by
+    exact bloomQMask_evalG s2 (fun r : Fin BLOCK_M => s0.pids 2 * BLOCK_M + r.val) sl head_dim
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hod)
+      (by rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+  have haccref : evalOp (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") s2 = some accTile := by
+    rw [evalOp_ref, hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact haccref0
+  have hptrref : evalOp (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs") s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out, offoTile.data idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [evalOp_ref, hs2, BlockState.setReg_same]
+  have hstore : stepStmt (Stmt.store .real [BLOCK_M, BLOCK_DMODEL]
+      (MemAccess.ptr (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (MaskOpt.mask
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+            (Op.constNat head_dim))))) s2
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]).foldl
+          (fun acc idx => if P idx then acc.writeMem Out (offoTile.data idx)
+            ((accTile.data idx).unbotD 0) else acc) s2) := by
+    unfold stepStmt
+    rw [haccref]
+    simp only [hmaskev, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rw [hptrref]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s2 ?_
+    intro acc idx _
+    by_cases h1 : s0.pids 2 * BLOCK_M + idx.1.val < sl
+    · by_cases h2 : idx.2.1.val < head_dim
+      · rw [decide_eq_true_eq.mpr h1, decide_eq_true_eq.mpr h2, Bool.and_true]
+        simp only [if_true, BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+        rw [if_pos (show P idx from ⟨h1, h2⟩)]
+      · rw [decide_eq_false_iff_not.mpr h2, Bool.and_false]
+        simp only [Bool.false_eq_true, if_false]
+        rw [if_neg (fun hc => h2 hc.2)]
+    · rw [decide_eq_false_iff_not.mpr h1, Bool.false_and]
+      simp only [Bool.false_eq_true, if_false]
+      rw [if_neg (fun hc => h1 hc.1)]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  rw [show outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx = offoTile.data idx from rfl]
+  rw [BlockState.scatter_readback_prop_masked_nd (region := Out) s2 (fun idx => offoTile.data idx)
+    (fun idx => (accTile.data idx).unbotD 0) P hOInj idx]
+  have hactive_iff : active s0 B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx ↔ P idx := by
+    have he : mIndex s0 BLOCK_M idx.1 = s0.pids 2 * BLOCK_M + idx.1.val := rfl
+    simp only [active, hP, he, hsld, dIndex]
+  by_cases hac : P idx
+  · rw [if_pos hac, if_pos (hactive_iff.mpr hac)]
+    simp only [haccTile, contextAttnBloomExactFoldMG, WithBot.unbotD_coe]
+    have hkvm : g idx.1 idx.2.1.val
+        = bloomKVMG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+            Req_to_tokens B_req_idx sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s
+            stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M (c * BLOCK_N) bel idx.1 idx.2.1.val := by
+      rw [hgd]; rfl
+    rw [hkvm, Nat.mul_div_cancel c hBN, hplend]
+    rfl
+  · rw [if_neg hac, if_neg (fun hcon => hac (hactive_iff.mp hcon))]
+    show (s2.readMem Out (offoTile.data idx)) = _
+    have hreadeq : s2.readMem Out (offoTile.data idx) = s.readMem Out (offoTile.data idx) := by
+      unfold BlockState.readMem; rw [hs2, hs1]; simp only [BlockState.setReg_mem]
+    rw [hreadeq]
+    unfold BlockState.readMem; rw [hmem]
+
+
+/-! ### General whole-kernel exec + genuine output value -/
+
+/-- General kernel-decoded streamed window `S = BLOCK_N·⌈(block_mask·block_end_loc)/BLOCK_N⌉`
+(loop step `BLOCK_N`; `block_end_loc` uses query block size `BLOCK_M`). -/
+def bloomFwdWindowG (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BLOCK_M BLOCK_N : Nat) : Nat :=
+  let plen := promptLen s B_Prompt_Cache_Len
+  let sl := seqLen s B_Seqlen B_Prompt_Cache_Len
+  let bel := bloomFwdBel s B_Seqlen B_Prompt_Cache_Len BLOCK_M
+  let bm := if BLOCK_M * s.pids 2 < sl then 1 else 0
+  BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N)
+
+/-- **General genuine closed-form `Out` value**: the block-causal-guarded boundary-masked
+in-loop-normalized online-softmax fold `contextAttnBloomExactFoldMG` of the gathered
+Q/K/V memory — a pure function of memory, not the kernel's executed readback. -/
+noncomputable def bloomFwdGenuineOutValueG
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  contextAttnBloomExactFoldMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+    stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M
+    (bloomFwdWindowG s B_Seqlen B_Prompt_Cache_Len BLOCK_M BLOCK_N)
+    (bloomFwdBel s B_Seqlen B_Prompt_Cache_Len BLOCK_M) idx
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General whole-kernel exec assembly.** Steps the faithful BLOOM surface and reads
+off the genuine general masked fold at every active `Out` lane. Mirror of `bloom_exec`
+over symbolic dims/strides/head_dim (`kv_group_num = 1`); output-offset injectivity is
+a hypothesis. -/
+theorem bloom_exec_general
+    (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : Region .nat) (s : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (hOInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, exec (context_attn_bloom_fwd_kernel_surface Q K V
+        sm_scale B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N) s = some sF
+      ∧ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          sF.readMem Out (outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)
+            = if active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx then
+                bloomFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+                  sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+                  stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M idx
+              else s.readMem Out (outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) := by
+  rw [show exec (context_attn_bloom_fwd_kernel_surface Q K V
+        sm_scale B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N) s
+      = stepStmts (context_attn_bloom_fwd_kernel_surface Q K V
+        sm_scale B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body s from rfl]
+  rw [bloomBody_splitG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
+    stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+    stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N]
+  -- preLoop
+  obtain ⟨s0, hpre, hpids, hmem, hundef0, hcb, hch, hstart_m, hckvh, hplen, hcbsi, hrqi0, hsl0,
+      hon, hod, hom, hmi, hli, hacc, hbel0, hbm0, hq⟩ :=
+    bloomPreLoopG_eval s Q B_Start_Loc B_Seqlen B_req_idx B_Prompt_Cache_Len
+      stride_qbs stride_qh stride_qd head_dim 1 BLOCK_DMODEL BLOCK_M BLOCK_N hundef
+  rw [stepStmts.append_some hpre]
+  set plen := promptLen s0 B_Prompt_Cache_Len with hplend
+  set sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len with hsld
+  set bel := bloomFwdBel s0 B_Seqlen B_Prompt_Cache_Len BLOCK_M with hbeld
+  set bm := (if BLOCK_M * s0.pids 2 < sl then 1 else 0) with hbmd
+  set S := BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) with hSd
+  have hmemv : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .nat rg i = s0.readMemValue .nat rg i := by
+    intro rg i; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  have hmemvr : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .real rg i = s0.readMemValue .real rg i := by
+    intro rg i; simp only [BlockState.readMemValue, BlockState.readMemAs, hmem]
+  have hbelrb : s0.regs .nat [] "block_end_loc" = some (Tile.scalar bel) := by
+    rw [hbel0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbeld, bloomFwdBel, hsld, hplend, seqLen, promptLen, Region.cast_cast, ← hpids, hmemv]
+  have hbmrb : s0.regs .nat [] "block_mask" = some (Tile.scalar bm) := by
+    rw [hbm0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbmd, hsld, hplend, seqLen, promptLen, Region.cast_cast, ← hpids, hmemv]
+  -- loop-entry invariant at block 0
+  have hinv0 : bloomInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+      sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel 0 s0 := by
+    refine ⟨rfl, rfl, hundef0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hcb, hpids]
+    · rw [hckvh, hpids]
+    · rw [hch, hpids]
+    · rw [hplen]; simp only [promptLen, Region.cast_cast, hmemv, ← hpids]
+    · rw [hsl0]; simp only [seqLen, promptLen, Region.cast_cast, hmemv, ← hpids]
+    · exact hbelrb
+    · rw [hcbsi]; simp only [startLoc, Region.cast_cast, hmemv, ← hpids]
+    · rw [hrqi0]; simp only [reqIdx, Region.cast_cast, hmemv, ← hpids]
+    · rw [hom, hpids]
+    · rw [hon]
+    · rw [hod]
+    · rw [hq]; refine congrArg some ?_; ext idx
+      simp only [seqLen, promptLen, startLoc, Region.cast_id, hpids, hmemv, hmemvr]
+    · rw [hmi]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero, WithBot.map_bot]
+    · rw [hli]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · rw [hacc]; refine congrArg some ?_; ext idx
+      simp only [gAccN_zero]
+    · omega
+  -- run the streaming loop
+  obtain ⟨final, sL, hloop, hfin, c_final, hfinaleq, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+      (stepOp := Op.constNat BLOCK_N)
+      (P := fun i st => ∃ c, i = c * BLOCK_N ∧
+        bloomInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel c st)
+      (s_init := s0)
+      (by rw [evalOp_constNat])
+      (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.ref .nat [] "block_end_loc")) s0 = some (Tile.scalar (bm * bel)) from by
+        rw [evalOp_mul, evalOp_ref, evalOp_ref, hbmrb, hbelrb]
+        simp only [Option.bind_eq_bind, Option.bind_some]; rfl)
+      (by rw [evalOp_constNat])
+      (Nat.pos_iff_ne_zero.mp hBN)
+      ⟨0, by ring, hinv0⟩
+      (fun i st hi hP => by
+        obtain ⟨c, hic, hinvc⟩ := hP
+        have hwin : (c + 1) * BLOCK_N ≤ S := by
+          have hstop : c * BLOCK_N < bm * bel := hic ▸ hi
+          rw [hSd]
+          have hge : bm * bel ≤ BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) := by
+            have hdm := Nat.div_add_mod (bm * bel + (BLOCK_N - 1)) BLOCK_N
+            have h3 : (bm * bel + (BLOCK_N - 1)) % BLOCK_N < BLOCK_N := Nat.mod_lt _ hBN
+            omega
+          have hcq : c < (bm * bel + (BLOCK_N - 1)) / BLOCK_N := by
+            by_contra hcon
+            have hcon' : (bm * bel + (BLOCK_N - 1)) / BLOCK_N ≤ c := Nat.not_lt.mp hcon
+            have h1 : BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) ≤ BLOCK_N * c :=
+              Nat.mul_le_mul_left _ hcon'
+            have h2 : bm * bel ≤ BLOCK_N * c := le_trans hge h1
+            rw [Nat.mul_comm BLOCK_N c] at h2
+            omega
+          calc (c + 1) * BLOCK_N = BLOCK_N * (c + 1) := by ring
+            _ ≤ BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) := Nat.mul_le_mul_left _ hcq
+        obtain ⟨s', hs', hinv'⟩ :=
+          bloom_attn_stepG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+            sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_N BLOCK_M head_dim hD hBN
+            S bel c i st hwin hic hinvc
+        exact ⟨s', hs', c + 1, by rw [hic]; ring, hinv'⟩)
+  subst hfinaleq
+  have hcle : c_final * BLOCK_N ≤ S := hinvL.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  have hScfinal : S = c_final * BLOCK_N := by
+    have hfinge : bm * bel ≤ c_final * BLOCK_N := hfin
+    have hqle : (bm * bel + (BLOCK_N - 1)) / BLOCK_N ≤ c_final := by
+      rw [Nat.div_le_iff_le_mul_add_pred hBN]
+      have hcomm : c_final * BLOCK_N = BLOCK_N * c_final := Nat.mul_comm _ _
+      omega
+    have hSub : S ≤ c_final * BLOCK_N := by
+      rw [hSd, Nat.mul_comm BLOCK_N]
+      exact Nat.mul_le_mul_right _ hqle
+    omega
+  -- postLoop
+  obtain ⟨sP, hpostStep, hO⟩ :=
+    bloomPostLoopG_eval Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+      sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_N BLOCK_M hD hBN S bel c_final sL hScfinal
+      (by
+        have : (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)
+            = (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) := by
+          funext idx
+          simp only [outOffset, startLoc, mIndex, dIndex, hpids, hmem,
+            BlockState.readMemValue, BlockState.readMemTyped]
+        rw [this]; exact hOInj)
+      hinvL
+  refine ⟨sP, ?_, ?_⟩
+  · rw [stepStmts.cons_some hloop]; exact hpostStep
+  · intro idx
+    have hOidx := hO idx
+    have houtoff : outOffset s0 B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx
+        = outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx := by
+      simp only [outOffset, startLoc, mIndex, dIndex, hpids, hmemv]
+    have hact : active s0 B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx
+        ↔ active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx := by
+      simp only [active, mIndex, seqLen, promptLen, dIndex, hpids, hmemv]
+    rw [houtoff] at hOidx
+    rw [hOidx]
+    by_cases hac : active s0 B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx
+    · rw [if_pos hac, if_pos (hact.mp hac)]
+      have hreadmem : ∀ (rg : RegionName) (o : Nat), s0.readMem rg o = s.readMem rg o := by
+        intro rg o; unfold BlockState.readMem; rw [hmem]
+      have hbeleq : bel = bloomFwdBel s B_Seqlen B_Prompt_Cache_Len BLOCK_M := by
+        simp only [hbeld, bloomFwdBel, hsld, hplend, seqLen, promptLen, ← hpids, hmemv]
+      have hSeq : S = bloomFwdWindowG s B_Seqlen B_Prompt_Cache_Len BLOCK_M BLOCK_N := by
+        simp only [bloomFwdWindowG, bloomFwdBel, hSd, hbmd, hbeld, bloomFwdBel, hsld, hplend,
+          seqLen, promptLen, ← hpids, hmemv]
+      rw [bloomFwdGenuineOutValueG, ← hbeleq, ← hSeq]
+      have hkvm : bloomKVMG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+            stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val
+          = bloomKVMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
+            stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val := by
+        funext j
+        simp only [bloomKVMG, bloomQTileMG, bloomKTileMG, bloomVTileMG, bloomQTileG, bloomKTileG, bloomVTileG,
+          bloomKvLocG, promptLen, seqLen, reqIdx, startLoc, curHead, hpids, hmemv, hreadmem]
+      simp only [contextAttnBloomExactFoldMG, hkvm]
+      have hplenq : promptLen s0 B_Prompt_Cache_Len = promptLen s B_Prompt_Cache_Len := by
+        simp only [promptLen, hpids, hmemv]
+      rw [hplenq, hpids]
+    · rw [if_neg hac, if_neg (fun h => hac (hact.mpr h))]
+      unfold BlockState.readMem; rw [hmem]
+
+
+/-! ### General top theorems -/
+
+/-- **General surface compute-correctness** for `context_attn_bloom.py` over symbolic
+`BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`head_dim`, the per-axis K/V/Q/O strides and the
+`Req_to_tokens` gather strides (`kv_group_num = 1`). Every active observable `Out`
+write holds the genuine boundary-masked natural-exp in-loop-normalized causal-softmax
+closed form `bloomFwdGenuineOutValueG` of the BLOOM gathered Q/K/V memory — a pure
+function of memory, NOT the kernel's executed readback. The `-1e8` causal sentinel is
+kept exactly. Side conditions: `0 < BLOCK_DMODEL`, `0 < BLOCK_N`, output-offset
+injectivity. -/
+theorem context_attn_bloom_surface_compute_correct_general
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (s : BlockState)
+    (hOInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V sm_scale
+        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          (Out, outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        bloomFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_bloom_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  obtain ⟨sF, hexec, hO⟩ :=
+    bloom_exec_general Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s
+      sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N hD hBN hOInj hundef
+  rw [hExec] at hexec
+  obtain rfl : sF = s' := (Option.some.inj hexec).symm
+  have hb := hO idx
+  simp only [ComputeCorrect.OutputReadable.read_real, Region.cast_cast, Region.cast_id]
+    at hb hActive ⊢
+  rw [if_pos hActive] at hb
+  rw [hb]
+
+/-- **Public general Python-shape summary** for `context_attn_bloom.py`. The faithful
+full BLOOM `_fwd_kernel` surface (with `Req_to_tokens` gather, natural-exp in-loop
+normalization, `-1e8` causal sentinel) lowers to the algorithm layer and is
+compute-correct against the genuine general fold `bloomFwdGenuineOutValueG` for any
+`0 < BLOCK_DMODEL`, `0 < BLOCK_N`, `kv_group_num = 1`, and injective output offsets. -/
+theorem context_attn_bloom_python_test_shape_output_summary_general
+    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len Out : RegionName)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (s : BlockState)
+    (hOInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V sm_scale
+      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V sm_scale
+        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          (Out, outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        bloomFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M idx) := by
+  refine ⟨context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported Q K V sm_scale
+      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N, ?_⟩
+  exact context_attn_bloom_surface_compute_correct_general Q K V Out B_Start_Loc B_Seqlen
+    Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+    head_dim BLOCK_DMODEL BLOCK_M BLOCK_N hD hBN s hOInj hundef
+
 end VeriTile.Bench.TritonBenchG.ContextAttnBloom
