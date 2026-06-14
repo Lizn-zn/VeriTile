@@ -1805,7 +1805,7 @@ init, the fp16 scaled `q` load, the `m_mask` row mask, and `max_num_blks = 8`.
 Block64 shape: `BLOCK_M = BLOCK_N = BLOCK_DMODEL = 64`. -/
 def msaSetup (Q K V : RegionName) (seqlens : Region .nat)
     (block_count block_offset column_count column_index : Region .nat)
-    (Out : RegionName) : List Stmt :=
+    (Out : RegionName) (sm_scale : ℝ := 0.1) : List Stmt :=
   [ Stmt.assign .nat [64] "offs_m"
       (Op.add .nat Broadcast.scalarL
         (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
@@ -1887,7 +1887,7 @@ def msaSetup (Q K V : RegionName) (seqlens : Region .nat)
     Stmt.assign .real [64] "l_i" (Op.full [64] (Op.const 0)),
     Stmt.assign .real [64, 64] "acc" (Op.full [64, 64] (Op.const 0)),
     Stmt.assign .real [] "qk_scale"
-      (Op.mul .real Broadcast.nil (Op.const (0.1 : ℝ)) (Op.const 1.44269504)),
+      (Op.mul .real Broadcast.nil (Op.const (sm_scale : ℝ)) (Op.const 1.44269504)),
     Stmt.assign .real [64, 64] "q"
       (Op.load .real (MemAccess.ptr (Op.ref .ptr [64, 64] "q_ptrs")) MaskOpt.none),
     Stmt.assign FloatDType.fp16.toTileDType [64, 64] "q"
@@ -2595,9 +2595,10 @@ column-sparse Loop B, separated by `max_num_cols = 16`), and the 2 post-loop
 statements. Extracted by `rfl`. -/
 theorem msa_body_split
     (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) :
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (sm_scale : ℝ := 0.1) :
     (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+      (sm_scale : ℝ) Blocks BlockOffsets ColCounts Cols Out
       32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
       2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel.body
       = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
@@ -2609,7 +2610,7 @@ theorem msa_body_split
                   (Op.ref .nat [] "off_hz") (Op.constNat 4)))
               MaskOpt.none),
           Stmt.ifThen (Op.boolNot msaGuard)
-            (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+            (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale
               ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
                     (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
                    Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
@@ -2625,7 +2626,8 @@ early-exit `ifThen` guard that wraps `msaSetup ++ loops ++ postLoop` in the full
 body — see `msa_body_split` — is discharged at the NEXT-stage top-level assembly
 when the program is active; this list is what runs inside it.) -/
 def msaPreLoop (Q K V : RegionName) (Seqlens : Region .nat)
-    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName) : List Stmt :=
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (sm_scale : ℝ := 0.1) : List Stmt :=
   [ Stmt.assign .nat [] "start_m" (Op.programId 0),
     Stmt.assign .nat [] "off_hz" (Op.programId 1),
     Stmt.assign .nat [] "seqlen"
@@ -2633,7 +2635,7 @@ def msaPreLoop (Q K V : RegionName) (Seqlens : Region .nat)
         (MemAccess.region Seqlens
           (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
         MaskOpt.none) ]
-    ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale
 
 /-- The `q_ptrs` pointer tile the setup computes, lane `(i,e)`:
 `Q` region at `qo_offset + (start_m·64 + i)·64 + e`, where `qo_offset =
@@ -2659,11 +2661,12 @@ def msaOPtr (Out : RegionName) (s0 : BlockState) : TileIndex [64, 64] → Region
 `(i,e)`: the raw `Q` read (via `readMemValue .real`) times `qk_scale =
 0.1·1.44269504`, before the fp16 cast that `msaInvariantA` applies. Written with
 `WithBot.realMul` so it matches the loop-body `mul` carrier exactly. -/
-noncomputable def msaQVal (Q : RegionName) (s0 : BlockState) : TileIndex [64, 64] → WithBot ℝ :=
+noncomputable def msaQVal (Q : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ := 0.1) : TileIndex [64, 64] → WithBot ℝ :=
   fun idx => WithBot.realMul
     (s0.readMemValue .real Q (((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
       + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val))
-    (some (0.1 * 1.44269504))
+    (some (sm_scale * 1.44269504))
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
@@ -2679,11 +2682,12 @@ theorem msaPreLoop_eval
     (s : BlockState) (Q K V : RegionName) (Seqlens : Region .nat)
     (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
     (scoreA : Nat → Fin 64 → Fin 64 → WithBot ℝ) (vblkA : Nat → Fin 64 → Fin 64 → ℝ)
+    (sm_scale : ℝ)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ s0, stepStmts (msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out) s
+    ∃ s0, stepStmts (msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale) s
         = some s0
       ∧ msaInvariantA Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-          scoreA vblkA (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 0 s0 := by
+          scoreA vblkA (msaQVal Q s sm_scale) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 0 s0 := by
   unfold msaPreLoop msaSetup
   simp only [List.cons_append, List.nil_append, List.append_assoc]
   -- stmt 0: start_m = programId 0
@@ -2939,10 +2943,10 @@ theorem msaPreLoop_eval
     (show evalOp (Op.full [64, 64] (Op.const 0)) _
         = some (⟨fun _ : TileIndex [64, 64] => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
       simp [evalOp_full, evalOp_const]))]
-  -- stmt 19: qk_scale = 0.1 * 1.44269504
+  -- stmt 19: qk_scale = sm_scale * 1.44269504
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.mul .real Broadcast.nil (Op.const (0.1 : ℝ)) (Op.const 1.44269504)) _
-        = some (Tile.scalar (some ((0.1 : ℝ) * 1.44269504) : WithBot ℝ)) from by
+    (show evalOp (Op.mul .real Broadcast.nil (Op.const (sm_scale : ℝ)) (Op.const 1.44269504)) _
+        = some (Tile.scalar (some ((sm_scale : ℝ) * 1.44269504) : WithBot ℝ)) from by
       rw [evalOp_mul, evalOp_const, evalOp_const]
       simp only [Option.bind_eq_bind, Option.bind_some]
       refine congrArg some ?_; ext idx
@@ -2965,7 +2969,7 @@ theorem msaPreLoop_eval
     (show evalOp (Op.castFloat FloatDType.real FloatDType.fp16
           (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 64] "q") (Op.ref .real [] "qk_scale"))) _
         = some (⟨fun idx : TileIndex [64, 64] =>
-            FloatDType.real.cast FloatDType.fp16 (msaQVal Q s idx)⟩
+            FloatDType.real.cast FloatDType.fp16 (msaQVal Q s sm_scale idx)⟩
             : Tile FloatDType.fp16.toTileDType [64, 64]) from by
       rw [evalOp_castFloat, evalOp_mul]
       simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
@@ -4359,22 +4363,22 @@ round-trip on `q` is the identity, K is `some K[n]` when loaded (else `some 0`),
 the dotted sum is `Σ_e (Q·0.1·1.44269504)·K_masked = 0.1·1.44269504·rawMasked`. -/
 theorem msaScoreA_dot_eq
     (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
-    (s0 : BlockState) (c SN : Nat) (i j : Fin 64) :
+    (s0 : BlockState) (sm_scale : ℝ) (c SN : Nat) (i j : Fin 64) :
     (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
         (fun e : Fin 64 => Option.map₂ (· * ·)
           (FloatDType.fp16.cast FloatDType.real
-            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
           (msaKLaneA K Seqlens Blocks BlockOffsets (msaKPtr K s0) s0 c SN e j)))
-      = some ((0.1 * 1.44269504) *
+      = some ((sm_scale * 1.44269504) *
           (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
               ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
             then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (SN + j.val)
             else 0)) := by
   have hterm : ∀ e : Fin 64, Option.map₂ (· * ·)
         (FloatDType.fp16.cast FloatDType.real
-          (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+          (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
         (msaKLaneA K Seqlens Blocks BlockOffsets (msaKPtr K s0) s0 c SN e j)
-      = some ((0.1 * 1.44269504) *
+      = some ((sm_scale * 1.44269504) *
           (qRow s0 Q 4 32768 8192 64 64 i e.val *
             (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
                 ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
@@ -4395,7 +4399,7 @@ theorem msaScoreA_dot_eq
         FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
         FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some]
       rw [hQoff, hKoff]
-      show some _ = some ((0.1 * 1.44269504) *
+      show some _ = some ((sm_scale * 1.44269504) *
         (qRow s0 Q 4 32768 8192 64 64 i e.val * kRow s0 K 4 32768 8192 64 (SN + j.val) e.val))
       unfold qRow kRow; ring_nf
     · rw [if_neg hin, if_neg hin]
@@ -4406,10 +4410,10 @@ theorem msaScoreA_dot_eq
   rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
         (fun e : Fin 64 => Option.map₂ (· * ·)
           (FloatDType.fp16.cast FloatDType.real
-            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
           (msaKLaneA K Seqlens Blocks BlockOffsets (msaKPtr K s0) s0 c SN e j)))
       = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
-          (fun e : Fin 64 => some ((0.1 * 1.44269504) *
+          (fun e : Fin 64 => some ((sm_scale * 1.44269504) *
             (qRow s0 Q 4 32768 8192 64 64 i e.val *
               (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
                   ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
@@ -4432,12 +4436,12 @@ theorem msaScoreA_dot_eq
 `wBlock` term at `effScale 0.1` (including the spurious-block weight-1 path). -/
 theorem msaE_scoreLaneA_eq
     (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
-    (s0 : BlockState) (c SN : Nat) (i j : Fin 64) :
-    msaE (msaScoreLaneA Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0)
+    (s0 : BlockState) (sm_scale : ℝ) (c SN : Nat) (i j : Fin 64) :
+    msaE (msaScoreLaneA Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0)
         s0 c SN i j)
       = (if s0.pids 0 * 64 + i.val < seqLen s0 4 (Region.cast Seqlens)
             ∧ SN + j.val ≤ s0.pids 0 * 64 + i.val then
-          Real.exp (effScale 0.1 *
+          Real.exp (effScale sm_scale *
             (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
                 ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
               then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (SN + j.val) else 0))
@@ -4447,7 +4451,7 @@ theorem msaE_scoreLaneA_eq
   by_cases hgate : s0.pids 0 * 64 + i.val < seqLen s0 4 (Region.cast Seqlens)
       ∧ SN + j.val ≤ s0.pids 0 * 64 + i.val
   · rw [if_pos hgate, if_pos hgate]
-    show msaE (some (0 + (0.1 * 1.44269504) * _)) = _
+    show msaE (some (0 + (sm_scale * 1.44269504) * _)) = _
     rw [msaE_some]
     rw [zero_add]
     congr 1
@@ -4459,21 +4463,21 @@ theorem msaE_scoreLaneA_eq
 gathered column `gcol j`; same fp16-identity argument as `msaScoreA_dot_eq`. -/
 theorem msaScoreB_dot_eq
     (Q K : RegionName) (Blocks ColCounts : Region .nat)
-    (s0 : BlockState) (sv : Nat) (gcol : Fin 64 → Nat) (i j : Fin 64) :
+    (s0 : BlockState) (sm_scale : ℝ) (sv : Nat) (gcol : Fin 64 → Nat) (i j : Fin 64) :
     (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
         (fun e : Fin 64 => Option.map₂ (· * ·)
           (FloatDType.fp16.cast FloatDType.real
-            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
           (msaKLaneB Blocks ColCounts (msaKPtr K s0) s0 sv gcol e j)))
-      = some ((0.1 * 1.44269504) *
+      = some ((sm_scale * 1.44269504) *
           (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
               ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
             then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (gcol j) else 0)) := by
   have hterm : ∀ e : Fin 64, Option.map₂ (· * ·)
         (FloatDType.fp16.cast FloatDType.real
-          (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+          (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
         (msaKLaneB Blocks ColCounts (msaKPtr K s0) s0 sv gcol e j)
-      = some ((0.1 * 1.44269504) *
+      = some ((sm_scale * 1.44269504) *
           (qRow s0 Q 4 32768 8192 64 64 i e.val *
             (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
                 ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
@@ -4494,7 +4498,7 @@ theorem msaScoreB_dot_eq
         FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
         FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some]
       rw [hQoff, hKoff]
-      show some _ = some ((0.1 * 1.44269504) *
+      show some _ = some ((sm_scale * 1.44269504) *
         (qRow s0 Q 4 32768 8192 64 64 i e.val * kRow s0 K 4 32768 8192 64 (gcol j) e.val))
       unfold qRow kRow; ring_nf
     · rw [if_neg hin, if_neg hin]
@@ -4505,10 +4509,10 @@ theorem msaScoreB_dot_eq
   rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
         (fun e : Fin 64 => Option.map₂ (· * ·)
           (FloatDType.fp16.cast FloatDType.real
-            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 (i, e, PUnit.unit))))
+            (FloatDType.real.cast FloatDType.fp16 (msaQVal Q s0 sm_scale (i, e, PUnit.unit))))
           (msaKLaneB Blocks ColCounts (msaKPtr K s0) s0 sv gcol e j)))
       = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
-          (fun e : Fin 64 => some ((0.1 * 1.44269504) *
+          (fun e : Fin 64 => some ((sm_scale * 1.44269504) *
             (qRow s0 Q 4 32768 8192 64 64 i e.val *
               (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
                   ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
@@ -4528,16 +4532,16 @@ theorem msaScoreB_dot_eq
     apply Finset.sum_eq_zero; intro e _; rw [if_neg hin, mul_zero, mul_zero]
 
 /-- The column-B score-lane softmax weight is exactly `mixedSparseAttnClosedForm`'s
-`wCol` term at `effScale 0.1` (no `cols < seqlen` mask — the kernel applies none). -/
+`wCol` term at `effScale sm_scale` (no `cols < seqlen` mask — the kernel applies none). -/
 theorem msaE_scoreLaneB_eq
     (Q K : RegionName) (Blocks ColCounts Seqlens : Region .nat)
-    (s0 : BlockState) (sv : Nat) (gcol : Fin 64 → Nat) (i j : Fin 64) :
-    msaE (msaScoreLaneB Blocks ColCounts Seqlens (msaQVal Q s0) (msaKPtr K s0)
+    (s0 : BlockState) (sm_scale : ℝ) (sv : Nat) (gcol : Fin 64 → Nat) (i j : Fin 64) :
+    msaE (msaScoreLaneB Blocks ColCounts Seqlens (msaQVal Q s0 sm_scale) (msaKPtr K s0)
         s0 sv gcol i j)
       = (if s0.pids 0 * 64 + i.val < seqLen s0 4 (Region.cast Seqlens)
             ∧ (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
               ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)) then
-          Real.exp (effScale 0.1 *
+          Real.exp (effScale sm_scale *
             (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
                 ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
               then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (gcol j) else 0))
@@ -4548,7 +4552,7 @@ theorem msaE_scoreLaneB_eq
       ∧ (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
         ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
   · rw [if_pos hgate, if_pos hgate]
-    show msaE (some (0 + (0.1 * 1.44269504) * _)) = _
+    show msaE (some (0 + (sm_scale * 1.44269504) * _)) = _
     rw [msaE_some, zero_add]
     congr 1
     unfold effScale; ring
@@ -4640,31 +4644,31 @@ Requires `num_cols ≤ 64 = BLOCK_N`: the kernel's single column block (`max_num
 must be over at most `BLOCK_N` columns (the faithful regime). -/
 theorem msa_catFold_eq_closedForm
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (s0 : BlockState) (i d : Fin 64)
+    (s0 : BlockState) (sm_scale : ℝ) (i d : Fin 64)
     (hNC64 : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ 64) :
     msaNumerUpto 64 64 64
         (msaCatScore 64 64 8
-          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
-          (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0))
+          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
+          (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0))
         (msaCatVblk 64 64 8
           (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0)
           (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0))
         9 i d
       / msaDenomUpto 64 64
         (msaCatScore 64 64 8
-          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
-          (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0))
+          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
+          (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0))
         9 i
     = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
         32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
         (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
         (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
-        (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 0.1 i d := by
+        (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 sm_scale i d := by
   set NB := s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0) with hNB
   set NC := s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) with hNC
   set SL := seqLen s0 4 (Region.cast Seqlens) with hSL
-  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0 with hscA
-  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0 with hscB
+  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscA
+  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscB
   set vblkA := msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 with hvbA
   set vblkB := msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0 with hvbB
   set cat := msaCatScore 64 64 8 scoreA scoreB with hcat
@@ -4674,7 +4678,7 @@ theorem msa_catFold_eq_closedForm
   -- per-block-A weight (the closed form's `wBlock`)
   have hwA : ∀ (b : Fin 8) (j : Fin 64), msaE (scoreA b.val i j)
       = (if s0.pids 0 * 64 + i.val < SL ∧ SN b.val + j.val ≤ s0.pids 0 * 64 + i.val then
-          Real.exp (effScale 0.1 *
+          Real.exp (effScale sm_scale *
             (if SN b.val + j.val < SL ∧ b.val < NB
               then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (SN b.val + j.val) else 0))
         else 0) := by
@@ -4692,7 +4696,7 @@ theorem msa_catFold_eq_closedForm
   set gcol : Fin 64 → Nat := msaGcol0 s0 Cols ColCounts 0 with hgcol
   have hwB : ∀ (j : Fin 64), msaE (scoreB 0 i j)
       = (if s0.pids 0 * 64 + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
-          Real.exp (effScale 0.1 *
+          Real.exp (effScale sm_scale *
             (if j.val < NC ∧ (0:Nat) < NC
               then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (gcol j) else 0))
         else 0) := by
@@ -4748,7 +4752,7 @@ theorem msa_catFold_eq_closedForm
   -- the gated column summands (numerator/denominator) as `Nat → ℝ` functions
   set numCol : Nat → ℝ := fun jn =>
     (if s0.pids 0 * 64 + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
-        Real.exp (effScale 0.1 *
+        Real.exp (effScale sm_scale *
           (if jn < NC ∧ (0:Nat) < NC
             then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (colKeyGlobal s0 Cols 2 8 jn) else 0))
       else 0) *
@@ -4756,7 +4760,7 @@ theorem msa_catFold_eq_closedForm
     with hnumCol
   set denCol : Nat → ℝ := fun jn =>
     (if s0.pids 0 * 64 + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
-        Real.exp (effScale 0.1 *
+        Real.exp (effScale sm_scale *
           (if jn < NC ∧ (0:Nat) < NC
             then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (colKeyGlobal s0 Cols 2 8 jn) else 0))
       else 0)
@@ -4768,7 +4772,7 @@ theorem msa_catFold_eq_closedForm
   have hcolNum :
       (∑ j : Fin 64,
         (if s0.pids 0 * 64 + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
-            Real.exp (effScale 0.1 *
+            Real.exp (effScale sm_scale *
               (if j.val < NC ∧ (0:Nat) < NC
                 then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (gcol j) else 0))
           else 0) *
@@ -4784,7 +4788,7 @@ theorem msa_catFold_eq_closedForm
   have hcolDen :
       (∑ j : Fin 64,
         (if s0.pids 0 * 64 + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
-            Real.exp (effScale 0.1 *
+            Real.exp (effScale sm_scale *
               (if j.val < NC ∧ (0:Nat) < NC
                 then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 64 64 i (gcol j) else 0))
           else 0))
@@ -4822,10 +4826,10 @@ theorem msa_catFold_eq_closedForm
 /-- The two pinned cat streams used by the loop assembly. -/
 noncomputable abbrev msaCatScore0
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (s0 : BlockState) : Nat → Fin 64 → Fin 64 → WithBot ℝ :=
+    (s0 : BlockState) (sm_scale : ℝ := 0.1) : Nat → Fin 64 → Fin 64 → WithBot ℝ :=
   msaCatScore 64 64 8
-    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
-    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
+    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
 
 noncomputable abbrev msaCatVblk0
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
@@ -4839,29 +4843,29 @@ Loop-B end (`c = 1`, seeded by Loop-A's `bF = 8` finals) equals
 `mixedSparseAttnClosedForm`, given the cat denominator is positive at this lane. -/
 theorem msaSeeded_ratio_eq_closedForm
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (s0 : BlockState) (i d : Fin 64)
+    (s0 : BlockState) (sm_scale : ℝ) (i d : Fin 64)
     (hNC64 : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ 64)
     (hpos : 0 < msaDenomUpto 64 64
-      (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0) 9 i) :
+      (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 sm_scale) 9 i) :
     (msaOPartialSeed 64 64 64
-        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
-        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
+        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
         (fun ii dd => msaOPartial 64 64 64
-          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
+          (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
           (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0) 8 ii dd)
-        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
         (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0) 1 i d)
       / (msaLPartialSeed 64 64
-        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
-        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
-        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0) 1 i)
+        (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
+        (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
+        (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 1 i)
     = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
         32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
         (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
         (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
-        (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 0.1 i d := by
-  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0 with hscA
-  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0 with hscB
+        (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 sm_scale i d := by
+  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscA
+  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscB
   set vblkA := msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 with hvbA
   set vblkB := msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0 with hvbB
   rw [msaOPartialSeed_eq_cat 64 64 64 8 scoreA scoreB vblkA vblkB _ _ 1 i d rfl rfl,
@@ -4869,9 +4873,9 @@ theorem msaSeeded_ratio_eq_closedForm
       show (8 + 1 : Nat) = 9 from rfl]
   rw [msaPartial_ratio_collapse 64 64 64 _ _ 9 i d (by
     rw [show msaCatScore 64 64 8 scoreA scoreB
-        = msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 from rfl]
+        = msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 sm_scale from rfl]
     exact hpos)]
-  exact msa_catFold_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 i d hNC64
+  exact msa_catFold_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 sm_scale i d hNC64
 
 /-- Masked `fp16` scatter at distinct offsets: `readMemValue .fp16` reads the
 written `fp16` cell at an active lane, and the prior cell elsewhere. fp16 analogue
@@ -4953,20 +4957,20 @@ The faithful regime side conditions (`num_cols ≤ 64`, per-active-lane positive
 denominator) are supplied as hypotheses. -/
 theorem msaPostLoop_eval
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (Out : RegionName) (s0 s : BlockState)
+    (Out : RegionName) (s0 s : BlockState) (sm_scale : ℝ)
     (hNC64 : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ 64)
     (hpos : ∀ i : Fin 64, s0.pids 0 * 64 + i.val < seqLen s0 4 (Region.cast Seqlens) →
       0 < msaDenomUpto 64 64
-        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0) 9 i)
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 sm_scale) 9 i)
     (hinv : msaInvariantB Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-      (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0)
+      (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
       (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0)
-      (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
-      (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0) 8)
+      (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
+      (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0) 8)
       (fun ii dd => msaOPartial 64 64 64
-        (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0)
+        (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
         (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0) 8 ii dd)
-      (msaQVal Q s0) (msaKPtr K s0) (msaVPtr V s0) (msaOPtr Out s0) s0 1 s) :
+      (msaQVal Q s0 sm_scale) (msaKPtr K s0) (msaVPtr V s0) (msaOPtr Out s0) s0 1 s) :
     ∃ sP, stepStmts msaPostLoop s = some sP
       ∧ ∀ idx : TileIndex [64, 64],
           sP.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 64 idx)
@@ -4975,12 +4979,12 @@ theorem msaPostLoop_eval
                   32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
                   (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
                   (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
-                  (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ)
+                  (seqLen s0 4 (Region.cast Seqlens)) 64 64 64 sm_scale idx.1 (dIndex idx)) : WithBot ℝ)
               else s.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 64 idx) := by
   obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
     hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmnc, hmi, hli, hacc⟩ := hinv
-  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0) (msaKPtr K s0) s0 with hscA
-  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0) (msaKPtr K s0) s0 with hscB
+  set scoreA := msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscA
+  set scoreB := msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0 with hscB
   set vblkA := msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0 with hvbA
   set vblkB := msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0 with hvbB
   set mA := msaMPartial 64 64 scoreA 8 with hmA
@@ -5084,7 +5088,7 @@ theorem msaPostLoop_eval
         = (some (ratio (ir, dd, u)) : WithBot ℝ) from rfl]
     rw [hratio]
     exact congrArg some
-      (msaSeeded_ratio_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 ir dd
+      (msaSeeded_ratio_eq_closedForm Q K V Seqlens Blocks BlockOffsets ColCounts Cols s0 sm_scale ir dd
         hNC64 (hpos ir hlt))
   · rw [if_neg hlt, if_neg hlt]
     simp only [BlockState.readMemValue, BlockState.readMemAs, hs1mem, hmem]
@@ -5110,15 +5114,15 @@ preserves inactive lanes. Faithful side conditions (`num_cols ≤ 64`,
 per-active-lane positive cat denominator) supplied as hypotheses. -/
 theorem msa_exec
     (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (Out : RegionName) (s : BlockState)
+    (Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     (hundef : ∀ rg o, s.undef rg o = 0)
     (hactive : s.pids 0 * 64 < seqLen s 4 (Region.cast Seqlens))
     (hNC64 : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ 64)
     (hpos : ∀ i : Fin 64, s.pids 0 * 64 + i.val < seqLen s 4 (Region.cast Seqlens) →
       0 < msaDenomUpto 64 64
-        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s) 9 i) :
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s sm_scale) 9 i) :
     ∃ sF, stepStmts ((mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        (sm_scale : ℝ) Blocks BlockOffsets ColCounts Cols Out
         32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
         2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel.body) s = some sF
       ∧ ∀ idx : TileIndex [64, 64],
@@ -5128,12 +5132,12 @@ theorem msa_exec
                   32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
                   (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
                   (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
-                  (seqLen s 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
-  rw [msa_body_split]
+                  (seqLen s 4 (Region.cast Seqlens)) 64 64 64 sm_scale idx.1 (dIndex idx)) : WithBot ℝ) := by
+  rw [msa_body_split Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols sm_scale]
   -- preLoop = [3 outer] ++ msaSetup; the whole preLoop runs to s0 (invariantA 0).
   obtain ⟨s0, hpre, hinv0⟩ := msaPreLoop_eval s Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
-    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s) hundef
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s sm_scale) (msaKPtr K s) s)
+    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s) sm_scale hundef
   -- the three outer statements, stepped explicitly to a concrete state s3
   have h0 : stepStmt (Stmt.assign .nat [] "start_m" (Op.programId 0)) s
       = some (s.setReg "start_m" .nat [] (Tile.scalar (s.pids 0))) :=
@@ -5172,17 +5176,17 @@ theorem msa_exec
           MaskOpt.none) ] s = some s3 := by
     rw [stepStmts.cons_some h0, stepStmts.cons_some h1, stepStmts.cons_some h2, stepStmts.nil]
   -- setup runs s3 → s0 (from the full preLoop run, split at s3)
-  have hsetup : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out) s3
+  have hsetup : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale) s3
       = some s0 := by
-    have hsplit := stepStmts.append_some h3 (l2 := msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out)
+    have hsplit := stepStmts.append_some h3 (l2 := msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale)
     rw [show ([ Stmt.assign .nat [] "start_m" (Op.programId 0),
         Stmt.assign .nat [] "off_hz" (Op.programId 1),
         Stmt.assign .nat [] "seqlen"
           (Op.load .nat (MemAccess.region Seqlens
             (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)))
             MaskOpt.none) ]
-      ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out)
-      = msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out from rfl] at hsplit
+      ++ msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale)
+      = msaPreLoop Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale from rfl] at hsplit
     rw [← hsplit]; exact hpre
   -- s3 pids/mem agree with s
   have hs3pids : s3.pids = s.pids := by
@@ -5203,25 +5207,25 @@ theorem msa_exec
     exact hactive
   -- Loop A: forRangeDyn over the 8 dense blocks (invariantA 0 → 8)
   obtain ⟨sA1, hloopA, hinvA8⟩ := msa_loopA_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s s0 hinv0
+    (msaQVal Q s sm_scale) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s s0 hinv0
   -- handoff: max_num_cols = 16 (invariantA 8 → invariantB 0)
   obtain ⟨sB1, hhand, hinvB0⟩ := msa_handoff Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
+    (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s sm_scale) (msaKPtr K s) s)
     (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s)
-    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s) (msaKPtr K s) s)
+    (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s sm_scale) (msaKPtr K s) s)
     (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s) s)
-    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 8 sA1 hinvA8
+    (msaQVal Q s sm_scale) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s 8 sA1 hinvA8
   -- Loop B: forRangeDyn over the 1 column block (invariantB 0 → 1)
   obtain ⟨sC1, hloopB, hinvB1⟩ := msa_loopB_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s) 8)
-    (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s) 8)
+    (msaMPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s sm_scale) (msaKPtr K s) s) 8)
+    (msaLPartial 64 64 (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s sm_scale) (msaKPtr K s) s) 8)
     (fun ii dd => msaOPartial 64 64 64
-      (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s) (msaKPtr K s) s)
+      (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s sm_scale) (msaKPtr K s) s)
       (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s) s) 8 ii dd)
-    (msaQVal Q s) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s sB1 hinvB0
+    (msaQVal Q s sm_scale) (msaKPtr K s) (msaVPtr V s) (msaOPtr Out s) s sB1 hinvB0
   -- postLoop: acc /= l_i + masked store (invariantB 1 → genuine closed form)
   obtain ⟨sP, hpost, hOut⟩ := msaPostLoop_eval Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    s sC1 hNC64 hpos hinvB1
+    s sC1 sm_scale hNC64 hpos hinvB1
   -- assemble the inner block: setup ++ [loopA, maxcols, loopB] ++ postLoop
   -- the middle block [loopA, maxcols, loopB] runs s0 → sC1
   have hmid : stepStmts [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
@@ -5237,14 +5241,14 @@ theorem msa_exec
     rw [stepStmts.cons_some hloopA, stepStmts.cons_some hhandStmt,
       stepStmts.cons_some hloopB, stepStmts.nil]
   -- setup ++ mid runs s3 → sC1
-  have hsetupmid : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+  have hsetupmid : stepStmts (msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale
       ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
             (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
            Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
            Stmt.forRangeDyn "start_n" (Op.constNat 0)
             (Op.ref .nat [] "max_num_cols") (Op.constNat 64) msaLoopBodyB ]) s3 = some sC1 := by
     rw [stepStmts.append_some hsetup]; exact hmid
-  have hinner : stepStmts ((msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+  have hinner : stepStmts ((msaSetup Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out sm_scale
       ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
             (Op.ref .nat [] "max_num_blks") (Op.constNat 1) msaLoopBodyA,
            Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
@@ -5306,7 +5310,7 @@ theorem mixed_sparse_attention_python_case1_output_closed_form_summary
                   (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
                   (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
                   (seqLen s 4 (Region.cast Seqlens)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
-  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out s
+  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out s (0.1 : ℝ)
     hundef hactive hNC64 hpos
   exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
 
@@ -5334,7 +5338,39 @@ theorem mixed_sparse_attention_python_case4_output_closed_form_summary
                   (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
                   (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
                   (seqLen s 4 (Region.cast SeqlensAlt)) 64 64 64 0.1 idx.1 (dIndex idx)) : WithBot ℝ) := by
-  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V SeqlensAlt Blocks BlockOffsets ColCounts Cols Out s
+  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V SeqlensAlt Blocks BlockOffsets ColCounts Cols Out s (0.1 : ℝ)
+    hundef hactive hNC64 hpos
+  exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
+
+/-- **Genuine Python case 3 closed-form summary** (`BLOCK_M=BLOCK_N=64`,
+`sm_scale=0.2`). Same genuine guarantee as case 1, at the larger softmax scale:
+the executed surface kernel's `fp16` `Out` cell at every active output lane equals
+`some (mixedSparseAttnClosedForm …)` with `sm_scale = 0.2`. The whole streaming
+foundation is parameterized by `sm_scale`, so this is `msa_exec` instantiated at
+`0.2` — NOT the store-only `accStoreValue` fact, the genuine non-self-referential
+mixed-sparse closed form. -/
+theorem mixed_sparse_attention_python_case3_output_closed_form_summary
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hactive : s.pids 0 * 64 < seqLen s 4 (Region.cast Seqlens))
+    (hNC64 : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ 64)
+    (hpos : ∀ i : Fin 64, s.pids 0 * 64 + i.val < seqLen s 4 (Region.cast Seqlens) →
+      0 < msaDenomUpto 64 64
+        (msaCatScore0 Q K V Seqlens Blocks BlockOffsets ColCounts Cols s (0.2 : ℝ)) 9 i) :
+    ∃ sF, exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        (0.2 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+        2 4 128 2 4 8 64 64 64 FloatDType.fp16).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [64, 64],
+          active s 4 Seqlens 64 idx →
+            sF.readMemValue .fp16 Out (outOffset s 4 32768 8192 64 1 64 idx)
+              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
+                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
+                  (seqLen s 4 (Region.cast Seqlens)) 64 64 64 0.2 idx.1 (dIndex idx)) : WithBot ℝ) := by
+  obtain ⟨sF, hexec, hOut⟩ := msa_exec Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out s (0.2 : ℝ)
     hundef hactive hNC64 hpos
   exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
 
