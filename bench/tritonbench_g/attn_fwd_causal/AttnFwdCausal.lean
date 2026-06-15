@@ -4868,6 +4868,12 @@ noncomputable def attnFwdCausalOutSpecG
     (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
     keyScale (fun i j => causalKeep (qStartAFCG s BLOCK_M) i j) idx
 
+/-- General per-key score scale carrier `q_scale · k_scale` (block `j / BLOCK_N`). -/
+noncomputable def keyScaleAFCG (s : BlockState) (QScale KScale : RegionName)
+    (N_CTX BLOCK_M BLOCK_N numKVBlocks : Nat) : Fin (BLOCK_N * numKVBlocks) → ℝ :=
+  fun j => s.readMem QScale (s.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + s.pids 0)
+            * s.readMem KScale (s.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + j.val / BLOCK_N)
+
 /-- General streaming bridge: the closed form equals the `osStep` online-softmax
 fold over the causal-masked key list. -/
 theorem attnFwdCausalOutSpecG_eq_streaming
@@ -6153,6 +6159,39 @@ theorem vPtrsAFCG_succ (s0 : BlockState) (V : RegionName)
       Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
       Broadcast.rightIndex_nil, NumericDType.nat_mul]
     ring
+
+/-- **General loop invariant** for the AFC streaming loop (counter `i = c·BLOCK_N`).
+Binds the running registers to the seed-1 ⊥-state over the first `i` keys, the
+static index vectors, loaded `q`/`q_scale`, the three streamed pointers, and
+preserves `undef`/`mem`. -/
+noncomputable def afcInvariantG
+    (Q K V QScale KScale Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ) (hBD : 0 < BLOCK_DMODEL)
+    (i : Nat) (s : BlockState) : Prop :=
+  let qStart := qStartAFCG s0 BLOCK_M
+  let qT := qTileAFCmG s0 Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE
+  let kT := kTileAFCG s0 K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+  let vT := vTileAFCmG s0 V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE
+  s.pids = s0.pids ∧ i % BLOCK_N = 0 ∧ i ≤ N_CTX ∧
+  (s.regs .real [BLOCK_M] "m_i" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩) ∧
+  (s.regs .real [BLOCK_M] "l_i" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      ((afcStateBot1G qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      ((afcStateBot1G qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => qStart + r.val))) ∧
+  (s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      if qStart + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE then
+        some (qTileAFCG s0 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL idx) else some (0.0 : ℝ)⟩) ∧
+  (s.regs .real [] "q_scale" = some (Tile.scalar
+      (some (s0.readMem QScale (s0.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + s0.pids 0))))) ∧
+  (s.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some (kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (i / BLOCK_N))) ∧
+  (s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFCG s0 KScale N_CTX BLOCK_N (i / BLOCK_N))) ∧
+  (s.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (i / BLOCK_N))) ∧
+  (s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 /-! ### General loop-body execution chain -/
 
