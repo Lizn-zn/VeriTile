@@ -485,6 +485,73 @@ theorem attention_fwd_triton2_closed_form_correct
   rw [dif_pos (show idx.2.1.val < HEAD_ACTIVE from hk)]
   exact hmain
 
+/-- **Dimension-general output summary for `attention_fwd_triton2` (no test-shape pin).**
+
+Mirrors the reference `attention_forward_triton_closed_form_correct`: over
+*symbolic* batch/head strides, head count `H`, block sizes `BLOCK_M`/`BLOCK_N`,
+KV-block count `numKVBlocks` (so `N_CTX = BLOCK_N · numKVBlocks`), head/active
+dimensions and arbitrary `q_scale`/`k_scale`, this combines
+
+* the checked full-surface lowering to the algorithm layer
+  (`attention_fwd_triton2_surface_toAlgorithm_supported`), and
+* the genuine closed-form value of every active `Out` lane
+  (`attention_fwd_triton2_closed_form_correct`):
+  `attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under the per-block
+  key scale — the base-2, per-key-scaled attention output reading INPUT Q/K/V
+  memory, NOT the kernel's own executed value.
+
+The only layout assumptions are the contiguity contracts the kernel relies on
+(`stride_qm = stride_kn = HEAD_DIM`, head stride `1`), `0 < BLOCK_N`,
+`HEAD_ACTIVE ≤ BLOCK_DMODEL`, `HEAD_ACTIVE ≤ HEAD_DIM`, and a clean initial
+`undef`. The Python test case (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128,
+BLOCK_N=64, HEAD_ACTIVE=96, numKVBlocks=2`) is the special case recovered by
+`attention_fwd_triton2_python_test_shape_output_summary`. -/
+theorem attention_fwd_triton2_output_summary_general
+    (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
+    (hBN : 0 < BLOCK_N) (hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL)
+    (hHD : HEAD_ACTIVE ≤ HEAD_DIM) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton2_surface Q K V Q_scale K_scale Out
+      stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1
+      Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton2_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if h : idx.2.1.val < HEAD_ACTIVE then
+          attentionRealBase2PerKeyScale
+            (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+            (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N
+              (BLOCK_N * numKVBlocks))
+            (idx.1, ⟨idx.2.1.val, h⟩, PUnit.unit)
+        else (0 : ℝ)) :=
+  ⟨attention_fwd_triton2_surface_toAlgorithm_supported Q K V Q_scale K_scale Out
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE STAGE,
+    attention_fwd_triton2_closed_form_correct Q K V Q_scale K_scale Out s
+      stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL
+      HEAD_ACTIVE STAGE hBN hActiveLe hHD hundef⟩
+
 /-- Python test-shape summary for `attention_fwd_triton2.py`.
 
 This combines the checked full-surface lowering for the Python launch
