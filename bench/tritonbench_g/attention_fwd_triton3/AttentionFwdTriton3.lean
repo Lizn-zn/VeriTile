@@ -7551,4 +7551,334 @@ theorem aft3_body_splitG3 (Q K V M Out L : RegionName) (sm_scale : ℝ)
         ++ Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG3 sm_scale off BM ND BN) :: aft3PostLoopG M Out L BM ND := by
   rfl
 
+/-- General case-1 sliding-window mask cell. -/
+noncomputable def aft3MaskCell1G (SM SN off size BM BN : Nat) (idx : TileIndex [BM, BN]) : Bool :=
+  ComparableDType.nat.ge (((idx.1.val - idx.2.1.val) + SM * BM - SN) + off) 0
+    && ComparableDType.nat.lt (((idx.1.val - idx.2.1.val) + SM * BM - SN) + off) size
+
+/-- General case-2 complement-window mask cell. -/
+noncomputable def aft3MaskCell2G (SM SN off size BM BN : Nat) (idx : TileIndex [BM, BN]) : Bool :=
+  ComparableDType.nat.ge (((idx.1.val - idx.2.1.val) + SM * BM - SN) + off) size
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- General sliding-window block (case 1). -/
+theorem aft3_window1_stepsG (s : BlockState) (SM SN off size BM BN : Nat)
+    (hax1 : 1 < [BM].length.succ) (hax0 : 0 < [BN].length.succ)
+    (qktile : Tile .real [BM, BN])
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    stepStmts [ Stmt.assign TileDType.nat [BM, BN] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, hax1⟩ (Op.arange BM)) (Op.expandDim ⟨0, hax0⟩ (Op.arange BN))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat off)),
+        Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size))] [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size)))],
+        Stmt.assign TileDType.real [BM, BN] "qk" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN]))] s
+      = some ((((s.setReg "dist" .nat [BM, BN] ⟨fun idx : TileIndex [BM, BN] => ((idx.1.val - idx.2.1.val) + SM * BM - SN) + off⟩).setReg
+          "mask" .bool [BM, BN] ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell1G SM SN off size BM BN idx⟩).setReg
+          "qk" .real [BM, BN] ⟨fun idx : TileIndex [BM, BN] =>
+            if aft3MaskCell1G SM SN off size BM BN idx then qktile.data idx else (⊥ : WithBot ℝ)⟩)) := by
+  set disttile : Tile .nat [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => ((idx.1.val - idx.2.1.val) + SM * BM - SN) + off⟩ with hdist
+  set masktile : Tile .bool [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      ComparableDType.nat.ge (disttile.data idx) 0 && ComparableDType.nat.lt (disttile.data idx) size⟩ with hmtile
+  have hmaskeq : masktile = ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell1G SM SN off size BM BN idx⟩ := by
+    refine Tile.ext (fun idx => ?_); simp only [hmtile, aft3MaskCell1G, hdist]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_dist_evalG s SM SN BM BN off hax1 hax0 hsm hsn))]
+  rw [stepStmts.cons_some
+    (show stepStmt _ (s.setReg "dist" .nat [BM, BN] disttile) = some _ from by
+      rw [aft3_ifThenElse_false (aft3_ne_zero_zero_false _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_mask_case1_evalG (s.setReg "dist" .nat [BM, BN] disttile) BM BN size disttile
+          (by rw [BlockState.setReg_same])))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_where_evalG _ BM BN masktile qktile
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same]; exact hqk)))]
+  rw [stepStmts.nil]
+  rw [hmaskeq]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- General complement sliding-window block (case 2). -/
+theorem aft3_window2_stepsG (s : BlockState) (SM SN off size BM BN : Nat)
+    (hax1 : 1 < [BM].length.succ) (hax0 : 0 < [BN].length.succ)
+    (qktile : Tile .real [BM, BN])
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    stepStmts [ Stmt.assign TileDType.nat [BM, BN] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, hax1⟩ (Op.arange BM)) (Op.expandDim ⟨0, hax0⟩ (Op.arange BN))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat off)),
+        Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size))] [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size)))],
+        Stmt.assign TileDType.real [BM, BN] "qk" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN]))] s
+      = some ((((s.setReg "dist" .nat [BM, BN] ⟨fun idx : TileIndex [BM, BN] => ((idx.1.val - idx.2.1.val) + SM * BM - SN) + off⟩).setReg
+          "mask" .bool [BM, BN] ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell2G SM SN off size BM BN idx⟩).setReg
+          "qk" .real [BM, BN] ⟨fun idx : TileIndex [BM, BN] =>
+            if aft3MaskCell2G SM SN off size BM BN idx then qktile.data idx else (⊥ : WithBot ℝ)⟩)) := by
+  set disttile : Tile .nat [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => ((idx.1.val - idx.2.1.val) + SM * BM - SN) + off⟩ with hdist
+  set masktile : Tile .bool [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => ComparableDType.nat.ge (disttile.data idx) size⟩ with hmtile
+  have hmaskeq : masktile = ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell2G SM SN off size BM BN idx⟩ := by
+    refine Tile.ext (fun idx => ?_); simp only [hmtile, aft3MaskCell2G, hdist]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_dist_evalG s SM SN BM BN off hax1 hax0 hsm hsn))]
+  rw [stepStmts.cons_some
+    (show stepStmt _ (s.setReg "dist" .nat [BM, BN] disttile) = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_mask_case2_evalG (s.setReg "dist" .nat [BM, BN] disttile) BM BN size disttile
+          (by rw [BlockState.setReg_same])))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_where_evalG _ BM BN masktile qktile
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same]; exact hqk)))]
+  rw [stepStmts.nil]
+  rw [hmaskeq]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- General p-mask block. -/
+theorem aft3_pmask1_stepsG (s : BlockState) (BM BN : Nat) (masktile : Tile .bool [BM, BN])
+    (ptile : Tile .real [BM, BN])
+    (hmask : s.regs .bool [BM, BN] "mask" = some masktile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    stepStmts [ Stmt.assign TileDType.real [BM, BN] "p" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "p") ((Op.const 0.0).broadcast [BM, BN]))] s
+      = some (s.setReg "p" .real [BM, BN] ⟨fun idx : TileIndex [BM, BN] =>
+          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩) := by
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_p_mask_evalG s BM BN masktile ptile hmask hp))]
+  rw [stepStmts.nil]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General loop-body execution chain (case 1).** -/
+theorem aft3LoopBodyG_steps (sin : BlockState) (SM SN off size : Nat)
+    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
+    (skk skn svk svn ND NKV_CTX BM BN : Nat) (hBN : 0 < BN)
+    (qtile : Tile .real [BM, ND]) (mtile ltile : Tile .real [BM]) (acctile : Tile .real [BM, ND])
+    (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND]) (sc : ℝ)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hq : sin.regs .real [BM, ND] "q" = some qtile)
+    (hqs : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
+    (hmi : sin.regs .real [BM] "m_i" = some mtile)
+    (hli : sin.regs .real [BM] "l_i" = some ltile)
+    (hacc : sin.regs .real [BM, ND] "acc" = some acctile)
+    (hKp : sin.regs .blockPtr [ND, BN] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [ND, BN] =>
+        { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+          blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol] }⟩))
+    (hVp : sin.regs .blockPtr [BN, ND] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BN, ND] =>
+        { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+          blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow, 0] }⟩))
+    (hkload : ∀ idx : TileIndex [ND, BN],
+      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * skk + (kcol + idx.2.1.val) * skn)))
+    (hvload : ∀ idx : TileIndex [BN, ND],
+      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * svk + idx.2.1.val * svn)))
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts (aft3LoopBodyG sc off size BM ND BN) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .real [BM, ND] "q" = some qtile
+      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
+      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar SM)
+      ∧ sF.regs .blockPtr [ND, BN] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [ND, BN] =>
+            { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+              blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol + BN] }⟩)
+      ∧ sF.regs .blockPtr [BN, ND] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [BN, ND] =>
+            { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+              blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow + BN, 0] }⟩)
+      ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
+      ∧ sF.regs .ptr [BM] "m_ptrs" = sin.regs .ptr [BM] "m_ptrs"
+      ∧ sF.regs .ptr [BM] "l_ptrs" = sin.regs .ptr [BM] "l_ptrs"
+      ∧ sF.regs .blockPtr [BM, ND] "O_block_ptr" = sin.regs .blockPtr [BM, ND] "O_block_ptr"
+      ∧ ∃ (qkT : Tile .real [BM, BN]) (rmaxT mijT alphaT lijT : Tile .real [BM])
+            (pT pmT : Tile .real [BM, BN]) (acc1T : Tile .real [BM, ND]),
+          (qkT = ⟨fun idx : TileIndex [BM, BN] =>
+            if aft3MaskCell1G SM SN off size BM BN idx
+            then (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add
+                      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+                    (Tile.scalar (some sc))).data idx
+            else (⊥ : WithBot ℝ)⟩)
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+          ∧ pmT = ⟨fun idx : TileIndex [BM, BN] =>
+              if aft3MaskCell1G SM SN off size BM BN idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT
+          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
+          ∧ sF.regs .real [BM] "m_i" = some mijT
+          ∧ sF.regs .real [BM] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
+          ∧ sF.regs .real [BM, ND] "acc" = some (Tile.bop NumericDType.real.add
+              (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1T (Tile.dot [] pmT vtile)) := by
+  set qkSeedT : Tile .real [BM, BN] :=
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (Tile.scalar (some sc)) with hqkSeed
+  set maskT : Tile .bool [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell1G SM SN off size BM BN idx⟩ with hmaskT
+  set qkT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      if maskT.data idx then qkSeedT.data idx else (⊥ : WithBot ℝ)⟩ with hqkT
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) from by simpa [TileShape.axisDim] using hBN)]⟩
+  set mijT : Tile .real [BM] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
+  set alphaT : Tile .real [BM] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with halpha
+  set pT : Tile .real [BM, BN] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)) with hpT
+  set pmT : Tile .real [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => if maskT.data idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpmT
+  set lijT : Tile .real [BM] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT with hlij
+  set acc1T : Tile .real [BM, ND] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
+  unfold aft3LoopBodyG
+  -- L1: k = load K_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") []) MaskOpt.none) sin
+        = some ktile from by
+      rw [aft3_load_k_eval Kreg kbase ND NKV_CTX ND BN skk skn kcol (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") sin
+        (by rw [evalOp_ref]; exact hKp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_); rw [hkload idx]))]
+  -- L2: qk = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_qkzeros_eval _ BM BN))]
+  -- L3: qk += dot q k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_dot_eval _ BM BN ND (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) qtile ktile
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same]; exact hq)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same])))]
+  -- L4: qk *= qk_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_scale_ref_eval _ BM BN sc
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hqs)))]
+  -- L5: window ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_window1_stepsG _ SM SN off size BM BN (by simp) (by simp) qkSeedT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsm)
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsn)
+          (by rw [BlockState.setReg_same])))]
+  -- L6: m_ij = maximum(m_i, max(qk,1))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mij_evalG _ BM BN mtile qkT rmaxT (by simp)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by rw [BlockState.setReg_same])
+      hrm))]
+  -- L7: qk -= m_ij[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_sub_evalG _ BM BN (by simp) qkT mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L8: p = exp2 qk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_p_evalG _ BM BN (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+      (by rw [BlockState.setReg_same])))]
+  -- L9: pmask ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_pmask1_stepsG _ BM BN maskT pT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same] <;> try rfl)
+          (by rw [BlockState.setReg_same])))]
+  -- L10: l_ij = sum p 1
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BM] "l_ij"
+    (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "p")) _ lijT
+    (aft3_lij_evalG _ BM BN pmT (by simp) (by rw [BlockState.setReg_same])))]
+  -- L11: tmp = m_i - m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_tmp_evalG _ BM mtile mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L12: alpha = exp2 tmp
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_alpha_evalG _ BM (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+      (by rw [BlockState.setReg_same])))]
+  -- L13: l_i = l_i * alpha + l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_li_evalG _ BM ltile alphaT lijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hli)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L14: acc = acc * alpha[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_rescale_evalG _ BM ND (by simp) acctile alphaT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hacc)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L15: v = load V_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none) _
+        = some vtile from by
+      rw [aft3_load_v_eval Vreg vbase NKV_CTX ND BN ND svk svn vrow (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") _
+        (by rw [evalOp_ref]
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hVp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
+  -- L16: acc += dot p v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_eval _ BM BN ND acc1T pmT vtile
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L17: m_i = m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mi_carry_evalG _ BM mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L18: V_block_ptr = advance [BN, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_v_eval _ Vreg vbase NKV_CTX ND BN ND svk svn vrow BN "V_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hVp)))]
+  -- L19: K_block_ptr = advance [0, BN]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_k_eval _ Kreg kbase ND NKV_CTX ND BN skk skn kcol BN "K_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
+    rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hq
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hqs
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hsm
+  · simp only [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
