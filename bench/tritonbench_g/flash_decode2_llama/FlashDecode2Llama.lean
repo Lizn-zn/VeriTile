@@ -563,4 +563,95 @@ theorem flash_decode2_llama_python_test_shape_running_max_output_summary
   · exact flash_decode2_llama_running_max_step_python_test_shape_compute_correct
       Mid_O_LogExpSum MaxLogic NewMaxLogic block_seq_n s
 
+/-! ## Dimension-general genuine closed-form summaries
+
+The declarations below (`…_general` suffix) generalize the Python-test-shape
+summaries above off the concrete strides/dims. Every stride and `BLOCK_DMODEL`
+is now a genuine `Nat` parameter, universally quantified — no `128`/`32`/`12`/…
+literals are baked in. The genuine `expected` payloads are unchanged
+closed forms reading INPUT memory (`normalizedStoreValue` = `acc / sum_exp` and
+`runningMaxStepValue` = `max(tlogic, max_logic)`); neither references the
+executed output.
+
+The full stage2 surface lowering (`flash_decode2_llama_surface_toAlgorithm_supported`)
+is itself already fully dimension-parameterized, so it is re-used verbatim. The
+output-store injectivity side condition (`hOutInj`), which at the test shape was
+discharged by `flash_decode2_llama_python_test_shape_offset_injective`, is here a
+hypothesis (it is the standard contiguous-footprint requirement). -/
+
+/-- **General genuine final-normalization output summary.** Fully
+dimension-parameterized over every stride and `BLOCK_DMODEL`: the full LLaMA
+flash-decode stage2 surface lowers, and the normalization writeback *realizes*
+the genuine closed form `O[d] = acc[d] / sum_exp` (`normalizedStoreValue`,
+reading the loop-produced `Acc`/`SumExp` input memory) at each output lane. No
+hardcoded shape literals. Side condition: output-footprint injectivity. -/
+theorem flash_decode2_llama_normalization_output_summary_general
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp O : RegionName)
+    (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
+      BLOCK_SEQ BLOCK_DMODEL
+      stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
+      stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od BLOCK_SEQ
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_normalization_store_kernel Acc SumExp O
+        stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+        stride_obs stride_oh stride_od BLOCK_DMODEL)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (O, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        normalizedStoreValue s Acc SumExp stride_acc_b stride_acc_h
+          stride_acc_d stride_sum_b stride_sum_h i) := by
+  refine ⟨?_, ?_⟩
+  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum O stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
+      BLOCK_SEQ BLOCK_DMODEL
+  · exact flash_decode2_llama_normalization_store_kernel_compute_correct Acc SumExp O
+      stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj
+
+/-- **General genuine running-maximum recurrence summary.** Fully
+dimension-parameterized over the block index and every stride: the full LLaMA
+flash-decode stage2 surface lowers, and one recurrence step *realizes* the
+genuine closed form `new_max_logic = max(tlogic, max_logic)`
+(`runningMaxStepValue`, reading `Mid_O_LogExpSum`/`MaxLogic` input memory). No
+hardcoded shape literals. -/
+theorem flash_decode2_llama_running_max_output_summary_general
+    (B_Seqlen : Region .nat)
+    (Mid_O Mid_O_LogExpSum MaxLogic NewMaxLogic O : RegionName)
+    (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb' stride_mid_o_eh' stride_mid_o_es stride_obs stride_oh stride_od
+      BLOCK_SEQ BLOCK_DMODEL
+      block_seq_n stride_mid_o_eb stride_mid_o_eh stride_logic_b stride_logic_h : Nat)
+    (s : BlockState) :
+    (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb'
+      stride_mid_o_eh' stride_mid_o_es stride_obs stride_oh stride_od BLOCK_SEQ
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
+        MaxLogic NewMaxLogic block_seq_n stride_mid_o_eb stride_mid_o_eh
+        stride_logic_b stride_logic_h)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar NewMaxLogic
+        (sumExpOffset s stride_logic_b stride_logic_h))
+      (expected := fun _ : PUnit =>
+        runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n
+          stride_mid_o_eb stride_mid_o_eh stride_logic_b stride_logic_h) := by
+  refine ⟨?_, ?_⟩
+  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum O stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb' stride_mid_o_eh' stride_mid_o_es stride_obs stride_oh stride_od
+      BLOCK_SEQ BLOCK_DMODEL
+  · exact flash_decode2_llama_running_max_step_kernel_compute_correct
+      Mid_O_LogExpSum MaxLogic NewMaxLogic block_seq_n stride_mid_o_eb stride_mid_o_eh
+      stride_logic_b stride_logic_h s
+
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama
