@@ -5110,6 +5110,59 @@ theorem afcStateBot1G_fst_eq_runningMax (qStart hi : Nat) (i : Fin BLOCK_M) (d :
       = afcRunningMaxG qT kT vT keyScale qStart hi i d := by
   rw [afcStateBot1G, afcStateBot_fst, afcRunningMaxG, afc_foldl_sup_bot_eq_foldr]
 
+/-- General denominator channel-independence. -/
+theorem afcStateBotG_snd_fst_indep (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.1
+      = (afcStateBotG qT kT vT keyScale qStart hi i d').2.1 := by
+  rw [afcStateBotG_snd_fst, afcStateBotG_snd_fst,
+    afcRunningMaxG_eq qT kT vT keyScale qStart hi i d d']
+  congr 2
+  unfold afcKeysUptoG
+  rw [List.map_filterMap, List.map_filterMap]
+  refine congrArg List.sum (List.filterMap_congr ?_)
+  intro j _
+  by_cases hj : j.val < hi ∧ j.val ≤ qStart + i.val <;> simp [afcKVG, hj]
+
+/-- General full-window bridge: at `hi = SEQ`, the causal ⊥-seeded key list equals
+the predicate-filtered `attnKeyListPred` with `causalKeep qStart`. -/
+theorem afcKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcKeysUptoG qT kT vT keyScale qStart SEQ i d
+      = attnKeyListPred qT kT vT keyScale (fun a b => causalKeep qStart a b) i d := by
+  unfold afcKeysUptoG attnKeyListPred afcKVG
+  apply List.filterMap_congr
+  intro j _
+  have hjlt : j.val < SEQ := j.isLt
+  have hiff : causalKeep qStart i j ↔ j.val ≤ qStart + i.val := by
+    unfold causalKeep; omega
+  by_cases hc : causalKeep qStart i j
+  · rw [if_pos ⟨hjlt, hiff.mp hc⟩, if_pos hc]
+  · rw [if_neg (fun hh => hc (hiff.mpr hh.2)), if_neg hc]
+
+/-- **General ⊥-seeded full-window state reads off the genuine closed-form spec.** -/
+theorem afcStateBotG_full_eq_spec
+    (s : BlockState) (Q K V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hne : afcRunningMaxG
+        (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+        (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+        keyScale (qStartAFCG s BLOCK_M) (BLOCK_N * numKVBlocks) i d ≠ ⊥) :
+    (let st := afcStateBotG
+        (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+        (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+        keyScale (qStartAFCG s BLOCK_M) (BLOCK_N * numKVBlocks) i d
+     st.2.2 / st.2.1)
+      = attnFwdCausalOutSpecG s Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N
+          BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale (i, d, PUnit.unit) := by
+  simp only
+  rw [afcStateBotG_ratio_eq _ _ _ _ _ _ _ _ hne]
+  rw [afcKeysUptoG_full_eq_pred]
+  rw [attnFwdCausalOutSpecG_eq_streaming]
+  rw [VeriTile.Triton.osStep_foldl_eq_batch]
+
 set_option maxRecDepth 8000 in
 /-- **General body split** — the lowered general AFC body decomposes as
 `take 22 ++ (forRange "start_n" 0 N_CTX BLOCK_N afcLoopBodyG :: drop 23)`. The
