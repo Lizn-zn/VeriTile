@@ -3720,53 +3720,6 @@ theorem mistral_exec
   rw [hoeq, hOut idx, if_pos hactS0]
   exact ctxMistralGenuineOutValue_eq_of_mem_pids s0 s Q K V B_Start_Loc.cast B_Seqlen.cast sw hmem0 hpids0 idx
 
-/-- **Public genuine Python test-shape summary for `context_attn_mistral.py`.**
-The full faithful `_fwd_kernel` surface realizes the genuine sliding-window
-causal-softmax closed form `ctxMistralGenuineOutValue` (boundary-masked
-sliding-window-softmax fold of the loaded Q/K/V memory, `-1e9` sentinel kept) at
-every active output lane — NOT a self-referential executed value: the streaming
-`m_i`/`l_i`/`acc` recurrence (two `where` masks, the `-1e9` block-max guard, and
-the `l_i_new` denominator guard) is decoded statement-by-statement and proven to
-collapse to the closed form. Bundles `sliding_window ∈ {10, 20}`. -/
-theorem context_attn_mistral_genuine_output_summary
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1 1 10 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        ctxMistralGenuineOutValue s Q K V B_Start_Loc B_Seqlen 10 idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1 1 20 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        ctxMistralGenuineOutValue s Q K V B_Start_Loc B_Seqlen 20 idx) := by
-  constructor <;>
-  · rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [context_attn_mistral_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-        ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hActive
-    obtain ⟨sF, hstep, hOut⟩ := mistral_exec Q K V B_Start_Loc B_Seqlen Out _ s hundef
-    rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
-    obtain rfl : sF = s' := Option.some.inj hExec
-    simp only [ComputeCorrect.OutputReadable.read_real]
-    exact hOut idx hActive
-
 end MistralPostExec
 
 
@@ -5890,6 +5843,66 @@ theorem context_attn_mistral_genuine_output_summary_general
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_real]
   exact hOut idx hActive
+
+/-- **Public genuine Python test-shape summary for `context_attn_mistral.py`.**
+The full faithful `_fwd_kernel` surface realizes the genuine sliding-window
+causal-softmax closed form `ctxMistralGenuineOutValue` (boundary-masked
+sliding-window-softmax fold of the loaded Q/K/V memory, `-1e9` sentinel kept) at
+every active output lane — NOT a self-referential executed value: the streaming
+`m_i`/`l_i`/`acc` recurrence (two `where` masks, the `-1e9` block-max guard, and
+the `l_i_new` denominator guard) is decoded statement-by-statement and proven to
+collapse to the closed form. Bundles `sliding_window ∈ {10, 20}`.
+
+This is now a thin corollary of the dimension-parameterized
+`context_attn_mistral_genuine_output_summary_general`, instantiated at the test
+shape `rs = 768`, `hs = 128`, `BLK = DM = 128`, `sm_scale = (√128)⁻¹`,
+`sw ∈ {10, 20}`. The side conditions `0 < BLK`, `0 < DM`, `DM ≤ rs` discharge by
+`norm_num`; `ctxMistralGenuineOutValue` is *definitionally* the general
+`mistralGenuineOutValueG` at these args (and `active`/`outOffset` likewise reduce
+to `mistralActiveG`/`mistralOutOffsetG`). -/
+theorem context_attn_mistral_genuine_output_summary
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1 1 10 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        ctxMistralGenuineOutValue s Q K V B_Start_Loc B_Seqlen 10 idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1 1 20 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        ctxMistralGenuineOutValue s Q K V B_Start_Loc B_Seqlen 20 idx) := by
+  have hoff : ∀ idx : TileIndex [128, 128],
+      outOffset s B_Start_Loc 768 128 1 128 idx
+        = mistralOutOffsetG s B_Start_Loc 768 128 128 128 idx := by
+    intro idx
+    simp only [outOffset, mIndex, dIndex, mistralOutOffsetG, Nat.mul_one]
+  constructor
+  · have hgen :=
+      context_attn_mistral_genuine_output_summary_general Q K V B_Start_Loc B_Seqlen Out
+        ((Real.sqrt (128 : ℝ))⁻¹) 768 128 128 128 10 (by norm_num) (by norm_num) (by norm_num)
+        s hundef
+    simpa only [ctxMistralGenuineOutValue, active, mIndex, mistralActiveG,
+      ComputeCorrect.WriteMap.writeIf, hoff] using hgen
+  · have hgen :=
+      context_attn_mistral_genuine_output_summary_general Q K V B_Start_Loc B_Seqlen Out
+        ((Real.sqrt (128 : ℝ))⁻¹) 768 128 128 128 20 (by norm_num) (by norm_num) (by norm_num)
+        s hundef
+    simpa only [ctxMistralGenuineOutValue, active, mIndex, mistralActiveG,
+      ComputeCorrect.WriteMap.writeIf, hoff] using hgen
 
 end MistralGeneralExec
 
