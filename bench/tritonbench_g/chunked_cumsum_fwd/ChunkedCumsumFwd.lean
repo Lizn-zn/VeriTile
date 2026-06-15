@@ -797,6 +797,197 @@ theorem chunked_cumsum_dA_cs_compute_slice_closed_form
       BLOCK_SIZE_H BLOCK_SIZE_CHUNK idx
   rwa [hcong] at h
 
+/-! ## Dimension-general genuine correctness
+
+The intermediate slice theorems above (`chunked_cumsum_dt_out_store_slice_compute_correct`,
+`chunked_cumsum_dA_cs_store_slice_compute_correct`,
+`chunked_cumsum_dA_cs_compute_slice_closed_form`) are already stated and proven
+**general over all dimensions and strides** (`nheads`, `chunk_size`, the block
+sizes, the number of chunks, and every stride). The theorems below package them
+into general all-outputs / summary statements universally quantified over those
+symbolic `Nat` parameters, mirroring the dimension-general top theorem of the
+sibling `chunk_cumsum_kernel`. The genuine `dA_cumsum` specification is
+`dAClosed` — the standalone within-chunk prefix `Finset.sum`
+`Σ_{k ≤ idx.chunk, active} dt[head,k] · A[head]` — never a read-back of the
+kernel's own output. Output-offset injectivity (`dtOutOffset` / `dACsOutOffset`
+injective) is the trusted host-side address-layout side condition, supplied as a
+hypothesis (it is discharged concretely in the Python test-shape corollaries). -/
+
+/-- **Dimension-general output coverage for chunked cumsum forward.** Over fully
+symbolic dimensions and strides, the `dt_out` store slice, the `dA_cumsum` store
+slice, and the `dA_cumsum` compute slice all realize their genuine
+specifications; in particular the compute slice realizes the standalone closed
+form `dAClosed` (the within-chunk prefix `Finset.sum`), not a read-back of the
+kernel's own output. -/
+theorem chunked_cumsum_fwd_all_outputs_compute_correct_general
+    (DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (s : BlockState)
+    (hDtOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dtOutOffset s stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head
+          stride_dt_out_csize BLOCK_SIZE_H idx))
+    (hDACsInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+          stride_dA_cs_csize BLOCK_SIZE_H idx)) :
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_dt_out_batch
+        stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize nheads
+        chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DtOut,
+          dtOutOffset s stride_dt_out_batch stride_dt_out_chunk
+            stride_dt_out_head stride_dt_out_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        s.readMem DtPrepared
+          (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+            chunk_size BLOCK_SIZE_H idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+        stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads
+        chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        s.readMem DAcs
+          (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+            chunk_size BLOCK_SIZE_H idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+        stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+        stride_dA_cs_csize nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        dAClosed s DtPrepared A stride_dt_batch stride_dt_seqlen
+          stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+          BLOCK_SIZE_CHUNK idx)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact chunked_cumsum_dt_out_store_slice_compute_correct DtPrepared DtOut
+      stride_dt_batch stride_dt_seqlen stride_dt_head stride_dt_out_batch
+      stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize nheads chunk_size
+      BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hDtOutInj
+  · exact chunked_cumsum_dA_cs_store_slice_compute_correct DAcs DACumsum
+      stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+      stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads chunk_size
+      BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hDACsInj
+  · exact chunked_cumsum_dA_cs_compute_slice_closed_form DtPrepared A DACumsum
+      stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hDACsInj
+
+/-- **Dimension-general genuine correctness summary for chunked cumsum forward.**
+The full surface lowers to the algorithm layer for *arbitrary* dimensions,
+strides, and the `HAS_DT_BIAS` / `DT_SOFTPLUS` flags, and — given output-offset
+injectivity — every output slice realizes its genuine specification, with the
+`dA_cumsum` compute slice realizing the standalone closed form `dAClosed`. This
+removes the test-shape pin: the statement is universally quantified over all
+`Nat` dimension/stride parameters (cf. the symbolic sibling
+`chunk_cumsum_scalar_python_test_shape_summary` generalized over `T`, `BT`). -/
+theorem chunked_cumsum_fwd_summary_general
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (batch seqlen nheads chunk_size : Nat)
+    (dt_min dt_max : ℝ)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      stride_dt_bias_head
+      stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize : Nat)
+    (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (s : BlockState)
+    (hDtOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dtOutOffset s stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head
+          stride_dt_out_csize BLOCK_SIZE_H idx))
+    (hDACsInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+          stride_dA_cs_csize BLOCK_SIZE_H idx)) :
+    (∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr batch seqlen nheads chunk_size dt_min dt_max stride_dt_batch
+      stride_dt_seqlen stride_dt_head stride_A_head stride_dt_bias_head
+      stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      DT_SOFTPLUS HAS_DT_BIAS BLOCK_SIZE_H BLOCK_SIZE_CHUNK).toAlgorithm?
+        = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_dt_out_batch
+        stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize nheads
+        chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DtOut,
+          dtOutOffset s stride_dt_out_batch stride_dt_out_chunk
+            stride_dt_out_head stride_dt_out_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        s.readMem DtPrepared
+          (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+            chunk_size BLOCK_SIZE_H idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+        stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads
+        chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        s.readMem DAcs
+          (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+            chunk_size BLOCK_SIZE_H idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+        stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+        stride_dA_cs_csize nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        dAClosed s DtPrepared A stride_dt_batch stride_dt_seqlen
+          stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
+          BLOCK_SIZE_CHUNK idx))) := by
+  refine ⟨?_, ?_⟩
+  · exact chunked_cumsum_fwd_surface_toAlgorithm_supported dt_ptr A_ptr
+      dt_bias_ptr dt_out_ptr dA_cumsum_ptr batch seqlen nheads chunk_size dt_min
+      dt_max stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
+      stride_dt_bias_head stride_dt_out_batch stride_dt_out_chunk
+      stride_dt_out_head stride_dt_out_csize stride_dA_cs_batch stride_dA_cs_chunk
+      stride_dA_cs_head stride_dA_cs_csize DT_SOFTPLUS HAS_DT_BIAS BLOCK_SIZE_H
+      BLOCK_SIZE_CHUNK
+  · exact chunked_cumsum_fwd_all_outputs_compute_correct_general DtPrepared DtOut
+      DAcs A DACumsum stride_dt_batch stride_dt_seqlen stride_dt_head
+      stride_A_head stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head
+      stride_dt_out_csize stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+      stride_dA_cs_csize nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK s
+      hDtOutInj hDACsInj
+
 /-! ## Python test-shape wrappers
 
 `chunked_cumsum_fwd.py`'s checked tests use `dt.shape = (2, 10, 4)` and
