@@ -8954,4 +8954,106 @@ theorem aft3_acc_reg_eqG (s0 : BlockState) (Q K V : RegionName)
         = (aft3StateBotG qT kT vT ks kp (c * BN) i d).2.2 * α from hacc1cancel]
   rw [hMr, WithBot.unbotD_coe]
 
+/-! ### General masked (cases 1/2) register bridges -/
+
+/-- **General masked `q·k` score cell (cases 1/2).** -/
+theorem aft3_score_cell_maskedG (s0 : BlockState) (Q K : RegionName)
+    (base BM ND NC sqm sqk skn skk : Nat) (sc : ℝ) (BN c : Nat)
+    (i : Fin BM) (jL : Fin BN) (hjL : c * BN + jL.val < NC) (mc : Bool)
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn))) :
+    (if mc then
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+          (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+      else (⊥ : WithBot ℝ))
+      = if mc then some (sc * Finset.univ.sum (fun e : Fin ND =>
+          qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit)
+            * kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, hjL⟩, e, PUnit.unit)))
+        else (⊥ : WithBot ℝ) := by
+  match mc with
+  | Bool.false => rfl
+  | Bool.true => exact aft3_score_cellG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL hjL qtile ktile hq hk
+
+set_option maxHeartbeats 1600000 in
+/-- **General masked block sup (cases 1/2).** -/
+theorem aft3Block_masked_blockSupG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩)) :
+    Finset.univ.sup (fun jL : Fin BN =>
+        if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+          keep BN c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  have hexp : (c + 1) * BN = c * BN + BN := by ring
+  rw [show (fun jL : Fin BN =>
+        if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else (⊥ : WithBot ℝ))
+      = (fun jL : Fin BN =>
+          if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            ((sc * Finset.univ.sum (fun e : Fin ND =>
+                qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                  kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ)) from by
+    funext jL
+    rw [hmc jL]
+    by_cases hk : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+    · rw [if_pos (by exact decide_eq_true hk), if_pos hk]
+    · rw [if_neg (by simp [hk]), if_neg hk]]
+  rw [show (aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+        (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+        keep BN c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange NC).filterMap (fun j : Fin NC =>
+          if c * BN ≤ j.val ∧ j.val < (c + 1) * BN ∧ keep i j
+          then some (keyScale3G sc NC j * Finset.univ.sum (fun e : Fin ND =>
+                qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) * kTile3G s0 K base NC ND skn skk (j, e, PUnit.unit))) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold aft3BlockG
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN ∧ keep i j <;> simp [hj]]
+  rw [aft3_filterMap_foldr_sup NC
+    (fun j => c * BN ≤ j.val ∧ j.val < (c + 1) * BN ∧ keep i j)
+    (fun j => keyScale3G sc NC j * Finset.univ.sum (fun e : Fin ND =>
+        qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) * kTile3G s0 K base NC ND skn skk (j, e, PUnit.unit)))]
+  symm
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN ∧ keep i j
+    · rw [if_pos hj]
+      have hjL : j.val - c * BN < BN := by omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * BN, hjL⟩ : Fin BN)))
+      simp only
+      have hfin : (⟨c * BN + (j.val - c * BN), by omega⟩ : Fin NC) = j := by
+        apply Fin.ext; simp only; omega
+      rw [if_pos (show keep i ⟨c * BN + (j.val - c * BN), by omega⟩ from by rw [hfin]; exact hj.2.2)]
+      apply le_of_eq
+      simp only [keyScale3G]
+      congr 1; rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * BN + jL.val < NC := aft3_block_idx_lt BN c NC jL.val jL.isLt hc1
+    by_cases hkeep : keep i ⟨c * BN + jL.val, hb⟩
+    · rw [if_pos hkeep]
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * BN + jL.val, hb⟩ : Fin NC)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
+      apply le_of_eq
+      simp only [keyScale3G]
+    · rw [if_neg hkeep]; exact bot_le
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
