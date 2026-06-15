@@ -10211,4 +10211,312 @@ theorem aft3_attn_step1G (Q K V M Out L : RegionName) (s0 : BlockState)
   · exact hundefF
   · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
 
+theorem aft3_attn_step2G (Q K V M Out L : RegionName) (s0 : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX off size : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hBNdvd : BN ∣ NC) (sc : ℝ)
+    (i : Nat) (s : BlockState) (hilt : i < NC) (himod : i % BN = 0)
+    (hinv : attnInvariantKG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+      (fun i j => natComplementSlidingWindowKeepG (s0.pids 0) BM BN off size i j) i s) :
+    ∃ s', stepStmts (aft3LoopBodyG2 sc off size BM ND BN) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnInvariantKG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+          (fun i j => natComplementSlidingWindowKeepG (s0.pids 0) BM BN off size i j) (i + BN) s' := by
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
+  have hBNi : BN ∣ i := Nat.dvd_of_mod_eq_zero himod
+  set c := i / BN with hc_def
+  have hi : i = c * BN := by rw [hc_def, Nat.div_mul_cancel hBNi]
+  have hcBN_succ : (c + 1) * BN = i + BN := by rw [Nat.succ_mul, ← hi]
+  have hc1 : (c + 1) * BN ≤ NC := by
+    rw [hcBN_succ]
+    obtain ⟨k, hk⟩ := hBNdvd
+    have hck : c < k := by
+      have hlt : c * BN < k * BN := by
+        rw [← hi]; calc i < NC := hilt
+          _ = k * BN := by rw [hk, Nat.mul_comm]
+      exact lt_of_mul_lt_mul_right hlt (Nat.zero_le BN)
+    have hle : i + BN ≤ k * BN := by
+      rw [hi, ← Nat.succ_mul]; exact Nat.mul_le_mul_right BN hck
+    rw [hk, Nat.mul_comm]; exact hle
+  set qT := qTile3G s0 Q base BM ND sqm sqk with hqT
+  set kT := kTile3G s0 K base NC ND skn skk with hkT
+  set vT := vTile3G s0 V base NC ND svk svn with hvT
+  set ks := keyScale3G sc NC with hks
+  set kp : Fin BM → Fin NC → Prop := fun i j => natComplementSlidingWindowKeepG (s0.pids 0) BM BN off size i j with hkp
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hKpF, hVpF, hoffF, hMptrF, hLptrF, hOpF,
+      qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
+      hqkData, hrm, hmijd, halphad, hpTd, hpmTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
+    aft3LoopBodyG2_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i off size
+      K V base base i i skk skn svk svn ND NC BM BN hBN
+      (⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      (⟨fun r : TileIndex [BM] => ((aft3StateBotKG qT kT vT ks kp i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateBotKG qT kT vT ks kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      sc
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
+      (by simp [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)
+      (fun idx => rfl)
+      (fun idx => rfl)
+      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
+  refine ⟨sF, hchain, ?_⟩
+  have hrmemK : ∀ idx : TileIndex [ND, BN],
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩ : Tile .real [ND, BN]).data idx
+        = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  have hrmemV : ∀ idx : TileIndex [BN, ND],
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩ : Tile .real [BN, ND]).data idx
+        = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  set qtileF : Tile .real [BM, ND] := ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩ with hqtileF
+  -- mask reconciliation
+  have hmc_row : ∀ (r : Fin BM) (jL : Fin BN), aft3MaskCell2G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)
+      = decide (kp r ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩) := by
+    intro r jL
+    have heq : aft3MaskCell2G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)
+        = aft3MaskCell2G (s0.pids 0) (c * BN) off size BM BN (r, jL, PUnit.unit) := by rw [hi]
+    rw [heq, aft3MaskCell2G_eq_keep (s0.pids 0) off size BM BN c r jL
+      (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1)]
+  have hmicell : ∀ r : Fin BM,
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩ : Tile .real [BM]).data (r, PUnit.unit)
+        = aft3RunningMaxG qT kT vT ks kp (c * BN) r ⟨0, hND⟩ := by
+    intro r; simp only; rw [hi]
+  have hmijcell : ∀ r : Fin BM, mijT.data (r, PUnit.unit)
+      = aft3RunningMaxG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩ := by
+    intro r
+    rw [hmijd]
+    refine aft3_mij_reg_eq_maskedG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 r ⟨0, hND⟩ kp
+      (fun jL => aft3MaskCell2G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit))
+      (fun jL => hmc_row r jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩) rmaxT qkT
+      hqtileF hrmemK ?_ ?_ ?_
+    · intro jL; rw [hqkData]
+    · rw [hmicell r]
+    · exact hrm
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids, hpids]
+  · simp [Nat.add_mod, himod, Nat.mod_self]
+  · rw [← hcBN_succ]; exact hc1
+  · rw [hmiF]; refine congrArg some ?_; ext r
+    rw [hmijcell r.1, hcBN_succ]
+  · rw [hliF]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨r, ⟨⟩⟩ := r
+    have hbr := aft3_denom_reg_eq_maskedG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 r ⟨0, hND⟩ kp
+      (fun jL => aft3MaskCell2G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)) (fun jL => hmc_row r jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩) qkT
+      (⟨fun r : TileIndex [BM] => ((aft3StateBotKG qT kT vT ks kp i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      mijT alphaT pT pmT hqtileF hrmemK
+      (fun jL => by rw [hqkData])
+      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
+      (by rw [hmijcell r]) halphad hpTd
+      (fun jL => by rw [hpmTd])
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hlijd, hbr]
+    show _ = ((aft3StateBotKG qT kT vT ks kp (i + BN) r ⟨0, hND⟩).2.1 : WithBot ℝ)
+    rw [hcBN_succ.symm,
+      show aft3StateBotKG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩
+        = aft3StateBotG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩ from by
+        unfold aft3StateBotKG; rw [if_neg (by rw [hcBN_succ]; omega)]]
+    rfl
+  · rw [haccF]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hbr := aft3_acc_reg_eq_maskedG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 ir id kp
+      (fun jL => aft3MaskCell2G (s0.pids 0) i off size BM BN (ir, jL, PUnit.unit)) (fun jL => hmc_row ir jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      qkT pT pmT
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateBotKG qT kT vT ks kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      acc1T
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      mijT alphaT hqtileF hrmemK hrmemV
+      (fun jL => by rw [hqkData])
+      (by simp only [hi]; rfl)
+      (by simp only [hi, hqT, hkT, hvT, hks]
+          exact aft3RunningMaxG_eq (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) kp (c * BN) ir ⟨0, hND⟩ id)
+      (by rw [hmijcell ir]; exact aft3RunningMaxG_eq qT kT vT ks kp ((c + 1) * BN) ir ⟨0, hND⟩ id)
+      halphad hacc1d hpTd
+      (fun jL => by rw [hpmTd])
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hbr]
+    show _ = ((aft3StateBotKG qT kT vT ks kp (i + BN) ir id).2.2 : WithBot ℝ)
+    rw [hcBN_succ.symm,
+      show aft3StateBotKG qT kT vT ks kp ((c + 1) * BN) ir id
+        = aft3StateBotG qT kT vT ks kp ((c + 1) * BN) ir id from by
+        unfold aft3StateBotKG; rw [if_neg (by rw [hcBN_succ]; omega)]]
+    rfl
+  · rw [hqF]
+  · rw [hqsF]
+  · rw [hsmF]
+  · rw [hoffF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff
+  · rw [hKpF, show ((i + BN) : Nat) = i + BN from rfl]
+  · rw [hVpF]
+  · rw [hMptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
+  · rw [hLptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr
+  · rw [hOpF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  · exact hundefF
+  · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General step lemma (case 3, no window).** Advances `attnInvariantG …
+noWindowKeep` by one key block (`i → i + BN`). -/
+theorem aft3_attn_step3G (Q K V M Out L : RegionName) (s0 : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX off size : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NC) (hBNdvd : BN ∣ NC) (sc : ℝ)
+    (i : Nat) (s : BlockState) (hilt : i < NC) (himod : i % BN = 0)
+    (hinv : attnInvariantG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+      (fun i j => noWindowKeep i j) i s) :
+    ∃ s', stepStmts (aft3LoopBodyG3 sc off BM ND BN) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnInvariantG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+          (fun i j => noWindowKeep i j) (i + BN) s' := by
+  simp only [attnInvariantG] at hinv
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
+  have hBNi : BN ∣ i := Nat.dvd_of_mod_eq_zero himod
+  set c := i / BN with hc_def
+  have hi : i = c * BN := by rw [hc_def, Nat.div_mul_cancel hBNi]
+  have hcBN_succ : (c + 1) * BN = i + BN := by rw [Nat.succ_mul, ← hi]
+  have hc1 : (c + 1) * BN ≤ NC := by
+    rw [hcBN_succ]
+    obtain ⟨k, hk⟩ := hBNdvd
+    have hck : c < k := by
+      have hlt : c * BN < k * BN := by
+        rw [← hi]; calc i < NC := hilt
+          _ = k * BN := by rw [hk, Nat.mul_comm]
+      exact lt_of_mul_lt_mul_right hlt (Nat.zero_le BN)
+    have hle : i + BN ≤ k * BN := by
+      rw [hi, ← Nat.succ_mul]; exact Nat.mul_le_mul_right BN hck
+    rw [hk, Nat.mul_comm]; exact hle
+  set qT := qTile3G s0 Q base BM ND sqm sqk with hqT
+  set kT := kTile3G s0 K base NC ND skn skk with hkT
+  set vT := vTile3G s0 V base NC ND svk svn with hvT
+  set ks := keyScale3G sc NC with hks
+  set kp : Fin BM → Fin NC → Prop := fun i j => noWindowKeep i j with hkp
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hoffF, hKpF, hVpF,
+      hMptrF, hLptrF, hOpF,
+      qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
+      hqkData, hrm, hmijd, halphad, hpTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
+    aft3LoopBodyG3_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i (s0.pids 1) off
+      K V base base i i skk skn svk svn ND NC BM BN hBN
+      (⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      (⟨fun r : TileIndex [BM] => ((aft3StateBot1G qT kT vT ks kp i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateBot1G qT kT vT ks kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      sc _ _ _
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff)
+      (by simp [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)
+      (fun idx => rfl)
+      (fun idx => rfl)
+      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
+  refine ⟨sF, hchain, ?_⟩
+  have hrmemK : ∀ idx : TileIndex [ND, BN],
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩ : Tile .real [ND, BN]).data idx
+        = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  have hrmemV : ∀ idx : TileIndex [BN, ND],
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩ : Tile .real [BN, ND]).data idx
+        = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  set qtileF : Tile .real [BM, ND] := ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩ with hqtileF
+  have hmicell : ∀ r : Fin BM,
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩ : Tile .real [BM]).data (r, PUnit.unit)
+        = aft3RunningMaxG qT kT vT ks kp (c * BN) r ⟨0, hND⟩ := by
+    intro r; simp only; rw [hi]
+  have hmijcell : ∀ r : Fin BM, mijT.data (r, PUnit.unit)
+      = aft3RunningMaxG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩ := by
+    intro r
+    rw [hmijd]
+    refine aft3_mij_reg_eqG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 r ⟨0, hND⟩
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩) rmaxT qkT
+      hqtileF hrmemK ?_ ?_ ?_
+    · rw [hqkData]
+    · rw [hmicell r]
+    · exact hrm
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids, hpids]
+  · simp [Nat.add_mod, himod, Nat.mod_self]
+  · rw [← hcBN_succ]; exact hc1
+  · rw [hmiF]; refine congrArg some ?_; ext r
+    rw [hmijcell r.1, hcBN_succ]
+  · rw [hliF]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨r, ⟨⟩⟩ := r
+    have hbr := aft3_denom_reg_eqG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hNC hc1 r ⟨0, hND⟩
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩) qkT
+      (⟨fun r : TileIndex [BM] => ((aft3StateBot1G qT kT vT ks kp i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      mijT alphaT pT hqtileF hrmemK (by rw [hqkData]) (by simp only [hi]; rfl) (by simp only [hi]; rfl)
+      (by rw [hmijcell r]) halphad hpTd
+    have hne : aft3RunningMaxG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩ ≠ ⊥ :=
+      aft3RunningMaxG_noWindow_ne_bot qT kT vT ks ((c + 1) * BN) (by rw [hcBN_succ]; omega) hNC r ⟨0, hND⟩
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hlijd, hbr]
+    show _ = ((aft3StateBot1G qT kT vT ks kp (i + BN) r ⟨0, hND⟩).2.1 : WithBot ℝ)
+    rw [hcBN_succ.symm,
+      aft3StateBot1G_eq_aft3StateBotG qT kT vT ks kp ((c + 1) * BN) r ⟨0, hND⟩ hne]
+    rfl
+  · rw [haccF]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hbr := aft3_acc_reg_eqG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hNC hc1 ir id
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      qkT pT
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateBot1G qT kT vT ks kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      acc1T
+      (⟨fun r : TileIndex [BM] => aft3RunningMaxG qT kT vT ks kp i r.1 ⟨0, hND⟩⟩)
+      mijT alphaT hqtileF hrmemK hrmemV (by rw [hqkData]) (by simp only [hi]; rfl)
+      (by simp only [hi, hqT, hkT, hvT, hks]
+          exact aft3RunningMaxG_eq (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) kp (c * BN) ir ⟨0, hND⟩ id)
+      (by rw [hmijcell ir]; exact aft3RunningMaxG_eq qT kT vT ks kp ((c + 1) * BN) ir ⟨0, hND⟩ id)
+      halphad hacc1d hpTd
+    have hne : aft3RunningMaxG qT kT vT ks kp ((c + 1) * BN) ir id ≠ ⊥ :=
+      aft3RunningMaxG_noWindow_ne_bot qT kT vT ks ((c + 1) * BN) (by rw [hcBN_succ]; omega) hNC ir id
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hbr]
+    show _ = ((aft3StateBot1G qT kT vT ks kp (i + BN) ir id).2.2 : WithBot ℝ)
+    rw [hcBN_succ.symm,
+      aft3StateBot1G_eq_aft3StateBotG qT kT vT ks kp ((c + 1) * BN) ir id hne]
+    rfl
+  · rw [hqF]
+  · rw [hqsF]
+  · rw [hsmF]
+  · rw [hoffF]
+  · rw [hKpF]
+  · rw [hVpF]
+  · rw [hMptrF]
+  · rw [hLptrF]
+  · rw [hOpF]
+  · exact hundefF
+  · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
