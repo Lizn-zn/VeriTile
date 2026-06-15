@@ -4279,6 +4279,332 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
     Xhat W DY Rstd C1 C2 DX 1024 1024 1024 1024 1024 s
     (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
 
+/-! ## Dimension-general aggregate outputs
+
+The slice-level `*_compute_correct` lemmas above are already stated over
+*symbolic* row strides, feature dimension `N`, and tile width `BLOCK_N`. The
+Python test-shape wrappers (next section) merely instantiate them at the tested
+`1024/1024/1024` shape. The theorems in this section re-expose the same genuine
+per-output correctness at **arbitrary** `Nat` strides / dimensions, with the
+universally quantified `BLOCK_N`. Each output store's offset has the form
+`s.pid * stride + i.val` for `i : Fin BLOCK_N`, which is injective in `i` for
+*every* stride (the row base `s.pid * stride` is constant across the tile), so
+no contiguity side condition is needed — the injectivity is discharged here.
+The `expected` carriers are the genuine closed forms reading *input* memory
+(`fwdYStoreSpec`, `meanStoreSpec`, `bwdC1ReductionSpec`, …), never a
+self-referential `exec(...).readMem`.  -/
+
+/-- General injectivity for a `s.pid * stride + i.val` row-vector store offset,
+for any stride and tile width.  -/
+theorem layer_norm_ops_row_vector_offset_general_injective
+    (s : BlockState) (stride BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride i) := by
+  intro a b h
+  simp only [bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_rms_dx_offset_general_injective
+    (s : BlockState) (stride BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride i) := by
+  intro a b h
+  simp only [bwdRmsDXOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_dresidual_in_offset_general_injective
+    (s : BlockState) (stride BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => bwdDResidualInOffset s stride i) := by
+  intro a b h
+  simp only [bwdDResidualInOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_param_grad_offset_general_injective
+    (s : BlockState) (N BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => bwdParamGradOffset s N i) := by
+  intro a b h
+  simp only [bwdParamGradOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_rms_dw_offset_general_injective
+    (s : BlockState) (N BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => bwdRmsDWOffset s N i) := by
+  intro a b h
+  simp only [bwdRmsDWOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_fwd_y_offset_general_injective
+    (s : BlockState) (stride_y_row BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i) := by
+  intro a b h
+  simp only [fwdYOffset, bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_fwd_residual_out_offset_general_injective
+    (s : BlockState) (stride_res_out_row BLOCK_N : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_N => fwdResidualOutOffset s stride_res_out_row i) := by
+  intro a b h
+  simp only [fwdResidualOutOffset, bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+/-- Plain layer-norm forward, **dimension-general**: exposes the genuine `Y`,
+`Mean`, and `Rstd` outputs together for arbitrary feature dim `N`, tile width
+`BLOCK_N`, and `Y` row stride `stride_y_row`. -/
+theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
+    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState)
+    (stride_y_row N BLOCK_N : Nat) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        stride_y_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (Y, fwdYOffset s stride_y_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        fwdYStoreSpec s ValuePre stride_y_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact layer_norm_ops_fwd_bias_y_store_slice_compute_correct ValuePre Y
+      stride_y_row N BLOCK_N s
+      (layer_norm_ops_fwd_y_offset_general_injective s stride_y_row BLOCK_N)
+  · exact layer_norm_ops_fwd_mean_store_slice_compute_correct MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
+
+/-- RMS layer-norm forward with bias, **dimension-general**: exposes the genuine
+`Y` and `Rstd` outputs together. -/
+theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
+    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState)
+    (stride_y_row N BLOCK_N : Nat) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        stride_y_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (Y, fwdYOffset s stride_y_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        fwdYStoreSpec s ValuePre stride_y_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  refine ⟨?_, ?_⟩
+  · exact layer_norm_ops_fwd_rms_bias_y_store_slice_compute_correct ValuePre Y
+      stride_y_row N BLOCK_N s
+      (layer_norm_ops_fwd_y_offset_general_injective s stride_y_row BLOCK_N)
+  · exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
+
+/-- Residual plain layer-norm forward with bias, **dimension-general**: exposes
+the genuine `RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` outputs together for
+arbitrary `RESIDUAL_OUT`/`Y` row strides, feature dim `N`, and tile width
+`BLOCK_N`. -/
+theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
+    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
+    (s : BlockState)
+    (stride_res_out_row stride_y_row N BLOCK_N : Nat) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_residual_out_store_slice ResidualPre
+        RESIDUAL_OUT stride_res_out_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s stride_res_out_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        fwdResidualOutStoreSpec s ResidualPre stride_res_out_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        stride_y_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (Y, fwdYOffset s stride_y_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        fwdYStoreSpec s ValuePre stride_y_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · exact layer_norm_ops_fwd_residual_out_store_slice_compute_correct ResidualPre
+      RESIDUAL_OUT stride_res_out_row N BLOCK_N s
+      (layer_norm_ops_fwd_residual_out_offset_general_injective s
+        stride_res_out_row BLOCK_N)
+  · exact layer_norm_ops_fwd_bias_y_store_slice_compute_correct ValuePre Y
+      stride_y_row N BLOCK_N s
+      (layer_norm_ops_fwd_y_offset_general_injective s stride_y_row BLOCK_N)
+  · exact layer_norm_ops_fwd_mean_store_slice_compute_correct MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
+
+/-- RMS backward, **dimension-general**: exposes the genuine `c1` reduction,
+`DX`, and partial `DW` store slices together for arbitrary row strides, feature
+dim `N`, and tile width `BLOCK_N`. -/
+theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
+    (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
+    (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
+    (hDWDX : DW ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        stride_xhat_row stride_dy_row N BLOCK_N)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DX, bwdRmsDXOffset s stride_dx_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 stride_xhat_row stride_dy_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DW, bwdRmsDWOffset s N i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdRmsDWSpec s X DY Rstd stride_x_row stride_dy_row N BLOCK_N i)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact layer_norm_ops_bwd_c1_reduction_slice_compute_correct Xhat W DY C1
+      stride_xhat_row stride_dy_row N BLOCK_N s
+  · exact layer_norm_ops_bwd_rms_dx_from_c1_slice_compute_correct
+      Xhat W DY Rstd C1 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N s
+      (layer_norm_ops_rms_dx_offset_general_injective s stride_dx_row BLOCK_N)
+  · exact layer_norm_ops_bwd_rms_one_row_dw_compute_correct X W DY DX DW Rstd
+      stride_x_row stride_dy_row stride_dx_row N BLOCK_N s hDWDX
+      (layer_norm_ops_rms_dw_offset_general_injective s N BLOCK_N)
+
+/-- Plain+bias backward, **dimension-general**: exposes the genuine `c1`/`c2`
+reductions, `DX`, partial `DW`, and partial `DB` store slices together for
+arbitrary row strides, feature dim `N`, and tile width `BLOCK_N`. -/
+theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        stride_xhat_row stride_dy_row N BLOCK_N)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        stride_dy_row N BLOCK_N)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DX, bwdRmsDXOffset s stride_dx_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 stride_xhat_row
+          stride_dy_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DW, bwdParamGradOffset s N i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row N
+          BLOCK_N i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DB, bwdParamGradOffset s N i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdBiasDBSpec s DY stride_dy_row i)) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · exact layer_norm_ops_bwd_c1_reduction_slice_compute_correct Xhat W DY C1
+      stride_xhat_row stride_dy_row N BLOCK_N s
+  · exact layer_norm_ops_bwd_c2_reduction_slice_compute_correct W DY C2
+      stride_dy_row N BLOCK_N s
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
+      Xhat W DY Rstd C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N
+      BLOCK_N s
+      (layer_norm_ops_rms_dx_offset_general_injective s stride_dx_row BLOCK_N)
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
+      X W DY DX DW DB Mean Rstd stride_x_row stride_dy_row stride_dx_row N
+      BLOCK_N s hDWDX hDWDB
+      (layer_norm_ops_param_grad_offset_general_injective s N BLOCK_N)
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
+      X W DY DX DW DB Mean Rstd stride_x_row stride_dy_row stride_dx_row N
+      BLOCK_N s hDBDX hDBDW
+      (layer_norm_ops_param_grad_offset_general_injective s N BLOCK_N)
+
+/-- Backward residual-add, **dimension-general**: exposes both genuine
+observable row-vector stores (`DX` and `DRESIDUAL_IN`) produced by the
+`dx += dres` branch, for arbitrary row strides, feature dim `N`, and tile width
+`BLOCK_N`. -/
+theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N : Nat)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DX, bwdRmsDXOffset s stride_dx_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s stride_dres_in_row i)))
+      (expected := fun i : Fin BLOCK_N =>
+        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i)) := by
+  refine ⟨?_, ?_⟩
+  · exact layer_norm_ops_bwd_residual_add_store_slice_dx_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN stride_dx_row stride_dres_row
+      stride_dres_in_row N BLOCK_N s hDXDresIn
+      (layer_norm_ops_rms_dx_offset_general_injective s stride_dx_row BLOCK_N)
+  · exact layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN stride_dx_row stride_dres_row
+      stride_dres_in_row N BLOCK_N s hDresInDX
+      (layer_norm_ops_dresidual_in_offset_general_injective s
+        stride_dres_in_row BLOCK_N)
+
 /-! ## Python test-shape aggregate outputs -/
 
 /-- Plain layer-norm forward Python shape with bias: exposes the `Y`, `Mean`,
