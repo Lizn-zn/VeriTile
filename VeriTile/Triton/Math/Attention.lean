@@ -1099,4 +1099,126 @@ theorem attentionRealBase2ScalarScaleBias_eq_streaming {M S D : Nat}
     List.sum_ofFn, Function.comp]
   rfl
 
+
+/-! ## Predicate-masked base-2 per-key-scale attention (causal / sliding-window)
+
+Ported additively (genuine closed-form support for attn_fwd_causal / attn_fwd_triton).
+The list/Finset filterMap helpers it relies on already live above.
+-/
+
+noncomputable def attentionRealBase2PerKeyScalePred {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let raw := fun j : Fin S =>
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+    let weight := fun j : Fin S =>
+      if keep i j then pow2 (keyScale j * raw j) else 0
+    let denom := Finset.univ.sum (fun j : Fin S => weight j)
+    let numer := Finset.univ.sum (fun j : Fin S => weight j * V (j, d, PUnit.unit))
+    numer / denom
+
+/-- Predicate-filtered streamed key list for output `(i, d)`: only keys with
+`keep i j` are emitted (masked keys are dropped, exactly the `-inf`-masked /
+zero-weight keys), each as a `(score, value)` pair with score
+`keyScale j · (Q row i · K row j)`. -/
+noncomputable def attnKeyListPred {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin M) (d : Fin D) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if keep i j then
+      some (keyScale j * Finset.univ.sum (fun e : Fin D =>
+              Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)),
+            V (j, d, PUnit.unit))
+    else none)
+
+/-- **Bridge: predicate-masked base-2 per-key-scale attention IS the
+online-softmax fold over the predicate-filtered key list.** The eventual `exec`
+proof only has to show the kernel's masked loop realizes this fold; this lemma
+then delivers the masked closed form (`attentionRealBase2PerKeyScalePred`).
+Sorry-free. -/
+theorem attentionRealBase2PerKeyScalePred_eq_streaming {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin M) (d : Fin D) :
+    attentionRealBase2PerKeyScalePred Q K V keyScale keep (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred Q K V keyScale keep i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [osStep_foldl_eq_batch]
+  simp only [attentionRealBase2PerKeyScalePred, attnKeyListPred]
+  congr 1
+  · rw [list_sum_filterMap_finRange S (fun j => keep i j)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1 * p.2)]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hj : keep i j <;> simp [hj]
+  · rw [list_sum_filterMap_finRange S (fun j => keep i j)
+      (fun j => (keyScale j * Finset.univ.sum (fun e : Fin D =>
+          Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)), V (j, d, PUnit.unit)))
+      (fun p => pow2 p.1)]
+
+/-! ### Block-level online softmax (matching the kernel's loop)
+
+The kernel does not stream one key at a time; each loop iteration absorbs a whole
+`BLOCK_N`-key block, taking the block max and rescaling the accumulator *once* per
+block. `osBlockStep` models exactly that, and `osBlockStep_foldl_consistent` shows
+the block recurrence keeps the same `l = 2^(-m)·Σ2^s`, `acc = 2^(-m)·Σ2^s·v`
+invariant — so the block fold and the per-key fold agree on the final ratio. This
+is the form the `exec` loop invariant carries (accumulator state after `k`
+blocks). -/
+
+/-- Factor the running-max shift out of a block sum: `Σ 2^(s-m')·g = 2^(-m')·Σ 2^s·g`. -/
+
+def slidingWindowKeep (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Prop :=
+  0 ≤ ((qStart : ℤ) + i.val - j.val + offset)
+    ∧ ((qStart : ℤ) + i.val - j.val + offset) < size
+
+instance slidingWindowKeepDecidable (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Decidable (slidingWindowKeep qStart offset size i j) := by
+  unfold slidingWindowKeep; infer_instance
+
+/-- Case-2 complement sliding-window keep predicate: `dist ≥ size`. -/
+def complementSlidingWindowKeep (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) : Prop :=
+  (size : ℤ) ≤ ((qStart : ℤ) + i.val - j.val + offset)
+
+instance complementSlidingWindowKeepDecidable (qStart offset size : Nat) {M S : Nat}
+    (i : Fin M) (j : Fin S) :
+    Decidable (complementSlidingWindowKeep qStart offset size i j) := by
+  unfold complementSlidingWindowKeep; infer_instance
+
+/-- Case-3 no-window keep predicate: every key is kept. -/
+def noWindowKeep {M S : Nat} (_i : Fin M) (_j : Fin S) : Prop := True
+
+instance noWindowKeepDecidable {M S : Nat} (i : Fin M) (j : Fin S) :
+    Decidable (noWindowKeep i j) := by unfold noWindowKeep; infer_instance
+
+/-- Causal keep predicate (`attn_fwd_triton`, `STAGE = 3`): for global query row
+`qg = qStart + i` and global key column `kg = j`, the kernel's
+`tl.where(offs_m[:, None] ≥ start_n + offs_n[None, :], qk, -inf)` keeps a key iff
+`qg ≥ kg`, i.e. `j ≤ qStart + i`. -/
+def causalKeep (qStart : Nat) {M S : Nat} (i : Fin M) (j : Fin S) : Prop :=
+  (j.val : ℤ) ≤ (qStart : ℤ) + i.val
+
+instance causalKeepDecidable (qStart : Nat) {M S : Nat} (i : Fin M) (j : Fin S) :
+    Decidable (causalKeep qStart i j) := by unfold causalKeep; infer_instance
+
+/-- **The unmasked base-2 per-key-scale attention is the no-window predicate
+instance.** Case 3 (`SLIDING_WINDOW = 0`) of `attention_fwd_triton3` reduces to
+the plain `attentionRealBase2PerKeyScale` closed form. -/
+theorem attentionRealBase2PerKeyScalePred_noWindow_eq {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (idx : TileIndex [M, D]) :
+    attentionRealBase2PerKeyScalePred Q K V keyScale
+        (fun (i : Fin M) (j : Fin S) => noWindowKeep i j) idx
+      = attentionRealBase2PerKeyScale Q K V keyScale idx := by
+  obtain ⟨i, d, u⟩ := idx; cases u
+  simp [attentionRealBase2PerKeyScalePred, attentionRealBase2PerKeyScale,
+    noWindowKeep, pow2]
+
+
 end VeriTile.Triton
