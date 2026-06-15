@@ -2185,4 +2185,816 @@ theorem attention_fwd_triton1_python_test_shape_output_summary
   · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
       131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 Bool.true Bool.true
 
+/-! ## Dimension-general genuine closed form
+
+The block below mirrors the literal exec-side derivation above, but over *symbolic*
+dimensions: a batch-head stride `s_qh`, chunk size `BT`, head dimension `BD`,
+chunk count `NT`, scale `scale : ℝ`, and the recurrent-state strides `s_hh`/`s_ht`
+(only touched by the no-op `STORE` branch). The only layout assumptions are the
+contiguity contracts the kernel genuinely relies on: the Q/V/O block strides are
+`(BD, 1)` and the K block strides are `(1, BD)` (so the per-chunk block pointer
+advance composes into a flat per-element address), and the dynamic loop bound is
+`cdiv(NT·BT, BT) = NT` under `0 < BT`. The top theorem
+`attention_fwd_triton1_output_summary_general` proves the executed kernel writes
+the genuine `outputClosedForm` (= `localTerm` + `recurrentTerm`, read purely over
+input memory, no self-reference) at every chunk/lane. The Python test shape
+(`s_qh = 131072`, `BT = 32`, `BD = 128`, `NT = 32`, `scale = 1/√128`) is the
+special case. -/
+
+/-- General scaled query cell `b_q[t,e] = scale · Q[base + (c·BT+t)·BD + e]`. -/
+noncomputable def aft1QCellG (s : BlockState) (Q : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c t e : Nat) : ℝ :=
+  s.readMem Q (s.pids 0 * s_qh + (c * BT + t) * BD + e) * scale
+
+/-- General key cell `b_k[e,tk] = K[base + e + (c·BT+tk)·BD]`. -/
+noncomputable def aft1KCellG (s : BlockState) (K : RegionName)
+    (s_qh BT BD : Nat) (c e tk : Nat) : ℝ :=
+  s.readMem K (s.pids 0 * s_qh + e + (c * BT + tk) * BD)
+
+/-- General value cell `b_v[tk,d] = V[base + (c·BT+tk)·BD + d]`. -/
+noncomputable def aft1VCellG (s : BlockState) (V : RegionName)
+    (s_qh BT BD : Nat) (c tk d : Nat) : ℝ :=
+  s.readMem V (s.pids 0 * s_qh + (c * BT + tk) * BD + d)
+
+/-- General kernel-native recurrent state after `c` chunks. -/
+noncomputable def aft1RecStateG (s : BlockState) (K V : RegionName)
+    (s_qh BT BD : Nat) (c : Nat) (d' d : Fin BD) : ℝ :=
+  ∑ j ∈ Finset.range c,
+    ∑ tk : Fin BT,
+      aft1KCellG s K s_qh BT BD j d'.val tk.val * aft1VCellG s V s_qh BT BD j tk.val d.val
+
+/-- General kernel-native local output of chunk `c`. -/
+noncomputable def aft1LocalOutG (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  ∑ tk : Fin BT,
+    (∑ e : Fin BD, aft1QCellG s Q s_qh scale BT BD c t.val e.val
+        * aft1KCellG s K s_qh BT BD c e.val tk.val) *
+      aft1VCellG s V s_qh BT BD c tk.val d.val
+
+/-- General kernel-native recurrent output contribution of chunk `c`. -/
+noncomputable def aft1RecOutG (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  ∑ d' : Fin BD, aft1QCellG s Q s_qh scale BT BD c t.val d'.val
+      * aft1RecStateG s K V s_qh BT BD c d' d
+
+/-- General kernel-native full output of chunk `c`: local + recurrent. -/
+noncomputable def aft1OutG (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  aft1LocalOutG s Q K V s_qh scale BT BD c t d
+    + aft1RecOutG s Q K V s_qh scale BT BD c t d
+
+/-- General `b_h` carry tile after `c` chunks. -/
+noncomputable def aft1BhTileG (s : BlockState) (K V : RegionName)
+    (s_qh BT BD : Nat) (c : Nat) : Tile .real [BD, BD] :=
+  ⟨fun idx => some (aft1RecStateG s K V s_qh BT BD c idx.1 idx.2.1)⟩
+
+/-- General `b_q` loaded-and-scaled tile of chunk `c`. -/
+noncomputable def aft1BqTileG (s : BlockState) (Q : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) : Tile .real [BT, BD] :=
+  ⟨fun idx => some (aft1QCellG s Q s_qh scale BT BD c idx.1.val idx.2.1.val)⟩
+
+/-- General `b_k` loaded tile of chunk `c`. -/
+noncomputable def aft1BkTileG (s : BlockState) (K : RegionName)
+    (s_qh BT BD : Nat) (c : Nat) : Tile .real [BD, BT] :=
+  ⟨fun idx => some (aft1KCellG s K s_qh BT BD c idx.1.val idx.2.1.val)⟩
+
+/-- General `b_v` loaded tile of chunk `c`. -/
+noncomputable def aft1BvTileG (s : BlockState) (V : RegionName)
+    (s_qh BT BD : Nat) (c : Nat) : Tile .real [BT, BD] :=
+  ⟨fun idx => some (aft1VCellG s V s_qh BT BD c idx.1.val idx.2.1.val)⟩
+
+/-- General `b_o` output tile of chunk `c` (full output). -/
+noncomputable def aft1BoTileG (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) : Tile .real [BT, BD] :=
+  ⟨fun idx => some (aft1OutG s Q K V s_qh scale BT BD c idx.1 idx.2.1)⟩
+
+/-- General local-only `b_o` tile of chunk `c` (= aft1LocalOutG). -/
+noncomputable def aft1BoLocalTileG (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) : Tile .real [BT, BD] :=
+  ⟨fun idx => some (aft1LocalOutG s Q K V s_qh scale BT BD c idx.1 idx.2.1)⟩
+
+/-- General intra-chunk score tile `b_s[t,tk] = Σ_e b_q[t,e]·b_k[e,tk]`. -/
+noncomputable def aft1BsTileG (s : BlockState) (Q K : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat) : Tile .real [BT, BT] :=
+  ⟨fun idx => some (∑ e : Fin BD, aft1QCellG s Q s_qh scale BT BD c idx.1.val e.val
+      * aft1KCellG s K s_qh BT BD c e.val idx.2.1.val)⟩
+
+/-- **General recurrent-state step.** -/
+theorem aft1RecStateG_succ (s : BlockState) (K V : RegionName) (s_qh BT BD : Nat)
+    (c : Nat) (d' d : Fin BD) :
+    aft1RecStateG s K V s_qh BT BD (c + 1) d' d
+      = aft1RecStateG s K V s_qh BT BD c d' d
+        + ∑ tk : Fin BT,
+            aft1KCellG s K s_qh BT BD c d'.val tk.val
+              * aft1VCellG s V s_qh BT BD c tk.val d.val := by
+  simp [aft1RecStateG, Finset.sum_range_succ]
+
+/-- `aft1BhTileG s K V 0` is the all-zero tile. -/
+theorem aft1BhTileG_zero (s : BlockState) (K V : RegionName) (s_qh BT BD : Nat) :
+    aft1BhTileG s K V s_qh BT BD 0 = (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BD, BD]) := by
+  unfold aft1BhTileG
+  refine congrArg _ ?_
+  funext idx
+  simp [aft1RecStateG]
+
+/-- General erased loop body of `attention_fwd_kernel_surface` at the contiguous
+layout (`s_qt = BD`, `s_qd = 1`, K strides `(1, BD)`). Checked against the
+lowered surface by `rfl` in `attention_fwd_triton1_body_splitG`. -/
+noncomputable def aft1LoopBodyG (Q K V H O : RegionName)
+    (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat)
+    (STORE IFCOND : Bool) : List Stmt :=
+  [ Stmt.assign .blockPtr [BT, BD] "p_q"
+      (Op.makeBlockPtrDynOffsets Q
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT), Op.constNat 0]),
+    Stmt.assign .blockPtr [BD, BT] "p_k"
+      (Op.makeBlockPtrDynOffsets K
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [BD, NT * BT] [BD, BT] [1, BD]
+        [Op.constNat 0, Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT)]),
+    Stmt.assign .blockPtr [BT, BD] "p_v"
+      (Op.makeBlockPtrDynOffsets V
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT), Op.constNat 0]),
+    Stmt.assign .blockPtr [BD, BD] "p_h"
+      (Op.makeBlockPtrDynOffsets H
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_hh))
+        [NT * BD, BD] [BD, BD] [s_ht, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BD), Op.constNat 0]),
+    Stmt.assign .blockPtr [BT, BD] "p_o"
+      (Op.makeBlockPtrDynOffsets O
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT), Op.constNat 0]),
+    Stmt.ifThen (Op.constBool STORE)
+      [Stmt.store .real [BD, BD]
+          (MemAccess.blockPtr (Op.ref .blockPtr [BD, BD] "p_h") [])
+          (Op.ref .real [BD, BD] "b_h") MaskOpt.none],
+    Stmt.assign .real [BT, BD] "b_q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_q") []) MaskOpt.none),
+    Stmt.assign .real [BT, BD] "b_q"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [BT, BD] "b_q") (Op.const scale)),
+    Stmt.assign .real [BD, BT] "b_k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BD, BT] "p_k") []) MaskOpt.none),
+    Stmt.assign .real [BT, BD] "b_v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_v") []) MaskOpt.none),
+    Stmt.assign .real [BT, BT] "b_s"
+      (@Op.dot [] BT BD BT (Op.ref .real [BT, BD] "b_q") (Op.ref .real [BD, BT] "b_k")),
+    Stmt.assign .real [BT, BD] "b_o"
+      (@Op.dot [] BT BT BD (Op.ref .real [BT, BT] "b_s") (Op.ref .real [BT, BD] "b_v")),
+    Stmt.ifThenElse (Op.constBool IFCOND)
+      [Stmt.ifThenElse
+          (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 0))
+          [Stmt.assign .real [BD, BD] "b_h"
+              (@Op.dot [] BD BT BD (Op.ref .real [BD, BT] "b_k") (Op.ref .real [BT, BD] "b_v"))]
+          [Stmt.assign .real [BT, BD] "b_o"
+              (Op.add .real Broadcast.nil.consSame.consSame
+                (Op.ref .real [BT, BD] "b_o")
+                (@Op.dot [] BT BD BD (Op.ref .real [BT, BD] "b_q") (Op.ref .real [BD, BD] "b_h"))),
+            Stmt.assign .real [BD, BD] "b_h"
+              (Op.add .real Broadcast.nil.consSame.consSame
+                (Op.ref .real [BD, BD] "b_h")
+                (@Op.dot [] BD BT BD (Op.ref .real [BD, BT] "b_k") (Op.ref .real [BT, BD] "b_v")))]]
+      [Stmt.assign .real [BT, BD] "b_o"
+          (Op.add .real Broadcast.nil.consSame.consSame
+            (Op.ref .real [BT, BD] "b_o")
+            (@Op.dot [] BT BD BD (Op.ref .real [BT, BD] "b_q") (Op.ref .real [BD, BD] "b_h"))),
+        Stmt.assign .real [BD, BD] "b_h"
+          (Op.add .real Broadcast.nil.consSame.consSame
+            (Op.ref .real [BD, BD] "b_h")
+            (@Op.dot [] BD BT BD (Op.ref .real [BD, BT] "b_k") (Op.ref .real [BT, BD] "b_v")))],
+    Stmt.store .real [BT, BD]
+      (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+      (Op.ref .real [BT, BD] "b_o") MaskOpt.none]
+
+/-- General erased prologue (program id + zero-init of `b_h` at shape `[BD,BD]`). -/
+def aft1PrologueG (BD : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "i_bh" (Op.programId 0),
+    Stmt.assign .real [BD, BD] "b_h" (Op.full [BD, BD] (Op.const 0)) ]
+
+/-- General dynamic loop-bound op `tl.cdiv(NT·BT, BT)`. -/
+def aft1StopOpG (BT NT : Nat) : Op .nat [] :=
+  Op.div .nat Broadcast.nil
+    (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat (NT * BT)) (Op.constNat BT)) (Op.constNat 1))
+    (Op.constNat BT)
+
+set_option maxRecDepth 8000 in
+/-- **General body split (by `rfl`).** -/
+theorem attention_fwd_triton1_body_splitG
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (STORE IFCOND : Bool) :
+    (attention_fwd_kernel_surface Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT STORE IFCOND).toAlgKernel.body
+      = aft1PrologueG BD
+        ++ [Stmt.forRangeDyn "i" (Op.constNat 0) (aft1StopOpG BT NT) (Op.constNat 1)
+              (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT STORE IFCOND)] := by
+  rfl
+
+/-- General `b_q` (post-scale) load = `aft1BqTileG`. -/
+theorem aft1_load_bq_eqG (s sin' : BlockState) (Q : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpq : sin'.regs .blockPtr [BT, BD] "p_q" = some
+      ⟨fun _ => BlockPtr.mk Q (s.pids 0 * s_qh) [NT * BT, BD] [BT, BD] [BD, 1] [c * BT, 0]⟩) :
+    evalOp (Op.mul .real Broadcast.scalarR
+        (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_q") []) MaskOpt.none)
+        (Op.const scale)) sin'
+      = some (aft1BqTileG s Q s_qh scale BT BD c) := by
+  rw [evalOp_mul, aft1_load_bp_2d_ref Q sin' "p_q" (s.pids 0 * s_qh) (NT * BT) BD BT BD BD 1
+    (c * BT) 0 hpq]
+  simp only [evalOp_const, Option.bind_some]
+  refine congrArg some ?_
+  ext idx; obtain ⟨t, e, u⟩ := idx
+  simp only [Tile.bop, Broadcast.scalarR, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.scalar, aft1BqTileG, aft1QCellG, NumericDType.mul, WithBot.realMul,
+    Option.map₂, Option.bind, Option.map, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
+/-- General `b_k` load = `aft1BkTileG`. -/
+theorem aft1_load_bk_eqG (s sin' : BlockState) (K : RegionName)
+    (s_qh BT BD : Nat) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpk : sin'.regs .blockPtr [BD, BT] "p_k" = some
+      ⟨fun _ => BlockPtr.mk K (s.pids 0 * s_qh) [BD, NT * BT] [BD, BT] [1, BD] [0, c * BT]⟩) :
+    evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BD, BT] "p_k") []) MaskOpt.none)
+        sin'
+      = some (aft1BkTileG s K s_qh BT BD c) := by
+  rw [aft1_load_bp_2d_ref K sin' "p_k" (s.pids 0 * s_qh) BD (NT * BT) BD BT 1 BD 0 (c * BT) hpk]
+  refine congrArg some ?_
+  ext idx; obtain ⟨e, tk, u⟩ := idx
+  simp only [aft1BkTileG, aft1KCellG, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
+/-- General `b_v` load = `aft1BvTileG`. -/
+theorem aft1_load_bv_eqG (s sin' : BlockState) (V : RegionName)
+    (s_qh BT BD : Nat) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpv : sin'.regs .blockPtr [BT, BD] "p_v" = some
+      ⟨fun _ => BlockPtr.mk V (s.pids 0 * s_qh) [NT * BT, BD] [BT, BD] [BD, 1] [c * BT, 0]⟩) :
+    evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_v") []) MaskOpt.none)
+        sin'
+      = some (aft1BvTileG s V s_qh BT BD c) := by
+  rw [aft1_load_bp_2d_ref V sin' "p_v" (s.pids 0 * s_qh) (NT * BT) BD BT BD BD 1 (c * BT) 0 hpv]
+  refine congrArg some ?_
+  ext idx; obtain ⟨tk, d, u⟩ := idx
+  simp only [aft1BvTileG, aft1VCellG, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
+/-- General eval of `b_s = dot(b_q, b_k)` = `aft1BsTileG`. -/
+theorem aft1_bs_eqG (s sin' : BlockState) (Q K : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat)
+    (hq : sin'.regs .real [BT, BD] "b_q" = some (aft1BqTileG s Q s_qh scale BT BD c))
+    (hk : sin'.regs .real [BD, BT] "b_k" = some (aft1BkTileG s K s_qh BT BD c)) :
+    @evalOp .real [BT, BT]
+        (@Op.dot [] BT BD BT (Op.ref .real [BT, BD] "b_q") (Op.ref .real [BD, BT] "b_k")) sin'
+      = some (aft1BsTileG s Q K s_qh scale BT BD c) := by
+  exact aft1_dot_op_eval sin' "b_q" "b_k" (aft1BqTileG s Q s_qh scale BT BD c)
+    (aft1BkTileG s K s_qh BT BD c)
+    (fun t e => aft1QCellG s Q s_qh scale BT BD c t.val e.val)
+    (fun e tk => aft1KCellG s K s_qh BT BD c e.val tk.val)
+    hq hk (fun t e => rfl) (fun e tk => rfl)
+
+/-- General eval of `b_o = dot(b_s, b_v)` = `aft1BoLocalTileG`. -/
+theorem aft1_bo_local_eqG (s sin' : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat)
+    (hs : sin'.regs .real [BT, BT] "b_s" = some (aft1BsTileG s Q K s_qh scale BT BD c))
+    (hv : sin'.regs .real [BT, BD] "b_v" = some (aft1BvTileG s V s_qh BT BD c)) :
+    @evalOp .real [BT, BD]
+        (@Op.dot [] BT BT BD (Op.ref .real [BT, BT] "b_s") (Op.ref .real [BT, BD] "b_v")) sin'
+      = some (aft1BoLocalTileG s Q K V s_qh scale BT BD c) := by
+  exact aft1_dot_op_eval sin' "b_s" "b_v" (aft1BsTileG s Q K s_qh scale BT BD c)
+    (aft1BvTileG s V s_qh BT BD c)
+    (fun t tk => ∑ e : Fin BD, aft1QCellG s Q s_qh scale BT BD c t.val e.val
+        * aft1KCellG s K s_qh BT BD c e.val tk.val)
+    (fun tk d => aft1VCellG s V s_qh BT BD c tk.val d.val) hs hv (fun t tk => rfl) (fun tk d => rfl)
+
+/-- General eval of `b_o += dot(b_q, b_h)` = `aft1BoTileG` (full output). -/
+theorem aft1_bo_full_eqG (s sin' : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c : Nat)
+    (hbo : sin'.regs .real [BT, BD] "b_o" = some (aft1BoLocalTileG s Q K V s_qh scale BT BD c))
+    (hq : sin'.regs .real [BT, BD] "b_q" = some (aft1BqTileG s Q s_qh scale BT BD c))
+    (hbh : sin'.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD c)) :
+    @evalOp .real [BT, BD]
+        (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BT, BD] "b_o")
+          (@Op.dot [] BT BD BD (Op.ref .real [BT, BD] "b_q") (Op.ref .real [BD, BD] "b_h"))) sin'
+      = some (aft1BoTileG s Q K V s_qh scale BT BD c) := by
+  rw [aft1_accDot_op_eval sin' "b_o" "b_q" "b_h"
+    (aft1BoLocalTileG s Q K V s_qh scale BT BD c) (aft1BqTileG s Q s_qh scale BT BD c)
+    (aft1BhTileG s K V s_qh BT BD c)
+    (fun t d => aft1LocalOutG s Q K V s_qh scale BT BD c t d)
+    (fun t d' => aft1QCellG s Q s_qh scale BT BD c t.val d'.val)
+    (fun d' d => aft1RecStateG s K V s_qh BT BD c d' d)
+    hbo hq hbh (fun t d => rfl) (fun t d' => rfl) (fun d' d => rfl)]
+  refine congrArg some ?_
+  ext idx; obtain ⟨t, d, u⟩ := idx
+  simp only [aft1BoTileG, aft1OutG, aft1RecOutG]
+
+/-- General eval of `b_h += dot(b_k, b_v)` = `aft1BhTileG (c+1)`. -/
+theorem aft1_bh_succ_eqG (s sin' : BlockState) (K V : RegionName)
+    (s_qh BT BD : Nat) (c : Nat)
+    (hbh : sin'.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD c))
+    (hk : sin'.regs .real [BD, BT] "b_k" = some (aft1BkTileG s K s_qh BT BD c))
+    (hv : sin'.regs .real [BT, BD] "b_v" = some (aft1BvTileG s V s_qh BT BD c)) :
+    @evalOp .real [BD, BD]
+        (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BD, BD] "b_h")
+          (@Op.dot [] BD BT BD (Op.ref .real [BD, BT] "b_k") (Op.ref .real [BT, BD] "b_v"))) sin'
+      = some (aft1BhTileG s K V s_qh BT BD (c + 1)) := by
+  rw [aft1_accDot_op_eval sin' "b_h" "b_k" "b_v"
+    (aft1BhTileG s K V s_qh BT BD c) (aft1BkTileG s K s_qh BT BD c) (aft1BvTileG s V s_qh BT BD c)
+    (fun d' d => aft1RecStateG s K V s_qh BT BD c d' d)
+    (fun d' tk => aft1KCellG s K s_qh BT BD c d'.val tk.val)
+    (fun tk d => aft1VCellG s V s_qh BT BD c tk.val d.val)
+    hbh hk hv (fun d' d => rfl) (fun d' tk => rfl) (fun tk d => rfl)]
+  refine congrArg some ?_
+  ext idx; obtain ⟨d', d, u⟩ := idx
+  simp only [aft1BhTileG]
+  rw [aft1RecStateG_succ]
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **General full loop-body register step (STORE=false, IFCOND=false).** -/
+theorem aft1_loopBody_regs_ffG
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat)
+    (s sin : BlockState) (c : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c))
+    (hbh : sin.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD c)) :
+    ∃ s2, stepStmts ((aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+          Bool.false Bool.false).take 13) sin = some s2
+      ∧ (∀ rg off, s2.readMem rg off = s.readMem rg off)
+      ∧ s2.pids = sin.pids
+      ∧ s2.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
+      ∧ s2.regs .blockPtr [BT, BD] "p_o" = some
+          (⟨fun _ => BlockPtr.mk O (s.pids 0 * s_qh) [NT * BT, BD] [BT, BD] [BD, 1]
+            [c * BT, 0]⟩ : Tile .blockPtr [BT, BD])
+      ∧ s2.regs .real [BT, BD] "b_o" = some (aft1BoTileG s Q K V s_qh scale BT BD c)
+      ∧ s2.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD (c + 1)) := by
+  unfold aft1LoopBodyG
+  simp only [List.take_succ_cons, List.take_zero]
+  -- p_q, p_k, p_v, p_h, p_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval Q sin _ _ _ [NT * BT, BD] [BT, BD] [BD, 1]
+      (s.pids 0 * s_qh) (c * BT) 0
+      (aft1_mulConst_eval sin "i_bh" (s.pids 0) s_qh hibh)
+      (aft1_mulConst_eval sin "i" c BT hi) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval K _ _ _ _ [BD, NT * BT] [BD, BT] [1, BD]
+      (s.pids 0 * s_qh) 0 (c * BT)
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) s_qh (by simp [hibh])) (by simp)
+      (aft1_mulConst_eval _ "i" c BT (by simp [hi]))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval V _ _ _ _ [NT * BT, BD] [BT, BD] [BD, 1]
+      (s.pids 0 * s_qh) (c * BT) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) s_qh (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c BT (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval H _ _ _ _ [NT * BD, BD] [BD, BD] [s_ht, 1]
+      (s.pids 0 * s_hh) (c * BD) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) s_hh (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c BD (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval O _ _ _ _ [NT * BT, BD] [BT, BD] [BD, 1]
+      (s.pids 0 * s_qh) (c * BT) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) s_qh (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c BT (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (aft1_ifThen_false_noop _ _)]
+  -- b_q raw load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bp_2d_ref Q _ "p_q" (s.pids 0 * s_qh) (NT * BT) BD BT BD BD 1
+      (c * BT) 0 (by simp)))]
+  -- b_q *= scale → aft1BqTileG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BT, BD] "b_q")
+        (Op.const scale)) _ = some (aft1BqTileG s Q s_qh scale BT BD c) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, BlockState.setReg_same, evalOp_const, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some ?_
+      ext idx; obtain ⟨t, e, u⟩ := idx
+      simp only [Tile.bop, Broadcast.scalarR, Broadcast.leftIndex, Broadcast.rightIndex,
+        Tile.scalar, aft1BqTileG, aft1QCellG, NumericDType.mul, WithBot.realMul,
+        Option.map₂, Option.bind, Option.map, BlockState.setReg_readMem, hmem,
+        Nat.add_zero, Nat.zero_add, Nat.mul_one]))]
+  -- b_k, b_v loads
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bk_eqG (NT := NT) s _ K s_qh BT BD c (by intro rg off; simp [hmem]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bv_eqG (NT := NT) s _ V s_qh BT BD c (by intro rg off; simp [hmem]) (by simp)))]
+  -- b_s = dot(b_q, b_k)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_bs_eqG s _ Q K s_qh scale BT BD c (by simp) (by simp)))]
+  -- b_o = dot(b_s, b_v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_bo_local_eqG s _ Q K V s_qh scale BT BD c (by simp) (by simp)))]
+  -- IFCOND gate (false): elseBody
+  rw [stepStmts.cons_some (st := Stmt.ifThenElse (Op.constBool Bool.false) _ _)
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.false) _ _) _ = some _ from by
+      rw [aft1_ifThenElse_false_else]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft1_bo_full_eqG s _ Q K V s_qh scale BT BD c (by simp) (by simp) (by simp [hbh])))]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft1_bh_succ_eqG s _ K V s_qh BT BD c (by simp [hbh]) (by simp) (by simp)))]
+      exact stepStmts.nil)]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro rg off; simp [hmem]
+  · simp
+  · simp [hibh]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_same]
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **General full single-chunk iteration (STORE=false, IFCOND=false).** -/
+theorem aft1_loopBody_iter_ffG
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat)
+    (s sin : BlockState) (c : Nat)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c))
+    (hbh : sin.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD c)) :
+    ∃ s', stepStmts (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
+      ∧ s'.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD (c + 1))
+      ∧ (∀ off, s'.readMem Q off = s.readMem Q off)
+      ∧ (∀ off, s'.readMem K off = s.readMem K off)
+      ∧ (∀ off, s'.readMem V off = s.readMem V off)
+      ∧ (∀ off, s'.readMem H off = s.readMem H off)
+      ∧ (∀ (t : Fin BT) (d : Fin BD),
+          s'.readMem O (s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+            = aft1OutG s Q K V s_qh scale BT BD c t d)
+      ∧ (∀ off, (∀ (t : Fin BT) (d : Fin BD),
+            off ≠ s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+          → s'.readMem O off = sin.readMem O off) := by
+  obtain ⟨s2, hstep, hmem2, hpids2, hibh2, hpo, hbo, hbh2⟩ :=
+    aft1_loopBody_regs_ffG Q K V H O s_qh s_hh s_ht scale BT BD NT s sin c hmem hibh hi hbh
+  have hdrop : (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT Bool.false Bool.false).drop 13
+      = [Stmt.store .real [BT, BD]
+          (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+          (Op.ref .real [BT, BD] "b_o") MaskOpt.none] := by
+    unfold aft1LoopBodyG
+    simp only [List.drop_succ_cons, List.drop_zero]
+  have hsplit : aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT Bool.false Bool.false
+      = (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT Bool.false Bool.false).take 13
+        ++ [Stmt.store .real [BT, BD]
+              (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+              (Op.ref .real [BT, BD] "b_o") MaskOpt.none] := by
+    conv_lhs => rw [← List.take_append_drop 13
+      (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT Bool.false Bool.false)]
+    rw [hdrop]
+  rw [hsplit, stepStmts.append_some hstep]
+  have hstore : stepStmt (Stmt.store .real [BT, BD]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+        (Op.ref .real [BT, BD] "b_o") MaskOpt.none) s2
+      = some ((TileShape.allIndices [BT, BD]).foldl
+          (fun acc i => acc.writeMemTyped .real O
+            (s.pids 0 * s_qh + (c * BT + i.1.val) * BD + (0 + i.2.1.val) * 1)
+            ((aft1BoTileG s Q K V s_qh scale BT BD c).data i)) s2) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hbo, hpo, Option.bind, Option.map]
+    refine congrArg some (congrArg (fun f => List.foldl f s2 (TileShape.allIndices [BT, BD])) ?_)
+    funext acc i
+    obtain ⟨t, d, u⟩ := i
+    simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds,
+      List.all_nil, Bool.and_true, if_true]
+  set offFn : TileIndex [BT, BD] → Nat :=
+    fun i => s.pids 0 * s_qh + (c * BT + i.1.val) * BD + (0 + i.2.1.val) * 1 with hoffFn
+  have hinj : Function.Injective offFn := by
+    rintro ⟨⟨ta, hta⟩, ⟨da, hda⟩, _⟩ ⟨⟨tb, htb⟩, ⟨db, hdb⟩, _⟩ h
+    simp only [hoffFn] at h
+    have ht : ta = tb := by
+      by_contra hne
+      have hda' : da < BD := hda
+      have hdb' : db < BD := hdb
+      have : (c * BT + ta) * BD + da ≠ (c * BT + tb) * BD + db := by
+        rcases Nat.lt_or_ge ta tb with hlt | hge
+        · have : (c * BT + ta) * BD + da < (c * BT + tb) * BD := by
+            have h1 : (c * BT + ta) * BD + BD ≤ (c * BT + tb) * BD := by
+              have : c * BT + ta + 1 ≤ c * BT + tb := by omega
+              calc (c * BT + ta) * BD + BD = (c * BT + ta + 1) * BD := by ring
+                _ ≤ (c * BT + tb) * BD := Nat.mul_le_mul_right BD this
+            omega
+          omega
+        · have hgt : tb < ta := by omega
+          have : (c * BT + tb) * BD + db < (c * BT + ta) * BD := by
+            have h1 : (c * BT + tb) * BD + BD ≤ (c * BT + ta) * BD := by
+              have : c * BT + tb + 1 ≤ c * BT + ta := by omega
+              calc (c * BT + tb) * BD + BD = (c * BT + tb + 1) * BD := by ring
+                _ ≤ (c * BT + ta) * BD := Nat.mul_le_mul_right BD this
+            omega
+          omega
+      omega
+    have hd : da = db := by
+      subst ht; omega
+    subst tb; subst db; rfl
+  have hstoreW : (TileShape.allIndices [BT, BD]).foldl
+        (fun acc i => acc.writeMemTyped .real O (offFn i) ((aft1BoTileG s Q K V s_qh scale BT BD c).data i)) s2
+      = (TileShape.allIndices [BT, BD]).foldl
+        (fun acc i => acc.writeMem O (offFn i) (aft1OutG s Q K V s_qh scale BT BD c i.1 i.2.1)) s2 := by
+    apply congrArg (fun f => List.foldl f s2 (TileShape.allIndices [BT, BD]))
+    funext acc i
+    simp only [BlockState.writeMemTyped_real, aft1BoTileG, FloatDType.real_storeValue]
+    rfl
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [aft1_foldl_store_pids]; exact hpids2
+  · rw [BlockState.foldl_writeMemTyped_regs]; exact hibh2
+  · rw [BlockState.foldl_writeMemTyped_regs]; exact hbh2
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O Q _ _ s2 off hOQ.symm]; exact hmem2 Q off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O K _ _ s2 off hOK.symm]; exact hmem2 K off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O V _ _ s2 off hOV.symm]; exact hmem2 V off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O H _ _ s2 off hOH.symm]; exact hmem2 H off
+  · intro t d
+    rw [hstoreW]
+    have hoff : s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val = offFn (t, d, PUnit.unit) := by
+      simp [hoffFn]
+    rw [hoff, BlockState.scatter_readback_nd s2 offFn
+      (fun i => aft1OutG s Q K V s_qh scale BT BD c i.1 i.2.1) hinj (t, d, PUnit.unit)]
+  · intro off hoff
+    rw [hstoreW]
+    rw [aft1_foldl_writeMem_readMem_other _ O offFn _ s2 off (by
+      intro i _
+      obtain ⟨t, d, u⟩ := i
+      simp only [hoffFn, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+      exact (hoff t d).symm)]
+    rw [hmem2 O off, ← hmem O off]
+
+/-- General carry invariant. -/
+noncomputable def aft1InvG (Q K V H O : RegionName) (s_qh : Nat) (scale : ℝ) (BT BD : Nat)
+    (s : BlockState) (n : Nat) (st : BlockState) : Prop :=
+  st.pids = s.pids
+  ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
+  ∧ st.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD n)
+  ∧ (∀ off, st.readMem Q off = s.readMem Q off)
+  ∧ (∀ off, st.readMem K off = s.readMem K off)
+  ∧ (∀ off, st.readMem V off = s.readMem V off)
+  ∧ (∀ off, st.readMem H off = s.readMem H off)
+  ∧ (∀ j, j < n → ∀ (t : Fin BT) (d : Fin BD),
+      st.readMem O (s.pids 0 * s_qh + (j * BT + t.val) * BD + d.val)
+        = aft1OutG s Q K V s_qh scale BT BD j t d)
+
+/-- `aft1BhTileG` depends only on `K`/`V` reads and `pids 0`. -/
+theorem aft1BhTileG_congr (s s' : BlockState) (K V : RegionName) (s_qh BT BD : Nat) (n : Nat)
+    (hp : s'.pids 0 = s.pids 0)
+    (hK : ∀ off, s'.readMem K off = s.readMem K off)
+    (hV : ∀ off, s'.readMem V off = s.readMem V off) :
+    aft1BhTileG s' K V s_qh BT BD n = aft1BhTileG s K V s_qh BT BD n := by
+  unfold aft1BhTileG
+  refine congrArg _ ?_
+  funext idx
+  simp only [aft1RecStateG, aft1KCellG, aft1VCellG, hp, hK, hV]
+
+/-- `aft1OutG` depends only on `Q`/`K`/`V` reads and `pids 0`. -/
+theorem aft1OutG_congr (s s' : BlockState) (Q K V : RegionName) (s_qh : Nat) (scale : ℝ)
+    (BT BD : Nat) (c : Nat) (t : Fin BT) (d : Fin BD)
+    (hp : s'.pids 0 = s.pids 0)
+    (hQ : ∀ off, s'.readMem Q off = s.readMem Q off)
+    (hK : ∀ off, s'.readMem K off = s.readMem K off)
+    (hV : ∀ off, s'.readMem V off = s.readMem V off) :
+    aft1OutG s' Q K V s_qh scale BT BD c t d = aft1OutG s Q K V s_qh scale BT BD c t d := by
+  simp only [aft1OutG, aft1LocalOutG, aft1RecOutG, aft1RecStateG, aft1QCellG, aft1KCellG,
+    aft1VCellG, hp, hQ, hK, hV]
+
+set_option maxHeartbeats 2000000 in
+/-- **General carry-invariant step.** One iteration preserves `aft1InvG`. -/
+theorem aft1InvG_step (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H)
+    (n : Nat) (st : BlockState) (hP : aft1InvG Q K V H O s_qh scale BT BD s n st) :
+    ∃ st', stepStmts (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false) (st.setReg "i" .nat [] (Tile.scalar n)) = some st'
+      ∧ aft1InvG Q K V H O s_qh scale BT BD s (n + 1) st' := by
+  obtain ⟨hpids, hibh, hbh, hQ, hK, hV, hHh, hOprev⟩ := hP
+  set sin := st.setReg "i" .nat [] (Tile.scalar n) with hsin
+  have hpidsSt0 : st.pids 0 = s.pids 0 := by rw [hpids]
+  have hbhSt : aft1BhTileG s K V s_qh BT BD n = aft1BhTileG st K V s_qh BT BD n :=
+    aft1BhTileG_congr st s K V s_qh BT BD n hpidsSt0.symm
+      (fun off => (hK off).symm) (fun off => (hV off).symm)
+  have hbhSin : sin.regs .real [BD, BD] "b_h" = some (aft1BhTileG st K V s_qh BT BD n) := by
+    rw [hsin]; rw [← hbhSt]; simpa using hbh
+  have hibhSin : sin.regs .nat [] "i_bh" = some (Tile.scalar (st.pids 0)) := by
+    rw [hsin, hpids]; simpa [hpids] using hibh
+  have hiSin : sin.regs .nat [] "i" = some (Tile.scalar n) := by rw [hsin]; simp
+  have hmemSin : ∀ rg off, sin.readMem rg off = st.readMem rg off := by
+    intro rg off; rw [hsin]; simp [BlockState.setReg_readMem]
+  obtain ⟨st', hstep, hpids', hibh', hbh', hQ', hK', hV', hH', hOcur, hOother⟩ :=
+    aft1_loopBody_iter_ffG Q K V H O s_qh s_hh s_ht scale BT BD NT st sin n
+      hOQ hOK hOV hOH hmemSin hibhSin hiSin hbhSin
+  refine ⟨st', hstep, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpids', hsin]; simpa using hpids
+  · rw [hibh', hpids]
+  · rw [hbh', aft1BhTileG_congr s st K V s_qh BT BD (n + 1) hpidsSt0
+      (fun off => hK off) (fun off => hV off)]
+  · intro off; rw [hQ' off]; exact hQ off
+  · intro off; rw [hK' off]; exact hK off
+  · intro off; rw [hV' off]; exact hV off
+  · intro off; rw [hH' off]; exact hHh off
+  · intro j hj t d
+    rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
+    · have haddr : s.pids 0 * s_qh + (j * BT + t.val) * BD + d.val
+          = st.pids 0 * s_qh + (j * BT + t.val) * BD + d.val := by rw [hpidsSt0]
+      rw [haddr, hOother _ (by
+        intro t' d' heq
+        have ht := t.isLt; have hd := d.isLt; have ht' := t'.isLt; have hd' := d'.isLt
+        have hbj : (j * BT + t.val) * BD + d.val < (j + 1) * (BT * BD) := by nlinarith
+        have hbn : n * (BT * BD) ≤ (n * BT + t'.val) * BD + d'.val := by nlinarith
+        have hle : (j + 1) * (BT * BD) ≤ n * (BT * BD) := by
+          have : j + 1 ≤ n := hjlt
+          exact Nat.mul_le_mul_right (BT * BD) this
+        have hcore : (j * BT + t.val) * BD + d.val = (n * BT + t'.val) * BD + d'.val := by omega
+        omega)]
+      rw [hsin]; simp only [BlockState.setReg_readMem]
+      rw [← haddr]; exact hOprev j hjlt t d
+    · subst hjeq
+      have haddr : s.pids 0 * s_qh + (j * BT + t.val) * BD + d.val
+          = st.pids 0 * s_qh + (j * BT + t.val) * BD + d.val := by rw [hpidsSt0]
+      rw [haddr, hOcur t d]
+      exact aft1OutG_congr s st Q K V s_qh scale BT BD j t d hpidsSt0 hQ hK hV
+
+set_option maxHeartbeats 2000000 in
+/-- **General prologue reaches `aft1InvG 0`.** -/
+theorem aft1_prologue_invG (Q K V H O : RegionName) (s_qh : Nat) (scale : ℝ) (BT BD : Nat)
+    (s : BlockState) :
+    ∃ s0, stepStmts (aft1PrologueG BD) s = some s0
+      ∧ aft1InvG Q K V H O s_qh scale BT BD s 0 s0 := by
+  unfold aft1PrologueG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.programId 0) s = some (Tile.scalar (s.pids 0)) from by simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BD, BD] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BD, BD]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · simp [BlockState.setReg_ne_name]
+  · rw [BlockState.setReg_same, aft1BhTileG_zero]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro j hj; exact absurd hj (Nat.not_lt_zero j)
+
+set_option maxHeartbeats 2000000 in
+/-- **General full-exec carry result (STORE=false, IFCOND=false).** -/
+theorem aft1_exec_carryG (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (hBT : 0 < BT) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    ∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ sF.regs .real [BD, BD] "b_h" = some (aft1BhTileG s K V s_qh BT BD NT)
+      ∧ (∀ (c : Nat), c < NT → ∀ (t : Fin BT) (d : Fin BD),
+          sF.readMem O (s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+            = aft1OutG s Q K V s_qh scale BT BD c t d) := by
+  rw [exec, attention_fwd_triton1_body_splitG]
+  obtain ⟨s0, hpre, hP0⟩ := aft1_prologue_invG Q K V H O s_qh scale BT BD s
+  rw [stepStmts.append_some hpre]
+  have hStop : evalOp (aft1StopOpG BT NT) s0 = some (Tile.scalar NT) := by
+    simp only [aft1StopOpG, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+      Option.bind_some, Option.bind_eq_bind]
+    refine congrArg some ?_
+    apply Tile.ext
+    intro z
+    simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+      NumericDType.div, NumericDType.sub, NumericDType.add]
+    show (NT * BT + BT - 1) / BT = NT
+    have hcomm : NT * BT = BT * NT := Nat.mul_comm NT BT
+    have heq : NT * BT + BT - 1 = BT * NT + (BT - 1) := by rw [hcomm]; omega
+    rw [heq, Nat.mul_add_div hBT]
+    have : (BT - 1) / BT = 0 := Nat.div_eq_of_lt (by omega)
+    omega
+  obtain ⟨final, sLoop, hloop, hfinal, hPfinal⟩ :=
+    forRangeDyn_inv (idx := "i") (start := 0) (stop := NT) (step := 1)
+      (startOp := Op.constNat 0) (stopOp := aft1StopOpG BT NT) (stepOp := Op.constNat 1)
+      (P := fun n st => aft1InvG Q K V H O s_qh scale BT BD s n st ∧ n ≤ NT)
+      (by simp [evalOp]) hStop (by simp [evalOp]) (by norm_num)
+      ⟨hP0, by norm_num⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hInv, _⟩ := hPi
+        obtain ⟨st', hstep', hInv'⟩ :=
+          aft1InvG_step Q K V H O s_qh s_hh s_ht scale BT BD NT s hOQ hOK hOV hOH i st hInv
+        exact ⟨st', hstep', hInv', by omega⟩)
+  obtain ⟨hInvF, hleF⟩ := hPfinal
+  have hfinalEq : final = NT := le_antisymm hleF hfinal
+  subst hfinalEq
+  obtain ⟨_, _, hbhF, _, _, _, _, hOF⟩ := hInvF
+  rw [stepStmts.cons_some hloop, stepStmts.nil]
+  exact ⟨sLoop, rfl, hbhF, hOF⟩
+
+/-- General `Q`/`V`/`O` accessor: chunk `c` offset `off ↦ base + c·(BT·BD) + off`. -/
+def aft1QAddrG (s : BlockState) (s_qh BT BD : Nat) (c off : Nat) : Nat :=
+  s.pids 0 * s_qh + c * (BT * BD) + off
+
+/-- General `K` accessor: `off = BT·d' + tk ↦ base + d' + (c·BT + tk)·BD`. -/
+def aft1KAddrG (s : BlockState) (s_qh BT BD : Nat) (c off : Nat) : Nat :=
+  s.pids 0 * s_qh + off / BT + (c * BT + off % BT) * BD
+
+set_option maxRecDepth 8000 in
+/-- General bridge: kernel-native output = genuine `outputClosedForm`. -/
+theorem aft1OutG_eq_outputClosedForm (s : BlockState) (Q K V : RegionName)
+    (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (hBT : 0 < BT) (c : Nat)
+    (t : Fin BT) (d : Fin BD) :
+    aft1OutG s Q K V s_qh scale BT BD c t d
+      = outputClosedForm s Q K V scale BT BD
+          (aft1QAddrG s s_qh BT BD) (aft1KAddrG s s_qh BT BD) (aft1QAddrG s s_qh BT BD) c t d := by
+  have hKaddr : ∀ (ch a tk : Nat), tk < BT →
+      aft1KAddrG s s_qh BT BD ch (BT * a + tk) = s.pids 0 * s_qh + a + (ch * BT + tk) * BD := by
+    intro ch a tk htk
+    simp only [aft1KAddrG]
+    have hdiv : (BT * a + tk) / BT = a := by
+      rw [Nat.mul_add_div hBT]; simp [Nat.div_eq_of_lt htk]
+    have hmod : (BT * a + tk) % BT = tk := by
+      rw [Nat.mul_add_mod]; exact Nat.mod_eq_of_lt htk
+    rw [hdiv, hmod]
+  simp only [aft1OutG, aft1LocalOutG, aft1RecOutG, aft1RecStateG, aft1QCellG, aft1KCellG,
+    aft1VCellG, outputClosedForm, localTerm, recurrentTerm, recurrentState, aft1QAddrG]
+  refine congrArg₂ (· + ·) ?_ ?_
+  · refine Finset.sum_congr rfl (fun tk _ => ?_)
+    have hVeq : s.pids 0 * s_qh + (c * BT + tk.val) * BD + d.val
+        = s.pids 0 * s_qh + c * (BT * BD) + (BD * tk.val + d.val) := by ring
+    rw [hVeq]
+    refine congrArg₂ (· * ·) (Finset.sum_congr rfl (fun dd _ => ?_)) rfl
+    have hQeq : s.pids 0 * s_qh + (c * BT + t.val) * BD + dd.val
+        = s.pids 0 * s_qh + c * (BT * BD) + (BD * t.val + dd.val) := by ring
+    rw [hQeq, hKaddr c dd.val tk.val tk.isLt]
+  · refine Finset.sum_congr rfl (fun d' _ => ?_)
+    refine congrArg₂ (· * ·) (congrArg₂ (· * ·) (congrArg _ (by ring)) rfl)
+      (Finset.sum_congr rfl (fun j _ => Finset.sum_congr rfl (fun tk _ => ?_)))
+    refine congrArg₂ (· * ·) (congrArg _ ?_) (congrArg _ (by ring))
+    rw [hKaddr j d'.val tk.val tk.isLt]
+
+set_option maxHeartbeats 2000000 in
+/-- **General genuine closed-form output (STORE=false, IFCOND=false).** -/
+theorem attention_fwd_triton1_exec_outputClosedFormG
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (hBT : 0 < BT) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    ∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ ∀ (c : Nat), c < NT → ∀ (t : Fin BT) (d : Fin BD),
+          sF.readMem O (s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+            = outputClosedForm s Q K V scale BT BD
+                (aft1QAddrG s s_qh BT BD) (aft1KAddrG s s_qh BT BD)
+                (aft1QAddrG s s_qh BT BD) c t d := by
+  obtain ⟨sF, hexec, _, hOF⟩ :=
+    aft1_exec_carryG Q K V H O s_qh s_hh s_ht scale BT BD NT hBT s hOQ hOK hOV hOH
+  refine ⟨sF, hexec, fun c hc t d => ?_⟩
+  rw [hOF c hc t d, aft1OutG_eq_outputClosedForm s Q K V s_qh scale BT BD hBT]
+
+set_option maxHeartbeats 2000000 in
+/-- **Dimension-general `output_summary` for `attention_fwd_triton1`.**
+
+For arbitrary batch-head stride `s_qh`, chunk size `BT > 0`, head dimension `BD`,
+chunk count `NT`, scale `scale : ℝ`, and recurrent-state strides `s_hh`/`s_ht`,
+executing the full `attention_fwd_kernel_surface` writes the genuine
+`outputClosedForm` (= `localTerm` intra-chunk `(scale·Q·K·V)` + `recurrentTerm`
+cross-chunk `(scale·Q·b_h_c)`, read purely over INPUT memory, **no self-reference**)
+into `O` at every chunk `c < NT` and lane `(t, d)`. All four `STORE`/`IFCOND`
+branch surfaces also lower faithfully to the algorithm layer. The only layout
+contracts are the contiguity ones the kernel genuinely relies on: Q/V/O block
+strides `(BD, 1)`, K block strides `(1, BD)`, recurrent stride `(s_ht, 1)`, and the
+dynamic bound `cdiv(NT·BT, BT) = NT` (needs `0 < BT`). The Python test shape
+(`s_qh = 131072`, `s_hh = 524288`, `s_ht = 128`, `BT = 32`, `BD = 128`, `NT = 32`,
+`scale = 1/√128`) is the special case. -/
+theorem attention_fwd_triton1_output_summary_general
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (hBT : 0 < BT) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    -- (1) genuine closed-form output of the executed kernel
+    (∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ ∀ (c : Nat), c < NT → ∀ (t : Fin BT) (d : Fin BD),
+          sF.readMem O (s.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+            = outputClosedForm s Q K V scale BT BD
+                (aft1QAddrG s s_qh BT BD) (aft1KAddrG s s_qh BT BD)
+                (aft1QAddrG s s_qh BT BD) c t d) ∧
+    -- (2) all four STORE/IFCOND branch surfaces lower to the algorithm layer
+    ((∃ alg, (attention_fwd_kernel_surface Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgorithm?
+        = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.true Bool.false).toAlgorithm?
+        = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.true).toAlgorithm?
+        = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.true Bool.true).toAlgorithm?
+        = Except.ok alg)) := by
+  refine ⟨attention_fwd_triton1_exec_outputClosedFormG Q K V H O s_qh s_hh s_ht scale
+    BT BD NT hBT s hOQ hOK hOV hOH, ?_, ?_, ?_, ?_⟩
+  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false
+  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.true Bool.false
+  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.true
+  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+      s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.true Bool.true
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
