@@ -6663,6 +6663,298 @@ theorem afcLoopBody_stepsG
   · exact hFkp
   · exact hFksp
   · exact hFvp
+
+/-- General loop body preserves `O_block_ptr`. -/
+theorem afcLoopBody_preserves_OblockPtrG
+    {N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat} {s s' : BlockState}
+    (h : stepStmts (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) s = some s') :
+    s'.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" := by
+  refine stepStmts_regs_preserved (fun st s1 s2 hmem hstep => ?_) h
+  fin_cases hmem <;> exact stepStmt_assign_regs_ne (by decide) hstep
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General step lemma (AFC, causal, masked).** -/
+theorem afc_attn_stepG
+    (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (hN : N_CTX = BLOCK_N * numKVBlocks)
+    (s0 : BlockState) (i : Nat) (s : BlockState) (hilt : i < N_CTX) (himod : i % BLOCK_N = 0)
+    (hsb : afcScoreBoundG
+      (qTileAFCmG s0 Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+      (kTileAFCG s0 K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+      (vTileAFCmG s0 V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+      (keyScaleAFCG s0 QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) (qStartAFCG s0 BLOCK_M))
+    (hinv : afcInvariantG Q K V QScale KScale Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks
+      (keyScaleAFCG s0 QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) hBD i s) :
+    ∃ s', stepStmts (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ afcInvariantG Q K V QScale KScale Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks
+          (keyScaleAFCG s0 QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) hBD (i + BLOCK_N) s' := by
+  subst hN
+  set keyScale := keyScaleAFCG s0 QScale KScale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N numKVBlocks with hkeyScale
+  set qStart := qStartAFCG s0 BLOCK_M with hqStart
+  set qT := qTileAFCmG s0 Q stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL HEAD_ACTIVE with hqT
+  set kT := kTileAFCG s0 K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL with hkT
+  set vT := vTileAFCmG s0 V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE with hvT
+  simp only [afcInvariantG] at hinv
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hoffsm, hoffsn,
+    hq, hqs, hKp, hKsp, hVp, hOp, hundef, hmem⟩ := hinv
+  set c := i / BLOCK_N with hc_def
+  have hi : i = c * BLOCK_N := by
+    rw [hc_def]; exact (Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero himod)).symm
+  have hcnum : c < numKVBlocks := by
+    have hlt2 : c * BLOCK_N < BLOCK_N * numKVBlocks := by rw [← hi]; exact hilt
+    by_contra hge; push_neg at hge
+    have : BLOCK_N * numKVBlocks ≤ BLOCK_N * c := Nat.mul_le_mul_left BLOCK_N hge
+    rw [Nat.mul_comm BLOCK_N c] at this; omega
+  have hc1 : (c + 1) * BLOCK_N ≤ BLOCK_N * numKVBlocks := by
+    calc (c + 1) * BLOCK_N = BLOCK_N * (c + 1) := by ring
+      _ ≤ BLOCK_N * numKVBlocks := Nat.mul_le_mul_left BLOCK_N (by omega)
+  set sin := s.setReg "start_n" .nat [] (Tile.scalar i) with hsin
+  have hpids' : sin.pids = s0.pids := by rw [hsin]; simpa using hpids
+  have hmem' : sin.mem = s0.mem := by
+    rw [hsin]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have hundef' : ∀ rg o, sin.undef rg o = 0 := by
+    intro rg o; rw [hsin, BlockState.setReg_undef]; exact hundef rg o
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF,
+      kmaskT, ktile, kscT, qkdotT, maskT, qkSentT, rmaxT, mijT, pT, lijT, alphaT,
+      vmaskT, vtile, pf16,
+      hkmaskT, hktile, hkscT, hqkdotT, hmaskT, hqkSentT, hrm, hmijT, hpT, hlijT, halphaT,
+      hvmaskT, hvtile, hpf16, hFmi, hFli, hFacc, hFoffsm, hFoffsn, hFq, hFqsc, hFKp, hFKsp, hFVp⟩ :=
+    afcLoopBody_stepsG (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE hBN
+      sin i
+      (Tile.vec (fun r : Fin BLOCK_M => qStart + r.val)) (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      (kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c)
+      (kScalePtrAFCG s0 KScale (BLOCK_N * numKVBlocks) BLOCK_N c)
+      (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c)
+      ⟨fun r : TileIndex [BLOCK_M] => afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if qStart + idx.1.val < BLOCK_N * numKVBlocks ∧ idx.2.1.val < HEAD_ACTIVE then
+          some (qTileAFCG s0 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL idx) else some (0.0 : ℝ)⟩
+      (Tile.scalar (some (s0.readMem QScale (s0.pids 1 * ((BLOCK_N * numKVBlocks + BLOCK_M - 1) / BLOCK_M) + s0.pids 0))))
+      ⟨fun r : TileIndex [BLOCK_M] => ((afcStateBot1G qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩).2.1 : ℝ)⟩
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => ((afcStateBot1G qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (by rw [hsin]; simpa using rfl)
+      (by rw [hsin]; simpa using hoffsm)
+      (by rw [hsin]; simpa using hoffsn)
+      (by rw [hsin]; simpa using hmi)
+      (by rw [hsin]; simpa using hli)
+      (by rw [hsin]; simpa using hacc)
+      (by rw [hsin]; simpa using hq)
+      (by rw [hsin]; simpa using hqs)
+      (by rw [hsin, hc_def]; simpa using hKp)
+      (by rw [hsin, hc_def]; simpa using hKsp)
+      (by rw [hsin, hc_def]; simpa using hVp)
+  refine ⟨sF, hchain, ?_⟩
+  set qsc : ℝ := s0.readMem QScale (s0.pids 1 * ((BLOCK_N * numKVBlocks + BLOCK_M - 1) / BLOCK_M) + s0.pids 0) with hqscv
+  set ksc : ℝ := s0.readMem KScale (s0.pids 1 * ((BLOCK_N * numKVBlocks + BLOCK_N - 1) / BLOCK_N) + c) with hkscv
+  have hkscData : kscT.data PUnit.unit = some ksc := by
+    rw [hkscT]; simp only [kScalePtrAFCG, Region.cast, hkscv]
+    refine congrArg some ?_
+    unfold BlockState.readMem; rw [hmem']
+  have hkeyBlock : ∀ jL : Fin BLOCK_N,
+      keyScale (⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩ : Fin (BLOCK_N * numKVBlocks)) = qsc * ksc := by
+    intro jL
+    have hdiv : (c * BLOCK_N + jL.val) / BLOCK_N = c := by
+      rw [Nat.mul_comm c BLOCK_N, Nat.mul_add_div hBN, Nat.div_eq_of_lt jL.isLt, Nat.add_zero]
+    simp only [hkeyScale, keyScaleAFCG, hqscv, hkscv, hdiv]
+  have hqcell : ∀ (ir : Fin BLOCK_M) (e : Fin BLOCK_DMODEL),
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if qStart + idx.1.val < BLOCK_N * numKVBlocks ∧ idx.2.1.val < HEAD_ACTIVE then
+          some (qTileAFCG s0 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL idx) else some (0.0 : ℝ)⟩
+          : Tile .real [BLOCK_M, BLOCK_DMODEL]).data (ir, e, PUnit.unit)
+        = some (if e.val < HEAD_ACTIVE then qT (ir, e, PUnit.unit) else 0) := by
+    intro ir e
+    show (if qStart + ir.val < BLOCK_N * numKVBlocks ∧ e.val < HEAD_ACTIVE then some (qTileAFCG s0 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL (ir, e, PUnit.unit)) else some (0.0 : ℝ))
+        = some (if e.val < HEAD_ACTIVE then qT (ir, e, PUnit.unit) else 0)
+    rw [hqT]; simp only [qTileAFCmG, hqStart]
+    by_cases he : e.val < HEAD_ACTIVE
+    · by_cases hb : qStartAFCG s0 BLOCK_M + ir.val < BLOCK_N * numKVBlocks
+      · rw [if_pos ⟨hb, he⟩, if_pos he, if_pos ⟨hb, he⟩]
+      · rw [if_neg (fun h => hb h.1), if_pos he, if_neg (fun h => hb h.1)]; norm_num
+    · rw [if_neg (fun h => he h.2), if_neg he]; norm_num
+  have hkcell : ∀ (e : Fin BLOCK_DMODEL) (jL : Fin BLOCK_N),
+      ktile.data (e, jL, PUnit.unit)
+        = some (if jL.val < BLOCK_N * numKVBlocks - i ∧ e.val < HEAD_ACTIVE then
+            kT (⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩, e, PUnit.unit) else 0) := by
+    intro e jL
+    rw [hktile]; simp only [hkmaskT, kPtrsAFCG, Region.cast, Tile.vec]
+    rw [show (ComparableDType.nat.lt jL.val (BLOCK_N * numKVBlocks - i) && ComparableDType.nat.lt e.val HEAD_ACTIVE)
+          = decide (jL.val < BLOCK_N * numKVBlocks - i ∧ e.val < HEAD_ACTIVE) from by
+      rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+        decide_eq_true_eq]]
+    by_cases hb : jL.val < BLOCK_N * numKVBlocks - i ∧ e.val < HEAD_ACTIVE
+    · rw [if_pos (by simp only [decide_eq_true_eq]; exact hb), if_pos hb]
+      refine congrArg some ?_
+      rw [hkT, kTileAFCG]
+      rw [show baseOffsetAFCG s0 stride_qz stride_qh H + e.val + (c * BLOCK_N + jL.val) * HEAD_DIM
+            = baseOffsetAFCG s0 stride_qz stride_qh H + (c * BLOCK_N + jL.val) * HEAD_DIM + e.val from by omega]
+      show sin.readMem _ _ = s0.readMem K _
+      unfold BlockState.readMem; rw [hmem']
+    · rw [if_neg (by simp only [decide_eq_true_eq]; exact hb), if_neg hb]
+      refine congrArg some ?_
+      exact hundef' _ _
+  have hqTmask : ∀ (ir : Fin BLOCK_M) (e : Fin BLOCK_DMODEL), (if e.val < HEAD_ACTIVE then qT (ir, e, PUnit.unit) else 0) = qT (ir, e, PUnit.unit) := by
+    intro ir e
+    by_cases he : e.val < HEAD_ACTIVE
+    · rw [if_pos he]
+    · rw [if_neg he, hqT]; simp only [qTileAFCmG]; rw [if_neg (fun h => he h.2)]
+  have hjLwin : ∀ jL : Fin BLOCK_N, jL.val < BLOCK_N * numKVBlocks - i := by
+    intro jL; have := jL.isLt
+    have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N
+    omega
+  have hqkcell : ∀ (ir : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) (jL : Fin BLOCK_N),
+      qkdotT.data (ir, jL, PUnit.unit)
+        = some ((afcKVG qT kT vT keyScale ir d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1) := by
+    intro ir d jL
+    rw [hqkdotT]
+    have hsc := afc_score_cellG BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE qStart (BLOCK_N * numKVBlocks - i) jL ir qsc ksc qT
+      (fun e jL => kT (⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩, e, PUnit.unit))
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if qStart + idx.1.val < BLOCK_N * numKVBlocks ∧ idx.2.1.val < HEAD_ACTIVE then
+          some (qTileAFCG s0 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL idx) else some (0.0 : ℝ)⟩
+      ktile kscT (hjLwin jL)
+      (fun e => hqcell ir e) (fun e => hkcell e jL) hkscData
+    rw [hsc]
+    refine congrArg some ?_
+    simp only [afcKVG, hkeyBlock jL]
+    rw [show (Finset.univ.sum (fun e : Fin BLOCK_DMODEL => (if e.val < HEAD_ACTIVE then qT (ir, e, PUnit.unit) else 0)
+            * kT (⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩, e, PUnit.unit)))
+          = Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (ir, e, PUnit.unit)
+            * kT (⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩, e, PUnit.unit))
+        from Finset.sum_congr rfl (fun e _ => by rw [hqTmask ir e])]
+    ring
+  have hmaskcell : ∀ (ir : Fin BLOCK_M) (jL : Fin BLOCK_N),
+      maskT.data (ir, jL, PUnit.unit) = decide (qStart + ir.val ≥ c * BLOCK_N + jL.val) := by
+    intro ir jL
+    rw [hmaskT]; simp only [Tile.vec]
+    rw [show (ComparableDType.nat.ge (qStart + ir.val) (i + jL.val))
+          = decide (qStart + ir.val ≥ c * BLOCK_N + jL.val) from by
+      rw [Bool.eq_iff_iff]; simp only [ComparableDType.nat_ge_eq_true, decide_eq_true_eq]
+      omega]
+  have hsentcell : ∀ (ir : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) (jL : Fin BLOCK_N),
+      qkSentT.data (ir, jL, PUnit.unit)
+        = if qStart + ir.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale ir d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+    intro ir d jL
+    rw [hqkSentT]; simp only [hmaskcell ir jL, decide_eq_true_eq]
+    by_cases hk : qStart + ir.val ≥ c * BLOCK_N + jL.val
+    · rw [if_pos hk, if_pos hk]
+      exact hqkcell ir d jL
+    · rw [if_neg hk, if_neg hk]
+      exact afc_sentinel_eq
+  simp only [afcInvariantG, ← hqStart, ← hqT, ← hkT, ← hvT]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, hpids']
+  · rw [Nat.add_mod_right]; exact himod
+  · have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N
+    rw [hi]; omega
+  · rw [hFmi]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hbr := afc_mij_reg_eq_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 ir hsb
+      qkSentT ⟨fun r : TileIndex [BLOCK_M] =>
+        afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩ rmaxT mijT
+      (fun jL => by
+        rw [show (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (ir, PUnit.unit) jL)
+              = (ir, jL, PUnit.unit) from rfl]
+        rw [hsentcell ir ⟨0, hBD⟩ jL])
+      hrm (by simp only [hi]) hmijT
+    rw [hbr, show ((c + 1) * BLOCK_N : Nat) = i + BLOCK_N from by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega]
+  · rw [hFli]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨ir, ⟨⟩⟩ := r
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir ⟨0, hBD⟩ := by
+      refine afc_mij_reg_eq_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 ir hsb
+        qkSentT ⟨fun r : TileIndex [BLOCK_M] =>
+          afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩ rmaxT mijT
+        (fun jL => by
+          rw [show (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (ir, PUnit.unit) jL)
+                = (ir, jL, PUnit.unit) from rfl]
+          rw [hsentcell ir ⟨0, hBD⟩ jL])
+        hrm (by simp only [hi]) hmijT
+    have hbr := afc_denom_reg_eq_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 ir hsb
+      qkSentT ⟨fun r : TileIndex [BLOCK_M] => afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩
+      mijT alphaT ⟨fun r : TileIndex [BLOCK_M] => ((afcStateBot1G qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩).2.1 : ℝ)⟩
+      lijT pT
+      (fun jL => by rw [hsentcell ir ⟨0, hBD⟩ jL])
+      (by simp only [hi]; rfl) (by simp only [hi]) hmijcell
+      halphaT hlijT
+      (fun jL => by
+        rw [hpT]; simp only [hmaskcell ir jL, decide_eq_true_eq])
+    have hne : afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir ⟨0, hBD⟩ ≠ ⊥ :=
+      afcRunningMaxG_ne_bot qT kT vT keyScale qStart ((c + 1) * BLOCK_N) (by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega) (by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega) ir ⟨0, hBD⟩
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hbr, show ((i + BLOCK_N) : Nat) = (c + 1) * BLOCK_N from by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega]
+    exact congrArg (fun st : WithBot ℝ × ℝ × ℝ => (st.2.1 : WithBot ℝ))
+      (afcStateBot1G_eq_afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir ⟨0, hBD⟩ hne).symm
+  · rw [hFacc, hpf16]
+    simp only [FloatDType.cast, FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot,
+      FloatDType.fp16_toWithBot, FloatDType.real_ofWithBot]
+    refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hmijcell : mijT.data (ir, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir ⟨0, hBD⟩ := by
+      refine afc_mij_reg_eq_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 ir hsb
+        qkSentT ⟨fun r : TileIndex [BLOCK_M] =>
+          afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩ rmaxT mijT
+        (fun jL => by
+          rw [show (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (ir, PUnit.unit) jL)
+                = (ir, jL, PUnit.unit) from rfl]
+          rw [hsentcell ir ⟨0, hBD⟩ jL])
+        hrm (by simp only [hi]) hmijT
+    have hvload : ∀ jL : Fin BLOCK_N,
+        vtile.data (jL, id, PUnit.unit)
+          = some ((afcKVG qT kT vT keyScale ir id ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).2) := by
+      intro jL
+      rw [hvtile]; simp only [hvmaskT, Tile.vec, vPtrsAFCG, Region.cast]
+      rw [show (ComparableDType.nat.lt jL.val (BLOCK_N * numKVBlocks - i) && ComparableDType.nat.lt id.val HEAD_ACTIVE)
+            = decide (jL.val < BLOCK_N * numKVBlocks - i ∧ id.val < HEAD_ACTIVE) from by
+        rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+          decide_eq_true_eq]]
+      simp only [afcKVG, hvT, vTileAFCmG]
+      by_cases hid : id.val < HEAD_ACTIVE
+      · rw [if_pos (by simp only [decide_eq_true_eq]; exact ⟨hjLwin jL, hid⟩), if_pos hid]
+        refine congrArg some ?_
+        show sin.readMem _ (baseOffsetAFCG s0 stride_qz stride_qh H + (c * BLOCK_N + jL.val) * HEAD_DIM + id.val) = _
+        rw [vTileAFCG]
+        unfold BlockState.readMem; rw [hmem']
+      · rw [if_neg (by simp only [decide_eq_true_eq, not_and]; intro _ h; exact hid h), if_neg hid]
+        exact congrArg some (hundef' _ _)
+    have hbr := afc_acc_reg_eq_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 ir id hsb
+      qkSentT ⟨fun r : TileIndex [BLOCK_M] => afcRunningMaxG qT kT vT keyScale qStart i r.1 ⟨0, hBD⟩⟩
+      mijT alphaT
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => ((afcStateBot1G qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => ((afcStateBot1G qT kT vT keyScale qStart i idx.1 idx.2.1).2.2 : ℝ)⟩
+        (Tile.expandDim ⟨1, by simp⟩ alphaT))
+      pT vtile (fun jL => (afcKVG qT kT vT keyScale ir id ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).2)
+      (fun jL => by rw [hsentcell ir ⟨0, hBD⟩ jL])
+      (by simp only [hi]; rfl) (by simp only [hi]) hmijcell halphaT rfl
+      (fun jL => by
+        rw [hpT]; simp only [hmaskcell ir jL, decide_eq_true_eq])
+      hvload (fun jL => rfl)
+    have hne : afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir id ≠ ⊥ := by
+      rw [afcRunningMaxG_eq qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir id ⟨0, hBD⟩]
+      exact afcRunningMaxG_ne_bot qT kT vT keyScale qStart ((c + 1) * BLOCK_N) (by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega) (by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega) ir ⟨0, hBD⟩
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) _
+      (Tile.dot [] pT vtile)).data _ = _
+    rw [hbr, show ((i + BLOCK_N) : Nat) = (c + 1) * BLOCK_N from by have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega]
+    exact congrArg (fun st : WithBot ℝ × ℝ × ℝ => (st.2.2 : WithBot ℝ))
+      (afcStateBot1G_eq_afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) ir id hne).symm
+  · rw [hFoffsm]
+  · rw [hFoffsn]
+  · rw [hFq]
+  · rw [hFqsc]
+  · rw [hFKp, kPtrsAFCG_succ, show (i + BLOCK_N) / BLOCK_N = c + 1 from by rw [hi, Nat.add_div_right _ hBN, Nat.mul_div_cancel _ hBN]]
+  · rw [hFKsp, kScalePtrAFCG_succ, show (i + BLOCK_N) / BLOCK_N = c + 1 from by rw [hi, Nat.add_div_right _ hBN, Nat.mul_div_cancel _ hBN]]
+  · rw [hFVp, vPtrsAFCG_succ, show (i + BLOCK_N) / BLOCK_N = c + 1 from by rw [hi, Nat.add_div_right _ hBN, Nat.mul_div_cancel _ hBN]]
+  · rw [afcLoopBody_preserves_OblockPtrG hchain, hsin,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hOp
+  · intro rg o; rw [hundefF, hundef']
+  · rw [hmemF, hmem']
 end General
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
