@@ -5310,6 +5310,339 @@ theorem afc_score_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
     Tile.scalar, NumericDType.mul, hdot, hkscT]
   simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
 
+set_option maxHeartbeats 1600000 in
+/-- General `m_ij = afcRunningMaxG((c+1)·BLOCK_N)` (masked with -1e6 sentinel). -/
+theorem afc_mij_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M)
+    (hsb : afcScoreBoundG qT kT vT keyScale qStart)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mtile rmaxT mijT : Tile .real [BLOCK_M])
+    (hsent : ∀ jL : Fin BLOCK_N, qkSentT.data (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (i, PUnit.unit) jL)
+        = if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hrmax : Tile.reduceMaxDrop (afcAx1G BLOCK_M BLOCK_N) qkSentT = some rmaxT)
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩)
+    (hmij : mijT = Tile.select
+        (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT) :
+    mijT.data (i, PUnit.unit)
+      = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ := by
+  have hSEQ : 0 < SEQ := by
+    have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ)) :=
+    afc_reduceMaxDrop_rowG BLOCK_M BLOCK_N hBN qkSentT rmaxT hrmax i _ hsent
+  rw [afcRunningMaxG_succ qT kT vT keyScale qStart BLOCK_N c i ⟨0, hBD⟩]
+  rw [afcBlockG_blockSup qT kT vT keyScale qStart BLOCK_N c i i ⟨0, hBD⟩ hc1]
+  set BSk : WithBot ℝ := Finset.univ.sup (fun jL : Fin BLOCK_N =>
+      if (c * BLOCK_N + jL.val) ≤ qStart + i.val then
+        (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+      else (⊥ : WithBot ℝ)) with hBSk
+  set M := afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩ with hMdef
+  have hBSk_le : BSk ≤ rmaxT.data (i, PUnit.unit) := by
+    rw [hrmaxcell, hBSk]
+    apply Finset.sup_le; intro jL _
+    split
+    · rename_i hk
+      refine Finset.le_sup_of_le (Finset.mem_univ jL) ?_
+      rw [if_pos (show qStart + i.val ≥ c * BLOCK_N + jL.val from by omega)]
+    · exact bot_le
+  have hr_le : rmaxT.data (i, PUnit.unit) ≤ BSk ⊔ ((-1000000.0 : ℝ) : WithBot ℝ) := by
+    rw [hrmaxcell, hBSk]
+    apply Finset.sup_le; intro jL _
+    split
+    · rename_i hk
+      refine le_sup_of_le_left (Finset.le_sup_of_le (Finset.mem_univ jL) ?_)
+      rw [if_pos (show c * BLOCK_N + jL.val ≤ qStart + i.val from by omega)]
+    · exact le_sup_right
+  have hMBSk_sentinel : ((-1000000.0 : ℝ) : WithBot ℝ) ≤ M ⊔ BSk := by
+    by_cases hc0 : c = 0
+    · subst hc0
+      refine le_sup_of_le_right ?_
+      rw [hBSk]
+      refine Finset.le_sup_of_le (Finset.mem_univ (⟨0, hBN⟩ : Fin BLOCK_N)) ?_
+      rw [if_pos (show 0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val ≤ qStart + i.val from by simp)]
+      refine le_of_lt ?_
+      rw [WithBot.coe_lt_coe]
+      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i ⟨0, hBD⟩
+      simpa [afcKVG] using hbnd
+    · refine le_sup_of_le_left (le_of_lt ?_)
+      rw [hMdef]
+      exact afcRunningMaxG_gt_sentinel qT kT vT keyScale qStart (c * BLOCK_N) (by
+        have : 1 ≤ c := by omega
+        calc 1 ≤ c := this
+          _ ≤ c * BLOCK_N := Nat.le_mul_of_pos_right c hBN) hSEQ i ⟨0, hBD⟩ hsb
+  have hdom : M ⊔ (BSk ⊔ ((-1000000.0 : ℝ) : WithBot ℝ)) = M ⊔ BSk := by
+    rw [← sup_assoc, sup_eq_left.mpr hMBSk_sentinel]
+  rw [hmij, Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile]
+  have hsqueeze : M ⊔ rmaxT.data (i, PUnit.unit) = M ⊔ BSk := by
+    apply le_antisymm
+    · exact sup_le_sup_left (le_trans hr_le (le_of_eq rfl)) M |>.trans (le_of_eq hdom) |>.trans (le_refl _)
+    · exact sup_le_sup_left hBSk_le M
+  by_cases hcmp : M > rmaxT.data (i, PUnit.unit)
+  · rw [if_pos (by simpa using hcmp)]
+    rw [← hsqueeze, max_eq_left (le_of_lt hcmp)]
+  · rw [if_neg (by simpa using hcmp)]
+    rw [← hsqueeze, max_eq_right (not_lt.mp hcmp)]
+
+set_option maxHeartbeats 1600000 in
+/-- General masked `pT` cell. -/
+theorem afc_pmT_cell_maskedG (BLOCK_N : Nat) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M) (jL : Fin BLOCK_N) (Mc1 : WithBot ℝ)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mijT : Tile .real [BLOCK_M]) (pT : Tile .real [BLOCK_M, BLOCK_N])
+    (kept : Bool)
+    (_hkept : kept = decide (qStart + i.val ≥ c * BLOCK_N + jL.val))
+    (hsent : qkSentT.data (i, jL, PUnit.unit)
+        = if kept then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = Mc1)
+    (hkeptbot : kept = Bool.true → Mc1 ≠ ⊥)
+    (hpT : pT.data (i, jL, PUnit.unit)
+        = if kept then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    pT.data (i, jL, PUnit.unit)
+      = some (if kept then
+          pow2 ((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+            ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 - Mc1.unbotD 0)
+          else 0) := by
+  rw [hpT]
+  by_cases hk : kept = Bool.true
+  · rw [if_pos hk]
+    obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+      cases hh : Mc1 with
+      | coe x => exact ⟨x, rfl⟩
+      | bot => exact absurd hh (hkeptbot hk)
+    simp only [Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, NumericDType.sub, hmij, hMr,
+      WithBot.unbotD_coe]
+    rw [show qkSentT.data (i, jL, PUnit.unit) =
+          (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+              ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ) from by
+      rw [hsent, if_pos hk]]
+    rw [if_pos hk]
+    simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+    refine congrArg some ?_
+    simp only [pow2]; ring_nf
+  · rw [if_neg hk, if_neg hk]
+    norm_num
+
+set_option maxHeartbeats 1600000 in
+/-- General masked `p` reduceSum row. -/
+theorem afc_nume_row_sum_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hsb : afcScoreBoundG qT kT vT keyScale qStart)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mijT : Tile .real [BLOCK_M]) (pT : Tile .real [BLOCK_M, BLOCK_N])
+    (hsent : ∀ jL : Fin BLOCK_N, qkSentT.data (i, jL, PUnit.unit)
+        = if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩)
+    (hpT : ∀ jL : Fin BLOCK_N, pT.data (i, jL, PUnit.unit)
+        = if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.reduceSumDrop (afcAx1G BLOCK_M BLOCK_N) pT).data (i, PUnit.unit)
+      = some ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map
+          (fun p => pow2 (p.1 - (afcRunningMaxG qT kT vT keyScale
+            qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩).unbotD 0))).sum := by
+  have hc1' : 1 ≤ (c + 1) * BLOCK_N := by
+    have : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega
+  set Mc1 := afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ with hMc1
+  have hMc1bot : Mc1 ≠ ⊥ := by
+    rw [hMc1]; exact afcRunningMaxG_ne_bot qT kT vT keyScale qStart ((c + 1) * BLOCK_N) hc1' (by omega) i ⟨0, hBD⟩
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ jL : Fin BLOCK_N,
+      pT.data (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (i, PUnit.unit) jL)
+        = some (if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            pow2 ((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 - Mc1.unbotD 0)
+            else 0) := by
+    intro jL
+    rw [show (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
+    have hsentR : qkSentT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+      rw [hsent jL]; by_cases h : qStart + i.val ≥ c * BLOCK_N + jL.val <;> simp [h]
+    have hpTR : pT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ) := by
+      rw [hpT jL]; by_cases h : qStart + i.val ≥ c * BLOCK_N + jL.val
+      · rw [if_pos h, if_pos (decide_eq_true h)]
+      · rw [if_neg h, if_neg (by simp [h])]
+    exact afc_pmT_cell_maskedG qT kT vT keyScale BLOCK_N hBD qStart c hc1 i jL Mc1 qkSentT mijT pT
+      (decide (qStart + i.val ≥ c * BLOCK_N + jL.val)) (by rfl) hsentR
+      (by rw [hmij]) (fun _ => hMc1bot) hpTR
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [afcBlockG_map_sum qT kT vT keyScale qStart BLOCK_N c i d hc1
+      (fun p => pow2 (p.1 - Mc1.unbotD 0))]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  simp only [decide_eq_true_eq]
+  by_cases hkp : (c * BLOCK_N + jL.val) ≤ qStart + i.val
+  · rw [if_pos (show qStart + i.val ≥ c * BLOCK_N + jL.val from by omega),
+        if_pos (show c * BLOCK_N + jL.val ≤ qStart + i.val from hkp)]
+    rfl
+  · rw [if_neg (show ¬ qStart + i.val ≥ c * BLOCK_N + jL.val from by omega),
+        if_neg (show ¬ c * BLOCK_N + jL.val ≤ qStart + i.val from hkp)]
+
+set_option maxHeartbeats 1600000 in
+/-- General masked `dot(p, v)` numerator row. -/
+theorem afc_acc_dot_block_maskedG (BLOCK_N : Nat) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mijT : Tile .real [BLOCK_M]) (pT : Tile .real [BLOCK_M, BLOCK_N])
+    (vtile : Tile .real [BLOCK_N, BLOCK_DMODEL]) (vval : Fin BLOCK_N → ℝ)
+    (hMc1bot : afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ ≠ ⊥)
+    (hsent : ∀ jL : Fin BLOCK_N, qkSentT.data (i, jL, PUnit.unit)
+        = if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩)
+    (hpT : ∀ jL : Fin BLOCK_N, pT.data (i, jL, PUnit.unit)
+        = if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ))
+    (hv : ∀ jL : Fin BLOCK_N, vtile.data (jL, d, PUnit.unit) = some (vval jL))
+    (hvval : ∀ jL : Fin BLOCK_N, vval jL
+        = (afcKVG qT kT vT keyScale i d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).2) :
+    (Tile.dot [] pT vtile).data (i, d, PUnit.unit)
+      = some ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map
+          (fun p => pow2 (p.1 - (afcRunningMaxG qT kT vT keyScale
+            qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩).unbotD 0) * p.2)).sum := by
+  set Mc1 := afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ with hMc1
+  have hpcell : ∀ jL : Fin BLOCK_N, pT.data (i, jL, PUnit.unit)
+      = some (if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+          pow2 ((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 - Mc1.unbotD 0)
+          else 0) := by
+    intro jL
+    have hsentR : qkSentT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ) := by
+      rw [hsent jL]; by_cases h : qStart + i.val ≥ c * BLOCK_N + jL.val <;> simp [h]
+    have hpTR : pT.data (i, jL, PUnit.unit)
+        = if decide (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ) := by
+      rw [hpT jL]; by_cases h : qStart + i.val ≥ c * BLOCK_N + jL.val
+      · rw [if_pos h, if_pos (decide_eq_true h)]
+      · rw [if_neg h, if_neg (by simp [h])]
+    have := afc_pmT_cell_maskedG qT kT vT keyScale BLOCK_N hBD qStart c hc1 i jL Mc1 qkSentT mijT pT
+      (decide (qStart + i.val ≥ c * BLOCK_N + jL.val)) (by rfl) hsentR (by rw [hmij]) (fun _ => hMc1bot) hpTR
+    rw [this]
+  rw [Tile.dot_nil_data]
+  have hterm : ∀ jL : Fin BLOCK_N,
+      Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            pow2 ((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 - Mc1.unbotD 0)
+              * vval jL
+            else 0) := by
+    intro jL
+    rw [hpcell jL, hv jL]
+    simp only [Option.map₂, Option.bind, Option.map, decide_eq_true_eq]
+    refine congrArg some ?_
+    by_cases h : qStart + i.val ≥ c * BLOCK_N + jL.val
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h]; ring
+  rw [show (@Finset.sum (Fin BLOCK_N) (WithBot ℝ) _ Finset.univ
+        (fun jL => Option.map₂ (· * ·) (pT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))))
+      = @Finset.sum (Fin BLOCK_N) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+              pow2 ((afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 - Mc1.unbotD 0)
+                * vval jL else 0) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hterm jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [afcBlockG_map_sum qT kT vT keyScale qStart BLOCK_N c i d hc1
+      (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : (c * BLOCK_N + jL.val) ≤ qStart + i.val
+  · rw [if_pos (show qStart + i.val ≥ c * BLOCK_N + jL.val from by omega),
+        if_pos (show c * BLOCK_N + jL.val ≤ qStart + i.val from hkp)]
+    rw [hvval jL,
+      show (afcKVG qT kT vT keyScale i ⟨0, hBD⟩ ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1
+          = (afcKVG qT kT vT keyScale i d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 from by
+        simp only [afcKVG]]
+  · rw [if_neg (show ¬ qStart + i.val ≥ c * BLOCK_N + jL.val from by omega),
+        if_neg (show ¬ c * BLOCK_N + jL.val ≤ qStart + i.val from hkp)]
+
+/-- General seed-1 vs seed-0 carry cancellation. -/
+theorem afcStateBot1G_cancel (qStart BLOCK_N c : Nat) (hBN : 0 < BLOCK_N) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) (Mc1 : WithBot ℝ)
+    (hSEQ : 0 < SEQ) :
+    let m := (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).1
+    let α := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+    (afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d).2.1 * α
+        = (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.1 * α
+      ∧ (afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2 * α
+        = (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2 * α := by
+  intro m α
+  by_cases hc0 : c = 0
+  · subst hc0
+    have hmbot : m = ⊥ := by
+      show (afcStateBotG qT kT vT keyScale qStart (0 * BLOCK_N) i d).1 = ⊥
+      rw [afcStateBotG_fst_eq_runningMax, Nat.zero_mul, afcRunningMaxG_zero]
+    have hα0 : α = 0 := by
+      show (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 = 0
+      rw [hmbot, WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    rw [hα0]; simp
+  · have hne : afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i d ≠ ⊥ :=
+      afcRunningMaxG_ne_bot qT kT vT keyScale qStart (c * BLOCK_N)
+        (by calc 1 ≤ c := by omega
+              _ ≤ c * BLOCK_N := Nat.le_mul_of_pos_right c hBN) hSEQ i d
+    rw [afcStateBot1G_eq_afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d hne]
+    exact ⟨rfl, rfl⟩
+
+/-- General empty-window sum-zero. -/
+theorem afcKeysUptoG_sum_zero_of_bot (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hbot : afcRunningMaxG qT kT vT keyScale qStart hi i d = ⊥) (h : ℝ × ℝ → ℝ) :
+    ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map h).sum = 0 := by
+  rw [show afcKeysUptoG qT kT vT keyScale qStart hi i d = [] from ?_, List.map_nil, List.sum_nil]
+  by_contra hne
+  obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+  have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+      (afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+    List.mem_map_of_mem hp
+  have := afc_mem_le_foldr_sup _ _ hmem
+  rw [← afcRunningMaxG, hbot] at this
+  exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+
+/-- General denom anchor. -/
+theorem afc_denom_anchorG (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.1
+      = ((afcStateBotG qT kT vT keyScale qStart hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1)).sum) := by
+  rw [afcStateBotG_snd_fst, afcStateBotG_fst_eq_runningMax]
+
+/-- General acc anchor. -/
+theorem afc_acc_anchorG (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.2
+      = ((afcStateBotG qT kT vT keyScale qStart hi i d).1.elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  rw [afcStateBotG_snd_snd, afcStateBotG_fst_eq_runningMax]
+
 /-- **General ⊥-seeded full-window state reads off the genuine closed-form spec.** -/
 theorem afcStateBotG_full_eq_spec
     (s : BlockState) (Q K V : RegionName)
