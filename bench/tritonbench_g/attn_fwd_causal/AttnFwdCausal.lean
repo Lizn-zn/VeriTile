@@ -4877,6 +4877,239 @@ theorem attnFwdCausalOutSpecG_eq_streaming
       (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
       keyScale (fun i j => causalKeep (qStartAFCG s BLOCK_M) i j) i d
 
+/-! ### General ⊥-seed online-softmax foundation math
+
+Mirrors the pinned `afcKV`/`afcKeysUpto`/`afcBlock`/`afcRunningMax`/`afcStateBot`/
+`afcStateBot1` over symbolic `BLOCK_M`(query rows)/`BLOCK_DMODEL`(channels)/
+`SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
+(`osStepBot`, `osStepBot_foldl_consistent`, `osStepBot_block_eq`,
+`osStepBot_bot_seed_indep`, `afc_filterMap_window_split`, `afc_filterMap_foldr_sup`,
+`afc_mem_le_foldr_sup`, `afc_filterMap_finRange_sum`, `afc_foldl_sup_bot_eq_foldr`). -/
+
+variable {BLOCK_M BLOCK_DMODEL SEQ : Nat}
+
+/-- General `(score, value)` pair the kernel streams for output `(i, d)` at key `j`. -/
+noncomputable def afcKVG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) (j : Fin SEQ) : ℝ × ℝ :=
+  (keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)),
+   vT (j, d, PUnit.unit))
+
+/-- General causal per-row key list over `[0, hi)`: keys `j < hi` with `j ≤ qStart + i`. -/
+noncomputable def afcKeysUptoG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) : List (ℝ × ℝ) :=
+  (List.finRange SEQ).filterMap (fun j : Fin SEQ =>
+    if j.val < hi ∧ j.val ≤ qStart + i.val then
+      some (afcKVG qT kT vT keyScale i d j)
+    else none)
+
+/-- General block-`c` per-row key list (`c·BLOCK_N ≤ j < (c+1)·BLOCK_N`, causal). -/
+noncomputable def afcBlockG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) : List (ℝ × ℝ) :=
+  (List.finRange SEQ).filterMap (fun j : Fin SEQ =>
+    if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val then
+      some (afcKVG qT kT vT keyScale i d j)
+    else none)
+
+/-- General ⊥-seeded running max of the streamed key prefix `[0, hi)`. -/
+noncomputable def afcRunningMaxG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) : WithBot ℝ :=
+  ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map
+    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+/-- General ⊥-seeded running `(max, denom, acc)` after streaming `[0, hi)` (seed-`0`). -/
+noncomputable def afcStateBotG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) : WithBot ℝ × ℝ × ℝ :=
+  (afcKeysUptoG qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 0, 0)
+
+/-- General ⊥-seeded running state from the kernel's `l_i = 1` seed. -/
+noncomputable def afcStateBot1G
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) : WithBot ℝ × ℝ × ℝ :=
+  (afcKeysUptoG qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 1, 0)
+
+variable (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+  (keyScale : Fin SEQ → ℝ)
+
+/-- General: ⊥-seeded running max of `afcStateBotG` is `afcRunningMaxG`. -/
+theorem afcStateBotG_fst_eq_runningMax (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).1
+      = afcRunningMaxG qT kT vT keyScale qStart hi i d := by
+  rw [afcStateBotG, afcStateBot_fst, afcRunningMaxG, afc_foldl_sup_bot_eq_foldr]
+
+/-- General ⊥-seeded denominator. -/
+theorem afcStateBotG_snd_fst (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.1
+      = ((afcRunningMaxG qT kT vT keyScale qStart hi i d).elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1)).sum) := by
+  rw [afcStateBotG]
+  rw [(osStepBot_foldl_consistent (afcKeysUptoG qT kT vT keyScale qStart hi i d) ⊥ 0 0 0 0
+    (by simp) (by simp) (by simp) (by simp)).1]
+  rw [show ((afcKeysUptoG qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 0, 0)).1
+        = afcRunningMaxG qT kT vT keyScale qStart hi i d from by
+    rw [afcStateBot_fst, afcRunningMaxG, afc_foldl_sup_bot_eq_foldr]]
+
+/-- General ⊥-seeded accumulator. -/
+theorem afcStateBotG_snd_snd (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.2
+      = ((afcRunningMaxG qT kT vT keyScale qStart hi i d).elim 0 (fun r => pow2 (-r)))
+        * (0 + ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  rw [afcStateBotG]
+  rw [(osStepBot_foldl_consistent (afcKeysUptoG qT kT vT keyScale qStart hi i d) ⊥ 0 0 0 0
+    (by simp) (by simp) (by simp) (by simp)).2]
+  rw [show ((afcKeysUptoG qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 0, 0)).1
+        = afcRunningMaxG qT kT vT keyScale qStart hi i d from by
+    rw [afcStateBot_fst, afcRunningMaxG, afc_foldl_sup_bot_eq_foldr]]
+
+/-- General ⊥-seeded ratio (max factor cancels) on a nonempty window. -/
+theorem afcStateBotG_ratio_eq (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hne : afcRunningMaxG qT kT vT keyScale qStart hi i d ≠ ⊥) :
+    (afcStateBotG qT kT vT keyScale qStart hi i d).2.2
+        / (afcStateBotG qT kT vT keyScale qStart hi i d).2.1
+      = ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum
+        / ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1)).sum := by
+  rw [afcStateBotG_snd_fst, afcStateBotG_snd_snd, zero_add, zero_add]
+  cases hM : afcRunningMaxG qT kT vT keyScale qStart hi i d with
+  | bot => exact absurd hM hne
+  | coe r =>
+    have hκ : ((r : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-r) := rfl
+    rw [hκ]
+    have hpos : pow2 (-r) ≠ 0 := ne_of_gt (pow2_pos _)
+    rw [mul_div_mul_left _ _ hpos]
+
+/-- General ⊥-seeded state at the empty window is `(⊥, 0, 0)`. -/
+theorem afcStateBotG_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcStateBotG qT kT vT keyScale qStart 0 i d = (⊥, 0, 0) := by
+  unfold afcStateBotG afcKeysUptoG
+  rw [show (List.finRange SEQ).filterMap
+        (fun j : Fin SEQ => if j.val < 0 ∧ j.val ≤ qStart + i.val
+          then some (afcKVG qT kT vT keyScale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- General ⊥-seeded running max at the empty window is `⊥`. -/
+theorem afcRunningMaxG_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcRunningMaxG qT kT vT keyScale qStart 0 i d = ⊥ := by
+  unfold afcRunningMaxG afcKeysUptoG
+  rw [show (List.finRange SEQ).filterMap
+        (fun j : Fin SEQ => if j.val < 0 ∧ j.val ≤ qStart + i.val
+          then some (afcKVG qT kT vT keyScale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- General window split (`hi = c·BLOCK_N`). -/
+theorem afcKeysUptoG_succ (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcKeysUptoG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d
+      = afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i d
+        ++ afcBlockG qT kT vT keyScale qStart BLOCK_N c i d := by
+  unfold afcKeysUptoG afcBlockG
+  rw [show (List.finRange SEQ).filterMap
+        (fun j : Fin SEQ => if j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val
+          then some (afcKVG qT kT vT keyScale i d j) else none)
+      = (List.finRange SEQ).filterMap
+        (fun j : Fin SEQ => if j.val ≤ qStart + i.val ∧ j.val < (c + 1) * BLOCK_N
+          then some (afcKVG qT kT vT keyScale i d j) else none)
+      from List.filterMap_congr (fun j _ => by simp only [and_comm])]
+  rw [afc_filterMap_window_split (List.finRange SEQ) (List.pairwise_lt_finRange SEQ)
+    (c * BLOCK_N) ((c + 1) * BLOCK_N) (fun j => j.val ≤ qStart + i.val)
+    (fun j => afcKVG qT kT vT keyScale i d j) (by nlinarith [Nat.zero_le BLOCK_N])]
+  refine congrArg₂ (· ++ ·) ?_ ?_
+  · apply List.filterMap_congr; intro j _; simp only [and_comm]
+  · apply List.filterMap_congr; intro j _
+    by_cases h1 : c * BLOCK_N ≤ j.val <;> by_cases h2 : j.val < (c + 1) * BLOCK_N <;>
+      by_cases h3 : j.val ≤ qStart + i.val <;> simp [h1, h2, h3, and_assoc]
+
+/-- General one-block advance of `afcStateBotG`. -/
+theorem afcStateBotG_succ (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d
+      = (afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).foldl osStepBot
+          (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d) := by
+  unfold afcStateBotG
+  rw [afcKeysUptoG_succ, List.foldl_append]
+
+/-- General running max one-block advance. -/
+theorem afcRunningMaxG_succ (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d
+      = afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i d
+        ⊔ ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map
+            (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  unfold afcRunningMaxG
+  rw [afcKeysUptoG_succ, List.map_append]
+  induction (afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i d) with
+  | nil => simp
+  | cons a t ih => simp only [List.map_cons, List.foldr_cons, List.cons_append, ih, max_assoc]
+
+/-- General `afcRunningMaxG` is channel-independent. -/
+theorem afcRunningMaxG_eq (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin BLOCK_DMODEL) :
+    afcRunningMaxG qT kT vT keyScale qStart hi i d
+      = afcRunningMaxG qT kT vT keyScale qStart hi i d' := by
+  unfold afcRunningMaxG afcKeysUptoG
+  congr 1
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val < hi ∧ j.val ≤ qStart + i.val <;> simp [afcKVG, hj]
+
+/-- General `afcRunningMaxG` over a nonempty causal window ≠ ⊥ (key 0 always kept). -/
+theorem afcRunningMaxG_ne_bot (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 < SEQ)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcRunningMaxG qT kT vT keyScale qStart hi i d ≠ ⊥ := by
+  unfold afcRunningMaxG afcKeysUptoG
+  set sc0 : ℝ := keyScale (⟨0, hSEQ⟩ : Fin SEQ) *
+      Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) *
+        kT (⟨0, hSEQ⟩, e, PUnit.unit)) with hsc0
+  have hmem : ((sc0 : ℝ) : WithBot ℝ) ∈
+      ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
+        if j.val < hi ∧ j.val ≤ qStart + i.val
+        then some (afcKVG qT kT vT keyScale i d j) else none)).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    rw [List.mem_map]
+    refine ⟨afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, hSEQ⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
+  have hle := afc_mem_le_foldr_sup _ _ hmem
+  intro hbot
+  exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
+
+/-- General seed-1 = seed-0 on nonempty windows. -/
+theorem afcStateBot1G_eq_afcStateBotG (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hne : afcRunningMaxG qT kT vT keyScale qStart hi i d ≠ ⊥) :
+    afcStateBot1G qT kT vT keyScale qStart hi i d
+      = afcStateBotG qT kT vT keyScale qStart hi i d := by
+  have hxs : afcKeysUptoG qT kT vT keyScale qStart hi i d ≠ [] := by
+    intro h; apply hne; unfold afcRunningMaxG; rw [h]; rfl
+  unfold afcStateBot1G afcStateBotG
+  exact osStepBot_bot_seed_indep _ hxs 1 0 0 0
+
+/-- General seed-1 state at the empty window is `(⊥, 1, 0)`. -/
+theorem afcStateBot1G_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcStateBot1G qT kT vT keyScale qStart 0 i d = (⊥, 1, 0) := by
+  unfold afcStateBot1G afcKeysUptoG
+  rw [show (List.finRange SEQ).filterMap
+        (fun j : Fin SEQ => if j.val < 0 ∧ j.val ≤ qStart + i.val
+          then some (afcKVG qT kT vT keyScale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- General seed-1 one-block advance. -/
+theorem afcStateBot1G_succ (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    afcStateBot1G qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d
+      = (afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).foldl osStepBot
+          (afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d) := by
+  unfold afcStateBot1G
+  rw [afcKeysUptoG_succ, List.foldl_append]
+
+/-- General seed-1 running max is `afcRunningMaxG`. -/
+theorem afcStateBot1G_fst_eq_runningMax (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    (afcStateBot1G qT kT vT keyScale qStart hi i d).1
+      = afcRunningMaxG qT kT vT keyScale qStart hi i d := by
+  rw [afcStateBot1G, afcStateBot_fst, afcRunningMaxG, afc_foldl_sup_bot_eq_foldr]
+
 set_option maxRecDepth 8000 in
 /-- **General body split** — the lowered general AFC body decomposes as
 `take 22 ++ (forRange "start_n" 0 N_CTX BLOCK_N afcLoopBodyG :: drop 23)`. The
