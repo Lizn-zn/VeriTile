@@ -6819,4 +6819,226 @@ theorem attentionFwdTriton3Case3OutSpecG_eq_streaming
       (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
       (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) i d
 
+/-! ## Dimension-general ⊥-seeded online-softmax math foundation
+
+A parallel, dimension-general copy of `aft3KeysUpto`/`aft3RunningMax`/
+`aft3StateBot`/`aft3Block`/`aft3StateBot1` and their lemmas, parameterized over
+`BM` (rows, `Fin BM`), `ND` (head dim, `Fin ND`), `NC` (keys, `Fin NC`), `BN`
+(block stride). The generic ⊥-seed core lemmas (`aft3OsStepBot*`,
+`aft3_foldl_sup_bot_eq_foldr`, `aft3_filterMap_window_split`, `aft3StateBot_fst`)
+operate over arbitrary lists, so they are reused verbatim. The block-split holds
+for any `BN` (`c·BN ≤ (c+1)·BN`); the full-window lemma needs `hi = NC`. -/
+
+/-- General windowed prefix key list `[0, hi)`. -/
+noncomputable def aft3KeysUptoG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    List (ℝ × ℝ) :=
+  (List.finRange NC).filterMap (fun j : Fin NC =>
+    if j.val < hi ∧ keep i j then
+      some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+              qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)),
+            vT (j, d, PUnit.unit))
+    else none)
+
+/-- General ⊥-seeded running max over the windowed prefix. -/
+noncomputable def aft3RunningMaxG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    WithBot ℝ :=
+  ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map
+    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+/-- General ⊥-seeded running `(max, denom, acc)` after the windowed prefix `[0, hi)`. -/
+noncomputable def aft3StateBotG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    WithBot ℝ × ℝ × ℝ :=
+  (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (⊥, 0, 0)
+
+/-- General block `c` per-row key list: kept keys with `c·BN ≤ j < (c+1)·BN`. -/
+noncomputable def aft3BlockG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (BN c : Nat) (i : Fin BM) (d : Fin ND) :
+    List (ℝ × ℝ) :=
+  (List.finRange NC).filterMap (fun j : Fin NC =>
+    if c * BN ≤ j.val ∧ j.val < (c + 1) * BN ∧ keep i j then
+      some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+              qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)),
+            vT (j, d, PUnit.unit))
+    else none)
+
+theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateBotG qT kT vT keyScale keep hi i d).1
+      = aft3RunningMaxG qT kT vT keyScale keep hi i d := by
+  rw [aft3StateBotG, aft3StateBot_fst, aft3RunningMaxG, aft3_foldl_sup_bot_eq_foldr]
+
+theorem aft3StateBotG_zero {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
+    aft3StateBotG qT kT vT keyScale keep 0 i d = (⊥, 0, 0) := by
+  unfold aft3StateBotG aft3KeysUptoG
+  rw [show (List.finRange NC).filterMap
+        (fun j : Fin NC => if j.val < 0 ∧ keep i j
+          then some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
+          else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+theorem aft3RunningMaxG_zero {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
+    aft3RunningMaxG qT kT vT keyScale keep 0 i d = ⊥ := by
+  unfold aft3RunningMaxG aft3KeysUptoG
+  rw [show (List.finRange NC).filterMap
+        (fun j : Fin NC => if j.val < 0 ∧ keep i j
+          then some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
+          else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+theorem aft3KeysUptoG_succ {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (BN c : Nat) (i : Fin BM) (d : Fin ND) :
+    aft3KeysUptoG qT kT vT keyScale keep ((c + 1) * BN) i d
+      = aft3KeysUptoG qT kT vT keyScale keep (c * BN) i d
+        ++ aft3BlockG qT kT vT keyScale keep BN c i d := by
+  unfold aft3KeysUptoG aft3BlockG
+  rw [show (List.finRange NC).filterMap
+        (fun j : Fin NC => if j.val < (c + 1) * BN ∧ keep i j then
+          some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+              qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit)) else none)
+      = (List.finRange NC).filterMap
+        (fun j : Fin NC => if keep i j ∧ j.val < (c + 1) * BN then
+          some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+              qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit)) else none)
+      from List.filterMap_congr (fun j _ => by simp only [and_comm])]
+  rw [aft3_filterMap_window_split (List.finRange NC) (List.pairwise_lt_finRange NC)
+    (c * BN) ((c + 1) * BN) (fun j => keep i j)
+    (fun j => (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+        qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit)))
+    (by nlinarith [Nat.zero_le BN])]
+  refine congrArg₂ (· ++ ·) ?_ ?_
+  · apply List.filterMap_congr; intro j _; simp only [and_comm]
+  · apply List.filterMap_congr; intro j _
+    by_cases h1 : c * BN ≤ j.val <;> by_cases h2 : j.val < (c + 1) * BN <;>
+      by_cases h3 : keep i j <;> simp [h1, h2, h3, and_assoc]
+
+theorem aft3StateBotG_succ {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (BN c : Nat) (i : Fin BM) (d : Fin ND) :
+    aft3StateBotG qT kT vT keyScale keep ((c + 1) * BN) i d
+      = (aft3BlockG qT kT vT keyScale keep BN c i d).foldl aft3OsStepBot
+          (aft3StateBotG qT kT vT keyScale keep (c * BN) i d) := by
+  unfold aft3StateBotG
+  rw [aft3KeysUptoG_succ, List.foldl_append]
+
+theorem aft3KeysUptoG_full {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
+    aft3KeysUptoG qT kT vT keyScale keep NC i d
+      = attnKeyListPred qT kT vT keyScale keep i d := by
+  unfold aft3KeysUptoG VeriTile.Triton.attnKeyListPred
+  apply List.filterMap_congr
+  intro j _
+  simp only [j.isLt, true_and]
+
+theorem aft3StateBotG_snd_fst {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateBotG qT kT vT keyScale keep hi i d).2.1
+      = ((aft3RunningMaxG qT kT vT keyScale keep hi i d).elim 0 (fun r => pow2 (-r)))
+        * ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1)).sum := by
+  have h := (aft3OsStepBot_foldl_consistent (aft3KeysUptoG qT kT vT keyScale keep hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).1
+  rw [aft3StateBotG]
+  rw [show (List.foldl aft3OsStepBot (⊥, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).2.1
+        = _ from h]
+  rw [show (List.foldl aft3OsStepBot (⊥, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).1
+        = aft3RunningMaxG qT kT vT keyScale keep hi i d from by
+    rw [aft3StateBot_fst, aft3RunningMaxG, aft3_foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+theorem aft3StateBotG_snd_snd {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateBotG qT kT vT keyScale keep hi i d).2.2
+      = ((aft3RunningMaxG qT kT vT keyScale keep hi i d).elim 0 (fun r => pow2 (-r)))
+        * ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1 * p.2)).sum := by
+  have h := (aft3OsStepBot_foldl_consistent (aft3KeysUptoG qT kT vT keyScale keep hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).2
+  rw [aft3StateBotG]
+  rw [show (List.foldl aft3OsStepBot (⊥, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).2.2
+        = _ from h]
+  rw [show (List.foldl aft3OsStepBot (⊥, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).1
+        = aft3RunningMaxG qT kT vT keyScale keep hi i d from by
+    rw [aft3StateBot_fst, aft3RunningMaxG, aft3_foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+theorem aft3StateBotG_ratio_eq {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND)
+    (hne : aft3RunningMaxG qT kT vT keyScale keep hi i d ≠ ⊥) :
+    (aft3StateBotG qT kT vT keyScale keep hi i d).2.2
+        / (aft3StateBotG qT kT vT keyScale keep hi i d).2.1
+      = (let st := (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [aft3StateBotG_snd_fst, aft3StateBotG_snd_snd]
+  simp only
+  have hcL := (VeriTile.Triton.osStep_foldl_consistent
+    (aft3KeysUptoG qT kT vT keyScale keep hi i d) 0 0 0 0 0 (by simp) (by simp)).1
+  have hcT := (VeriTile.Triton.osStep_foldl_consistent
+    (aft3KeysUptoG qT kT vT keyScale keep hi i d) 0 0 0 0 0 (by simp) (by simp)).2
+  rw [show (List.foldl osStep (0, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).2.1
+        = _ from hcL,
+      show (List.foldl osStep (0, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).2.2
+        = _ from hcT]
+  cases hM : aft3RunningMaxG qT kT vT keyScale keep hi i d with
+  | bot => exact absurd hM hne
+  | coe r =>
+    rw [show ((↑r : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-r) from rfl]
+    simp only [zero_add]
+    rw [mul_div_mul_left _ _ (ne_of_gt (pow2_pos _)),
+        mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
+
+/-- General ⊥-seeded running state from the kernel's `l_i = 1` seed. -/
+noncomputable def aft3StateBot1G {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    WithBot ℝ × ℝ × ℝ :=
+  (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (⊥, 1, 0)
+
+theorem aft3StateBot1G_eq_aft3StateBotG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND)
+    (hne : aft3RunningMaxG qT kT vT keyScale keep hi i d ≠ ⊥) :
+    aft3StateBot1G qT kT vT keyScale keep hi i d
+      = aft3StateBotG qT kT vT keyScale keep hi i d := by
+  have hxs : aft3KeysUptoG qT kT vT keyScale keep hi i d ≠ [] := by
+    intro h
+    apply hne
+    unfold aft3RunningMaxG
+    rw [h]; rfl
+  unfold aft3StateBot1G aft3StateBotG
+  exact aft3OsStepBot_bot_seed_indep _ hxs 1 0 0 0
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
