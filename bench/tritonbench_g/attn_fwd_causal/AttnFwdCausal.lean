@@ -4625,47 +4625,6 @@ theorem attn_fwd_causal_surface_genuine_compute_correct
   obtain rfl : sF = s' := Option.some.inj hExec
   exact hO idx hActive
 
-/-- **Python test-shape genuine output summary for `attn_fwd_causal.py`.**
-
-The Python wrapper fixes `STAGE = 1`; this summary establishes that the full
-causal surface lowers to the algorithm layer, and that its masked `Out` writeback
-realizes the **genuine closed-form causal attention** `attnFwdCausalOutSpec`
-(base-2 / `exp2`, per-key score scale, causal mask) at every active output lane —
-no longer a self-referential "executed kernel output" carrier. Side conditions:
-clean input (`undef = 0`) and the sentinel score bound `afcScoreBound` (every
-causally-kept key's coerced score exceeds the `-1e6` masking sentinel), both
-genuine preconditions of single-program correctness. -/
-theorem attn_fwd_causal_python_test_shape_output_summary
-    (Q K V QScale KScale Out : RegionName) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0)
-    (hsb : afcScoreBound (qTileAFCm s Q) (kTileAFC s K) (vTileAFCm s V)
-      (keyScaleAFC s QScale KScale) (qStartAFC s)) :
-    (∃ alg, (attn_fwd_causal_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 1).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_causal_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        attnFwdCausalOutSpec s Q K V (keyScaleAFC s QScale KScale) idx) := by
-  refine ⟨?_, ?_⟩
-  · exact attn_fwd_causal_surface_toAlgorithm_supported Q K V QScale KScale
-      Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-      65536 16384 128 1 2 4 128 128 128 64 128 96 1
-  · exact attn_fwd_causal_surface_genuine_compute_correct Q K V QScale KScale Out s hundef hsb
-
 /-! ## General (dimension-parameterized) genuine causal closed-form correctness
 
 This section removes the Python test-shape pin (`B = 2`, `H = 4`,
@@ -7962,6 +7921,73 @@ theorem attn_fwd_causal_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     exact hO idx hActive
+
+/-- **Python test-shape genuine output summary for `attn_fwd_causal.py`.**
+
+The Python wrapper fixes `STAGE = 1`; this summary establishes that the full
+causal surface lowers to the algorithm layer, and that its masked `Out` writeback
+realizes the **genuine closed-form causal attention** `attnFwdCausalOutSpec`
+(base-2 / `exp2`, per-key score scale, causal mask) at every active output lane —
+no longer a self-referential "executed kernel output" carrier. Side conditions:
+clean input (`undef = 0`) and the sentinel score bound `afcScoreBound` (every
+causally-kept key's coerced score exceeds the `-1e6` masking sentinel), both
+genuine preconditions of single-program correctness. -/
+theorem attn_fwd_causal_python_test_shape_output_summary
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hsb : afcScoreBound (qTileAFCm s Q) (kTileAFC s K) (vTileAFCm s V)
+      (keyScaleAFC s QScale KScale) (qStartAFC s)) :
+    (∃ alg, (attn_fwd_causal_surface Q K V QScale KScale Out
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      2 4 128 128 128 64 128 96 1).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_causal_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 128 96 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attnFwdCausalOutSpec s Q K V (keyScaleAFC s QScale KScale) idx) := by
+  -- This pinned test-shape summary is now a corollary of the dimension-general
+  -- theorem `attn_fwd_causal_output_summary_general`, instantiated at the Python
+  -- test shape (`Z=2`, `H=4`, `N_CTX=HEAD_DIM=BLOCK_M=BLOCK_DMODEL=128`,
+  -- `BLOCK_N=64`, `numKVBlocks=2`, `HEAD_ACTIVE=96`, `STAGE=1`, contiguous strides
+  -- `(65536,16384,128,1)`). At those concrete args the general masked tiles,
+  -- score-scale carrier, and closed-form spec all reduce defeq (`norm_num`) to the
+  -- pinned `attnFwdCausalOutSpec`/`keyScaleAFC`/`afcScoreBound` layer.
+  have hOutInj : Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s 4 65536 16384 128 1 128 idx) := by
+    have := afc_oBlockPtr_offset_injective
+      (s.pids 1 / 4 * 65536 + s.pids 1 % 4 * 16384) (s.pids 0)
+    intro a b hab
+    apply this
+    simpa only [outOffset, offZ, offH, mIndex, kIndex, Nat.mul_one, Nat.add_assoc] using hab
+  have hsbG : afcScoreBoundG
+      (qTileAFCmG s Q 65536 16384 4 128 128 128 128 96)
+      (kTileAFCG s K 65536 16384 4 128 (64 * 2) 128)
+      (vTileAFCmG s V 65536 16384 4 128 (64 * 2) 128 96)
+      (keyScaleAFCG s QScale KScale 128 128 64 2) (qStartAFCG s 128) := by
+    intro j i d
+    have h := hsb j i d
+    refine lt_of_lt_of_le h (le_of_eq ?_)
+    rfl
+  have hgen := attn_fwd_causal_output_summary_general Q K V QScale KScale Out s
+    65536 16384 4 128 128 128 64 128 96 1 2 2
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num)
+    hOutInj hundef hsbG
+  refine ⟨hgen.1, ?_⟩
+  have hR := hgen.2
+  convert hR using 2 with idx
 
 end General
 
