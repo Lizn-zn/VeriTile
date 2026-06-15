@@ -7041,4 +7041,154 @@ theorem aft3StateBot1G_eq_aft3StateBotG {BM ND NC : Nat}
   unfold aft3StateBot1G aft3StateBotG
   exact aft3OsStepBot_bot_seed_indep _ hxs 1 0 0 0
 
+/-- `aft3RunningMaxG` is independent of the channel index `d`. -/
+theorem aft3RunningMaxG_eq {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d d' : Fin ND) :
+    aft3RunningMaxG qT kT vT keyScale keep hi i d
+      = aft3RunningMaxG qT kT vT keyScale keep hi i d' := by
+  unfold aft3RunningMaxG aft3KeysUptoG
+  congr 1
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val < hi ∧ keep i j <;> simp [hj]
+
+theorem aft3StateBotG_snd_fst_indep {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d d' : Fin ND) :
+    (aft3StateBotG qT kT vT keyScale keep hi i d).2.1
+      = (aft3StateBotG qT kT vT keyScale keep hi i d').2.1 := by
+  rw [aft3StateBotG_snd_fst, aft3StateBotG_snd_fst,
+    aft3RunningMaxG_eq qT kT vT keyScale keep hi i d d']
+  congr 2
+  unfold aft3KeysUptoG
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases hj : j.val < hi ∧ keep i j <;> simp [hj]
+
+theorem aft3KeysUptoG_sum_zero_of_bot {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND)
+    (hbot : aft3RunningMaxG qT kT vT keyScale keep hi i d = ⊥) (h : ℝ × ℝ → ℝ) :
+    ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map h).sum = 0 := by
+  rw [show aft3KeysUptoG qT kT vT keyScale keep hi i d = [] from ?_, List.map_nil, List.sum_nil]
+  by_contra hne
+  obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+  have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+      (aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+    List.mem_map_of_mem hp
+  have := aft3_mem_le_foldr_sup _ _ hmem
+  rw [← aft3RunningMaxG, hbot] at this
+  exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+
+/-- General faithful kernel ⊥-carry state (seed-1 at window 0, seed-0 ⊥-state after). -/
+noncomputable def aft3StateBotKG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    WithBot ℝ × ℝ × ℝ :=
+  if hi = 0 then (⊥, 1, 0)
+  else aft3StateBotG qT kT vT keyScale keep hi i d
+
+theorem aft3StateBotKG_fst {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateBotKG qT kT vT keyScale keep hi i d).1
+      = aft3RunningMaxG qT kT vT keyScale keep hi i d := by
+  unfold aft3StateBotKG
+  split
+  · rename_i h; subst h; rw [aft3RunningMaxG_zero]
+  · rw [aft3StateBotG_fst_eq_runningMax]
+
+theorem aft3StateBotKG_cancel {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (BN c : Nat) (hBN : 0 < BN) (i : Fin BM) (d : Fin ND)
+    (Mc1 : WithBot ℝ) :
+    let m := (aft3StateBotG qT kT vT keyScale keep (c * BN) i d).1
+    let α := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+    (aft3StateBotKG qT kT vT keyScale keep (c * BN) i d).2.1 * α
+        = (aft3StateBotG qT kT vT keyScale keep (c * BN) i d).2.1 * α
+      ∧ (aft3StateBotKG qT kT vT keyScale keep (c * BN) i d).2.2 * α
+        = (aft3StateBotG qT kT vT keyScale keep (c * BN) i d).2.2 * α := by
+  intro m α
+  unfold aft3StateBotKG
+  by_cases hc0 : c = 0
+  · subst hc0
+    simp only [Nat.zero_mul, if_pos rfl]
+    have hmbot : m = ⊥ := by
+      show (aft3StateBotG qT kT vT keyScale keep (0 * BN) i d).1 = ⊥
+      rw [aft3StateBotG_fst_eq_runningMax, Nat.zero_mul, aft3RunningMaxG_zero]
+    have hα0 : α = 0 := by
+      show (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 = 0
+      rw [hmbot, WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+    rw [hα0]; simp
+  · have hne0 : c * BN ≠ 0 := Nat.mul_ne_zero hc0 hBN.ne'
+    rw [if_neg hne0]
+    exact ⟨rfl, rfl⟩
+
+theorem aft3StateBotKG_zero {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
+    aft3StateBotKG qT kT vT keyScale keep 0 i d
+      = aft3StateBot1G qT kT vT keyScale keep 0 i d := by
+  unfold aft3StateBotKG aft3StateBot1G aft3KeysUptoG
+  rw [if_pos rfl]
+  rw [show (List.finRange NC).filterMap
+        (fun j : Fin NC => if j.val < 0 ∧ keep i j
+          then some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
+          else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- **General empty-window `0/0` reconciliation** at the full window `hi = NC`. -/
+theorem aft3StateBotKG_full_eq_streaming {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)] (hNC : 0 < NC)
+    (ir : Fin BM) (dd : Fin ND) (d0 : Fin ND) :
+    ((aft3StateBotKG qT kT vT keyScale keep NC ir dd).2.2)
+        / ((aft3StateBotKG qT kT vT keyScale keep NC ir d0).2.1)
+      = (let st := (aft3KeysUptoG qT kT vT keyScale keep NC ir dd).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  have hNC0 : NC ≠ 0 := hNC.ne'
+  have hK : aft3StateBotKG qT kT vT keyScale keep NC ir dd
+      = aft3StateBotG qT kT vT keyScale keep NC ir dd := by
+    unfold aft3StateBotKG; rw [if_neg hNC0]
+  have hK0 : aft3StateBotKG qT kT vT keyScale keep NC ir d0
+      = aft3StateBotG qT kT vT keyScale keep NC ir d0 := by
+    unfold aft3StateBotKG; rw [if_neg hNC0]
+  rw [hK, hK0]
+  by_cases hne : aft3RunningMaxG qT kT vT keyScale keep NC ir dd = ⊥
+  · have hden : (aft3StateBotG qT kT vT keyScale keep NC ir d0).2.1 = 0 := by
+      rw [aft3StateBotG_snd_fst]
+      rw [aft3KeysUptoG_sum_zero_of_bot qT kT vT keyScale keep NC ir d0
+        (by rw [aft3RunningMaxG_eq qT kT vT keyScale keep NC ir d0 dd]; exact hne) _,
+        mul_zero]
+    have hnum : (aft3StateBotG qT kT vT keyScale keep NC ir dd).2.2 = 0 := by
+      rw [aft3StateBotG_snd_snd]
+      rw [aft3KeysUptoG_sum_zero_of_bot qT kT vT keyScale keep NC ir dd hne _, mul_zero]
+    have hkeys : aft3KeysUptoG qT kT vT keyScale keep NC ir dd = [] := by
+      by_contra hc
+      obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hc
+      have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
+          (aft3KeysUptoG qT kT vT keyScale keep NC ir dd).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
+        List.mem_map_of_mem hp
+      have := aft3_mem_le_foldr_sup _ _ hmem
+      rw [← aft3RunningMaxG, hne] at this
+      exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+    rw [hnum, hden, hkeys]; simp
+  · rw [show (aft3StateBotG qT kT vT keyScale keep NC ir d0).2.1
+          = (aft3StateBotG qT kT vT keyScale keep NC ir dd).2.1 from
+        aft3StateBotG_snd_fst_indep qT kT vT keyScale keep NC ir d0 dd]
+    exact aft3StateBotG_ratio_eq qT kT vT keyScale keep NC ir dd hne
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
