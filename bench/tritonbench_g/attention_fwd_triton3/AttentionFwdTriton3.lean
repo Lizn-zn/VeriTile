@@ -10793,4 +10793,68 @@ theorem aft3_attn_step3G (Q K V M Out L : RegionName) (s0 : BlockState)
   · exact hundefF
   · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
 
+/-! ## General full kernel execution (cases 1/2/3) -/
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General full kernel execution (case 1, sliding window).** -/
+theorem aft3_attn_exec1G
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgKernel.body s = some sF
+      ∧ (∀ idx : TileIndex [BM, ND],
+          sF.readMem Out ((s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son)
+            = attentionFwdTriton3Case1OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx)
+      ∧ (∀ i : Fin BM,
+          sF.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))
+            = (WithBot.realAdd
+                (aft3RunningMaxG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) NKV_CTX i ⟨0, hND⟩)
+                (WithBot.realLog2 (((aft3StateBotKG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) NKV_CTX i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+  set base := s.pids 1 / H * sqz + s.pids 1 % H * sqh with hbase
+  set sc := sm_scale * 1.4426950408889634 with hsc
+  set kp : Fin BM → Fin NKV_CTX → Prop := fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j with hkp
+  rw [aft3_body_splitG]
+  obtain ⟨sp, hpre, hinv0⟩ :=
+    aft3PreLoop_evalG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hH hHKV hskz hskh hsvz hsvh hsoz hsoh kp hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+      (body := aft3LoopBodyG sm_scale off size BM ND BN)
+      (P := fun i st => attnInvariantKG Q K V M Out L s base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc kp i st)
+      (s_init := sp)
+      hBN.ne'
+      (attnInvariant_zero_to_KG Q K V M Out L s base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc kp sp hinv0)
+      (fun i st hi hP => aft3_attn_step1G Q K V M Out L s base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX off size hND hBM hBN hBNdvd sc i st hi
+        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+  rw [stepStmts.cons_some hloop]
+  have hfinal : final = NKV_CTX := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    rcases Nat.lt_or_ge final NKV_CTX with h | h
+    · exact absurd h (by simpa using hfin)
+    · exact Nat.le_antisymm hle h
+  subst final
+  obtain ⟨sF, hpost, hO, hM⟩ :=
+    aft3PostLoop_eval_KG Q K V M Out L s sL base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc hMO kp hinjO hinjM hinvL
+  refine ⟨sF, hpost, ?_, hM⟩
+  intro idx
+  obtain ⟨ir, id, ⟨⟩⟩ := idx
+  rw [hO (ir, id, PUnit.unit)]
+  rw [aft3StateBotKG_full_eq_streaming (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NKV_CTX ND skn skk)
+    (vTile3G s V base NKV_CTX ND svk svn) (keyScale3G sc NKV_CTX) kp hNC ir id ⟨0, hND⟩]
+  rw [attentionFwdTriton3Case1OutSpecG_eq_streaming s Q K V base BM ND NKV_CTX sqm sqk skn skk svk svn sc BN off size ir id]
+  rw [aft3KeysUptoG_full (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NKV_CTX ND skn skk)
+    (vTile3G s V base NKV_CTX ND svk svn) (keyScale3G sc NKV_CTX) kp ir id]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
