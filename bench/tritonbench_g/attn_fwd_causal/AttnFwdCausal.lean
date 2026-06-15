@@ -7845,6 +7845,61 @@ theorem afcPostLoopG_eval
   · rw [if_neg hk, if_neg (fun h => hk (hactiveP.mp h)), hs2]
     simp only [BlockState.readMem, BlockState.setReg_mem]
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General full kernel execution (AFC, causal).** The lowered general AFC surface
+body (contiguous symbolic layout) steps a clean, score-bounded state through
+preLoop + the `forRange` streaming loop (`forRange_inv` with `afcInvariantG`,
+advanced by `afc_attn_stepG`) + postLoop, leaving the `Out` writeback at every
+active lane equal to the genuine causal closed form `attnFwdCausalOutSpecG`. -/
+theorem afc_exec_generalG
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z numKVBlocks : Nat)
+    (hBD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M)
+    (hN : N_CTX = BLOCK_N * numKVBlocks) (hnum : 0 < numKVBlocks)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hsb : afcScoreBoundG
+      (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+      (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+      (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+      (keyScaleAFCG s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) (qStartAFCG s BLOCK_M)) :
+    ∃ sF, stepStmts (attn_fwd_causal_surface Q K V QScale KScale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body s = some sF
+      ∧ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          active s N_CTX HEAD_ACTIVE BLOCK_M idx →
+            sF.readMem Out (outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)
+              = attnFwdCausalOutSpecG s Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks (keyScaleAFCG s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) idx := by
+  set keyScale := keyScaleAFCG s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks with hkeyScale
+  rw [afc_body_splitG, afcPreLoopG_check, afcPostLoopG_check]
+  obtain ⟨sp, hpre, hinv0⟩ :=
+    afcPreLoopG_invariant s Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hN hBN hBD keyScale hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := N_CTX) (step := BLOCK_N)
+      (body := AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+      (P := fun i st => afcInvariantG Q K V QScale KScale Out s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale hBD i st)
+      (s_init := sp)
+      (by omega)
+      hinv0
+      (fun i st hi hP =>
+        afc_attn_stepG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hBM hBD hN s i st hi
+          (by simp only [afcInvariantG] at hP; exact hP.2.1) hsb hP)
+  rw [stepStmts.cons_some hloop]
+  have hfinal : final = N_CTX := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  rw [hfinal] at hinvL
+  obtain ⟨sF, hpost, hO⟩ :=
+    afcPostLoopG_eval Q K V QScale KScale Out s sL stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBD hN hBN hnum keyScale hOutInj hinvL
+  refine ⟨sF, hpost, ?_⟩
+  intro idx hact
+  rw [hO idx, if_pos hact]
+
 end General
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
