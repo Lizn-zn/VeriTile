@@ -4793,6 +4793,90 @@ section General
 
 open VeriTile.Triton
 
+/-! ### General spec layer (genuine causal closed form over symbolic dims) -/
+
+/-- General per-plane base offset: `off_z·stride_qz + off_h·stride_qh` with
+`off_z = pids1 / H`, `off_h = pids1 % H`. -/
+def baseOffsetAFCG (s : BlockState) (stride_qz stride_qh H : Nat) : Nat :=
+  s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh
+
+/-- General query tile: row `i` = global query `pids0·BLOCK_M + i`, head lane `e`
+(`stride_qm = HEAD_DIM`, `stride_qk = 1`). -/
+noncomputable def qTileAFCG (s : BlockState) (Q : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL : Nat) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun (i, e, _) => s.readMem Q (baseOffsetAFCG s stride_qz stride_qh H
+    + (s.pids 0 * BLOCK_M + i.val) * HEAD_DIM + e.val)
+
+/-- General key tile: row `j` (global key), head lane `e` (`K[base + j·HEAD_DIM + e]`). -/
+noncomputable def kTileAFCG (s : BlockState) (K : RegionName)
+    (stride_qz stride_qh H HEAD_DIM SEQ BLOCK_DMODEL : Nat) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun (j, e, _) => s.readMem K (baseOffsetAFCG s stride_qz stride_qh H + j.val * HEAD_DIM + e.val)
+
+/-- General value tile: row `j` (global key), head lane `d` (`V[base + j·HEAD_DIM + d]`). -/
+noncomputable def vTileAFCG (s : BlockState) (V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM SEQ BLOCK_DMODEL : Nat) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun (j, d, _) => s.readMem V (baseOffsetAFCG s stride_qz stride_qh H + j.val * HEAD_DIM + d.val)
+
+/-- General global query row for output tile-row `i`. -/
+def qStartAFCG (s : BlockState) (BLOCK_M : Nat) : Nat := s.pids 0 * BLOCK_M
+
+/-- General masked query tile: head-active (`e < HEAD_ACTIVE`) and query-row
+boundary (`qStart + i < N_CTX`) masking, mirroring the kernel's `q` load mask. -/
+noncomputable def qTileAFCmG (s : BlockState) (Q : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun (i, e, u) =>
+    if qStartAFCG s BLOCK_M + i.val < N_CTX ∧ e.val < HEAD_ACTIVE then
+      qTileAFCG s Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL (i, e, u) else 0
+
+/-- General masked value tile: head-active (`d < HEAD_ACTIVE`) masking. -/
+noncomputable def vTileAFCmG (s : BlockState) (V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM SEQ BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun (j, d, u) =>
+    if d.val < HEAD_ACTIVE then
+      vTileAFCG s V stride_qz stride_qh H HEAD_DIM SEQ BLOCK_DMODEL (j, d, u) else 0
+
+/-- **General genuine closed form** (exp2, causal): predicate-masked base-2
+per-key-scale attention with the `causalKeep qStart` mask, over the kernel's
+actually-loaded masked q/v tiles. -/
+noncomputable def attnFwdCausalOutSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  attentionRealBase2PerKeyScalePred
+    (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+    (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+    (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+    keyScale (fun i j => causalKeep (qStartAFCG s BLOCK_M) i j) idx
+
+/-- General streaming bridge: the closed form equals the `osStep` online-softmax
+fold over the causal-masked key list. -/
+theorem attnFwdCausalOutSpecG_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    attnFwdCausalOutSpecG s Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N
+        BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred
+            (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+            (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+            (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+            keyScale (fun i j => causalKeep (qStartAFCG s BLOCK_M) i j) i d).foldl
+              osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attnFwdCausalOutSpecG] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+      (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+      (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+      keyScale (fun i j => causalKeep (qStartAFCG s BLOCK_M) i j) i d
+
 set_option maxRecDepth 8000 in
 /-- **General body split** — the lowered general AFC body decomposes as
 `take 22 ++ (forRange "start_n" 0 N_CTX BLOCK_N afcLoopBodyG :: drop 23)`. The
