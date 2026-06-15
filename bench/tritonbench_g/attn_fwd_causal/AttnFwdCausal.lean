@@ -4787,6 +4787,20 @@ def afcLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
       (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
 
+/-- General loop-body head (statements 0–10). -/
+def afcLoopBodyHeadG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  List.take 11 (afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+
+/-- General loop-body tail (statements 11–21). -/
+def afcLoopBodyTailG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  List.drop 11 (afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+
+theorem afcLoopBodyG_eq_head_tail (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      = afcLoopBodyHeadG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+        ++ afcLoopBodyTailG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE := by
+  rw [afcLoopBodyHeadG, afcLoopBodyTailG, List.take_append_drop]
+
 end AfcFoundation
 
 section General
@@ -6067,6 +6081,186 @@ theorem afc_body_splitG
                 sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
                 Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.drop 23) :=
   rfl
+
+/-! ### General loop-body execution chain -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- General loop-body head execution (statements 0–10). -/
+theorem afcLoopBodyHeadG_steps
+    (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) (hBN : 0 < BLOCK_N)
+    (sin : BlockState) (SN : Nat)
+    (offsm : Tile .nat [BLOCK_M]) (offsn : Tile .nat [BLOCK_N])
+    (kptrs : Tile .ptr [BLOCK_DMODEL, BLOCK_N]) (ksptr : Tile .ptr [])
+    (mtile : Tile .real [BLOCK_M]) (qtile : Tile .real [BLOCK_M, BLOCK_DMODEL]) (qsc : Tile .real [])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hoffsm : sin.regs .nat [BLOCK_M] "offs_m" = some offsm)
+    (hoffsn : sin.regs .nat [BLOCK_N] "offs_n" = some offsn)
+    (hmi : sin.regs .real [BLOCK_M] "m_i" = some mtile)
+    (hkp : sin.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some kptrs)
+    (hksp : sin.regs .ptr [] "K_scale_ptr" = some ksptr)
+    (hq : sin.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qtile)
+    (hqsc : sin.regs .real [] "q_scale" = some qsc) :
+    ∃ s1, stepStmts (AfcFoundation.afcLoopBodyHeadG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) sin = some s1
+      ∧ s1.pids = sin.pids ∧ s1.mem = sin.mem ∧ (∀ rg o, s1.undef rg o = sin.undef rg o)
+      ∧ ∃ (kmaskT : Tile .bool [BLOCK_DMODEL, BLOCK_N]) (ktile : Tile .real [BLOCK_DMODEL, BLOCK_N])
+          (kscT : Tile .real []) (qkdotT : Tile .real [BLOCK_M, BLOCK_N])
+          (maskT : Tile .bool [BLOCK_M, BLOCK_N]) (qkSentT : Tile .real [BLOCK_M, BLOCK_N])
+          (rmaxT mijT : Tile .real [BLOCK_M]) (qkShiftT pExpT pT : Tile .real [BLOCK_M, BLOCK_N]),
+        (kmaskT = ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+            (ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (N_CTX - SN))
+              && (ComparableDType.nat.lt idx.1.val HEAD_ACTIVE)⟩)
+        ∧ (ktile = ⟨fun i : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+            if kmaskT.data i then some (sin.readMem (kptrs.data i).1 (kptrs.data i).2)
+            else some (sin.undef (kptrs.data i).1 (kptrs.data i).2)⟩)
+        ∧ (kscT = ⟨fun _ : TileIndex [] =>
+            some (sin.readMem (ksptr.data PUnit.unit).1 (ksptr.data PUnit.unit).2)⟩)
+        ∧ (qkdotT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              ⟨fun i => (Tile.dot [] qtile ktile).data i⟩ qsc) kscT)
+        ∧ (maskT = ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+            ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+              (SN + offsn.data (idx.2.1, PUnit.unit))⟩)
+        ∧ (qkSentT = ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+            if maskT.data idx then qkdotT.data idx
+            else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩)
+        ∧ (Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qkSentT = some rmaxT)
+        ∧ (mijT = Tile.select
+            (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+            mtile rmaxT)
+        ∧ (qkShiftT = Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))
+        ∧ (pExpT = Tile.uop WithBot.realExp2 qkShiftT)
+        ∧ (pT = ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+            if maskT.data idx then pExpT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩)
+        ∧ s1.regs .real [BLOCK_M] "m_i" = some mtile
+        ∧ s1.regs .real [BLOCK_M] "m_ij" = some mijT
+        ∧ s1.regs .bool [BLOCK_M, BLOCK_N] "mask" = some maskT
+        ∧ s1.regs .real [BLOCK_M, BLOCK_N] "p" = some pT
+        ∧ s1.regs .real [BLOCK_M] "l_i" = sin.regs .real [BLOCK_M] "l_i"
+        ∧ s1.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = sin.regs .real [BLOCK_M, BLOCK_DMODEL] "acc"
+        ∧ s1.regs .real [BLOCK_N, BLOCK_DMODEL] "v" = sin.regs .real [BLOCK_N, BLOCK_DMODEL] "v"
+        ∧ s1.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = sin.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+        ∧ s1.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some kptrs
+        ∧ s1.regs .ptr [] "K_scale_ptr" = some ksptr
+        ∧ s1.regs .nat [BLOCK_M] "offs_m" = some offsm
+        ∧ s1.regs .nat [BLOCK_N] "offs_n" = some offsn
+        ∧ s1.regs .nat [] "start_n" = some (Tile.scalar SN)
+        ∧ s1.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qtile
+        ∧ s1.regs .real [] "q_scale" = some qsc := by
+  set kmaskT : Tile .bool [BLOCK_DMODEL, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+      (ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (N_CTX - SN))
+        && (ComparableDType.nat.lt idx.1.val HEAD_ACTIVE)⟩ with hkmaskT
+  set ktile : Tile .real [BLOCK_DMODEL, BLOCK_N] := ⟨fun i : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+      if kmaskT.data i then some (sin.readMem (kptrs.data i).1 (kptrs.data i).2)
+      else some (sin.undef (kptrs.data i).1 (kptrs.data i).2)⟩ with hktile
+  set kscT : Tile .real [] := ⟨fun _ : TileIndex [] =>
+      some (sin.readMem (ksptr.data PUnit.unit).1 (ksptr.data PUnit.unit).2)⟩ with hkscT
+  set qkdotT : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        ⟨fun i => (Tile.dot [] qtile ktile).data i⟩ qsc) kscT with hqkdotT
+  set maskT : Tile .bool [BLOCK_M, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+        (SN + offsn.data (idx.2.1, PUnit.unit))⟩ with hmaskT
+  set qkSentT : Tile .real [BLOCK_M, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      if maskT.data idx then qkdotT.data idx
+      else WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩ with hqkSentT
+  obtain ⟨rmaxT, hrm⟩ := afc_reduceMaxDrop1_someG BLOCK_M BLOCK_N hBN qkSentT
+  set mijT : Tile .real [BLOCK_M] := Tile.select
+      (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+      mtile rmaxT with hmijT
+  set qkShiftT : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.sub
+      (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT) with hqkShiftT
+  set pExpT : Tile .real [BLOCK_M, BLOCK_N] := Tile.uop WithBot.realExp2 qkShiftT with hpExpT
+  set pT : Tile .real [BLOCK_M, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      if maskT.data idx then pExpT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpT
+  unfold AfcFoundation.afcLoopBodyHeadG AfcFoundation.afcLoopBodyG
+  simp only [List.take_succ_cons, List.take_zero]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar SN) from by rw [evalOp_ref, hsn]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some kmaskT from by
+      rw [afc_kmask_evalG _ SN N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL offsn
+        (by simp [BlockState.setReg_ne_name, hoffsn])
+        (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some ktile from by
+      rw [afc_load_k_eval _ BLOCK_DMODEL BLOCK_N "K_ptrs" "k_mask" kptrs kmaskT
+        (by simp [BlockState.setReg_ne_name, hkp]) (by rw [BlockState.setReg_same])]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some kscT from by
+      rw [afc_load_kscale_eval _ "K_scale_ptr" ksptr
+        (by simp [BlockState.setReg_ne_name, hksp])]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some qkdotT from by
+      rw [afc_qk_dot_eval _ BLOCK_M BLOCK_N BLOCK_DMODEL qtile ktile qsc kscT
+        (by simp [BlockState.setReg_ne_name, hq]) (by simp [BlockState.setReg_ne_name])
+        (by simp [BlockState.setReg_ne_name, hqsc]) (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some maskT from by
+      rw [afc_mask_evalG _ SN BLOCK_M BLOCK_N offsm offsn
+        (by simp [BlockState.setReg_ne_name, hoffsm]) (by simp [BlockState.setReg_ne_name, hoffsn])
+        (by simp [BlockState.setReg_ne_name, hsn])]))]
+  have hbcast6 : ∀ t : BlockState, @evalOp TileDType.real [BLOCK_M, BLOCK_N]
+      (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [BLOCK_M, BLOCK_N]) t
+      = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] =>
+          WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 : ℝ))⟩ : Tile .real [BLOCK_M, BLOCK_N]) := by
+    intro t
+    simp only [evalOp, evalOp_sub, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+    rfl
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.where (Op.ref .bool [BLOCK_M, BLOCK_N] "mask")
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [BLOCK_M, BLOCK_N])) _
+        = some qkSentT from by
+      rw [evalOp_where]
+      simp only [evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        hbcast6, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext idx
+      simp only [hqkSentT, Tile.select_data, Tile.scalar]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some mijT from by
+      rw [afc_mij_evalG _ BLOCK_M BLOCK_N mtile qkSentT rmaxT
+        (by simp [BlockState.setReg_ne_name, hmi]) (by rw [BlockState.setReg_same]) hrm]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some qkShiftT from by
+      rw [afc_qk_sub_evalG _ BLOCK_M BLOCK_N (by simp) qkSentT mijT
+        (by simp [BlockState.setReg_ne_name]) (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some pExpT from by
+      rw [afc_p_evalG _ BLOCK_M BLOCK_N qkShiftT (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp _ _ = some pT from by
+      rw [afc_p_mask_evalG _ BLOCK_M BLOCK_N maskT pExpT
+        (by simp [BlockState.setReg_ne_name]) (by rw [BlockState.setReg_same])]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, kmaskT, ktile, kscT, qkdotT, maskT, qkSentT, rmaxT, mijT,
+    qkShiftT, pExpT, pT, rfl, rfl, rfl, rfl, rfl, rfl, hrm, rfl, rfl, rfl, rfl,
+    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_pids]
+  · funext rg o; simp [BlockState.setReg_mem]
+  · intro rg o; simp [BlockState.setReg_undef]
+  · simp [BlockState.setReg_ne_name, hmi]
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+  · simp [BlockState.setReg_same]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name, hkp]
+  · simp [BlockState.setReg_ne_name, hksp]
+  · simp [BlockState.setReg_ne_name, hoffsm]
+  · simp [BlockState.setReg_ne_name, hoffsn]
+  · simp [BlockState.setReg_ne_name, hsn]
+  · simp [BlockState.setReg_ne_name, hq]
+  · simp [BlockState.setReg_ne_name, hqsc]
 
 end General
 
