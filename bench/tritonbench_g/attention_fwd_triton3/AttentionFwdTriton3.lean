@@ -10975,4 +10975,103 @@ theorem aft3_attn_execG
   exact ⟨sF, hpost, hO, hM⟩
 
 
+/-! ## General genuine output summaries (cases 1/2/3) -/
+
+/-- General genuine `M`-row spec (cases 1/2): raw `(M ⊔ … + log2 l).unbotD`. -/
+noncomputable def attentionFwdTriton3KMSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)] (i : Fin BM) (hND : 0 < ND) : ℝ :=
+  (WithBot.realAdd
+      (aft3RunningMaxG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+        (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) keep NC i ⟨0, hND⟩)
+      (WithBot.realLog2 (((aft3StateBotKG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+        (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) keep NC i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0
+
+/-- General genuine `M`-row spec (case 3): `m_i + log2 l_i` finalize. -/
+noncomputable def attentionFwdTriton3Case3MSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (i : Fin BM) (hND : 0 < ND) : ℝ :=
+  (aft3RunningMaxG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) (fun i j => noWindowKeep i j) NC i ⟨0, hND⟩).unbotD 0
+    + Real.log
+      ((aft3StateBot1G (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+          (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) (fun i j => noWindowKeep i j) NC i ⟨0, hND⟩).2.1) / Real.log 2
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Case 1 general genuine output summary.** -/
+theorem attention_fwd_triton3_python_case1_output_summary_general
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx)
+        (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
+      (expected := fun idx : TileIndex [BM, ND] =>
+        attentionFwdTriton3Case1OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0)
+      (initialState := s)
+      (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
+      (expected := fun i : Fin BM =>
+        attentionFwdTriton3KMSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) i hND) := by
+  have houtOff : ∀ idx : TileIndex [BM, ND],
+      outOffset s H sqz sqh som son BM idx
+        = (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son := by
+    intro idx; simp only [outOffset, offZ, offH, mIndex, kIndex]
+  have hlRow : ∀ i : Fin BM,
+      lRowOffset s (s.pids 1) ROUND_CTX BM i = s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val) := by
+    intro i; simp only [lRowOffset]
+  refine ⟨by apply attention_fwd_triton3_surface_toAlgorithm_supported, ?_, ?_⟩
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx _hActive
+    obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec1G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    rw [houtOff idx]; exact hO idx
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec1G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [hlRow i]
+    show sF.readMem M _ = _
+    rw [hM i, attentionFwdTriton3KMSpecG]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
