@@ -241,28 +241,6 @@ precomputed normalized `Acc` tile and proves the final masked writeback into
 `Out`, preserving the source store address and mask
 `(offs_m < N_CTX) & (offs_k < 96)`. The inner `tl.float32` accumulator is
 outside this slice. -/
-def attention_fwd_triton3_final_store_slice
-    (Acc Out : RegionName)
-    (H N_CTX HEAD_ACTIVE
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-      stride_qz stride_qh stride_qm stride_qk
-      BLOCK_M BLOCK_DMODEL : Nat) :
-    ComputeKernel := triton {
-  start_m = tl.program_id(0)
-  off_hz = tl.program_id(1)
-  off_z = off_hz // $(H)
-  off_h = off_hz % $(H)
-  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  offs_k = tl.arange(0, $(BLOCK_DMODEL))
-  mask = (offs_m[:, None] < $(N_CTX)) & (offs_k[None, :] < $(HEAD_ACTIVE))
-  acc = tl.load(Acc + off_z * $(stride_acc_z) + off_h * $(stride_acc_h) +
-      offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k),
-      mask=mask, other=0.0)
-  tl.store(Out + off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh) +
-      offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk),
-      (acc).to(Out.dtype.element_ty), mask=mask)
-}
-
 def offZ (s : BlockState) (H : Nat) : Nat :=
   s.pids 1 / H
 
@@ -302,115 +280,6 @@ def outOffset
     mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 
 /-- Algorithm-layer correctness for the final output store. -/
-theorem attention_fwd_triton3_final_store_slice_correct
-    (Acc Out : RegionName)
-    (H N_CTX HEAD_ACTIVE
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-      stride_qz stride_qh stride_qm stride_qk
-      BLOCK_M BLOCK_DMODEL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
-      let outAddr := outOffset s H stride_qz stride_qh stride_qm stride_qk
-        BLOCK_M idx
-      (exec (attention_fwd_triton3_final_store_slice Acc Out H N_CTX
-            HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-            stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL) s).map
-          (·.readMem Out outAddr)
-        = some (if active s N_CTX HEAD_ACTIVE BLOCK_M idx then
-            s.readMem Acc
-              (accOffset s H stride_acc_z stride_acc_h stride_acc_m
-                stride_acc_k BLOCK_M idx)
-          else s.readMem Out outAddr) := by
-  intro idx
-  simp [exec, attention_fwd_triton3_final_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul,
-        IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
-        offZ, offH, mIndex, kIndex, active, accOffset, outOffset,
-        TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
-    fun idx =>
-      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh +
-        (s.pids 0 * BLOCK_M + idx.1.val) * stride_qm +
-        idx.2.1.val * stride_qk
-  let valueFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
-    fun idx =>
-      WithBot.unbotD 0
-        (if s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧
-            idx.2.1.val < HEAD_ACTIVE then
-          some (s.readMem Acc
-            (s.pids 1 / H * stride_acc_z + s.pids 1 % H * stride_acc_h +
-              (s.pids 0 * BLOCK_M + idx.1.val) * stride_acc_m +
-              idx.2.1.val * stride_acc_k))
-        else some (0.0 : ℝ))
-  let P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
-    fun idx =>
-      s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧
-        idx.2.1.val < HEAD_ACTIVE
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, outOffset, offZ, offH, mIndex, kIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem Out (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BLOCK_M, BLOCK_DMODEL])).readMem Out
-        (offsetFn idx) =
-    if P idx then
-      s.readMem Acc
-        (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-          BLOCK_M idx)
-    else s.readMem Out (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive :
-      s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE
-  · simp [offsetFn, valueFn, P, active, accOffset, outOffset, offZ, offH,
-      mIndex, kIndex, hActive]
-  · simp [offsetFn, valueFn, P, active, accOffset, outOffset, offZ, offH,
-      mIndex, kIndex, hActive]
-
-/-- Compute-facing correctness for the final output store. -/
-theorem attention_fwd_triton3_final_store_slice_compute_correct
-    (Acc Out : RegionName)
-    (H N_CTX HEAD_ACTIVE
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-      stride_qz stride_qh stride_qm stride_qk
-      BLOCK_M BLOCK_DMODEL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_final_store_slice Acc Out H N_CTX
-        HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-        stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s N_CTX HEAD_ACTIVE BLOCK_M idx)
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        s.readMem Acc
-          (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-            BLOCK_M idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_final_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := attention_fwd_triton3_final_store_slice_correct Acc Out H N_CTX
-    HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k stride_qz
-    stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL s hOutInj idx
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
-
-/-- Formula-level `END=True` output normalization and final store:
-`acc = acc / l_i[:, None]` before the masked `Out` writeback. This proves the
-observable active output cells against the Python epilogue arithmetic instead
-of treating the normalized accumulator as precomputed. -/
 def attention_fwd_triton3_end_output_formula_store_slice
     (Acc LPre Out : RegionName)
     (H N_CTX HEAD_ACTIVE
@@ -534,134 +403,10 @@ theorem attention_fwd_triton3_end_output_formula_store_slice_compute_correct
 /-- Proof-oriented L (log-sum-exp) row store slice of `attention_fwd_triton3.py`.
 Takes a precomputed `LPre` vector and proves the row writeback into `L` at
 offset `off_hz * ROUND_CTX + offs_m`. -/
-def attention_fwd_triton3_l_store_slice
-    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
-    ComputeKernel := triton {
-  start_m = tl.program_id(0)
-  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  l_i = tl.load(LPre + $(off_hz) * $(ROUND_CTX) + offs_m)
-  tl.store(L + $(off_hz) * $(ROUND_CTX) + offs_m, l_i)
-}
-
 def lRowOffset (s : BlockState) (off_hz ROUND_CTX BLOCK_M : Nat)
     (i : Fin BLOCK_M) : Nat :=
   off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + i.val)
 
-noncomputable def lStoreSpec (s : BlockState) (LPre : RegionName)
-    (off_hz ROUND_CTX BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
-  s.readMem LPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i)
-
-theorem attention_fwd_triton3_l_store_slice_correct
-    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
-    ∀ i : Fin BLOCK_M,
-      let outAddr := lRowOffset s off_hz ROUND_CTX BLOCK_M i
-      (exec (attention_fwd_triton3_l_store_slice LPre L off_hz ROUND_CTX BLOCK_M)
-          s).map (·.readMem L outAddr)
-        = some (lStoreSpec s LPre off_hz ROUND_CTX BLOCK_M i) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M] =>
-        off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [lRowOffset, Nat.add_assoc] using h
-    cases a; cases b
-    simp only at hab; cases hab; rfl
-  simp [exec, attention_fwd_triton3_l_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul]
-  simp only [lRowOffset, Nat.add_assoc]
-  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
-  simp [lStoreSpec, lRowOffset, Nat.add_assoc]
-
-theorem attention_fwd_triton3_l_store_slice_compute_correct
-    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_l_store_slice LPre L off_hz ROUND_CTX BLOCK_M)
-      (initialState := s)
-      (write := fun i : Fin BLOCK_M => some (L, lRowOffset s off_hz ROUND_CTX BLOCK_M i))
-      (expected := fun i => lStoreSpec s LPre off_hz ROUND_CTX BLOCK_M i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_l_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  have h := attention_fwd_triton3_l_store_slice_correct LPre L off_hz ROUND_CTX BLOCK_M
-    s hOutInj i
-  rw [hExec] at h
-  exact Option.some.inj h
-
-/-- Proof-oriented M (max) row store slice of `attention_fwd_triton3.py`.
-Mirrors the L-row store slice. -/
-def attention_fwd_triton3_m_store_slice
-    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
-    ComputeKernel := triton {
-  start_m = tl.program_id(0)
-  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  m_i = tl.load(MPre + $(off_hz) * $(ROUND_CTX) + offs_m)
-  tl.store(M + $(off_hz) * $(ROUND_CTX) + offs_m, m_i)
-}
-
-noncomputable def mStoreSpec (s : BlockState) (MPre : RegionName)
-    (off_hz ROUND_CTX BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
-  s.readMem MPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i)
-
-theorem attention_fwd_triton3_m_store_slice_correct
-    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
-    ∀ i : Fin BLOCK_M,
-      let outAddr := lRowOffset s off_hz ROUND_CTX BLOCK_M i
-      (exec (attention_fwd_triton3_m_store_slice MPre M off_hz ROUND_CTX BLOCK_M)
-          s).map (·.readMem M outAddr)
-        = some (mStoreSpec s MPre off_hz ROUND_CTX BLOCK_M i) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M] =>
-        off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [lRowOffset, Nat.add_assoc] using h
-    cases a; cases b
-    simp only at hab; cases hab; rfl
-  simp [exec, attention_fwd_triton3_m_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul]
-  simp only [lRowOffset, Nat.add_assoc]
-  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
-  simp [mStoreSpec, lRowOffset, Nat.add_assoc]
-
-theorem attention_fwd_triton3_m_store_slice_compute_correct
-    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_m_store_slice MPre M off_hz ROUND_CTX BLOCK_M)
-      (initialState := s)
-      (write := fun i : Fin BLOCK_M => some (M, lRowOffset s off_hz ROUND_CTX BLOCK_M i))
-      (expected := fun i => mStoreSpec s MPre off_hz ROUND_CTX BLOCK_M i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_m_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  have h := attention_fwd_triton3_m_store_slice_correct MPre M off_hz ROUND_CTX BLOCK_M
-    s hOutInj i
-  rw [hExec] at h
-  exact Option.some.inj h
-
-/-- Formula-level `END=True` M-row epilogue of `attention_fwd_triton3.py`:
-`m_i += tl.math.log2(l_i)`, then store to `M`. This starts from the row values
-computed by the streaming inner loop and proves the Python epilogue arithmetic,
-not only a precomputed M readback. -/
 def attention_fwd_triton3_end_m_formula_store_slice
     (MPre LPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
     ComputeKernel := triton {
@@ -738,27 +483,6 @@ theorem attention_fwd_triton3_end_m_formula_store_slice_compute_correct
 `ROUND_CTX = 128`, `H_KV = H = 4`, and `sm_scale = 1 / sqrt(64) = 1/8`.
 All four test cases run with `END = true`; the observed `M` row therefore
 comes from the formula epilogue `m_i += log2(l_i)`. -/
-
-theorem attention_fwd_triton3_final_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_final_store_slice Acc Out
-        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) := by
-  apply attention_fwd_triton3_final_store_slice_compute_correct
-  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
-  simp [outOffset, offZ, offH, mIndex, kIndex] at h
-  have hm : ma = mb := by omega
-  have hk : ka = kb := by omega
-  subst mb
-  subst kb
-  rfl
 
 theorem attention_fwd_triton3_end_output_formula_python_test_shape_compute_correct
     (Acc LPre Out : RegionName) (s : BlockState) :
@@ -1088,15 +812,6 @@ noncomputable def keyScale3 : Fin 128 → ℝ :=
   fun _ => (1 / 8 : ℝ) * 1.4426950408889634
 
 /-- Global query row for output tile-row `i` in this program. -/
-def qStart3 (s : BlockState) : Nat := s.pids 0 * 64
-
-/-- **Faithful nat-truncated sliding-window distance.** The kernel computes
-`dist = (i − jL : ℕ) + start_m·64 − start_n` with **natural** subtraction (negative
-results truncate to `0`), where `start_m = SM`, the block-local key is
-`jL = j mod 64`, and `start_n = (j / 64)·64`. For a global key `j` and row `i`
-this is `(i − j%64 : ℕ) + SM·64 − (j/64)·64`. This is the exact quantity the
-lowered surface evaluates per cell (see `aft3MaskCell1`/`aft3MaskCell2`), NOT the
-signed-ℤ distance of `slidingWindowKeep`. -/
 def natDist3 (SM : Nat) (i : Fin 64) (j : Fin 128) : Nat :=
   (i.val - j.val % 64) + SM * 64 - (j.val / 64) * 64
 
@@ -1144,32 +859,6 @@ noncomputable def attentionFwdTriton3Case3OutSpec
 
 /-- Streaming bridge, case 1: the closed form equals the `osStep` online-softmax
 fold over the masked key list — the form the exec loop realizes. -/
-theorem attentionFwdTriton3Case1OutSpec_eq_streaming
-    (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
-    attentionFwdTriton3Case1OutSpec s Q K V (i, d, PUnit.unit)
-      = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-            keyScale3 (fun i j => natSlidingWindowKeep (s.pids 0) i j) i d).foldl
-              osStep (0, 0, 0)
-         st.2.2 / st.2.1) := by
-  simpa [attentionFwdTriton3Case1OutSpec] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
-      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => natSlidingWindowKeep (s.pids 0) i j) i d
-
-/-- Streaming bridge, case 2. -/
-theorem attentionFwdTriton3Case2OutSpec_eq_streaming
-    (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
-    attentionFwdTriton3Case2OutSpec s Q K V (i, d, PUnit.unit)
-      = (let st := (attnKeyListPred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-            keyScale3 (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i d).foldl
-              osStep (0, 0, 0)
-         st.2.2 / st.2.1) := by
-  simpa [attentionFwdTriton3Case2OutSpec] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
-      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i d
-
-/-- Streaming bridge, case 3 — also equals the plain (unmasked) base-2 softmax. -/
 theorem attentionFwdTriton3Case3OutSpec_eq_streaming
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64) :
     attentionFwdTriton3Case3OutSpec s Q K V (i, d, PUnit.unit)
@@ -1183,56 +872,6 @@ theorem attentionFwdTriton3Case3OutSpec_eq_streaming
 
 /-- Case 3's masked closed form is the plain unmasked base-2 per-key-scale
 softmax (`attentionRealBase2PerKeyScale`). -/
-theorem attentionFwdTriton3Case3OutSpec_eq_unmasked
-    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) :
-    attentionFwdTriton3Case3OutSpec s Q K V idx
-      = VeriTile.Triton.attentionRealBase2PerKeyScale
-          (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 idx := by
-  simpa [attentionFwdTriton3Case3OutSpec] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_noWindow_eq
-      (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 idx
-
-/-! ## Forward-loop per-statement op-eval recipes (RECIPE LAYER)
-
-The streaming inner loop of `attention_fwd_triton3.py`'s `_attn_fwd_inner` is
-expressed as a `forRangeDyn` body whose statement order (extracted from the
-lowered surface AST at the Python test shape, `BLOCK_M=BLOCK_N=BLOCK_DMODEL=64`,
-`IS_EVEN_N=1` so the boundary `tl.where` branches are dead) is:
-
-```
- 1  k    = tl.load(K_block_ptr)                              -- block-ptr load (col offset)
- 2  qk   = tl.zeros([64,64])                                 -- neutral dot seed
- 3  qk  += tl.dot(q, k)                                      -- q·k
- 4  qk   = qk * qk_scale                                     -- scalar scale (= keyScale3)
- 5  dist = arange[:,None] - arange[None,:] + start_m·64
-                                        - start_n + 0        -- sliding-window distance (nat)
- 6  mask = (dist >= 0) & (dist < 64)                         -- case-1 sliding-window keep
- 7  qk   = tl.where(mask, qk, -inf)                          -- non-kept lanes → -inf
- 8  m_ij = tl.maximum(m_i, tl.max(qk, 1))                    -- running max (reduceMax)
- 9  qk   = qk - m_ij[:,None]                                 -- max-shift
-10  p    = tl.math.exp2(qk)                                  -- base-2 softmax weights
-11  p    = tl.where(mask, p, 0)                              -- zero non-kept lanes
-12  l_ij = tl.sum(p, 1)                                      -- denominator increment (reduceSum)
-13  tmp  = m_i - m_ij                                        -- log-domain correction
-14  alpha = tl.math.exp2(tmp)                                -- rescale factor
-15  l_i  = l_i * alpha + l_ij                                -- denominator carry
-16  acc  = acc * alpha[:,None]                               -- accumulator rescale
-17  v    = tl.load(V_block_ptr)                              -- block-ptr load (row offset)
-18  acc += tl.dot(p, v)                                      -- numerator accumulation
-19  m_i  = m_ij                                              -- max carry
-20  V_block_ptr = tl.advance(V_block_ptr, [64, 0])           -- V steps down the key axis
-21  K_block_ptr = tl.advance(K_block_ptr, [0, 64])           -- K steps along the key axis
-```
-
-Case 2 replaces line 6's `mask` with `dist >= 64`
-(`complementSlidingWindowKeep`); case 3 drops lines 6/7/11 entirely
-(`noWindowKeep`). Each recipe below is a standalone `evalOp` reduction with
-abstract register-readback hypotheses over a symbolic `BlockState`, so the
-eventual step lemma threads them through `stepStmts.cons_some` without reducing a
-nested `setReg` literal. ASSEMBLY (invariant / `attn_step` / pre+post-loop) is
-the NEXT stage and is intentionally NOT attempted here. -/
-
-/-- `evalOp` helper for `tl.math.exp2` (`Op.exp2`) → `Tile.uop realExp2`. -/
 theorem aft3_evalOp_exp2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
     evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
   simp [evalOp]
@@ -1414,103 +1053,6 @@ set_option maxRecDepth 8000 in
 - start_n + offset`** (here `offset = 0`). With `start_m = SM`, `start_n = SN`,
 each cell `(i, j)` is the truncated-nat distance
 `((i - j) + SM·64 - SN) + 0` — the per-lane sliding-window position. -/
-theorem aft3_dist_eval (s : BlockState) (SM SN : Nat)
-    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
-    evalOp (Op.add .nat Broadcast.scalarR
-        (Op.sub .nat Broadcast.scalarR
-          (Op.add .nat Broadcast.scalarR
-            (Op.sub .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-              (Op.expandDim ⟨1, by simp⟩ (Op.arange 64))
-              (Op.expandDim ⟨0, by simp⟩ (Op.arange 64)))
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64)))
-          (Op.ref .nat [] "start_n"))
-        (Op.constNat 0)) s
-      = some ⟨fun idx : TileIndex [64, 64] =>
-          ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩ := by
-  simp only [evalOp.eq_def, hsm, hsn, Option.bind_eq_bind, Option.bind_some, Option.bind]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.bop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
-    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
-    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
-    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
-    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
-    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.sub]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L6 (case 1, sliding window non-complement): `mask = (dist >= 0) &
-(dist < SLIDING_WINDOW_SIZE)`** (`= 64`). Cell `(i, j)` is kept iff the distance
-is in `[0, 64)` — exactly `slidingWindowKeep`'s in-window condition. -/
-theorem aft3_mask_case1_eval (s : BlockState) (disttile : Tile .nat [64, 64])
-    (hd : s.regs .nat [64, 64] "dist" = some disttile) :
-    evalOp (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
-          (Op.constNat 0))
-        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
-          (Op.constNat 64))) s
-      = some ⟨fun idx : TileIndex [64, 64] =>
-          ComparableDType.nat.ge (disttile.data idx) 0
-            && ComparableDType.nat.lt (disttile.data idx) 64⟩ := by
-  rw [aft3_evalOp_boolAnd, aft3_evalOp_ge, evalOp_lt]
-  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.bop_data, Tile.cop_data, Tile.scalar,
-    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
-    Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
-    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L6 (case 2, complement sliding window): `mask = (dist >= SLIDING_WINDOW_SIZE)`**
-(`= 64`). Cell `(i, j)` is kept iff the distance is `≥ 64` — exactly
-`complementSlidingWindowKeep`'s condition. -/
-theorem aft3_mask_case2_eval (s : BlockState) (disttile : Tile .nat [64, 64])
-    (hd : s.regs .nat [64, 64] "dist" = some disttile) :
-    evalOp (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64, 64] "dist")
-        (Op.constNat 64)) s
-      = some ⟨fun idx : TileIndex [64, 64] =>
-          ComparableDType.nat.ge (disttile.data idx) 64⟩ := by
-  rw [aft3_evalOp_ge]
-  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.cop_data, Tile.scalar,
-    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
-    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L7: `qk = tl.where(mask, qk, -inf)`** — keep `qk` on lanes the case
-predicate selects, set non-kept lanes to `⊥` (`-inf`) so they vanish under
-`exp2`. Works for any case `mask` tile (`slidingWindowKeep` /
-`complementSlidingWindowKeep`). -/
-theorem aft3_where_eval (s : BlockState) (masktile : Tile .bool [64, 64])
-    (qktile : Tile .real [64, 64])
-    (hmask : s.regs .bool [64, 64] "mask" = some masktile)
-    (hqk : s.regs .real [64, 64] "qk" = some qktile) :
-    evalOp (Op.where (Op.ref .bool [64, 64] "mask")
-        (Op.ref .real [64, 64] "qk") (Op.broadcast Op.negInf [64, 64])) s
-      = some ⟨fun idx : TileIndex [64, 64] =>
-          if masktile.data idx then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
-  have hbcast : @evalOp TileDType.real [64, 64] (Op.broadcast Op.negInf [64, 64]) s
-      = some (⟨fun _ : TileIndex [64, 64] => (⊥ : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
-    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
-  rw [evalOp_where]
-  simp only [evalOp_ref, hmask, hqk, hbcast, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.select_data, Tile.scalar]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L8: `m_ij = tl.maximum(m_i, tl.max(qk, 1))`** — lowered to
-`where(m_i > reduceMax(qk,1), m_i, reduceMax(qk,1))`, i.e. the running max keeps
-`m_i` when it already dominates the new block row-max, else takes the row-max.
-`reduceMax`'s `eraseAxis` result-shape blocks `rw`, so the reduced row is proven
-then defeq-coerced to `[64]`. -/
 theorem aft3_mij_eval (s : BlockState)
     (mtile : Tile .real [64]) (qktile : Tile .real [64, 64]) (rmaxT : Tile .real [64])
     (hmi : s.regs .real [64] "m_i" = some mtile)
@@ -1566,26 +1108,6 @@ set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **L11: `p = tl.where(mask, p, 0)`** — zero the non-kept lanes (redundant with
 L7's `-inf`+`exp2`, but kept for the complement/case mask). -/
-theorem aft3_p_mask_eval (s : BlockState) (masktile : Tile .bool [64, 64])
-    (ptile : Tile .real [64, 64])
-    (hmask : s.regs .bool [64, 64] "mask" = some masktile)
-    (hp : s.regs .real [64, 64] "p" = some ptile) :
-    evalOp (Op.where (Op.ref .bool [64, 64] "mask")
-        (Op.ref .real [64, 64] "p") (Op.broadcast (Op.const 0.0) [64, 64])) s
-      = some ⟨fun idx : TileIndex [64, 64] =>
-          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ := by
-  have hbcast : @evalOp TileDType.real [64, 64] (Op.broadcast (Op.const 0.0) [64, 64]) s
-      = some (⟨fun _ : TileIndex [64, 64] => (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [64, 64]) := by
-    simp only [evalOp, evalOp_const, Option.bind_eq_bind, Option.bind_some]; rfl
-  rw [evalOp_where]
-  simp only [evalOp_ref, hmask, hp, hbcast, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.select_data, Tile.scalar]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L12: `l_ij = tl.sum(p, 1)`** — the per-row denominator increment. -/
 theorem aft3_lij_eval (s : BlockState) (ptile : Tile .real [64, 64])
     (hp : s.regs .real [64, 64] "p" = some ptile) :
     evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false
@@ -1748,61 +1270,6 @@ set_option maxRecDepth 8000 in
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
 exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
 aft3PostLoop`. -/
-theorem aft3_body_split (Q K V M Out L : RegionName) :
-    (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel.body
-      = aft3PreLoop Q K V M Out L
-        ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody :: aft3PostLoop M Out L := by
-  rfl
-
-/-- Case-2 lowered loop body: identical to `aft3LoopBody` but the inner
-`ifThenElse` (complement-select) condition is the constexpr-true `ne 1 0`. -/
-def aft3LoopBody2 : List Stmt :=
-  [ Stmt.assign TileDType.real [64, 64] "k" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none),
-    Stmt.assign TileDType.real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
-    Stmt.assign TileDType.real [64, 64] "qk" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "qk") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "q") (Op.ref TileDType.real [64, 64] "k"))))),
-    Stmt.assign TileDType.real [64, 64] "qk" ((Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [64, 64] "qk") (Op.ref TileDType.real [] "qk_scale"))),
-    Stmt.ifThen (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.nat [64, 64] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by decide⟩ (Op.arange 64)) (Op.expandDim ⟨0, by decide⟩ (Op.arange 64))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat 0)), Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.bool [64, 64] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64))] [Stmt.assign TileDType.bool [64, 64] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64)))], Stmt.assign TileDType.real [64, 64] "qk" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "qk") (Op.negInf.broadcast [64, 64]))],
-    Stmt.assign TileDType.real [64] "m_ij" (((Op.gt ComparableDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.reduceMax ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "qk"))).where (Op.ref TileDType.real [64] "m_i") (Op.reduceMax ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "qk")))),
-    Stmt.assign TileDType.real [64, 64] "qk" (Op.sub NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "qk") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "m_ij"))),
-    Stmt.assign TileDType.real [64, 64] "p" (Op.ref TileDType.real [64, 64] "qk").exp2,
-    Stmt.ifThen (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64, 64] "p" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "p") ((Op.const 0.0).broadcast [64, 64]))],
-    Stmt.assign TileDType.real [64] "l_ij" (Op.reduceSum ⟨1, by decide⟩ Bool.false (Op.ref TileDType.real [64, 64] "p")),
-    Stmt.assign TileDType.real [64] "tmp" ((Op.sub NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "m_ij"))),
-    Stmt.assign TileDType.real [64] "alpha" (Op.ref TileDType.real [64] "tmp").exp2,
-    Stmt.assign TileDType.real [64] "l_i" ((Op.add NumericDType.real Broadcast.nil.consSame (Op.mul NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "l_i") (Op.ref TileDType.real [64] "alpha")) (Op.ref TileDType.real [64] "l_ij"))),
-    Stmt.assign TileDType.real [64, 64] "acc" ((Op.mul NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "acc") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "alpha")))),
-    Stmt.assign TileDType.real [64, 64] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none),
-    Stmt.assign TileDType.real [64, 64] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "p") (Op.ref TileDType.real [64, 64] "v"))))),
-    Stmt.assign TileDType.real [64] "m_i" ((Op.ref TileDType.real [64] "m_ij")),
-    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [64, 0]),
-    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [0, 64]) ]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **Body split (case 2).** The lowered body of the case-2 (complement) surface. -/
-theorem aft3_body_split2 (Q K V M Out L : RegionName) :
-    (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1).toAlgKernel.body
-      = aft3PreLoop Q K V M Out L
-        ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody2 :: aft3PostLoop M Out L := by
-  rfl
-
-
-/-! ## ⊥-seed online-softmax recurrence (deliverable 3, generic core)
-
-The kernel seeds its running `max` register at `⊥` (`tl.zeros − inf`) and
-`l_i`/`acc` at `0`. `aft3OsStepBot` is the faithful per-key ⊥-seeded update;
-`aft3StateBot` folds it over a key list. These generic lemmas (over an arbitrary
-`List (ℝ × ℝ)`) mirror the flash-attn `osStepBot` core and are reused by the
-predicate-windowed layer below. -/
-
-open VeriTile.Triton (osStep pow2)
-
-/-- ⊥-seeded per-key online-softmax update (the kernel's register recurrence:
-`max` carried as `WithBot ℝ`, `l`/`acc` as `ℝ`). -/
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
   let m := st.1; let l := st.2.1; let acc := st.2.2
   let s := sv.1; let v := sv.2
@@ -2096,21 +1563,6 @@ theorem aft3StateBot_fst_eq_runningMax
 
 /-- ⊥-seeded state at the empty window is `(⊥, 0, 0)` — the kernel's preLoop
 init. The base case making `attnInvariant … 0` satisfiable. -/
-theorem aft3StateBot_zero
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (i : Fin 64) (d : Fin 64) :
-    aft3StateBot qT kT vT keyScale keep 0 i d = (⊥, 0, 0) := by
-  unfold aft3StateBot aft3KeysUpto
-  rw [show (List.finRange 128).filterMap
-        (fun j : Fin 128 => if j.val < 0 ∧ keep i j
-          then some (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
-                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
-          else none) = [] from by
-    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
-  rfl
-
-/-- ⊥-seeded running max at the empty window is `⊥`. -/
 theorem aft3RunningMax_zero
     (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
     (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
@@ -2245,34 +1697,6 @@ theorem aft3StateBot_ratio_eq
         mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
 
 /-- **Full-window ⊥-seeded state reads off the case-1 closed form.** -/
-theorem aft3StateBot_full_eq_spec_case1
-    (s : BlockState) (Q K V : RegionName) (i d : Fin 64)
-    (hne : aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => natSlidingWindowKeep (s.pids 0) i j) 128 i d ≠ ⊥) :
-    (let st := aft3StateBot (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => natSlidingWindowKeep (s.pids 0) i j) 128 i d
-     st.2.2 / st.2.1)
-      = attentionFwdTriton3Case1OutSpec s Q K V (i, d, PUnit.unit) := by
-  simp only
-  rw [aft3StateBot_ratio_eq _ _ _ _ _ _ _ _ hne]
-  rw [aft3KeysUpto_full]
-  exact (attentionFwdTriton3Case1OutSpec_eq_streaming s Q K V i d).symm
-
-/-- **Full-window ⊥-seeded state reads off the case-2 closed form.** -/
-theorem aft3StateBot_full_eq_spec_case2
-    (s : BlockState) (Q K V : RegionName) (i d : Fin 64)
-    (hne : aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) 128 i d ≠ ⊥) :
-    (let st := aft3StateBot (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) 128 i d
-     st.2.2 / st.2.1)
-      = attentionFwdTriton3Case2OutSpec s Q K V (i, d, PUnit.unit) := by
-  simp only
-  rw [aft3StateBot_ratio_eq _ _ _ _ _ _ _ _ hne]
-  rw [aft3KeysUpto_full]
-  exact (attentionFwdTriton3Case2OutSpec_eq_streaming s Q K V i d).symm
-
-/-- **Full-window ⊥-seeded state reads off the case-3 closed form.** -/
 theorem aft3StateBot_full_eq_spec_case3
     (s : BlockState) (Q K V : RegionName) (i d : Fin 64)
     (hne : aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
@@ -2896,590 +2320,6 @@ set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **Complement sliding-window block (case 2).** The `ifThen` body steps to the
 state where `qk` is masked to `⊥` outside the complement window (`dist ≥ 64`). -/
-theorem aft3_window2_steps (s : BlockState) (SM SN : Nat) (qktile : Tile .real [64, 64])
-    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hqk : s.regs .real [64, 64] "qk" = some qktile) :
-    stepStmts [ Stmt.assign TileDType.nat [64, 64] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by decide⟩ (Op.arange 64)) (Op.expandDim ⟨0, by decide⟩ (Op.arange 64))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat 0)),
-        Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.bool [64, 64] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64))] [Stmt.assign TileDType.bool [64, 64] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64)))],
-        Stmt.assign TileDType.real [64, 64] "qk" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "qk") (Op.negInf.broadcast [64, 64]))] s
-      = some ((((s.setReg "dist" .nat [64, 64] ⟨fun idx : TileIndex [64, 64] => ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩).setReg
-          "mask" .bool [64, 64] ⟨fun idx : TileIndex [64, 64] => aft3MaskCell2 SM SN idx⟩).setReg
-          "qk" .real [64, 64] ⟨fun idx : TileIndex [64, 64] =>
-            if aft3MaskCell2 SM SN idx then qktile.data idx else (⊥ : WithBot ℝ)⟩)) := by
-  set disttile : Tile .nat [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩ with hdist
-  set masktile : Tile .bool [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => ComparableDType.nat.ge (disttile.data idx) 64⟩ with hmtile
-  have hmaskeq : masktile = ⟨fun idx : TileIndex [64, 64] => aft3MaskCell2 SM SN idx⟩ := by
-    refine Tile.ext (fun idx => ?_); simp only [hmtile, aft3MaskCell2, hdist]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_dist_eval s SM SN hsm hsn))]
-  rw [stepStmts.cons_some
-    (show stepStmt _ (s.setReg "dist" .nat [64, 64] disttile) = some _ from by
-      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
-      rw [stepStmts.cons_some (stepStmt_assign_eq_some
-        (aft3_mask_case2_eval (s.setReg "dist" .nat [64, 64] disttile) disttile
-          (by rw [BlockState.setReg_same])))]
-      rw [stepStmts.nil])]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_where_eval _ masktile qktile
-      (by rw [BlockState.setReg_same])
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same]; exact hqk)))]
-  rw [stepStmts.nil]
-  rfl
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **Sliding-window block (case 1).** The `ifThen` body `[dist, ifThenElse mask, qk =
-where]` steps from a state with `start_m=SM`/`start_n=SN`/`qk=qktile` to one where
-`dist`/`mask` are set and `qk` is the masked tile (`⊥` on out-of-window lanes). -/
-theorem aft3_window1_steps (s : BlockState) (SM SN : Nat) (qktile : Tile .real [64, 64])
-    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hqk : s.regs .real [64, 64] "qk" = some qktile) :
-    stepStmts [ Stmt.assign TileDType.nat [64, 64] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by decide⟩ (Op.arange 64)) (Op.expandDim ⟨0, by decide⟩ (Op.arange 64))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat 64))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat 0)),
-        Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.bool [64, 64] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64))] [Stmt.assign TileDType.bool [64, 64] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist") (Op.constNat 64)))],
-        Stmt.assign TileDType.real [64, 64] "qk" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "qk") (Op.negInf.broadcast [64, 64]))] s
-      = some ((((s.setReg "dist" .nat [64, 64] ⟨fun idx : TileIndex [64, 64] => ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩).setReg
-          "mask" .bool [64, 64] ⟨fun idx : TileIndex [64, 64] => aft3MaskCell1 SM SN idx⟩).setReg
-          "qk" .real [64, 64] ⟨fun idx : TileIndex [64, 64] =>
-            if aft3MaskCell1 SM SN idx then qktile.data idx else (⊥ : WithBot ℝ)⟩)) := by
-  set disttile : Tile .nat [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => ((idx.1.val - idx.2.1.val) + SM * 64 - SN) + 0⟩ with hdist
-  set masktile : Tile .bool [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] =>
-      ComparableDType.nat.ge (disttile.data idx) 0 && ComparableDType.nat.lt (disttile.data idx) 64⟩ with hmtile
-  have hmaskeq : masktile = ⟨fun idx : TileIndex [64, 64] => aft3MaskCell1 SM SN idx⟩ := by
-    refine Tile.ext (fun idx => ?_); simp only [hmtile, aft3MaskCell1, hdist]
-  -- stmt: dist
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_dist_eval s SM SN hsm hsn))]
-  -- stmt: mask ifThenElse (COMPLEMENT false → else branch = case1 mask)
-  rw [stepStmts.cons_some
-    (show stepStmt _ (s.setReg "dist" .nat [64, 64] disttile) = some _ from by
-      rw [aft3_ifThenElse_false (aft3_ne_zero_zero_false _)]
-      rw [stepStmts.cons_some (stepStmt_assign_eq_some
-        (aft3_mask_case1_eval (s.setReg "dist" .nat [64, 64] disttile) disttile
-          (by rw [BlockState.setReg_same])))]
-      rw [stepStmts.nil])]
-  -- stmt: qk = where mask qk -inf
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_where_eval _ masktile qktile
-      (by rw [BlockState.setReg_same])
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same]; exact hqk)))]
-  rw [stepStmts.nil]
-  rfl
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **p-mask block (case 1).** The `ifThen` body `[p = where mask p 0]` zeros the
-out-of-window lanes of `p`. -/
-theorem aft3_pmask1_steps (s : BlockState) (masktile : Tile .bool [64, 64])
-    (ptile : Tile .real [64, 64])
-    (hmask : s.regs .bool [64, 64] "mask" = some masktile)
-    (hp : s.regs .real [64, 64] "p" = some ptile) :
-    stepStmts [ Stmt.assign TileDType.real [64, 64] "p" ((Op.ref TileDType.bool [64, 64] "mask").where (Op.ref TileDType.real [64, 64] "p") ((Op.const 0.0).broadcast [64, 64]))] s
-      = some (s.setReg "p" .real [64, 64] ⟨fun idx : TileIndex [64, 64] =>
-          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩) := by
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_p_mask_eval s masktile ptile hmask hp))]
-  rw [stepStmts.nil]
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Loop-body execution chain (case 1).** The 19 lowered `aft3LoopBody`
-statements step the iteration-entry state `sin` (with `start_n = SN`, the
-invariant's register readbacks `m_i`/`l_i`/`acc`/`q`/`qk_scale`/`start_m`, and
-the `K`/`V` block pointers at `[0, kcol]`/`[vrow, 0]`) to a final state `sF`,
-exposing the symbolic `m_i`/`l_i`/`acc` register values (the masked online-softmax
-block recurrence over `aft3MaskCell1`) plus the advanced block pointers. The
-sliding-window `ifThen`/`ifThenElse` constexpr branches fold into the masked
-`qk`/`p` tiles via `aft3_window1_steps`/`aft3_pmask1_steps`. -/
-theorem aft3LoopBody_steps (sin : BlockState) (SM SN : Nat)
-    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
-    (qtile : Tile .real [64, 64]) (mtile ltile : Tile .real [64]) (acctile : Tile .real [64, 64])
-    (ktile vtile : Tile .real [64, 64]) (sc : ℝ)
-    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
-    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hq : sin.regs .real [64, 64] "q" = some qtile)
-    (hqs : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
-    (hmi : sin.regs .real [64] "m_i" = some mtile)
-    (hli : sin.regs .real [64] "l_i" = some ltile)
-    (hacc : sin.regs .real [64, 64] "acc" = some acctile)
-    (hKp : sin.regs .blockPtr [64, 64] "K_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 64] =>
-        { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
-          blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol] }⟩))
-    (hVp : sin.regs .blockPtr [64, 64] "V_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 64] =>
-        { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
-          blockShape := [64, 64], strides := [64, 1], offsets := [vrow, 0] }⟩))
-    (hkload : ∀ idx : TileIndex [64, 64],
-      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * 1 + (kcol + idx.2.1.val) * 64)))
-    (hvload : ∀ idx : TileIndex [64, 64],
-      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 64 + idx.2.1.val * 1)))
-    (hundef : ∀ rg o, sin.undef rg o = 0) :
-    ∃ sF, stepStmts aft3LoopBody sin = some sF
-      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
-      ∧ sF.regs .real [64, 64] "q" = some qtile
-      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
-      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar SM)
-      ∧ sF.regs .blockPtr [64, 64] "K_block_ptr" = some
-          (⟨fun _ : TileIndex [64, 64] =>
-            { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
-              blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol + 64] }⟩)
-      ∧ sF.regs .blockPtr [64, 64] "V_block_ptr" = some
-          (⟨fun _ : TileIndex [64, 64] =>
-            { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
-              blockShape := [64, 64], strides := [64, 1], offsets := [vrow + 64, 0] }⟩)
-      ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
-      ∧ sF.regs .ptr [64] "m_ptrs" = sin.regs .ptr [64] "m_ptrs"
-      ∧ sF.regs .ptr [64] "l_ptrs" = sin.regs .ptr [64] "l_ptrs"
-      ∧ sF.regs .blockPtr [64, 64] "O_block_ptr" = sin.regs .blockPtr [64, 64] "O_block_ptr"
-      ∧ ∃ (qkT : Tile .real [64, 64]) (rmaxT mijT alphaT lijT : Tile .real [64])
-            (pT pmT : Tile .real [64, 64]) (acc1T : Tile .real [64, 64]),
-          (qkT = ⟨fun idx : TileIndex [64, 64] =>
-            if aft3MaskCell1 SM SN idx
-            then (Tile.bop NumericDType.real.mul Broadcast.scalarR
-                    (Tile.bop NumericDType.real.add
-                      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-                    (Tile.scalar (some sc))).data idx
-            else (⊥ : WithBot ℝ)⟩)
-          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some rmaxT
-          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
-          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
-          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
-          ∧ pmT = ⟨fun idx : TileIndex [64, 64] =>
-              if aft3MaskCell1 SM SN idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩
-          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) pmT
-          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
-          ∧ sF.regs .real [64] "m_i" = some mijT
-          ∧ sF.regs .real [64] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
-              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
-          ∧ sF.regs .real [64, 64] "acc" = some (Tile.bop NumericDType.real.add
-              (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1T (Tile.dot [] pmT vtile)) := by
-  set qkSeedT : Tile .real [64, 64] :=
-    Tile.bop NumericDType.real.mul Broadcast.scalarR
-      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-      (Tile.scalar (some sc)) with hqkSeed
-  set maskT : Tile .bool [64, 64] := ⟨fun idx : TileIndex [64, 64] => aft3MaskCell1 SM SN idx⟩ with hmaskT
-  set qkT : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] =>
-      if maskT.data idx then qkSeedT.data idx else (⊥ : WithBot ℝ)⟩ with hqkT
-  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some t :=
-    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) from by decide)]⟩
-  set mijT : Tile .real [64] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
-  set alphaT : Tile .real [64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with halpha
-  set pT : Tile .real [64, 64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)) with hpT
-  set pmT : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] => if maskT.data idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpmT
-  set lijT : Tile .real [64] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) pmT with hlij
-  set acc1T : Tile .real [64, 64] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
-  unfold aft3LoopBody
-  -- L1: k = load K_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none) sin
-        = some ktile from by
-      rw [aft3_load_k_eval Kreg kbase 64 128 64 64 1 64 kcol (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") sin
-        (by rw [evalOp_ref]; exact hKp)]
-      refine congrArg some ?_; refine Tile.ext (fun idx => ?_); rw [hkload idx]))]
-  -- L2: qk = zeros
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_qkzeros_eval _ 64 64))]
-  -- L3: qk += dot q k
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_dot_eval _ 64 64 64 (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) qtile ktile
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same]; exact hq)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L4: qk *= qk_scale  (qk_scale read from register)
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_scale_ref_eval _ 64 64 sc
-      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hqs)))]
-  -- L5: window ifThen (SLIDING_WINDOW true) → dist/mask/qk masked = qkT
-  rw [stepStmts.cons_some
-    (show stepStmt _ _ = some _ from
-      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
-        (aft3_window1_steps _ SM SN qkSeedT
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsm)
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsn)
-          (by rw [BlockState.setReg_same])))]
-  -- L6: m_ij = maximum(m_i, max(qk,1))
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_mij_eval _ mtile qkT rmaxT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      hrm))]
-  -- L7: qk -= m_ij[:, None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_sub_eval _ (by simp) qkT mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by rw [BlockState.setReg_same])))]
-  -- L8: p = exp2 qk
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_p_eval _ (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
-      (by rw [BlockState.setReg_same])))]
-  -- L9: pmask ifThen (SLIDING_WINDOW true) → p masked = pmT
-  rw [stepStmts.cons_some
-    (show stepStmt _ _ = some _ from
-      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
-        (aft3_pmask1_steps _ maskT pT
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-                BlockState.setReg_same] <;> try rfl)
-          (by rw [BlockState.setReg_same])))]
-  -- L10: l_ij = sum p 1
-  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [64] "l_ij"
-    (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "p")) _ lijT
-    (aft3_lij_eval _ pmT (by rw [BlockState.setReg_same])))]
-  -- L11: tmp = m_i - m_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_tmp_eval _ mtile mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L12: alpha = exp2 tmp
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_alpha_eval _ (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
-      (by rw [BlockState.setReg_same])))]
-  -- L13: l_i = l_i * alpha + l_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_li_eval _ ltile alphaT lijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hli)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L14: acc = acc * alpha[:, None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_acc_rescale_eval _ (by simp) acctile alphaT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hacc)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L15: v = load V_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none) _
-        = some vtile from by
-      rw [aft3_load_v_eval Vreg vbase 128 64 64 64 64 1 vrow (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") _
-        (by rw [evalOp_ref]
-            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
-            exact hVp)]
-      refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
-      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
-  -- L16: acc += dot p v
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_acc_eval _ 64 64 64 acc1T pmT vtile
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by rw [BlockState.setReg_same])))]
-  -- L17: m_i = m_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_mi_carry_eval _ mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L18: V_block_ptr = advance [64, 0]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_advance_v_eval _ Vreg vbase 128 64 64 64 64 1 vrow 64 "V_block_ptr"
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hVp)))]
-  -- L19: K_block_ptr = advance [0, 64]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_advance_k_eval _ Kreg kbase 64 128 64 64 1 64 kcol 64 "K_block_ptr"
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
-  rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
-    rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
-  · simp only [BlockState.setReg_pids]
-  · funext rg o; simp only [BlockState.setReg_mem]
-  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hq
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hqs
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hsm
-  · simp only [BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Loop-body execution chain (case 2).** The 19 lowered `aft3LoopBody`
-statements step the iteration-entry state `sin` (with `start_n = SN`, the
-invariant's register readbacks `m_i`/`l_i`/`acc`/`q`/`qk_scale`/`start_m`, and
-the `K`/`V` block pointers at `[0, kcol]`/`[vrow, 0]`) to a final state `sF`,
-exposing the symbolic `m_i`/`l_i`/`acc` register values (the masked online-softmax
-block recurrence over `aft3MaskCell2`) plus the advanced block pointers. The
-sliding-window `ifThen`/`ifThenElse` constexpr branches fold into the masked
-`qk`/`p` tiles via `aft3_window2_steps`/`aft3_pmask1_steps`. -/
-theorem aft3LoopBody2_steps (sin : BlockState) (SM SN : Nat)
-    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
-    (qtile : Tile .real [64, 64]) (mtile ltile : Tile .real [64]) (acctile : Tile .real [64, 64])
-    (ktile vtile : Tile .real [64, 64]) (sc : ℝ)
-    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
-    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hq : sin.regs .real [64, 64] "q" = some qtile)
-    (hqs : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
-    (hmi : sin.regs .real [64] "m_i" = some mtile)
-    (hli : sin.regs .real [64] "l_i" = some ltile)
-    (hacc : sin.regs .real [64, 64] "acc" = some acctile)
-    (hKp : sin.regs .blockPtr [64, 64] "K_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 64] =>
-        { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
-          blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol] }⟩))
-    (hVp : sin.regs .blockPtr [64, 64] "V_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 64] =>
-        { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
-          blockShape := [64, 64], strides := [64, 1], offsets := [vrow, 0] }⟩))
-    (hkload : ∀ idx : TileIndex [64, 64],
-      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * 1 + (kcol + idx.2.1.val) * 64)))
-    (hvload : ∀ idx : TileIndex [64, 64],
-      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 64 + idx.2.1.val * 1)))
-    (hundef : ∀ rg o, sin.undef rg o = 0) :
-    ∃ sF, stepStmts aft3LoopBody2 sin = some sF
-      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
-      ∧ sF.regs .real [64, 64] "q" = some qtile
-      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
-      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar SM)
-      ∧ sF.regs .blockPtr [64, 64] "K_block_ptr" = some
-          (⟨fun _ : TileIndex [64, 64] =>
-            { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
-              blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol + 64] }⟩)
-      ∧ sF.regs .blockPtr [64, 64] "V_block_ptr" = some
-          (⟨fun _ : TileIndex [64, 64] =>
-            { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
-              blockShape := [64, 64], strides := [64, 1], offsets := [vrow + 64, 0] }⟩)
-      ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
-      ∧ sF.regs .ptr [64] "m_ptrs" = sin.regs .ptr [64] "m_ptrs"
-      ∧ sF.regs .ptr [64] "l_ptrs" = sin.regs .ptr [64] "l_ptrs"
-      ∧ sF.regs .blockPtr [64, 64] "O_block_ptr" = sin.regs .blockPtr [64, 64] "O_block_ptr"
-      ∧ ∃ (qkT : Tile .real [64, 64]) (rmaxT mijT alphaT lijT : Tile .real [64])
-            (pT pmT : Tile .real [64, 64]) (acc1T : Tile .real [64, 64]),
-          (qkT = ⟨fun idx : TileIndex [64, 64] =>
-            if aft3MaskCell2 SM SN idx
-            then (Tile.bop NumericDType.real.mul Broadcast.scalarR
-                    (Tile.bop NumericDType.real.add
-                      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-                    (Tile.scalar (some sc))).data idx
-            else (⊥ : WithBot ℝ)⟩)
-          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some rmaxT
-          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
-          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
-          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
-          ∧ pmT = ⟨fun idx : TileIndex [64, 64] =>
-              if aft3MaskCell2 SM SN idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩
-          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) pmT
-          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
-          ∧ sF.regs .real [64] "m_i" = some mijT
-          ∧ sF.regs .real [64] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
-              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
-          ∧ sF.regs .real [64, 64] "acc" = some (Tile.bop NumericDType.real.add
-              (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1T (Tile.dot [] pmT vtile)) := by
-  set qkSeedT : Tile .real [64, 64] :=
-    Tile.bop NumericDType.real.mul Broadcast.scalarR
-      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-      (Tile.scalar (some sc)) with hqkSeed
-  set maskT : Tile .bool [64, 64] := ⟨fun idx : TileIndex [64, 64] => aft3MaskCell2 SM SN idx⟩ with hmaskT
-  set qkT : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] =>
-      if maskT.data idx then qkSeedT.data idx else (⊥ : WithBot ℝ)⟩ with hqkT
-  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some t :=
-    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) from by decide)]⟩
-  set mijT : Tile .real [64] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
-  set alphaT : Tile .real [64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with halpha
-  set pT : Tile .real [64, 64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)) with hpT
-  set pmT : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] => if maskT.data idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpmT
-  set lijT : Tile .real [64] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) pmT with hlij
-  set acc1T : Tile .real [64, 64] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
-  unfold aft3LoopBody2
-  -- L1: k = load K_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none) sin
-        = some ktile from by
-      rw [aft3_load_k_eval Kreg kbase 64 128 64 64 1 64 kcol (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") sin
-        (by rw [evalOp_ref]; exact hKp)]
-      refine congrArg some ?_; refine Tile.ext (fun idx => ?_); rw [hkload idx]))]
-  -- L2: qk = zeros
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_qkzeros_eval _ 64 64))]
-  -- L3: qk += dot q k
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_dot_eval _ 64 64 64 (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) qtile ktile
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same]; exact hq)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L4: qk *= qk_scale  (qk_scale read from register)
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_scale_ref_eval _ 64 64 sc
-      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hqs)))]
-  -- L5: window ifThen (SLIDING_WINDOW true) → dist/mask/qk masked = qkT
-  rw [stepStmts.cons_some
-    (show stepStmt _ _ = some _ from
-      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
-        (aft3_window2_steps _ SM SN qkSeedT
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsm)
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsn)
-          (by rw [BlockState.setReg_same])))]
-  -- L6: m_ij = maximum(m_i, max(qk,1))
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_mij_eval _ mtile qkT rmaxT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
-      (by rw [BlockState.setReg_same] <;> try rfl)
-      hrm))]
-  -- L7: qk -= m_ij[:, None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_qk_sub_eval _ (by simp) qkT mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by rw [BlockState.setReg_same])))]
-  -- L8: p = exp2 qk
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_p_eval _ (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
-      (by rw [BlockState.setReg_same])))]
-  -- L9: pmask ifThen (SLIDING_WINDOW true) → p masked = pmT
-  rw [stepStmts.cons_some
-    (show stepStmt _ _ = some _ from
-      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
-        (aft3_pmask1_steps _ maskT pT
-          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-                BlockState.setReg_same] <;> try rfl)
-          (by rw [BlockState.setReg_same])))]
-  -- L10: l_ij = sum p 1
-  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [64] "l_ij"
-    (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "p")) _ lijT
-    (aft3_lij_eval _ pmT (by rw [BlockState.setReg_same])))]
-  -- L11: tmp = m_i - m_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_tmp_eval _ mtile mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L12: alpha = exp2 tmp
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_alpha_eval _ (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
-      (by rw [BlockState.setReg_same])))]
-  -- L13: l_i = l_i * alpha + l_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_li_eval _ ltile alphaT lijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hli)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L14: acc = acc * alpha[:, None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_acc_rescale_eval _ (by simp) acctile alphaT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hacc)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L15: v = load V_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none) _
-        = some vtile from by
-      rw [aft3_load_v_eval Vreg vbase 128 64 64 64 64 1 vrow (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") _
-        (by rw [evalOp_ref]
-            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
-            exact hVp)]
-      refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
-      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
-  -- L16: acc += dot p v
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_acc_eval _ 64 64 64 acc1T pmT vtile
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)
-      (by rw [BlockState.setReg_same])))]
-  -- L17: m_i = m_ij
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_mi_carry_eval _ mijT
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-            BlockState.setReg_same] <;> try rfl)))]
-  -- L18: V_block_ptr = advance [64, 0]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_advance_v_eval _ Vreg vbase 128 64 64 64 64 1 vrow 64 "V_block_ptr"
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hVp)))]
-  -- L19: K_block_ptr = advance [0, 64]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (aft3_advance_k_eval _ Kreg kbase 64 128 64 64 1 64 kcol 64 "K_block_ptr"
-      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
-  rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
-    rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
-  · simp only [BlockState.setReg_pids]
-  · funext rg o; simp only [BlockState.setReg_mem]
-  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hq
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hqs
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]; exact hsm
-  · simp only [BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
-      BlockState.setReg_same]
-
-
-/-! ## Case 3 (no sliding window): genuine unmasked closed form
-
-Case 3 (`_SLIDING_WINDOW = 0`) lowers the two sliding-window `ifThen` guards to the
-constexpr-false condition `Op.ne (constNat 0) (constNat 0)`, so the `dist`/`mask`/
-`where` block and the `p`-mask are dead and skipped. The streaming loop then runs
-the *unmasked* online-softmax recurrence over every key — i.e. the `noWindowKeep`
-predicate — which equals the plain base-2 per-key-scale softmax
-`attentionFwdTriton3Case3OutSpec`.
-
-(Cases 1/2 are NOT closeable against `slidingWindowKeep`/
-`complementSlidingWindowKeep`: the kernel models the Triton `dist` with **natural**
-subtraction `Op.sub NumericDType.nat`, which truncates negative distances to `0`,
-whereas the math specs use signed ℤ arithmetic. The two masks differ on a majority
-of cells, so those genuine-spec theorems are false — a modeling boundary, not a
-provability gap.) -/
-
-/-- Case-3 lowered loop body: identical to `aft3LoopBody` but with the two
-sliding-window `ifThen` conditions constexpr-false (`Op.ne 0 0`) and the
-dead mask comparisons using `size = 0`. -/
-
 def aft3LoopBody3 : List Stmt :=
   [ Stmt.assign TileDType.real [64, 64] "k" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
@@ -3801,16 +2641,6 @@ theorem aft3Block_map_sum
 
 /-- A real `foldl max` over a list, coerced to `WithBot`, is `max` of the seed
 with the `WithBot` `foldr` of the coerced list. -/
-theorem aft3_foldl_max_coe (m0 : ℝ) (L : List ℝ) :
-    ((L.foldl (fun a x => max a x) m0 : ℝ) : WithBot ℝ)
-      = max ((m0 : ℝ) : WithBot ℝ) ((L.map (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥) := by
-  induction L generalizing m0 with
-  | nil => simp
-  | cons a t ih =>
-    simp only [List.foldl_cons, List.map_cons, List.foldr_cons, ih]
-    rw [WithBot.coe_max, ← max_assoc]
-
-/-- **`aft3RunningMax` one-block advance.** -/
 theorem aft3RunningMax_succ
     (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
     (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
@@ -4458,413 +3288,6 @@ made: the ⊥-carry (`m_ij = ⊥`, `α = 0`) is handled by the seed-cancellation
 
 /-- **The masked `q·k` score cell (cases 1/2).** On a kept lane the cell is the
 score `some (sc · Σ q·k)`; on a masked lane it is `⊥`. -/
-theorem aft3_score_cell_masked (s0 : BlockState) (Q K : RegionName) (sc : ℝ) (c : Nat)
-    (i jL : Fin 64) (hjL : c * 64 + jL.val < 128) (mc : Bool)
-    (qtile : Tile .real [64, 64]) (ktile : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64))) :
-    (if mc then
-        (Tile.bop NumericDType.real.mul Broadcast.scalarR
-          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-            (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-          (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-      else (⊥ : WithBot ℝ))
-      = if mc then some (sc * Finset.univ.sum (fun e : Fin 64 =>
-          qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)))
-        else (⊥ : WithBot ℝ) := by
-  match mc with
-  | Bool.false => rfl
-  | Bool.true => exact aft3_score_cell s0 Q K sc c i jL hjL qtile ktile hq hk
-
-/-- **Masked block sup (cases 1/2).** The kernel's `tl.max(qk, 1)` over block `c`
-(cell = `if mc jL then some score else ⊥`) equals the `aft3Block`-windowed
-`foldr ⊔ ⊥` for the `keep` predicate, given the cell-mask reconciliation. -/
-theorem aft3Block_masked_blockSup (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩)) :
-    Finset.univ.sup (fun jL : Fin 64 =>
-        if mc jL then
-          ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-        else (⊥ : WithBot ℝ))
-      = ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-  -- replace the Bool cell-mask by the faithful `keep` predicate at the global key
-  rw [show (fun jL : Fin 64 =>
-        if mc jL then
-          ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-        else (⊥ : WithBot ℝ))
-      = (fun jL : Fin 64 =>
-          if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
-            ((sc * Finset.univ.sum (fun e : Fin 64 =>
-                qTile3 s0 Q (i, e, PUnit.unit) *
-                  kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-          else (⊥ : WithBot ℝ)) from by
-    funext jL
-    rw [hmc jL]
-    by_cases hk : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-    · rw [if_pos (by exact decide_eq_true hk), if_pos hk]
-    · rw [if_neg (by simp [hk]), if_neg hk]]
-  rw [show (aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-        keep c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
-      = ((List.finRange 128).filterMap (fun j : Fin 128 =>
-          if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j
-          then some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
-                qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit))) else none)).map
-            (fun x => ((x : ℝ) : WithBot ℝ)) from by
-    unfold aft3Block
-    rw [List.map_filterMap, List.map_filterMap]
-    apply List.filterMap_congr
-    intro j _
-    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j <;> simp [hj]]
-  rw [aft3_filterMap_foldr_sup 128
-    (fun j => c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j)
-    (fun j => keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
-        qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit)))]
-  symm
-  apply le_antisymm
-  · apply Finset.sup_le; intro j _
-    by_cases hj : c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ keep i j
-    · rw [if_pos hj]
-      have hjL : j.val - c * 64 < 64 := by omega
-      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * 64, hjL⟩ : Fin 64)))
-      simp only
-      have hfin : (⟨c * 64 + (j.val - c * 64), by omega⟩ : Fin 128) = j := by
-        apply Fin.ext; simp; omega
-      rw [if_pos (show keep i ⟨c * 64 + (j.val - c * 64), by omega⟩ from by rw [hfin]; exact hj.2.2)]
-      apply le_of_eq
-      rw [hsc, keyScale3, keyScale3]
-      congr 1; rw [hfin]
-    · rw [if_neg hj]; exact bot_le
-  · apply Finset.sup_le; intro jL _
-    have hb : c * 64 + jL.val < 128 := by have := jL.isLt; omega
-    by_cases hkeep : keep i ⟨c * 64 + jL.val, hb⟩
-    · rw [if_pos hkeep]
-      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * 64 + jL.val, hb⟩ : Fin 128)))
-      simp only
-      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
-      apply le_of_eq
-      rw [hsc, keyScale3, keyScale3]
-    · rw [if_neg hkeep]; exact bot_le
-
-/-- **`m_ij = aft3RunningMax((c+1)·64)` (cases 1/2, masked).** Mirror of
-`aft3_mij_reg_eq` with the masked qk cell. -/
-theorem aft3_mij_reg_eq_masked (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩))
-    (qtile ktile : Tile .real [64, 64]) (mtile rmaxT : Tile .real [64])
-    (qkT : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hqkT : ∀ jL : Fin 64, qkT.data (i, jL, PUnit.unit) =
-        if mc jL then
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-        else (⊥ : WithBot ℝ))
-    (hmtile : mtile.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep (c * 64) i ⟨0, by norm_num⟩)
-    (hrmax : Tile.reduceMaxDrop aft3Ax1 qkT = some rmaxT) :
-    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
-      = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep ((c + 1) * 64) i ⟨0, by norm_num⟩ := by
-  have hrmaxcell : rmaxT.data (i, PUnit.unit)
-      = ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep c i ⟨0, by norm_num⟩).map
-          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-    rw [aft3_reduceMaxDrop_row qkT rmaxT hrmax i
-      (fun jL => if mc jL then
-          ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-          else (⊥ : WithBot ℝ))
-      (fun jL => by
-        rw [hqkT jL]
-        exact aft3_score_cell_masked s0 Q K sc c i jL (by have := jL.isLt; omega) (mc jL) qtile ktile hq hk)]
-    exact aft3Block_masked_blockSup s0 Q K V sc c hc1 i ⟨0, by norm_num⟩ hsc keep mc hmc
-  rw [aft3RunningMax_succ (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-      keep c i ⟨0, by norm_num⟩]
-  rw [Tile.select_data, Tile.cop_data]
-  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
-  set M := aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-      keep (c * 64) i ⟨0, by norm_num⟩
-  set S := ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-      keep c i ⟨0, by norm_num⟩).map
-      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
-  by_cases h : M ≤ S
-  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
-  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
-
-/-- **Masked `pmT` cell (cases 1/2).** The kernel's masked `p` tile cell on lane
-`jL` is `some (exp2(score − Mr))` when kept, `some 0` when masked — given `mij`
-cell `= some Mr`. -/
-theorem aft3_pmT_cell_masked (s0 : BlockState) (Q K : RegionName) (sc : ℝ) (c : Nat)
-    (i jL : Fin 64) (hjL : c * 64 + jL.val < 128) (mcj : Bool)
-    (qtile ktile : Tile .real [64, 64]) (mijT : Tile .real [64]) (Mc1 : WithBot ℝ)
-    (qkT pT : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hqkTcell : qkT.data (i, jL, PUnit.unit)
-        = if mcj then
-            (Tile.bop NumericDType.real.mul Broadcast.scalarR
-              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-              (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-          else (⊥ : WithBot ℝ))
-    (hmij : mijT.data (i, PUnit.unit) = Mc1)
-    (hkeptbot : mcj = Bool.true → Mc1 ≠ ⊥)
-    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
-        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))) :
-    (if mcj then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ))
-      = some (if mcj then
-          pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
-            qTile3 s0 Q (i, e, PUnit.unit) *
-              kTile3 s0 K (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) - Mc1.unbotD 0)
-          else 0) := by
-  match mcj with
-  | Bool.false => show (some (0.0 : ℝ) : WithBot ℝ) = some (0 : ℝ); norm_num
-  | Bool.true =>
-       obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
-         cases hh : Mc1 with
-         | coe x => exact ⟨x, rfl⟩
-         | bot => exact absurd hh (hkeptbot rfl)
-       show pT.data (i, jL, PUnit.unit) = some (pow2 _ )
-       rw [hpT]
-       show WithBot.realExp2 _ = _
-       simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
-         TileShape.dropInsertedIndex, NumericDType.sub, hmij, hMr, WithBot.unbotD_coe]
-       rw [show qkT.data (i, jL, PUnit.unit) =
-             (Tile.bop NumericDType.real.mul Broadcast.scalarR
-              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-              (Tile.scalar (some sc))).data (i, jL, PUnit.unit) from hqkTcell]
-       rw [aft3_score_cell s0 Q K sc c i jL hjL qtile ktile hq hk]
-       simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
-       refine congrArg some ?_; simp only [pow2]; ring_nf
-
-set_option maxHeartbeats 1600000 in
-/-- **`Σ_jL pm[i,jL] = aft3Block` pow2-score sum (cases 1/2, masked).** The masked
-`p` reduceSum equals the windowed `aft3Block` pow2-score sum. -/
-theorem aft3_nume_row_sum_masked (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩))
-    (qtile ktile : Tile .real [64, 64]) (mijT : Tile .real [64]) (pT pmT : Tile .real [64, 64])
-    (qkT : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hqkT : ∀ jL : Fin 64, qkT.data (i, jL, PUnit.unit) =
-        if mc jL then
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-        else (⊥ : WithBot ℝ))
-    (hmij : mijT.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩)
-    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
-        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
-    (hpmT : ∀ jL : Fin 64, pmT.data (i, jL, PUnit.unit) =
-        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
-    (Tile.reduceSumDrop aft3Ax1 pmT).data (i, PUnit.unit)
-      = some ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep c i d).map (fun p =>
-            pow2 (p.1 - (aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-              keep ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0))).sum := by
-  set Mc1 := aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
-  -- a kept lane forces `Mc1 ≠ ⊥` (its score is in the windowed prefix)
-  have hkeptbot : ∀ jL : Fin 64, keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ → Mc1 ≠ ⊥ := by
-    intro jL hkp
-    rw [hMc1, aft3RunningMax_eq (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep
-      ((c + 1) * 64) i ⟨0, by norm_num⟩ d]
-    unfold aft3RunningMax aft3KeysUpto
-    intro hbot
-    set sc' := keyScale3 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128) *
-        Finset.univ.sum (fun e : Fin 64 => qTile3 s0 Q (i, e, PUnit.unit) *
-          kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) with hsc'
-    have hmem : ((sc' : ℝ) : WithBot ℝ) ∈
-        ((List.finRange 128).filterMap (fun j : Fin 128 =>
-          if j.val < (c + 1) * 64 ∧ keep i j then
-            some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
-                    qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit)),
-                  vTile3 s0 V (j, d, PUnit.unit))
-          else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
-      rw [List.mem_map]
-      refine ⟨(sc', vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)), ?_, rfl⟩
-      rw [List.mem_filterMap]
-      refine ⟨⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, List.mem_finRange _, ?_⟩
-      have hlt : (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128).val < (c + 1) * 64 := by
-        show c * 64 + jL.val < (c + 1) * 64; have := jL.isLt; omega
-      rw [if_pos ⟨hlt, hkp⟩]
-    have hle := aft3_mem_le_foldr_sup _ _ hmem
-    exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
-  rw [Tile.reduceSumDrop_data]
-  have hcell : ∀ jL : Fin 64,
-      pmT.data (TileShape.insertAxisIndex [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) (i, PUnit.unit) jL)
-        = some (if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
-            pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mc1.unbotD 0)
-            else 0) := by
-    intro jL
-    rw [show (TileShape.insertAxisIndex [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
-    rw [hpmT jL]
-    rw [aft3_pmT_cell_masked s0 Q K sc c i jL (by have := jL.isLt; omega) (mc jL)
-      qtile ktile mijT Mc1 qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
-    · rw [hmc jL]
-      by_cases hkp : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-      · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
-      · rw [if_neg hkp, if_neg (by simp [hkp])]
-    · intro hmcj
-      exact hkeptbot jL (by have := (hmc jL).symm.trans hmcj; exact of_decide_eq_true this)
-  simp only [hcell]
-  rw [WithBot.sum_someTerm_eq_some]
-  refine congrArg some ?_
-  rw [aft3Block_map_sum (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-      keep c i d hc1 (fun p => pow2 (p.1 - Mc1.unbotD 0))]
-  refine Finset.sum_congr rfl (fun jL _ => ?_)
-  have hjLlt : jL.val < 64 := jL.isLt
-  have hb : c * 64 + jL.val < 128 := by omega
-  by_cases hkp : keep i ⟨c * 64 + jL.val, hb⟩
-  · rw [if_pos hkp, if_pos hkp, hsc, keyScale3, keyScale3]
-  · rw [if_neg hkp, if_neg hkp]
-
-set_option maxHeartbeats 1600000 in
-/-- **`Σ_jL pm[i,jL]·v[jL,d] = aft3Block` pow2-score·v sum (cases 1/2, masked).** -/
-theorem aft3_acc_dot_block_masked (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩))
-    (qtile ktile vtile : Tile .real [64, 64]) (mijT : Tile .real [64]) (pT pmT : Tile .real [64, 64])
-    (qkT : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hv : ∀ idx : TileIndex [64, 64],
-        vtile.data idx = some (s0.readMem V (baseOffset3 s0 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)))
-    (hqkT : ∀ jL : Fin 64, qkT.data (i, jL, PUnit.unit) =
-        if mc jL then
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-        else (⊥ : WithBot ℝ))
-    (hmij : mijT.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩)
-    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
-        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
-    (hpmT : ∀ jL : Fin 64, pmT.data (i, jL, PUnit.unit) =
-        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
-    (Tile.dot [] pmT vtile).data (i, d, PUnit.unit)
-      = some ((aft3Block (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep c i d).map (fun p =>
-            pow2 (p.1 - (aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-              keep ((c + 1) * 64) i ⟨0, by norm_num⟩).unbotD 0) * p.2)).sum := by
-  set Mc1 := aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
-  have hkeptbot : ∀ jL : Fin 64, keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ → Mc1 ≠ ⊥ := by
-    intro jL hkp
-    rw [hMc1, aft3RunningMax_eq (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3 keep
-      ((c + 1) * 64) i ⟨0, by norm_num⟩ d]
-    unfold aft3RunningMax aft3KeysUpto
-    intro hbot
-    set sc' := keyScale3 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128) *
-        Finset.univ.sum (fun e : Fin 64 => qTile3 s0 Q (i, e, PUnit.unit) *
-          kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit)) with hsc'
-    have hmem : ((sc' : ℝ) : WithBot ℝ) ∈
-        ((List.finRange 128).filterMap (fun j : Fin 128 =>
-          if j.val < (c + 1) * 64 ∧ keep i j then
-            some (keyScale3 j * Finset.univ.sum (fun e : Fin 64 =>
-                    qTile3 s0 Q (i, e, PUnit.unit) * kTile3 s0 K (j, e, PUnit.unit)),
-                  vTile3 s0 V (j, d, PUnit.unit))
-          else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
-      rw [List.mem_map]
-      refine ⟨(sc', vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)), ?_, rfl⟩
-      rw [List.mem_filterMap]
-      refine ⟨⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, List.mem_finRange _, ?_⟩
-      have hlt : (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ : Fin 128).val < (c + 1) * 64 := by
-        show c * 64 + jL.val < (c + 1) * 64; have := jL.isLt; omega
-      rw [if_pos ⟨hlt, hkp⟩]
-    have hle := aft3_mem_le_foldr_sup _ _ hmem
-    exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
-  rw [Tile.dot_nil_data]
-  have hcell : ∀ jL : Fin 64,
-      Option.map₂ (· * ·) (pmT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
-        = some (if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
-            pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mc1.unbotD 0)
-              * vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
-            else 0) := by
-    intro jL
-    have hpmcell : pmT.data (i, jL, PUnit.unit)
-        = some (if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
-            pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
-              qTile3 s0 Q (i, e, PUnit.unit) *
-                kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mc1.unbotD 0)
-            else 0) := by
-      rw [hpmT jL]
-      rw [aft3_pmT_cell_masked s0 Q K sc c i jL (by have := jL.isLt; omega) (mc jL)
-        qtile ktile mijT Mc1 qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
-      · rw [hmc jL]
-        by_cases hkp : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-        · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
-        · rw [if_neg hkp, if_neg (by simp [hkp])]
-      · intro hmcj
-        exact hkeptbot jL (by have := (hmc jL).symm.trans hmcj; exact of_decide_eq_true this)
-    rw [hpmcell, hv (jL, d, PUnit.unit)]
-    rw [show s0.readMem V (baseOffset3 s0 + (c * 64 + jL.val) * 64 + d.val * 1)
-          = vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit) from by
-      simp only [vTile3]; congr 1; ring]
-    by_cases hkp : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-    · rw [if_pos hkp, if_pos hkp]; rfl
-    · rw [if_neg hkp, if_neg hkp]
-      simp only [Option.map₂, Option.bind, Option.map]; rw [zero_mul]
-  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
-        (fun k => Option.map₂ (· * ·) (pmT.data (i, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
-      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ (fun jL =>
-          (some (if keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩ then
-              pow2 ((sc * Finset.univ.sum (fun e : Fin 64 =>
-                qTile3 s0 Q (i, e, PUnit.unit) *
-                  kTile3 s0 K (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mc1.unbotD 0)
-                * vTile3 s0 V (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
-              else 0) : WithBot ℝ))
-      from Finset.sum_congr rfl (fun jL _ => hcell jL)]
-  rw [WithBot.sum_someTerm_eq_some]
-  refine congrArg some ?_
-  rw [aft3Block_map_sum (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-      keep c i d hc1 (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)]
-  refine Finset.sum_congr rfl (fun jL _ => ?_)
-  by_cases hkp : keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩
-  · rw [if_pos hkp, if_pos hkp, hsc, keyScale3, keyScale3]
-  · rw [if_neg hkp, if_neg hkp]
-
-/-! ### Faithful kernel running state for cases 1/2 (`aft3StateBotK`)
-
-The kernel seeds `l_i = 1`, `acc = 0` at preLoop (window `[0,0)`). But — unlike the
-filtered model `aft3StateBot1` — on a **fully-masked** block the kernel *executes*
-the block with all lanes zeroed (`α = exp2(⊥ − ⊥) = 0`, `l_ij = 0`), so the seed-1
-is annihilated: after any masked block from a `⊥` running-max the register becomes
-`0`. Thus the faithful tracked value is the kernel seed at window `0` and the
-seed-`0` ⊥-state `aft3StateBot` for every later window: -/
 noncomputable def aft3StateBotK
     (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
     (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
@@ -4875,68 +3298,6 @@ noncomputable def aft3StateBotK
 
 /-- The running max of `aft3StateBotK` is `aft3RunningMax` (the seed-`1` and
 seed-`0` states share the `⊥` max at window `0`). -/
-theorem aft3StateBotK_fst
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64) :
-    (aft3StateBotK qT kT vT keyScale keep hi i d).1
-      = aft3RunningMax qT kT vT keyScale keep hi i d := by
-  unfold aft3StateBotK
-  split
-  · rename_i h; subst h; rw [aft3RunningMax_zero]
-  · rw [aft3StateBot_fst_eq_runningMax]
-
-/-- **The seed cancellation.** At every window `c·64`, the kernel state's `l`/`acc`
-agree with `aft3StateBot` after multiplying by the next-block rescale `α`
-(`= exp2(M_c − M_{c+1})`). At `c = 0` the running max is `⊥`, so `α = 0` kills the
-seed-1; for `c > 0` the two states are definitionally equal. -/
-theorem aft3StateBotK_cancel
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (c : Nat) (i : Fin 64) (d : Fin 64) (Mc1 : WithBot ℝ) :
-    let m := (aft3StateBot qT kT vT keyScale keep (c * 64) i d).1
-    let α := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
-    (aft3StateBotK qT kT vT keyScale keep (c * 64) i d).2.1 * α
-        = (aft3StateBot qT kT vT keyScale keep (c * 64) i d).2.1 * α
-      ∧ (aft3StateBotK qT kT vT keyScale keep (c * 64) i d).2.2 * α
-        = (aft3StateBot qT kT vT keyScale keep (c * 64) i d).2.2 * α := by
-  intro m α
-  unfold aft3StateBotK
-  by_cases hc0 : c = 0
-  · subst hc0
-    simp only [Nat.zero_mul, if_pos rfl]
-    have hmbot : m = ⊥ := by
-      show (aft3StateBot qT kT vT keyScale keep (0 * 64) i d).1 = ⊥
-      rw [aft3StateBot_fst_eq_runningMax, Nat.zero_mul, aft3RunningMax_zero]
-    have hα0 : α = 0 := by
-      show (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 = 0
-      rw [hmbot, WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
-    rw [hα0]; simp
-  · simp only [Nat.mul_eq_zero, hc0, false_or, OfNat.ofNat_ne_zero, or_self, if_neg]
-    exact ⟨rfl, rfl⟩
-
-/-- At window `0` the kernel state `aft3StateBotK` is the seed `(⊥, 1, 0)` =
-`aft3StateBot1` — the preLoop init, making `attnInvariantK … 0` follow from the
-banked `attnInvariant … 0`. -/
-theorem aft3StateBotK_zero
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (i : Fin 64) (d : Fin 64) :
-    aft3StateBotK qT kT vT keyScale keep 0 i d
-      = aft3StateBot1 qT kT vT keyScale keep 0 i d := by
-  unfold aft3StateBotK aft3StateBot1 aft3KeysUpto
-  rw [if_pos rfl]
-  rw [show (List.finRange 128).filterMap
-        (fun j : Fin 128 => if j.val < 0 ∧ keep i j
-          then some (keyScale j * Finset.univ.sum (fun e : Fin 64 =>
-                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
-          else none) = [] from by
-    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
-  rfl
-
-/-- **Masked loop invariant (cases 1/2).** Identical to `attnInvariant` but the
-denominator/accumulator carry the faithful kernel state `aft3StateBotK` (seed-1
-at window 0, then the seed-0 ⊥-state). -/
 noncomputable def attnInvariantK
     (Q K V M Out L : RegionName) (s0 : BlockState)
     (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
@@ -4984,610 +3345,6 @@ noncomputable def attnInvariantK
 /-- The base case: the banked `attnInvariant … 0` (which carries `aft3StateBot1`)
 yields `attnInvariantK … 0` (which carries `aft3StateBotK`), since both equal the
 seed `(⊥,1,0)` at window 0. -/
-theorem attnInvariant_zero_to_K
-    (Q K V M Out L : RegionName) (s0 : BlockState)
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (s : BlockState) (h : attnInvariant Q K V M Out L s0 keep 0 s) :
-    attnInvariantK Q K V M Out L s0 keep 0 s := by
-  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := h
-  refine ⟨hpids, hmod, hile, hmi, ?_, ?_, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩
-  · rw [hli]; simp only [aft3StateBotK_zero]
-  · rw [hacc]; simp only [aft3StateBotK_zero]
-
-/-- **Empty-window `0/0` reconciliation.** At the full window the raw kernel ratio
-`(aft3StateBotK 128).2.2 / (aft3StateBotK 128 ·⟨0⟩).2.1` equals the streaming
-`osStep` ratio over the kept keys — for *every* row, including the empty-window
-rows where the running max is `⊥` (both sides are `0/0 = 0` there). -/
-theorem aft3StateBotK_full_eq_streaming
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (i d : Fin 64) :
-    ((aft3StateBotK qT kT vT keyScale keep 128 i d).2.2)
-        / ((aft3StateBotK qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1)
-      = (let st := (aft3KeysUpto qT kT vT keyScale keep 128 i d).foldl osStep (0, 0, 0)
-         st.2.2 / st.2.1) := by
-  have hK : aft3StateBotK qT kT vT keyScale keep 128 i d
-      = aft3StateBot qT kT vT keyScale keep 128 i d := by
-    unfold aft3StateBotK; rw [if_neg (by norm_num)]
-  have hK0 : aft3StateBotK qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩
-      = aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ := by
-    unfold aft3StateBotK; rw [if_neg (by norm_num)]
-  rw [hK, hK0]
-  by_cases hne : aft3RunningMax qT kT vT keyScale keep 128 i d = ⊥
-  · -- empty window: both ratios are 0/0
-    have hden : (aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1 = 0 := by
-      rw [aft3StateBot_snd_fst]
-      rw [aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩
-        (by rw [aft3RunningMax_eq qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ d]; exact hne) _,
-        mul_zero]
-    have hnum : (aft3StateBot qT kT vT keyScale keep 128 i d).2.2 = 0 := by
-      rw [aft3StateBot_snd_snd]
-      rw [aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale keep 128 i d hne _, mul_zero]
-    have hkeys : aft3KeysUpto qT kT vT keyScale keep 128 i d = [] := by
-      by_contra hc
-      obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hc
-      have hmem : ((p.1 : ℝ) : WithBot ℝ) ∈
-          (aft3KeysUpto qT kT vT keyScale keep 128 i d).map (fun q => ((q.1 : ℝ) : WithBot ℝ)) :=
-        List.mem_map_of_mem hp
-      have := aft3_mem_le_foldr_sup _ _ hmem
-      rw [← aft3RunningMax, hne] at this
-      exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
-    rw [hnum, hden, hkeys]; simp
-  · -- nonempty window: K = StateBot ratio = streaming ratio
-    rw [show (aft3StateBot qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩).2.1
-          = (aft3StateBot qT kT vT keyScale keep 128 i d).2.1 from
-        aft3StateBot_snd_fst_indep qT kT vT keyScale keep 128 i ⟨0, by norm_num⟩ d]
-    exact aft3StateBot_ratio_eq qT kT vT keyScale keep 128 i d hne
-
-/-- **Case-1 mask reconciliation (TRUE by construction).** At loop counter `SN =
-c·64`, the lowered nat-mask cell `aft3MaskCell1 SM (c·64) (i, jL)` equals the
-faithful `natSlidingWindowKeep SM i ⟨c·64 + jL⟩`. The `dist ≥ 0` conjunct is
-vacuous on ℕ. -/
-theorem aft3MaskCell1_eq_keep (SM c : Nat) (i jL : Fin 64)
-    (hb : c * 64 + jL.val < 128) :
-    aft3MaskCell1 SM (c * 64) (i, jL, PUnit.unit)
-      = decide (natSlidingWindowKeep SM i ⟨c * 64 + jL.val, hb⟩) := by
-  unfold aft3MaskCell1 natSlidingWindowKeep natDist3 ComparableDType.ge ComparableDType.lt
-  have hjL : jL.val < 64 := jL.isLt
-  have hmod : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) % 64 = jL.val := by show (c * 64 + jL.val) % 64 = jL.val; omega
-  have hdiv : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) / 64 = c := by show (c * 64 + jL.val) / 64 = c; omega
-  simp only [hmod, hdiv, Nat.zero_le, decide_true, Bool.true_and, Nat.add_zero]
-
-/-- **Case-2 mask reconciliation (TRUE by construction).** At `SN = c·64`, the
-lowered nat-mask `aft3MaskCell2` (`dist ≥ 64`) equals `natComplementSlidingWindowKeep`. -/
-theorem aft3MaskCell2_eq_keep (SM c : Nat) (i jL : Fin 64)
-    (hb : c * 64 + jL.val < 128) :
-    aft3MaskCell2 SM (c * 64) (i, jL, PUnit.unit)
-      = decide (natComplementSlidingWindowKeep SM i ⟨c * 64 + jL.val, hb⟩) := by
-  unfold aft3MaskCell2 natComplementSlidingWindowKeep natDist3 ComparableDType.ge
-  have hjL : jL.val < 64 := jL.isLt
-  have hmod : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) % 64 = jL.val := by show (c * 64 + jL.val) % 64 = jL.val; omega
-  have hdiv : ((⟨c * 64 + jL.val, hb⟩ : Fin 128).val) / 64 = c := by show (c * 64 + jL.val) / 64 = c; omega
-  simp only [hmod, hdiv, Nat.add_zero]
-
-set_option maxHeartbeats 1000000 in
-/-- **`l_i' = aft3StateBot((c+1)·64).2.1` (cases 1/2, masked).** From the kernel
-seed state `aft3StateBotK(c·64)` the masked `l_i·α + Σpm` register equals the
-seed-`0` denominator after `c+1` blocks. -/
-theorem aft3_denom_reg_eq_masked (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩))
-    (qtile ktile : Tile .real [64, 64]) (qkT : Tile .real [64, 64])
-    (ltile mtile mijT alphaT : Tile .real [64]) (pT pmT : Tile .real [64, 64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hqkT : ∀ jL : Fin 64, qkT.data (i, jL, PUnit.unit) =
-        if mc jL then
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-        else (⊥ : WithBot ℝ))
-    (hltile : ltile.data (i, PUnit.unit) = some
-        ((aft3StateBotK (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep (c * 64) i ⟨0, by norm_num⟩).2.1))
-    (hmtile : mtile.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep (c * 64) i ⟨0, by norm_num⟩)
-    (hmij : mijT.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep ((c + 1) * 64) i ⟨0, by norm_num⟩)
-    (halpha : alphaT = Tile.uop WithBot.realExp2
-        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
-    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
-        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
-    (hpmT : ∀ jL : Fin 64, pmT.data (i, jL, PUnit.unit) =
-        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
-    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
-        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT)
-        (Tile.reduceSumDrop aft3Ax1 pmT)).data (i, PUnit.unit)
-      = some ((aft3StateBot (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep ((c + 1) * 64) i ⟨0, by norm_num⟩).2.1) := by
-  set qT := qTile3 s0 Q
-  set kT := kTile3 s0 K
-  set vT := vTile3 s0 V
-  set m := (aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).1 with hm_def
-  set Mc := aft3RunningMax qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩ with hMc
-  set Mc1 := aft3RunningMax qT kT vT keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
-  have hmMc : m = Mc := by rw [hm_def, hMc, aft3StateBot_fst_eq_runningMax]
-  have hMsucc : Mc1 = m ⊔ ((aft3Block qT kT vT keyScale3 keep c i ⟨0, by norm_num⟩).map
-        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-    have h1 : Mc1 = (aft3StateBot qT kT vT keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩).1 := by
-      rw [hMc1, aft3StateBot_fst_eq_runningMax]
-    rw [h1, aft3StateBot_succ, aft3OsStepBot_block_fst m
-        ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.1)
-        ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.2)]
-  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
-    rw [halpha]; show WithBot.realExp2 _ = _
-    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
-      NumericDType.sub, ← hMc, ← hMc1, hmMc]
-  have hsum := aft3_nume_row_sum_masked s0 Q K V sc c hc1 i ⟨0, by norm_num⟩ hsc keep mc hmc
-    qtile ktile mijT pT pmT qkT hq hk hqkT hmij hpT hpmT
-  have hblockEq := aft3OsStepBot_block_eq m
-    ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.1)
-    ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.2)
-    ((aft3KeysUpto qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).map (fun p => pow2 p.1 * p.2)).sum
-    ((aft3KeysUpto qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum
-    (aft3Block qT kT vT keyScale3 keep c i ⟨0, by norm_num⟩)
-    (by rw [aft3_denom_anchor, zero_add, hm_def])
-    (by rw [aft3_acc_anchor, zero_add, hm_def])
-    (fun hbot => aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩
-      (by rw [← aft3StateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
-    (fun hbot => aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩
-      (by rw [← aft3StateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
-  rw [← hMsucc] at hblockEq
-  rw [show (aft3StateBot qT kT vT keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩).2.1
-        = (Mc1, (aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.1
-              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
-              + ((aft3Block qT kT vT keyScale3 keep c i ⟨0, by norm_num⟩).map (fun p => pow2 (p.1 - Mc1.unbotD 0))).sum,
-            _).2.1 from by
-    rw [aft3StateBot_succ]; rw [← hblockEq]]
-  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
-  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
-    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
-  have hcancel := (aft3StateBotK_cancel qT kT vT keyScale3 keep c i ⟨0, by norm_num⟩ Mc1).1
-  rw [Tile.bop_data]
-  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
-  erw [hsum]
-  rw [Tile.bop_data]
-  simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
-    hltile, halphaVal, hαsome]
-  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
-  refine congrArg some ?_
-  rw [show (aft3StateBotK qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.1 * α
-        = (aft3StateBot qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩).2.1 * α from hcancel]
-
-set_option maxHeartbeats 1000000 in
-/-- **`acc' = aft3StateBot((c+1)·64).2.2` (cases 1/2, masked).** -/
-theorem aft3_acc_reg_eq_masked (s0 : BlockState) (Q K V : RegionName) (sc : ℝ)
-    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (i d : Fin 64)
-    (hsc : sc = keyScale3 (⟨0, by norm_num⟩ : Fin 128))
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (mc : Fin 64 → Bool)
-    (hmc : ∀ jL : Fin 64, mc jL = decide (keep i ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩))
-    (qtile ktile vtile : Tile .real [64, 64]) (qkT : Tile .real [64, 64])
-    (acctile acc1T pT pmT : Tile .real [64, 64]) (mtile mijT alphaT : Tile .real [64])
-    (hq : qtile = ⟨fun idx : TileIndex [64, 64] => some (qTile3 s0 Q idx)⟩)
-    (hk : ∀ idx : TileIndex [64, 64],
-        ktile.data idx = some (s0.readMem K (baseOffset3 s0 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
-    (hv : ∀ idx : TileIndex [64, 64],
-        vtile.data idx = some (s0.readMem V (baseOffset3 s0 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)))
-    (hqkT : ∀ jL : Fin 64, qkT.data (i, jL, PUnit.unit) =
-        if mc jL then
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) (Tile.dot [] qtile ktile))
-            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
-        else (⊥ : WithBot ℝ))
-    (hacctile : acctile.data (i, d, PUnit.unit) = some
-        ((aft3StateBotK (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep (c * 64) i d).2.2))
-    (hmtile : mtile.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep (c * 64) i ⟨0, by norm_num⟩)
-    (hmij : mijT.data (i, PUnit.unit)
-        = aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-            keep ((c + 1) * 64) i ⟨0, by norm_num⟩)
-    (halpha : alphaT = Tile.uop WithBot.realExp2
-        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
-    (hacc1 : acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
-    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
-        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
-    (hpmT : ∀ jL : Fin 64, pmT.data (i, jL, PUnit.unit) =
-        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
-    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        acc1T (Tile.dot [] pmT vtile)).data (i, d, PUnit.unit)
-      = some ((aft3StateBot (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-          keep ((c + 1) * 64) i d).2.2) := by
-  set qT := qTile3 s0 Q
-  set kT := kTile3 s0 K
-  set vT := vTile3 s0 V
-  set m := (aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).1 with hm_def
-  set Mc := aft3RunningMax qT kT vT keyScale3 keep (c * 64) i ⟨0, by norm_num⟩ with hMc
-  set Mc1 := aft3RunningMax qT kT vT keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩ with hMc1
-  have hmMc : m = Mc := by
-    rw [hm_def, hMc, aft3StateBot_fst_eq_runningMax,
-      aft3RunningMax_eq qT kT vT keyScale3 keep (c * 64) i d ⟨0, by norm_num⟩]
-  have hMsucc : Mc1 = m ⊔ ((aft3Block qT kT vT keyScale3 keep c i d).map
-        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
-    have h1 : Mc1 = (aft3StateBot qT kT vT keyScale3 keep ((c + 1) * 64) i d).1 := by
-      rw [hMc1, aft3StateBot_fst_eq_runningMax,
-        aft3RunningMax_eq qT kT vT keyScale3 keep ((c + 1) * 64) i ⟨0, by norm_num⟩ d]
-    rw [h1, aft3StateBot_succ, aft3OsStepBot_block_fst m
-        ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.1)
-        ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.2)]
-  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
-    rw [halpha]; show WithBot.realExp2 _ = _
-    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
-      NumericDType.sub, ← hMc, ← hMc1, hmMc]
-  have hdot := aft3_acc_dot_block_masked s0 Q K V sc c hc1 i d hsc keep mc hmc
-    qtile ktile vtile mijT pT pmT qkT hq hk hv hqkT hmij hpT hpmT
-  have hblockEq := aft3OsStepBot_block_eq m
-    ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.1)
-    ((aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.2)
-    ((aft3KeysUpto qT kT vT keyScale3 keep (c * 64) i d).map (fun p => pow2 p.1 * p.2)).sum
-    ((aft3KeysUpto qT kT vT keyScale3 keep (c * 64) i d).map (fun p => pow2 p.1)).sum
-    (aft3Block qT kT vT keyScale3 keep c i d)
-    (by rw [aft3_denom_anchor, zero_add, hm_def])
-    (by rw [aft3_acc_anchor, zero_add, hm_def])
-    (fun hbot => aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale3 keep (c * 64) i d
-      (by rw [← aft3StateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
-    (fun hbot => aft3KeysUpto_sum_zero_of_bot qT kT vT keyScale3 keep (c * 64) i d
-      (by rw [← aft3StateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
-  rw [← hMsucc] at hblockEq
-  rw [show (aft3StateBot qT kT vT keyScale3 keep ((c + 1) * 64) i d).2.2
-        = (Mc1, _,
-            (aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.2
-              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
-              + ((aft3Block qT kT vT keyScale3 keep c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
-        from by rw [aft3StateBot_succ]; rw [← hblockEq]]
-  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
-  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
-    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
-  have hcancel := (aft3StateBotK_cancel qT kT vT keyScale3 keep c i d Mc1).2
-  rw [Tile.bop_data]
-  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
-  erw [hdot]
-  rw [hacc1, Tile.bop_data]
-  simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
-    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, hacctile, halphaVal, hαsome]
-  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
-  refine congrArg some ?_
-  rw [show (aft3StateBotK qT kT vT keyScale3 keep (c * 64) i d).2.2 * α
-        = (aft3StateBot qT kT vT keyScale3 keep (c * 64) i d).2.2 * α from hcancel]
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Step lemma (case 1, sliding window).** The masked loop body `aft3LoopBody`
-advances `attnInvariantK … natSlidingWindowKeep` by one key block (`i → i + 64`),
-via `aft3LoopBody_steps` + the masked `mij`/`denom`/`acc` register bridges. The
-mask reconciliation `aft3MaskCell1 ↔ natSlidingWindowKeep` is TRUE by
-construction (`aft3MaskCell1_eq_keep`). -/
-theorem aft3_attn_step1 (Q K V M Out L : RegionName) (s0 : BlockState)
-    (i : Nat) (s : BlockState) (hilt : i < 128) (himod : i % 64 = 0)
-    (hinv : attnInvariantK Q K V M Out L s0
-      (fun i j => natSlidingWindowKeep (s0.pids 0) i j) i s) :
-    ∃ s', stepStmts aft3LoopBody (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
-      ∧ attnInvariantK Q K V M Out L s0
-          (fun i j => natSlidingWindowKeep (s0.pids 0) i j) (i + 64) s' := by
-  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
-  set c := i / 64 with hc_def
-  have hi : i = c * 64 := by omega
-  have hc1 : (c + 1) * 64 ≤ 128 := by omega
-  set base := baseOffset3 s0 with hbase
-  set sc0 : ℝ := (1 / 8 : ℝ) * 1.4426950408889634 with hsc0
-  set qT := qTile3 s0 Q with hqT
-  set kT := kTile3 s0 K with hkT
-  set vT := vTile3 s0 V with hvT
-  set kp : Fin 64 → Fin 128 → Prop := fun i j => natSlidingWindowKeep (s0.pids 0) i j with hkp
-  have hbaseEq : (s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 : Nat) = base := by
-    simp [hbase, baseOffset3]
-  -- run the masked loop body chain
-  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hKpF, hVpF, hoffF, hMptrF, hLptrF, hOpF,
-      qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
-      hqkData, hrm, hmijd, halphad, hpTd, hpmTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
-    aft3LoopBody_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i
-      K V base base i i
-      (⟨fun idx : TileIndex [64, 64] => some (qT idx)⟩)
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      (⟨fun r : TileIndex [64] => ((aft3StateBotK qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩)
-      (⟨fun idx : TileIndex [64, 64] => ((aft3StateBotK qT kT vT keyScale3 kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩)
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩)
-      sc0
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
-      (by simp [BlockState.setReg_same])
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hKp, hbaseEq])
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hVp, hbaseEq])
-      (fun idx => rfl)
-      (fun idx => rfl)
-      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
-  refine ⟨sF, hchain, ?_⟩
-  have hrmemK : ∀ idx : TileIndex [64, 64],
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ : Tile .real [64, 64]).data idx
-        = some (s0.readMem K (base + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)) := by
-    intro idx
-    simp only [BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem, hi]
-  have hrmemV : ∀ idx : TileIndex [64, 64],
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ : Tile .real [64, 64]).data idx
-        = some (s0.readMem V (base + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)) := by
-    intro idx
-    simp only [BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem, hi]
-  set qtileF : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] => some (qT idx)⟩ with hqtileF
-  set ktileF : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ with hktileF
-  set vtileF : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ with hvtileF
-  have hsckey : sc0 = keyScale3 (⟨0, by norm_num⟩ : Fin 128) := by rw [hsc0, keyScale3]
-  -- the cell-mask: aft3MaskCell1 (pids 0) i, reconciled with the keep predicate at c
-  set mc : Fin 64 → Bool := fun jL => aft3MaskCell1 (s0.pids 0) i (⟨0, by norm_num⟩, jL, PUnit.unit) with hmcdef
-  have hmc_row : ∀ r jL : Fin 64, aft3MaskCell1 (s0.pids 0) i (r, jL, PUnit.unit)
-      = decide (kp r ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩) := by
-    intro r jL
-    have heq : aft3MaskCell1 (s0.pids 0) i (r, jL, PUnit.unit)
-        = aft3MaskCell1 (s0.pids 0) (c * 64) (r, jL, PUnit.unit) := by rw [hi]
-    rw [heq, aft3MaskCell1_eq_keep (s0.pids 0) c r jL (by have := jL.isLt; omega)]
-  have hmc : ∀ jL : Fin 64, mc jL = decide (kp ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩) := by
-    intro jL
-    rw [hmcdef]; simp only
-    exact hmc_row ⟨0, by norm_num⟩ jL
-  -- m_i cell readback
-  have hmicell : ∀ r : Fin 64,
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩ : Tile .real [64]).data (r, PUnit.unit)
-        = aft3RunningMax qT kT vT keyScale3 kp (c * 64) r ⟨0, by norm_num⟩ := by
-    intro r; simp only; rw [hi]
-  -- mijT cell = aft3RunningMax((c+1)*64)
-  have hmijcell : ∀ r : Fin 64, mijT.data (r, PUnit.unit)
-      = aft3RunningMax qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩ := by
-    intro r
-    rw [hmijd]
-    refine aft3_mij_reg_eq_masked s0 Q K V sc0 c hc1 r ⟨0, by norm_num⟩ hsckey kp
-      (fun jL => aft3MaskCell1 (s0.pids 0) i (r, jL, PUnit.unit))
-      (fun jL => hmc_row r jL)
-      qtileF ktileF
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩) rmaxT qkT
-      hqtileF hrmemK ?_ ?_ ?_
-    · intro jL; rw [hqkData]
-    · rw [hmicell r]
-    · exact hrm
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [hpidsF, BlockState.setReg_pids, hpids]
-  · omega
-  · omega
-  · rw [hmiF]; refine congrArg some ?_; ext r
-    rw [hmijcell r.1, show ((c + 1) * 64 : Nat) = i + 64 from by omega]
-  · rw [hliF]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
-    obtain ⟨r, ⟨⟩⟩ := r
-    have hbr := aft3_denom_reg_eq_masked s0 Q K V sc0 c hc1 r ⟨0, by norm_num⟩ hsckey kp
-      (fun jL => aft3MaskCell1 (s0.pids 0) i (r, jL, PUnit.unit)) (fun jL => hmc_row r jL)
-      qtileF ktileF qkT
-      (⟨fun r : TileIndex [64] => ((aft3StateBotK qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩)
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      mijT alphaT pT pmT hqtileF hrmemK
-      (fun jL => by rw [hqkData])
-      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
-      (by rw [hmijcell r]) halphad hpTd
-      (fun jL => by rw [hpmTd])
-    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
-    rw [hlijd, hbr]
-    show _ = ((aft3StateBotK qT kT vT keyScale3 kp (i + 64) r ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
-    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
-      show aft3StateBotK qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩
-        = aft3StateBot qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩ from by
-        unfold aft3StateBotK; rw [if_neg (by omega)]]
-    rw [← hqT, ← hkT, ← hvT]; rfl
-  · rw [haccF]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
-    obtain ⟨ir, id, ⟨⟩⟩ := idx
-    have hbr := aft3_acc_reg_eq_masked s0 Q K V sc0 c hc1 ir id hsckey kp
-      (fun jL => aft3MaskCell1 (s0.pids 0) i (ir, jL, PUnit.unit)) (fun jL => hmc_row ir jL)
-      qtileF ktileF vtileF qkT
-      (⟨fun idx : TileIndex [64, 64] => ((aft3StateBotK qT kT vT keyScale3 kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
-      acc1T pT pmT
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      mijT alphaT hqtileF hrmemK hrmemV
-      (fun jL => by rw [hqkData])
-      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
-      (by rw [hmijcell ir]) halphad hacc1d hpTd
-      (fun jL => by rw [hpmTd])
-    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
-    rw [hbr]
-    show _ = ((aft3StateBotK qT kT vT keyScale3 kp (i + 64) ir id).2.2 : WithBot ℝ)
-    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
-      show aft3StateBotK qT kT vT keyScale3 kp ((c + 1) * 64) ir id
-        = aft3StateBot qT kT vT keyScale3 kp ((c + 1) * 64) ir id from by
-        unfold aft3StateBotK; rw [if_neg (by omega)]]
-    rw [← hqT, ← hkT, ← hvT]; rfl
-  · rw [hqF]
-  · rw [hqsF]
-  · rw [hsmF]
-  · rw [hoffF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff
-  · rw [hKpF, ← hbaseEq]
-  · rw [hVpF, ← hbaseEq]
-  · rw [hMptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
-  · rw [hLptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr
-  · rw [hOpF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
-  · exact hundefF
-  · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
-
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Step lemma (case 2, complement sliding window).** The masked loop body `aft3LoopBody`
-advances `attnInvariantK … natComplementSlidingWindowKeep` by one key block (`i → i + 64`),
-via `aft3LoopBody2_steps` + the masked `mij`/`denom`/`acc` register bridges. The
-mask reconciliation `aft3MaskCell2 ↔ natComplementSlidingWindowKeep` is TRUE by
-construction (`aft3MaskCell2_eq_keep`). -/
-theorem aft3_attn_step2 (Q K V M Out L : RegionName) (s0 : BlockState)
-    (i : Nat) (s : BlockState) (hilt : i < 128) (himod : i % 64 = 0)
-    (hinv : attnInvariantK Q K V M Out L s0
-      (fun i j => natComplementSlidingWindowKeep (s0.pids 0) i j) i s) :
-    ∃ s', stepStmts aft3LoopBody2 (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
-      ∧ attnInvariantK Q K V M Out L s0
-          (fun i j => natComplementSlidingWindowKeep (s0.pids 0) i j) (i + 64) s' := by
-  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
-  set c := i / 64 with hc_def
-  have hi : i = c * 64 := by omega
-  have hc1 : (c + 1) * 64 ≤ 128 := by omega
-  set base := baseOffset3 s0 with hbase
-  set sc0 : ℝ := (1 / 8 : ℝ) * 1.4426950408889634 with hsc0
-  set qT := qTile3 s0 Q with hqT
-  set kT := kTile3 s0 K with hkT
-  set vT := vTile3 s0 V with hvT
-  set kp : Fin 64 → Fin 128 → Prop := fun i j => natComplementSlidingWindowKeep (s0.pids 0) i j with hkp
-  have hbaseEq : (s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 : Nat) = base := by
-    simp [hbase, baseOffset3]
-  -- run the masked loop body chain
-  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hKpF, hVpF, hoffF, hMptrF, hLptrF, hOpF,
-      qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
-      hqkData, hrm, hmijd, halphad, hpTd, hpmTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
-    aft3LoopBody2_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i
-      K V base base i i
-      (⟨fun idx : TileIndex [64, 64] => some (qT idx)⟩)
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      (⟨fun r : TileIndex [64] => ((aft3StateBotK qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩)
-      (⟨fun idx : TileIndex [64, 64] => ((aft3StateBotK qT kT vT keyScale3 kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩)
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩)
-      sc0
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
-      (by simp [BlockState.setReg_same])
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hKp, hbaseEq])
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hVp, hbaseEq])
-      (fun idx => rfl)
-      (fun idx => rfl)
-      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
-  refine ⟨sF, hchain, ?_⟩
-  have hrmemK : ∀ idx : TileIndex [64, 64],
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ : Tile .real [64, 64]).data idx
-        = some (s0.readMem K (base + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)) := by
-    intro idx
-    simp only [BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem, hi]
-  have hrmemV : ∀ idx : TileIndex [64, 64],
-      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ : Tile .real [64, 64]).data idx
-        = some (s0.readMem V (base + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)) := by
-    intro idx
-    simp only [BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem, hi]
-  set qtileF : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] => some (qT idx)⟩ with hqtileF
-  set ktileF : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ with hktileF
-  set vtileF : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ with hvtileF
-  have hsckey : sc0 = keyScale3 (⟨0, by norm_num⟩ : Fin 128) := by rw [hsc0, keyScale3]
-  -- the cell-mask: aft3MaskCell2 (pids 0) i, reconciled with the keep predicate at c
-  set mc : Fin 64 → Bool := fun jL => aft3MaskCell2 (s0.pids 0) i (⟨0, by norm_num⟩, jL, PUnit.unit) with hmcdef
-  have hmc_row : ∀ r jL : Fin 64, aft3MaskCell2 (s0.pids 0) i (r, jL, PUnit.unit)
-      = decide (kp r ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩) := by
-    intro r jL
-    have heq : aft3MaskCell2 (s0.pids 0) i (r, jL, PUnit.unit)
-        = aft3MaskCell2 (s0.pids 0) (c * 64) (r, jL, PUnit.unit) := by rw [hi]
-    rw [heq, aft3MaskCell2_eq_keep (s0.pids 0) c r jL (by have := jL.isLt; omega)]
-  have hmc : ∀ jL : Fin 64, mc jL = decide (kp ⟨0, by norm_num⟩ ⟨c * 64 + jL.val, by have := jL.isLt; omega⟩) := by
-    intro jL
-    rw [hmcdef]; simp only
-    exact hmc_row ⟨0, by norm_num⟩ jL
-  -- m_i cell readback
-  have hmicell : ∀ r : Fin 64,
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩ : Tile .real [64]).data (r, PUnit.unit)
-        = aft3RunningMax qT kT vT keyScale3 kp (c * 64) r ⟨0, by norm_num⟩ := by
-    intro r; simp only; rw [hi]
-  -- mijT cell = aft3RunningMax((c+1)*64)
-  have hmijcell : ∀ r : Fin 64, mijT.data (r, PUnit.unit)
-      = aft3RunningMax qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩ := by
-    intro r
-    rw [hmijd]
-    refine aft3_mij_reg_eq_masked s0 Q K V sc0 c hc1 r ⟨0, by norm_num⟩ hsckey kp
-      (fun jL => aft3MaskCell2 (s0.pids 0) i (r, jL, PUnit.unit))
-      (fun jL => hmc_row r jL)
-      qtileF ktileF
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩) rmaxT qkT
-      hqtileF hrmemK ?_ ?_ ?_
-    · intro jL; rw [hqkData]
-    · rw [hmicell r]
-    · exact hrm
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [hpidsF, BlockState.setReg_pids, hpids]
-  · omega
-  · omega
-  · rw [hmiF]; refine congrArg some ?_; ext r
-    rw [hmijcell r.1, show ((c + 1) * 64 : Nat) = i + 64 from by omega]
-  · rw [hliF]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
-    obtain ⟨r, ⟨⟩⟩ := r
-    have hbr := aft3_denom_reg_eq_masked s0 Q K V sc0 c hc1 r ⟨0, by norm_num⟩ hsckey kp
-      (fun jL => aft3MaskCell2 (s0.pids 0) i (r, jL, PUnit.unit)) (fun jL => hmc_row r jL)
-      qtileF ktileF qkT
-      (⟨fun r : TileIndex [64] => ((aft3StateBotK qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩)
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      mijT alphaT pT pmT hqtileF hrmemK
-      (fun jL => by rw [hqkData])
-      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
-      (by rw [hmijcell r]) halphad hpTd
-      (fun jL => by rw [hpmTd])
-    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
-    rw [hlijd, hbr]
-    show _ = ((aft3StateBotK qT kT vT keyScale3 kp (i + 64) r ⟨0, by norm_num⟩).2.1 : WithBot ℝ)
-    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
-      show aft3StateBotK qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩
-        = aft3StateBot qT kT vT keyScale3 kp ((c + 1) * 64) r ⟨0, by norm_num⟩ from by
-        unfold aft3StateBotK; rw [if_neg (by omega)]]
-    rw [← hqT, ← hkT, ← hvT]; rfl
-  · rw [haccF]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
-    obtain ⟨ir, id, ⟨⟩⟩ := idx
-    have hbr := aft3_acc_reg_eq_masked s0 Q K V sc0 c hc1 ir id hsckey kp
-      (fun jL => aft3MaskCell2 (s0.pids 0) i (ir, jL, PUnit.unit)) (fun jL => hmc_row ir jL)
-      qtileF ktileF vtileF qkT
-      (⟨fun idx : TileIndex [64, 64] => ((aft3StateBotK qT kT vT keyScale3 kp i idx.1 idx.2.1).2.2 : ℝ)⟩)
-      acc1T pT pmT
-      (⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 kp i r.1 ⟨0, by norm_num⟩⟩)
-      mijT alphaT hqtileF hrmemK hrmemV
-      (fun jL => by rw [hqkData])
-      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
-      (by rw [hmijcell ir]) halphad hacc1d hpTd
-      (fun jL => by rw [hpmTd])
-    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
-    rw [hbr]
-    show _ = ((aft3StateBotK qT kT vT keyScale3 kp (i + 64) ir id).2.2 : WithBot ℝ)
-    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega,
-      show aft3StateBotK qT kT vT keyScale3 kp ((c + 1) * 64) ir id
-        = aft3StateBot qT kT vT keyScale3 kp ((c + 1) * 64) ir id from by
-        unfold aft3StateBotK; rw [if_neg (by omega)]]
-    rw [← hqT, ← hkT, ← hvT]; rfl
-  · rw [hqF]
-  · rw [hqsF]
-  · rw [hsmF]
-  · rw [hoffF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff
-  · rw [hKpF, ← hbaseEq]
-  · rw [hVpF, ← hbaseEq]
-  · rw [hMptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
-  · rw [hLptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr
-  · rw [hOpF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
-  · exact hundefF
-  · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
-
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Step lemma (case 3, no window).** The loop body `aft3LoopBody3` advances
-`attnInvariant … noWindowKeep` by one key block (`i → i + 64`), via
-`aft3LoopBody3_steps` + the `mij`/`denom`/`acc` register bridges (all reading off
-`aft3RunningMax`/`aft3StateBot1` at `(c+1)·64`). -/
 theorem aft3_attn_step3 (Q K V M Out L : RegionName) (s0 : BlockState)
     (i : Nat) (s : BlockState) (hilt : i < 128) (himod : i % 64 = 0)
     (hinv : attnInvariant Q K V M Out L s0 (fun i j => noWindowKeep i j) i s) :
@@ -5768,194 +3525,6 @@ loop-end state satisfying `attnInvariantK … keep 128`, the `O` writeback holds
 raw `aft3StateBotK` ratio `acc/l_i` and the `M` writeback holds the raw finalize
 `(M ⊔ ... )`-`unbotD` value, for *every* row — including the empty-window rows
 where the running max is `⊥` (there `acc/l_i = 0/0 = 0`). No `ne_bot` assumption. -/
-theorem aft3PostLoop_eval_K
-    (Q K V M Out L : RegionName) (s0 : BlockState) (s : BlockState)
-    (hMO : M ≠ Out)
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)]
-    (hinv : attnInvariantK Q K V M Out L s0 keep 128 s) :
-    ∃ sP, stepStmts (aft3PostLoop M Out L) s = some sP
-      ∧ (∀ idx : TileIndex [64, 64],
-          sP.readMem Out (outOffset s0 4 32768 8192 64 1 64 idx)
-            = ((aft3StateBotK (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-                  keep 128 idx.1 idx.2.1).2.2)
-              / ((aft3StateBotK (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-                  keep 128 idx.1 ⟨0, by norm_num⟩).2.1))
-      ∧ (∀ i : Fin 64,
-          sP.readMem M (lRowOffset s0 (s0.pids 1) 128 64 i)
-            = (WithBot.realAdd
-                  (aft3RunningMax (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-                    keep 128 i ⟨0, by norm_num⟩)
-                  (WithBot.realLog2 (((aft3StateBotK (qTile3 s0 Q) (kTile3 s0 K) (vTile3 s0 V) keyScale3
-                    keep 128 i ⟨0, by norm_num⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
-  obtain ⟨hpids, _, _, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ :=
-    hinv
-  set qT := qTile3 s0 Q with hqT
-  set kT := kTile3 s0 K with hkT
-  set vT := vTile3 s0 V with hvT
-  set miTile : Tile .real [64] :=
-    ⟨fun r : TileIndex [64] => aft3RunningMax qT kT vT keyScale3 keep 128 r.1 ⟨0, by norm_num⟩⟩
-    with hmiTile
-  set liTile : Tile .real [64] :=
-    ⟨fun r : TileIndex [64] => ((aft3StateBotK qT kT vT keyScale3 keep 128 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩
-    with hliTile
-  set accTile : Tile .real [64, 64] :=
-    ⟨fun idx : TileIndex [64, 64] => ((aft3StateBotK qT kT vT keyScale3 keep 128 idx.1 idx.2.1).2.2 : ℝ)⟩
-    with haccTile
-  unfold aft3PostLoop
-  set miFin : Tile .real [64] :=
-    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) miTile
-      (Tile.uop WithBot.realLog2 liTile) with hmiFin
-  set accFin : Tile .real [64, 64] :=
-    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil)) accTile
-      (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
-  rw [stepStmts.cons_some
-    (show stepStmt _ s = some _ from by
-      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true s)]
-      rw [stepStmts.cons_some (stepStmt_assign_eq_some
-        (show evalOp (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil)
-            (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "l_i").log2) s
-            = some miFin from by
-          rw [evalOp_add]
-          simp only [evalOp, evalOp.eq_def, evalOp_ref, hmi, hli, Option.bind_eq_bind,
-            Option.bind_some]
-          rfl))]
-      rw [stepStmts.cons_some (stepStmt_assign_eq_some
-        (show evalOp (Op.div NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-            (Op.ref TileDType.real [64, 64] "acc")
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [64] "l_i"))) _
-            = some accFin from by
-          have hexp : @evalOp TileDType.real [64, 1]
-                (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [64] "l_i"))
-                (s.setReg "m_i" .real [64] miFin)
-              = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
-            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
-              (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
-          rw [evalOp_div]
-          simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
-            not_false_eq_true, BlockState.setReg_same, hexp, hacc, Option.bind_eq_bind,
-            Option.bind_some]
-          rfl))]
-      rw [stepStmts.nil])]
-  set s2 := (s.setReg "m_i" .real [64] miFin).setReg "acc" .real [64, 64] accFin with hs2
-  have hMptr2 : s2.regs .ptr [64] "m_ptrs" = some
-      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
-        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * 128))
-          (Tile.vec (fun r : Fin 64 => s0.pids 0 * 64 + r.val)))) := by
-    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
-      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
-  have hmi2 : s2.regs .real [64] "m_i" = some miFin := by
-    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
-      BlockState.setReg_same]
-  set mOffFn : TileIndex [64] → Nat :=
-    fun r => s0.pids 1 * 128 + (s0.pids 0 * 64 + r.1.val) with hmOffFn
-  have hmptrEval : evalOp (Op.ref TileDType.ptr [64] "m_ptrs") s2
-      = some (⟨fun r : TileIndex [64] => (M.cast, mOffFn r)⟩ : Tile .ptr [64]) := by
-    rw [evalOp_ref, hMptr2]
-    refine congrArg some ?_; ext r
-    · rfl
-    · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
-        Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
-        Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add, hmOffFn]
-  have hstore1 : stepStmt (Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs"))
-      (Op.ref TileDType.real [64] "m_i") MaskOpt.none) s2
-      = some ((TileShape.allIndices [64]).foldl
-          (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2) := by
-    simp only [stepStmt, evalOp_ref, hmi2, hmptrEval, Option.bind_eq_bind, Option.bind_some,
-      Option.map_some, if_true, Region.cast_id]
-  rw [stepStmts.cons_some hstore1]
-  set s3 := (TileShape.allIndices [64]).foldl
-      (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2 with hs3
-  have hOp3 : s3.regs .blockPtr [64, 64] "O_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 64] =>
-        { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
-          parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
-          offsets := [s0.pids 0 * 64, 0] }⟩) := by
-    rw [hs3]
-    simp only [BlockState.foldl_writeMemTyped_regs]
-    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
-      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
-  have hacc3 : s3.regs .real [64, 64] "acc" = some accFin := by
-    rw [hs3]
-    simp only [BlockState.foldl_writeMemTyped_regs]
-    rw [hs2, BlockState.setReg_same]
-  set oOffFn : TileIndex [64, 64] → Nat :=
-    fun idx => s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 + (s0.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1
-    with hoOffFn
-  set oValFn : TileIndex [64, 64] → WithBot ℝ := fun idx => accFin.data idx with hoValFn
-  have hOpref : @evalOp TileDType.blockPtr [64, 64] (Op.ref .blockPtr [64, 64] "O_block_ptr") s3
-      = some (⟨fun _ : TileIndex [64, 64] =>
-          { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
-            parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
-            offsets := [s0.pids 0 * 64, 0] }⟩
-          : Tile .blockPtr [64, 64]) := by rw [evalOp_ref]; exact hOp3
-  have hstore2 : stepStmt (Stmt.store TileDType.real [64, 64]
-      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "O_block_ptr") [])
-      (Op.ref TileDType.real [64, 64] "acc") MaskOpt.none) s3
-      = some ((TileShape.allIndices [64, 64]).foldl
-          (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3) := by
-    simp only [stepStmt, evalOp_ref, hacc3, hOp3, Option.bind_eq_bind, Option.bind_some,
-      Option.map_some]
-    refine congrArg some ?_
-    refine List.foldl_ext _ _ s3 ?_
-    intro acc idx _
-    simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil, Bool.and_true,
-      Bool.true_and, if_true]
-    have haddr : BlockPtr.address
-        { region := Out, baseOffset := s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192,
-          parentShape := [128, 64], blockShape := [64, 64], strides := [64, 1],
-          offsets := [s0.pids 0 * 64, 0] }
-        [idx.1.val, idx.2.1.val]
-        = oOffFn idx := by
-      show s0.pids 1 / 4 * 32768 + s0.pids 1 % 4 * 8192 +
-          ((s0.pids 0 * 64 + idx.1.val) * 64 + (0 + idx.2.1.val) * 1) = _
-      rw [Nat.zero_add, hoOffFn]; ring
-    rw [haddr]
-  rw [stepStmts.cons_some hstore2, stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_⟩
-  · intro idx
-    have hinjO : Function.Injective oOffFn := by
-      rw [hoOffFn]; exact aft3_O_blockptr_offset_injective _ (s0.pids 0)
-    have houtOff : outOffset s0 4 32768 8192 64 1 64 idx = oOffFn idx := by
-      simp only [outOffset, offZ, offH, mIndex, kIndex, hoOffFn]
-    rw [houtOff]
-    simp only [BlockState.writeMemTyped_real]
-    rw [BlockState.scatter_readback_nd (region := Out) s3 oOffFn
-      (fun idx => FloatDType.real.storeValue (oValFn idx)) hinjO idx]
-    simp only [FloatDType.real_storeValue, hoValFn, haccFin]
-    obtain ⟨ir, id, ⟨⟩⟩ := idx
-    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
-      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
-      Option.map₂, Option.bind, Option.map, haccTile, hliTile, WithBot.unbotD_coe,
-      WithBot.unbotD_some]
-  · intro i
-    have hinjM : Function.Injective mOffFn := by
-      rw [hmOffFn]; exact aft3_M_ptr_offset_injective (s0.pids 0) (s0.pids 1)
-    rw [show (lRowOffset s0 (s0.pids 1) 128 64 i) = mOffFn (i, PUnit.unit) from by
-      simp only [lRowOffset, hmOffFn]]
-    rw [show ((TileShape.allIndices [64, 64]).foldl
-            (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3).readMem M
-              (mOffFn (i, PUnit.unit))
-          = s3.readMem M (mOffFn (i, PUnit.unit)) from by
-      simp only [BlockState.writeMemTyped_real]
-      exact aft3_foldl_writeMem_readMem_other_region M Out hMO oOffFn
-        (fun idx => FloatDType.real.storeValue (oValFn idx)) (mOffFn (i, PUnit.unit))
-        (TileShape.allIndices [64, 64]) s3]
-    rw [hs3]
-    simp only [BlockState.writeMemTyped_real]
-    rw [BlockState.scatter_readback_nd (region := M) s2 mOffFn
-      (fun r => FloatDType.real.storeValue (miFin.data r)) hinjM (i, PUnit.unit)]
-    simp only [FloatDType.real_storeValue, miFin, Tile.bop_data, Tile.uop_data,
-      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, hmiTile, hliTile]
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **PostLoop execution + genuine readbacks (case 3, no window).** Stepping the
-3 post-loop statements (END finalize + M-row store + O block-ptr store) from a
-loop-end state satisfying `attnInvariant … noWindowKeep 128`, the kernel's `O`
-store holds the genuine closed-form attention ratio
-(`attentionFwdTriton3Case3OutSpec`) at every injective output lane, and the `M`
-store holds the genuine finalize value `m_i + log2 l_i` (running max + log2 of the
-denominator) at every injective row lane. -/
 theorem aft3PostLoop_eval
     (Q K V M Out L : RegionName) (s0 : BlockState) (s : BlockState)
     (hMO : M ≠ Out)
@@ -6238,111 +3807,6 @@ but with the masked loop body, the ⊥-carry invariant `attnInvariantK`
 (`natSlidingWindowKeep`), and the empty-window-safe postLoop. The `O` writeback
 realizes the faithful case-1 closed form `attentionFwdTriton3Case1OutSpec`
 (`0/0 = 0` at fully-masked rows); the `M` writeback realizes the raw finalize. -/
-theorem aft3_attn_exec1
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-        32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgKernel.body s = some sF
-      ∧ (∀ idx : TileIndex [64, 64],
-          sF.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-            = attentionFwdTriton3Case1OutSpec s Q K V idx)
-      ∧ (∀ i : Fin 64,
-          sF.readMem M (lRowOffset s (s.pids 1) 128 64 i)
-            = attentionFwdTriton3KMSpec s Q K V
-                (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
-  rw [aft3_body_split]
-  obtain ⟨sp, hpre, hinv0⟩ :=
-    aft3PreLoop_eval Q K V M Out L s (fun i j => natSlidingWindowKeep (s.pids 0) i j) hundef
-  rw [stepStmts.append_some hpre]
-  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
-    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
-      (body := aft3LoopBody)
-      (P := fun i st => attnInvariantK Q K V M Out L s
-        (fun i j => natSlidingWindowKeep (s.pids 0) i j) i st)
-      (s_init := sp)
-      (by norm_num)
-      (attnInvariant_zero_to_K Q K V M Out L s _ sp hinv0)
-      (fun i st hi hP => aft3_attn_step1 Q K V M Out L s i st hi
-        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
-  rw [stepStmts.cons_some hloop]
-  have hfinal : final = 128 := by
-    obtain ⟨_, hmod, hle, _⟩ := hinvL
-    omega
-  subst hfinal
-  obtain ⟨sF, hpost, hO, hM⟩ :=
-    aft3PostLoop_eval_K Q K V M Out L s sL hMO (fun i j => natSlidingWindowKeep (s.pids 0) i j) hinvL
-  refine ⟨sF, hpost, ?_, ?_⟩
-  · intro idx
-    obtain ⟨ir, id, ⟨⟩⟩ := idx
-    rw [hO (ir, id, PUnit.unit)]
-    rw [aft3StateBotK_full_eq_streaming (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => natSlidingWindowKeep (s.pids 0) i j) ir id]
-    rw [aft3KeysUpto_full]
-    exact (attentionFwdTriton3Case1OutSpec_eq_streaming s Q K V ir id).symm
-  · intro i; rw [hM i, attentionFwdTriton3KMSpec]
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Full kernel execution (case 2, complement sliding window).** Mirrors `aft3_attn_exec`
-but with the masked loop body, the ⊥-carry invariant `attnInvariantK`
-(`natComplementSlidingWindowKeep`), and the empty-window-safe postLoop. The `O` writeback
-realizes the faithful case-1 closed form `attentionFwdTriton3Case2OutSpec`
-(`0/0 = 0` at fully-masked rows); the `M` writeback realizes the raw finalize. -/
-theorem aft3_attn_exec2
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-        32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1).toAlgKernel.body s = some sF
-      ∧ (∀ idx : TileIndex [64, 64],
-          sF.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-            = attentionFwdTriton3Case2OutSpec s Q K V idx)
-      ∧ (∀ i : Fin 64,
-          sF.readMem M (lRowOffset s (s.pids 1) 128 64 i)
-            = attentionFwdTriton3KMSpec s Q K V
-                (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i) := by
-  rw [aft3_body_split2]
-  obtain ⟨sp, hpre, hinv0⟩ :=
-    aft3PreLoop_eval Q K V M Out L s (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) hundef
-  rw [stepStmts.append_some hpre]
-  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
-    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
-      (body := aft3LoopBody2)
-      (P := fun i st => attnInvariantK Q K V M Out L s
-        (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i st)
-      (s_init := sp)
-      (by norm_num)
-      (attnInvariant_zero_to_K Q K V M Out L s _ sp hinv0)
-      (fun i st hi hP => aft3_attn_step2 Q K V M Out L s i st hi
-        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
-  rw [stepStmts.cons_some hloop]
-  have hfinal : final = 128 := by
-    obtain ⟨_, hmod, hle, _⟩ := hinvL
-    omega
-  subst hfinal
-  obtain ⟨sF, hpost, hO, hM⟩ :=
-    aft3PostLoop_eval_K Q K V M Out L s sL hMO (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) hinvL
-  refine ⟨sF, hpost, ?_, ?_⟩
-  · intro idx
-    obtain ⟨ir, id, ⟨⟩⟩ := idx
-    rw [hO (ir, id, PUnit.unit)]
-    rw [aft3StateBotK_full_eq_streaming (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) ir id]
-    rw [aft3KeysUpto_full]
-    exact (attentionFwdTriton3Case2OutSpec_eq_streaming s Q K V ir id).symm
-  · intro i; rw [hM i, attentionFwdTriton3KMSpec]
-
-/-! ## Case 3 genuine closed-form output summary
-
-The case-3 `Out`/`M` writebacks at the Python test shape equal their genuine
-closed forms (the base-2 per-key-scale softmax `attentionFwdTriton3Case3OutSpec`
-for `Out`, the running-max + log2-denominator finalize for `M`) — no longer the
-self-referential "executed kernel output" carrier. This requires a clean
-(`undef = 0`) input and `M ≠ Out` (so the `O` store does not clobber the `M`
-row), both genuine preconditions of single-program correctness. -/
-
-/-- Genuine `M`-row spec (case 3): `m_i + log2 l_i` finalize at full window. -/
 noncomputable def attentionFwdTriton3Case3MSpec
     (s : BlockState) (Q K V : RegionName) (i : Fin 64) : ℝ :=
   (aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
@@ -6355,347 +3819,6 @@ set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- Genuine case-3 `Out`-store correctness: the masked `Out` writeback realizes the
 closed-form attention ratio at every active lane. -/
-theorem attention_fwd_triton3_case3_surface_out_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case3OutSpec s Q K V idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hO idx
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine case-3 `M`-store correctness: the `M`-row writeback realizes the
-`m_i + log2 l_i` finalize at every row. -/
-theorem attention_fwd_triton3_case3_surface_m_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3Case3MSpec s Q K V i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hM i
-
-/-- **Case 3 genuine output summary.** The case-3 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine closed forms
-(`attentionFwdTriton3Case3OutSpec` / `attentionFwdTriton3Case3MSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case3_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case3OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3Case3MSpec s Q K V i) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
-      Q K V M Out L
-  · exact attention_fwd_triton3_case3_surface_out_compute_correct Q K V M Out L s hMO hundef
-  · exact attention_fwd_triton3_case3_surface_m_compute_correct Q K V M Out L s hMO hundef
-
-
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine case-1 `Out`-store correctness: the masked `Out` writeback realizes the
-faithful nat-truncated sliding-window closed form `attentionFwdTriton3Case1OutSpec`
-at every active lane (`0/0 = 0` at fully-masked rows). -/
-theorem attention_fwd_triton3_case1_surface_out_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case1OutSpec s Q K V idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec1 Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hO idx
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine case-1 `M`-store correctness: the `M`-row writeback realizes the raw
-`m_i + log2 l_i` finalize (`attentionFwdTriton3KMSpec`) at every row. -/
-theorem attention_fwd_triton3_case1_surface_m_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec1 Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hM i
-
-/-- **Case 1 genuine output summary.** The case-1 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
-(`attentionFwdTriton3Case1OutSpec` / `attentionFwdTriton3KMSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case1_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case1OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported Q K V M Out L
-  · exact attention_fwd_triton3_case1_surface_out_compute_correct Q K V M Out L s hMO hundef
-  · exact attention_fwd_triton3_case1_surface_m_compute_correct Q K V M Out L s hMO hundef
-
-
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine case-1 `Out`-store correctness: the masked `Out` writeback realizes the
-faithful nat-truncated complement sliding-window closed form `attentionFwdTriton3Case2OutSpec`
-at every active lane (`0/0 = 0` at fully-masked rows). -/
-theorem attention_fwd_triton3_case2_surface_out_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case2OutSpec s Q K V idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec2 Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hO idx
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine case-1 `M`-store correctness: the `M`-row writeback realizes the raw
-`m_i + log2 l_i` finalize (`attentionFwdTriton3KMSpec`) at every row. -/
-theorem attention_fwd_triton3_case2_surface_m_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec2 Q K V M Out L s hMO hundef
-  rw [exec] at hExec
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  exact hM i
-
-/-- **Case 1 genuine output summary.** The case-1 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
-(`attentionFwdTriton3Case2OutSpec` / `attentionFwdTriton3KMSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case2_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case2OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact attention_fwd_triton3_python_case2_surface_toAlgorithm_supported Q K V M Out L
-  · exact attention_fwd_triton3_case2_surface_out_compute_correct Q K V M Out L s hMO hundef
-  · exact attention_fwd_triton3_case2_surface_m_compute_correct Q K V M Out L s hMO hundef
-
-/-! ## Dimension-general genuine closed-form spec layer (cases 1/2/3)
-
-A parallel, dimension-general spec/tile/mask layer to the test-shape `qTile3`/
-`kTile3`/`vTile3`/`keyScale3`/`natSlidingWindowKeep`/`attentionFwdTriton3CaseNOutSpec`
-above, parameterized over the symbolic kernel dims/strides:
-
-* `BM`  = `BLOCK_M`         (query rows; output tile rows; `Fin BM`)
-* `ND`  = `BLOCK_DMODEL`    (head dim; `Fin ND`)
-* `NC`  = `NKV_CTX`         (total keys streamed; `Fin NC`)
-* `base`= the `(off_z, off_h)` plane base offset (`offZ·stride_qz + offH·stride_qh`)
-* strides `sqm sqk` (Q/Out row/head), `skn skk` (K key/head), `svk svn` (V key/head)
-* `sc`  = the per-key score scale (`sm_scale · log2e`)
-* window: `natSlidingWindowKeepG`/`natComplementSlidingWindowKeepG` over symbolic
-  `BM`/`BN`/window size; `noWindowKeep` for case 3.
-
-The genuine closed form reuses the fully dimension-general math foundation
-`VeriTile.Triton.attentionRealBase2PerKeyScalePred` (`{M S D : Nat}`), so the
-spec/streaming-bridge layer is immediate. -/
-
-/-- General query tile: row `i`, head lane `e`, at `base + (start_m·BM + i)·sqm + e·sqk`. -/
 noncomputable def qTile3G (s : BlockState) (Q : RegionName)
     (base BM ND sqm sqk : Nat) : TileIndex [BM, ND] → ℝ :=
   fun (i, e, _) => s.readMem Q (base + (s.pids 0 * BM + i.val) * sqm + e.val * sqk)
@@ -6879,20 +4002,6 @@ theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
     (aft3StateBotG qT kT vT keyScale keep hi i d).1
       = aft3RunningMaxG qT kT vT keyScale keep hi i d := by
   rw [aft3StateBotG, aft3StateBot_fst, aft3RunningMaxG, aft3_foldl_sup_bot_eq_foldr]
-
-theorem aft3StateBotG_zero {BM ND NC : Nat}
-    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
-    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
-    [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
-    aft3StateBotG qT kT vT keyScale keep 0 i d = (⊥, 0, 0) := by
-  unfold aft3StateBotG aft3KeysUptoG
-  rw [show (List.finRange NC).filterMap
-        (fun j : Fin NC => if j.val < 0 ∧ keep i j
-          then some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
-                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
-          else none) = [] from by
-    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
-  rfl
 
 theorem aft3RunningMaxG_zero {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
@@ -7094,17 +4203,6 @@ noncomputable def aft3StateBotKG {BM ND NC : Nat}
     WithBot ℝ × ℝ × ℝ :=
   if hi = 0 then (⊥, 1, 0)
   else aft3StateBotG qT kT vT keyScale keep hi i d
-
-theorem aft3StateBotKG_fst {BM ND NC : Nat}
-    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
-    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin BM) (d : Fin ND) :
-    (aft3StateBotKG qT kT vT keyScale keep hi i d).1
-      = aft3RunningMaxG qT kT vT keyScale keep hi i d := by
-  unfold aft3StateBotKG
-  split
-  · rename_i h; subst h; rw [aft3RunningMaxG_zero]
-  · rw [aft3StateBotG_fst_eq_runningMax]
 
 theorem aft3StateBotKG_cancel {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
@@ -11226,6 +8324,311 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
     simp only [hlRow i]
     show sF.readMem M _ = _
     rw [hM i, attentionFwdTriton3Case3MSpecG]
+
+
+/-! ## Test-shape genuine output summaries (cases 1/2/3) as corollaries of the
+dimension-general theorems.
+
+Each pinned test-shape summary is now an instantiation of the corresponding
+`…_output_summary_general` theorem at the Python test-shape concrete dimensions
+(`BM = ND = BN = 64`, `NKV_CTX = N_CTX = ROUND_CTX = 128`, `Z = 2`, `H = H_KV = 4`,
+all strides as in the surface call, `sm_scale = 1/8`), bridged through the
+test-shape ⟷ general tile/spec equalities (`qTile3 = qTile3G …` etc., immediate by
+`Nat.mul_one`; the general running-max / state folds are structurally identical to
+the test-shape ones once the tiles, scale and keep predicates coincide). -/
+
+/-- Test-shape ⟷ general query-tile bridge. -/
+private theorem aft3_qTile3_eq_G (s : BlockState) (Q : RegionName) :
+    qTile3 s Q = qTile3G s Q (baseOffset3 s) 64 64 64 1 := by
+  funext idx; obtain ⟨i, e, u⟩ := idx; simp [qTile3, qTile3G, Nat.mul_one]
+
+/-- Test-shape ⟷ general key-tile bridge. -/
+private theorem aft3_kTile3_eq_G (s : BlockState) (K : RegionName) :
+    kTile3 s K = kTile3G s K (baseOffset3 s) 128 64 64 1 := by
+  funext idx; obtain ⟨j, e, u⟩ := idx; simp [kTile3, kTile3G, Nat.mul_one]
+
+/-- Test-shape ⟷ general value-tile bridge. -/
+private theorem aft3_vTile3_eq_G (s : BlockState) (V : RegionName) :
+    vTile3 s V = vTile3G s V (baseOffset3 s) 128 64 64 1 := by
+  funext idx; obtain ⟨j, d, u⟩ := idx; simp [vTile3, vTile3G, Nat.mul_one]
+
+/-- Test-shape ⟷ general keyScale bridge (both constant). -/
+private theorem aft3_keyScale3_eq_G :
+    keyScale3 = keyScale3G ((1 / 8 : ℝ) * 1.4426950408889634) 128 := rfl
+
+/-- Test-shape ⟷ general case-1 keep-predicate bridge. -/
+private theorem aft3_keep1_eq_G (s : BlockState) :
+    (fun i j => natSlidingWindowKeep (s.pids 0) i j)
+      = (fun (i : Fin 64) (j : Fin 128) => natSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) := by
+  funext i j; simp [natSlidingWindowKeep, natSlidingWindowKeepG, natDist3, natDist3G]
+
+/-- Test-shape ⟷ general case-2 keep-predicate bridge. -/
+private theorem aft3_keep2_eq_G (s : BlockState) :
+    (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j)
+      = (fun (i : Fin 64) (j : Fin 128) => natComplementSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) := by
+  funext i j; simp [natComplementSlidingWindowKeep, natComplementSlidingWindowKeepG, natDist3, natDist3G]
+
+/-- Case-1 OutSpec bridge: test-shape = general at the test-shape concrete args. -/
+private theorem aft3_case1OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
+    (idx : TileIndex [64, 64]) :
+    attentionFwdTriton3Case1OutSpec s Q K V idx
+      = attentionFwdTriton3Case1OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 idx := by
+  unfold attentionFwdTriton3Case1OutSpec attentionFwdTriton3Case1OutSpecG
+  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
+  simp only [aft3_keep1_eq_G]
+
+/-- Case-2 OutSpec bridge. -/
+private theorem aft3_case2OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
+    (idx : TileIndex [64, 64]) :
+    attentionFwdTriton3Case2OutSpec s Q K V idx
+      = attentionFwdTriton3Case2OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 idx := by
+  unfold attentionFwdTriton3Case2OutSpec attentionFwdTriton3Case2OutSpecG
+  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
+  simp only [aft3_keep2_eq_G]
+
+/-- Case-3 OutSpec bridge. -/
+private theorem aft3_case3OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
+    (idx : TileIndex [64, 64]) :
+    attentionFwdTriton3Case3OutSpec s Q K V idx
+      = attentionFwdTriton3Case3OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+          ((1 / 8 : ℝ) * 1.4426950408889634) idx := by
+  unfold attentionFwdTriton3Case3OutSpec attentionFwdTriton3Case3OutSpecG
+  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
+
+/-- Test-shape ⟷ general running-max fold bridge (structurally identical). -/
+private theorem aft3_runningMax_eq_G (qT : TileIndex [64, 64] → ℝ)
+    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
+    aft3RunningMax qT kT vT ks keep hi i d = aft3RunningMaxG qT kT vT ks keep hi i d := rfl
+
+/-- Test-shape ⟷ general seed-`1` state fold bridge. -/
+private theorem aft3_stateBot1_eq_G (qT : TileIndex [64, 64] → ℝ)
+    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
+    aft3StateBot1 qT kT vT ks keep hi i d = aft3StateBot1G qT kT vT ks keep hi i d := rfl
+
+/-- Test-shape ⟷ general seed-`K` state fold bridge. -/
+private theorem aft3_stateBotK_eq_G (qT : TileIndex [64, 64] → ℝ)
+    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
+    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
+    aft3StateBotK qT kT vT ks keep hi i d = aft3StateBotKG qT kT vT ks keep hi i d := rfl
+
+/-- Case-1/2 M-spec bridge. -/
+private theorem aft3_KMSpec_eq_G (s : BlockState) (Q K V : RegionName)
+    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)] (i : Fin 64) :
+    attentionFwdTriton3KMSpec s Q K V keep i
+      = attentionFwdTriton3KMSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+          ((1 / 8 : ℝ) * 1.4426950408889634) keep i (by norm_num) := by
+  unfold attentionFwdTriton3KMSpec attentionFwdTriton3KMSpecG
+  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G,
+    aft3_runningMax_eq_G, aft3_stateBotK_eq_G]
+
+/-- Case-3 M-spec bridge. -/
+private theorem aft3_case3MSpec_eq_G (s : BlockState) (Q K V : RegionName)
+    (i : Fin 64) :
+    attentionFwdTriton3Case3MSpec s Q K V i
+      = attentionFwdTriton3Case3MSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+          ((1 / 8 : ℝ) * 1.4426950408889634) i (by norm_num) := by
+  unfold attentionFwdTriton3Case3MSpec attentionFwdTriton3Case3MSpecG
+  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G,
+    aft3_runningMax_eq_G, aft3_stateBot1_eq_G]
+
+/-- Concrete output-store injectivity at the Python test shape. -/
+private theorem aft3_hinjO_concrete (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] =>
+        (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)
+          + (s.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1) :=
+  aft3_O_blockptr_offset_injective (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192) (s.pids 0)
+
+/-- Concrete M-row-store injectivity at the Python test shape. -/
+private theorem aft3_hinjM_concrete (s : BlockState) :
+    Function.Injective
+      (fun r : TileIndex [64] => s.pids 1 * 128 + (s.pids 0 * 64 + r.1.val)) :=
+  aft3_M_ptr_offset_injective (s.pids 0) (s.pids 1)
+
+/-- **Case 3 genuine output summary.** The case-3 surface lowers to the algorithm
+layer, and its `Out`/`M` writebacks realize the genuine closed forms
+(`attentionFwdTriton3Case3OutSpec` / `attentionFwdTriton3Case3MSpec`) on clean
+(`undef = 0`) input with `M ≠ Out`. -/
+theorem attention_fwd_triton3_python_case3_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case3OutSpec s Q K V idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3Case3MSpec s Q K V i) := by
+  have H := attention_fwd_triton3_python_case3_output_summary_general
+    Q K V M Out L (1 / 8 : ℝ)
+    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    2 4 4 128 128 128 0 64 64 64 s
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
+    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
+  obtain ⟨hAlg, hO, hM⟩ := H
+  refine ⟨hAlg, ?_, ?_⟩
+  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case3OutSpec s Q K V idx)
+        = (fun idx : TileIndex [64, 64] =>
+            attentionFwdTriton3Case3OutSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634) idx) := by
+      funext idx; rw [aft3_case3OutSpec_eq_G]
+    rw [hexp]; exact hO
+  · have hexp : (fun i : Fin 64 => attentionFwdTriton3Case3MSpec s Q K V i)
+        = (fun i : Fin 64 =>
+            attentionFwdTriton3Case3MSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634) i (by norm_num)) := by
+      funext i; rw [aft3_case3MSpec_eq_G]
+    rw [hexp]; exact hM
+
+/-- **Case 1 genuine output summary.** The case-1 surface lowers to the algorithm
+layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
+(`attentionFwdTriton3Case1OutSpec` / `attentionFwdTriton3KMSpec`) on clean
+(`undef = 0`) input with `M ≠ Out`. -/
+theorem attention_fwd_triton3_python_case1_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case1OutSpec s Q K V idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
+  have H := attention_fwd_triton3_python_case1_output_summary_general
+    Q K V M Out L (1 / 8 : ℝ)
+    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    2 4 4 128 128 128 0 64 64 64 64 s
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
+    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
+  obtain ⟨hAlg, hO, hM⟩ := H
+  refine ⟨hAlg, ?_, ?_⟩
+  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case1OutSpec s Q K V idx)
+        = (fun idx : TileIndex [64, 64] =>
+            attentionFwdTriton3Case1OutSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634) 64 0 64 idx) := by
+      funext idx; rw [aft3_case1OutSpec_eq_G]
+    rw [hexp]; exact hO
+  · have hexp : (fun i : Fin 64 =>
+          attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i)
+        = (fun i : Fin 64 =>
+            attentionFwdTriton3KMSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634)
+              (fun i j => natSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) i (by norm_num)) := by
+      funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep1_eq_G]
+    rw [hexp]; exact hM
+
+/-- **Case 2 genuine output summary.** The case-2 surface lowers to the algorithm
+layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
+(`attentionFwdTriton3Case2OutSpec` / `attentionFwdTriton3KMSpec`) on clean
+(`undef = 0`) input with `M ≠ Out`. -/
+theorem attention_fwd_triton3_python_case2_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case2OutSpec s Q K V idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i) := by
+  have H := attention_fwd_triton3_python_case2_output_summary_general
+    Q K V M Out L (1 / 8 : ℝ)
+    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    2 4 4 128 128 128 0 64 64 64 64 s
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
+    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
+  obtain ⟨hAlg, hO, hM⟩ := H
+  refine ⟨hAlg, ?_, ?_⟩
+  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case2OutSpec s Q K V idx)
+        = (fun idx : TileIndex [64, 64] =>
+            attentionFwdTriton3Case2OutSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634) 64 0 64 idx) := by
+      funext idx; rw [aft3_case2OutSpec_eq_G]
+    rw [hexp]; exact hO
+  · have hexp : (fun i : Fin 64 =>
+          attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i)
+        = (fun i : Fin 64 =>
+            attentionFwdTriton3KMSpecG s Q K V
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
+              (1 / 8 * 1.4426950408889634)
+              (fun i j => natComplementSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) i (by norm_num)) := by
+      funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep2_eq_G]
+    rw [hexp]; exact hM
 
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
