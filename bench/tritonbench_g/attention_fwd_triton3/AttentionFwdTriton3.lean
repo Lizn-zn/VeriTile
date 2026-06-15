@@ -10011,4 +10011,40 @@ theorem aft3PreLoop_evalG
     simp only [BlockState.setReg_mem]
     rw [show s11.mem rg o = s.mem rg o from by rw [hmem]]
 
+/-! ## General mask reconciliation (cases 1/2) -/
+
+/-- **General case-1 mask reconciliation.** At `SN = c·BN`, the lowered nat-mask
+`aft3MaskCell1G` (`dist ∈ [0, size)`) equals `natSlidingWindowKeepG`. -/
+theorem aft3MaskCell1G_eq_keep (SM off size BM BN c : Nat) (i : Fin BM) (jL : Fin BN)
+    {NC : Nat} (hb : c * BN + jL.val < NC) :
+    aft3MaskCell1G SM (c * BN) off size BM BN (i, jL, PUnit.unit)
+      = decide (natSlidingWindowKeepG SM BM BN off size i (⟨c * BN + jL.val, hb⟩ : Fin NC)) := by
+  unfold aft3MaskCell1G natSlidingWindowKeepG natDist3G ComparableDType.ge ComparableDType.lt
+  have hjL : jL.val < BN := jL.isLt
+  have hBN : 0 < BN := Nat.lt_of_le_of_lt (Nat.zero_le _) hjL
+  have hmod : ((⟨c * BN + jL.val, hb⟩ : Fin NC).val) % BN = jL.val := by
+    show (c * BN + jL.val) % BN = jL.val
+    rw [Nat.mul_comm, Nat.mul_add_mod_self_left, Nat.mod_eq_of_lt hjL]
+  have hdiv : ((⟨c * BN + jL.val, hb⟩ : Fin NC).val) / BN = c := by
+    show (c * BN + jL.val) / BN = c
+    rw [Nat.mul_comm, Nat.mul_add_div hBN, Nat.div_eq_of_lt hjL, Nat.add_zero]
+  simp only [hmod, hdiv, Nat.zero_le, decide_true, Bool.true_and]
+
+/-- **General case-2 mask reconciliation.** At `SN = c·BN`, the lowered nat-mask
+`aft3MaskCell2G` (`dist ≥ size`) equals `natComplementSlidingWindowKeepG`. -/
+theorem aft3MaskCell2G_eq_keep (SM off size BM BN c : Nat) (i : Fin BM) (jL : Fin BN)
+    {NC : Nat} (hb : c * BN + jL.val < NC) :
+    aft3MaskCell2G SM (c * BN) off size BM BN (i, jL, PUnit.unit)
+      = decide (natComplementSlidingWindowKeepG SM BM BN off size i (⟨c * BN + jL.val, hb⟩ : Fin NC)) := by
+  unfold aft3MaskCell2G natComplementSlidingWindowKeepG natDist3G ComparableDType.ge
+  have hjL : jL.val < BN := jL.isLt
+  have hBN : 0 < BN := Nat.lt_of_le_of_lt (Nat.zero_le _) hjL
+  have hmod : ((⟨c * BN + jL.val, hb⟩ : Fin NC).val) % BN = jL.val := by
+    show (c * BN + jL.val) % BN = jL.val
+    rw [Nat.mul_comm, Nat.mul_add_mod_self_left, Nat.mod_eq_of_lt hjL]
+  have hdiv : ((⟨c * BN + jL.val, hb⟩ : Fin NC).val) / BN = c := by
+    show (c * BN + jL.val) / BN = c
+    rw [Nat.mul_comm, Nat.mul_add_div hBN, Nat.div_eq_of_lt hjL, Nat.add_zero]
+  simp only [hmod, hdiv]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
