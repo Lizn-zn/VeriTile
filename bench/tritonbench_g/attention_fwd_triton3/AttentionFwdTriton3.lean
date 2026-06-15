@@ -11074,4 +11074,158 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
     show sF.readMem M _ = _
     rw [hM i, attentionFwdTriton3KMSpecG]
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Case 2 general genuine output summary.** -/
+theorem attention_fwd_triton3_python_case2_output_summary_general
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx)
+        (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
+      (expected := fun idx : TileIndex [BM, ND] =>
+        attentionFwdTriton3Case2OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1)
+      (initialState := s)
+      (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
+      (expected := fun i : Fin BM =>
+        attentionFwdTriton3KMSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) (fun i j => natComplementSlidingWindowKeepG (s.pids 0) BM BN off size i j) i hND) := by
+  have houtOff : ∀ idx : TileIndex [BM, ND],
+      outOffset s H sqz sqh som son BM idx
+        = (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son := by
+    intro idx; simp only [outOffset, offZ, offH, mIndex, kIndex]
+  have hlRow : ∀ i : Fin BM,
+      lRowOffset s (s.pids 1) ROUND_CTX BM i = s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val) := by
+    intro i; simp only [lRowOffset]
+  refine ⟨by apply attention_fwd_triton3_surface_toAlgorithm_supported, ?_, ?_⟩
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx _hActive
+    obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec2G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    rw [houtOff idx]; exact hO idx
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec2G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [hlRow i]
+    show sF.readMem M _ = _
+    rw [hM i, attentionFwdTriton3KMSpecG]
+
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Case 3 general genuine output summary.** -/
+theorem attention_fwd_triton3_python_case3_output_summary_general
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx)
+        (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
+      (expected := fun idx : TileIndex [BM, ND] =>
+        attentionFwdTriton3Case3OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0)
+      (initialState := s)
+      (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
+      (expected := fun i : Fin BM =>
+        attentionFwdTriton3Case3MSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) i hND) := by
+  have houtOff : ∀ idx : TileIndex [BM, ND],
+      outOffset s H sqz sqh som son BM idx
+        = (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son := by
+    intro idx; simp only [outOffset, offZ, offH, mIndex, kIndex]
+  have hlRow : ∀ i : Fin BM,
+      lRowOffset s (s.pids 1) ROUND_CTX BM i = s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val) := by
+    intro i; simp only [lRowOffset]
+  refine ⟨by apply attention_fwd_triton3_surface_toAlgorithm_supported, ?_, ?_⟩
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx _hActive
+    obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_execG Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    rw [houtOff idx]; exact hO idx
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_execG Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [hlRow i]
+    show sF.readMem M _ = _
+    rw [hM i, attentionFwdTriton3Case3MSpecG]
+
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
