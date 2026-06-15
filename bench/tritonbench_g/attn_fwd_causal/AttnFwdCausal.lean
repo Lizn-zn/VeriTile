@@ -4666,4 +4666,155 @@ theorem attn_fwd_causal_python_test_shape_output_summary
       65536 16384 128 1 2 4 128 128 128 64 128 96 1
   · exact attn_fwd_causal_surface_genuine_compute_correct Q K V QScale KScale Out s hundef hsb
 
+/-! ## General (dimension-parameterized) genuine causal closed-form correctness
+
+This section removes the Python test-shape pin (`B = 2`, `H = 4`,
+`N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
+`HEAD_ACTIVE = 96`, contiguous strides `(65536, 16384, 128, 1)`) and verifies the
+genuine causal closed form `attentionRealBase2PerKeyScalePred ... (causalKeep)` at
+the **dimension-parameterized** contiguous layout. -/
+
+namespace AfcFoundation
+
+open VeriTile.Triton
+
+/-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
+`N_CTX`/`HEAD_ACTIVE`). Mirrors `afcLoopBody` with the test-shape numerals replaced
+by the corresponding dimension parameters. -/
+def afcLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
+    Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    -- 1: k_mask
+    Stmt.assign .bool [BLOCK_DMODEL, BLOCK_N] "k_mask"
+      (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))),
+    -- 2: k = tl.load(K_ptrs, mask=k_mask)
+    Stmt.assign .real [BLOCK_DMODEL, BLOCK_N] "k"
+      (Op.load .real (.ptr (.ref .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs")) (.mask (.ref .bool [BLOCK_DMODEL, BLOCK_N] "k_mask"))),
+    -- 3: k_scale = tl.load(K_scale_ptr)
+    Stmt.assign .real [] "k_scale"
+      (Op.load .real (.ptr (.ref .ptr [] "K_scale_ptr")) .none),
+    -- 4: qk = castFloat(q·k) * q_scale * k_scale
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.mul .real Broadcast.scalarR
+        (Op.mul .real Broadcast.scalarR
+          (Op.castFloat FloatDType.real FloatDType.real
+            (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "q") (Op.ref .real [BLOCK_DMODEL, BLOCK_N] "k")))
+          (Op.ref .real [] "q_scale"))
+        (Op.ref .real [] "k_scale")),
+    -- 5: mask = offs_m[:,None] >= start_n + offs_n[None,:]
+    Stmt.assign .bool [BLOCK_M, BLOCK_N] "mask"
+      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))),
+    -- 6: qk = tl.where(mask, qk, -1000000.0)
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.where (Op.ref .bool [BLOCK_M, BLOCK_N] "mask")
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [BLOCK_M, BLOCK_N])),
+    -- 7: m_ij = maximum(m_i, max(qk,1))
+    Stmt.assign .real [BLOCK_M] "m_ij"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BLOCK_M] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+            (Op.ref .real [BLOCK_M, BLOCK_N] "qk")))
+        (Op.ref .real [BLOCK_M] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+          (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))),
+    -- 8: qk = qk - m_ij[:, None]
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "m_ij"))),
+    -- 9: p = exp2(qk)
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p" (Op.exp2 (Op.ref .real [BLOCK_M, BLOCK_N] "qk")),
+    -- 10: p = tl.where(mask, p, 0)
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p"
+      (Op.where (Op.ref .bool [BLOCK_M, BLOCK_N] "mask")
+        (Op.ref .real [BLOCK_M, BLOCK_N] "p") (Op.broadcast (Op.const 0.0) [BLOCK_M, BLOCK_N])),
+    -- 11: l_ij = sum(p, 1)
+    Stmt.assign .real [BLOCK_M] "l_ij"
+      (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    -- 12: alpha = exp2(m_i - m_ij)
+    Stmt.assign .real [BLOCK_M] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_ij"))),
+    -- 13: l_i = l_i * alpha + l_ij
+    Stmt.assign .real [BLOCK_M] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BLOCK_M] "l_i") (Op.ref .real [BLOCK_M] "alpha"))
+        (Op.ref .real [BLOCK_M] "l_ij")),
+    -- 14: acc = acc * alpha[:, None]
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "alpha"))),
+    -- 15: v = tl.load(V_ptrs, mask=...)
+    Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "v"
+      (Op.load .real (.ptr (.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+            (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+    -- 16: p = p.to(fp16)
+    Stmt.assign .fp16 [BLOCK_M, BLOCK_N] "p"
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    -- 17: acc += dot(p.to(real), v)
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.dot (batch := [])
+          (Op.castFloat FloatDType.fp16 FloatDType.real (Op.ref .fp16 [BLOCK_M, BLOCK_N] "p"))
+          (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v"))),
+    -- 18: m_i = m_ij
+    Stmt.assign .real [BLOCK_M] "m_i" (Op.ref .real [BLOCK_M] "m_ij"),
+    -- 19: K_ptrs += BLOCK_N * HEAD_DIM
+    Stmt.assign .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))),
+    -- 20: K_scale_ptr += 1
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "K_scale_ptr") (Op.constNat 1)),
+    -- 21: V_ptrs += BLOCK_N * HEAD_DIM
+    Stmt.assign .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
+
+end AfcFoundation
+
+section General
+
+open VeriTile.Triton
+
+set_option maxRecDepth 8000 in
+/-- **General body split** — the lowered general AFC body decomposes as
+`take 22 ++ (forRange "start_n" 0 N_CTX BLOCK_N afcLoopBodyG :: drop 23)`. The
+static `forRange` (NOT `forRangeDyn`) sits at index 22 regardless of dimension
+values (the AST structure is dim-value-independent), checked by `rfl`. -/
+theorem afc_body_splitG
+    (Q K V QScale KScale Out : RegionName)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
+    (attn_fwd_causal_surface Q K V QScale KScale Out
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body
+      = (attn_fwd_causal_surface Q K V QScale KScale Out
+          sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+          Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.take 22
+        ++ (Stmt.forRange "start_n" 0 N_CTX BLOCK_N
+              (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+            :: (attn_fwd_causal_surface Q K V QScale KScale Out
+                sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+                Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.drop 23) :=
+  rfl
+
+end General
+
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
