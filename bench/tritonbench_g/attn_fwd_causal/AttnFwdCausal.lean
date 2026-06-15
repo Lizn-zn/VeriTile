@@ -6789,6 +6789,91 @@ theorem afcPreLoopTailG_eval
       simp only [BlockState.setReg_undef, hundef]
       norm_num
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General preLoop execution** (compose head + tail). -/
+theorem afcPreLoopG_eval
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .real [BLOCK_M] "m_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M] "l_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (some (1 : ℝ) : WithBot ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => (some (0 : ℝ) : WithBot ℝ)⟩
+      ∧ s0.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val))
+      ∧ s0.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s0.regs .nat [BLOCK_DMODEL] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+      ∧ s0.regs .real [] "q_scale" = some ⟨fun _ : TileIndex [] =>
+          some (s.readMem QScale ((s.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + s.pids 0)))⟩
+      ∧ s0.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some (kPtrsAFCG s K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s0.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFCG s KScale N_CTX BLOCK_N 0)
+      ∧ s0.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some (vPtrsAFCG s V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s0.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)
+      ∧ s0.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          if s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE
+          then some (qTileAFCG s Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL idx) else some (0.0 : ℝ)⟩ := by
+  rw [AfcFoundation.afcPreLoopG_eq_head_tail]
+  obtain ⟨s1, hHead, hpids1, hmem1, hundef1, hstartm1, hoffhz1, hqvk1, hqso1, hkso1,
+    hoffsm1, hoffsn1, hoffsk1⟩ := afcPreLoopHeadG_eval s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL hundef
+  rw [stepStmts.append_some hHead]
+  have hstartm1' : s1.regs .nat [] "start_m" = some (Tile.scalar (s1.pids 0)) := by
+    rw [hpids1]; exact hstartm1
+  have hoffhz1' : s1.regs .nat [] "off_hz" = some (Tile.scalar (s1.pids 1)) := by
+    rw [hpids1]; exact hoffhz1
+  have hqvk1' : s1.regs .nat [] "qvk_offset" = some (Tile.scalar (baseOffsetAFCG s1 stride_qz stride_qh H)) := by
+    rw [show baseOffsetAFCG s1 stride_qz stride_qh H = baseOffsetAFCG s stride_qz stride_qh H from by
+      simp only [baseOffsetAFCG, hpids1]]; exact hqvk1
+  have hqso1' : s1.regs .nat [] "q_scale_offset"
+      = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M))) := by
+    rw [hpids1]; exact hqso1
+  have hkso1' : s1.regs .nat [] "k_scale_offset"
+      = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N))) := by
+    rw [hpids1]; exact hkso1
+  have hoffsm1' : s1.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s1.pids 0 * BLOCK_M + r.val)) := by
+    rw [hpids1]; exact hoffsm1
+  obtain ⟨s0, hTail, hpids0, hmem0, hundef0, hstartm0, hoffhz0, hmi0, hli0, hacc0,
+    hoffsm0, hoffsn0, hoffsk0, hqscale0, hkp0, hksp0, hvp0, hop0, hq0⟩ :=
+    afcPreLoopTailG_eval s1 Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE hundef1
+      hstartm1' hoffhz1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
+  have hbase : baseOffsetAFCG s1 stride_qz stride_qh H = baseOffsetAFCG s stride_qz stride_qh H := by
+    simp only [baseOffsetAFCG, hpids1]
+  have hkpEq : kPtrsAFCG s1 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0 = kPtrsAFCG s K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0 := by
+    simp only [kPtrsAFCG, hbase]
+  have hkspEq : kScalePtrAFCG s1 KScale N_CTX BLOCK_N 0 = kScalePtrAFCG s KScale N_CTX BLOCK_N 0 := by
+    simp only [kScalePtrAFCG, hpids1]
+  have hvpEq : vPtrsAFCG s1 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0 = vPtrsAFCG s V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0 := by
+    simp only [vPtrsAFCG, hbase]
+  have hopEq : oBlockPtrAFCG s1 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL = oBlockPtrAFCG s Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL := by
+    simp only [oBlockPtrAFCG, hbase, hpids1]
+  refine ⟨s0, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpids0, hpids1]
+  · rw [hmem0, hmem1]
+  · exact hundef0
+  · rw [hstartm0, hpids1]
+  · rw [hoffhz0, hpids1]
+  · exact hmi0
+  · exact hli0
+  · exact hacc0
+  · rw [hoffsm0, hpids1]
+  · exact hoffsn0
+  · exact hoffsk0
+  · rw [hqscale0]
+    refine congrArg some ?_
+    ext idx
+    simp only [BlockState.readMem, hmem1, hpids1]
+  · rw [hkp0, hkpEq]
+  · rw [hksp0, hkspEq]
+  · rw [hvp0, hvpEq]
+  · rw [hop0, hopEq]
+  · rw [hq0]
+    refine congrArg some ?_
+    ext idx
+    simp only [hpids1, qTileAFCG, BlockState.readMem, hmem1, hbase]
+
 /-- **General loop invariant** for the AFC streaming loop (counter `i = c·BLOCK_N`).
 Binds the running registers to the seed-1 ⊥-state over the first `i` keys, the
 static index vectors, loaded `q`/`q_scale`, the three streamed pointers, and
@@ -6821,6 +6906,40 @@ noncomputable def afcInvariantG
   (s.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (i / BLOCK_N))) ∧
   (s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General preLoop ⇒ invariant base case.** -/
+theorem afcPreLoopG_invariant
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (hN : N_CTX = BLOCK_N * numKVBlocks) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) s = some s0
+      ∧ afcInvariantG Q K V QScale KScale Out s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale hBD 0 s0 := by
+  subst hN
+  obtain ⟨s0, hstep, hpids, hmem, hundef0, hstartm, hoffhz, hmi, hli, hacc,
+    hoffsm, hoffsn, hoffsk, hqscale, hkp, hksp, hvp, hop, hq⟩ :=
+    afcPreLoopG_eval s Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE hundef
+  refine ⟨s0, hstep, ?_⟩
+  simp only [afcInvariantG, qStartAFCG]
+  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, ?_, ?_, ?_, fun rg o => hundef0 rg o, hmem⟩
+  · rw [hmi]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    simp only [afcRunningMaxG_zero]
+  · rw [hli]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    simp only [afcStateBot1G_zero]; rfl
+  · rw [hacc]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    simp only [afcStateBot1G_zero]; rfl
+  · rw [hoffsm]
+  · exact hoffsn
+  · rw [hq]; rfl
+  · rw [hqscale]; rfl
+  · rw [hkp, Nat.zero_div]
+  · rw [hksp, Nat.zero_div]
+  · rw [hvp, Nat.zero_div]
+  · rw [hop]
 
 /-! ### General loop-body execution chain -/
 
