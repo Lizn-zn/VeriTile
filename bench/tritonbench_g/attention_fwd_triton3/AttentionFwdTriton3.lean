@@ -6676,4 +6676,147 @@ theorem attention_fwd_triton3_python_case2_output_summary
   · exact attention_fwd_triton3_case2_surface_out_compute_correct Q K V M Out L s hMO hundef
   · exact attention_fwd_triton3_case2_surface_m_compute_correct Q K V M Out L s hMO hundef
 
+/-! ## Dimension-general genuine closed-form spec layer (cases 1/2/3)
+
+A parallel, dimension-general spec/tile/mask layer to the test-shape `qTile3`/
+`kTile3`/`vTile3`/`keyScale3`/`natSlidingWindowKeep`/`attentionFwdTriton3CaseNOutSpec`
+above, parameterized over the symbolic kernel dims/strides:
+
+* `BM`  = `BLOCK_M`         (query rows; output tile rows; `Fin BM`)
+* `ND`  = `BLOCK_DMODEL`    (head dim; `Fin ND`)
+* `NC`  = `NKV_CTX`         (total keys streamed; `Fin NC`)
+* `base`= the `(off_z, off_h)` plane base offset (`offZ·stride_qz + offH·stride_qh`)
+* strides `sqm sqk` (Q/Out row/head), `skn skk` (K key/head), `svk svn` (V key/head)
+* `sc`  = the per-key score scale (`sm_scale · log2e`)
+* window: `natSlidingWindowKeepG`/`natComplementSlidingWindowKeepG` over symbolic
+  `BM`/`BN`/window size; `noWindowKeep` for case 3.
+
+The genuine closed form reuses the fully dimension-general math foundation
+`VeriTile.Triton.attentionRealBase2PerKeyScalePred` (`{M S D : Nat}`), so the
+spec/streaming-bridge layer is immediate. -/
+
+/-- General query tile: row `i`, head lane `e`, at `base + (start_m·BM + i)·sqm + e·sqk`. -/
+noncomputable def qTile3G (s : BlockState) (Q : RegionName)
+    (base BM ND sqm sqk : Nat) : TileIndex [BM, ND] → ℝ :=
+  fun (i, e, _) => s.readMem Q (base + (s.pids 0 * BM + i.val) * sqm + e.val * sqk)
+
+/-- General key tile: key `j` (global), head lane `e`, at `base + j·skn + e·skk`. -/
+noncomputable def kTile3G (s : BlockState) (K : RegionName)
+    (base NC ND skn skk : Nat) : TileIndex [NC, ND] → ℝ :=
+  fun (j, e, _) => s.readMem K (base + j.val * skn + e.val * skk)
+
+/-- General value tile: key `j` (global), head lane `d`, at `base + j·svk + d·svn`. -/
+noncomputable def vTile3G (s : BlockState) (V : RegionName)
+    (base NC ND svk svn : Nat) : TileIndex [NC, ND] → ℝ :=
+  fun (j, d, _) => s.readMem V (base + j.val * svk + d.val * svn)
+
+/-- General per-key uniform score scale (= `sm_scale · log2e`). -/
+noncomputable def keyScale3G (sc : ℝ) (NC : Nat) : Fin NC → ℝ := fun _ => sc
+
+/-- General faithful nat-truncated sliding-window distance, block-local key
+`jL = j mod BN`, block start `start_n = (j / BN)·BN`:
+`dist = (i − jL : ℕ) + SM·BM − start_n + offset`. -/
+def natDist3G (SM BM BN off : Nat) {NC : Nat} (i : Fin BM) (j : Fin NC) : Nat :=
+  (i.val - j.val % BN) + SM * BM - (j.val / BN) * BN + off
+
+/-- General case-1 keep predicate: `dist < size`. -/
+def natSlidingWindowKeepG (SM BM BN off size : Nat) {NC : Nat}
+    (i : Fin BM) (j : Fin NC) : Prop :=
+  natDist3G SM BM BN off i j < size
+
+instance natSlidingWindowKeepGDecidable (SM BM BN off size : Nat) {NC : Nat}
+    (i : Fin BM) (j : Fin NC) : Decidable (natSlidingWindowKeepG SM BM BN off size i j) := by
+  unfold natSlidingWindowKeepG; infer_instance
+
+/-- General case-2 complement keep predicate: `size ≤ dist`. -/
+def natComplementSlidingWindowKeepG (SM BM BN off size : Nat) {NC : Nat}
+    (i : Fin BM) (j : Fin NC) : Prop :=
+  size ≤ natDist3G SM BM BN off i j
+
+instance natComplementSlidingWindowKeepGDecidable (SM BM BN off size : Nat) {NC : Nat}
+    (i : Fin BM) (j : Fin NC) :
+    Decidable (natComplementSlidingWindowKeepG SM BM BN off size i j) := by
+  unfold natComplementSlidingWindowKeepG; infer_instance
+
+/-- General genuine closed form, case 1 (sliding window). -/
+noncomputable def attentionFwdTriton3Case1OutSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN off size : Nat)
+    (idx : TileIndex [BM, ND]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3G s Q base BM ND sqm sqk)
+    (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn)
+    (keyScale3G sc NC) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) idx
+
+/-- General genuine closed form, case 2 (complement sliding window). -/
+noncomputable def attentionFwdTriton3Case2OutSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN off size : Nat)
+    (idx : TileIndex [BM, ND]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3G s Q base BM ND sqm sqk)
+    (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn)
+    (keyScale3G sc NC) (fun i j => natComplementSlidingWindowKeepG (s.pids 0) BM BN off size i j) idx
+
+/-- General genuine closed form, case 3 (no window) — plain base-2 softmax. -/
+noncomputable def attentionFwdTriton3Case3OutSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ)
+    (idx : TileIndex [BM, ND]) : ℝ :=
+  attentionRealBase2PerKeyScalePred (qTile3G s Q base BM ND sqm sqk)
+    (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn)
+    (keyScale3G sc NC) (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) idx
+
+/-- Streaming bridge, general case 1: closed form = online-softmax fold of the
+masked key list. -/
+theorem attentionFwdTriton3Case1OutSpecG_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN off size : Nat)
+    (i : Fin BM) (d : Fin ND) :
+    attentionFwdTriton3Case1OutSpecG s Q K V base BM ND NC sqm sqk skn skk svk svn sc BN off size
+        (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3G s Q base BM ND sqm sqk)
+            (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+            (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d).foldl
+              osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case1OutSpecG] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+      (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d
+
+/-- Streaming bridge, general case 2. -/
+theorem attentionFwdTriton3Case2OutSpecG_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN off size : Nat)
+    (i : Fin BM) (d : Fin ND) :
+    attentionFwdTriton3Case2OutSpecG s Q K V base BM ND NC sqm sqk skn skk svk svn sc BN off size
+        (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3G s Q base BM ND sqm sqk)
+            (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+            (fun i j => natComplementSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d).foldl
+              osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case2OutSpecG] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+      (fun i j => natComplementSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d
+
+/-- Streaming bridge, general case 3. -/
+theorem attentionFwdTriton3Case3OutSpecG_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ)
+    (i : Fin BM) (d : Fin ND) :
+    attentionFwdTriton3Case3OutSpecG s Q K V base BM ND NC sqm sqk skn skk svk svn sc
+        (i, d, PUnit.unit)
+      = (let st := (attnKeyListPred (qTile3G s Q base BM ND sqm sqk)
+            (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+            (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  simpa [attentionFwdTriton3Case3OutSpecG] using
+    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+      (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
+      (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) i d
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
