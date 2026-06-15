@@ -5310,6 +5310,210 @@ theorem afc_score_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
     Tile.scalar, NumericDType.mul, hdot, hkscT]
   simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
 
+/-! ### General per-statement op-eval recipes -/
+
+set_option maxHeartbeats 1600000 in
+/-- General `k_mask` recipe ([BLOCK_DMODEL, BLOCK_N]). -/
+theorem afc_kmask_evalG (s : BlockState) (SN NCTX HA BLOCK_N BLOCK_DMODEL : Nat)
+    (offsn : Tile .nat [BLOCK_N])
+    (hoffsn : s.regs .nat [BLOCK_N] "offs_n" = some offsn)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat NCTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HA)))) s
+      = some ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+          (ComparableDType.nat.lt (offsn.data (idx.2.1, PUnit.unit)) (NCTX - SN))
+            && (ComparableDType.nat.lt idx.1.val HA)⟩ := by
+  rw [afc_evalOp_boolAnd]
+  simp only [evalOp_lt, evalOp.eq_def, evalOp_constNat, evalOp_arange, hoffsn, hsn,
+    Option.bind_eq_bind, Option.bind_some, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex, NumericDType.sub]
+
+set_option maxHeartbeats 1600000 in
+/-- General `mask` (causal keep) recipe. -/
+theorem afc_mask_evalG (s : BlockState) (SN BLOCK_M BLOCK_N : Nat)
+    (offsm : Tile .nat [BLOCK_M]) (offsn : Tile .nat [BLOCK_N])
+    (hoffsm : s.regs .nat [BLOCK_M] "offs_m" = some offsm)
+    (hoffsn : s.regs .nat [BLOCK_N] "offs_n" = some offsn)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))) s
+      = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          ComparableDType.nat.ge (offsm.data (idx.1, PUnit.unit))
+            (SN + offsn.data (idx.2.1, PUnit.unit))⟩ := by
+  rw [afc_evalOp_ge]
+  simp only [evalOp_add, evalOp.eq_def, hoffsm, hoffsn, hsn,
+    Option.bind_eq_bind, Option.bind_some, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.cop_data, Tile.bop_data, Tile.expandDim_data, Tile.scalar,
+    Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex, NumericDType.add]
+
+set_option maxHeartbeats 1600000 in
+/-- General `m_ij = maximum(m_i, max(qk,1))` recipe. -/
+theorem afc_mij_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat)
+    (mtile : Tile .real [BLOCK_M]) (qktile : Tile .real [BLOCK_M, BLOCK_N]) (rmaxT : Tile .real [BLOCK_M])
+    (hmi : s.regs .real [BLOCK_M] "m_i" = some mtile)
+    (hqk : s.regs .real [BLOCK_M, BLOCK_N] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BLOCK_M] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+            (Op.ref .real [BLOCK_M, BLOCK_N] "qk")))
+        (Op.ref .real [BLOCK_M] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+          (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))) s
+      = some (Tile.select
+          (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+          mtile rmaxT) := by
+  have hrmax : @evalOp TileDType.real [BLOCK_M]
+      (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk")) s = some rmaxT := by
+    unfold evalOp
+    simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+    exact hrm
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmi, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+/-- General `qk = qk - m_ij[:,None]` recipe. -/
+theorem afc_qk_sub_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat) (hax : 1 < [BLOCK_M].length.succ)
+    (qktile : Tile .real [BLOCK_M, BLOCK_N]) (mc : Tile .real [BLOCK_M])
+    (hqk : s.regs .real [BLOCK_M, BLOCK_N] "qk" = some qktile)
+    (hmij : s.regs .real [BLOCK_M] "m_ij" = some mc) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BLOCK_M] "m_ij"))) s
+      = some (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          qktile (Tile.expandDim ⟨1, hax⟩ mc)) := by
+  have hexp : @evalOp TileDType.real [BLOCK_M, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BLOCK_M] "m_ij")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmij
+  rw [evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+/-- General `p = exp2(qk)` recipe. -/
+theorem afc_p_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat) (qktile : Tile .real [BLOCK_M, BLOCK_N])
+    (hqk : s.regs .real [BLOCK_M, BLOCK_N] "qk" = some qktile) :
+    evalOp (Op.exp2 (Op.ref .real [BLOCK_M, BLOCK_N] "qk")) s
+      = some (Tile.uop WithBot.realExp2 qktile) := by
+  rw [afc_evalOp_exp2]; simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+/-- General `p = where(mask, p, 0)` recipe. -/
+theorem afc_p_mask_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat) (masktile : Tile .bool [BLOCK_M, BLOCK_N])
+    (ptile : Tile .real [BLOCK_M, BLOCK_N])
+    (hmask : s.regs .bool [BLOCK_M, BLOCK_N] "mask" = some masktile)
+    (hp : s.regs .real [BLOCK_M, BLOCK_N] "p" = some ptile) :
+    evalOp (Op.where (Op.ref .bool [BLOCK_M, BLOCK_N] "mask")
+        (Op.ref .real [BLOCK_M, BLOCK_N] "p") (Op.broadcast (Op.const 0.0) [BLOCK_M, BLOCK_N])) s
+      = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ := by
+  have hbcast : @evalOp TileDType.real [BLOCK_M, BLOCK_N] (Op.broadcast (Op.const 0.0) [BLOCK_M, BLOCK_N]) s
+      = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => (some (0.0 : ℝ) : WithBot ℝ)⟩ :
+          Tile .real [BLOCK_M, BLOCK_N]) := by
+    simp only [evalOp, evalOp_const, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where]
+  simp only [evalOp_ref, hmask, hp, hbcast, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.scalar]
+
+set_option maxHeartbeats 1600000 in
+/-- General `l_ij = sum(p, 1)` recipe. -/
+theorem afc_lij_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat) (ptile : Tile .real [BLOCK_M, BLOCK_N])
+    (hp : s.regs .real [BLOCK_M, BLOCK_N] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+        (Op.ref .real [BLOCK_M, BLOCK_N] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) ptile) := by
+  rw [evalOp_reduceSum]
+  simp only [evalOp_ref, hp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+/-- General `alpha = exp2(m_i - m_ij)` recipe. -/
+theorem afc_alpha_evalG (s : BlockState) (BLOCK_M : Nat) (mi mij : Tile .real [BLOCK_M])
+    (hmi : s.regs .real [BLOCK_M] "m_i" = some mi)
+    (hmij : s.regs .real [BLOCK_M] "m_ij" = some mij) :
+    evalOp (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_ij"))) s
+      = some (Tile.uop WithBot.realExp2
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mi mij)) := by
+  rw [afc_evalOp_exp2, evalOp_sub]
+  simp only [evalOp_ref, hmi, hmij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+/-- General `l_i = l_i * alpha + l_ij` recipe. -/
+theorem afc_li_evalG (s : BlockState) (BLOCK_M : Nat) (li alpha lij : Tile .real [BLOCK_M])
+    (hli : s.regs .real [BLOCK_M] "l_i" = some li)
+    (halpha : s.regs .real [BLOCK_M] "alpha" = some alpha)
+    (hlij : s.regs .real [BLOCK_M] "l_ij" = some lij) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BLOCK_M] "l_i") (Op.ref .real [BLOCK_M] "alpha"))
+        (Op.ref .real [BLOCK_M] "l_ij")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) li alpha) lij) := by
+  rw [evalOp_add, evalOp_mul]
+  simp only [evalOp_ref, hli, halpha, hlij, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+/-- General `acc = acc * alpha[:,None]` recipe. -/
+theorem afc_acc_rescale_evalG (s : BlockState) (BLOCK_M BLOCK_DMODEL : Nat) (hax : 1 < [BLOCK_M].length.succ)
+    (acctile : Tile .real [BLOCK_M, BLOCK_DMODEL]) (alpha : Tile .real [BLOCK_M])
+    (hacc : s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some acctile)
+    (halpha : s.regs .real [BLOCK_M] "alpha" = some alpha) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BLOCK_M] "alpha"))) s
+      = some (Tile.bop NumericDType.real.mul
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acctile (Tile.expandDim ⟨1, hax⟩ alpha)) := by
+  have hexp : @evalOp TileDType.real [BLOCK_M, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BLOCK_M] "alpha")) s
+      = some (Tile.expandDim ⟨1, hax⟩ alpha) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ halpha
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+/-- General `p = p.to(fp16)` recipe. -/
+theorem afc_p_fp16_evalG (s : BlockState) (BLOCK_M BLOCK_N : Nat) (ptile : Tile .real [BLOCK_M, BLOCK_N])
+    (hp : s.regs .real [BLOCK_M, BLOCK_N] "p" = some ptile) :
+    evalOp (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")) s
+      = some ⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ := by
+  simp only [evalOp_castFloat, FloatDType.toTileDType_real, evalOp_ref, hp,
+    Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+/-- General `m_i = m_ij` recipe. -/
+theorem afc_mi_carry_evalG (s : BlockState) (BLOCK_M : Nat) (mij : Tile .real [BLOCK_M])
+    (hmij : s.regs .real [BLOCK_M] "m_ij" = some mij) :
+    evalOp (Op.ref .real [BLOCK_M] "m_ij") s = some mij := by
+  rw [evalOp_ref, hmij]
+
+/-- General `reduceMaxDrop` over axis 1 of `[BLOCK_M, BLOCK_N]` succeeds (`0 < BLOCK_N`). -/
+theorem afc_reduceMaxDrop1_someG (BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (x : Tile .real [BLOCK_M, BLOCK_N]) :
+    ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) x = some t := by
+  unfold Tile.reduceMaxDrop
+  rw [dif_pos (show 0 < TileShape.axisDim [BLOCK_M, BLOCK_N] (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) from hBN)]
+  exact ⟨_, rfl⟩
+
 set_option maxHeartbeats 1600000 in
 /-- General `m_ij = afcRunningMaxG((c+1)·BLOCK_N)` (masked with -1e6 sentinel). -/
 theorem afc_mij_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
