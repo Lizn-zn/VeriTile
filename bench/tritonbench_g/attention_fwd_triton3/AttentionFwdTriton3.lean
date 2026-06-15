@@ -8519,4 +8519,112 @@ theorem aft3_score_cellG (s0 : BlockState) (Q K : RegionName)
   simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map, zero_add]
   ring
 
+/-! ### General case-3 (no-window) register bridges -/
+
+set_option maxHeartbeats 1600000 in
+/-- **General block sup (case 3).** -/
+theorem aft3Block_noWindow_blockSupG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND) :
+    Finset.univ.sup (fun jL : Fin BN =>
+        ((sc * Finset.univ.sum (fun e : Fin ND =>
+            qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+              kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ))
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+          (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) BN c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [show (aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+        (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+        (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) BN c i d).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange NC).filterMap (fun j : Fin NC =>
+          if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+          then some (keyScale3G sc NC j * Finset.univ.sum (fun e : Fin ND =>
+                qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) * kTile3G s0 K base NC ND skn skk (j, e, PUnit.unit))) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold aft3BlockG
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN <;>
+      simp [hj, noWindowKeep]]
+  rw [aft3_filterMap_foldr_sup NC
+    (fun j => c * BN ≤ j.val ∧ j.val < (c + 1) * BN)
+    (fun j => keyScale3G sc NC j * Finset.univ.sum (fun e : Fin ND =>
+        qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) * kTile3G s0 K base NC ND skn skk (j, e, PUnit.unit)))]
+  symm
+  have hexp : (c + 1) * BN = c * BN + BN := by ring
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+    · rw [if_pos hj]
+      have hjL : j.val - c * BN < BN := by omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * BN, hjL⟩ : Fin BN)))
+      simp only
+      have hfin : (⟨c * BN + (j.val - c * BN), by omega⟩ : Fin NC) = j := by apply Fin.ext; simp; omega
+      apply le_of_eq
+      simp only [keyScale3G]
+      congr 1; rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * BN + jL.val < NC := aft3_block_idx_lt BN c NC jL.val jL.isLt hc1
+    refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * BN + jL.val, hb⟩ : Fin NC)))
+    simp only
+    rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega⟩)]
+    apply le_of_eq
+    simp only [keyScale3G]
+
+set_option maxHeartbeats 1600000 in
+/-- **General `m_ij = aft3RunningMaxG((c+1)·BN)` (case 3).** -/
+theorem aft3_mij_reg_eqG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mtile rmaxT : Tile .real [BM])
+    (qkT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : qkT = Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc)))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+            (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) (c * BN) i d)
+    (hrmax : Tile.reduceMaxDrop (aft3Ax1G BM BN) qkT = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
+      = aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+          (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) ((c + 1) * BN) i d := by
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+          (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) BN c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [aft3_reduceMaxDrop_rowG BM BN hBN qkT rmaxT hrmax i
+      (fun jL => ((sc * Finset.univ.sum (fun e : Fin ND =>
+          qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+            kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ))
+      ?_]
+    · exact aft3Block_noWindow_blockSupG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d
+    · intro jL
+      rw [hqkT]
+      exact aft3_score_cellG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) qtile ktile hq hk
+  rw [aft3RunningMaxG_succ (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+      (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) BN c i d]
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
+  set M := aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+      (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) (c * BN) i d
+  set S := ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+      (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) BN c i d).map
+      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+  by_cases h : M ≤ S
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
