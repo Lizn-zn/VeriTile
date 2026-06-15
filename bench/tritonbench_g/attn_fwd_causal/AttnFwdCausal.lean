@@ -4787,6 +4787,180 @@ def afcLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
       (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
 
+/-- General preLoop (22 deterministic prefix statements), symbolic dims with
+contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`).
+Mirrors `afcPreLoop` with the test-shape numerals replaced by the corresponding
+dimension parameters. -/
+def afcPreLoopG (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [] "off_z"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "off_h"
+      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "qvk_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh))),
+    Stmt.assign .nat [] "vk_offset"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat HEAD_DIM)),
+    Stmt.assign .nat [] "q_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_M)) (Op.constNat 1))
+          (Op.constNat BLOCK_M))),
+    Stmt.assign .nat [] "k_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_N)) (Op.constNat 1))
+          (Op.constNat BLOCK_N))),
+    Stmt.assign .nat [BLOCK_M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+    Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+    Stmt.assign .nat [BLOCK_DMODEL] "offs_k" (Op.arange BLOCK_DMODEL),
+    Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [] "Q_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase QScale)
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))),
+    Stmt.assign .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))),
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase KScale) (Op.ref .nat [] "k_scale_offset")),
+    Stmt.assign .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .real [BLOCK_M] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [BLOCK_M] "l_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) (Op.const 1.0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+      (Op.load .real (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+    Stmt.assign .real [] "q_scale"
+      (Op.load .real (.ptr (.ref .ptr [] "Q_scale_ptr")) .none) ]
+
+/-- General preLoop head — statements 0–10 of `afcPreLoopG`. -/
+def afcPreLoopHeadG (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [] "off_z"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "off_h"
+      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "qvk_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh))),
+    Stmt.assign .nat [] "vk_offset"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat HEAD_DIM)),
+    Stmt.assign .nat [] "q_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_M)) (Op.constNat 1))
+          (Op.constNat BLOCK_M))),
+    Stmt.assign .nat [] "k_scale_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_N)) (Op.constNat 1))
+          (Op.constNat BLOCK_N))),
+    Stmt.assign .nat [BLOCK_M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+    Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+    Stmt.assign .nat [BLOCK_DMODEL] "offs_k" (Op.arange BLOCK_DMODEL) ]
+
+/-- General preLoop tail — statements 11–21 of `afcPreLoopG`. -/
+def afcPreLoopTailG (Q K V QScale KScale Out : RegionName)
+    (HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  [ Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [] "Q_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase QScale)
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))),
+    Stmt.assign .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))),
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase KScale) (Op.ref .nat [] "k_scale_offset")),
+    Stmt.assign .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .real [BLOCK_M] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [BLOCK_M] "l_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) (Op.const 1.0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+      (Op.load .real (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"))
+        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+    Stmt.assign .real [] "q_scale"
+      (Op.load .real (.ptr (.ref .ptr [] "Q_scale_ptr")) .none) ]
+
+theorem afcPreLoopG_eq_head_tail (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      = afcPreLoopHeadG stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL
+        ++ afcPreLoopTailG Q K V QScale KScale Out HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE :=
+  rfl
+
+/-- General postLoop (2 statements): `acc /= l_i[:, None]` then masked store to `O_block_ptr`. -/
+def afcPostLoopG (Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
+  [ Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i"))),
+    Stmt.store .real [BLOCK_M, BLOCK_DMODEL] (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE))))) ]
+
 /-- General loop-body head (statements 0–10). -/
 def afcLoopBodyHeadG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   List.take 11 (afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
@@ -6097,6 +6271,28 @@ theorem afc_body_splitG
             :: (attn_fwd_causal_surface Q K V QScale KScale Out
                 sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
                 Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.drop 23) :=
+  rfl
+
+set_option maxRecDepth 8000 in
+/-- `body.take 22 = afcPreLoopG` at the contiguous symbolic layout. Checked by `rfl`. -/
+theorem afcPreLoopG_check (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z : Nat) :
+    (attn_fwd_causal_surface Q K V QScale KScale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.take 22
+      = AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE :=
+  rfl
+
+set_option maxRecDepth 8000 in
+/-- `body.drop 23 = afcPostLoopG` at the contiguous symbolic layout. Checked by `rfl`. -/
+theorem afcPostLoopG_check (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z : Nat) :
+    (attn_fwd_causal_surface Q K V QScale KScale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.drop 23
+      = AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE :=
   rfl
 
 /-! ### General streamed-pointer closed cell-forms -/
