@@ -5138,6 +5138,120 @@ theorem afcKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOC
   · rw [if_pos ⟨hjlt, hiff.mp hc⟩, if_pos hc]
   · rw [if_neg (fun hh => hc (hiff.mpr hh.2)), if_neg hc]
 
+/-- General sentinel boundedness side-condition. -/
+def afcScoreBoundG
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
+    (keyScale : Fin SEQ → ℝ) (qStart : Nat) : Prop :=
+  ∀ (j : Fin SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL),
+    keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
+      > -1000000.0
+
+/-- General: under `afcScoreBoundG`, running max over a nonempty causal window
+exceeds the `-1e6` sentinel. -/
+theorem afcRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 < SEQ)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hsb : afcScoreBoundG qT kT vT keyScale qStart) :
+    afcRunningMaxG qT kT vT keyScale qStart hi i d > some (-1000000.0 : ℝ) := by
+  unfold afcRunningMaxG afcKeysUptoG
+  have hkey0 : ((afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) > -1000000.0 := by
+    have := hsb ⟨0, hSEQ⟩ i d
+    simpa [afcKVG] using this
+  have hmem : ((((afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ)) : WithBot ℝ) ∈
+      ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
+        if j.val < hi ∧ j.val ≤ qStart + i.val
+        then some (afcKVG qT kT vT keyScale i d j) else none)).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    rw [List.mem_map]
+    refine ⟨afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    refine ⟨⟨0, hSEQ⟩, List.mem_finRange _, ?_⟩
+    rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
+  have hle := afc_mem_le_foldr_sup _ _ hmem
+  refine lt_of_lt_of_le ?_ hle
+  exact (WithBot.coe_lt_coe).mpr hkey0
+
+/-- General `afcBlockG` map-and-sum: reindex block `c`'s causal window onto
+`Fin BLOCK_N` lanes (global key `c·BLOCK_N + jL`). -/
+theorem afcBlockG_map_sum (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hwin : (c + 1) * BLOCK_N ≤ SEQ) (h : ℝ × ℝ → ℝ) :
+    ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map h).sum
+      = ∑ jL : Fin BLOCK_N,
+          (if (c * BLOCK_N + jL.val) ≤ qStart + i.val then
+            h (afcKVG qT kT vT keyScale i d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩)
+           else 0) := by
+  rw [afcBlockG, afc_filterMap_finRange_sum SEQ
+    (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val)
+    (fun j => afcKVG qT kT vT keyScale i d j) h]
+  rw [show (∑ j : Fin SEQ, if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val
+            then h (afcKVG qT kT vT keyScale i d j) else 0)
+        = ∑ j ∈ Finset.univ.filter (fun j : Fin SEQ => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N),
+            (if j.val ≤ qStart + i.val then h (afcKVG qT kT vT keyScale i d j) else 0) from by
+    rw [Finset.sum_filter]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hwj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N
+    · by_cases hcj : j.val ≤ qStart + i.val
+      · rw [if_pos ⟨hwj.1, hwj.2, hcj⟩, if_pos hwj, if_pos hcj]
+      · rw [if_neg (fun hh => hcj hh.2.2), if_pos hwj, if_neg hcj]
+    · rw [if_neg (fun hh => hwj ⟨hh.1, hh.2.1⟩), if_neg hwj]]
+  symm
+  have hexp : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := by ring
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * BLOCK_N + jL.val, by have := jL.isLt; omega⟩ : Fin SEQ)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * BLOCK_N + a.val = c * BLOCK_N + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * BLOCK_N, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- General `afcBlockG` running-sup bridge. -/
+theorem afcBlockG_blockSup (qStart BLOCK_N c : Nat) (i d : Fin BLOCK_M) (d2 : Fin BLOCK_DMODEL)
+    (hwin : (c + 1) * BLOCK_N ≤ SEQ) :
+    ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d2).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          if (c * BLOCK_N + jL.val) ≤ qStart + i.val then
+            (((afcKVG qT kT vT keyScale i d2 ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ)) := by
+  rw [show (afcBlockG qT kT vT keyScale qStart BLOCK_N c i d2).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
+          if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val
+          then some ((afcKVG qT kT vT keyScale i d2 j).1) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+    unfold afcBlockG
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val <;> simp [hj]]
+  rw [afc_filterMap_foldr_sup SEQ
+    (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val)
+    (fun j => (afcKVG qT kT vT keyScale i d2 j).1)]
+  have hexp : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := by ring
+  apply le_antisymm
+  · apply Finset.sup_le; intro j _
+    by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ j.val ≤ qStart + i.val
+    · rw [if_pos hj]
+      have hjL : j.val - c * BLOCK_N < BLOCK_N := by omega
+      have hfin : (⟨c * BLOCK_N + (j.val - c * BLOCK_N), by omega⟩ : Fin SEQ) = j := by apply Fin.ext; simp only; omega
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨j.val - c * BLOCK_N, hjL⟩ : Fin BLOCK_N)))
+      simp only
+      rw [if_pos (show c * BLOCK_N + (j.val - c * BLOCK_N) ≤ qStart + i.val from by have := hj.2.2; omega)]
+      apply le_of_eq
+      rw [hfin]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le; intro jL _
+    have hb : c * BLOCK_N + jL.val < SEQ := by have := jL.isLt; omega
+    by_cases hkeep : c * BLOCK_N + jL.val ≤ qStart + i.val
+    · rw [if_pos hkeep]
+      refine le_trans ?_ (Finset.le_sup (Finset.mem_univ (⟨c * BLOCK_N + jL.val, hb⟩ : Fin SEQ)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
+    · rw [if_neg hkeep]; exact bot_le
+
 /-- **General ⊥-seeded full-window state reads off the genuine closed-form spec.** -/
 theorem afcStateBotG_full_eq_spec
     (s : BlockState) (Q K V : RegionName)
