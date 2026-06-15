@@ -5643,6 +5643,180 @@ theorem afc_acc_anchorG (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODE
         * (0 + ((afcKeysUptoG qT kT vT keyScale qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
   rw [afcStateBotG_snd_snd, afcStateBotG_fst_eq_runningMax]
 
+set_option maxHeartbeats 1600000 in
+/-- General `l_i' = afcStateBotG((c+1)·BLOCK_N).2.1` (masked). -/
+theorem afc_denom_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M)
+    (hsb : afcScoreBoundG qT kT vT keyScale qStart)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mtile mijT alphaT litile lijT : Tile .real [BLOCK_M])
+    (pT : Tile .real [BLOCK_M, BLOCK_N])
+    (hsent : ∀ jL : Fin BLOCK_N, qkSentT.data (i, jL, PUnit.unit)
+        = if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hlitile : litile.data (i, PUnit.unit) = some
+        ((afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.1))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩)
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hlijT : lijT = Tile.reduceSumDrop (afcAx1G BLOCK_M BLOCK_N) pT)
+    (hpT : ∀ jL : Fin BLOCK_N, pT.data (i, jL, PUnit.unit)
+        = if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) litile alphaT) lijT).data (i, PUnit.unit)
+      = some ((afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩).2.1) := by
+  have hSEQ : 0 < SEQ := by
+    have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega
+  set m := (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).1 with hm_def
+  set Mc := afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩ with hMc
+  set Mc1 := afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ with hMc1
+  have hmMc : m = Mc := by rw [hm_def, hMc, afcStateBotG_fst_eq_runningMax]
+  have hMsucc : Mc1 = m ⊔ ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i ⟨0, hBD⟩).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, afcRunningMaxG_succ, hmMc, ← hMc]
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub, ← hMc, ← hMc1, hmMc]
+  have hsum := afc_nume_row_sum_maskedG qT kT vT keyScale BLOCK_N hBN hBM hBD qStart c hc1 i ⟨0, hBD⟩ hsb qkSentT mijT pT hsent hmij hpT
+  have hblockEq := osStepBot_block_eq m
+    ((afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.1)
+    ((afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.2)
+    ((afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).map (fun p => pow2 p.1 * p.2)).sum
+    ((afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).map (fun p => pow2 p.1)).sum
+    (afcBlockG qT kT vT keyScale qStart BLOCK_N c i ⟨0, hBD⟩)
+    (by rw [afc_denom_anchorG, zero_add, hm_def])
+    (by rw [afc_acc_anchorG, zero_add, hm_def])
+    (fun hbot => afcKeysUptoG_sum_zero_of_bot qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩
+      (by rw [← afcStateBotG_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => afcKeysUptoG_sum_zero_of_bot qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩
+      (by rw [← afcStateBotG_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  rw [show (afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩).2.1
+        = (Mc1, (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.1
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i ⟨0, hBD⟩).map (fun p => pow2 (p.1 - Mc1.unbotD 0))).sum,
+            _).2.1 from by
+    rw [afcStateBotG_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  have hcancel := (afcStateBot1G_cancel qT kT vT keyScale qStart BLOCK_N c hBN i ⟨0, hBD⟩ Mc1 hSEQ).1
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  rw [hlijT]
+  erw [hsum]
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    hlitile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [show (afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.1 * α
+        = (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩).2.1 * α from by
+    have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
+
+set_option maxHeartbeats 1600000 in
+/-- General `acc' = afcStateBotG((c+1)·BLOCK_N).2.2` (masked). -/
+theorem afc_acc_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBD : 0 < BLOCK_DMODEL)
+    (qStart : Nat) (c : Nat) (hc1 : (c + 1) * BLOCK_N ≤ SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
+    (hsb : afcScoreBoundG qT kT vT keyScale qStart)
+    (qkSentT : Tile .real [BLOCK_M, BLOCK_N]) (mtile mijT alphaT : Tile .real [BLOCK_M])
+    (acctile acc1T : Tile .real [BLOCK_M, BLOCK_DMODEL]) (pT : Tile .real [BLOCK_M, BLOCK_N])
+    (vtile : Tile .real [BLOCK_N, BLOCK_DMODEL]) (vval : Fin BLOCK_N → ℝ)
+    (hsent : ∀ jL : Fin BLOCK_N, qkSentT.data (i, jL, PUnit.unit)
+        = if qStart + i.val ≥ c * BLOCK_N + jL.val then
+            (((afcKVG qT kT vT keyScale i ⟨0, hBD⟩
+                ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).1 : ℝ) : WithBot ℝ)
+          else ((-1000000.0 : ℝ) : WithBot ℝ))
+    (hacctile : acctile.data (i, d, PUnit.unit) = some
+        ((afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩)
+    (hmij : mijT.data (i, PUnit.unit)
+        = afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hacc1 : acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+    (hpT : ∀ jL : Fin BLOCK_N, pT.data (i, jL, PUnit.unit)
+        = if (qStart + i.val ≥ c * BLOCK_N + jL.val) then
+            (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+              (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkSentT (Tile.expandDim ⟨1, by simp⟩ mijT))).data (i, jL, PUnit.unit)
+          else (some (0.0 : ℝ) : WithBot ℝ))
+    (hv : ∀ jL : Fin BLOCK_N, vtile.data (jL, d, PUnit.unit) = some (vval jL))
+    (hvval : ∀ jL : Fin BLOCK_N, vval jL
+        = (afcKVG qT kT vT keyScale i d ⟨c * BLOCK_N + jL.val, by have := jL.isLt; have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega⟩).2) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        acc1T (Tile.dot [] pT vtile)).data (i, d, PUnit.unit)
+      = some ((afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d).2.2) := by
+  have hSEQ : 0 < SEQ := by
+    have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega
+  have hc1' : 1 ≤ (c + 1) * BLOCK_N := by
+    have h2 : (c+1)*BLOCK_N = c*BLOCK_N + BLOCK_N := Nat.succ_mul c BLOCK_N; omega
+  set m := (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).1 with hm_def
+  set Mc := afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i ⟨0, hBD⟩ with hMc
+  set Mc1 := afcRunningMaxG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ with hMc1
+  have hmMc : m = Mc := by
+    rw [hm_def, hMc, afcStateBotG_fst_eq_runningMax,
+      afcRunningMaxG_eq qT kT vT keyScale qStart (c * BLOCK_N) i d ⟨0, hBD⟩]
+  have hmd : m = afcRunningMaxG qT kT vT keyScale qStart (c * BLOCK_N) i d := by
+    rw [hm_def, afcStateBotG_fst_eq_runningMax]
+  have hMsucc : Mc1 = m ⊔ ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, afcRunningMaxG_eq qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i ⟨0, hBD⟩ d,
+      afcRunningMaxG_succ, hmd]
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub, ← hMc, ← hMc1, hmMc]
+  have hMc1bot : Mc1 ≠ ⊥ := by
+    rw [hMc1]; exact afcRunningMaxG_ne_bot qT kT vT keyScale qStart ((c + 1) * BLOCK_N) hc1' hSEQ i ⟨0, hBD⟩
+  have hdot := afc_acc_dot_block_maskedG qT kT vT keyScale BLOCK_N hBM hBD qStart c hc1 i d qkSentT mijT pT vtile vval
+    (by rw [← hMc1]; exact hMc1bot) hsent hmij hpT hv hvval
+  have hblockEq := osStepBot_block_eq m
+    ((afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.1)
+    ((afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2)
+    ((afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i d).map (fun p => pow2 p.1 * p.2)).sum
+    ((afcKeysUptoG qT kT vT keyScale qStart (c * BLOCK_N) i d).map (fun p => pow2 p.1)).sum
+    (afcBlockG qT kT vT keyScale qStart BLOCK_N c i d)
+    (by rw [afc_denom_anchorG, zero_add, hm_def])
+    (by rw [afc_acc_anchorG, zero_add, hm_def])
+    (fun hbot => afcKeysUptoG_sum_zero_of_bot qT kT vT keyScale qStart (c * BLOCK_N) i d
+      (by rw [← afcStateBotG_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => afcKeysUptoG_sum_zero_of_bot qT kT vT keyScale qStart (c * BLOCK_N) i d
+      (by rw [← afcStateBotG_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  rw [show (afcStateBotG qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d).2.2
+        = (Mc1, _,
+            (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((afcBlockG qT kT vT keyScale qStart BLOCK_N c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
+        from by rw [afcStateBotG_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  have hcancel := (afcStateBot1G_cancel qT kT vT keyScale qStart BLOCK_N c hBN i d Mc1 hSEQ).2
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hdot]
+  rw [hacc1, Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, hacctile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [show (afcStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2 * α
+        = (afcStateBotG qT kT vT keyScale qStart (c * BLOCK_N) i d).2.2 * α from by
+    have := hcancel; simp only [← hm_def, ← hαdef] at this ⊢; exact this]
+
 /-- **General ⊥-seeded full-window state reads off the genuine closed-form spec.** -/
 theorem afcStateBotG_full_eq_spec
     (s : BlockState) (Q K V : RegionName)
