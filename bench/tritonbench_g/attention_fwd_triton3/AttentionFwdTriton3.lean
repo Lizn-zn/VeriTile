@@ -9056,4 +9056,107 @@ theorem aft3Block_masked_blockSupG (s0 : BlockState) (Q K V : RegionName)
       simp only [keyScale3G]
     · rw [if_neg hkeep]; exact bot_le
 
+set_option maxHeartbeats 1600000 in
+/-- **General masked `m_ij = aft3RunningMaxG((c+1)·BN)` (cases 1/2).** -/
+theorem aft3_mij_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mtile rmaxT : Tile .real [BM])
+    (qkT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep (c * BN) i d)
+    (hrmax : Tile.reduceMaxDrop (aft3Ax1G BM BN) qkT = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
+      = aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep ((c + 1) * BN) i d := by
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [aft3_reduceMaxDrop_rowG BM BN hBN qkT rmaxT hrmax i
+      (fun jL => if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ))
+      ?_]
+    · exact aft3Block_masked_blockSupG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep mc hmc
+    · intro jL
+      rw [hqkT jL]
+      exact aft3_score_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile hq hk
+  rw [aft3RunningMaxG_succ (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d]
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell]
+  set M := aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep (c * BN) i d
+  set S := ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+  by_cases h : M ≤ S
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
+/-- **General masked `pmT` cell (cases 1/2).** -/
+theorem aft3_pmT_cell_maskedG (s0 : BlockState) (Q K : RegionName)
+    (base BM ND NC sqm sqk skn skk : Nat) (sc : ℝ) (BN c : Nat)
+    (i : Fin BM) (jL : Fin BN) (hjL : c * BN + jL.val < NC) (mcj : Bool)
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mijT : Tile .real [BM]) (Mc1 : WithBot ℝ)
+    (qkT pT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkTcell : qkT.data (i, jL, PUnit.unit)
+        = if mcj then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+          else (⊥ : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = Mc1)
+    (hkeptbot : mcj = Bool.true → Mc1 ≠ ⊥)
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))) :
+    (if mcj then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ))
+      = some (if mcj then
+          pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+            qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+              kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, hjL⟩, e, PUnit.unit))) - Mc1.unbotD 0)
+          else 0) := by
+  match mcj with
+  | Bool.false => show (some (0.0 : ℝ) : WithBot ℝ) = some (0 : ℝ); norm_num
+  | Bool.true =>
+       obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+         cases hh : Mc1 with
+         | coe x => exact ⟨x, rfl⟩
+         | bot => exact absurd hh (hkeptbot rfl)
+       show pT.data (i, jL, PUnit.unit) = some (pow2 _ )
+       rw [hpT]
+       show WithBot.realExp2 _ = _
+       simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+         TileShape.dropInsertedIndex, NumericDType.sub, hmij, hMr, WithBot.unbotD_coe]
+       rw [show qkT.data (i, jL, PUnit.unit) =
+             (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+              (Tile.scalar (some sc))).data (i, jL, PUnit.unit) from hqkTcell]
+       rw [aft3_score_cellG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL hjL qtile ktile hq hk]
+       simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+       refine congrArg some ?_; simp only [pow2]; ring_nf
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
