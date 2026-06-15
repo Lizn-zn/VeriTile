@@ -7900,6 +7900,69 @@ theorem afc_exec_generalG
   intro idx hact
   rw [hO idx, if_pos hact]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Dimension-general genuine causal closed-form output summary for `attn_fwd_causal`.**
+
+Removes the Python test-shape pin (`Z = 2`, `H = 4`,
+`N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
+`HEAD_ACTIVE = 96`): for arbitrary symbolic block/head dimensions at the
+contiguous layout (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`),
+the full causal surface lowers to the algorithm layer and its masked `Out`
+writeback realizes the genuine closed-form causal attention
+`attnFwdCausalOutSpecG` (= `attentionRealBase2PerKeyScalePred … (causalKeep)` over
+INPUT memory) at every active output lane. Side conditions: positive blocks,
+`N_CTX = BLOCK_N · numKVBlocks` (`numKVBlocks > 0`), clean input (`undef = 0`), the
+`-1e6` sentinel score bound `afcScoreBoundG`, and output-offset injectivity. -/
+theorem attn_fwd_causal_output_summary_general
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z numKVBlocks : Nat)
+    (hBD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M)
+    (hN : N_CTX = BLOCK_N * numKVBlocks) (hnum : 0 < numKVBlocks)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hsb : afcScoreBoundG
+      (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+      (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+      (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+      (keyScaleAFCG s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) (qStartAFCG s BLOCK_M)) :
+    (∃ alg, (attn_fwd_causal_surface Q K V QScale KScale Out
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_causal_surface Q K V QScale KScale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => active s N_CTX HEAD_ACTIVE BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        attnFwdCausalOutSpecG s Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks (keyScaleAFCG s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) idx) := by
+  refine ⟨?_, ?_⟩
+  · exact attn_fwd_causal_surface_toAlgorithm_supported Q K V QScale KScale Out
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attn_fwd_causal_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    obtain ⟨sF, hstep, hO⟩ := afc_exec_generalG Q K V QScale KScale Out s
+      stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z numKVBlocks
+      hBD hBN hBM hN hnum hOutInj hundef hsb
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    exact hO idx hActive
+
 end General
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
