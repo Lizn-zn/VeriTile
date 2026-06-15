@@ -7703,6 +7703,148 @@ theorem afc_attn_stepG
     exact hOp
   · intro rg o; rw [hundefF, hundef']
   · rw [hmemF, hmem']
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General postLoop evaluation (AFC, causal).** From a loop-end state satisfying
+`afcInvariantG … N_CTX`, the 2 postLoop statements write the genuine closed form
+`attnFwdCausalOutSpecG` to `Out` at every active output lane and preserve `Out` on
+inactive lanes. -/
+theorem afcPostLoopG_eval
+    (Q K V QScale KScale Out : RegionName) (s0 : BlockState) (s : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (hBD : 0 < BLOCK_DMODEL) (hN : N_CTX = BLOCK_N * numKVBlocks) (hBN : 0 < BLOCK_N) (hnum : 0 < numKVBlocks)
+    (keyScale : Fin (BLOCK_N * numKVBlocks) → ℝ)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s0 H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx))
+    (hinv : afcInvariantG Q K V QScale KScale Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale hBD N_CTX s) :
+    ∃ sP, stepStmts (AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) s = some sP
+      ∧ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          sP.readMem Out (outOffset s0 H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)
+            = if active s0 N_CTX HEAD_ACTIVE BLOCK_M idx then
+                attnFwdCausalOutSpecG s0 Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale idx
+              else s.readMem Out (outOffset s0 H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx) := by
+  have hSEQ : 0 < BLOCK_N * numKVBlocks := Nat.mul_pos hBN hnum
+  have hNpos : 0 < N_CTX := by rw [hN]; exact hSEQ
+  simp only [afcInvariantG] at hinv
+  obtain ⟨hpids, _, _, _hmi, hli, hacc, hoffsm, _hoffsn,
+    _hq, _hqs, _hKp, _hKsp, _hVp, hOp, hundef, hmem⟩ := hinv
+  set qStart := qStartAFCG s0 BLOCK_M with hqStart
+  set qT := qTileAFCmG s0 Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE with hqT
+  set kT := kTileAFCG s0 K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL with hkT
+  set vT := vTileAFCmG s0 V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE with hvT
+  set liTile : Tile .real [BLOCK_M] :=
+    ⟨fun r : TileIndex [BLOCK_M] => ((afcStateBot1G qT kT vT keyScale qStart N_CTX r.1 ⟨0, hBD⟩).2.1 : ℝ)⟩
+    with hliTile
+  set accTile : Tile .real [BLOCK_M, BLOCK_DMODEL] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => ((afcStateBot1G qT kT vT keyScale qStart N_CTX idx.1 idx.2.1).2.2 : ℝ)⟩
+    with haccTile
+  set accFin : Tile .real [BLOCK_M, BLOCK_DMODEL] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil)) accTile
+      (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
+  unfold AfcFoundation.afcPostLoopG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i"))) s
+        = some accFin from by
+      have hexp : @evalOp TileDType.real [BLOCK_M, 1]
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [BLOCK_M] "l_i")) s
+          = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
+        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hli
+      rw [evalOp_div]
+      simp only [evalOp_ref, hexp, hacc, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  set s2 := s.setReg "acc" .real [BLOCK_M, BLOCK_DMODEL] accFin with hs2
+  have hOp2 : s2.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  have hacc2 : s2.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some accFin := by
+    rw [hs2, BlockState.setReg_same]
+  have hoffsm2 : s2.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => qStart + r.val)) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoffsm
+  set oOffFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
+    fun idx => baseOffsetAFCG s0 stride_qz stride_qh H + (s0.pids 0 * BLOCK_M + idx.1.val) * HEAD_DIM + idx.2.1.val with hoOffFn
+  set P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
+    fun idx => qStart + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE with hP
+  have hopEval : evalOp (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr") s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out.cast, oOffFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [evalOp_ref, hOp2]
+    refine congrArg some ?_; ext idx
+    · rfl
+    · simp only [oBlockPtrAFCG, hoOffFn]
+  have hmaskEval : evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => decide (P idx)⟩ : Tile .bool [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [afc_evalOp_boolAnd, evalOp_lt]
+    erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsm2, evalOp_expandDim]
+    simp only [evalOp_lt, evalOp_arange, evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+    refine congrArg some ?_; ext idx
+    simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, TileShape.dropInsertedIndex]
+    rw [show (ComparableDType.nat.lt (qStart + idx.1.val) N_CTX && ComparableDType.nat.lt idx.2.1.val HEAD_ACTIVE)
+          = decide (P idx) from by
+      rw [Bool.eq_iff_iff]; simp only [hP, Bool.and_eq_true, ComparableDType.nat_lt_eq_true,
+        decide_eq_true_eq]]
+  have hstore : stepStmt (Stmt.store .real [BLOCK_M, BLOCK_DMODEL] (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))) s2
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]).foldl
+          (fun acc idx => if P idx then acc.writeMem Out (oOffFn idx) ((accFin.data idx).unbotD 0) else acc) s2) := by
+    simp only [stepStmt, evalOp_ref, hacc2, hopEval, hmaskEval, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some, decide_eq_true_eq]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s2 ?_
+    intro acc idx _
+    by_cases hk : P idx
+    · simp only [if_pos hk, Region.cast_id, BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+    · simp only [if_neg hk]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  have hinjO : Function.Injective oOffFn := by
+    have : oOffFn = (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s0 H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx) := by
+      funext idx
+      simp only [hoOffFn, outOffset, offZ, offH, mIndex, kIndex, baseOffsetAFCG, Nat.mul_one]
+    rw [this]; exact hOutInj
+  have houtOff : outOffset s0 H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx = oOffFn idx := by
+    simp only [outOffset, offZ, offH, mIndex, kIndex, hoOffFn, baseOffsetAFCG, Nat.mul_one]
+  rw [houtOff]
+  rw [BlockState.scatter_readback_prop_masked_nd _ oOffFn
+    (fun idx => (accFin.data idx).unbotD 0) P hinjO idx]
+  have hactiveP : active s0 N_CTX HEAD_ACTIVE BLOCK_M idx ↔ P idx := by
+    simp only [active, mIndex, kIndex, hP, hqStart, qStartAFCG]
+  by_cases hk : P idx
+  · rw [if_pos hk, if_pos (hactiveP.mpr hk)]
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    subst hN
+    have hne : afcRunningMaxG qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) ir id ≠ ⊥ :=
+      afcRunningMaxG_ne_bot qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) hSEQ hSEQ ir id
+    have hne' : afcRunningMaxG qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) ir ⟨0, hBD⟩ ≠ ⊥ :=
+      afcRunningMaxG_ne_bot qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) hSEQ hSEQ ir ⟨0, hBD⟩
+    simp only [haccFin, Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+      Option.map₂, Option.bind, Option.map, haccTile, hliTile, WithBot.unbotD_coe]
+    rw [afcStateBot1G_eq_afcStateBotG qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) ir id hne,
+      afcStateBot1G_eq_afcStateBotG qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) ir ⟨0, hBD⟩ hne']
+    rw [afcStateBotG_snd_fst_indep qT kT vT keyScale qStart (BLOCK_N * numKVBlocks) ir ⟨0, hBD⟩ id]
+    have hbridge := afcStateBotG_full_eq_spec s0 Q K V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks keyScale ir id
+      (by rw [← hqStart, ← hqT, ← hkT, ← hvT]; exact hne)
+    rw [← hbridge]
+    simp only [hqStart, hqT, hkT, hvT, WithBot.unbotD_some]
+  · rw [if_neg hk, if_neg (fun h => hk (hactiveP.mp h)), hs2]
+    simp only [BlockState.readMem, BlockState.setReg_mem]
+
 end General
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
