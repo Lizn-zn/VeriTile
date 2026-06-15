@@ -2141,50 +2141,6 @@ theorem attention_fwd_triton1_exec_outputClosedForm
   refine ⟨sF, hexec, fun c hc t d => ?_⟩
   rw [hOF c hc t d, aft1Out_eq_outputClosedForm]
 
-set_option maxHeartbeats 2000000 in
-/-- **`output_summary` for `attention_fwd_triton1` (genuine closed form).**
-
-The public output summary, restated against the genuine `outputClosedForm` (the
-linear-attention local + recurrent closed form over input memory) — **not** against
-any self-referential executed value. For the checked Python surface
-(`B=2,H=8,T=1024,D=128,BT=32,BD=128,NT=32`, `scale=1/√128`, default branch
-`STORE=false, IFCOND=false`), executing the full kernel writes `outputClosedForm`
-into `O` at every chunk/lane, and the four `STORE`/`IFCOND` branch surfaces all
-lower faithfully to the algorithm layer. -/
-theorem attention_fwd_triton1_python_test_shape_output_summary
-    (Q K V H O : RegionName) (s : BlockState)
-    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
-    -- (1) genuine closed-form output of the executed kernel
-    (∃ sF, exec (attention_fwd_kernel_surface Q K V H O
-        131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
-        32 128 32 Bool.false Bool.false).toAlgKernel s = some sF
-      ∧ ∀ (c : Nat), c < 32 → ∀ (t : Fin 32) (d : Fin 128),
-          sF.readMem O (s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
-            = outputClosedForm s Q K V ((Real.sqrt (128:ℝ))⁻¹) 32 128
-                (aft1QAddr s) (aft1KAddr s) (aft1QAddr s) c t d) ∧
-    -- (2) all four STORE/IFCOND branch surfaces lower to the algorithm layer
-    ((∃ alg, (attention_fwd_kernel_surface Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
-      32 128 32 Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
-     (∃ alg, (attention_fwd_kernel_surface Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
-      32 128 32 Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
-     (∃ alg, (attention_fwd_kernel_surface Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
-      32 128 32 Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
-     (∃ alg, (attention_fwd_kernel_surface Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
-      32 128 32 Bool.true Bool.true).toAlgorithm? = Except.ok alg)) := by
-  refine ⟨attention_fwd_triton1_exec_outputClosedForm Q K V H O s hOQ hOK hOV hOH, ?_, ?_, ?_, ?_⟩
-  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 Bool.false Bool.false
-  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 Bool.true Bool.false
-  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 Bool.false Bool.true
-  · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
-      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 Bool.true Bool.true
-
 /-! ## Dimension-general genuine closed form
 
 The block below mirrors the literal exec-side derivation above, but over *symbolic*
@@ -2996,5 +2952,43 @@ theorem attention_fwd_triton1_output_summary_general
       s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.true
   · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
       s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.true Bool.true
+
+set_option maxHeartbeats 2000000 in
+/-- **`output_summary` for `attention_fwd_triton1` (genuine closed form).**
+
+The public output summary, restated against the genuine `outputClosedForm` (the
+linear-attention local + recurrent closed form over input memory) — **not** against
+any self-referential executed value. For the checked Python surface
+(`B=2,H=8,T=1024,D=128,BT=32,BD=128,NT=32`, `scale=1/√128`, default branch
+`STORE=false, IFCOND=false`), executing the full kernel writes `outputClosedForm`
+into `O` at every chunk/lane, and the four `STORE`/`IFCOND` branch surfaces all
+lower faithfully to the algorithm layer. This is the special case of
+`attention_fwd_triton1_output_summary_general` at the Python test dimensions. -/
+theorem attention_fwd_triton1_python_test_shape_output_summary
+    (Q K V H O : RegionName) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    -- (1) genuine closed-form output of the executed kernel
+    (∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
+        32 128 32 Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ ∀ (c : Nat), c < 32 → ∀ (t : Fin 32) (d : Fin 128),
+          sF.readMem O (s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
+            = outputClosedForm s Q K V ((Real.sqrt (128:ℝ))⁻¹) 32 128
+                (aft1QAddr s) (aft1KAddr s) (aft1QAddr s) c t d) ∧
+    -- (2) all four STORE/IFCOND branch surfaces lower to the algorithm layer
+    ((∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.true).toAlgorithm? = Except.ok alg)) := by
+  exact attention_fwd_triton1_output_summary_general Q K V H O
+    131072 524288 128 ((Real.sqrt (128 : ℝ))⁻¹) 32 128 32 (by norm_num) s hOQ hOK hOV hOH
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
