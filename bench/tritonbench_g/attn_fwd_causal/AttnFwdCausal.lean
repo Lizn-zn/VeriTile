@@ -5252,6 +5252,64 @@ theorem afcBlockG_blockSup (qStart BLOCK_N c : Nat) (i d : Fin BLOCK_M) (d2 : Fi
       rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hkeep⟩)]
     · rw [if_neg hkeep]; exact bot_le
 
+/-! ### General masked-block bridge layer ([BLOCK_M,BLOCK_N], -1e6 sentinel, HEAD_ACTIVE) -/
+
+/-- General canonical axis-1 index of `[BLOCK_M, BLOCK_N]`. -/
+abbrev afcAx1G (BLOCK_M BLOCK_N : Nat) : Fin [BLOCK_M, BLOCK_N].length := ⟨1, by simp⟩
+
+/-- General `reduceMax` row. -/
+theorem afc_reduceMaxDrop_rowG (BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N)
+    (qk : Tile .real [BLOCK_M, BLOCK_N]) (rmaxT : Tile .real [BLOCK_M])
+    (hrm : Tile.reduceMaxDrop (afcAx1G BLOCK_M BLOCK_N) qk = some rmaxT)
+    (i : Fin BLOCK_M) (g : Fin BLOCK_N → WithBot ℝ)
+    (hqk : ∀ jL : Fin BLOCK_N,
+        qk.data (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) (i, PUnit.unit) jL) = g jL) :
+    rmaxT.data (i, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [BLOCK_M, BLOCK_N] (afcAx1G BLOCK_M BLOCK_N) from hBN)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
+/-- General `q·k` score cell (HEAD_ACTIVE). -/
+theorem afc_score_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (qStart SN : Nat) (jL : Fin BLOCK_N)
+    (i : Fin BLOCK_M) (qsc ksc : ℝ)
+    (qm : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kread : Fin BLOCK_DMODEL → Fin BLOCK_N → ℝ)
+    (qtile : Tile .real [BLOCK_M, BLOCK_DMODEL]) (ktile : Tile .real [BLOCK_DMODEL, BLOCK_N])
+    (kscT : Tile .real [])
+    (hjLwin : jL.val < SN)
+    (hqtile : ∀ e : Fin BLOCK_DMODEL, qtile.data (i, e, PUnit.unit)
+        = some (if e.val < HEAD_ACTIVE then qm (i, e, PUnit.unit) else 0))
+    (hktile : ∀ e : Fin BLOCK_DMODEL, ktile.data (e, jL, PUnit.unit)
+        = some (if jL.val < SN ∧ e.val < HEAD_ACTIVE then kread e jL else 0))
+    (hkscT : kscT.data PUnit.unit = some ksc) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          ⟨fun ix => (Tile.dot [] qtile ktile).data ix⟩
+          (Tile.scalar (some qsc))) kscT).data (i, jL, PUnit.unit)
+      = some ((Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+          (if e.val < HEAD_ACTIVE then qm (i, e, PUnit.unit) else 0) * kread e jL)) * qsc * ksc) := by
+  have hdot : (Tile.dot [] qtile ktile).data (i, jL, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+          (if e.val < HEAD_ACTIVE then qm (i, e, PUnit.unit) else 0) * kread e jL)) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin BLOCK_DMODEL) (WithBot ℝ) _ Finset.univ
+          (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, jL, PUnit.unit))))
+        = @Finset.sum (Fin BLOCK_DMODEL) (WithBot ℝ) _ Finset.univ
+          (fun e => (some ((if e.val < HEAD_ACTIVE then qm (i, e, PUnit.unit) else 0) * kread e jL) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun e _ => by
+          rw [hqtile e, hktile e]
+          simp only [Option.map₂, Option.bind, Option.map]
+          refine congrArg some ?_
+          by_cases he : e.val < HEAD_ACTIVE
+          · rw [if_pos he, if_pos ⟨hjLwin, he⟩]
+          · rw [if_neg he, if_neg (by simp [he])]; ring)]
+    rw [WithBot.sum_someTerm_eq_some]
+  simp only [Tile.bop_data, Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Tile.scalar, NumericDType.mul, hdot, hkscT]
+  simp only [WithBot.realMul, Option.map₂, Option.bind, Option.map]
+
 /-- **General ⊥-seeded full-window state reads off the genuine closed-form spec.** -/
 theorem afcStateBotG_full_eq_spec
     (s : BlockState) (Q K V : RegionName)
