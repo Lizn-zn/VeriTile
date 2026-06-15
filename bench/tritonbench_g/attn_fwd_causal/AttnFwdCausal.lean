@@ -6093,6 +6093,67 @@ theorem afc_body_splitG
                 Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel.body.drop 23) :=
   rfl
 
+/-! ### General streamed-pointer closed cell-forms -/
+
+/-- General `K_ptrs` after `c` blocks: `[BLOCK_DMODEL, BLOCK_N]`, cell `(e, jL)` →
+`K[base + e + (c·BLOCK_N + jL)·HEAD_DIM]`. -/
+noncomputable def kPtrsAFCG (s0 : BlockState) (K : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c : Nat) : Tile .ptr [BLOCK_DMODEL, BLOCK_N] :=
+  ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+    (K.cast, baseOffsetAFCG s0 stride_qz stride_qh H + idx.1.val + (c * BLOCK_N + idx.2.1.val) * HEAD_DIM)⟩
+
+/-- General `K_scale_ptr` after `c` blocks. -/
+noncomputable def kScalePtrAFCG (s0 : BlockState) (KScale : RegionName)
+    (N_CTX BLOCK_N c : Nat) : Tile .ptr [] :=
+  ⟨fun _ : TileIndex [] => (KScale.cast, s0.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + c)⟩
+
+/-- General `V_ptrs` after `c` blocks: `[BLOCK_N, BLOCK_DMODEL]`, cell `(jL, d)` →
+`V[base + (c·BLOCK_N + jL)·HEAD_DIM + d]`. -/
+noncomputable def vPtrsAFCG (s0 : BlockState) (V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c : Nat) : Tile .ptr [BLOCK_N, BLOCK_DMODEL] :=
+  ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+    (V.cast, baseOffsetAFCG s0 stride_qz stride_qh H + (c * BLOCK_N + idx.1.val) * HEAD_DIM + idx.2.1.val)⟩
+
+/-- General `O_block_ptr` (constant): `[BLOCK_M, BLOCK_DMODEL]`, cell `(i, e)` →
+`Out[base + (pids0·BLOCK_M + i)·HEAD_DIM + e]`. -/
+noncomputable def oBlockPtrAFCG (s0 : BlockState) (Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL : Nat) : Tile .ptr [BLOCK_M, BLOCK_DMODEL] :=
+  ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+    (Out.cast, baseOffsetAFCG s0 stride_qz stride_qh H + (s0.pids 0 * BLOCK_M + idx.1.val) * HEAD_DIM + idx.2.1.val)⟩
+
+theorem kPtrsAFCG_succ (s0 : BlockState) (K : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar BLOCK_N) (Tile.scalar HEAD_DIM))
+      = kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [kPtrsAFCG, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
+theorem kScalePtrAFCG_succ (s0 : BlockState) (KScale : RegionName) (N_CTX BLOCK_N c : Nat) :
+    Tile.ptrAdd Broadcast.nil (kScalePtrAFCG s0 KScale N_CTX BLOCK_N c) (Tile.scalar 1)
+      = kScalePtrAFCG s0 KScale N_CTX BLOCK_N (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [kScalePtrAFCG, Tile.ptrAdd_data, Tile.scalar,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    omega
+
+theorem vPtrsAFCG_succ (s0 : BlockState) (V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL c)
+        (Tile.bop NumericDType.nat.mul Broadcast.nil (Tile.scalar BLOCK_N) (Tile.scalar HEAD_DIM))
+      = vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c + 1) := by
+  ext idx
+  · rfl
+  · simp only [vPtrsAFCG, Tile.ptrAdd_data, Tile.bop_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.nat_mul]
+    ring
+
 /-! ### General loop-body execution chain -/
 
 set_option maxHeartbeats 1600000 in
