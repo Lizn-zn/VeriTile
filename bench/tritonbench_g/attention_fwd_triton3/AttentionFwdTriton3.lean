@@ -7191,4 +7191,218 @@ theorem aft3StateBotKG_full_eq_streaming {BM ND NC : Nat}
         aft3StateBotG_snd_fst_indep qT kT vT keyScale keep NC ir d0 dd]
     exact aft3StateBotG_ratio_eq qT kT vT keyScale keep NC ir dd hne
 
+/-! ## Dimension-general loop-body op-eval recipes
+
+`*G` variants of the shape-pinned recipes (`aft3_qk_sub_eval`/`aft3_p_eval`/etc.),
+generalized to `[BM, BN]`/`[BM]` and symbolic window size. The already-general
+recipes (`aft3_load_*`, `aft3_advance_*`, `aft3_qkzeros_eval`, `aft3_qk_dot_eval`,
+`aft3_qk_scale_eval`, `aft3_acc_eval`, the floorDiv/mod/ptr helpers) are reused
+directly. -/
+
+/-- General L5: `dist = arange[:,None] - arange[None,:] + start_m·BM - start_n + off`. -/
+theorem aft3_dist_evalG (s : BlockState) (SM SN BM BN off : Nat) (hax1 : 1 < [BM].length.succ)
+    (hax0 : 0 < [BN].length.succ)
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.add .nat Broadcast.scalarR
+        (Op.sub .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarR
+            (Op.sub .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.expandDim ⟨1, hax1⟩ (Op.arange BM))
+              (Op.expandDim ⟨0, hax0⟩ (Op.arange BN)))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BM)))
+          (Op.ref .nat [] "start_n"))
+        (Op.constNat off)) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          ((idx.1.val - idx.2.1.val) + SM * BM - SN) + off⟩ := by
+  simp only [evalOp.eq_def, hsm, hsn, Option.bind_eq_bind, Option.bind_some, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.sub]
+
+/-- General L6 case 1: `mask = (dist >= 0) & (dist < size)`. -/
+theorem aft3_mask_case1_evalG (s : BlockState) (BM BN size : Nat) (disttile : Tile .nat [BM, BN])
+    (hd : s.regs .nat [BM, BN] "dist" = some disttile) :
+    evalOp (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BM, BN] "dist")
+          (Op.constNat 0))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BM, BN] "dist")
+          (Op.constNat size))) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          ComparableDType.nat.ge (disttile.data idx) 0
+            && ComparableDType.nat.lt (disttile.data idx) size⟩ := by
+  rw [aft3_evalOp_boolAnd, aft3_evalOp_ge, evalOp_lt]
+  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+
+/-- General L6 case 2: `mask = (dist >= size)`. -/
+theorem aft3_mask_case2_evalG (s : BlockState) (BM BN size : Nat) (disttile : Tile .nat [BM, BN])
+    (hd : s.regs .nat [BM, BN] "dist" = some disttile) :
+    evalOp (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BM, BN] "dist")
+        (Op.constNat size)) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          ComparableDType.nat.ge (disttile.data idx) size⟩ := by
+  rw [aft3_evalOp_ge]
+  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.cop_data, Tile.scalar,
+    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+
+/-- General L7: `qk = tl.where(mask, qk, -inf)`. -/
+theorem aft3_where_evalG (s : BlockState) (BM BN : Nat) (masktile : Tile .bool [BM, BN])
+    (qktile : Tile .real [BM, BN])
+    (hmask : s.regs .bool [BM, BN] "mask" = some masktile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.where (Op.ref .bool [BM, BN] "mask")
+        (Op.ref .real [BM, BN] "qk") (Op.broadcast Op.negInf [BM, BN])) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          if masktile.data idx then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast Op.negInf [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where]
+  simp only [evalOp_ref, hmask, hqk, hbcast, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.scalar]
+
+/-- General L8: `m_ij = tl.maximum(m_i, tl.max(qk, 1))`. -/
+theorem aft3_mij_evalG (s : BlockState) (BM BN : Nat)
+    (mtile : Tile .real [BM]) (qktile : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hax : 1 < [BM, BN].length)
+    (hmi : s.regs .real [BM] "m_i" = some mtile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, hax⟩ : Fin [BM, BN].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "m_i")
+          (Op.reduceMax (⟨1, hax⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "qk")))
+        (Op.ref .real [BM] "m_i")
+        (Op.reduceMax (⟨1, hax⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "qk"))) s
+      = some (Tile.select
+          (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT)
+          mtile rmaxT) := by
+  have hrmaxN : evalOp (Op.reduceMax (⟨1, hax⟩ : Fin [BM, BN].length) Bool.false
+      (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  have hrmax : @evalOp TileDType.real [BM]
+      (Op.reduceMax (⟨1, hax⟩ : Fin [BM, BN].length) Bool.false
+        (Op.ref .real [BM, BN] "qk")) s = some rmaxT := hrmaxN
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmi, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+/-- General L9: `qk = qk - m_ij[:, None]`. -/
+theorem aft3_qk_sub_evalG (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (qktile : Tile .real [BM, BN]) (mc : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hmij : s.regs .real [BM] "m_ij" = some mc) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij"))) s
+      = some (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          qktile (Tile.expandDim ⟨1, hax⟩ mc)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mc) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmij
+  rw [evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- General L10: `p = tl.math.exp2(qk)`. -/
+theorem aft3_p_evalG (s : BlockState) (BM BN : Nat) (qktile : Tile .real [BM, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.exp2 (Op.ref .real [BM, BN] "qk")) s
+      = some (Tile.uop WithBot.realExp2 qktile) := by
+  rw [aft3_evalOp_exp2]; simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+
+/-- General L11: `p = tl.where(mask, p, 0)`. -/
+theorem aft3_p_mask_evalG (s : BlockState) (BM BN : Nat) (masktile : Tile .bool [BM, BN])
+    (ptile : Tile .real [BM, BN])
+    (hmask : s.regs .bool [BM, BN] "mask" = some masktile)
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.where (Op.ref .bool [BM, BN] "mask")
+        (Op.ref .real [BM, BN] "p") (Op.broadcast (Op.const 0.0) [BM, BN])) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          if masktile.data idx then ptile.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ := by
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast (Op.const 0.0) [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_const, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where]
+  simp only [evalOp_ref, hmask, hp, hbcast, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.scalar]
+
+/-- General L12: `l_ij = tl.sum(p, 1)`. -/
+theorem aft3_lij_evalG (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM, BN])
+    (hax : 1 < [BM, BN].length)
+    (hp : s.regs .real [BM, BN] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, hax⟩ : Fin [BM, BN].length) Bool.false
+        (Op.ref .real [BM, BN] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, hax⟩ : Fin [BM, BN].length) ptile) := by
+  rw [evalOp_reduceSum]; simp only [evalOp_ref, hp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- General L13: `tmp = m_i - m_ij`. -/
+theorem aft3_tmp_evalG (s : BlockState) (BM : Nat) (mi mij : Tile .real [BM])
+    (hmi : s.regs .real [BM] "m_i" = some mi)
+    (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mi mij) := by
+  rw [evalOp_sub]; simp only [evalOp_ref, hmi, hmij, Option.bind_eq_bind, Option.bind_some]
+
+/-- General L14: `alpha = tl.math.exp2(tmp)`. -/
+theorem aft3_alpha_evalG (s : BlockState) (BM : Nat) (tmptile : Tile .real [BM])
+    (htmp : s.regs .real [BM] "tmp" = some tmptile) :
+    evalOp (Op.exp2 (Op.ref .real [BM] "tmp")) s
+      = some (Tile.uop WithBot.realExp2 tmptile) := by
+  rw [aft3_evalOp_exp2]; simp only [evalOp_ref, htmp, Option.bind_eq_bind, Option.bind_some]
+
+/-- General L15: `l_i = l_i * alpha + l_ij`. -/
+theorem aft3_li_evalG (s : BlockState) (BM : Nat) (li alpha lij : Tile .real [BM])
+    (hli : s.regs .real [BM] "l_i" = some li)
+    (halpha : s.regs .real [BM] "alpha" = some alpha)
+    (hlij : s.regs .real [BM] "l_ij" = some lij) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "alpha"))
+        (Op.ref .real [BM] "l_ij")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) li alpha) lij) := by
+  rw [evalOp_add, evalOp_mul]
+  simp only [evalOp_ref, hli, halpha, hlij, Option.bind_eq_bind, Option.bind_some]
+
+/-- General L16: `acc = acc * alpha[:, None]`. -/
+theorem aft3_acc_rescale_evalG (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (acctile : Tile .real [BM, BN]) (alpha : Tile .real [BM])
+    (hacc : s.regs .real [BM, BN] "acc" = some acctile)
+    (halpha : s.regs .real [BM] "alpha" = some alpha) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "acc") (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "alpha"))) s
+      = some (Tile.bop NumericDType.real.mul
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          acctile (Tile.expandDim ⟨1, hax⟩ alpha)) := by
+  have hexp : @evalOp TileDType.real [BM, 1]
+      (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "alpha")) s
+      = some (Tile.expandDim ⟨1, hax⟩ alpha) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ halpha
+  rw [evalOp_mul]
+  simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- General L19: `m_i = m_ij`. -/
+theorem aft3_mi_carry_evalG (s : BlockState) (BM : Nat) (mij : Tile .real [BM])
+    (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.ref .real [BM] "m_ij") s = some mij := by
+  rw [evalOp_ref, hmij]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
