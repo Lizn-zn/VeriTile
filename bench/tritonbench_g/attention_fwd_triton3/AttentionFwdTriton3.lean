@@ -9539,4 +9539,54 @@ theorem aft3_acc_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
   rw [show (aft3StateBotKG qT kT vT ks keep (c * BN) i d).2.2 * α
         = (aft3StateBotG qT kT vT ks keep (c * BN) i d).2.2 * α from hcancel]
 
+/-! ## Dimension-general invariant + preLoop (cases 1/2/3)
+
+The general loop invariant `attnInvariantKG` carries the faithful kernel state
+`aft3StateBotKG` (seed-1 at window 0, seed-0 ⊥-state after) over symbolic
+dimensions and a single shared base `base` (the common q/k/v/o offset). The
+preLoop establishes it from a clean state for a surface whose four block-pointer
+offsets coincide at `base`. -/
+
+/-- General loop invariant carrying the faithful ⊥-carry kernel state. -/
+noncomputable def attnInvariantKG
+    (Q K V M Out L : RegionName) (s0 : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (hND : 0 < ND) (sc : ℝ)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (i : Nat) (s : BlockState) : Prop :=
+  let qT := qTile3G s0 Q base BM ND sqm sqk
+  let kT := kTile3G s0 K base NC ND skn skk
+  let vT := vTile3G s0 V base NC ND svk svn
+  s.pids = s0.pids ∧ i % BN = 0 ∧ i ≤ NC ∧
+  (s.regs .real [BM] "m_i" = some ⟨fun r : TileIndex [BM] =>
+      aft3RunningMaxG qT kT vT (keyScale3G sc NC) keep i r.1 ⟨0, hND⟩⟩) ∧
+  (s.regs .real [BM] "l_i" = some ⟨fun r : TileIndex [BM] =>
+      ((aft3StateBotKG qT kT vT (keyScale3G sc NC) keep i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [BM, ND] "acc" = some ⟨fun idx : TileIndex [BM, ND] =>
+      ((aft3StateBotKG qT kT vT (keyScale3G sc NC) keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .real [BM, ND] "q" = some ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩) ∧
+  (s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .blockPtr [ND, BN] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [ND, BN] =>
+      { region := K, baseOffset := base, parentShape := [ND, NC], blockShape := [ND, BN],
+        strides := [skk, skn], offsets := [0, i] }⟩)) ∧
+  (s.regs .blockPtr [BN, ND] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [BN, ND] =>
+      { region := V, baseOffset := base, parentShape := [NC, ND], blockShape := [BN, ND],
+        strides := [svk, svn], offsets := [i, 0] }⟩)) ∧
+  (s.regs .ptr [BM] "m_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+        (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val))))) ∧
+  (s.regs .ptr [BM] "l_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+        (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val))))) ∧
+  (s.regs .blockPtr [BM, ND] "O_block_ptr" = some
+    (⟨fun _ : TileIndex [BM, ND] =>
+      { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+        strides := [som, son], offsets := [s0.pids 0 * BM, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
