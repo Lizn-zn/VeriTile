@@ -681,13 +681,9 @@ theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
 
 /-! ### Generic streaming-softmax register bridges (mirror #304) -/
 
-theorem realExp2_eq_some_unbotD (z : WithBot ℝ) :
-    WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
-  cases z <;> rfl
-
-theorem realExp2_unbotD_coe (r : ℝ) :
-    (WithBot.realExp2 ((r : ℝ) : WithBot ℝ)).unbotD 0 = pow2 r := by
-  simp [pow2, mul_comm]
+-- (deleted dead internal helpers `realExp2_eq_some_unbotD` and
+-- `realExp2_unbotD_coe`: unused after collapsing the pinned test-shape summary
+-- into a corollary of the dimension-general theorem.)
 
 theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
     @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
@@ -1029,11 +1025,8 @@ theorem load_b1_eval (s : BlockState) (B0 : RegionName)
   simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar, Tile.vec,
     NumericDType.add, NumericDType.mul, BlockState.readMemValue_real, Region.cast_id]
 
-theorem evalOp_floorDiv' {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.floorDiv h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
+-- (deleted dead internal helper `evalOp_floorDiv'`: unused after collapsing the
+-- pinned test-shape summary into a corollary of the dimension-general theorem.)
 
 theorem load_b0_eval (s : BlockState) (B0 : RegionName)
     (BLOCK_M stride_b0m smbm boff snv : Nat) (hax : 1 < [BLOCK_M].length.succ)
