@@ -7696,7 +7696,44 @@ theorem triton_attention_forward_python_test_shape_output_summary
   · exact triton_attention_forward_surface_m_python_test_shape_compute_correct
       Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
 
-/-- Public Python backward-preprocess summary for `triton_attention.py`.
+/-- **★ MAIN (general).** General-dimension Python backward-preprocess summary
+for `triton_attention.py`.
+
+This records the faithful `_bwd_preprocess` full surface for *arbitrary symbolic*
+`BLOCK_M` and `D_HEAD` (no pinning to the test shape), and connects both
+Python-observable `NewDO` and `Delta` outputs directly to the produced
+full-surface values. `_bwd_preprocess` is a pure per-row store/reduction with no
+cross-block coupling, so the surface is correct at every block size; the test
+shape `(BLOCK_M, D_HEAD) = (128, 64)` is recovered as the corollary
+`triton_attention_bwd_preprocess_python_test_shape_output_summary`. -/
+theorem triton_attention_bwd_preprocess_output_summary_general
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState) :
+    (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
+      BLOCK_M D_HEAD).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
+      (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta BLOCK_M D_HEAD idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta BLOCK_M D_HEAD i)) := by
+  refine ⟨triton_attention_bwd_preprocess_toAlgorithm_supported
+      Out DO L NewDO Delta BLOCK_M D_HEAD, ?_, ?_⟩
+  · exact triton_attention_bwd_preprocess_newdo_surface_compute_correct
+      Out DO L NewDO Delta BLOCK_M D_HEAD s
+  · exact triton_attention_bwd_preprocess_delta_surface_compute_correct
+      Out DO L NewDO Delta BLOCK_M D_HEAD s
+
+/-- Public Python backward-preprocess summary for `triton_attention.py`
+(test-shape corollary of `triton_attention_bwd_preprocess_output_summary_general`).
 
 This records the faithful `_bwd_preprocess` full surface at `BLOCK_M = 128`
 and `D_HEAD = 64`, and connects both Python-observable `NewDO` and `Delta`
@@ -7719,12 +7756,8 @@ theorem triton_attention_bwd_preprocess_python_test_shape_output_summary
       (initialState := s)
       (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
       (expected := fun i : Fin 128 =>
-        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
-  constructor
-  · exact triton_attention_bwd_preprocess_toAlgorithm_supported
-      Out DO L NewDO Delta 128 64
-  · exact triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-      Out DO L NewDO Delta s
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) :=
+  triton_attention_bwd_preprocess_output_summary_general Out DO L NewDO Delta 128 64 s
 
 /-- Public Python backward-gradient summary for `triton_attention.py`.
 
