@@ -45,10 +45,10 @@ triton_attention_forward_python_test_shape_output_summary           ← TOP (for
   └─ triton_attention_forward_surface_{out,l,m}_python_test_shape_compute_correct
        └─ triton_attention_forward_{output,l,m}_store_slice_compute_correct → ..._correct
 
-triton_attention_bwd_preprocess_python_test_shape_output_summary    ← TOP (preprocess NewDO/Delta)
-  └─ triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-       └─ triton_attention_bwd_preprocess_{newdo,delta}_surface_compute_correct
-            └─ ..._{store,formula}_slice_compute_correct → ..._correct
+triton_attention_bwd_preprocess_output_summary_general              ← TOP (preprocess NewDO/Delta, SYMBOLIC BLOCK_M/D_HEAD)
+  ├─ triton_attention_bwd_preprocess_{newdo,delta}_surface_compute_correct
+  │      └─ ..._{store,formula}_slice_compute_correct → ..._correct
+  └─ triton_attention_bwd_preprocess_python_test_shape_output_summary  ← test-shape corollary (128, 64)
 ```
 (Offset injectivity discharged by the `triton_attention_python_*_offset_injective` lemmas.)
 
@@ -82,6 +82,25 @@ Side conditions: the test-shape summaries fix `(B,H,T,D) = (2,4,128,64)`,
 `BLOCK_M = 128`, `BLOCK_DMODEL = 64`, strides `(32768, 8192, 64, 1)`,
 `num_block = 1`, `sm_scale = 1/√64`; the complete backward summary additionally
 requires `PTile ≠ DSTile`.
+
+## Dimension generality
+
+`_bwd_preprocess` is **dimension-general**: it is a pure per-row store/reduction
+with no cross-block coupling, so `triton_attention_bwd_preprocess_output_summary_general`
+holds for *arbitrary symbolic* `BLOCK_M` and `D_HEAD` (the (128, 64) summary is a
+corollary).
+
+The **forward** and **backward-grads** summaries remain pinned to the single-block
+test shape and this is *structural*, not cosmetic. The forward proof stack
+(`taLoopBody`/`taLoopBody_steps`/`ta_attn_step`/`taInvariant` and the
+`fwdOutSpec`/`fwdLSpec`/`fwdMSpec` specs) is built at concrete `128`/`64`: the
+honest grid assumption `pids 0 = 0` collapses the causal stop bound
+`(start_m+1)·BLOCK_M` to a *single* `forRangeDyn` iteration, and the FA1 bridge is
+proved at `numKVBlocks = 1`. Generalizing forward to symbolic `N_CTX` would need a
+genuine multi-block streaming loop invariant (`ceil(N_CTX/BLOCK_N)` iterations)
+plus re-typing every spec over `Fin N_CTX` — the same two-level-loop difficulty
+flagged for backward-grads (`num_block = 1`, opaque `producedBwdKernelD{Q,K,V}Value`
+carriers). These are deliberately left pinned rather than faked.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TritonAttention
@@ -90,7 +109,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_grads_genuine_output_summary` -/
+/-! **★ Main theorems:** `triton_attention_bwd_preprocess_output_summary_general` (dimension-general),
+`triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_grads_genuine_output_summary` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
