@@ -84,6 +84,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `decay_cumsum_backward_python_test_shape_closed_output_summary_general` -/
+
 section Correct
 
 /-- Faithful transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
@@ -7098,6 +7100,8 @@ theorem bwd_decay_cumsum_dg_closed_compute_correct_general :
   rw [hDGwr t_rel.val (by omega) t_rel.isLt i, if_pos hActive,
     bwdCumPartialG_eq_DGClosed s DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t_rel i]
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General `output_summary`.** The executed backward surface realizes all three
 genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). -/
 theorem decay_cumsum_backward_python_test_shape_closed_output_summary_general :

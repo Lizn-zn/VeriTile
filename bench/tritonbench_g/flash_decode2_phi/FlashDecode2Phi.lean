@@ -78,6 +78,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 1000000
 
+/-! **★ Main theorems:** `flash_decode2_phi_normalization_output_summary_general`, `flash_decode2_phi_masked_accumulator_output_summary_general`, `flash_decode2_phi_running_max_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -739,6 +741,8 @@ theorem flash_decode2_phi_normalization_store_kernel_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine final-normalization output summary.** Fully
 dimension-parameterized over every stride, `head_dim`, `BLOCK_SEQ`, and
 `BLOCK_DMODEL`: the full Phi flash-decode stage2 surface lowers, and the masked
@@ -779,6 +783,8 @@ theorem flash_decode2_phi_normalization_output_summary_general
       head_dim stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
       stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine masked accumulator/`sum_exp` recurrence summary.** Fully
 dimension-parameterized over the block index, `head_dim`, `BLOCK_SEQ`,
 `BLOCK_DMODEL`, and every stride: the full Phi flash-decode stage2 surface
@@ -846,6 +852,8 @@ theorem flash_decode2_phi_masked_accumulator_output_summary_general
       SumExpIn MaxLogic NewMaxLogic SumExpOut block_seq_n stride_mid_o_eb
       stride_mid_o_eh stride_sum_b stride_sum_h stride_logic_b stride_logic_h s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine running-maximum recurrence summary.** Fully
 dimension-parameterized over every stride, `head_dim`, `BLOCK_SEQ`, and
 `BLOCK_DMODEL`: the full Phi flash-decode stage2 surface lowers, and the dynamic

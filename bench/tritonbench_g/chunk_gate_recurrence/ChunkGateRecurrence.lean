@@ -91,6 +91,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `chunk_gate_recurrence_forward_python_test_shape_output_summary`, `chunk_gate_recurrence_backward_python_test_shape_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1744,6 +1746,8 @@ theorem chunk_gate_recurrence_backward_python_test_shape_summary
   · exact chunk_gate_recurrence_backward_python_test_shape_all_outputs_compute_correct
       DaccPrev DaccPre DS S D DI DG DL t_rel s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- `output_summary` alias for the forward Python chunk-gate recurrence path. -/
 abbrev chunk_gate_recurrence_forward_python_test_shape_output_summary
     (AccPrev S D O LastKv : RegionName) (t_rel : Nat)
@@ -1757,6 +1761,8 @@ abbrev chunk_gate_recurrence_forward_python_test_shape_output_summary
   chunk_gate_recurrence_forward_python_test_shape_summary AccPrev S D O LastKv
     t_rel s hAccTrue hAccFalse
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- `output_summary` alias for the backward Python chunk-gate recurrence path. -/
 abbrev chunk_gate_recurrence_backward_python_test_shape_output_summary
     (DaccPrev DaccPre DS S D DI DG DL : RegionName) (t_rel : Nat)

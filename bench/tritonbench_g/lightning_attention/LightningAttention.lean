@@ -66,6 +66,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorem:** `lightning_attention_python_test_shape_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1651,6 +1653,8 @@ theorem lightning_attention_forward_o_inter_python_test_shape_compute_correct
     OInter 64 64 32 s lightning_attention_forward_o_inter_offset_python_test_shape_injective
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Genuine** launched-surface output summary for the checked Python forward
 shape. Exposes (1) the surface lowering of the forward + both backward kernels,
 (2) the `kv += tl.dot(k_trans, v)` carry-fold body realizing its genuine spec

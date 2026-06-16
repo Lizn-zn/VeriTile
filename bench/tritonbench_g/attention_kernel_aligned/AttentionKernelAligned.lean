@@ -74,6 +74,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorem:** `attention_kernel_aligned_python_test_shape_output_summary_general` -/
+
 section Correct
 
 /-- Faithful DSL port of `attention_kernel_aligned.py`'s `_fwd_kernel_aligned`. -/
@@ -3258,6 +3260,8 @@ theorem aligned_genuine_output_compute_correct_general
 
 end ClosedForm
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General public summary for `attention_kernel_aligned.py`
 (dimension-parameterized, NON-self-referential).**
 

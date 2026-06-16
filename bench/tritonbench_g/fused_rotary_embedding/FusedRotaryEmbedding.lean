@@ -56,6 +56,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `decoding_fused_rotary_embedding_all_outputs_compute_correct_general`, `decoding_fused_rotary_embedding_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1745,6 +1747,8 @@ and the default 4D K/V cache layout in its first case. The wrappers below pin
 those strides and expose the Q/K rotary writes plus guarded K/V cache writes
 for that concrete Python shape. -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General all-outputs correctness (genuine closed form).** Fully
 dimension-parameterized over all Q/K/cos/sin/cache strides, the rotary half
 width `HALF_DIM`, the V head dim `HEAD_DIM`, the cache split width `x`, and
@@ -1910,6 +1914,8 @@ theorem decoding_fused_rotary_embedding_all_outputs_compute_correct_general
         vch_stride vcs_stride vcd_stride bts_stride btb_stride block_size
         HEAD_DIM s hVCInj
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General top theorem (genuine closed form).** Dimension-general companion
 to `decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary`.
 Over symbolic strides/dims (`x`, all Q/K/cos/sin/cache strides, the rotary half

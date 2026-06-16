@@ -63,6 +63,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `token_attn_mistral_python_case1_output_summary`, `token_attn_mistral_python_case2_output_summary`, `token_attn_mistral_python_case3_output_summary`, `token_attn_mistral_python_case4_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1975,6 +1977,8 @@ abbrev token_attn_mistral_python_case4_store_summary
     B_Att_Start_Loc B_Att_Seqlen s
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_mistral_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2002,6 +2006,8 @@ theorem token_attn_mistral_python_case1_output_summary
       B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 64 128 rfl rfl (by norm_num)
       s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_mistral_python_case2_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2029,6 +2035,8 @@ theorem token_attn_mistral_python_case2_output_summary
       B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
       s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_mistral_python_case3_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2056,6 +2064,8 @@ theorem token_attn_mistral_python_case3_output_summary
       B_Att_Seqlen 64 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
       s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_mistral_python_case4_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)

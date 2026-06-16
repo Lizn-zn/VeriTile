@@ -72,6 +72,8 @@ set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorem:** `batched_vecmat_closed_form_correct` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1521,6 +1523,8 @@ theorem vecmat_exec_closed_form (A B output : RegionName) (s : BlockState)
   rw [hexec]
   exact hpost idx
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Closed-form GEMV correctness for `batched_vecmat_mult` (general statement).**
 
 For arbitrary `dim_n`, tile dims `BLOCK_M`/`BLOCK_N`, K-block size `BLOCK_K`, and

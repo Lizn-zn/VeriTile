@@ -91,6 +91,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `chunk_gated_attention_python_test_shape_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1146,6 +1148,8 @@ theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
   · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
       BHFinal Ht s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python test-shape summary for `chunk_gated_attention.py`, against the
 **genuine closed forms** (no self-referential read-back).
 

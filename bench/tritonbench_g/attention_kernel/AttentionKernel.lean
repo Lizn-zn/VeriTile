@@ -66,6 +66,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorem:** `attention_kernel_python_test_shape_output_summary_general` -/
+
 section Correct
 
 /-- Faithful DSL port of `attention_kernel.py`'s `_fwd_kernel_aligned`. -/
@@ -3371,6 +3373,8 @@ theorem attention_kernel_python_test_shape_output_summary
   · exact ClosedForm.attention_kernel_genuine_output_compute_correct
       Q K V B0 Out s hundef
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General** public summary for `attention_kernel.py` (dimension-parameterized).
 Records the faithful aligned attention surface and asserts that every observable
 `Out` lane holds the **genuine** closed-form base-2 streaming-softmax attention

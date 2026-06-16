@@ -57,6 +57,8 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `mv_kernel_python_case2_output_summary`, `mv_kernel_python_case3_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -338,6 +340,8 @@ abbrev mv_kernel_python_case3_prop
     (expected := fun i =>
       mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python case-2 summary for `mv_kernel`. -/
 theorem mv_kernel_python_case2_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
@@ -348,6 +352,8 @@ theorem mv_kernel_python_case2_output_summary
   · exact mv_kernel_python_case2_one_block_compute_correct A B C
       BLOCK_N BLOCK_M s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python case-3 summary for `mv_kernel`. -/
 theorem mv_kernel_python_case3_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :

@@ -72,6 +72,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `attention_fwd_triton2_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -468,6 +470,8 @@ theorem attention_fwd_triton2_closed_form_correct
   rw [dif_pos (show idx.2.1.val < HEAD_ACTIVE from hk)]
   exact hmain
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Dimension-general output summary for `attention_fwd_triton2` (no test-shape pin).**
 
 Mirrors the reference `attention_forward_triton_closed_form_correct`: over

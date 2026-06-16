@@ -83,6 +83,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorems:** `chunk_delta_fwd_python_case1_output_summary`, `chunk_delta_fwd_python_case2_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -2593,6 +2595,8 @@ hypotheses** — the cross-chunk fold is derived end-to-end from the kernel `exe
 The `NK = 1` host assertion is modeled by `s.pids 0 = 0`; output offset
 injectivity and region distinctness are side conditions for the test shape. -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python case 1 summary: no initial state, no final-state output.
 `B=2,H=4,T=128,K=V=64,BT=BC=32,BK=BV=64,NT=4`. The full surface lowers, and
 executing the whole kernel writes the genuine recurrence closed forms `hValue`
@@ -2631,6 +2635,8 @@ theorem chunk_delta_fwd_python_case1_output_summary
       (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
   exact ⟨sF, hexec, hh, hvn⟩
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python case 2 summary: initial state and final-state output enabled.
 Same shape as case 1. Executing the whole kernel writes `hValue` into `h[j]`,
 `vNewSpec` into `v_new[j]`, and `finalValue` (`H_4`) into `final_state`, all at
