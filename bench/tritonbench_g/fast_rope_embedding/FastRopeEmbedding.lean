@@ -23,9 +23,10 @@ quantified, the per-program statement covers every program.
 ## Proof architecture
 
 ```
-rope_embedding_python_test_shape_surface_output_summary    ← TOP THEOREM
-  (alias: rope_embedding_python_test_shape_output_summary)
-  ├─ rope_embedding_python_test_shape_{forward,backward}_surface_toAlgorithm_supported
+rope_embedding_output_summary_general                       ← TOP THEOREM (dim-general)
+  └─ rope_embedding_python_test_shape_surface_output_summary  ← concrete corollary
+       (alias: rope_embedding_python_test_shape_output_summary)
+  ├─ rope_embedding_surface_toAlgorithm_supported
   │      surface lowers to the algorithm layer
   ├─ rope_embedding_python_test_shape_first_half_compute_correct
   │      └─ rope_embedding_q_first_half_compute_correct
@@ -53,7 +54,10 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `rope_embedding_python_test_shape_surface_output_summary`, `rope_embedding_python_test_shape_output_summary` -/
+/-! **★ Main theorem:** `rope_embedding_output_summary_general` (dimension-general).
+The pinned `rope_embedding_python_test_shape_surface_output_summary` (and its alias
+`rope_embedding_python_test_shape_output_summary`) are thin corollaries at the
+concrete Python test shape. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -370,6 +374,115 @@ theorem rope_embedding_q_second_half_compute_correct
     s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- Dimension-general public summary for `fast_rope_embedding`.
+
+Symbolic in every shape parameter (`seqlen`, `head_dim`, `n_heads`,
+`BLOCK_SIZE`, and the `Q`/`cos`/`sin` row strides) and in the regions, this is
+the genuine compute-correctness statement that the pinned Python-test-shape
+summary is merely one instance of:
+
+* the forward surfaces for `Q` and `K` lower to the algorithm layer,
+* both forward half stores for `Q` and for `K` realize the rotary writeback
+  against `ropeFirstSpec` / `ropeSecondSpec` (pure functions of input memory),
+* the backward gradient surfaces for `QGrad` and `KGrad` lower.
+
+The only side conditions are honest store-offset injectivity hypotheses (the
+per-region first/second-half offsets are injective on the active lanes); these
+are exactly what the readback lemmas need and hold for any contiguous,
+in-range layout. `BLOCK_SIZE > 0` is *not* required as a hypothesis: it is
+discharged internally from the lane index. -/
+theorem rope_embedding_output_summary_general
+    (Q K QGrad KGrad cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat)
+    (sQ sK : BlockState)
+    (hQFirstInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qFirstOffset sQ Q_row_stride head_dim i))
+    (hQSecondInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qSecondOffset sQ Q_row_stride head_dim i))
+    (hKFirstInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qFirstOffset sK Q_row_stride head_dim i))
+    (hKSecondInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qSecondOffset sK Q_row_stride head_dim i)) :
+    (∃ alg, (rope_embedding_surface Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+      Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_embedding_q_first_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads BLOCK_SIZE i)
+        (fun i => (Q, qFirstOffset sQ Q_row_stride head_dim i)))
+      (expected := fun i =>
+        ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim BLOCK_SIZE i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_embedding_q_second_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads BLOCK_SIZE i)
+        (fun i => (Q, qSecondOffset sQ Q_row_stride head_dim i)))
+      (expected := fun i =>
+        ropeSecondSpec sQ Q cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim BLOCK_SIZE i)) ∧
+    (∃ alg, (rope_embedding_surface K cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+      Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_embedding_q_first_half K cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
+      (initialState := sK)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sK head_dim n_heads BLOCK_SIZE i)
+        (fun i => (K, qFirstOffset sK Q_row_stride head_dim i)))
+      (expected := fun i =>
+        ropeFirstSpec sK K cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim BLOCK_SIZE i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_embedding_q_second_half K cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
+      (initialState := sK)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sK head_dim n_heads BLOCK_SIZE i)
+        (fun i => (K, qSecondOffset sK Q_row_stride head_dim i)))
+      (expected := fun i =>
+        ropeSecondSpec sK K cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim BLOCK_SIZE i)) ∧
+    (∃ alg, (rope_embedding_surface QGrad cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+      Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (rope_embedding_surface KGrad cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+      Bool.true).toAlgorithm? = Except.ok alg) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact rope_embedding_surface_toAlgorithm_supported Q cos sin
+      Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE Bool.false
+  · exact rope_embedding_q_first_half_compute_correct Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE sQ
+      hQFirstInj
+  · exact rope_embedding_q_second_half_compute_correct Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE sQ
+      hQSecondInj
+  · exact rope_embedding_surface_toAlgorithm_supported K cos sin
+      Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE Bool.false
+  · exact rope_embedding_q_first_half_compute_correct K cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE sK
+      hKFirstInj
+  · exact rope_embedding_q_second_half_compute_correct K cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE sK
+      hKSecondInj
+  · exact rope_embedding_surface_toAlgorithm_supported QGrad cos sin
+      Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE Bool.true
+  · exact rope_embedding_surface_toAlgorithm_supported KGrad cos sin
+      Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE Bool.true
+
 end Correct
 
 /-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
@@ -468,10 +581,11 @@ theorem rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
     128 8 8 4 16 8 8 Bool.true
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python test-shape summary: the full forward surfaces for Q and K
-lower, both forward half stores realize the checked row layout, and the
-backward gradient surfaces lower for Q and K. -/
+/-- Public Python test-shape summary: the concrete-shape instance of
+`rope_embedding_output_summary_general` at the checked layout
+(`Q_row_stride=128`, `cos/sin` row stride `8`, `seqlen=4`, `head_dim=16`,
+`n_heads=8`, `BLOCK_SIZE=8`). A thin corollary of the dimension-general main
+theorem, supplying the test-shape offset-injectivity facts. -/
 theorem rope_embedding_python_test_shape_surface_output_summary
     (Q K QGrad KGrad cos sin : RegionName)
     (sQ sK : BlockState) :
@@ -514,29 +628,15 @@ theorem rope_embedding_python_test_shape_surface_output_summary
     (∃ alg, (rope_embedding_surface QGrad cos sin 128 8 8 4 16 8 8
       Bool.true).toAlgorithm? = Except.ok alg) ∧
     (∃ alg, (rope_embedding_surface KGrad cos sin 128 8 8 4 16 8 8
-      Bool.true).toAlgorithm? = Except.ok alg) := by
-  constructor
-  · exact rope_embedding_python_test_shape_forward_surface_toAlgorithm_supported
-      Q cos sin
-  constructor
-  · exact rope_embedding_python_test_shape_first_half_compute_correct Q cos sin sQ
-  constructor
-  · exact rope_embedding_python_test_shape_second_half_compute_correct Q cos sin sQ
-  constructor
-  · exact rope_embedding_python_test_shape_forward_surface_toAlgorithm_supported
-      K cos sin
-  constructor
-  · exact rope_embedding_python_test_shape_first_half_compute_correct K cos sin sK
-  constructor
-  · exact rope_embedding_python_test_shape_second_half_compute_correct K cos sin sK
-  constructor
-  · exact rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
-      QGrad cos sin
-  · exact rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
-      KGrad cos sin
+      Bool.true).toAlgorithm? = Except.ok alg) :=
+  rope_embedding_output_summary_general Q K QGrad KGrad cos sin
+    128 8 8 4 16 8 8 sQ sK
+    (rope_embedding_python_test_shape_first_offset_injective sQ)
+    (rope_embedding_python_test_shape_second_offset_injective sQ)
+    (rope_embedding_python_test_shape_first_offset_injective sK)
+    (rope_embedding_python_test_shape_second_offset_injective sK)
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- `output_summary` alias for the Python fast RoPE embedding path. -/
 abbrev rope_embedding_python_test_shape_output_summary
     (Q K QGrad KGrad cos sin : RegionName)
