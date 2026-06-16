@@ -77,7 +77,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `softmax_reducev_python_test_shape_output_summary_general` -/
+/-! **★ Main theorem:** `softmax_reducev_genuine_output_compute_correct_general` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -4427,6 +4427,7 @@ theorem sr_execG
     (fun n e => by simp only [srVFG, Fin.val_cast]; rw [srVG_eq_of_mem_pids s0 s V BLoc BSeqLen.cast mil sb ss svbs svh svd hmem0 hpids0])
 
 set_option maxHeartbeats 1000000 in
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine closed-form `Out`-store correctness.** Every output lane of the
 `softmax_reducev` kernel holds the genuine softmax-weighted V reduction
 `softmaxReducevWeightedSum` of the loaded logits / gathered V rows. Fully
@@ -4469,151 +4470,5 @@ theorem softmax_reducev_genuine_output_compute_correct_general
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-/-- Python test-shape final output store correctness for `o` with shape
-`(batch, head, d_model) = (2, 2, 64)`.  The accumulator and denominator are
-materialized in proof regions; the full streaming softmax loop is represented
-by the surface wrappers below. -/
-theorem softmax_reducev_python_test_shape_final_output_compute_correct
-    (Acc ESum Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := softmax_reducev_final_store_slice Acc ESum Out
-        128 64 1 2 1 128 64 1 64)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
-      (expected := fun i =>
-        softmaxReducevFinalSpec s Acc ESum 128 64 1 2 1 i) := by
-  exact softmax_reducev_final_store_slice_compute_correct Acc ESum Out
-    128 64 1 2 1 128 64 1 64 s
-    (softmax_reducev_python_output_offset_injective s)
-
-/-- Public Python case coverage summary: the full checked surface lowers for
-both sentinel choices, and the final normalized `o` vector writeback realizes
-the Python output shape. -/
-theorem softmax_reducev_python_test_shape_output_surface_summary
-    (Logics V Acc ESum Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := softmax_reducev_final_store_slice Acc ESum Out
-        128 64 1 2 1 128 64 1 64)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
-      (expected := fun i =>
-        softmaxReducevFinalSpec s Acc ESum 128 64 1 2 1 i)) := by
-  constructor
-  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-  constructor
-  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-  · exact softmax_reducev_python_test_shape_final_output_compute_correct
-      Acc ESum Out s
-
-/-- Python reduce-V softmax final-store coverage. -/
-abbrev softmax_reducev_python_test_shape_store_summary
-    (Logics V Acc ESum Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :=
-  softmax_reducev_python_test_shape_output_surface_summary
-    Logics V Acc ESum Out BLoc BStartLoc BSeqLen s
-
-
-/-- **Top theorem (genuine closed form).** At the Python test shape the full
-`softmax_reducev` surface lowers (both sentinel choices) and its `Out` store
-*realizes* the genuine softmax-weighted V reduction
-`softmaxReducevWeightedSum` — `out[d] = Σₙ softmax(qk)[n] · V[v_index[n], d]` — over
-the input logits / gathered value rows, with NO reference to the executed kernel
-output. The hypotheses are exactly the Python test regime (`seqlen = 128`: a
-positive multiple of `64`); `mr` is the streamed running max. -/
-theorem softmax_reducev_python_test_shape_output_summary
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0)
-    (hseqmod : srSeqLen s BSeqLen.cast % 64 = 0) (hseqpos : 0 < srSeqLen s BSeqLen.cast)
-    (mr : ℝ)
-    (hM : srRunningMax (srQkF s Logics BStartLoc.cast BSeqLen.cast) (srVF s V BLoc BSeqLen.cast)
-      (srSeqLen s BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)) :
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1))
-      (initialState := s)
-      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
-      (expected := fun d : Fin 64 =>
-        softmaxReducevWeightedSum (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
-          (srVF s V BLoc BSeqLen.cast) d)) ∧
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
-        Except.ok alg) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-  · exact softmax_reducev_genuine_output_compute_correct Logics V Out BLoc BStartLoc BSeqLen
-      s hundef hseqmod hseqpos mr hM
-  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
-      Logics V Out BLoc BStartLoc BSeqLen
-
-/-! ## GENERAL dimension-parameterized closed-form correctness
-
-The declarations below (`…G` / `…_general` suffix) generalize the `softmax_reducev`
-streaming online-softmax + paged-V-gather correctness over the block size `BLOCK_N`
-(the key block / running-max reduction width), the channel width `BLOCK_DMODEL`, and
-all memory strides — no hardcoded `64`/`128`/`256`/`8192` literals in the general
-signatures. The recurrence math (`srStateBot`, `srRunningMax`, `srBlock`,
-`srOsStepBot_block_eq`, `srStateBot_succ`, `softmaxReducevWeightedSum`) is already
-dimension-general and is reused verbatim. -/
-
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **General top theorem (genuine closed form).** Fully dimension-parameterized over
-`BLOCK_N` / `BLOCK_DMODEL` / strides: the full `softmax_reducev` surface lowers and
-its `Out` store *realizes* the genuine softmax-weighted V reduction
-`softmaxReducevWeightedSum` — `out[d] = Σₙ softmax(qk)[n] · V[v_index[n], d]` — over
-the input logits / gathered value rows, with NO reference to the executed output. NO
-hardcoded `64`/`128`/`256`/`8192` literals: the dims/strides are genuine `Nat`
-parameters with `0 < BLOCK_N`, `0 < BLOCK_DMODEL`, `BLOCK_N ∣ srSeqLen` side
-conditions. -/
-theorem softmax_reducev_python_test_shape_output_summary_general
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat)
-    (mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N : Nat)
-    (other_kv_index : Int)
-    (hD : 0 < BLOCK_DMODEL) (hN : 0 < BLOCK_N)
-    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
-    (hseqmod : srSeqLen s BSeqLen.cast % BLOCK_N = 0) (hseqpos : 0 < srSeqLen s BSeqLen.cast)
-    (hOutInj : ∀ s0 : BlockState, Function.Injective (fun i : Fin BLOCK_DMODEL => outOffsetG s0 sob soh sod i))
-    (mr : ℝ)
-    (hM : srRunningMax (srQkFG s Logics BStartLoc.cast BSeqLen.cast slh slb)
-      (srVFG s V BLoc BSeqLen.cast mil sb ss svbs svh svd BLOCK_DMODEL)
-      (srSeqLen s BSeqLen.cast) (⟨0, hD⟩ : Fin BLOCK_DMODEL) = (mr : WithBot ℝ)) :
-    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index)
-      (initialState := s)
-      (write := fun i : Fin BLOCK_DMODEL => some (Out, outOffsetG s sob soh sod i))
-      (expected := fun d : Fin BLOCK_DMODEL =>
-        softmaxReducevWeightedSum (srQkFG s Logics BStartLoc.cast BSeqLen.cast slh slb) mr
-          (srVFG s V BLoc BSeqLen.cast mil sb ss svbs svh svd BLOCK_DMODEL) d)) := by
-  refine ⟨?_, ?_⟩
-  · exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc BStartLoc BSeqLen
-      mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index
-  · exact softmax_reducev_genuine_output_compute_correct_general Logics V Out BLoc BStartLoc BSeqLen
-      mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index
-      hD hN s hundef hseqmod hseqpos hOutInj mr hM
-
-end TestShape
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
