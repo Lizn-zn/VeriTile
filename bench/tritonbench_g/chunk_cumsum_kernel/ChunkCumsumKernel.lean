@@ -80,7 +80,9 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `chunk_cumsum_scalar_python_test_shape_output_summary` -/
+/-! **★ Main theorem:** `chunk_cumsum_scalar_output_summary_general`
+(dimension-general `T`, `BT`); `chunk_cumsum_scalar_python_test_shape_output_summary`
+is the `T = 4`, `BT = 16` corollary. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1327,6 +1329,38 @@ theorem chunk_cumsum_scalar_surface_global_cumsum
               s.readMem S (s.pids 0 * T + m) :=
   chunk_cumsum_scalar_surface_loop_correct S O T BT s hSO hBT
 
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **★ MAIN THEOREM ★ — Public general scalar chunk-cumsum output summary
+(genuine closed form, dimension-general `T`, `BT`).** Two genuine facts about the
+complete `chunk_cumsum_scalar_surface` kernel, with **honest side-conditions
+only** (`0 < BT`, output/input regions distinct):
+
+* the full surface — prefix `i_bh`/`b_z` init followed by the `forRangeDyn` over
+  `cdiv(T, BT)` chunks that threads the running carry `b_z` — **lowers** to the
+  algorithm layer;
+* it **computes the genuine global cumulative sum** at every in-range output flat
+  index: `O[i_bh·T + flat] = Σ_{m ≤ flat, m < T} S[i_bh·T + m]`.
+
+The carry invariant `carry_c = Σ_{flat < c·BT, flat < T} s[i_bh·T+flat]` is
+*proven* by the loop induction (`forRangeDyn_inv` + `surface_step`), not assumed.
+`expected` is a standalone `Finset.sum` over input memory (`globalCumsumClosed`),
+never a read-back of the kernel's own output. This is the dimension-parameterized
+headline; `chunk_cumsum_scalar_python_test_shape_output_summary` is the `T = 4`,
+`BT = 16` corollary. -/
+theorem chunk_cumsum_scalar_output_summary_general
+    (S O : RegionName) (T BT : Nat) (s : BlockState)
+    (hSO : O ≠ S) (hBT : 0 < BT) :
+    (∃ alg, (chunk_cumsum_scalar_surface S O T BT).toAlgorithm? = Except.ok alg) ∧
+    (∃ sfinal,
+      exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal ∧
+      ∀ flat, flat < T →
+        sfinal.readMem O (s.pids 0 * T + flat)
+          = ∑ m ∈ (Finset.range T).filter (fun m => m ≤ flat),
+              s.readMem S (s.pids 0 * T + m)) :=
+  ⟨chunk_cumsum_scalar_surface_toAlgorithm_supported S O T BT,
+   chunk_cumsum_scalar_surface_global_cumsum S O T BT s hSO hBT⟩
+
 end Correct
 
 /-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
@@ -1484,12 +1518,23 @@ theorem chunk_cumsum_scalar_python_test_shape_summary
 
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- `output_summary` for the scalar Python chunk-cumsum surface: the genuine
-single-Python-chunk closed-form correctness (`S → O` realizes the prefix sum). -/
-abbrev chunk_cumsum_scalar_python_test_shape_output_summary
-    (S O : RegionName) (s : BlockState) :=
-  chunk_cumsum_scalar_single_block_python_test_shape_compute_correct S O s
+/-- **Python test-shape output summary (`T = 4`, `BT = 16`) — thin corollary.**
+Instantiates the dimension-general headline
+`chunk_cumsum_scalar_output_summary_general` at the checked Python shape
+(`cdiv 4 16 = 1`, so the chunk loop runs once with carry `= 0`): the full surface
+lowers and computes the genuine global prefix sum
+`O[i_bh·4 + flat] = Σ_{m ≤ flat, m < 4} S[i_bh·4 + m]`. `expected` is a standalone
+`Finset.sum` over input memory, never a read-back of the kernel's own output. -/
+theorem chunk_cumsum_scalar_python_test_shape_output_summary
+    (S O : RegionName) (s : BlockState) (hSO : O ≠ S) :
+    (∃ alg, (chunk_cumsum_scalar_surface S O 4 16).toAlgorithm? = Except.ok alg) ∧
+    (∃ sfinal,
+      exec (chunk_cumsum_scalar_surface S O 4 16).toAlgKernel s = some sfinal ∧
+      ∀ flat, flat < 4 →
+        sfinal.readMem O (s.pids 0 * 4 + flat)
+          = ∑ m ∈ (Finset.range 4).filter (fun m => m ≤ flat),
+              s.readMem S (s.pids 0 * 4 + m)) :=
+  chunk_cumsum_scalar_output_summary_general S O 4 16 s hSO (by norm_num)
 
 /-! ## Surface-level loop induction (carry invariant)
 
