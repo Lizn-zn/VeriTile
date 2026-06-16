@@ -23,15 +23,15 @@ every program of the grid.
 ## Proof architecture
 
 ```
-mv_kernel_python_test_shape_complete_summary    ← TOP THEOREM (both checked shapes)
-  ├─ mv_kernel_python_case2_output_summary       (N=4, M=3)
-  │    ├─ (toAlgorithm? = Except.ok _) via mv_kernel_python_case2_surface_toAlgorithm_supported
-  │    └─ mv_kernel_python_case2_one_block_compute_correct
-  └─ mv_kernel_python_case3_output_summary        (N=32, M=16)
-       ├─ (toAlgorithm? = Except.ok _) via mv_kernel_python_case3_surface_toAlgorithm_supported
-       └─ mv_kernel_python_case3_one_block_compute_correct
-            └─ mv_kernel_one_block_compute_correct → mv_kernel_one_block_correct
-                 └─ mvSpec / mvProdTile  (row-wise `Tile.reduceSum` of `a * b`)
+mv_kernel_output_summary_general                 ← ★ MAIN THEOREM (symbolic N, M, BLOCK_*, strides)
+  ├─ mv_kernel_surface_toAlgorithm_supported      (toAlgorithm? = Except.ok _, full looping surface)
+  └─ mv_kernel_one_block_compute_correct → mv_kernel_one_block_correct
+       └─ mvSpec / mvProdTile  (row-wise `Tile.reduceSum` of `a * b`)
+       (honest side-condition: output-offset injectivity `hOutInj`)
+
+mv_kernel_python_test_shape_complete_summary     ← concrete checked shapes
+  ├─ mv_kernel_python_case2_output_summary        (N=4, M=3)   := general @ (4,3), stride 1
+  └─ mv_kernel_python_case3_output_summary        (N=32, M=16) := general @ (32,16), stride 1
 ```
 
 `mv_kernel_surface_toAlgorithm_supported` separately establishes that the full
@@ -57,7 +57,10 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `mv_kernel_python_case2_output_summary`, `mv_kernel_python_case3_output_summary` -/
+/-! **★ Main theorem:** `mv_kernel_output_summary_general` — dimension-general
+correctness for `mv_kernel` against `mvSpec` (symbolic `N M BLOCK_N BLOCK_M` and
+strides; honest side-conditions only). The concrete Python `case2`/`case3`
+summaries are thin corollaries that instantiate it at the checked test shapes. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -254,6 +257,60 @@ theorem mv_kernel_one_block_compute_correct
     stride_cn BLOCK_N BLOCK_M s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Dimension-general correctness surface for `mv_kernel`.
+
+Bundles the two genuine obligations at fully symbolic dimensions
+(`N M BLOCK_N BLOCK_M` and all strides):
+
+* the full looping surface lowers to the algorithm layer
+  (`toAlgorithm? = Except.ok _`), and
+* the one-`BLOCK_M` slice realizes `mvSpec` — the masked, input-only
+  matrix-vector reduction — writing each active row to `C` at `cOffset`.
+
+The single honest side-condition is output-offset injectivity
+(`hOutInj`): distinct block rows must map to distinct `C` slots, which
+holds for any nonzero `stride_cn` (and in particular the contiguous
+Python strides, via `mv_kernel_python_stride1_output_offset_injective`). -/
+abbrev mv_kernel_general_prop
+    (A B C : RegionName)
+    (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
+    (s : BlockState) : Prop :=
+  (∃ alg, (mv_kernel A B C N M stride_an stride_am stride_bm stride_cn
+      BLOCK_N BLOCK_M).toAlgorithm? = Except.ok alg) ∧
+  ComputeCorrect.Realizes
+    (kernel := mv_kernel_one_block A B C N M stride_an stride_am stride_bm
+      stride_cn BLOCK_N BLOCK_M)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < N)
+      (fun i => (C, cOffset s stride_cn BLOCK_N i)))
+    (expected := fun i =>
+      mvSpec s A B N M stride_an stride_am stride_bm BLOCK_N BLOCK_M i)
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- **Dimension-general public summary for `mv_kernel`.**
+
+For symbolic dimensions `N M BLOCK_N BLOCK_M` and arbitrary strides, the full
+matrix-vector surface lowers to the algorithm layer and its one-block slice
+realizes the genuine input-only specification `mvSpec` (a masked row-wise
+`Tile.reduceSum` of `A · B`), writing each active output row `i` of `C`.
+
+The only hypothesis is the honest output-offset injectivity condition
+`hOutInj`; there are no shape-specific assumptions. -/
+theorem mv_kernel_output_summary_general
+    (A B C : RegionName)
+    (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i)) :
+    mv_kernel_general_prop A B C N M stride_an stride_am stride_bm stride_cn
+      BLOCK_N BLOCK_M s := by
+  refine ⟨?_, ?_⟩
+  · exact mv_kernel_surface_toAlgorithm_supported A B C N M stride_an stride_am
+      stride_bm stride_cn BLOCK_N BLOCK_M
+  · exact mv_kernel_one_block_compute_correct A B C N M stride_an stride_am
+      stride_bm stride_cn BLOCK_N BLOCK_M s hOutInj
+
 /-! ## Python test-case wrappers
 
 The bundled Python test constructs contiguous tensors for shapes `(N, M) =
@@ -341,28 +398,23 @@ abbrev mv_kernel_python_case3_prop
       mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i)
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python case-2 summary for `mv_kernel`. -/
+/-- Public Python case-2 summary for `mv_kernel` (thin corollary of the
+dimension-general `mv_kernel_output_summary_general` at `(N, M) = (4, 3)` with
+the contiguous Python strides). -/
 theorem mv_kernel_python_case2_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s := by
-  constructor
-  · exact mv_kernel_python_case2_surface_toAlgorithm_supported A B C
-      BLOCK_N BLOCK_M
-  · exact mv_kernel_python_case2_one_block_compute_correct A B C
-      BLOCK_N BLOCK_M s
+    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s :=
+  mv_kernel_output_summary_general A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M s
+    (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
 
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python case-3 summary for `mv_kernel`. -/
+/-- Public Python case-3 summary for `mv_kernel` (thin corollary of the
+dimension-general `mv_kernel_output_summary_general` at `(N, M) = (32, 16)` with
+the contiguous Python strides). -/
 theorem mv_kernel_python_case3_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s := by
-  constructor
-  · exact mv_kernel_python_case3_surface_toAlgorithm_supported A B C
-      BLOCK_N BLOCK_M
-  · exact mv_kernel_python_case3_one_block_compute_correct A B C
-      BLOCK_N BLOCK_M s
+    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s :=
+  mv_kernel_output_summary_general A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M s
+    (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
 
 end Correct
 
