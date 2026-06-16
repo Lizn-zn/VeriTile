@@ -83,7 +83,14 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorems:** `chunk_delta_fwd_python_case1_output_summary`, `chunk_delta_fwd_python_case2_output_summary` -/
+/-! **★ Main theorem (dimension-general):** `chunk_delta_fwd_output_summary_general`
+— arbitrary symbolic `T BT BC BK BV NT` + strides; the full surface lowers and the
+three masked store faces realize the genuine delta-rule recurrence under honest
+symbolic-dim producer hypotheses + offset injectivity.
+
+**★ Concrete Python cases (producer hypotheses discharged from `exec`):**
+`chunk_delta_fwd_python_case1_output_summary`,
+`chunk_delta_fwd_python_case2_output_summary`. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -2584,6 +2591,113 @@ theorem chunk_delta_fwd_exec_genuine
       e.val p.val e.isLt (by obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
     rfl
 
+/-! ### ════════ ★ MAIN THEOREM (dimension-general) ★ ════════ -/
+
+/-- **Public dimension-general output summary.** For **arbitrary** symbolic
+dimensions `T BT BC BK BV NT`, key/value strides
+`s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d`, state strides `s_h_h s_h_t`, and
+batch/head counts `_H K V`, the full chunk-delta forward surface
+
+* lowers to the algorithm layer (`(...).toAlgorithm? = Except.ok _`); and
+* under the genuine **producer hypotheses** `hBH`/`hBVN`/`hBHF` — asserting that
+  the within-kernel cross-chunk fold materialized the genuine closed forms
+  `hValue` (chunk-start state `H_{i_t}`), `vNewValue` (the corrected value
+  `v − d·H_{i_t}`) and `finalValue` (`H_{NT}`) into the producer buffers
+  `BH`/`BVN`/`BHFinal` — together with output-offset injectivity, each masked
+  store face **realizes the genuine delta-rule recurrence** at every active lane:
+  the `h[i_t]` store realizes `hValue i_t`, the `v_new[i_t]` store (single inner
+  chunk, `BC = BT`) realizes `vNewValue i_t`, and the `final_state` store realizes
+  `finalValue NT`.
+
+The genuine recurrence specs (`stateValue`, `vNewValue`, `hValue`, `finalValue`)
+are the closed forms over the **input** memory `k`/`v`/`d`/`initial_state`, never
+an exec-readback. The producer hypotheses are honest explicit hypotheses on the
+producer buffers (the same KIND of assumption as the `chunk_cumsum` carry
+invariant); for the two checked Python shapes they are *discharged end-to-end
+from the kernel `exec` with no producer hypotheses* by
+`chunk_delta_fwd_python_case{1,2}_output_summary` below (which call
+`chunk_delta_fwd_exec_genuine`). This headline statement carries **no concrete
+dimension literals**: it is the genuine dimension-generalization of the recurrence
+store faces. -/
+theorem chunk_delta_fwd_output_summary_general
+    (k v d v_new h initial_state final_state BH BVN BHFinal : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      _H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (s : BlockState)
+    -- offset injectivity (per active store face) — honest side conditions
+    (hInjH : ∀ i_t : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx))
+    (hInjV : ∀ i_t : Nat, Function.Injective
+      (fun idx : TileIndex [BT, BV] => vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx))
+    (hInjF : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx))
+    -- genuine producer hypotheses (symbolic dims) — the cross-chunk fold landed
+    -- the genuine closed forms into the producer buffers
+    (hBH : ∀ i_t : Nat, ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+        s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx)
+          = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              K V BT BV BK USE_INITIAL_STATE i_t idx)
+    (hBVN : ∀ i_t : Nat, ∀ idx : TileIndex [BT, BV], vNewActive s i_t 0 T V BT BT BV idx →
+        s.readMem BVN (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)
+          = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              K V BT BV BK USE_INITIAL_STATE i_t idx)
+    (hBHF : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+        s.readMem BHFinal (finalStateOffset s K V BK BV idx)
+          = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              K V BT BV BK USE_INITIAL_STATE NT idx) :
+    -- (i) the full surface lowers
+    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+        _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
+          = Except.ok alg)
+    -- (ii) the state-store face realizes the genuine chunk-start state recurrence
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+        (kernel := chunk_delta_fwd_h_store_slice BH h i_t s_h_h s_h_t K V BK BV)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
+          (fun idx : TileIndex [BK, BV] => (h, hOffset s i_t s_h_h s_h_t K V BK BV idx)))
+        (expected := fun idx : TileIndex [BK, BV] =>
+          hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            K V BT BV BK USE_INITIAL_STATE i_t idx))
+    -- (iii) the corrected-value store face realizes the genuine `vNewValue`
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+        (kernel := chunk_delta_fwd_v_new_store_slice BVN v_new i_t 0
+          s_vo_h s_vo_t s_vo_d T V BT BT BV)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun idx : TileIndex [BT, BV] => vNewActive s i_t 0 T V BT BT BV idx)
+          (fun idx : TileIndex [BT, BV] =>
+            (v_new, vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)))
+        (expected := fun idx : TileIndex [BT, BV] =>
+          vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            K V BT BV BK USE_INITIAL_STATE i_t idx))
+    -- (iv) the final-state store face realizes `H_{NT}`
+    ∧ ComputeCorrect.Realizes
+        (kernel := chunk_delta_fwd_final_state_store_slice BHFinal final_state K V BK BV)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
+          (fun idx : TileIndex [BK, BV] => (final_state, finalStateOffset s K V BK BV idx)))
+        (expected := fun idx : TileIndex [BK, BV] =>
+          finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            K V BT BV BK USE_INITIAL_STATE NT idx) := by
+  refine ⟨chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
+      initial_state final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE, ?_, ?_, ?_⟩
+  · intro i_t
+    exact chunk_delta_fwd_h_store_slice_realizes_state BH h k v d initial_state
+      i_t s_h_h s_h_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK
+      USE_INITIAL_STATE s (hInjH i_t) (hBH i_t)
+  · intro i_t
+    exact chunk_delta_fwd_v_new_store_slice_realizes_vNew BVN v_new k v d initial_state
+      i_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
+      USE_INITIAL_STATE s (hInjV i_t) (hBVN i_t)
+  · exact chunk_delta_fwd_final_state_store_slice_realizes_final BHFinal final_state
+      k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK NT
+      USE_INITIAL_STATE s hInjF hBHF
+
 /-! ## Public Python-case coverage summaries (genuine `exec`-derived)
 
 Each summary certifies that (i) the full chunk-delta surface lowers to the
@@ -2593,7 +2707,10 @@ recurrence closed forms `hValue`, `vNewSpec`, and `finalValue` into the output
 buffers `h`, `v_new`, and `final_state` at every active lane. **No producer
 hypotheses** — the cross-chunk fold is derived end-to-end from the kernel `exec`.
 The `NK = 1` host assertion is modeled by `s.pids 0 = 0`; output offset
-injectivity and region distinctness are side conditions for the test shape. -/
+injectivity and region distinctness are side conditions for the test shape.
+These two concrete cases *discharge* the producer hypotheses of the general
+headline `chunk_delta_fwd_output_summary_general` end-to-end from `exec` at the
+two checked Python shapes. -/
 
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
