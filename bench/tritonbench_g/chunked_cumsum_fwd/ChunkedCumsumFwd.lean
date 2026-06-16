@@ -82,6 +82,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+section Correct
+
 /-! ## Within-chunk cumsum identity (`tl.cumsum` axis=1 = prefix `Finset.sum`)
 
 `tl.cumsum(dA, axis=1)` lowers to `Op.scan .sum` along the chunk axis (axis 1 of
@@ -988,6 +990,10 @@ theorem chunked_cumsum_fwd_summary_general
       stride_dA_cs_csize nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK s
       hDtOutInj hDACsInj
 
+end Correct
+
+section TestShape
+
 /-! ## Python test-shape wrappers
 
 `chunked_cumsum_fwd.py`'s checked tests use `dt.shape = (2, 10, 4)` and
@@ -1426,5 +1432,7 @@ abbrev chunked_cumsum_fwd_python_test_case4_output_summary
     (dt_min dt_max : ℝ) (s : BlockState) :=
   chunked_cumsum_fwd_python_test_case4_slice_summary dt_ptr A_ptr dt_bias_ptr
     dt_out_ptr dA_cumsum_ptr DtPrepared DtOut DAcs A DACumsum dt_min dt_max s
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
