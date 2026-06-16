@@ -3697,23 +3697,29 @@ theorem afcKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOC
   · rw [if_pos ⟨hjlt, hiff.mp hc⟩, if_pos hc]
   · rw [if_neg (fun hh => hc (hiff.mpr hh.2)), if_neg hc]
 
-/-- General sentinel boundedness side-condition. -/
+/-- General sentinel boundedness side-condition (causal-only, non-strict).
+Only *causally-kept* keys (`j ≤ qStart + i`) need a bound; non-causal keys are
+forced to the `-1e6` sentinel by the kernel's mask and need no hypothesis. The
+bound is non-strict (`-1e6 ≤ …`), the weakest form sufficient for the proof. -/
 def afcScoreBoundG
     (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
     (keyScale : Fin SEQ → ℝ) (qStart : Nat) : Prop :=
-  ∀ (j : Fin SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL),
-    keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
-      > -1000000.0
+  ∀ (j : Fin SEQ) (i : Fin BLOCK_M), (j.val ≤ qStart + i.val) →
+    (0:ℝ) - 1000000.0 ≤
+      keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
 
 /-- General: under `afcScoreBoundG`, running max over a nonempty causal window
-exceeds the `-1e6` sentinel. -/
+is `≥` the `-1e6` sentinel (the first key `j = 0` is causal, so the causal-only
+bound applies and the sup over the window dominates it). -/
 theorem afcRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 < SEQ)
     (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
     (hsb : afcScoreBoundG qT kT vT keyScale qStart) :
-    afcRunningMaxG qT kT vT keyScale qStart hi i d > some (-1000000.0 : ℝ) := by
+    afcRunningMaxG qT kT vT keyScale qStart hi i d ≥ some (-1000000.0 : ℝ) := by
   unfold afcRunningMaxG afcKeysUptoG
-  have hkey0 : ((afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) > -1000000.0 := by
-    have := hsb ⟨0, hSEQ⟩ i d
+  have hkey0 : ((afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) ≥ -1000000.0 := by
+    have := hsb ⟨0, hSEQ⟩ i (by simp)
+    have hrw : (0:ℝ) - 1000000.0 = -1000000.0 := by norm_num
+    rw [hrw] at this
     simpa [afcKVG] using this
   have hmem : ((((afcKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ)) : WithBot ℝ) ∈
       ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
@@ -3726,8 +3732,8 @@ theorem afcRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 
     refine ⟨⟨0, hSEQ⟩, List.mem_finRange _, ?_⟩
     rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
   have hle := afc_mem_le_foldr_sup _ _ hmem
-  refine lt_of_lt_of_le ?_ hle
-  exact (WithBot.coe_lt_coe).mpr hkey0
+  refine le_trans ?_ hle
+  exact (WithBot.coe_le_coe).mpr hkey0
 
 /-- General `afcBlockG` map-and-sum: reindex block `c`'s causal window onto
 `Fin BLOCK_N` lanes (global key `c·BLOCK_N + jL`). -/
@@ -4140,11 +4146,13 @@ theorem afc_mij_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < BL
       rw [hBSk]
       refine Finset.le_sup_of_le (Finset.mem_univ (⟨0, hBN⟩ : Fin BLOCK_N)) ?_
       rw [if_pos (show 0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val ≤ qStart + i.val from by simp)]
-      refine le_of_lt ?_
-      rw [WithBot.coe_lt_coe]
-      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i ⟨0, hBD⟩
+      rw [WithBot.coe_le_coe]
+      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i
+        (by simp)
+      have hrw : (0:ℝ) - 1000000.0 = -1000000.0 := by norm_num
+      rw [hrw] at hbnd
       simpa [afcKVG] using hbnd
-    · refine le_sup_of_le_left (le_of_lt ?_)
+    · refine le_sup_of_le_left ?_
       rw [hMdef]
       exact afcRunningMaxG_gt_sentinel qT kT vT keyScale qStart (c * BLOCK_N) (by
         have : 1 ≤ c := by omega
@@ -6382,9 +6390,13 @@ theorem attn_fwd_causal_python_test_shape_output_summary
       (kTileAFCG s K 65536 16384 4 128 (64 * 2) 128)
       (vTileAFCmG s V 65536 16384 4 128 (64 * 2) 128 96)
       (keyScaleAFCG s QScale KScale 128 128 64 2) (qStartAFCG s 128) := by
-    intro j i d
-    have h := hsb j i d
-    refine lt_of_lt_of_le h (le_of_eq ?_)
+    intro j i _hjle
+    -- pinned `afcScoreBound` is all-keys STRICT `>`; the weakened general bound
+    -- is causal-only NON-strict `≤`, so the pinned hypothesis is more than enough.
+    have h := hsb j i ⟨0, by norm_num⟩
+    have hrw : (0:ℝ) - 1000000.0 = -1000000.0 := by norm_num
+    rw [hrw]
+    refine le_of_lt (lt_of_lt_of_le h (le_of_eq ?_))
     rfl
   have hgen := attn_fwd_causal_output_summary_general Q K V QScale KScale Out s
     65536 16384 4 128 128 128 64 128 96 1 2 2
