@@ -6467,5 +6467,3 @@ end General
 
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
-
-#print axioms VeriTile.Bench.TritonBenchG.ContextAttnNopad.context_attn_nopad_output_summary_general
