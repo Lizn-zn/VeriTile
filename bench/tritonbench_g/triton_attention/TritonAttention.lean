@@ -90,7 +90,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_grads_genuine_output_summary` -/
+/-! **★ Main theorems:** `triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1101,6 +1101,223 @@ theorem triton_attention_bwd_preprocess_delta_surface_compute_correct
   subst s0
   intro i
   simp [producedBwdPreprocessDeltaValue, hExec]
+
+/-! ### Genuine closed-form preprocess specs (input-memory)
+
+The two specs below are the GENUINE Python `_bwd_preprocess` closed forms,
+written purely over the kernel's **input** regions `Out`, `DO`, `L` — they do
+*not* reference the kernel's own `NewDO`/`Delta` output (unlike the opaque
+`producedBwdPreprocess{NewDO,Delta}Value` carriers above).
+
+* `bwdPreprocessNewDOSpecG s O DO L`: the elementwise `do / L[:, None]` store,
+  i.e. `DO[i,d] / L[i]`.
+* `bwdPreprocessDeltaSpecG s O DO L`: the row reduction `Σ_d O[i,d]·(DO[i,d]/L[i])`.
+
+These match the per-element forward-style specs `newdoFormulaSpec` /
+`deltaFormulaSpec` already in this file, but are stated as standalone genuine
+closed forms and proven realized by the *full* `triton_attention_bwd_preprocess`
+surface (not just the arithmetic slices). -/
+
+/-- A `foldl` of `writeMem` into region `wr` leaves a read of a *different*
+region `rr ≠ wr` unchanged, regardless of the written offsets/values. Used to
+push a read past the unrelated `Delta`/`NewDO` store of the two-store
+`_bwd_preprocess` surface. -/
+private theorem foldl_writeMem_readMem_ne_region {α : Type}
+    (wr rr : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat)
+    (l : List α) (hne : rr ≠ wr) :
+    ∀ (s : BlockState),
+      ((l.foldl (fun acc k => acc.writeMem wr (offsetFn k) (valueFn k)) s).readMem
+        rr o) = s.readMem rr o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+    intro s
+    rw [List.foldl_cons, ih]
+    exact BlockState.writeMem_readMem_of_ne_region s wr (offsetFn hd)
+      (valueFn hd) rr o hne
+
+noncomputable def bwdPreprocessNewDOSpecG (s : BlockState) (_O DO L : RegionName)
+    (BLOCK_M D_HEAD : Nat) (idx : TileIndex [BLOCK_M, D_HEAD]) : ℝ :=
+  s.readMem DO (newdoOffset s BLOCK_M D_HEAD idx) /
+    s.readMem L (newdoMIndex s BLOCK_M idx.1)
+
+noncomputable def bwdPreprocessDeltaSpecG (s : BlockState) (O DO L : RegionName)
+    (BLOCK_M D_HEAD : Nat) (i : Fin BLOCK_M) : ℝ :=
+  ∑ j : Fin D_HEAD,
+    let idx : TileIndex [BLOCK_M, D_HEAD] :=
+      TileShape.insertAxisIndex [BLOCK_M, D_HEAD] 1
+        (TileShape.insertAxisIndex [BLOCK_M] 0 PUnit.unit i) j
+    s.readMem O (newdoOffset s BLOCK_M D_HEAD idx) *
+      (s.readMem DO (newdoOffset s BLOCK_M D_HEAD idx) /
+        s.readMem L (newdoMIndex s BLOCK_M idx.1))
+
+/-- The full `triton_attention_bwd_preprocess` surface stores the genuine
+`bwdPreprocessNewDOSpecG` at every `NewDO` lane. The `Delta` store is to a
+distinct region (`NewDO ≠ Delta`), so it cannot perturb the `NewDO` readback. -/
+theorem triton_attention_bwd_preprocess_newdo_genuine_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
+    (hND : NewDO ≠ Delta)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        newdoOffset s BLOCK_M D_HEAD idx)) :
+    ∀ idx : TileIndex [BLOCK_M, D_HEAD],
+      let outAddr := newdoOffset s BLOCK_M D_HEAD idx
+      (exec (triton_attention_bwd_preprocess Out DO L NewDO Delta
+            BLOCK_M D_HEAD) s).map (·.readMem NewDO outAddr)
+        = some (bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx) := by
+  intro idx
+  simp [exec, triton_attention_bwd_preprocess, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+        NumericDType.div, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, newdoOffset, newdoMIndex, newdoNIndex,
+        TileShape.dropInsertedIndex, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?]
+  -- The outer `Delta` store is to a region distinct from `NewDO`, so it cannot
+  -- perturb the `NewDO` readback.
+  rw [foldl_writeMem_readMem_ne_region Delta NewDO _ _ _ _ hND]
+  -- Now reduce the inner `NewDO` scatter via the injective-offset readback.
+  let offsetFn : TileIndex [BLOCK_M, D_HEAD] → Nat :=
+    fun idx => (s.pids 0 * BLOCK_M + idx.1.val) * D_HEAD + idx.2.1.val
+  let valueFn : TileIndex [BLOCK_M, D_HEAD] → ℝ :=
+    fun idx => s.readMem DO (offsetFn idx) /
+      s.readMem L (s.pids 0 * BLOCK_M + idx.1.val)
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, newdoOffset, newdoMIndex, newdoNIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        acc.writeMem NewDO (offsetFn i) (valueFn i))
+      _ (TileShape.allIndices [BLOCK_M, D_HEAD])).readMem NewDO
+        (offsetFn idx) =
+    bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx
+  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
+  simp [bwdPreprocessNewDOSpecG, newdoOffset, newdoMIndex, newdoNIndex,
+    offsetFn, valueFn]
+
+/-- The full `triton_attention_bwd_preprocess` surface stores the genuine
+`bwdPreprocessDeltaSpecG` at every `Delta` row lane. The `Delta` store is the
+final (outermost) store, so any preceding `NewDO` store is just part of its base
+state and the row-offset scatter readback applies directly. -/
+theorem triton_attention_bwd_preprocess_delta_genuine_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat)
+    (s s' : BlockState)
+    (hExec : exec (triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD) s = some s') :
+    ∀ i : Fin BLOCK_M,
+      s'.readMem Delta (deltaOffset s BLOCK_M i) =
+        bwdPreprocessDeltaSpecG s Out DO L BLOCK_M D_HEAD i := by
+  intro i
+  simp [exec, triton_attention_bwd_preprocess, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, NumericDType.add,
+        NumericDType.mul, NumericDType.div, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?] at hExec
+  rw [← hExec]
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] => s.pids 0 * BLOCK_M + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [deltaOffset]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [bwdPreprocessDeltaSpecG, newdoOffset, newdoMIndex,
+    newdoNIndex, deltaOffset, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, NumericDType.mul, NumericDType.div]
+  congr
+
+/-- `Realizes` form of the genuine `NewDO` correctness for the full surface. -/
+theorem triton_attention_bwd_preprocess_newdo_genuine_compute_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
+    (hND : NewDO ≠ Delta)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        newdoOffset s BLOCK_M D_HEAD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
+      (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := triton_attention_bwd_preprocess_newdo_genuine_correct
+    Out DO L NewDO Delta BLOCK_M D_HEAD s hND hOutInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
+/-- `Realizes` form of the genuine `Delta` correctness for the full surface. -/
+theorem triton_attention_bwd_preprocess_delta_genuine_compute_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        bwdPreprocessDeltaSpecG s Out DO L BLOCK_M D_HEAD i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  exact triton_attention_bwd_preprocess_delta_genuine_correct Out DO L NewDO
+    Delta BLOCK_M D_HEAD s s' hExec i
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- **Genuine faithful backward-preprocess summary (dimension-general).** For
+*symbolic* `BLOCK_M`, `D_HEAD` and any program id, every output lane of the full
+`_bwd_preprocess` surface holds its genuine Python closed form, stated purely
+over the **input** regions `Out`/`DO`/`L`:
+
+* `NewDO[i,d] = DO[i,d] / L[i]` (`bwdPreprocessNewDOSpecG`);
+* `Delta[i]  = Σ_{d} O[i,d] · (DO[i,d] / L[i])` (`bwdPreprocessDeltaSpecG`).
+
+Honest side conditions only: `NewDO ≠ Delta` (the two stores hit distinct
+regions, so the `Delta` store cannot clobber the `NewDO` readback) and
+injectivity of the `NewDO` tile offset map (`hOutInj`). The expected values are
+**not** the self-referential `producedBwdPreprocess{NewDO,Delta}Value` carriers. -/
+theorem triton_attention_bwd_preprocess_genuine_output_summary_general
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
+    (hND : NewDO ≠ Delta)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        newdoOffset s BLOCK_M D_HEAD idx)) :
+    (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
+      BLOCK_M D_HEAD).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
+      (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        bwdPreprocessDeltaSpecG s Out DO L BLOCK_M D_HEAD i)) := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact triton_attention_bwd_preprocess_toAlgorithm_supported
+      Out DO L NewDO Delta BLOCK_M D_HEAD
+  · exact triton_attention_bwd_preprocess_newdo_genuine_compute_correct
+      Out DO L NewDO Delta BLOCK_M D_HEAD s hND hOutInj
+  · exact triton_attention_bwd_preprocess_delta_genuine_compute_correct
+      Out DO L NewDO Delta BLOCK_M D_HEAD s
 
 /-! ### Main backward gradient store slices
 
@@ -7873,3 +8090,4 @@ theorem triton_attention_bwd_python_test_shape_complete_summary
 end TestShape
 
 end VeriTile.Bench.TritonBenchG.TritonAttention
+
