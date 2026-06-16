@@ -96,6 +96,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- DSL port of `attention_score.py`'s `_score_kernel`.
 
 The proof parameter `hBlockMN` carries the Python wrapper invariant
@@ -3017,5 +3021,13 @@ theorem attention_score_python_case1_output_summary_general
       stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
       stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale
       hBNpos hdvd s hundef
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.AttentionScore

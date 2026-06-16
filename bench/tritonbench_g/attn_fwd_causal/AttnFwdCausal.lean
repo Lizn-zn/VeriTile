@@ -63,6 +63,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Full Lean port of `attn_fwd_causal.py`'s `_attn_fwd`.
 
 The upstream kernel runs the K/V streaming-softmax loop through a separate
@@ -343,60 +347,6 @@ theorem attn_fwd_causal_final_store_slice_compute_correct
 `N_CTX = 128`, `HEAD_DIM = 128`, `BLOCK_M = 128`, `BLOCK_N = 64`, and the
 final store mask enables the first 96 head lanes. Contiguous tensors have
 strides `(65536, 16384, 128, 1)`. -/
-
-theorem attn_fwd_causal_final_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_causal_final_store_slice Acc Out
-        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
-  apply attn_fwd_causal_final_store_slice_compute_correct
-  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
-  simp [outOffset, offZ, offH, mIndex, kIndex] at h
-  have hm : ma = mb := by omega
-  have hk : ka = kb := by omega
-  subst mb
-  subst kb
-  rfl
-
-/-! ## Genuine closed-form attention spec (exp2, causal)
-
-`attn_fwd_causal.py`'s `_attn_fwd` (Python `stage = 3`, two `_attn_fwd_inner`
-calls: stage `4 - STAGE = 1` for the strictly-below-diagonal off-diagonal key
-blocks `range(0, start_m·BLOCK_M)`, no causal mask; stage `2` for the diagonal
-block `range(start_m·BLOCK_M, (start_m+1)·BLOCK_M)` under the causal predicate)
-is **base-2** (`tl.math.exp2`) softmax with a **scalar** score scale `q_scale ·
-k_scale` (loaded once per program / per key block) and a **causal** mask. The
-inlined surface composes both staged calls into a single `range(0, N_CTX,
-BLOCK_N)` loop carrying `tl.where(offs_m[:, None] ≥ start_n + offs_n[None, :],
-qk, -1e6)` on every block (a no-op on off-diagonal stage-1 blocks; the stage-2
-mask on the diagonal block; zeroing on the never-visited above-diagonal blocks).
-So the genuine closed form is the predicate-masked base-2 per-key-scale attention
-`attentionRealBase2PerKeyScalePred` (`VeriTile/Triton/Math/Attention.lean`),
-instantiated with:
-
-* `keep := causalKeep qStart` — key `j` contributes to query row `i` iff
-  `j ≤ qStart + i` (the kernel's `offs_m ≥ start_n + offs_n` mask, with global
-  `qStart = start_m · BLOCK_M`). This single predicate captures the STAGE-3
-  two-stage key set: stage-1 off-diagonal keys (`j < start_m·128`, all kept) ∪
-  stage-2 diagonal keys (`start_m·128 ≤ j < (start_m+1)·128`, kept iff
-  `j ≤ qStart + i`) = exactly `{j : j ≤ qStart + i}`;
-* a per-key score scale carrier (the scalar `q_scale · k_scale`; here abstracted
-  as `keyScaleAFC`, an opaque `Fin S → ℝ`, since the kernel loads the
-  quantization scalars from memory rather than fixing them at a constant).
-
-This routes to **base-2** (matching the `exp2` kernel); the streaming bridge
-`attentionRealBase2PerKeyScalePred_eq_streaming` (sorry-free) delivers the
-`osStep` online-softmax fold the exec loop realizes. -/
-
-open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
-  causalKeep)
 
 /-- Base address of the `(off_z, off_h)` plane for the Python test shape
 (`stride_qz = 65536`, `stride_qh = 16384`, `H = 4`). Q, K, V, Out share it
@@ -901,6 +851,68 @@ theorem afc_advance_kscale_eval (s : BlockState) (name : RegName) (ptr : Tile .p
     evalOp (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] name) (Op.constNat 1)) s
       = some (Tile.ptrAdd Broadcast.nil ptr (Tile.scalar 1)) := by
   simp only [evalOp, evalOp_ref, evalOp_constNat, hptr, Option.bind_eq_bind, Option.bind_some]
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem attn_fwd_causal_final_store_python_test_shape_compute_correct
+    (Acc Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_causal_final_store_slice Acc Out
+        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
+  apply attn_fwd_causal_final_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
+
+/-! ## Genuine closed-form attention spec (exp2, causal)
+
+`attn_fwd_causal.py`'s `_attn_fwd` (Python `stage = 3`, two `_attn_fwd_inner`
+calls: stage `4 - STAGE = 1` for the strictly-below-diagonal off-diagonal key
+blocks `range(0, start_m·BLOCK_M)`, no causal mask; stage `2` for the diagonal
+block `range(start_m·BLOCK_M, (start_m+1)·BLOCK_M)` under the causal predicate)
+is **base-2** (`tl.math.exp2`) softmax with a **scalar** score scale `q_scale ·
+k_scale` (loaded once per program / per key block) and a **causal** mask. The
+inlined surface composes both staged calls into a single `range(0, N_CTX,
+BLOCK_N)` loop carrying `tl.where(offs_m[:, None] ≥ start_n + offs_n[None, :],
+qk, -1e6)` on every block (a no-op on off-diagonal stage-1 blocks; the stage-2
+mask on the diagonal block; zeroing on the never-visited above-diagonal blocks).
+So the genuine closed form is the predicate-masked base-2 per-key-scale attention
+`attentionRealBase2PerKeyScalePred` (`VeriTile/Triton/Math/Attention.lean`),
+instantiated with:
+
+* `keep := causalKeep qStart` — key `j` contributes to query row `i` iff
+  `j ≤ qStart + i` (the kernel's `offs_m ≥ start_n + offs_n` mask, with global
+  `qStart = start_m · BLOCK_M`). This single predicate captures the STAGE-3
+  two-stage key set: stage-1 off-diagonal keys (`j < start_m·128`, all kept) ∪
+  stage-2 diagonal keys (`start_m·128 ≤ j < (start_m+1)·128`, kept iff
+  `j ≤ qStart + i`) = exactly `{j : j ≤ qStart + i}`;
+* a per-key score scale carrier (the scalar `q_scale · k_scale`; here abstracted
+  as `keyScaleAFC`, an opaque `Fin S → ℝ`, since the kernel loads the
+  quantization scalars from memory rather than fixing them at a constant).
+
+This routes to **base-2** (matching the `exp2` kernel); the streaming bridge
+`attentionRealBase2PerKeyScalePred_eq_streaming` (sorry-free) delivers the
+`osStep` online-softmax fold the exec loop realizes. -/
+
+open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
+  causalKeep)
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
 

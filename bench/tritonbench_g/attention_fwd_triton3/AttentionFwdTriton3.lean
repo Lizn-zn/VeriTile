@@ -114,6 +114,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Full Lean port of `attention_fwd_triton3.py`'s `_attn_fwd`. -/
 def attention_fwd_triton3_surface
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
@@ -505,21 +509,6 @@ theorem attention_fwd_triton3_end_output_formula_python_test_shape_compute_corre
   subst kb
   rfl
 
-theorem attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
-    (MPre LPre M : RegionName) (off_hz : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
-        off_hz 128 64)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
-      (expected := fun i : Fin 64 =>
-        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
-  apply attention_fwd_triton3_end_m_formula_store_slice_compute_correct
-  intro a b h
-  simp [lRowOffset] at h
-  apply Fin.ext
-  omega
-
 theorem attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
     (Q K V M Out L : RegionName) :
     ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
@@ -702,86 +691,6 @@ theorem attention_fwd_triton3_python_end_output_formula_summary
         endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) := by
   exact attention_fwd_triton3_end_output_formula_python_test_shape_compute_correct
     Acc LPre Out s
-
-/-- Combined checked-shape summary for `test_forward` in `attention_fwd_triton3.py`.
-
-This pins all four Python branch launches (`sliding_window`, complement window,
-plain full-window, and `INIT=False`) and exposes the END epilogue arithmetic
-that mutates the observable `Out` and `M` tensors. -/
-theorem attention_fwd_triton3_python_test_shape_complete_summary
-    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat)
-    (s : BlockState) :
-    ((∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
-      ).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
-      ).toAlgorithm? = Except.ok alg)) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
-        Out 4 128 64 32768 8192 64 1 32768 8192 64 1 128 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
-        off_hz 128 64)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
-      (expected := fun i : Fin 64 =>
-        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
-  constructor
-  · constructor
-    · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
-        Q K V M Out L
-    constructor
-    · exact attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
-        Q K V M Out L
-    constructor
-    · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
-        Q K V M Out L
-    · exact attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
-        Q K V M Out L
-  constructor
-  · exact attention_fwd_triton3_python_end_output_formula_summary Acc LPre Out s
-  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
-      MPre LPre M off_hz s
-
-/-! ## Genuine closed-form attention spec for cases 1/2/3
-
-The `producedAttentionFwdTriton3CaseN{Out,M}Value` definitions above are the
-single-program *surface* values (`exec … |> readMem`). The genuine, non-self-
-referential closed form for the `END=True` normalized output `acc / l_i` is the
-predicate-masked base-2 per-key-scale attention `attentionRealBase2PerKeyScalePred`
-(STAGE 1, `VeriTile/Triton/Math/Attention.lean`), instantiated at the kernel's
-block-ptr tile layout and per-case sliding-window `keep` predicate:
-
-* case 1 (`SLIDING_WINDOW`, non-complement) → `slidingWindowKeep qStart 0 64`,
-* case 2 (`COMPLEMENT_SLIDING_WINDOW`)       → `complementSlidingWindowKeep qStart 0 64`,
-* case 3 (no window)                          → `noWindowKeep` (= unmasked softmax).
-
-These definitions and their streaming bridges are sorry-free. Linking the
-kernel's `producedAttentionFwdTriton3CaseN OutValue` to these closed forms is the
-remaining exec-side realization (per-statement block-ptr/where/exp2 recipes +
-`attnInvariant`/`preLoop`/`attn_step`/`postLoop` over `forRangeDyn_inv`, as in
-`VeriTile/Examples/AttentionForwardClosedForm.lean`). -/
-
-open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
-  slidingWindowKeep complementSlidingWindowKeep noWindowKeep pow2)
 
 /-- Base address of the `(off_z, off_h)` plane for the Python test shape
 (strides `qz = 32768`, `qh = 8192`, `H = 4`). Q and Out share this plane; K and V
@@ -4980,7 +4889,6 @@ theorem aft3LoopBodyG_steps (sin : BlockState) (SM SN off size : Nat)
       BlockState.setReg_same]
 
 
-
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **General loop-body execution chain (case 2, complement).** -/
@@ -8630,5 +8538,108 @@ theorem attention_fwd_triton3_python_case2_output_summary
       funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep2_eq_G]
     rw [hexp]; exact hM
 
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+    (MPre LPre M : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  apply attention_fwd_triton3_end_m_formula_store_slice_compute_correct
+  intro a b h
+  simp [lRowOffset] at h
+  apply Fin.ext
+  omega
+
+/-- Combined checked-shape summary for `test_forward` in `attention_fwd_triton3.py`.
+
+This pins all four Python branch launches (`sliding_window`, complement window,
+plain full-window, and `INIT=False`) and exposes the END epilogue arithmetic
+that mutates the observable `Out` and `M` tensors. -/
+theorem attention_fwd_triton3_python_test_shape_complete_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat)
+    (s : BlockState) :
+    ((∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
+      ).toAlgorithm? = Except.ok alg)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
+        Out 4 128 64 32768 8192 64 1 32768 8192 64 1 128 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · constructor
+    · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
+        Q K V M Out L
+    constructor
+    · exact attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
+        Q K V M Out L
+    constructor
+    · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
+        Q K V M Out L
+    · exact attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
+        Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_python_end_output_formula_summary Acc LPre Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
+
+/-! ## Genuine closed-form attention spec for cases 1/2/3
+
+The `producedAttentionFwdTriton3CaseN{Out,M}Value` definitions above are the
+single-program *surface* values (`exec … |> readMem`). The genuine, non-self-
+referential closed form for the `END=True` normalized output `acc / l_i` is the
+predicate-masked base-2 per-key-scale attention `attentionRealBase2PerKeyScalePred`
+(STAGE 1, `VeriTile/Triton/Math/Attention.lean`), instantiated at the kernel's
+block-ptr tile layout and per-case sliding-window `keep` predicate:
+
+* case 1 (`SLIDING_WINDOW`, non-complement) → `slidingWindowKeep qStart 0 64`,
+* case 2 (`COMPLEMENT_SLIDING_WINDOW`)       → `complementSlidingWindowKeep qStart 0 64`,
+* case 3 (no window)                          → `noWindowKeep` (= unmasked softmax).
+
+These definitions and their streaming bridges are sorry-free. Linking the
+kernel's `producedAttentionFwdTriton3CaseN OutValue` to these closed forms is the
+remaining exec-side realization (per-statement block-ptr/where/exp2 recipes +
+`attnInvariant`/`preLoop`/`attn_step`/`postLoop` over `forRangeDyn_inv`, as in
+`VeriTile/Examples/AttentionForwardClosedForm.lean`). -/
+
+open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
+  slidingWindowKeep complementSlidingWindowKeep noWindowKeep pow2)
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3

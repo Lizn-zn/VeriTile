@@ -65,6 +65,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful DSL port of `context_attn_nopad.py`'s `_fwd_kernel`. -/
 def context_attn_nopad_fwd_kernel_surface
     (Q K V : RegionName) (sm_scale : ℝ)
@@ -950,45 +954,6 @@ theorem context_attn_nopad_final_store_slice_compute_correct
 The checked Python tests use `H = 6`, `N_CTX = 1024`, and `D_HEAD = 128`
 with contiguous output row/head/dimension strides `(768, 128, 1)`. The launcher
 uses `BLOCK_M = BLOCK_N = 128` and `BLOCK_DMODEL = 128`. -/
-
-theorem context_attn_nopad_python_test_shape_offset_injective
-    (s : BlockState) (B_Start_Loc : RegionName) :
-    Function.Injective
-      (fun idx : TileIndex [128, 128] =>
-        outOffset s B_Start_Loc 768 128 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, startLoc, mIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem context_attn_nopad_final_store_python_test_shape_compute_correct
-    (Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_nopad_final_store_slice Acc B_Start_Loc B_Seqlen
-        Out 786432 128 768 1 768 128 1 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
-  exact context_attn_nopad_final_store_slice_compute_correct Acc B_Start_Loc
-    B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
-    (context_attn_nopad_python_test_shape_offset_injective s B_Start_Loc)
-
-/-! ## Genuine exec assembly (mirrors triton_attention #308 structure)
-
-The streaming loop is decoded statement-by-statement and bound to the banked
-`osNormStepBot` online-normalized recurrence. Unlike triton_attention (block
-pointers, single diagonal block, `boundary_check`), `context_attn_nopad` uses
-explicit 3D-packed pointer arithmetic, a true `float("-inf")` causal `where`
-sentinel, natural `tl.exp`, and an *in-loop* normalize (`p_scale`/`acc_scale`),
-so `acc` already holds the normalized ratio at every block (no post-loop divide).
-The loop runs `block_mask·(start_m+1)·128` keys = `start_m+1` blocks. -/
 
 /-- The 19 lowered preLoop statements of the Python-shape `context_attn_nopad`
 forward body (program ids, the loaded seq-len/start-loc scalars, the index
@@ -3936,66 +3901,6 @@ theorem nopad_exec
   -- genuine value transports s0 → s (pure memory function; mem/pids agree)
   exact ctxNopadGenuineOutValue_eq_of_mem_pids s0 s Q K V B_Start_Loc.cast B_Seqlen.cast hmem0 hpids0 idx
 
-/-- Public Python test-shape summary for `context_attn_nopad.py`.
-
-The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`
-loop + masked store) *realizes* the genuine causal-softmax closed form
-`ctxNopadGenuineOutValue` — the boundary-masked causal-softmax fold of the loaded
-Q/K/V memory — at every active output lane (`gi = start_m·128 + i < cur_batch_seq_len`,
-`offs_d` folded into the slice). NOT a self-referential executed value: the streaming
-`m_i`/`l_i`/`acc` recurrence is decoded statement-by-statement and proven to collapse
-to the closed form. The compute-correct claim is at the checked contiguous layout
-(`H=6`, `D_HEAD=128`, `BLOCK_M=BLOCK_N=BLOCK_DMODEL=128`, strides `768,128,1`). -/
-theorem context_attn_nopad_python_test_shape_output_summary
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        ctxNopadGenuineOutValue s Q K V B_Start_Loc B_Seqlen idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [context_attn_nopad_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  obtain ⟨sF, hstep, hOut⟩ := nopad_exec Q K V B_Start_Loc B_Seqlen Out s hundef
-  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  simp only [ComputeCorrect.OutputReadable.read_real]
-  exact hOut idx hActive
-
-/-! ## General (dimension-parameterized) closed-form correctness
-
-The pinned development above fixes `BLOCK_M = BLOCK_N = BLOCK_DMODEL = 128` and the
-Python test-shape contiguous strides `768 = H·D, 128 = D, 1`. This section
-generalizes the *entire* faithful stack to genuine dimension-parameterized
-correctness over:
-
-* `BLK` — the streamed block size (`BLOCK_M = BLOCK_N`, the kernel's `tl.zeros([BLOCK_M])`
-  axis used for both the query-row block and the key block, hence coupled);
-* `DM` — the head/channel dimension (`BLOCK_DMODEL`, kept fully independent);
-* `H`  — the number of heads, giving the contiguous row stride `H·DM`.
-
-The contiguous layout `(stride_*bs, stride_*h, stride_*d) = (H·DM, DM, 1)` is the
-genuine no-padding `[N, H, D]` packing (`768 = 6·128`, `128`, `1` at the test
-shape). Instantiating `BLK = DM = 128`, `H = 6` recovers the pinned theorems.
-
-Side conditions: `0 < BLK`, `0 < DM`, `0 < H` (all needed by the kernel's tile
-construction / nonempty reductions); the contiguous-layout strides as above.
-No hardcoded `128`/`768` appears in any general signature. -/
-
-section General
-
 /-- General coordinate-faithful query tile: row `i` is the global packed row
 `B_Start_Loc[cur_batch] + start_m·BLK + i`, channel `e`, contiguous strides
 `(rs, hs, 1)` (= `(H·DM, DM, 1)`). -/
@@ -6506,6 +6411,111 @@ instance activeGDecidable (s : BlockState) (B_Seqlen : RegionName) (BLK DM : Nat
     (idx : TileIndex [BLK, DM]) : Decidable (activeG s B_Seqlen BLK idx) := by
   unfold activeG; infer_instance
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem context_attn_nopad_python_test_shape_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s B_Start_Loc 768 128 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_nopad_final_store_python_test_shape_compute_correct
+    (Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_nopad_final_store_slice Acc B_Start_Loc B_Seqlen
+        Out 786432 128 768 1 768 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
+  exact context_attn_nopad_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
+    (context_attn_nopad_python_test_shape_offset_injective s B_Start_Loc)
+
+/-! ## Genuine exec assembly (mirrors triton_attention #308 structure)
+
+The streaming loop is decoded statement-by-statement and bound to the banked
+`osNormStepBot` online-normalized recurrence. Unlike triton_attention (block
+pointers, single diagonal block, `boundary_check`), `context_attn_nopad` uses
+explicit 3D-packed pointer arithmetic, a true `float("-inf")` causal `where`
+sentinel, natural `tl.exp`, and an *in-loop* normalize (`p_scale`/`acc_scale`),
+so `acc` already holds the normalized ratio at every block (no post-loop divide).
+The loop runs `block_mask·(start_m+1)·128` keys = `start_m+1` blocks. -/
+
+/-- Public Python test-shape summary for `context_attn_nopad.py`.
+
+The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`
+loop + masked store) *realizes* the genuine causal-softmax closed form
+`ctxNopadGenuineOutValue` — the boundary-masked causal-softmax fold of the loaded
+Q/K/V memory — at every active output lane (`gi = start_m·128 + i < cur_batch_seq_len`,
+`offs_d` folded into the slice). NOT a self-referential executed value: the streaming
+`m_i`/`l_i`/`acc` recurrence is decoded statement-by-statement and proven to collapse
+to the closed form. The compute-correct claim is at the checked contiguous layout
+(`H=6`, `D_HEAD=128`, `BLOCK_M=BLOCK_N=BLOCK_DMODEL=128`, strides `768,128,1`). -/
+theorem context_attn_nopad_python_test_shape_output_summary
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        ctxNopadGenuineOutValue s Q K V B_Start_Loc B_Seqlen idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_nopad_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  obtain ⟨sF, hstep, hOut⟩ := nopad_exec Q K V B_Start_Loc B_Seqlen Out s hundef
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact hOut idx hActive
+
+/-! ## General (dimension-parameterized) closed-form correctness
+
+The pinned development above fixes `BLOCK_M = BLOCK_N = BLOCK_DMODEL = 128` and the
+Python test-shape contiguous strides `768 = H·D, 128 = D, 1`. This section
+generalizes the *entire* faithful stack to genuine dimension-parameterized
+correctness over:
+
+* `BLK` — the streamed block size (`BLOCK_M = BLOCK_N`, the kernel's `tl.zeros([BLOCK_M])`
+  axis used for both the query-row block and the key block, hence coupled);
+* `DM` — the head/channel dimension (`BLOCK_DMODEL`, kept fully independent);
+* `H`  — the number of heads, giving the contiguous row stride `H·DM`.
+
+The contiguous layout `(stride_*bs, stride_*h, stride_*d) = (H·DM, DM, 1)` is the
+genuine no-padding `[N, H, D]` packing (`768 = 6·128`, `128`, `1` at the test
+shape). Instantiating `BLK = DM = 128`, `H = 6` recovers the pinned theorems.
+
+Side conditions: `0 < BLK`, `0 < DM`, `0 < H` (all needed by the kernel's tile
+construction / nonempty reductions); the contiguous-layout strides as above.
+No hardcoded `128`/`768` appears in any general signature. -/
+
+section General
+
 /-- **General Public summary for `context_attn_nopad.py`.**
 
 The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`
@@ -6548,5 +6558,7 @@ theorem context_attn_nopad_python_test_shape_output_summary_general
   exact hOut idx hActive
 
 end General
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad

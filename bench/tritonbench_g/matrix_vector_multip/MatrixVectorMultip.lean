@@ -57,6 +57,10 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `matrix_vector_multip.py`'s `mv_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
@@ -354,6 +358,12 @@ theorem mv_kernel_python_case3_output_summary
   · exact mv_kernel_python_case3_one_block_compute_correct A B C
       BLOCK_N BLOCK_M s
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 /-- Combined checked-shape summary for `matrix_vector_multip.py`. -/
 theorem mv_kernel_python_test_shape_complete_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
@@ -362,4 +372,6 @@ theorem mv_kernel_python_test_shape_complete_summary
   constructor
   · exact mv_kernel_python_case2_output_summary A B C BLOCK_N BLOCK_M s
   · exact mv_kernel_python_case3_output_summary A B C BLOCK_N BLOCK_M s
+end TestShape
+
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip

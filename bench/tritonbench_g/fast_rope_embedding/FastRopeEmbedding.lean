@@ -53,6 +53,10 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
 
 The body preserves the fixed four-head group loop, the `BACKWARD_PASS` case,
@@ -364,6 +368,12 @@ theorem rope_embedding_q_second_half_compute_correct
     s s' hOutInj hExec i
   simpa [hActive] using h
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 theorem rope_embedding_python_test_shape_first_offset_injective
     (s : BlockState) :
     Function.Injective (fun i : Fin 8 => qFirstOffset s 128 16 i) := by
@@ -527,5 +537,7 @@ abbrev rope_embedding_python_test_shape_output_summary
     (sQ sK : BlockState) :=
   rope_embedding_python_test_shape_surface_output_summary
     Q K QGrad KGrad cos sin sQ sK
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.FastRopeEmbedding

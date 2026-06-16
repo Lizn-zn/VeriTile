@@ -91,6 +91,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `chunk_gate_recurrence.py`'s `_fwd_recurrence`.
 
 The optional `last_kv` argument is represented by `HAS_LAST_KV`. The backward
@@ -1284,25 +1288,6 @@ theorem chunk_gate_recurrence_initial_zero_python_test_shape_compute_correct
   subst bv
   rfl
 
-theorem chunk_gate_recurrence_forward_step_python_test_shape_compute_correct
-    (AccPrev S D O : RegionName) (t_rel : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gate_recurrence_forward_step_store_slice AccPrev S D O
-        t_rel 64 64 64 64 16)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 16] =>
-        some (O, forwardStepTileOffset s (t_rel + 1) 64 64 64 64 16 idx))
-      (expected := fun idx =>
-        forwardStepSpec s AccPrev S D t_rel 64 64 64 64 16 idx) := by
-  apply chunk_gate_recurrence_forward_step_store_slice_compute_correct
-  rintro ⟨⟨ak, hak⟩, ⟨av, hav⟩, _⟩ ⟨⟨bk, hbk⟩, ⟨bv, hbv⟩, _⟩ h
-  simp [forwardStepTileOffset, kIndex, vIndex] at h
-  have hk : ak = bk := by omega
-  have hv : av = bv := by omega
-  subst bk
-  subst bv
-  rfl
-
 theorem chunk_gate_recurrence_bwd_dacc_step_DI_python_test_shape_compute_correct
     (DaccPrev DS D DI : RegionName) (t_rel : Nat) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -1333,35 +1318,6 @@ theorem chunk_gate_recurrence_bwd_dg_step_python_test_shape_compute_correct
         bwdDGStepSpec s DaccPrev DS S D t_rel 64 64 64 64 16) := by
   exact chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct
     DaccPrev DS S D DG t_rel 64 1 4 64 64 64 16 s
-
-theorem chunk_gate_recurrence_bwd_DI_python_test_shape_compute_correct
-    (DaccPre DI : RegionName) (t_rel : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gate_recurrence_bwd_DI_store_slice DaccPre DI
-        t_rel 64 64 64 64 16)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 16] =>
-        some (DI, timeTileOffset s t_rel 64 64 64 64 16 idx))
-      (expected := fun idx : TileIndex [64, 16] =>
-        bwdDIStoreSpec s DaccPre t_rel 64 64 64 64 16 idx) := by
-  apply chunk_gate_recurrence_bwd_DI_store_slice_compute_correct
-  rintro ⟨⟨ak, hak⟩, ⟨av, hav⟩, _⟩ ⟨⟨bk, hbk⟩, ⟨bv, hbv⟩, _⟩ h
-  simp [timeTileOffset, kIndex, vIndex] at h
-  have hk : ak = bk := by omega
-  have hv : av = bv := by omega
-  subst bk
-  subst bv
-  rfl
-
-theorem chunk_gate_recurrence_bwd_DG_python_test_shape_compute_correct
-    (DGPre DG : RegionName) (t_rel : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gate_recurrence_bwd_DG_store_slice DGPre DG t_rel 64 1 4)
-      (initialState := s)
-      (write := fun _ : PUnit => some (DG, bwdDGOffset s t_rel 64 1 4))
-      (expected := fun _ => bwdDGStoreSpec s DGPre t_rel 64 1 4) := by
-  exact chunk_gate_recurrence_bwd_DG_store_slice_compute_correct DGPre DG
-    t_rel 64 1 4 s
 
 theorem chunk_gate_recurrence_bwd_DL_python_test_shape_compute_correct
     (DaccPre DL : RegionName) (s : BlockState) :
@@ -1536,6 +1492,60 @@ theorem chunk_gate_recurrence_python_test_bwd_surface_toAlgorithm_supported
           8 64 64 64 64 16).toAlgKernel := by
   exact chunk_gate_recurrence_bwd_surface_toAlgorithm_supported S D DI DG DL DS
     8 64 64 64 64 16
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem chunk_gate_recurrence_forward_step_python_test_shape_compute_correct
+    (AccPrev S D O : RegionName) (t_rel : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_forward_step_store_slice AccPrev S D O
+        t_rel 64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (O, forwardStepTileOffset s (t_rel + 1) 64 64 64 64 16 idx))
+      (expected := fun idx =>
+        forwardStepSpec s AccPrev S D t_rel 64 64 64 64 16 idx) := by
+  apply chunk_gate_recurrence_forward_step_store_slice_compute_correct
+  rintro ⟨⟨ak, hak⟩, ⟨av, hav⟩, _⟩ ⟨⟨bk, hbk⟩, ⟨bv, hbv⟩, _⟩ h
+  simp [forwardStepTileOffset, kIndex, vIndex] at h
+  have hk : ak = bk := by omega
+  have hv : av = bv := by omega
+  subst bk
+  subst bv
+  rfl
+
+theorem chunk_gate_recurrence_bwd_DI_python_test_shape_compute_correct
+    (DaccPre DI : RegionName) (t_rel : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_DI_store_slice DaccPre DI
+        t_rel 64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (DI, timeTileOffset s t_rel 64 64 64 64 16 idx))
+      (expected := fun idx : TileIndex [64, 16] =>
+        bwdDIStoreSpec s DaccPre t_rel 64 64 64 64 16 idx) := by
+  apply chunk_gate_recurrence_bwd_DI_store_slice_compute_correct
+  rintro ⟨⟨ak, hak⟩, ⟨av, hav⟩, _⟩ ⟨⟨bk, hbk⟩, ⟨bv, hbv⟩, _⟩ h
+  simp [timeTileOffset, kIndex, vIndex] at h
+  have hk : ak = bk := by omega
+  have hv : av = bv := by omega
+  subst bk
+  subst bv
+  rfl
+
+theorem chunk_gate_recurrence_bwd_DG_python_test_shape_compute_correct
+    (DGPre DG : RegionName) (t_rel : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_DG_store_slice DGPre DG t_rel 64 1 4)
+      (initialState := s)
+      (write := fun _ : PUnit => some (DG, bwdDGOffset s t_rel 64 1 4))
+      (expected := fun _ => bwdDGStoreSpec s DGPre t_rel 64 1 4) := by
+  exact chunk_gate_recurrence_bwd_DG_store_slice_compute_correct DGPre DG
+    t_rel 64 1 4 s
 
 /-- **Genuine Python test-shape forward coverage** for chunk gate recurrence.
 Every observable forward writeback realizes the genuine closed form `fwdClosed`
@@ -1753,5 +1763,7 @@ abbrev chunk_gate_recurrence_backward_python_test_shape_output_summary
     (s : BlockState) :=
   chunk_gate_recurrence_backward_python_test_shape_summary DaccPrev DaccPre DS S D
     DI DG DL t_rel s
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ChunkGateRecurrence

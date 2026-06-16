@@ -72,6 +72,10 @@ set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
 
 The Python wrapper asserts that `M`, `N`, and `K` are divisible by their block
@@ -1561,6 +1565,12 @@ theorem batched_vecmat_closed_form_correct
 `test_vecmat` runs `M = N = K = 128`, `block_m = 16`, `block_n = 32`,
 `block_k = 64`, so `numKBlocks = 128 / 64 = 2`. -/
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 /-- Output-offset injectivity for the checked `16 × 32` tile shape. -/
 theorem batched_vecmat_python_test_shape_offset_injective (s : BlockState) :
     Function.Injective (vecmatOutOffset s 128 16 32) := by
@@ -1592,5 +1602,7 @@ theorem batched_vecmat_python_test_shape_output_summary
     (by norm_num) (by norm_num) (by norm_num)
     (batched_vecmat_python_test_shape_offset_injective s) hundef
   simpa using h
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult

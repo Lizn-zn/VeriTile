@@ -56,6 +56,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `fused_rotary_embedding.py`'s
 `decoding_fused_rotary_embedding_kernel`.
 
@@ -1741,6 +1745,336 @@ and the default 4D K/V cache layout in its first case. The wrappers below pin
 those strides and expose the Q/K rotary writes plus guarded K/V cache writes
 for that concrete Python shape. -/
 
+/-- **General all-outputs correctness (genuine closed form).** Fully
+dimension-parameterized over all Q/K/cos/sin/cache strides, the rotary half
+width `HALF_DIM`, the V head dim `HEAD_DIM`, the cache split width `x`, and
+`KV_GROUP_NUM`: the unconditional Q rotary writebacks, the K rotary writebacks,
+and the `handle_kv`-guarded paged K/V cache stores (driven by `context_lengths`
+/ `BLOCK_TABLES` metadata) all realize their genuine rotary closed forms reading
+input memory. No hardcoded `512`/`64`/`32`/`2`/`4`/`16` literals — every stride
+and dimension is a free `Nat` parameter, with only the per-region store-offset
+injectivity hypotheses as side conditions. -/
+theorem decoding_fused_rotary_embedding_all_outputs_compute_correct_general
+    (q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
+      context_lengths : RegionName)
+    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride x kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
+      bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM : Nat)
+    (s : BlockState)
+    (hQ1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        qFirstOffset s q_token_stride q_head_stride head_dim_stride i))
+    (hQ2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i))
+    (hK1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
+    (hK2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+    (hKC1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride bts_stride btb_stride block_size i))
+    (hKC2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride bts_stride btb_stride block_size HALF_DIM i))
+    (hVCInj : Function.Injective
+      (fun i : Fin HEAD_DIM =>
+        decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths KV_GROUP_NUM
+          vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+          block_size i)) :
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
+        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin HALF_DIM => True)
+        (fun i => (q, qFirstOffset s q_token_stride q_head_stride head_dim_stride i)))
+      (expected := fun i =>
+        qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
+        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin HALF_DIM => True)
+        (fun i => (q,
+          qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i)))
+      (expected := fun i =>
+        qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := fun i : Fin HALF_DIM => some (k,
+        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
+      (expected := fun i =>
+        kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := fun i : Fin HALF_DIM => some (k,
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+      (expected := fun i =>
+        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
+          OutK0Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+            block_size)
+          (decodingOffsetsInLastBlock s context_lengths block_size)
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (k_cache,
+          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+            kcd_stride bts_stride btb_stride block_size i)))
+      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
+          OutK1Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+            block_size)
+          (decodingOffsetsInLastBlock s context_lengths block_size)
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (k_cache,
+          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+            kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
+      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
+        LoadedV v_cache
+        (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+          block_size)
+        (decodingOffsetsInLastBlock s context_lengths block_size)
+        KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HEAD_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (v_cache,
+          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride bts_stride
+            btb_stride block_size i)))
+      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact decoding_fused_rotary_embedding_q_first_half_compute_correct q cos sin
+      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM s hQ1Inj
+  · exact decoding_fused_rotary_embedding_q_second_half_compute_correct q cos sin
+      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM s hQ2Inj
+  · exact decoding_fused_rotary_embedding_k_first_half_compute_correct k cos sin
+      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM s hK1Inj
+  · exact decoding_fused_rotary_embedding_k_second_half_compute_correct k cos sin
+      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM s hK2Inj
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_first_half_guarded_store_slice_compute_correct
+        OutK0Pre k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x kcb_stride
+        kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride btb_stride
+        block_size HALF_DIM s hKC1Inj
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_second_half_guarded_store_slice_compute_correct
+        OutK1Pre k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x kcb_stride
+        kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride btb_stride
+        block_size HALF_DIM s hKC2Inj
+  · exact
+      decoding_fused_rotary_embedding_context_v_cache_guarded_store_slice_compute_correct
+        LoadedV v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM vcb_stride
+        vch_stride vcs_stride vcd_stride bts_stride btb_stride block_size
+        HEAD_DIM s hVCInj
+
+/-- **General top theorem (genuine closed form).** Dimension-general companion
+to `decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary`.
+Over symbolic strides/dims (`x`, all Q/K/cos/sin/cache strides, the rotary half
+width `HALF_DIM`, the V head dim `HEAD_DIM`, `block_size`, `KV_GROUP_NUM`): the
+faithful full kernel surface lowers to the algorithm layer, AND every output —
+Q/K rotary writebacks plus the `handle_kv`-guarded paged K/V cache stores driven
+by `context_lengths`/`BLOCK_TABLES` — realizes its genuine rotary closed form
+reading input memory. No hardcoded test-shape literals; the only side conditions
+are the per-region store-offset injectivity hypotheses. -/
+theorem decoding_fused_rotary_embedding_output_summary_general
+    (q k v cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
+      context_lengths : RegionName)
+    (BLOCK_TABLES_nat context_lengths_nat : Region .nat)
+    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride x kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
+      bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM : Nat)
+    (s : BlockState)
+    (hQ1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        qFirstOffset s q_token_stride q_head_stride head_dim_stride i))
+    (hQ2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i))
+    (hK1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
+    (hK2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+    (hKC1Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride bts_stride btb_stride block_size i))
+    (hKC2Inj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride bts_stride btb_stride block_size HALF_DIM i))
+    (hVCInj : Function.Injective
+      (fun i : Fin HEAD_DIM =>
+        decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths KV_GROUP_NUM
+          vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+          block_size i)) :
+    (∃ alg, (decoding_fused_rotary_embedding_kernel_surface q k v cos sin
+      k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
+      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
+      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
+      ).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
+        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin HALF_DIM => True)
+        (fun i => (q, qFirstOffset s q_token_stride q_head_stride head_dim_stride i)))
+      (expected := fun i =>
+        qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
+        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin HALF_DIM => True)
+        (fun i => (q,
+          qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i)))
+      (expected := fun i =>
+        qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := fun i : Fin HALF_DIM => some (k,
+        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
+      (expected := fun i =>
+        kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        HALF_DIM)
+      (initialState := s)
+      (write := fun i : Fin HALF_DIM => some (k,
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+      (expected := fun i =>
+        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
+          OutK0Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+            block_size)
+          (decodingOffsetsInLastBlock s context_lengths block_size)
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (k_cache,
+          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+            kcd_stride bts_stride btb_stride block_size i)))
+      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
+          OutK1Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+            block_size)
+          (decodingOffsetsInLastBlock s context_lengths block_size)
+          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+          kcd_stride HALF_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (k_cache,
+          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
+            kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
+      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
+        LoadedV v_cache
+        (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
+          block_size)
+        (decodingOffsetsInLastBlock s context_lengths block_size)
+        KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HEAD_DIM => handleKv s KV_GROUP_NUM)
+        (fun i => (v_cache,
+          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
+            KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride bts_stride
+            btb_stride block_size i)))
+      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
+  refine ⟨?_, ?_⟩
+  · exact decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
+      q k v cos sin k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
+      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
+      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
+  · exact decoding_fused_rotary_embedding_all_outputs_compute_correct_general
+      q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
+      context_lengths q_token_stride q_head_stride k_token_stride k_head_stride
+      head_dim_stride cos_token_stride cos_stride x kcb_stride kch_stride
+      kcsplit_x_stride kcs_stride kcd_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM
+      s hQ1Inj hQ2Inj hK1Inj hK2Inj hKC1Inj hKC2Inj hVCInj
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 theorem decoding_fused_rotary_embedding_q_first_half_python_test_shape_compute_correct
     (q cos sin : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -2328,328 +2662,6 @@ self-reference). The only side conditions are the genuinely-needed per-region
 store-offset injectivity hypotheses (the same ones the test-shape wrappers
 discharge by `omega` for their concrete strides). -/
 
-/-- **General all-outputs correctness (genuine closed form).** Fully
-dimension-parameterized over all Q/K/cos/sin/cache strides, the rotary half
-width `HALF_DIM`, the V head dim `HEAD_DIM`, the cache split width `x`, and
-`KV_GROUP_NUM`: the unconditional Q rotary writebacks, the K rotary writebacks,
-and the `handle_kv`-guarded paged K/V cache stores (driven by `context_lengths`
-/ `BLOCK_TABLES` metadata) all realize their genuine rotary closed forms reading
-input memory. No hardcoded `512`/`64`/`32`/`2`/`4`/`16` literals — every stride
-and dimension is a free `Nat` parameter, with only the per-region store-offset
-injectivity hypotheses as side conditions. -/
-theorem decoding_fused_rotary_embedding_all_outputs_compute_correct_general
-    (q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
-      context_lengths : RegionName)
-    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride x kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM : Nat)
-    (s : BlockState)
-    (hQ1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qFirstOffset s q_token_stride q_head_stride head_dim_stride i))
-    (hQ2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i))
-    (hK1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-    (hK2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-    (hKC1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size i))
-    (hKC2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size HALF_DIM i))
-    (hVCInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths KV_GROUP_NUM
-          vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
-          block_size i)) :
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q, qFirstOffset s q_token_stride q_head_stride head_dim_stride i)))
-      (expected := fun i =>
-        qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q,
-          qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i)))
-      (expected := fun i =>
-        qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-      (expected := fun i =>
-        kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-      (expected := fun i =>
-        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
-          OutK0Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size i)))
-      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
-          OutK1Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
-      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
-        LoadedV v_cache
-        (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-          block_size)
-        (decodingOffsetsInLastBlock s context_lengths block_size)
-        KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HEAD_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (v_cache,
-          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride bts_stride
-            btb_stride block_size i)))
-      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · exact decoding_fused_rotary_embedding_q_first_half_compute_correct q cos sin
-      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-      HALF_DIM s hQ1Inj
-  · exact decoding_fused_rotary_embedding_q_second_half_compute_correct q cos sin
-      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-      HALF_DIM s hQ2Inj
-  · exact decoding_fused_rotary_embedding_k_first_half_compute_correct k cos sin
-      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-      HALF_DIM s hK1Inj
-  · exact decoding_fused_rotary_embedding_k_second_half_compute_correct k cos sin
-      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-      HALF_DIM s hK2Inj
-  · exact
-      decoding_fused_rotary_embedding_context_k_cache_first_half_guarded_store_slice_compute_correct
-        OutK0Pre k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x kcb_stride
-        kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride btb_stride
-        block_size HALF_DIM s hKC1Inj
-  · exact
-      decoding_fused_rotary_embedding_context_k_cache_second_half_guarded_store_slice_compute_correct
-        OutK1Pre k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x kcb_stride
-        kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride btb_stride
-        block_size HALF_DIM s hKC2Inj
-  · exact
-      decoding_fused_rotary_embedding_context_v_cache_guarded_store_slice_compute_correct
-        LoadedV v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM vcb_stride
-        vch_stride vcs_stride vcd_stride bts_stride btb_stride block_size
-        HEAD_DIM s hVCInj
-
-/-- **General top theorem (genuine closed form).** Dimension-general companion
-to `decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary`.
-Over symbolic strides/dims (`x`, all Q/K/cos/sin/cache strides, the rotary half
-width `HALF_DIM`, the V head dim `HEAD_DIM`, `block_size`, `KV_GROUP_NUM`): the
-faithful full kernel surface lowers to the algorithm layer, AND every output —
-Q/K rotary writebacks plus the `handle_kv`-guarded paged K/V cache stores driven
-by `context_lengths`/`BLOCK_TABLES` — realizes its genuine rotary closed form
-reading input memory. No hardcoded test-shape literals; the only side conditions
-are the per-region store-offset injectivity hypotheses. -/
-theorem decoding_fused_rotary_embedding_output_summary_general
-    (q k v cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
-      context_lengths : RegionName)
-    (BLOCK_TABLES_nat context_lengths_nat : Region .nat)
-    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride x kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM : Nat)
-    (s : BlockState)
-    (hQ1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qFirstOffset s q_token_stride q_head_stride head_dim_stride i))
-    (hQ2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i))
-    (hK1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-    (hK2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-    (hKC1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size i))
-    (hKC2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size HALF_DIM i))
-    (hVCInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths KV_GROUP_NUM
-          vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
-          block_size i)) :
-    (∃ alg, (decoding_fused_rotary_embedding_kernel_surface q k v cos sin
-      k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
-      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
-      ).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q, qFirstOffset s q_token_stride q_head_stride head_dim_stride i)))
-      (expected := fun i =>
-        qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q,
-          qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i)))
-      (expected := fun i =>
-        qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-      (expected := fun i =>
-        kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-      (expected := fun i =>
-        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
-          OutK0Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size i)))
-      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
-          OutK1Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
-      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
-        LoadedV v_cache
-        (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-          block_size)
-        (decodingOffsetsInLastBlock s context_lengths block_size)
-        KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HEAD_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (v_cache,
-          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride bts_stride
-            btb_stride block_size i)))
-      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
-  refine ⟨?_, ?_⟩
-  · exact decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
-      q k v cos sin k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
-      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
-  · exact decoding_fused_rotary_embedding_all_outputs_compute_correct_general
-      q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
-      context_lengths q_token_stride q_head_stride k_token_stride k_head_stride
-      head_dim_stride cos_token_stride cos_stride x kcb_stride kch_stride
-      kcsplit_x_stride kcs_stride kcd_stride vcb_stride vch_stride vcs_stride
-      vcd_stride bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM
-      s hQ1Inj hQ2Inj hK1Inj hK2Inj hKC1Inj hKC2Inj hVCInj
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding

@@ -66,6 +66,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful DSL port of `context_attn_llama.py`'s `_fwd_kernel`. -/
 def context_attn_llama_fwd_kernel_surface
     (Q K V : RegionName) (sm_scale : ℝ) (Out : RegionName)
@@ -1761,8 +1765,6 @@ theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Ti
     NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
 
 
-
-
 /-! ## exec-assembly: per-statement eval recipes + preLoop/loopBody (Milestone 2) -/
 
 
@@ -2331,7 +2333,6 @@ theorem ctx_offv_gather_eval {BN D : Nat} (s : BlockState) (ckvh : Nat)
     Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
 
 
-
 /-- **General `kv_loc` masked nat-gather recipe**, gather strides free
 (`stride_req_b`/`stride_req_s`). Lane `j` reads `Req_to_tokens[stride_req_b·rqi +
 stride_req_s·(SN+j)]` when active (`SN+j < bel`), else `0`. -/
@@ -2676,7 +2677,6 @@ def ctxPostLoop (Out : RegionName) : List Stmt :=
             (Op.ref .nat [] "cur_batch_seq_len")))) ]
 
 
-
 /-- **Body decomposition.** The compiled Python-shape Llama context body splits as
 `ctxPreLoop ++ (forRangeDyn start_n 0 (block_mask·block_end_loc) 128 ctxLoopBody
 :: ctxPostLoop)`. Pure `List` identity (`rfl`). -/
@@ -2938,8 +2938,6 @@ theorem ctxLoopBody_steps (Q K V Req_to_tokens B_req_idx : RegionName) (sin : Bl
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
   · -- acc readback (peel m_i)
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
-
-
 
 
 /-! ## exec-assembly: streaming-loop step + postLoop + whole-kernel (Milestone 3) -/
@@ -3680,7 +3678,6 @@ The block math (`gStateBot`/`gStateBot_succ_explicit`/…) and all op-eval recip
 and tile bridges are BN/BM/D-parametric (shared with the 128 path). Only the
 shape-literal exec layer (the prologue/loop-body/epilogue `Stmt` lists, their
 readback invariant, and the whole-kernel assembly) is re-derived here at `[64,…]`. -/
-
 
 
 /-- The Tesla-shape streamed window: the first multiple of `BLOCK_N = 128` at/above
@@ -5085,7 +5082,6 @@ theorem context_attn_llama_exec_block64
       unfold BlockState.readMem; rw [hmem]
 
 
-
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_llama_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
@@ -5339,81 +5335,6 @@ theorem context_attn_llama_surface_python_block64_compute_correct
   rw [hb, ctxFwdGenuineOutValue64, ctxFwdWindow64, ctxFwdBel]
   norm_num
 
-/-- Public Python test-shape summary for `context_attn_llama.py`.
-
-This records the faithful full int8-KV `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches. For **both** the regular
-(non-Tesla, BLOCK_M = 128) path and the Tesla (BLOCK_M = 64) path, every active
-observable `Out` write holds the **genuine** boundary-masked causal-softmax closed
-form `contextAttnExactFoldM` of the loaded Q/K/V memory (`ctxFwdGenuineOutValue128`
-/ `ctxFwdGenuineOutValue64`), NOT the kernel's own executed readback: the
-self-referential proof gap is closed for both block shapes. -/
-theorem context_attn_llama_python_test_shape_output_summary
-    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len Out : RegionName)
-    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (context_attn_llama_fwd_kernel_surface Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      2048 128 1 2048 128 1 2048 128 1 2048 128 1
-      9048 1 1 16 128 128 128).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (context_attn_llama_fwd_kernel_surface Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      2048 128 1 2048 128 1 2048 128 1 2048 128 1
-      9048 1 1 16 128 64 128).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_llama_fwd_kernel_surface Q K V
-        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-        2048 128 1 2048 128 1 2048 128 1 2048 128 1
-        9048 1 1 16 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] =>
-          active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        ctxFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_llama_fwd_kernel_surface Q K V
-        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-        2048 128 1 2048 128 1 2048 128 1 2048 128 1
-        9048 1 1 16 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 128] =>
-          active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx)
-        (fun idx : TileIndex [64, 128] =>
-          (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 128] =>
-        ctxFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
-  constructor
-  · exact context_attn_llama_fwd_kernel_surface_toAlgorithm_supported Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      2048 128 1 2048 128 1 2048 128 1 2048 128 1
-      9048 1 1 16 128 128 128
-  constructor
-  · exact context_attn_llama_fwd_kernel_surface_toAlgorithm_supported Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      2048 128 1 2048 128 1 2048 128 1 2048 128 1
-      9048 1 1 16 128 64 128
-  constructor
-  · exact context_attn_llama_surface_python_block128_compute_correct Q K V Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
-  · exact context_attn_llama_surface_python_block64_compute_correct Q K V Out
-      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
-
-
-
-
-/-! ## General EXEC stack (dimension-parameterized) -/
-
 /-- General prologue (first 20 lowered statements), parameterized over strides/dims.
 Matches `ctxPreLoop` at `H=16`, `kv_group_num=1`,
 `BLOCK_M=BLOCK_N=BLOCK_DMODEL=128`, test strides. -/
@@ -5636,7 +5557,6 @@ theorem ctxBody_splitG (Q K V Out : RegionName)
                 stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
             :: ctxPostLoopG Out stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M) := by
   rfl
-
 
 
 /-- General block-`c` score sup over `Fin BLOCK_N`, matching `gRunningMax_succ`. -/
@@ -5904,7 +5824,6 @@ theorem ctxLoopBody_stepsG (Q K V Req_to_tokens : RegionName) (sm_scale : ℝ)
   · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
 
-
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **General PreLoop execution.** Mirror of `ctxPreLoop_eval` over symbolic
@@ -6150,7 +6069,6 @@ theorem ctxPreLoop_evalG
     (simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
      <;> try trivial)
-
 
 
 set_option maxHeartbeats 2400000 in
@@ -6475,7 +6393,6 @@ theorem ctx_attn_stepG
   · exact hwin
 
 
-
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **General `ctxPostLoop_evalG`: `acc /= l_i` + masked store reads off the
@@ -6647,7 +6564,6 @@ theorem ctxPostLoop_evalG
       unfold BlockState.readMem; rw [hs3, hs2, hs1]; simp only [BlockState.setReg_mem]
     rw [this]
     unfold BlockState.readMem; rw [hmem]
-
 
 
 /-- General kernel-decoded `block_end_loc = min(BM·start_m + BM + plen, seq_len + plen)`. -/
@@ -6932,6 +6848,85 @@ theorem context_attn_llama_surface_compute_correct_general
   rw [if_pos hActive] at hb
   rw [hb]
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+/-- Public Python test-shape summary for `context_attn_llama.py`.
+
+This records the faithful full int8-KV `_fwd_kernel` surface for the checked
+layout and both Python launcher block-size branches. For **both** the regular
+(non-Tesla, BLOCK_M = 128) path and the Tesla (BLOCK_M = 64) path, every active
+observable `Out` write holds the **genuine** boundary-masked causal-softmax closed
+form `contextAttnExactFoldM` of the loaded Q/K/V memory (`ctxFwdGenuineOutValue128`
+/ `ctxFwdGenuineOutValue64`), NOT the kernel's own executed readback: the
+self-referential proof gap is closed for both block shapes. -/
+theorem context_attn_llama_python_test_shape_output_summary
+    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len Out : RegionName)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (context_attn_llama_fwd_kernel_surface Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      2048 128 1 2048 128 1 2048 128 1 2048 128 1
+      9048 1 1 16 128 128 128).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (context_attn_llama_fwd_kernel_surface Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      2048 128 1 2048 128 1 2048 128 1 2048 128 1
+      9048 1 1 16 128 64 128).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := context_attn_llama_fwd_kernel_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        2048 128 1 2048 128 1 2048 128 1 2048 128 1
+        9048 1 1 16 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        ctxFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := context_attn_llama_fwd_kernel_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        2048 128 1 2048 128 1 2048 128 1 2048 128 1
+        9048 1 1 16 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        ctxFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
+  constructor
+  · exact context_attn_llama_fwd_kernel_surface_toAlgorithm_supported Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      2048 128 1 2048 128 1 2048 128 1 2048 128 1
+      9048 1 1 16 128 128 128
+  constructor
+  · exact context_attn_llama_fwd_kernel_surface_toAlgorithm_supported Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+      2048 128 1 2048 128 1 2048 128 1 2048 128 1
+      9048 1 1 16 128 64 128
+  constructor
+  · exact context_attn_llama_surface_python_block128_compute_correct Q K V Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
+  · exact context_attn_llama_surface_python_block64_compute_correct Q K V Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
+
+
+/-! ## General EXEC stack (dimension-parameterized) -/
+
 /-- **Public general Python-shape summary** for `context_attn_llama.py`. The faithful
 full LLaMA `_fwd_kernel` surface (with `Req_to_tokens` gather) lowers to the
 algorithm layer and is compute-correct against the genuine general fold
@@ -6978,5 +6973,7 @@ theorem context_attn_llama_python_test_shape_output_summary_general
     stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
     H BLOCK_DMODEL BLOCK_M BLOCK_N hD hBN s hOInj hundef
 
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ContextAttnLlama
