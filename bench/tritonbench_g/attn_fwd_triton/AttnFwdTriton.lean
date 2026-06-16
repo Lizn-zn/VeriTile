@@ -351,31 +351,6 @@ strides `(65536, 16384, 128, 1)`. -/
 
 end Correct
 
-section TestShape
-
-theorem attn_fwd_triton_final_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_final_store_slice Acc Out
-        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
-  apply attn_fwd_triton_final_store_slice_compute_correct
-  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
-  simp [outOffset, offZ, offH, mIndex, kIndex] at h
-  have hm : ma = mb := by omega
-  have hk : ka = kb := by omega
-  subst mb
-  subst kb
-  rfl
-
-end TestShape
-
 section Correct
 
 /-! ## Genuine closed-form attention spec (exp2, causal)
@@ -8306,83 +8281,6 @@ theorem attn_fwd_triton_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     exact hO idx hActive
-
-section TestShape
-
-/-- **Python test-shape summary for `attn_fwd_triton.py` (genuine closed form).**
-
-The Python wrapper fixes `STAGE = 3`; this summary combines the supported full
-surface with the observable `Out` writes, stated against the **genuine closed-form
-attention** `attnFwdTritonOutSpec` (masked base-2 per-key-scale causal softmax with
-`keyScale = aftKeyScale = q_scale · k_scale`). The two genuine side conditions are
-explicit: `aftScoreBound` (the kernel's `-1e6` `tl.where` mask sentinel never raises
-a row max above the true running max, i.e. every *kept* causal score is `≥ -1e6`)
-and the clean `undef ≡ 0` initial state.
-
-This is now a **corollary** of the dimension-general theorem
-`attn_fwd_triton_output_summary_general`, instantiated at the Python test shape
-(`Z = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
-`numKVBlocks = 2`, `HEAD_ACTIVE = 96`, `STAGE = 3`, contiguous strides
-`(65536, 16384, 128, 1)`). At those concrete args the general masked tiles, score
-carrier, and closed-form spec all reduce defeq to the pinned
-`attnFwdTritonOutSpec`/`aftKeyScale` layer, and the pinned causal-only `aftScoreBound`
-is exactly the (now causal-only) general `aftgScoreBoundG`. -/
-theorem attn_fwd_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Out : RegionName) (s : BlockState)
-    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 3)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
-  -- output-offset injectivity at the contiguous test-shape strides
-  have hOutInj : Function.Injective
-      (fun idx : TileIndex [128, 128] =>
-        outOffset s 4 65536 16384 128 1 128 idx) := by
-    rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-    simp only [outOffset, offZ, offH, mIndex, kIndex, Nat.mul_one] at h
-    have hm : ma = mb := by omega
-    have hd : da = db := by omega
-    subst mb; subst db; rfl
-  -- pinned causal-only `aftScoreBound` ⟹ (now causal-only) general `aftgScoreBoundG`
-  have hsbG : aftgScoreBoundG
-      (qTileAFT2mG s Q 65536 16384 4 128 128 128 128 96)
-      (kTileAFT2G s K 65536 16384 4 128 (64 * 2) 128)
-      (vTileAFT2mG s V 65536 16384 4 128 (64 * 2) 128 96)
-      (keyScaleAFT2G s QScale KScale 128 128 64 2) (qStartAFT2G s 128) := by
-    intro j i hjle
-    have h := hsb i j hjle
-    rw [aftBlockScore] at h
-    -- pinned tiles/keyScale are defeq to the general ones at the concrete test-shape
-    -- args; only the `0.0`/`0` literal differs, closed by `norm_num`
-    refine le_trans (le_of_eq (by norm_num)) h
-  -- instantiate the dimension-general theorem at the Python test shape
-  have hgen := attn_fwd_triton_output_summary_general Q K V QScale KScale Out s
-    65536 16384 4 128 128 128 64 128 96 3 2 2
-    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num)
-    hOutInj hundef hsbG
-  refine ⟨hgen.1, ?_⟩
-  -- the general `expected` (attnFwdTritonOutSpecG …) reduces defeq to the pinned
-  -- `attnFwdTritonOutSpec` at the concrete test-shape args
-  convert hgen.2 using 2 with idx
-
-end TestShape
 
 end General
 
