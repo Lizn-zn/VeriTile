@@ -74,6 +74,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+section Correct
+
 /-- Faithful DSL port of `attention_kernel_aligned.py`'s `_fwd_kernel_aligned`. -/
 def attention_kernel_aligned_fwd_kernel_aligned_surface
     (Q K V B0 Out : RegionName) (sm_scale : ℝ)
@@ -484,33 +486,6 @@ theorem attention_kernel_aligned_fwd_kernel_aligned_surface_compute_correct
   subst s0
   intro idx
   simp [producedOutputValue, hExec]
-
-/-! ## Python test-shape wrapper
-
-`attention_kernel_aligned.py`'s checked test uses `B = 2`, `H = 4`,
-`N_CTX = 128`, `D_MODEL = 64`, `BLOCK_M = 32`, and `BLOCK_N = 64`.
-Contiguous `[B, H, N_CTX, D_MODEL]` tensors are passed to the kernel with
-per-head strides `(8192, 64, 1)`. -/
-
-theorem attention_kernel_aligned_final_store_python_test_shape_compute_correct
-    (Acc L Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
-        8192 64 1 128 1 8192 64 1 32 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [32, 64] =>
-        some (Out, outOffset s 8192 64 1 32 idx))
-      (expected := fun idx : TileIndex [32, 64] =>
-        normalizedAccValue s Acc L 8192 64 1 128 1 32 idx) := by
-  apply attention_kernel_aligned_final_store_slice_compute_correct
-  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
-  simp [outOffset, mIndex, kIndex] at h
-  have hm : ma = mb := by omega
-  have hk : ka = kb := by omega
-  subst mb
-  subst kb
-  rfl
-
 
 /-! ## Genuine closed-form exec assembly (mirrors `attention_kernel` / PR #304)
 
@@ -3283,25 +3258,6 @@ theorem aligned_genuine_output_compute_correct_general
 
 end ClosedForm
 
-theorem attention_kernel_aligned_fwd_kernel_aligned_python_test_shape_compute_correct
-    (Q K V B0 Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
-        1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1
-        8192 128 2 4 128 0 64 128 64 32 64
-        FloatDType.fp16)
-      (initialState := s)
-      (write := fun idx : TileIndex [32, 64] =>
-        some (Out, surfaceOutOffset s 8192 64 1 32 idx))
-      (expected := fun idx : TileIndex [32, 64] =>
-        producedOutputValue s Q K V B0 Out 1.0 8192 64 1 8192 64 1
-          8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32
-          64 FloatDType.fp16 idx) := by
-  exact attention_kernel_aligned_fwd_kernel_aligned_surface_compute_correct
-    Q K V B0 Out 1.0 8192 64 1 8192 64 1 8192 64 1
-    8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-    FloatDType.fp16 s
-
 /-- **General public summary for `attention_kernel_aligned.py`
 (dimension-parameterized, NON-self-referential).**
 
@@ -3346,6 +3302,55 @@ theorem attention_kernel_aligned_python_test_shape_output_summary_general
       Q K V B0 Out s sm_scale stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB
       hKN hBM hHD hnB hundef
 
+end Correct
+
+section TestShape
+
+/-! ## Python test-shape wrapper
+
+`attention_kernel_aligned.py`'s checked test uses `B = 2`, `H = 4`,
+`N_CTX = 128`, `D_MODEL = 64`, `BLOCK_M = 32`, and `BLOCK_N = 64`.
+Contiguous `[B, H, N_CTX, D_MODEL]` tensors are passed to the kernel with
+per-head strides `(8192, 64, 1)`. -/
+
+theorem attention_kernel_aligned_final_store_python_test_shape_compute_correct
+    (Acc L Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
+        8192 64 1 128 1 8192 64 1 32 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 64] =>
+        some (Out, outOffset s 8192 64 1 32 idx))
+      (expected := fun idx : TileIndex [32, 64] =>
+        normalizedAccValue s Acc L 8192 64 1 128 1 32 idx) := by
+  apply attention_kernel_aligned_final_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
+
+theorem attention_kernel_aligned_fwd_kernel_aligned_python_test_shape_compute_correct
+    (Q K V B0 Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
+        1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1
+        8192 128 2 4 128 0 64 128 64 32 64
+        FloatDType.fp16)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 64] =>
+        some (Out, surfaceOutOffset s 8192 64 1 32 idx))
+      (expected := fun idx : TileIndex [32, 64] =>
+        producedOutputValue s Q K V B0 Out 1.0 8192 64 1 8192 64 1
+          8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32
+          64 FloatDType.fp16 idx) := by
+  exact attention_kernel_aligned_fwd_kernel_aligned_surface_compute_correct
+    Q K V B0 Out 1.0 8192 64 1 8192 64 1 8192 64 1
+    8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
+    FloatDType.fp16 s
+
 /-- **Public Python test-shape summary for `attention_kernel_aligned.py`
 (NON-self-referential).**
 
@@ -3387,5 +3392,7 @@ theorem attention_kernel_aligned_python_test_shape_output_summary
   exact attention_kernel_aligned_python_test_shape_output_summary_general
     Q K V B0 Out s 1.0 8192 8192 32 64 64 64 128 2
     (by norm_num) (by norm_num) (by norm_num) (by norm_num) hundef
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.AttentionKernelAligned
