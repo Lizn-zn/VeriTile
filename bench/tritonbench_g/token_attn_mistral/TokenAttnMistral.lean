@@ -26,10 +26,11 @@ covers every program of the grid.
 ## Proof architecture
 
 ```
-token_attn_mistral_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per Python test case)
-  ├─ token_attn_mistral_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
+token_attn_mistral_output_summary_general                     ← HEADLINE (symbolic dims / sliding_window / strides)
+  ├─ token_attn_mistral_surface_toAlgorithm_supported                  surface lowers to the algorithm layer
   └─ token_attn_mistral_closed_form_compute_correct                    full surface, final store = closed form
        └─ token_attn_mistral_closed_form_correct                       exec readback = tokenAttnMistralClosedForm
+token_attn_mistral_python_case{1,2,3,4}_output_summary        ← thin corollaries (one per Python test case)
             ├─ mistral_preLoop          14 prelude assigns → entry invariant (acc = partialAcc 0)
             ├─ mistral_loop_step        5-stmt body advances partialAcc by one BLOCK_N block (forRangeDyn_inv)
             └─ mistral_postLoop         cast + off_o + out_ptrs + unmasked store readback = closed form
@@ -42,7 +43,10 @@ token_attn_mistral_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
 modeled. Each per-case `output_summary` shows the surface kernel lowers to the
 algorithm layer AND the store to `Out` is compute-correct against a **genuine,
-self-reference-free closed form** `tokenAttnMistralClosedForm`: every lane `d` of
+self-reference-free closed form** `tokenAttnMistralClosedForm` (this is stated once
+in the dimension-general headline `token_attn_mistral_output_summary_general` over
+symbolic `BLOCK_DMODEL`/`BLOCK_N`/`sliding_window`/strides, with the four per-case
+theorems as thin corollaries): every lane `d` of
 the `[BLOCK_DMODEL]` output holds the sliding-window probability-weighted value
 sum `Σ_{n < cur_att_seq_len} p[n]·v[v_loc[n], d]` (with the `start_index` offset
 and `Req_to_tokens` gather folded in; out-of-window tokens masked to `0`). This is
@@ -63,7 +67,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `token_attn_mistral_python_case1_output_summary`, `token_attn_mistral_python_case2_output_summary`, `token_attn_mistral_python_case3_output_summary`, `token_attn_mistral_python_case4_output_summary` -/
+/-! **★ Main theorem:** `token_attn_mistral_output_summary_general` (dimension-general headline). Per-case corollaries: `token_attn_mistral_python_case1_output_summary`, `token_attn_mistral_python_case2_output_summary`, `token_attn_mistral_python_case3_output_summary`, `token_attn_mistral_python_case4_output_summary`. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1978,7 +1982,67 @@ abbrev token_attn_mistral_python_case4_store_summary
 
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-! ### ════════ ★ MAIN THEOREM ★ ════════
+
+**Dimension-general headline.** For *symbolic* output width `BLOCK_DMODEL`, block
+size `BLOCK_N`, sliding window `sliding_window`, and *all* strides, the full
+sliding-window reduce-V surface kernel (1) lowers to the algorithm layer, and (2)
+realizes the genuine, self-reference-free PV-reduction closed form
+`tokenAttnMistralClosedForm` (which incorporates `sliding_window` symbolically via
+`startIndex`/`vActive`) at every `[BLOCK_DMODEL]` output lane.
+
+Honest side-conditions only: `0 < BLOCK_DMODEL`, `0 < BLOCK_N`, the contiguous
+layout hyps `stride_pbs = 1` / `stride_req_to_tokens_s = 1` (faithful to the
+checked test's contiguous `Prob`/`Req_to_tokens`), output-offset injectivity
+`hOutInj`, and a clean `undef` state `hundef`. The four `python_case*` theorems
+below are thin corollaries instantiating the concrete (dims, sliding_window,
+stride_req_to_tokens_b). -/
+theorem token_attn_mistral_output_summary_general
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (hpbs : stride_pbs = 1) (hrts : stride_req_to_tokens_s = 1) (hBN : 0 < BLOCK_N)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    (∃ alg, (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+      stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+        stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        kv_group_num sliding_window BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (Out, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
+          B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+          stride_ph stride_pbs stride_vbs stride_vh stride_vd kv_group_num
+          sliding_window BLOCK_DMODEL i)) := by
+  refine ⟨?_, ?_⟩
+  · exact token_attn_mistral_surface_toAlgorithm_supported Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+      stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N
+  · exact token_attn_mistral_closed_form_compute_correct Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+      stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N hpbs hrts hBN s hundef hOutInj
+
+/-- **Python case 1** corollary of `token_attn_mistral_output_summary_general`:
+`batch = 2`, `seq_len = 128`, `num_heads = 4`, `d_model = 64`,
+`sliding_window = 64`, `stride_req_to_tokens_b = 128`. -/
 theorem token_attn_mistral_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -1996,18 +2060,14 @@ theorem token_attn_mistral_python_case1_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
-          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 64 64 i)) := by
-  constructor
-  · exact token_attn_mistral_python_case1_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-      B_Att_Start_Loc B_Att_Seqlen
-  · exact token_attn_mistral_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc
-      B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 64 128 rfl rfl (by norm_num)
-      s hundef (token_attn_mistral_python_test_shape_offset_injective s)
+          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 64 64 i)) :=
+  token_attn_mistral_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+    128 1 128 1 8192 64 1 256 64 1 1 64 64 128 rfl rfl (by norm_num)
+    s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- **Python case 2** corollary of `token_attn_mistral_output_summary_general`:
+as case 1 but `sliding_window = 32`. -/
 theorem token_attn_mistral_python_case2_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2025,18 +2085,14 @@ theorem token_attn_mistral_python_case2_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
-          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 32 64 i)) := by
-  constructor
-  · exact token_attn_mistral_python_case2_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-      B_Att_Start_Loc B_Att_Seqlen
-  · exact token_attn_mistral_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc
-      B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
-      s hundef (token_attn_mistral_python_test_shape_offset_injective s)
+          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 32 64 i)) :=
+  token_attn_mistral_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+    128 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
+    s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- **Python case 3** corollary of `token_attn_mistral_output_summary_general`:
+shortened `stride_req_to_tokens_b = 64` (`sliding_window = 32`). -/
 theorem token_attn_mistral_python_case3_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2054,18 +2110,14 @@ theorem token_attn_mistral_python_case3_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
-          B_Seqlen B_Att_Seqlen 64 1 128 1 8192 64 1 1 32 64 i)) := by
-  constructor
-  · exact token_attn_mistral_python_case3_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-      B_Att_Start_Loc B_Att_Seqlen
-  · exact token_attn_mistral_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc
-      B_Att_Seqlen 64 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
-      s hundef (token_attn_mistral_python_test_shape_offset_injective s)
+          B_Seqlen B_Att_Seqlen 64 1 128 1 8192 64 1 1 32 64 i)) :=
+  token_attn_mistral_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+    64 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
+    s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-- **Python case 4** corollary of `token_attn_mistral_output_summary_general`:
+the `batch = 4` variant (`sliding_window = 32`). -/
 theorem token_attn_mistral_python_case4_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
@@ -2083,15 +2135,11 @@ theorem token_attn_mistral_python_case4_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
-          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 32 64 i)) := by
-  constructor
-  · exact token_attn_mistral_python_case4_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-      B_Att_Start_Loc B_Att_Seqlen
-  · exact token_attn_mistral_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc
-      B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
-      s hundef (token_attn_mistral_python_test_shape_offset_injective s)
+          B_Seqlen B_Att_Seqlen 128 1 128 1 8192 64 1 1 32 64 i)) :=
+  token_attn_mistral_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
+    128 1 128 1 8192 64 1 256 64 1 1 32 64 128 rfl rfl (by norm_num)
+    s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
 end Correct
 
@@ -2102,3 +2150,4 @@ section TestShape
 end TestShape
 
 end VeriTile.Bench.TritonBenchG.TokenAttnMistral
+
