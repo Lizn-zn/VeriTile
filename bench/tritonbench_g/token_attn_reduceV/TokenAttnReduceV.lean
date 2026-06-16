@@ -25,19 +25,25 @@ here. Because the program ids `cur_batch`/`cur_head` are universally quantified
 ## Proof architecture
 
 ```
-token_attn_reducev_python_case{1,2,3}_output_summary        ← TOP THEOREMS (one per Python test case)
-  ├─ token_attn_reducev_python_case{i}_surface_toAlgorithm_supported   surface lowers
-  └─ token_attn_reducev_closed_form_compute_correct                    full surface, final store = closed form
-       └─ token_attn_reducev_closed_form_correct                       exec readback = tokenAttnReduceVClosedForm
+token_attn_reducev_output_summary_general                   ← ★ HEADLINE (dimension-general)
+  ├─ token_attn_reducev_surface_toAlgorithm_supported              surface lowers (any dims/strides)
+  └─ token_attn_reducev_closed_form_compute_correct               full surface, final store = closed form
+       └─ token_attn_reducev_closed_form_correct                  exec readback = tokenAttnReduceVClosedForm
             ├─ reducev_preLoop          13 prelude assigns → entry invariant (acc = partialAcc 0)
             ├─ reducev_loop_step        5-stmt body advances partialAcc by one BLOCK_N block (forRangeDyn_inv)
             └─ reducev_postLoop         cast + off_o + out_ptrs + unmasked store readback = closed form
+token_attn_reducev_python_case{1,2,3}_output_summary        ← thin corollaries (Python test shapes)
+  └─ token_attn_reducev_output_summary_general                     instantiated at BLOCK_DMODEL=64, BLOCK_N=128
 (supporting: token_attn_reducev_python_test_shape_offset_injective;
  algebra: partialAcc_block_succ / partialAcc_eq_PVValue; recipes: reducev_*_eval)
 ```
 
-The three `output_summary` theorems pin the kernel at the Python test shapes
-(`BLOCK_DMODEL = 64`, `BLOCK_N = 128`).
+The headline `token_attn_reducev_output_summary_general` is fully
+dimension-general (symbolic `BLOCK_DMODEL`, `BLOCK_N`, `kv_group_num`, and
+strides) under honest side-conditions (`0 < BLOCK_DMODEL`, `0 < BLOCK_N`,
+contiguous `stride_pbs = stride_req_to_tokens_s = 1`, output-offset injectivity,
+clean `undef`). The three `output_summary` corollaries instantiate it at the
+Python test shapes (`BLOCK_DMODEL = 64`, `BLOCK_N = 128`).
 
 ## Modeling boundary
 
@@ -56,10 +62,12 @@ prelude decode, the `reducev_loop_step` one-block accumulator advance driven
 through `forRangeDyn_inv`, and the `reducev_postLoop` unmasked-store readback —
 never by re-asserting the kernel's own executed value. This kernel has **no
 sliding window** (`cur_batch_start_index = 0`), so the loop range equals the mask
-window and a single `inWindow` predicate guards every masked load. The summaries
-are instantiated at the Python test-function shapes (all with `stride_pbs = 1`
-and `stride_req_to_tokens_s = 1`); other shapes are not covered by the top
-theorems.
+window and a single `inWindow` predicate guards every masked load. The headline
+`token_attn_reducev_output_summary_general` covers **all** shapes with symbolic
+`BLOCK_DMODEL`/`BLOCK_N`/`kv_group_num`/strides (under the honest contiguous-layout
+hypotheses `stride_pbs = 1` and `stride_req_to_tokens_s = 1`); the per-case
+`output_summary` theorems are thin corollaries instantiating it at the Python
+test-function shapes.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnReduceV
@@ -68,7 +76,9 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `token_attn_reducev_python_case1_output_summary`, `token_attn_reducev_python_case2_output_summary`, `token_attn_reducev_python_case3_output_summary` -/
+/-! **★ Main theorem:** `token_attn_reducev_output_summary_general` (dimension-general;
+the `token_attn_reducev_python_case{1,2,3}_output_summary` theorems are thin
+test-shape corollaries of it). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1669,7 +1679,73 @@ abbrev token_attn_reducev_python_case3_store_summary
 
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-! ### ════════ ★ MAIN THEOREM ★ ════════
+
+`token_attn_reducev_output_summary_general` is the headline: a **single
+dimension-general** statement over symbolic `(BLOCK_DMODEL, BLOCK_N)` and all
+strides. It bundles the surface→algorithm lowering with the genuine
+PV-reduction compute-correctness (`tokenAttnReduceVClosedForm`), under honest
+side-conditions only:
+
+* `0 < BLOCK_DMODEL`, `0 < BLOCK_N` — non-degenerate output / loop block;
+* `stride_pbs = 1`, `stride_req_to_tokens_s = 1` — the contiguous `Prob` /
+  `Req_to_tokens` layouts the kernel's per-lane address arithmetic genuinely
+  assumes;
+* `hOutInj` — output-offset injectivity (no aliasing across the store);
+* `hundef` — clean input (`undef = 0`).
+
+No shape-specific numeric cheats; `expected` is the self-reference-free closed
+form over input memory, never the kernel's executed value. The Python test
+cases below are thin corollaries instantiating this at `BLOCK_DMODEL = 64`,
+`BLOCK_N = 128` (the `stride_req_to_tokens_b ∈ {128, 64}` gather-stride does not
+enter the value spec, so all three collapse to the same instantiation up to
+that stride). -/
+theorem token_attn_reducev_output_summary_general
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num BLOCK_DMODEL BLOCK_N : Nat)
+    (hBD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (hpbs : stride_pbs = 1) (hrts : stride_req_to_tokens_s = 1)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    (∃ alg, (token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+      stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+        stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        kv_group_num BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (Out, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        tokenAttnReduceVClosedForm s Prob V Req_to_tokens B_req_idx
+          B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+          stride_pbs stride_vbs stride_vh stride_vd kv_group_num BLOCK_DMODEL i)) := by
+  refine ⟨?_, ?_⟩
+  · exact token_attn_reducev_surface_toAlgorithm_supported Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen stride_req_to_tokens_b
+      stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od kv_group_num BLOCK_DMODEL BLOCK_N
+  · exact token_attn_reducev_closed_form_compute_correct Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen stride_req_to_tokens_b
+      stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od kv_group_num BLOCK_DMODEL BLOCK_N hpbs hrts
+      hBN s hundef hOutInj
+
+
+/-! ### Python test-shape corollaries (thin instantiations of the general theorem)
+
+The three `python_case{1,2,3}_output_summary` theorems pin
+`BLOCK_DMODEL = 64`, `BLOCK_N = 128` and the checked output strides; they are
+recovered as direct instantiations of `token_attn_reducev_output_summary_general`
+above (cases 1/3 share `stride_req_to_tokens_b = 128`, case 2 uses `64`; that
+gather-stride does not enter the PV-reduction value spec). -/
 theorem token_attn_reducev_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1684,17 +1760,13 @@ theorem token_attn_reducev_python_case1_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnReduceVClosedForm s Prob V Req_to_tokens B_req_idx
-          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 1 64 i)) := by
-  constructor
-  · exact token_attn_reducev_python_case1_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-  · exact token_attn_reducev_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
-      256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
-      (token_attn_reducev_python_test_shape_offset_injective s)
+          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 1 64 i)) :=
+  token_attn_reducev_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128
+    (by norm_num) (by norm_num) rfl rfl s hundef
+    (token_attn_reducev_python_test_shape_offset_injective s)
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_reducev_python_case2_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1709,17 +1781,13 @@ theorem token_attn_reducev_python_case2_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnReduceVClosedForm s Prob V Req_to_tokens B_req_idx
-          B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 1 64 i)) := by
-  constructor
-  · exact token_attn_reducev_python_case2_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-  · exact token_attn_reducev_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1
-      256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
-      (token_attn_reducev_python_test_shape_offset_injective s)
+          B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 1 64 i)) :=
+  token_attn_reducev_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 256 64 1 1 64 128
+    (by norm_num) (by norm_num) rfl rfl s hundef
+    (token_attn_reducev_python_test_shape_offset_injective s)
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_reducev_python_case3_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1734,14 +1802,11 @@ theorem token_attn_reducev_python_case3_output_summary
       (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
       (expected := fun i : Fin 64 =>
         tokenAttnReduceVClosedForm s Prob V Req_to_tokens B_req_idx
-          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 1 64 i)) := by
-  constructor
-  · exact token_attn_reducev_python_case3_surface_toAlgorithm_supported
-      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
-  · exact token_attn_reducev_closed_form_compute_correct Prob V Out
-      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
-      256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
-      (token_attn_reducev_python_test_shape_offset_injective s)
+          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 1 64 i)) :=
+  token_attn_reducev_output_summary_general Prob V Out Req_to_tokens B_req_idx
+    B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128
+    (by norm_num) (by norm_num) rfl rfl s hundef
+    (token_attn_reducev_python_test_shape_offset_injective s)
 
 end Correct
 
