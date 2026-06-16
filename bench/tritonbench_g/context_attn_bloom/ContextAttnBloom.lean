@@ -63,7 +63,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `context_attn_bloom_python_test_shape_output_summary_general` -/
+/-! **★ Main theorem:** `context_attn_bloom_surface_compute_correct_general` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -7311,6 +7311,7 @@ theorem bloom_exec_general
 
 /-! ### General top theorems -/
 
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General surface compute-correctness** for `context_attn_bloom.py` over symbolic
 `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`head_dim`, the per-axis K/V/Q/O strides and the
 `Req_to_tokens` gather strides (`kv_group_num = 1`). Every active observable `Out`
@@ -7367,134 +7368,5 @@ theorem context_attn_bloom_surface_compute_correct_general
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-/-- Public Python test-shape summary for `context_attn_bloom.py`.
-
-This records the faithful full BLOOM `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches, with the observable final
-`Out` writes connected directly to the produced full-surface values. -/
-theorem context_attn_bloom_python_test_shape_output_summary
-    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
-      B_Prompt_Cache_Len Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V
-      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-      B_req_idx B_Prompt_Cache_Len
-      576 96 1 576 96 1 576 96 1 576 96 1
-      7500 1 1 96 128 128 128).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V
-      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-      B_req_idx B_Prompt_Cache_Len
-      576 96 1 576 96 1 576 96 1 576 96 1
-      7500 1 1 96 64 128 128).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
-        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-        B_req_idx B_Prompt_Cache_Len
-        576 96 1 576 96 1 576 96 1 576 96 1
-        7500 1 1 96 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] =>
-          active s B_Seqlen B_Prompt_Cache_Len 96 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bloomFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen Out
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
-        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-        B_req_idx B_Prompt_Cache_Len
-        576 96 1 576 96 1 576 96 1 576 96 1
-        7500 1 1 96 64 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 128] =>
-          active s B_Seqlen B_Prompt_Cache_Len 96 64 idx)
-        (fun idx : TileIndex [64, 128] =>
-          (Out, outOffset s B_Start_Loc 576 96 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 128] =>
-        bloomFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen Out
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
-  constructor
-  · exact context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported Q K V
-      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-      B_req_idx B_Prompt_Cache_Len 576 96 1 576 96 1 576 96 1 576 96 1
-      7500 1 1 96 128 128 128
-  constructor
-  · exact context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported Q K V
-      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
-      B_req_idx B_Prompt_Cache_Len 576 96 1 576 96 1 576 96 1 576 96 1
-      7500 1 1 96 64 128 128
-  constructor
-  · exact context_attn_bloom_surface_python_block128_compute_correct Q K V
-      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
-  · exact context_attn_bloom_surface_python_block64_compute_correct Q K V
-      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s hundef
-
-
-/-! ## General (`…G`) dimension-parameterized stack for context_attn_bloom
-
-The pinned proof above hardcodes `BLOCK_M ∈ {128,64}`, `BLOCK_N = BLOCK_DMODEL =
-128`, `head_dim = 96`, the per-axis K/V/Q strides `576/96/1`, and the gather
-strides `7500/1`. The `…G` family below abstracts those over `H`/`BLOCK_M`/
-`BLOCK_N`/`BLOCK_DMODEL`/`head_dim` + all strides (incl. the `Req_to_tokens`
-gather strides). The natural-`exp` in-loop-normalized streaming softmax with the
-`-1e8` causal sentinel is kept exactly. Instantiating the test shape recovers the
-pinned defs/theorems (the pin bridges below). `kv_group_num = 1` (so
-`cur_kv_head = cur_head`). -/
-
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **Public general Python-shape summary** for `context_attn_bloom.py`. The faithful
-full BLOOM `_fwd_kernel` surface (with `Req_to_tokens` gather, natural-exp in-loop
-normalization, `-1e8` causal sentinel) lowers to the algorithm layer and is
-compute-correct against the genuine general fold `bloomFwdGenuineOutValueG` for any
-`0 < BLOCK_DMODEL`, `0 < BLOCK_N`, `kv_group_num = 1`, and injective output offsets. -/
-theorem context_attn_bloom_python_test_shape_output_summary_general
-    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len Out : RegionName)
-    (sm_scale : ℝ)
-    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
-      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-      head_dim BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
-    (s : BlockState)
-    (hOInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V sm_scale
-      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-      stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_bloom_fwd_kernel_surface Q K V sm_scale
-        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
-        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx)
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          (Out, outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        bloomFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
-          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M idx) := by
-  refine ⟨context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported Q K V sm_scale
-      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
-      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-      stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N, ?_⟩
-  exact context_attn_bloom_surface_compute_correct_general Q K V Out B_Start_Loc B_Seqlen
-    Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
-    stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-    head_dim BLOCK_DMODEL BLOCK_M BLOCK_N hD hBN s hOInj hundef
-
-end TestShape
 
 end VeriTile.Bench.TritonBenchG.ContextAttnBloom
