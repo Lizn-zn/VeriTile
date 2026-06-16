@@ -993,34 +993,6 @@ theorem aft_evalOp_load_ptr_none_of {shape : TileShape}
   ext i
   simp only [BlockState.readMemValue_real, if_true]
 
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **q-load mask** — the preLoop `q = tl.load(Q_ptrs, mask=...)` mask
-`(offs_m[:,None] < 128) & (arange(128) < 96)[None,:]`. Mirror of `aft_kmask_eval`
-with the head-active lane on the column axis. -/
-theorem aft_qmask_eval (s : BlockState)
-    (offsm : Tile .nat [128])
-    (hoffsm : s.regs .nat [128] "offs_m" = some offsm) :
-    evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
-        (Op.lt ComparableDType.nat Broadcast.scalarR
-          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
-        (Op.expandDim ⟨0, by simp⟩
-          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))) s
-      = some ⟨fun idx : TileIndex [128, 128] =>
-          (ComparableDType.nat.lt (offsm.data (idx.1, PUnit.unit)) 128)
-            && (ComparableDType.nat.lt idx.2.1.val 96)⟩ := by
-  rw [aft_evalOp_boolAnd]
-  simp only [evalOp_lt, evalOp.eq_def, evalOp_constNat, evalOp_arange, hoffsm,
-    Option.bind_eq_bind, Option.bind_some, Option.bind]
-  refine congrArg some ?_
-  ext idx
-  simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec, Tile.scalar,
-    Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
-    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
-    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
-    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
-    TileShape.dropInsertedIndex]
-
 /-- The `reduceMaxDrop` over axis 1 of a `[128, 64]` real tile always succeeds
 (axis dim `64 > 0`); the explicit `some`-value form lets the `m_ij` recipe's
 `hrm` hypothesis be discharged for an inferred `qk` tile inside the loop-body chain. -/
@@ -1251,19 +1223,6 @@ theorem aftStateBot_ratio_eq
     rw [hκ]
     have hpos : pow2 (-r) ≠ 0 := ne_of_gt (pow2_pos _)
     rw [mul_div_mul_left _ _ hpos]
-
-/-- The ⊥-seeded state at the empty / `hi = 0` window is `(⊥, 0, 0)` — the kernel's
-preLoop init (`m_i = -inf`, `l_i`/`acc` ⊥-seeded `0`). -/
-theorem aftStateBot_zero
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart : Nat) (i : Fin 128) (d : Fin 128) :
-    aftStateBot qT kT vT keyScale qStart 0 i d = (⊥, 0, 0) := by
-  unfold aftStateBot aftKeysUpto
-  rw [show (List.finRange 128).filterMap
-        (fun j : Fin 128 => if j.val < 0 ∧ j.val ≤ qStart + i.val
-          then some (aftKV qT kT vT keyScale i d j) else none) = [] from by
-    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
-  rfl
 
 /-- The ⊥-seeded running max at the empty / `hi = 0` window is `⊥`. -/
 theorem aftRunningMax_zero
@@ -1520,18 +1479,6 @@ theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
     rw [hα, hub]; simp
   simp only [List.foldl_cons, hstep]
 
-/-- The seed-`1` state equals the seed-`0` state whenever the window is nonempty. -/
-theorem aftStateBot1_eq_aftStateBot
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128)
-    (hne : aftRunningMax qT kT vT keyScale qStart hi i d ≠ ⊥) :
-    aftStateBot1 qT kT vT keyScale qStart hi i d
-      = aftStateBot qT kT vT keyScale qStart hi i d := by
-  have hxs : aftKeysUpto qT kT vT keyScale qStart hi i d ≠ [] := by
-    intro h; apply hne; unfold aftRunningMax; rw [h]; rfl
-  unfold aftStateBot1 aftStateBot
-  exact osStepBot_bot_seed_indep _ hxs 1 0 0 0
-
 /-- **Faithful kernel running state** (`l_i = 1` seed): `(⊥,1,0)` at window `0`,
 the seed-`0` ⊥-state for later windows. -/
 noncomputable def aftStateBotK
@@ -1539,24 +1486,6 @@ noncomputable def aftStateBotK
     (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
   if hi = 0 then (⊥, 1, 0)
   else aftStateBot qT kT vT keyScale qStart hi i d
-
-/-- The running max of `aftStateBotK` is `aftRunningMax`. -/
-theorem aftStateBotK_fst
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) :
-    (aftStateBotK qT kT vT keyScale qStart hi i d).1
-      = aftRunningMax qT kT vT keyScale qStart hi i d := by
-  unfold aftStateBotK
-  split
-  · rename_i h; subst h; rw [aftRunningMax_zero]
-  · rw [aftStateBot_fst_eq_runningMax]
-
-/-- At window `0` the kernel state is the `(⊥,1,0)` seed. -/
-theorem aftStateBotK_zero
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart : Nat) (i : Fin 128) (d : Fin 128) :
-    aftStateBotK qT kT vT keyScale qStart 0 i d = (⊥, 1, 0) := by
-  unfold aftStateBotK; rw [if_pos rfl]
 
 /-- **Seed cancellation.** From the kernel state `aftStateBotK(c·64)`, multiplying
 `l`/`acc` by the next-block rescale `α = exp2(M_c − Mc1)` gives the same result as
@@ -1731,29 +1660,6 @@ end AftFoundation
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
 open VeriTile.Triton
-
-set_option maxRecDepth 8000 in
-/-- The lowered `forRange` loop body of the Python-shape AFT kernel is exactly
-`aftLoopBody` (22 statements). Checked by `rfl`. -/
-theorem aftLoopBody_check
-    (Q K V QScale KScale Out : RegionName) :
-    (match ((attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3).toAlgKernel.body)[22]? with
-      | some (Stmt.forRange _ _ _ _ body) => body
-      | _ => [])
-      = AftFoundation.aftLoopBody :=
-  rfl
-
-set_option maxRecDepth 8000 in
-/-- The 2 lowered postLoop statements (`body.drop 23`) of the Python-shape AFT
-kernel are exactly `aftPostLoop`. Checked by `rfl`. -/
-theorem aftPostLoop_check (Q K V QScale KScale Out : RegionName) :
-    (attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23
-      = AftFoundation.aftPostLoop Out :=
-  rfl
 
 set_option maxRecDepth 8000 in
 /-- **`aftBody_split`** — the lowered AFT body decomposes as
@@ -1955,15 +1861,6 @@ namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
 open VeriTile.Triton
 
-set_option maxRecDepth 8000 in
-/-- `body.take 22 = aftPreLoop`. Checked by `rfl`. -/
-theorem aftPreLoop_check (Q K V QScale KScale Out : RegionName) :
-    (attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3).toAlgKernel.body.take 22
-      = AftFoundation.aftPreLoop Q K V QScale KScale Out :=
-  rfl
-
 /-- The loaded (masked) query tile the preLoop binds to `q`: lane `(i, e)` reads
 `Q[baseOffset + (qStart + i)·128 + e]` when `qStart + i < 128 ∧ e < 96`, else the
 zero `undef` cell. Carried by the invariant so the step lemma threads it through
@@ -2079,35 +1976,6 @@ noncomputable def aftInvariant
   (s.regs .ptr [128, 128] "O_block_ptr" = some ⟨fun idx : TileIndex [128, 128] =>
       (Region.cast Out, baseOffsetAFT s0 + (qStartAFT s0 + idx.1.val) * 128 + idx.2.1.val)⟩) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
-
-namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
-
-open VeriTile.Triton VeriTile.Bench.TritonBenchG.AttnFwdTriton
-
-/-- The running-state bindings of `aftInvariant … 0` are the ⊥-seed inits
-(`m_i = ⊥`, `l_i = 0`, `acc = 0`) — the base case the preLoop establishes. Pure
-math (reads off `aftRunningMax_zero`/`aftStateBot_zero`); the exec preLoop step
-supplies the register equalities, this supplies the value normalization. -/
-theorem aftInvariant_running_zero
-    (qT kT vT : TileIndex [128, 128] → ℝ) (s0 : BlockState) (keyScale : Fin 128 → ℝ) :
-    (⟨fun r : TileIndex [128] =>
-        aftRunningMax qT kT vT keyScale
-          (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩⟩ : Tile .real [128])
-        = ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
-      ∧ (⟨fun r : TileIndex [128] =>
-        ((aftStateBotK qT kT vT keyScale
-          (qStartAFT s0) 0 r.1 ⟨0, by norm_num⟩).2.1 : ℝ)⟩ : Tile .real [128])
-        = ⟨fun _ : TileIndex [128] => (some (1 : ℝ) : WithBot ℝ)⟩
-      ∧ (⟨fun idx : TileIndex [128, 128] =>
-        ((aftStateBotK qT kT vT keyScale
-          (qStartAFT s0) 0 idx.1 idx.2.1).2.2 : ℝ)⟩ : Tile .real [128, 128])
-        = ⟨fun _ : TileIndex [128, 128] => (some (0 : ℝ) : WithBot ℝ)⟩ := by
-  refine ⟨?_, ?_, ?_⟩
-  · ext r; simp only [aftRunningMax_zero]
-  · ext r; simp only [aftStateBotK_zero]; rfl
-  · ext idx; simp only [aftStateBotK_zero]; rfl
-
-end VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase
 
 /-- `qvk_offset` value for the AFT Python test shape: `(pid1/4)·65536 + (pid1%4)·16384`. -/
 def qvkOffAFT (s : BlockState) : Nat :=
@@ -2707,45 +2575,6 @@ theorem aftPreLoop_eval
   · -- O_block_ptr
     rw [hOp0]; refine congrArg some (Tile.ext (fun idx => Prod.ext rfl ?_))
     simp only [hbase1, hpids1, Nat.zero_mul, Nat.add_zero]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **Standalone `q`-readback** (kernel-friendly, referenced by name — NOT inlined,
-to dodge the `(kernel) deep recursion` whnf over the `Q_ptrs` ptr-offset bop tree).
-Given the preLoop bindings of `Q_ptrs` (per-lane address
-`baseOffset + (qStart + r)·128 + e`) and `offs_m`, and the standing `undef ≡ 0`
-invariant, the lowered `q = tl.load(Q_ptrs, mask=(offs_m<128) & (arange<96))`
-statement evaluates to `qLoadedAFT`: the masked-load value
-`if qStart+r<128 ∧ e<96 then Q[base + (qStart + r)·128 + e] else 0`. -/
-theorem aft_q_readback
-    (s : BlockState) (Q : RegionName) (qStart base : Nat)
-    (offsm : Tile .nat [128])
-    (hoffsm : s.regs .nat [128] "offs_m" = some offsm)
-    (hoffsmv : ∀ r : Fin 128, offsm.data (r, PUnit.unit) = qStart + r.val)
-    (hQp : s.regs .ptr [128, 128] "Q_ptrs"
-      = some ⟨fun idx : TileIndex [128, 128] =>
-          (Region.cast Q, base + (qStart + idx.1.val) * 128 + idx.2.1.val)⟩)
-    (hbase : base = baseOffsetAFT s)
-    (hqStart : qStart = s.pids 0 * 128)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    evalOp (Op.load .real (.ptr (.ref .ptr [128, 128] "Q_ptrs"))
-        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.lt ComparableDType.nat Broadcast.scalarR
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
-          (Op.expandDim ⟨0, by simp⟩
-            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))) s
-      = some (qLoadedAFT s Q) := by
-  rw [aft_evalOp_load_ptr_mask_of _ _ _ _ _
-    (evalOp_ref _ _ _ _ |>.trans hQp) (aft_qmask_eval s offsm hoffsm)]
-  refine congrArg some ?_
-  ext idx
-  obtain ⟨r, e, ⟨⟩⟩ := idx
-  simp only [qLoadedAFT]
-  rw [hoffsmv r, hqStart]
-  by_cases hk : (ComparableDType.nat.lt (s.pids 0 * 128 + r.val) 128) && (ComparableDType.nat.lt e.val 96)
-  · simp only [hk, if_true]
-    rw [show (Region.cast Q : RegionName) = Q from Region.cast_id Q, hbase]
-  · rw [if_neg (by simp_all), if_neg (by simp_all), hundef]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -3630,31 +3459,6 @@ theorem aft_mem_le_foldr_sup (a : WithBot ℝ) :
     · rw [h]; exact le_sup_left
     · exact le_trans (ih h) le_sup_right
 
-/-- For the causal keep, key `0` (in block `0`) is kept for every row, so the
-running max over a nonempty window `[0, hi)` (`hi > 0`) is `≠ ⊥`. -/
-theorem aftRunningMax_causal_ne_bot (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
-    (hi : Nat) (hhi : 0 < hi) (i d : Fin 128) :
-    aftRunningMax (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale
-        (qStartAFT s0) hi i d ≠ ⊥ := by
-  unfold aftRunningMax aftKeysUpto
-  set sc := aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale
-      i d ⟨0, by norm_num⟩ |>.1 with hsc
-  have hmem : ((sc : ℝ) : WithBot ℝ) ∈
-      ((List.finRange 128).filterMap (fun j : Fin 128 =>
-        if j.val < hi ∧ j.val ≤ qStartAFT s0 + i.val then
-          some (aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V)
-            keyScale i d j)
-        else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
-    rw [List.mem_map]
-    refine ⟨aftKV (qMaskedAFT s0 Q) (kTileAFT s0 K) (vMaskedAFT s0 V) keyScale
-      i d ⟨0, by norm_num⟩, ?_, rfl⟩
-    rw [List.mem_filterMap]
-    refine ⟨⟨0, by norm_num⟩, List.mem_finRange _, ?_⟩
-    rw [if_pos ⟨hhi, by simp⟩]
-  have hle := aft_mem_le_foldr_sup _ _ hmem
-  intro hbot
-  exact absurd (le_bot_iff.mp (hbot ▸ hle)) WithBot.coe_ne_bot
-
 /-- `aftRunningMax` over the causal window equals the windowed `foldr ⊔ ⊥` of the
 coerced block scores; spelled directly via `aftBlock`. -/
 theorem aftBlock_blockSup (s0 : BlockState) (Q K V : RegionName) (keyScale : Fin 128 → ℝ)
@@ -4389,50 +4193,6 @@ theorem aftKeyScale_block (s0 : BlockState) (QScale KScale : RegionName) (c : Na
   have hdiv : (c * 64 + jL.val) / 64 = c := by have := jL.isLt; omega
   simp only [hdiv]
 
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **PreLoop establishes the loop invariant at window 0.** Stepping `aftPreLoop`
-from a clean `undef ≡ 0` state reaches a loop-entry state satisfying
-`aftInvariant … 0`: the running `m_i`/`l_i`/`acc` carry the ⊥-seed inits
-(`aftRunningMax 0 = ⊥`, `aftStateBotK 0 = (⊥,1,0)`), normalized via
-`aftInvariant_running_zero`. -/
-theorem aftPreLoop_invariant
-    (s : BlockState) (Q K V QScale KScale Out : RegionName)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ s0, stepStmts (AftFoundation.aftPreLoop Q K V QScale KScale Out) s = some s0
-      ∧ aftInvariant Q K V QScale KScale Out s (aftKeyScale s QScale KScale) 0 s0 := by
-  obtain ⟨s0, hstep, hpids, hmem, hundef0, hstartm, hoffhz, hmi, hli, hacc,
-    hoffsm, hoffsn, hoffsk, hqscale, hKp, hKsp, hVp, hq, hOp⟩ := aftPreLoop_eval s Q K V QScale KScale Out hundef
-  refine ⟨s0, hstep, ?_⟩
-  obtain ⟨hrm0, hl0, hacc0⟩ :=
-    VeriTile.Bench.TritonBenchG.AttnFwdTriton.AftInvariantBase.aftInvariant_running_zero
-      (qMaskedAFT s Q) (kTileAFT s K) (vMaskedAFT s V) s (aftKeyScale s QScale KScale)
-  simp only [aftInvariant, qStartAFT]
-  refine ⟨hpids, by norm_num, by norm_num, ?_, ?_, ?_, ?_, hoffsn, hoffsk, ?_, ?_, ?_, hqscale,
-    ?_, ?_, ?_, ?_, hundef0, hmem⟩
-  · rw [hmi]; exact congrArg some hrm0.symm
-  · rw [hli]; exact congrArg some hl0.symm
-  · rw [hacc]; exact congrArg some hacc0.symm
-  · rw [hoffsm]
-  · rw [hstartm]
-  · rw [hoffhz]
-  · rw [hq]
-  · rw [hKp]
-  · rw [hKsp]
-  · rw [hVp]
-  · rw [hOp]
-
-/-! ## FINAL Part 3 — `aft_attn_step` (single streaming block step over `aftLoopBody`)
-
-From a state satisfying `aftInvariant … i` (after `c = i/64` blocks), stepping the
-22-statement `aftLoopBody` advances to a state satisfying `aftInvariant … (i+64)`.
-Threads `aftLoopBody_steps` (the masked block-eval) through the genuine bridges
-`aft_mij_reg_eq` / `aft_pT_cell` / `aft_denom_reg_eq` / `aft_acc_reg_eq` against
-the per-block `keyScale = aftKeyScale` (via `aftKeyScale_block`), reconciling the
-loop's masked `k`-load to the full `k` readback the bridges want via
-`aft_dot_kmask_irrel`. The `set`-shield on the supplied K/V tiles dodges the
-nested-state stack overflow. -/
-
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **AFT streaming block step.** `aftInvariant i → aftInvariant (i+64)` over
@@ -4874,137 +4634,6 @@ theorem aftPostLoop_eval (Q K V QScale KScale Out : RegionName) (s0 : BlockState
   exact aftStateBot_full_eq_spec s0 Q K V keyScale ir id (hne ir id)
 
 /-! ## FINAL Part 4 (top) — genuine closed-form exec correctness + summary -/
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Genuine exec correctness.** The full `attn_fwd_triton` surface, executed at
-the Python test shape, lands the genuine closed-form attention `attnFwdTritonOutSpec`
-(masked base-2 per-key-scale causal softmax with `keyScale = aftKeyScale`) at every
-active `Out` lane. Composes `aftPreLoop_invariant` (→ `aftInvariant … 0`),
-`forRange_inv` driven by `aft_attn_step` (→ `aftInvariant … 128`), and
-`aftPostLoop_eval`. -/
-theorem attn_fwd_triton_exec_eq_spec
-    (Q K V QScale KScale Out : RegionName) (s : BlockState)
-    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ sP, exec (attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3).toAlgKernel s = some sP
-      ∧ (∀ idx : TileIndex [128, 128], active s 128 96 128 idx →
-          sP.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
-            = attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
-  set keyScale := aftKeyScale s QScale KScale with hkeyScale
-  -- the score bound: every kept score ≥ -1e6 (here only the running-max ≠ ⊥ matters downstream)
-  -- preLoop → aftInvariant 0
-  obtain ⟨s0, hpre, hinv0⟩ := aftPreLoop_invariant s Q K V QScale KScale Out hundef
-  -- the loop invariant carries pids = s.pids; rephrase qStart/baseOffset against s
-  -- forRange loop: aftInvariant 0 → aftInvariant 128 (over aft_attn_step)
-  obtain ⟨fin, sF, hloop, hfin, hinvF⟩ :=
-    forRange_inv (idx := "start_n") (start := 0) (stop := 128) (step := 64)
-      (P := fun i st => aftInvariant Q K V QScale KScale Out s keyScale i st)
-      (by norm_num) hinv0
-      (fun i st hi hP => by
-        have himod : i % 64 = 0 := by
-          have h := hP; simp only [aftInvariant] at h; exact h.2.1
-        exact aft_attn_step Q K V QScale KScale Out s i st hi himod hsb hP)
-  -- fin = 128
-  have hfin128 : fin = 128 := by
-    have h := hinvF; simp only [aftInvariant] at h
-    obtain ⟨_, hmodF, hileF, _⟩ := h; omega
-  subst hfin128
-  -- postLoop
-  obtain ⟨sP, hpost, hO⟩ := aftPostLoop_eval Q K V QScale KScale Out s sF
-    (fun i d => aftRunningMax_causal_ne_bot s Q K V keyScale 128 (by norm_num) i d) hinvF
-  -- compose the exec
-  refine ⟨sP, ?_, hO⟩
-  rw [exec, aftBody_split]
-  rw [stepStmts.append_some (by
-    rw [aftPreLoop_check]; exact hpre)]
-  rw [stepStmts]
-  rw [show (attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3).toAlgKernel.body.drop 23 = AftFoundation.aftPostLoop Out from aftPostLoop_check Q K V QScale KScale Out]
-  rw [show stepStmt (Stmt.forRange "start_n" 0 128 64 AftFoundation.aftLoopBody) s0 = some sF from hloop]
-  exact hpost
-
-set_option maxHeartbeats 4000000 in
-/-- **Genuine compute-facing correctness.** The surface realizes the genuine
-closed-form attention `attnFwdTritonOutSpec` at every active `Out` lane, given the
-score-bound side condition (the `-1e6` mask sentinel is inert) and a clean
-(`undef ≡ 0`) initial state. -/
-theorem attn_fwd_triton_surface_python_test_shape_compute_correct_genuine
-    (Q K V QScale KScale Out : RegionName) (s : BlockState)
-    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-        2 4 128 128 128 64 128 96 3)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attn_fwd_triton_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  obtain ⟨sP, hexec, hO⟩ := attn_fwd_triton_exec_eq_spec Q K V QScale KScale Out s hsb hundef
-  rw [hexec] at hExec
-  rw [← Option.some.inj hExec]
-  exact hO idx hActive
-
-
-/-- **Python test-shape summary for `attn_fwd_triton.py` (genuine closed form).**
-
-The Python wrapper fixes `STAGE = 3`; this summary combines the supported full
-surface with the observable `Out` writes, now stated against the **genuine
-closed-form attention** `attnFwdTritonOutSpec` (masked base-2 per-key-scale causal
-softmax with `keyScale = aftKeyScale = q_scale · k_scale`) — no longer the
-self-referential executed-output value. The two genuine side conditions are
-explicit: `aftScoreBound` (the kernel's `-1e6` `tl.where` mask sentinel never
-raises a row max above the true running max, i.e. every kept score is `≥ -1e6`)
-and the clean `undef ≡ 0` initial state. -/
-theorem attn_fwd_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Out : RegionName) (s : BlockState)
-    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 3)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
-  constructor
-  · exact attn_fwd_triton_surface_toAlgorithm_supported Q K V QScale KScale
-      Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
-      65536 16384 128 1 2 4 128 128 128 64 128 96 3
-  · exact attn_fwd_triton_surface_python_test_shape_compute_correct_genuine Q K V
-      QScale KScale Out s hsb hundef
-
-
-/-! ## GENERAL PRELUDE: aftg-named helper lemmas + AftgFoundation General namespace
-(copied from the proven attn_fwd_causal general stack; both kernels share an
-identical surface AST, so the general layer mirrors causal exactly with
-head-masking already built in via qTileAFT2mG/vTileAFT2mG.) -/
 
 /-- **Generic register-frame lemma.** If every statement in `body`, when stepped,
 preserves the register `(d, sh, name)`, then so does the whole `stepStmts` run. -/
@@ -5893,16 +5522,6 @@ theorem aftgStateBotG_ratio_eq (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOC
     have hpos : pow2 (-r) ≠ 0 := ne_of_gt (pow2_pos _)
     rw [mul_div_mul_left _ _ hpos]
 
-/-- General ⊥-seeded state at the empty window is `(⊥, 0, 0)`. -/
-theorem aftgStateBotG_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
-    aftgStateBotG qT kT vT keyScale qStart 0 i d = (⊥, 0, 0) := by
-  unfold aftgStateBotG aftgKeysUptoG
-  rw [show (List.finRange SEQ).filterMap
-        (fun j : Fin SEQ => if j.val < 0 ∧ j.val ≤ qStart + i.val
-          then some (aftgKVG qT kT vT keyScale i d j) else none) = [] from by
-    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
-  rfl
-
 /-- General ⊥-seeded running max at the empty window is `⊥`. -/
 theorem aftgRunningMaxG_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
     aftgRunningMaxG qT kT vT keyScale qStart 0 i d = ⊥ := by
@@ -6008,20 +5627,6 @@ theorem aftgStateBot1G_zero (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMOD
     apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
   rfl
 
-/-- General seed-1 one-block advance. -/
-theorem aftgStateBot1G_succ (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
-    aftgStateBot1G qT kT vT keyScale qStart ((c + 1) * BLOCK_N) i d
-      = (aftgBlockG qT kT vT keyScale qStart BLOCK_N c i d).foldl osStepBot
-          (aftgStateBot1G qT kT vT keyScale qStart (c * BLOCK_N) i d) := by
-  unfold aftgStateBot1G
-  rw [aftgKeysUptoG_succ, List.foldl_append]
-
-/-- General seed-1 running max is `aftgRunningMaxG`. -/
-theorem aftgStateBot1G_fst_eq_runningMax (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
-    (aftgStateBot1G qT kT vT keyScale qStart hi i d).1
-      = aftgRunningMaxG qT kT vT keyScale qStart hi i d := by
-  rw [aftgStateBot1G, aftgStateBot_fst, aftgRunningMaxG, aftg_foldl_sup_bot_eq_foldr]
-
 /-- General denominator channel-independence. -/
 theorem aftgStateBotG_snd_fst_indep (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin BLOCK_DMODEL) :
     (aftgStateBotG qT kT vT keyScale qStart hi i d).2.1
@@ -6050,23 +5655,30 @@ theorem aftgKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLO
   · rw [if_pos ⟨hjlt, hiff.mp hc⟩, if_pos hc]
   · rw [if_neg (fun hh => hc (hiff.mpr hh.2)), if_neg hc]
 
-/-- General sentinel boundedness side-condition. -/
+/-- General sentinel boundedness side-condition (**causal-only, non-strict**).
+
+The kernel masks every non-causal key with the `-1e6` `tl.where` sentinel, so only
+the **kept** (causal) keys `j ≤ qStart + i` need a boundedness assumption, and only
+`≥ -1e6` (non-strict) is required: the masked keys are pinned to the sentinel and
+never raise the running max. This mirrors the pinned `aftScoreBound` form. -/
 def aftgScoreBoundG
     (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
     (keyScale : Fin SEQ → ℝ) (qStart : Nat) : Prop :=
-  ∀ (j : Fin SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL),
-    keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
-      > -1000000.0
+  ∀ (j : Fin SEQ) (i : Fin BLOCK_M), j.val ≤ qStart + i.val →
+    (0:ℝ) - 1000000.0
+      ≤ keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
 
-/-- General: under `aftgScoreBoundG`, running max over a nonempty causal window
-exceeds the `-1e6` sentinel. -/
+/-- General: under the **causal-only, non-strict** `aftgScoreBoundG`, the running
+max over a nonempty causal window is `≥` the `-1e6` sentinel. Key `0` is always
+causal-kept (`0 ≤ qStart + i`), so its kept score `≥ -1e6` (the weaker bound) is a
+member of the window's `foldr ⊔ ⊥`, hence a lower bound on the running max. -/
 theorem aftgRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 < SEQ)
     (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
     (hsb : aftgScoreBoundG qT kT vT keyScale qStart) :
-    aftgRunningMaxG qT kT vT keyScale qStart hi i d > some (-1000000.0 : ℝ) := by
+    aftgRunningMaxG qT kT vT keyScale qStart hi i d ≥ some (-1000000.0 : ℝ) := by
   unfold aftgRunningMaxG aftgKeysUptoG
-  have hkey0 : ((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) > -1000000.0 := by
-    have := hsb ⟨0, hSEQ⟩ i d
+  have hkey0 : ((-1000000.0 : ℝ)) ≤ ((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) := by
+    have := hsb ⟨0, hSEQ⟩ i (by simp)
     simpa [aftgKVG] using this
   have hmem : ((((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ)) : WithBot ℝ) ∈
       ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
@@ -6079,8 +5691,8 @@ theorem aftgRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0
     refine ⟨⟨0, hSEQ⟩, List.mem_finRange _, ?_⟩
     rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
   have hle := aftg_mem_le_foldr_sup _ _ hmem
-  refine lt_of_lt_of_le ?_ hle
-  exact (WithBot.coe_lt_coe).mpr hkey0
+  refine le_trans ?_ hle
+  exact (WithBot.coe_le_coe).mpr hkey0
 
 /-- General `aftgBlockG` map-and-sum: reindex block `c`'s causal window onto
 `Fin BLOCK_N` lanes (global key `c·BLOCK_N + jL`). -/
@@ -6493,11 +6105,10 @@ theorem aftg_mij_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < B
       rw [hBSk]
       refine Finset.le_sup_of_le (Finset.mem_univ (⟨0, hBN⟩ : Fin BLOCK_N)) ?_
       rw [if_pos (show 0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val ≤ qStart + i.val from by simp)]
-      refine le_of_lt ?_
-      rw [WithBot.coe_lt_coe]
-      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i ⟨0, hBD⟩
+      rw [WithBot.coe_le_coe]
+      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i (by simp)
       simpa [aftgKVG] using hbnd
-    · refine le_sup_of_le_left (le_of_lt ?_)
+    · refine le_sup_of_le_left ?_
       rw [hMdef]
       exact aftgRunningMaxG_gt_sentinel qT kT vT keyScale qStart (c * BLOCK_N) (by
         have : 1 ≤ c := by omega
@@ -8680,6 +8291,79 @@ theorem attn_fwd_triton_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     exact hO idx hActive
+
+/-- **Python test-shape summary for `attn_fwd_triton.py` (genuine closed form).**
+
+The Python wrapper fixes `STAGE = 3`; this summary combines the supported full
+surface with the observable `Out` writes, stated against the **genuine closed-form
+attention** `attnFwdTritonOutSpec` (masked base-2 per-key-scale causal softmax with
+`keyScale = aftKeyScale = q_scale · k_scale`). The two genuine side conditions are
+explicit: `aftScoreBound` (the kernel's `-1e6` `tl.where` mask sentinel never raises
+a row max above the true running max, i.e. every *kept* causal score is `≥ -1e6`)
+and the clean `undef ≡ 0` initial state.
+
+This is now a **corollary** of the dimension-general theorem
+`attn_fwd_triton_output_summary_general`, instantiated at the Python test shape
+(`Z = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
+`numKVBlocks = 2`, `HEAD_ACTIVE = 96`, `STAGE = 3`, contiguous strides
+`(65536, 16384, 128, 1)`). At those concrete args the general masked tiles, score
+carrier, and closed-form spec all reduce defeq to the pinned
+`attnFwdTritonOutSpec`/`aftKeyScale` layer, and the pinned causal-only `aftScoreBound`
+is exactly the (now causal-only) general `aftgScoreBoundG`. -/
+theorem attn_fwd_triton_python_test_shape_output_summary
+    (Q K V QScale KScale Out : RegionName) (s : BlockState)
+    (hsb : aftScoreBound s Q K (aftKeyScale s QScale KScale))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      2 4 128 128 128 64 128 96 3).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 128 96 3)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attnFwdTritonOutSpec s Q K V (aftKeyScale s QScale KScale) idx) := by
+  -- output-offset injectivity at the contiguous test-shape strides
+  have hOutInj : Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s 4 65536 16384 128 1 128 idx) := by
+    rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+    simp only [outOffset, offZ, offH, mIndex, kIndex, Nat.mul_one] at h
+    have hm : ma = mb := by omega
+    have hd : da = db := by omega
+    subst mb; subst db; rfl
+  -- pinned causal-only `aftScoreBound` ⟹ (now causal-only) general `aftgScoreBoundG`
+  have hsbG : aftgScoreBoundG
+      (qTileAFT2mG s Q 65536 16384 4 128 128 128 128 96)
+      (kTileAFT2G s K 65536 16384 4 128 (64 * 2) 128)
+      (vTileAFT2mG s V 65536 16384 4 128 (64 * 2) 128 96)
+      (keyScaleAFT2G s QScale KScale 128 128 64 2) (qStartAFT2G s 128) := by
+    intro j i hjle
+    have h := hsb i j hjle
+    rw [aftBlockScore] at h
+    -- pinned tiles/keyScale are defeq to the general ones at the concrete test-shape
+    -- args; only the `0.0`/`0` literal differs, closed by `norm_num`
+    refine le_trans (le_of_eq (by norm_num)) h
+  -- instantiate the dimension-general theorem at the Python test shape
+  have hgen := attn_fwd_triton_output_summary_general Q K V QScale KScale Out s
+    65536 16384 4 128 128 128 64 128 96 3 2 2
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num)
+    hOutInj hundef hsbG
+  refine ⟨hgen.1, ?_⟩
+  -- the general `expected` (attnFwdTritonOutSpecG …) reduces defeq to the pinned
+  -- `attnFwdTritonOutSpec` at the concrete test-shape args
+  convert hgen.2 using 2 with idx
 
 end General
 
