@@ -64,6 +64,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+section Correct
+
 /-- Full Lean port of `attn_fwd_triton.py`'s `_attn_fwd` (`STAGE = 3`).
 
 The upstream kernel runs the K/V streaming-softmax loop through a separate
@@ -345,6 +347,10 @@ theorem attn_fwd_triton_final_store_slice_compute_correct
 the first 96 head lanes. Contiguous `[B, H, N_CTX, HEAD_DIM]` tensors have
 strides `(65536, 16384, 128, 1)`. -/
 
+end Correct
+
+section TestShape
+
 theorem attn_fwd_triton_final_store_python_test_shape_compute_correct
     (Acc Out : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -366,6 +372,9 @@ theorem attn_fwd_triton_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
+end TestShape
+
+section Correct
 
 /-! ## Genuine closed-form attention spec (exp2, causal)
 
@@ -1514,6 +1523,8 @@ theorem aftStateBotK_cancel
     rw [hα0]; simp
   · simp only [Nat.mul_eq_zero, hc0, false_or, OfNat.ofNat_ne_zero, or_self, if_neg]
     exact ⟨rfl, rfl⟩
+
+end Correct
 
 /-! ## FOUNDATION Part 1 — `aftBody_split` (preLoop ++ forRange aftLoopBody :: postLoop)
 
@@ -8292,6 +8303,8 @@ theorem attn_fwd_triton_output_summary_general
     obtain rfl : sF = s' := Option.some.inj hExec
     exact hO idx hActive
 
+section TestShape
+
 /-- **Python test-shape summary for `attn_fwd_triton.py` (genuine closed form).**
 
 The Python wrapper fixes `STAGE = 3`; this summary combines the supported full
@@ -8364,6 +8377,8 @@ theorem attn_fwd_triton_python_test_shape_output_summary
   -- the general `expected` (attnFwdTritonOutSpecG …) reduces defeq to the pinned
   -- `attnFwdTritonOutSpec` at the concrete test-shape args
   convert hgen.2 using 2 with idx
+
+end TestShape
 
 end General
 
