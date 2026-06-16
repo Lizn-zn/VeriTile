@@ -63,6 +63,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `context_attn_bloom_python_test_shape_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -7445,6 +7447,8 @@ gather strides). The natural-`exp` in-loop-normalized streaming softmax with the
 pinned defs/theorems (the pin bridges below). `kv_group_num = 1` (so
 `cur_kv_head = cur_head`). -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Public general Python-shape summary** for `context_attn_bloom.py`. The faithful
 full BLOOM `_fwd_kernel` surface (with `Req_to_tokens` gather, natural-exp in-loop
 normalization, `-1e8` causal sentinel) lowers to the algorithm layer and is

@@ -90,6 +90,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_grads_genuine_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -6937,6 +6939,8 @@ theorem bwd_grads_exec (s : BlockState) (Q K V Out DO DQ DK DV L M Delta : Regio
   · intro idx; rw [bwdGradOffset_eq_bwdKBase s hpids1 idx]; exact hDV idx
   · intro idx; rw [bwdGradOffset_eq_bwdKBase s hpids1 idx]; exact hDK idx
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 1600000 in
 /-- **Genuine faithful backward gradient summary.** At the checked Python launch
 (`B·H = 8` program blocks, single KV/M block, `pids 1 = 0`), every output lane of
@@ -7619,6 +7623,8 @@ theorem triton_attention_bwd_score_python_test_shape_formula_summary
       QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python forward summary for `triton_attention.py`.
 
 The surface conjunct pins the faithful `_fwd_kernel` launch for the checked

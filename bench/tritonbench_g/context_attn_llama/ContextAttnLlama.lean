@@ -66,6 +66,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `context_attn_llama_python_test_shape_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -6927,6 +6929,8 @@ theorem context_attn_llama_python_test_shape_output_summary
 
 /-! ## General EXEC stack (dimension-parameterized) -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Public general Python-shape summary** for `context_attn_llama.py`. The faithful
 full LLaMA `_fwd_kernel` surface (with `Req_to_tokens` gather) lowers to the
 algorithm layer and is compute-correct against the genuine general fold

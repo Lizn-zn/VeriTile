@@ -77,6 +77,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `softmax_reducev_python_test_shape_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -4571,6 +4573,8 @@ signatures. The recurrence math (`srStateBot`, `srRunningMax`, `srBlock`,
 `srOsStepBot_block_eq`, `srStateBot_succ`, `softmaxReducevWeightedSum`) is already
 dimension-general and is reused verbatim. -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General top theorem (genuine closed form).** Fully dimension-parameterized over
 `BLOCK_N` / `BLOCK_DMODEL` / strides: the full `softmax_reducev` surface lowers and
 its `Out` store *realizes* the genuine softmax-weighted V reduction

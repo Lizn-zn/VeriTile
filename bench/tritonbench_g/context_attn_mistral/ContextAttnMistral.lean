@@ -63,6 +63,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 
 
+/-! **★ Main theorem:** `context_attn_mistral_genuine_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -4998,6 +5000,8 @@ instance mistralActiveGDecidable (s : BlockState) (B_Seqlen : RegionName) (BLK D
     (idx : TileIndex [BLK, DM]) : Decidable (mistralActiveG s B_Seqlen BLK DM idx) := by
   unfold mistralActiveG; infer_instance
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General Public summary for `context_attn_mistral.py`.**
 
 The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`

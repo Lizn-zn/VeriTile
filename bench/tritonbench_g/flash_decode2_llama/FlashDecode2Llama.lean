@@ -66,6 +66,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `flash_decode2_llama_normalization_output_summary_general`, `flash_decode2_llama_running_max_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -430,6 +432,8 @@ theorem flash_decode2_llama_running_max_step_kernel_compute_correct
       exact False.elim (hbot hpos)
     · exact WithBot.unbotD_coe 0 _
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine final-normalization output summary.** Fully
 dimension-parameterized over every stride and `BLOCK_DMODEL`: the full LLaMA
 flash-decode stage2 surface lowers, and the normalization writeback *realizes*
@@ -468,6 +472,8 @@ theorem flash_decode2_llama_normalization_output_summary_general
       stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
       stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General genuine running-maximum recurrence summary.** Fully
 dimension-parameterized over the block index and every stride: the full LLaMA
 flash-decode stage2 surface lowers, and one recurrence step *realizes* the

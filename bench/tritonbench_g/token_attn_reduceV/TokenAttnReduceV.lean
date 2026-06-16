@@ -68,6 +68,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `token_attn_reducev_python_case1_output_summary`, `token_attn_reducev_python_case2_output_summary`, `token_attn_reducev_python_case3_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1666,6 +1668,8 @@ abbrev token_attn_reducev_python_case3_store_summary
     Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen s
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_reducev_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1689,6 +1693,8 @@ theorem token_attn_reducev_python_case1_output_summary
       256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
       (token_attn_reducev_python_test_shape_offset_injective s)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_reducev_python_case2_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1712,6 +1718,8 @@ theorem token_attn_reducev_python_case2_output_summary
       256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
       (token_attn_reducev_python_test_shape_offset_injective s)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 theorem token_attn_reducev_python_case3_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)

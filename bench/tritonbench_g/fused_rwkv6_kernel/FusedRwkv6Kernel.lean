@@ -76,6 +76,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorems:** `fused_recurrent_rwkv6_python_test_case1_output_summary`, `fused_recurrent_rwkv6_python_test_case2_output_summary`, `fused_recurrent_rwkv6_python_test_case3_output_summary`, `fused_recurrent_rwkv6_python_test_case4_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -811,6 +813,8 @@ end Correct
 
 section TestShape
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Genuine RWKV6 Python case 1 summary** (no initial state, no final state). -/
 theorem fused_recurrent_rwkv6_python_test_case1_output_summary
     (q k v w u o h0 ht BHPrev BHOut : RegionName) (t : Fin 4) (s : BlockState)
@@ -845,6 +849,8 @@ theorem fused_recurrent_rwkv6_python_test_case1_output_summary
       Bool.false t.val 32 32 8 8 8 8 s
       (fused_recurrent_rwkv6_final_state_offset_injective s) hPrev
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Genuine RWKV6 Python case 2 summary** (initial state, no final state). -/
 theorem fused_recurrent_rwkv6_python_test_case2_output_summary
     (q k v w u o h0 ht BHPrev BHOut : RegionName) (t : Fin 4) (s : BlockState)
@@ -879,6 +885,8 @@ theorem fused_recurrent_rwkv6_python_test_case2_output_summary
       Bool.true t.val 32 32 8 8 8 8 s
       (fused_recurrent_rwkv6_final_state_offset_injective s) hPrev
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Genuine RWKV6 Python case 3 summary** (no initial state, with final state):
 adds the final-state writeback realizing `stateClosed(T)` (`T = 4`). -/
 theorem fused_recurrent_rwkv6_python_test_case3_output_summary
@@ -921,6 +929,8 @@ theorem fused_recurrent_rwkv6_python_test_case3_output_summary
       Bool.false 32 32 8 8 8 8 4 s
       (fused_recurrent_rwkv6_final_state_offset_injective s) hFinal
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Genuine RWKV6 Python case 4 summary** (initial state and final state). -/
 theorem fused_recurrent_rwkv6_python_test_case4_output_summary
     (q k v w u o h0 ht BHPrev BHOut BHFinal : RegionName) (t : Fin 4)

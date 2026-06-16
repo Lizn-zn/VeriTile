@@ -63,6 +63,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `attn_fwd_causal_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -6284,6 +6286,8 @@ theorem afc_exec_generalG
   intro idx hact
   rw [hO idx, if_pos hact]
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **Dimension-general genuine causal closed-form output summary for `attn_fwd_causal`.**

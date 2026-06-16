@@ -57,6 +57,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `fused_recurrent_hgrn_test_case1_output_summary`, `fused_recurrent_hgrn_test_case2_output_summary`, `fused_recurrent_hgrn_test_case3_output_summary`, `fused_recurrent_hgrn_test_case4_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1432,6 +1434,8 @@ abbrev fused_recurrent_hgrn_test_case4_outputs_prop
 case propositions so the manifest context reflects its full-surface statement. -/
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 1 end-to-end summary for the Python regression shape: exact
 forward/backward DSL surfaces plus the observable `o`, `dx`, and `dg` row
 writebacks. -/
@@ -1446,6 +1450,8 @@ theorem fused_recurrent_hgrn_test_case1_output_summary
   · exact fused_recurrent_hgrn_test_case1_python_test_shape_all_outputs_compute_correct
       X G O H0 Ht DO DX DG t_rel s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 2 end-to-end summary for the Python regression shape: initial-state
 forward/backward DSL surfaces plus `o`, forward-step, `dx`, and `dg`
 writebacks. -/
@@ -1460,6 +1466,8 @@ theorem fused_recurrent_hgrn_test_case2_output_summary
   · exact fused_recurrent_hgrn_test_case2_python_test_shape_all_outputs_compute_correct
       BH BHPrev X G DHPrev DO BO O DX DG t_rel s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 3 end-to-end summary for the Python regression shape: no-initial
 surfaces with final-state output plus `o`, `ht`, `dx`, and `dg` writebacks. -/
 theorem fused_recurrent_hgrn_test_case3_output_summary
@@ -1473,6 +1481,8 @@ theorem fused_recurrent_hgrn_test_case3_output_summary
   · exact fused_recurrent_hgrn_test_case3_python_test_shape_all_outputs_compute_correct
       BH BHFinal DHPrev DO BO O Ht DX DG t_rel s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 4 end-to-end summary for the Python regression shape: initial-state
 and final-state surfaces plus all observed forward/final/backward writebacks. -/
 theorem fused_recurrent_hgrn_test_case4_output_summary

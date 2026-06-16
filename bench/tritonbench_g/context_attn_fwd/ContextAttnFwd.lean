@@ -59,6 +59,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `context_attn_fwd_python_test_shape_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -6724,6 +6726,8 @@ theorem context_attn_fwd_python_test_shape_output_summary
 
 /-! ## General EXEC stack (dimension-parameterized) -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Public general Python-shape summary** for `context_attn_fwd.py`. The faithful
 full int8-KV `_fwd_kernel` surface lowers to the algorithm layer and is
 compute-correct against the genuine general fold `ctxFwdGenuineOutValueG` for any

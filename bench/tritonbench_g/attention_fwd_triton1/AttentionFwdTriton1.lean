@@ -65,6 +65,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `attention_fwd_triton1_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine, dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1183,6 +1185,8 @@ theorem attention_fwd_triton1_exec_outputClosedFormG
   refine ⟨sF, hexec, fun c hc t d => ?_⟩
   rw [hOF c hc t d, aft1OutG_eq_outputClosedForm s Q K V s_qh scale BT BD hBT]
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 2000000 in
 /-- **Dimension-general `output_summary` for `attention_fwd_triton1`.**
 

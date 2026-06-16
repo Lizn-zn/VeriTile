@@ -65,6 +65,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `context_attn_nopad_python_test_shape_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -6516,6 +6518,8 @@ No hardcoded `128`/`768` appears in any general signature. -/
 
 section General
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General Public summary for `context_attn_nopad.py`.**
 
 The full faithful `_fwd_kernel` surface (preLoop + streaming-softmax `forRangeDyn`

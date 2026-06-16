@@ -96,6 +96,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `attention_score_python_case1_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -2985,6 +2987,8 @@ theorem attention_score_case1_genuine_compute_correct_general
   simp only [ComputeCorrect.OutputReadable.read_real]
   rw [h2, if_pos hActive]
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Public general Python case-1 output summary (genuine closed form).** The full
 attention-score surface lowers to the algorithm layer, and the kernel writes the
 genuine closed-form score `case1OutClosedFormG` to every active output column —

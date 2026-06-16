@@ -53,6 +53,8 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `rope_embedding_python_test_shape_surface_output_summary`, `rope_embedding_python_test_shape_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -465,6 +467,8 @@ theorem rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
   exact rope_embedding_surface_toAlgorithm_supported Q cos sin
     128 8 8 4 16 8 8 Bool.true
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Public Python test-shape summary: the full forward surfaces for Q and K
 lower, both forward half stores realize the checked row layout, and the
 backward gradient surfaces lower for Q and K. -/
@@ -531,6 +535,8 @@ theorem rope_embedding_python_test_shape_surface_output_summary
   · exact rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
       KGrad cos sin
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- `output_summary` alias for the Python fast RoPE embedding path. -/
 abbrev rope_embedding_python_test_shape_output_summary
     (Q K QGrad KGrad cos sin : RegionName)

@@ -82,6 +82,8 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorems:** `chunked_cumsum_fwd_all_outputs_compute_correct_general`, `chunked_cumsum_fwd_summary_general` -/
+
 section Correct
 
 /-! ## Within-chunk cumsum identity (`tl.cumsum` axis=1 = prefix `Finset.sum`)
@@ -815,6 +817,8 @@ kernel's own output. Output-offset injectivity (`dtOutOffset` / `dACsOutOffset`
 injective) is the trusted host-side address-layout side condition, supplied as a
 hypothesis (it is discharged concretely in the Python test-shape corollaries). -/
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Dimension-general output coverage for chunked cumsum forward.** Over fully
 symbolic dimensions and strides, the `dt_out` store slice, the `dA_cumsum` store
 slice, and the `dA_cumsum` compute slice all realize their genuine
@@ -895,6 +899,8 @@ theorem chunked_cumsum_fwd_all_outputs_compute_correct_general
       stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
       nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hDACsInj
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **Dimension-general genuine correctness summary for chunked cumsum forward.**
 The full surface lowers to the algorithm layer for *arbitrary* dimensions,
 strides, and the `HAS_DT_BIAS` / `DT_SOFTPLUS` flags, and — given output-offset

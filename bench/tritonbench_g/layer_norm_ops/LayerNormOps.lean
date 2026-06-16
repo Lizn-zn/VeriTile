@@ -72,6 +72,8 @@ set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! **★ Main theorems:** `layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general`, `layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general`, `layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general`, `layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -3965,6 +3967,8 @@ theorem layer_norm_ops_fwd_residual_out_offset_general_injective
   simp only [fwdResidualOutOffset, bwdRowVectorOffset] at h
   exact Fin.ext (by omega)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Plain layer-norm forward, **dimension-general**: exposes the genuine `Y`,
 `Mean`, and `Rstd` outputs together for arbitrary feature dim `N`, tile width
 `BLOCK_N`, and `Y` row stride `stride_y_row`. -/
@@ -3997,6 +4001,8 @@ theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
   · exact layer_norm_ops_fwd_mean_store_slice_compute_correct MeanPre Mean s
   · exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- RMS layer-norm forward with bias, **dimension-general**: exposes the genuine
 `Y` and `Rstd` outputs together. -/
 theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
@@ -4022,6 +4028,8 @@ theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
       (layer_norm_ops_fwd_y_offset_general_injective s stride_y_row BLOCK_N)
   · exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Residual plain layer-norm forward with bias, **dimension-general**: exposes
 the genuine `RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` outputs together for
 arbitrary `RESIDUAL_OUT`/`Y` row strides, feature dim `N`, and tile width
@@ -4180,6 +4188,8 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
       BLOCK_N s hDBDX hDBDW
       (layer_norm_ops_param_grad_offset_general_injective s N BLOCK_N)
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Backward residual-add, **dimension-general**: exposes both genuine
 observable row-vector stores (`DX` and `DRESIDUAL_IN`) produced by the
 `dx += dres` branch, for arbitrary row strides, feature dim `N`, and tile width

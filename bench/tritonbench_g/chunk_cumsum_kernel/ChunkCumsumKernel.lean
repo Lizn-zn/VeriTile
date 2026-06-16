@@ -80,6 +80,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorem:** `chunk_cumsum_scalar_python_test_shape_output_summary` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -1481,6 +1483,8 @@ theorem chunk_cumsum_scalar_python_test_shape_summary
       S BO Carry O s hcarry⟩
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- `output_summary` for the scalar Python chunk-cumsum surface: the genuine
 single-Python-chunk closed-form correctness (`S → O` realizes the prefix sum). -/
 abbrev chunk_cumsum_scalar_python_test_shape_output_summary

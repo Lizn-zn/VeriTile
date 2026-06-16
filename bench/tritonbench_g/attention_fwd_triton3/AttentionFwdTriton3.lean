@@ -114,6 +114,8 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! **★ Main theorems:** `attention_fwd_triton3_python_case1_output_summary_general`, `attention_fwd_triton3_python_case2_output_summary_general`, `attention_fwd_triton3_python_case3_output_summary_general` -/
+
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
 section Correct
@@ -8004,6 +8006,8 @@ noncomputable def attentionFwdTriton3Case3MSpecG
       ((aft3StateBot1G (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
           (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) (fun i j => noWindowKeep i j) NC i ⟨0, hND⟩).2.1) / Real.log 2
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 1 general genuine output summary.** -/
@@ -8080,6 +8084,8 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
     show sF.readMem M _ = _
     rw [hM i, attentionFwdTriton3KMSpecG]
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 2 general genuine output summary.** -/
@@ -8157,6 +8163,8 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
     rw [hM i, attentionFwdTriton3KMSpecG]
 
 
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 3 general genuine output summary.** -/
