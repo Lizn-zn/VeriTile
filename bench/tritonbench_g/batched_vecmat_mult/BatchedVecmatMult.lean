@@ -1571,42 +1571,5 @@ theorem batched_vecmat_closed_form_correct
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-/-- Output-offset injectivity for the checked `16 × 32` tile shape. -/
-theorem batched_vecmat_python_test_shape_offset_injective (s : BlockState) :
-    Function.Injective (vecmatOutOffset s 128 16 32) := by
-  intro a b h
-  simp only [vecmatOutOffset, gRow, gCol] at h
-  obtain ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ := a
-  obtain ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ := b
-  simp only at h ⊢
-  have hm : ma = mb := by omega
-  have hn : na = nb := by omega
-  subst hm; subst hn; rfl
-
-/-- **Public Python `test_vecmat` summary**: the full `128 × 128 × 128` batched
-vecmat surface (`block_m = 16`, `block_n = 32`, `block_k = 64`, two K-blocks)
-lowers to the algorithm layer and realizes the genuine batched vector-matrix
-reference `out[m,n] = Σ_{kk < 128} A[m,kk]·B[m,n,kk]`. -/
-theorem batched_vecmat_python_test_shape_output_summary
-    (A B output : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (batched_vecmat_surface A B output 128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := batched_vecmat_surface A B output 128 128 128 16 32 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [16, 32] =>
-        some (output, vecmatOutOffset s 128 16 32 idx))
-      (expected := fun idx : TileIndex [16, 32] =>
-        gemvSpec s A B 128 128 16 32 64 2 idx.1 idx.2.1)) := by
-  refine ⟨batched_vecmat_surface_toAlgorithm_supported A B output 128 128 128 16 32 64, ?_⟩
-  have h := batched_vecmat_closed_form_correct A B output s 128 128 16 32 64 2
-    (by norm_num) (by norm_num) (by norm_num)
-    (batched_vecmat_python_test_shape_offset_injective s) hundef
-  simpa using h
-
-end TestShape
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult
