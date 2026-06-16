@@ -72,6 +72,10 @@ set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
 
 This keeps the residual input, `RESIDUAL_OUT`, RMS-vs-layer norm, bias,
@@ -3903,397 +3907,6 @@ contiguous row-major `[M, N]` tensors. Thus `x`, `y`, `residual`, and
 always pass a bias tensor, and cover plain+bias, RMS+bias, and
 residual+plain+bias forward branches. -/
 
-theorem layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun i : Fin 1024 => fwdYOffset s 1024 i) := by
-  intro a b h
-  simp [fwdYOffset, bwdRowVectorOffset] at h
-  exact Fin.ext (by omega)
-
-theorem layer_norm_ops_fwd_residual_out_offset_python_test_shape_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun i : Fin 1024 => fwdResidualOutOffset s 1024 i) := by
-  intro a b h
-  simp [fwdResidualOutOffset, bwdRowVectorOffset] at h
-  exact Fin.ext (by omega)
-
-theorem layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
-    (MeanPre Mean : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
-      (expected := fun _ => meanStoreSpec s MeanPre) := by
-  exact layer_norm_ops_fwd_mean_store_slice_compute_correct MeanPre Mean s
-
-theorem layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
-    (RstdPre Rstd : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
-      (expected := fun _ => rstdStoreSpec s RstdPre) := by
-  exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
-
-theorem layer_norm_ops_fwd_y_store_python_test_shape_compute_correct
-    (ValuePre Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i) := by
-  exact layer_norm_ops_fwd_y_store_slice_compute_correct ValuePre Y
-    1024 1024 1024 s
-    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_fwd_bias_y_store_python_test_shape_compute_correct
-    (ValuePre Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i) := by
-  exact layer_norm_ops_fwd_bias_y_store_slice_compute_correct ValuePre Y
-    1024 1024 1024 s
-    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_fwd_rms_bias_y_store_python_test_shape_compute_correct
-    (ValuePre Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i) := by
-  exact layer_norm_ops_fwd_rms_bias_y_store_slice_compute_correct ValuePre Y
-    1024 1024 1024 s
-    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_fwd_residual_bias_y_store_python_test_shape_compute_correct
-    (ValuePre Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i) := by
-  exact layer_norm_ops_fwd_residual_bias_y_store_slice_compute_correct
-    ValuePre Y 1024 1024 1024 s
-    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_fwd_residual_out_store_python_test_shape_compute_correct
-    (ValuePre RESIDUAL_OUT : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_residual_out_store_slice ValuePre
-        RESIDUAL_OUT 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdResidualOutStoreSpec s ValuePre 1024 i) := by
-  exact layer_norm_ops_fwd_residual_out_store_slice_compute_correct ValuePre
-    RESIDUAL_OUT 1024 1024 1024 s
-    (layer_norm_ops_fwd_residual_out_offset_python_test_shape_injective s)
-
-/-! ## Python backward test-shape wrappers
-
-`layer_norm_ops.py`'s checked backward cases use `M = 64`, `N = 1024`, and
-contiguous row-major `[M, N]` tensors, so every row stride appearing in the
-tested backward launcher is `1024`. For float32 inputs, `BLOCK_N =
-min(65536 / 4, next_power_of_2 1024) = 1024`. The wrappers below specialize the
-branch slices to those Python-test shapes. -/
-
-theorem layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun i : Fin 1024 => bwdRowVectorOffset s 1024 i) := by
-  intro a b h
-  simp [bwdRowVectorOffset] at h
-  exact Fin.ext (by omega)
-
-theorem layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun i : Fin 1024 => bwdParamGradOffset s 1024 i) := by
-  intro a b h
-  simp [bwdParamGradOffset] at h
-  exact Fin.ext (by omega)
-
-theorem layer_norm_ops_bwd_dx_store_python_test_shape_compute_correct
-    (DXPre DX : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_dx_store_slice DXPre DX 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRowVectorStoreSpec s DXPre 1024 i) := by
-  exact layer_norm_ops_bwd_dx_store_slice_compute_correct DXPre DX
-    1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_dresidual_in_store_python_test_shape_compute_correct
-    (DXPre DRESIDUAL_IN : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_dresidual_in_store_slice DXPre DRESIDUAL_IN
-        1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DRESIDUAL_IN, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRowVectorStoreSpec s DXPre 1024 i) := by
-  exact layer_norm_ops_bwd_dresidual_in_store_slice_compute_correct DXPre
-    DRESIDUAL_IN 1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_recompute_y_store_python_test_shape_compute_correct
-    (YPre Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_recompute_y_store_slice YPre Y
-        1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRowVectorStoreSpec s YPre 1024 i) := by
-  exact layer_norm_ops_bwd_recompute_y_store_slice_compute_correct YPre Y
-    1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_dw_store_python_test_shape_compute_correct
-    (DWPre DW : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_dw_store_slice DWPre DW 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdParamGradStoreSpec s DWPre 1024 i) := by
-  exact layer_norm_ops_bwd_dw_store_slice_compute_correct DWPre DW 1024 1024 s
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_db_store_python_test_shape_compute_correct
-    (DBPre DB : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_db_store_slice DBPre DB 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdParamGradStoreSpec s DBPre 1024 i) := by
-  exact layer_norm_ops_bwd_db_store_slice_compute_correct DBPre DB 1024 1024 s
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
-    (X W DY DX DW Rstd : RegionName) (s : BlockState) (hDWDX : DW ≠ DX) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i) := by
-  exact layer_norm_ops_bwd_rms_one_row_dw_compute_correct X W DY DX DW Rstd
-    1024 1024 1024 1024 1024 s hDWDX
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
-    (DY DB : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i) := by
-  exact layer_norm_ops_bwd_bias_db_one_row_compute_correct DY DB
-    1024 1024 1024 s
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
-    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i) := by
-  exact layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
-    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDWDX hDWDB
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
-    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i) := by
-  exact layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
-    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDBDX hDBDW
-    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
-    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i) := by
-  exact layer_norm_ops_bwd_residual_add_store_slice_dx_compute_correct
-    DXBase DRESIDUAL DX DRESIDUAL_IN 1024 1024 1024 1024 1024 s hDXDresIn
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_residual_add_dresidual_in_python_test_shape_compute_correct
-    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
-    (hDresInDX : DRESIDUAL_IN ≠ DX) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i) := by
-  exact layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_compute_correct
-    DXBase DRESIDUAL DX DRESIDUAL_IN 1024 1024 1024 1024 1024 s hDresInDX
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
-    (Xhat W B Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRecomputeYBiasSpec s Xhat W B 1024 i) := by
-  exact layer_norm_ops_bwd_recompute_y_bias_slice_compute_correct Xhat W B Y
-    1024 1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_recompute_y_no_bias_python_test_shape_compute_correct
-    (Xhat W Y : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_recompute_y_no_bias_slice Xhat W Y
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRecomputeYNoBiasSpec s Xhat W 1024 i) := by
-  exact layer_norm_ops_bwd_recompute_y_no_bias_slice_compute_correct Xhat W Y
-    1024 1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-    (Xhat W DY C1 : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024) := by
-  exact layer_norm_ops_bwd_c1_reduction_slice_compute_correct Xhat W DY C1
-    1024 1024 1024 1024 s
-
-theorem layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
-    (W DY C2 : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024) := by
-  exact layer_norm_ops_bwd_c2_reduction_slice_compute_correct W DY C2
-    1024 1024 1024 s
-
-theorem layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
-    (Xhat W DY Rstd C1 DX : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i) := by
-  exact layer_norm_ops_bwd_rms_dx_from_c1_slice_compute_correct
-    Xhat W DY Rstd C1 DX 1024 1024 1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
-    (Xhat W DY Rstd C1 C2 DX : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DX 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i) := by
-  exact layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
-    Xhat W DY Rstd C1 C2 DX 1024 1024 1024 1024 1024 s
-    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
-
-/-! ## Dimension-general aggregate outputs
-
-The slice-level `*_compute_correct` lemmas above are already stated over
-*symbolic* row strides, feature dimension `N`, and tile width `BLOCK_N`. The
-Python test-shape wrappers (next section) merely instantiate them at the tested
-`1024/1024/1024` shape. The theorems in this section re-expose the same genuine
-per-output correctness at **arbitrary** `Nat` strides / dimensions, with the
-universally quantified `BLOCK_N`. Each output store's offset has the form
-`s.pid * stride + i.val` for `i : Fin BLOCK_N`, which is injective in `i` for
-*every* stride (the row base `s.pid * stride` is constant across the tile), so
-no contiguity side condition is needed — the injectivity is discharged here.
-The `expected` carriers are the genuine closed forms reading *input* memory
-(`fwdYStoreSpec`, `meanStoreSpec`, `bwdC1ReductionSpec`, …), never a
-self-referential `exec(...).readMem`.  -/
-
 /-- General injectivity for a `s.pid * stride + i.val` row-vector store offset,
 for any stride and tile width.  -/
 theorem layer_norm_ops_row_vector_offset_general_injective
@@ -4606,732 +4219,6 @@ theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
         stride_dres_in_row BLOCK_N)
 
 /-! ## Python test-shape aggregate outputs -/
-
-/-- Plain layer-norm forward Python shape with bias: exposes the `Y`, `Mean`,
-and `Rstd` outputs together. -/
-theorem layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
-    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
-      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
-      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
-  constructor
-  · exact layer_norm_ops_fwd_bias_y_store_python_test_shape_compute_correct
-      ValuePre Y s
-  constructor
-  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
-      MeanPre Mean s
-  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
-      RstdPre Rstd s
-
-/-- RMS layer-norm forward Python shape with bias: exposes the `Y` and `Rstd`
-outputs together. -/
-theorem layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
-    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
-        1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
-      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
-  constructor
-  · exact layer_norm_ops_fwd_rms_bias_y_store_python_test_shape_compute_correct
-      ValuePre Y s
-  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
-      RstdPre Rstd s
-
-/-- Residual plain layer-norm forward Python shape with bias: exposes
-`RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` together. -/
-theorem layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
-    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
-    (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_residual_out_store_slice ResidualPre
-        RESIDUAL_OUT 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdResidualOutStoreSpec s ResidualPre 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
-        1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, fwdYOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        fwdYStoreSpec s ValuePre 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
-      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
-      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
-  constructor
-  · exact layer_norm_ops_fwd_residual_out_store_python_test_shape_compute_correct
-      ResidualPre RESIDUAL_OUT s
-  constructor
-  · exact layer_norm_ops_fwd_residual_bias_y_store_python_test_shape_compute_correct
-      ValuePre Y s
-  constructor
-  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
-      MeanPre Mean s
-  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
-      RstdPre Rstd s
-
-/-- RMS backward Python shape: exposes the `c1` reduction, `DX`, and partial
-`DW` store slices together. -/
-theorem layer_norm_ops_bwd_rms_python_test_shape_core_outputs_compute_correct
-    (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 DX s
-  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
-      X W DY DX DW Rstd s hDWDX
-
-/-- Plain+bias backward Python shape: exposes the `c1`/`c2` reductions, `DX`,
-partial `DW`, and partial `DB` store slices together. -/
-theorem layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
-    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DX 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
-      W DY C2 s
-  constructor
-  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 C2 DX s
-  constructor
-  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
-      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
-  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
-      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
-
-/-- Backward residual-add Python shape: exposes both observable row-vector
-stores produced by the `dx += dres` branch, `DX` and optional `DRESIDUAL_IN`. -/
-theorem layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
-    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDresInDX : DRESIDUAL_IN ≠ DX) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
-      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
-  · exact
-      layer_norm_ops_bwd_residual_add_dresidual_in_python_test_shape_compute_correct
-        DXBase DRESIDUAL DX DRESIDUAL_IN s hDresInDX
-
-/-- Backward Python test case 2: non-RMS, bias, no residual, no recompute.
-
-The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` and
-`C2` conjuncts expose the row reductions consumed by the `DX` slice. -/
-theorem layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
-    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DX 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  exact layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
-    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
-
-/-- Backward Python test case 4: RMS, bias, no residual, no recompute.
-
-The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` conjunct
-exposes the row reduction consumed by the RMS `DX` slice. -/
-theorem layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
-    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 DX s
-  constructor
-  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
-      X W DY DX DW Rstd s hDWDX
-  · exact layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
-      DY DB s
-
-/-- Backward Python test case 6: non-RMS, bias, residual input, no recompute.
-
-The observed `DX` is the residual-adjusted value; `DW`/`DB` are the same
-partial-gradient stores as the plain+bias branch. -/
-theorem layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
-    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 : RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DXBase 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
-      W DY C2 s
-  constructor
-  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 C2 DXBase s
-  constructor
-  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
-      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
-  constructor
-  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
-      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
-  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
-      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
-
-/-- Backward Python test case 7: non-RMS, bias, no residual, recompute output.
-
-This groups the plain+bias core outputs with the recomputed `Y` store. -/
-theorem layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
-    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DX 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
-      W DY C2 s
-  constructor
-  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 C2 DX s
-  constructor
-  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
-      Xhat W B Y s
-  constructor
-  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
-      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
-  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
-      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
-
-/-- Backward Python test case 8: non-RMS, bias, residual input, recompute output.
-
-This groups the final residual-adjusted `DX`, partial `DW`/`DB`, and
-recomputed `Y` stores for the tested branch. -/
-theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
-    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 : RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C1, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        1024 1024 1024)
-      (initialState := s)
-      (write := fun _ : PUnit => some (C2, s.pid))
-      (expected := fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DXBase 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
-        1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DW, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
-        1024 1024 1024 1024 1024)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 1024 => i.val < 1024)
-        (fun i => (DB, bwdParamGradOffset s 1024 i)))
-      (expected := fun i : Fin 1024 =>
-        bwdBiasDBSpec s DY 1024 i)) := by
-  constructor
-  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
-      Xhat W DY C1 s
-  constructor
-  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
-      W DY C2 s
-  constructor
-  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
-      Xhat W DY Rstd C1 C2 DXBase s
-  constructor
-  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
-      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
-  constructor
-  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
-      Xhat W B Y s
-  constructor
-  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
-      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
-  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
-      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
-
-/-- `output_summary` alias for the plain+bias forward Python layer-norm path. -/
-abbrev layer_norm_ops_fwd_plain_bias_python_test_shape_output_summary
-    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :=
-  layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
-    ValuePre MeanPre RstdPre Y Mean Rstd s
-
-/-- `output_summary` alias for the RMS+bias forward Python layer-norm path. -/
-abbrev layer_norm_ops_fwd_rms_bias_python_test_shape_output_summary
-    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :=
-  layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
-    ValuePre RstdPre Y Rstd s
-
-/-- `output_summary` alias for the residual plain+bias forward Python path. -/
-abbrev layer_norm_ops_fwd_residual_bias_python_test_shape_output_summary
-    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
-    (s : BlockState) :=
-  layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
-    ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd s
-
-/-- `output_summary` alias for the residual-add backward Python path. -/
-abbrev layer_norm_ops_bwd_residual_add_python_test_shape_output_summary
-    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDresInDX : DRESIDUAL_IN ≠ DX) :=
-  layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
-    DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn hDresInDX
-
-/-- `output_summary` alias for backward case 2: plain+bias, no residual,
-no recompute. -/
-abbrev layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_output_summary
-    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
-    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
-
-/-- `output_summary` alias for backward case 4: RMS+bias, no residual,
-no recompute. -/
-abbrev layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_output_summary
-    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) :=
-  layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
-    X Xhat W DY Rstd C1 DX DW DB s hDWDX
-
-/-- `output_summary` for backward case 6: non-RMS + bias with residual input.
-
-Routes to the genuine closed-form slice decomposition: `C1`/`C2` row
-reductions, the `dx = (wdy - (xhat·c1 + c2))·rstd` plain dx, the residual-add
-`dx += dres`, and the partial `dw = dy·xhat` / `db = dy` parameter-gradient
-stores. No self-referential `expected`. -/
-abbrev layer_norm_ops_bwd_plain_bias_residual_python_test_shape_output_summary
-    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 :
-      RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
-    X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 s
-    hDXDresIn hDWDX hDWDB hDBDX hDBDW
-
-/-- `output_summary` for backward case 7: non-RMS + bias, no residual, recompute
-output.
-
-Routes to the genuine closed-form slice decomposition: `C1`/`C2` row
-reductions, the plain `dx`, the recomputed `y = xhat·w + b`, and the partial
-`dw`/`db` parameter-gradient stores. No self-referential `expected`. -/
-abbrev layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_output_summary
-    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
-    X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
-
-/-- `output_summary` for backward case 8: non-RMS + bias, residual input,
-recompute output.
-
-Routes to the genuine closed-form slice decomposition combining the case 6
-residual-add `dx` with the case 7 recomputed `y`, plus the partial `dw`/`db`
-parameter-gradient stores. No self-referential `expected`. -/
-abbrev layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary
-    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 :
-      RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
-    X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 s
-    hDXDresIn hDWDX hDWDB hDBDX hDBDW
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/-! ## End-to-end surface correctness
-
-The theorem below proves an output of `layer_norm_fwd_1pass_surface` itself —
-the full Python kernel surface, not a separately defined one-block slice —
-specialised to the simplest constexpr configuration. This closes the
-"the surface is functionally correct, not just the slice kernels" gap for the
-forward RMS/no-residual/no-bias branch. -/
 
 theorem layer_norm_fwd_1pass_surface_rms_only_y_correct
     (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
@@ -6696,5 +5583,1083 @@ theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
     stride_dx_row stride_dres_row stride_dres_in_row M N BLOCK_N eps s s'
     hExec i
   simpa [hActive] using h
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 1024 => fwdYOffset s 1024 i) := by
+  intro a b h
+  simp [fwdYOffset, bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_fwd_residual_out_offset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 1024 => fwdResidualOutOffset s 1024 i) := by
+  intro a b h
+  simp [fwdResidualOutOffset, bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
+    (MeanPre Mean : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre) := by
+  exact layer_norm_ops_fwd_mean_store_slice_compute_correct MeanPre Mean s
+
+theorem layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+    (RstdPre Rstd : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre) := by
+  exact layer_norm_ops_fwd_rstd_store_slice_compute_correct RstdPre Rstd s
+
+theorem layer_norm_ops_fwd_y_store_python_test_shape_compute_correct
+    (ValuePre Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i) := by
+  exact layer_norm_ops_fwd_y_store_slice_compute_correct ValuePre Y
+    1024 1024 1024 s
+    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_fwd_bias_y_store_python_test_shape_compute_correct
+    (ValuePre Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i) := by
+  exact layer_norm_ops_fwd_bias_y_store_slice_compute_correct ValuePre Y
+    1024 1024 1024 s
+    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_fwd_rms_bias_y_store_python_test_shape_compute_correct
+    (ValuePre Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i) := by
+  exact layer_norm_ops_fwd_rms_bias_y_store_slice_compute_correct ValuePre Y
+    1024 1024 1024 s
+    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_fwd_residual_bias_y_store_python_test_shape_compute_correct
+    (ValuePre Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i) := by
+  exact layer_norm_ops_fwd_residual_bias_y_store_slice_compute_correct
+    ValuePre Y 1024 1024 1024 s
+    (layer_norm_ops_fwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_fwd_residual_out_store_python_test_shape_compute_correct
+    (ValuePre RESIDUAL_OUT : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_residual_out_store_slice ValuePre
+        RESIDUAL_OUT 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdResidualOutStoreSpec s ValuePre 1024 i) := by
+  exact layer_norm_ops_fwd_residual_out_store_slice_compute_correct ValuePre
+    RESIDUAL_OUT 1024 1024 1024 s
+    (layer_norm_ops_fwd_residual_out_offset_python_test_shape_injective s)
+
+/-! ## Python backward test-shape wrappers
+
+`layer_norm_ops.py`'s checked backward cases use `M = 64`, `N = 1024`, and
+contiguous row-major `[M, N]` tensors, so every row stride appearing in the
+tested backward launcher is `1024`. For float32 inputs, `BLOCK_N =
+min(65536 / 4, next_power_of_2 1024) = 1024`. The wrappers below specialize the
+branch slices to those Python-test shapes. -/
+
+theorem layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 1024 => bwdRowVectorOffset s 1024 i) := by
+  intro a b h
+  simp [bwdRowVectorOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 1024 => bwdParamGradOffset s 1024 i) := by
+  intro a b h
+  simp [bwdParamGradOffset] at h
+  exact Fin.ext (by omega)
+
+theorem layer_norm_ops_bwd_dx_store_python_test_shape_compute_correct
+    (DXPre DX : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_dx_store_slice DXPre DX 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRowVectorStoreSpec s DXPre 1024 i) := by
+  exact layer_norm_ops_bwd_dx_store_slice_compute_correct DXPre DX
+    1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_dresidual_in_store_python_test_shape_compute_correct
+    (DXPre DRESIDUAL_IN : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_dresidual_in_store_slice DXPre DRESIDUAL_IN
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DRESIDUAL_IN, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRowVectorStoreSpec s DXPre 1024 i) := by
+  exact layer_norm_ops_bwd_dresidual_in_store_slice_compute_correct DXPre
+    DRESIDUAL_IN 1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_recompute_y_store_python_test_shape_compute_correct
+    (YPre Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_store_slice YPre Y
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRowVectorStoreSpec s YPre 1024 i) := by
+  exact layer_norm_ops_bwd_recompute_y_store_slice_compute_correct YPre Y
+    1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_dw_store_python_test_shape_compute_correct
+    (DWPre DW : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_dw_store_slice DWPre DW 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdParamGradStoreSpec s DWPre 1024 i) := by
+  exact layer_norm_ops_bwd_dw_store_slice_compute_correct DWPre DW 1024 1024 s
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_db_store_python_test_shape_compute_correct
+    (DBPre DB : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_db_store_slice DBPre DB 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdParamGradStoreSpec s DBPre 1024 i) := by
+  exact layer_norm_ops_bwd_db_store_slice_compute_correct DBPre DB 1024 1024 s
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
+    (X W DY DX DW Rstd : RegionName) (s : BlockState) (hDWDX : DW ≠ DX) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i) := by
+  exact layer_norm_ops_bwd_rms_one_row_dw_compute_correct X W DY DX DW Rstd
+    1024 1024 1024 1024 1024 s hDWDX
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
+    (DY DB : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i) := by
+  exact layer_norm_ops_bwd_bias_db_one_row_compute_correct DY DB
+    1024 1024 1024 s
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i) := by
+  exact layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
+    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDWDX hDWDB
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i) := by
+  exact layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
+    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDBDX hDBDW
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i) := by
+  exact layer_norm_ops_bwd_residual_add_store_slice_dx_compute_correct
+    DXBase DRESIDUAL DX DRESIDUAL_IN 1024 1024 1024 1024 1024 s hDXDresIn
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_residual_add_dresidual_in_python_test_shape_compute_correct
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i) := by
+  exact layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_compute_correct
+    DXBase DRESIDUAL DX DRESIDUAL_IN 1024 1024 1024 1024 1024 s hDresInDX
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
+    (Xhat W B Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYBiasSpec s Xhat W B 1024 i) := by
+  exact layer_norm_ops_bwd_recompute_y_bias_slice_compute_correct Xhat W B Y
+    1024 1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_recompute_y_no_bias_python_test_shape_compute_correct
+    (Xhat W Y : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_no_bias_slice Xhat W Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYNoBiasSpec s Xhat W 1024 i) := by
+  exact layer_norm_ops_bwd_recompute_y_no_bias_slice_compute_correct Xhat W Y
+    1024 1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+    (Xhat W DY C1 : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024) := by
+  exact layer_norm_ops_bwd_c1_reduction_slice_compute_correct Xhat W DY C1
+    1024 1024 1024 1024 s
+
+theorem layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+    (W DY C2 : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024) := by
+  exact layer_norm_ops_bwd_c2_reduction_slice_compute_correct W DY C2
+    1024 1024 1024 s
+
+theorem layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
+    (Xhat W DY Rstd C1 DX : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i) := by
+  exact layer_norm_ops_bwd_rms_dx_from_c1_slice_compute_correct
+    Xhat W DY Rstd C1 DX 1024 1024 1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+    (Xhat W DY Rstd C1 C2 DX : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i) := by
+  exact layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
+    Xhat W DY Rstd C1 C2 DX 1024 1024 1024 1024 1024 s
+    (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+/-! ## Dimension-general aggregate outputs
+
+The slice-level `*_compute_correct` lemmas above are already stated over
+*symbolic* row strides, feature dimension `N`, and tile width `BLOCK_N`. The
+Python test-shape wrappers (next section) merely instantiate them at the tested
+`1024/1024/1024` shape. The theorems in this section re-expose the same genuine
+per-output correctness at **arbitrary** `Nat` strides / dimensions, with the
+universally quantified `BLOCK_N`. Each output store's offset has the form
+`s.pid * stride + i.val` for `i : Fin BLOCK_N`, which is injective in `i` for
+*every* stride (the row base `s.pid * stride` is constant across the tile), so
+no contiguity side condition is needed — the injectivity is discharged here.
+The `expected` carriers are the genuine closed forms reading *input* memory
+(`fwdYStoreSpec`, `meanStoreSpec`, `bwdC1ReductionSpec`, …), never a
+self-referential `exec(...).readMem`.  -/
+
+/-- Plain layer-norm forward Python shape with bias: exposes the `Y`, `Mean`,
+and `Rstd` outputs together. -/
+theorem layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
+    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  constructor
+  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
+      MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- RMS layer-norm forward Python shape with bias: exposes the `Y` and `Rstd`
+outputs together. -/
+theorem layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
+    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_rms_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- Residual plain layer-norm forward Python shape with bias: exposes
+`RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` together. -/
+theorem layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
+    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_residual_out_store_slice ResidualPre
+        RESIDUAL_OUT 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdResidualOutStoreSpec s ResidualPre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_residual_out_store_python_test_shape_compute_correct
+      ResidualPre RESIDUAL_OUT s
+  constructor
+  · exact layer_norm_ops_fwd_residual_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  constructor
+  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
+      MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- RMS backward Python shape: exposes the `c1` reduction, `DX`, and partial
+`DW` store slices together. -/
+theorem layer_norm_ops_bwd_rms_python_test_shape_core_outputs_compute_correct
+    (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 DX s
+  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW Rstd s hDWDX
+
+/-- Plain+bias backward Python shape: exposes the `c1`/`c2` reductions, `DX`,
+partial `DW`, and partial `DB` store slices together. -/
+theorem layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DX s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward residual-add Python shape: exposes both observable row-vector
+stores produced by the `dx += dres` branch, `DX` and optional `DRESIDUAL_IN`. -/
+theorem layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  · exact
+      layer_norm_ops_bwd_residual_add_dresidual_in_python_test_shape_compute_correct
+        DXBase DRESIDUAL DX DRESIDUAL_IN s hDresInDX
+
+/-- Backward Python test case 2: non-RMS, bias, no residual, no recompute.
+
+The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` and
+`C2` conjuncts expose the row reductions consumed by the `DX` slice. -/
+theorem layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  exact layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
+    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- Backward Python test case 4: RMS, bias, no residual, no recompute.
+
+The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` conjunct
+exposes the row reduction consumed by the RMS `DX` slice. -/
+theorem layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 DX s
+  constructor
+  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW Rstd s hDWDX
+  · exact layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
+      DY DB s
+
+/-- Backward Python test case 6: non-RMS, bias, residual input, no recompute.
+
+The observed `DX` is the residual-adjusted value; `DW`/`DB` are the same
+partial-gradient stores as the plain+bias branch. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DXBase 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DXBase s
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward Python test case 7: non-RMS, bias, no residual, recompute output.
+
+This groups the plain+bias core outputs with the recomputed `Y` store. -/
+theorem layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
+    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DX s
+  constructor
+  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
+      Xhat W B Y s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward Python test case 8: non-RMS, bias, residual input, recompute output.
+
+This groups the final residual-adjusted `DX`, partial `DW`/`DB`, and
+recomputed `Y` stores for the tested branch. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
+    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DXBase 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DXBase s
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  constructor
+  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
+      Xhat W B Y s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
+
+/-- `output_summary` alias for the plain+bias forward Python layer-norm path. -/
+abbrev layer_norm_ops_fwd_plain_bias_python_test_shape_output_summary
+    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :=
+  layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
+    ValuePre MeanPre RstdPre Y Mean Rstd s
+
+/-- `output_summary` alias for the RMS+bias forward Python layer-norm path. -/
+abbrev layer_norm_ops_fwd_rms_bias_python_test_shape_output_summary
+    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :=
+  layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
+    ValuePre RstdPre Y Rstd s
+
+/-- `output_summary` alias for the residual plain+bias forward Python path. -/
+abbrev layer_norm_ops_fwd_residual_bias_python_test_shape_output_summary
+    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
+    (s : BlockState) :=
+  layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
+    ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd s
+
+/-- `output_summary` alias for the residual-add backward Python path. -/
+abbrev layer_norm_ops_bwd_residual_add_python_test_shape_output_summary
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :=
+  layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
+    DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn hDresInDX
+
+/-- `output_summary` alias for backward case 2: plain+bias, no residual,
+no recompute. -/
+abbrev layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_output_summary
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` alias for backward case 4: RMS+bias, no residual,
+no recompute. -/
+abbrev layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_output_summary
+    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :=
+  layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY Rstd C1 DX DW DB s hDWDX
+
+/-- `output_summary` for backward case 6: non-RMS + bias with residual input.
+
+Routes to the genuine closed-form slice decomposition: `C1`/`C2` row
+reductions, the `dx = (wdy - (xhat·c1 + c2))·rstd` plain dx, the residual-add
+`dx += dres`, and the partial `dw = dy·xhat` / `db = dy` parameter-gradient
+stores. No self-referential `expected`. -/
+abbrev layer_norm_ops_bwd_plain_bias_residual_python_test_shape_output_summary
+    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 :
+      RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 s
+    hDXDresIn hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` for backward case 7: non-RMS + bias, no residual, recompute
+output.
+
+Routes to the genuine closed-form slice decomposition: `C1`/`C2` row
+reductions, the plain `dx`, the recomputed `y = xhat·w + b`, and the partial
+`dw`/`db` parameter-gradient stores. No self-referential `expected`. -/
+abbrev layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_output_summary
+    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
+    X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` for backward case 8: non-RMS + bias, residual input,
+recompute output.
+
+Routes to the genuine closed-form slice decomposition combining the case 6
+residual-add `dx` with the case 7 recomputed `y`, plus the partial `dw`/`db`
+parameter-gradient stores. No self-referential `expected`. -/
+abbrev layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary
+    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 :
+      RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
+    X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 s
+    hDXDresIn hDWDX hDWDB hDBDX hDBDW
+
+
+/-! ## End-to-end surface correctness
+
+The theorem below proves an output of `layer_norm_fwd_1pass_surface` itself —
+the full Python kernel surface, not a separately defined one-block slice —
+specialised to the simplest constexpr configuration. This closes the
+"the surface is functionally correct, not just the slice kernels" gap for the
+forward RMS/no-residual/no-bias branch. -/
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.LayerNormOps

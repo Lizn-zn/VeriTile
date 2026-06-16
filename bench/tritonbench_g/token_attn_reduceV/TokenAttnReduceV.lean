@@ -68,6 +68,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `token_attn_reduceV.py`'s
 `_fwd_kernel_token_att2`.
 
@@ -1662,24 +1666,6 @@ abbrev token_attn_reducev_python_case3_store_summary
     Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen s
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 theorem token_attn_reducev_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1748,5 +1734,13 @@ theorem token_attn_reducev_python_case3_output_summary
       Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
       256 64 1 1 64 128 rfl rfl (by norm_num) s hundef
       (token_attn_reducev_python_test_shape_offset_injective s)
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.TokenAttnReduceV

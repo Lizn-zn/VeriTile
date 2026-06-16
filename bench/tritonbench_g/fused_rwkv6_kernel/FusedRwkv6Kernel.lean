@@ -76,6 +76,10 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `fused_rwkv6_kernel.py`'s
 `fused_recurrent_rwkv6_fwd_kernel` as used by the exported benchmark helper.
 
@@ -801,6 +805,12 @@ and the state update realizes `stateClosed(t+1)` — closed forms over the *inpu
 regions, never a read-back of the kernel's own output. Case 1: no initial / no
 final state; case 2: initial state; case 3: final state; case 4: both. -/
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 /-- **Genuine RWKV6 Python case 1 summary** (no initial state, no final state). -/
 theorem fused_recurrent_rwkv6_python_test_case1_output_summary
     (q k v w u o h0 ht BHPrev BHOut : RegionName) (t : Fin 4) (s : BlockState)
@@ -961,5 +971,7 @@ theorem fused_recurrent_rwkv6_python_test_case4_output_summary
   · exact fused_recurrent_rwkv6_final_state_closed_form BHFinal ht k v w h0
       Bool.true 32 32 8 8 8 8 4 s
       (fused_recurrent_rwkv6_final_state_offset_injective s) hFinal
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel

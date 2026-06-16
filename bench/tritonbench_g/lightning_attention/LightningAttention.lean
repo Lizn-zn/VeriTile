@@ -66,6 +66,10 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `lightning_attention.py`'s `_fwd_kernel`.
 
 This covers the full forward recurrent tile loop. -/
@@ -1204,6 +1208,12 @@ The checked Python test uses `b = 2`, `h = 8`, `n = 128`, `d = 64`, and
 backward launcher uses `BLOCK = 64`; DQ/DK row tiles have width `64`, and DV
 row tiles have width `128`. -/
 
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
 theorem lightning_attention_forward_python_test_shape_offset_injective
     (s : BlockState) :
     Function.Injective
@@ -1583,23 +1593,6 @@ theorem lightning_attention_python_test_shape_store_summary
       DQInter DQPre DKPre DVPre DQ DK DV s
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /-! ## Genuine forward closed-form realizations at the Python test shape
 
 The Python launcher fixes `d = 64`, `BLOCK = 64`, `BLOCK_MODEL = 32`, so the
@@ -1656,22 +1649,6 @@ theorem lightning_attention_forward_o_inter_python_test_shape_compute_correct
         oInterDotSpec s Q KVPrev 64 64 32 idx) := by
   exact lightning_attention_forward_o_inter_dot_slice_compute_correct Q KVPrev
     OInter 64 64 32 s lightning_attention_forward_o_inter_offset_python_test_shape_injective
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 /-- **Genuine** launched-surface output summary for the checked Python forward
@@ -1735,5 +1712,7 @@ theorem lightning_attention_python_test_shape_complete_summary
       DK DV OAcc OIntra OInter DQInter DQPre DKPre DVPre s
   · exact lightning_attention_bwd_dq_inter_python_test_shape_formula_summary DO
       KVTrans DQInter s
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.LightningAttention

@@ -91,6 +91,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_cum`.
 
@@ -1015,36 +1019,6 @@ noncomputable def producedChunkGatedAttentionFinalStateValue
   hClosed s K V G H0 GATEK USE_INITIAL_STATE
     4096 1 128 4096 32 1 32 32 32 16 16 4 idx
 
-/-- Python test-shape output coverage for chunk gated attention: every checked
-state-output surface (`h` at each loop row and final state) realizes its masked
-store shape. -/
-theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
-    (BH H BHFinal Ht : RegionName) (i_t : Fin 4) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
-  constructor
-  · exact chunk_gated_attention_h_state_python_test_shape_compute_correct
-      BH H i_t s
-  · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
-      BHFinal Ht s
-
 /-- Swap the `expected` value of a `writeIf`-`Realizes` when the two `expected`
 functions agree on every active (`mask`-satisfying) index. -/
 theorem realizes_writeIf_expected_congr {ι : Type} {α : Type}
@@ -1135,6 +1109,42 @@ theorem chunk_gated_attention_final_state_store_slice_closed_form
   simp only [finalStateStoreValue, hActive, if_true]
   rw [hBuf idx]
   simp
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+/-- Python test-shape output coverage for chunk gated attention: every checked
+state-output surface (`h` at each loop row and final state) realizes its masked
+store shape. -/
+theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
+    (BH H BHFinal Ht : RegionName) (i_t : Fin 4) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
+        4096 32 1 32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
+        32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
+  constructor
+  · exact chunk_gated_attention_h_state_python_test_shape_compute_correct
+      BH H i_t s
+  · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
+      BHFinal Ht s
 
 /-- Public Python test-shape summary for `chunk_gated_attention.py`, against the
 **genuine closed forms** (no self-referential read-back).
@@ -1271,5 +1281,7 @@ theorem chunk_gated_attention_python_test_shape_output_summary
   · simpa [producedChunkGatedAttentionFinalStateValue] using
       chunk_gated_attention_final_state_store_slice_closed_form BHFinal Ht K V GCum H0
         Bool.true Bool.false s hFinTFT
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention

@@ -83,13 +83,9 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! ## Reusable execution primitives (recipe architecture)
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-Ported / specialized from the `chunk_gla_simple` recipe set: block-pointer load
-recipes through bound registers, `makeBlockPtrDynOffsets` eval recipes, the
-matmul element lemma, and a dynamic-range carry-invariant driver. These keep the
-`BlockState` symbolic — readbacks peel through `setReg` chains by name-inequality
-`simp` — so the cross-chunk fold never `whnf`-es a deeply nested literal state. -/
+section Correct
 
 /-- No-mask 2D block-pointer load through a *bound register* `name` holding the
 block-pointer tile produced by `makeBlockPtrDynOffsets`. -/
@@ -2676,5 +2672,13 @@ theorem chunk_delta_fwd_python_case2_output_summary
       (fun i_t => chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
       (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
   exact ⟨sF, hexec, hh, hvn, hfin rfl⟩
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

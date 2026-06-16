@@ -57,6 +57,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_fwd_kernel`.
 
@@ -826,34 +830,6 @@ The Python regression keeps `B = 1`, `H = 2`, `T = 2`, `D = 2` and varies
 only `initial_state`/`output_final_state`. These wrappers pin the four forward
 entry points and the two backward `USE_INITIAL_STATE` paths used by autograd. -/
 
-theorem fused_recurrent_hgrn_test_case1_fwd_surface_toAlgorithm_supported
-    (x g o h0 ht : RegionName) :
-    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
-      Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
-  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
-    2 2 32 Bool.false Bool.false
-
-theorem fused_recurrent_hgrn_test_case2_fwd_surface_toAlgorithm_supported
-    (x g o h0 ht : RegionName) :
-    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
-      Bool.true Bool.false).toAlgorithm? = Except.ok alg := by
-  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
-    2 2 32 Bool.true Bool.false
-
-theorem fused_recurrent_hgrn_test_case3_fwd_surface_toAlgorithm_supported
-    (x g o h0 ht : RegionName) :
-    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
-      Bool.false Bool.true).toAlgorithm? = Except.ok alg := by
-  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
-    2 2 32 Bool.false Bool.true
-
-theorem fused_recurrent_hgrn_test_case4_fwd_surface_toAlgorithm_supported
-    (x g o h0 ht : RegionName) :
-    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
-      Bool.true Bool.true).toAlgorithm? = Except.ok alg := by
-  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
-    2 2 32 Bool.true Bool.true
-
 theorem fused_recurrent_hgrn_test_no_initial_state_bwd_surface_toAlgorithm_supported
     (G O H0 DX DG DO : RegionName) :
     (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
@@ -948,6 +924,40 @@ four result entries produced by `test_fused_recurrent_hgrn_with_backward`.
 They deliberately stay in this benchmark file: the grouping is specific to the
 Python regression's `initial_state`/`output_final_state` matrix and should not
 be promoted to the shared math or semantics layers. -/
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem fused_recurrent_hgrn_test_case1_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.false Bool.false
+
+theorem fused_recurrent_hgrn_test_case2_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.true Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.true Bool.false
+
+theorem fused_recurrent_hgrn_test_case3_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.false Bool.true).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.false Bool.true
+
+theorem fused_recurrent_hgrn_test_case4_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.true Bool.true).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.true Bool.true
 
 /-- `test_case_1`: no initial state and no final state. The full forward and
 backward surfaces realize the checked observable `o`, `dx`, and `dg` rows. -/
@@ -1422,22 +1432,6 @@ abbrev fused_recurrent_hgrn_test_case4_outputs_prop
 case propositions so the manifest context reflects its full-surface statement. -/
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /-- Case 1 end-to-end summary for the Python regression shape: exact
 forward/backward DSL surfaces plus the observable `o`, `dx`, and `dg` row
 writebacks. -/
@@ -1524,5 +1518,7 @@ theorem fused_recurrent_hgrn_python_test_shape_complete_summary
       BH BHFinal DHPrev BO t_rel s
   · exact fused_recurrent_hgrn_test_case4_output_summary X G O H0 Ht DO DX DG
       BH BHPrev BHFinal DHPrev BO t_rel s
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
