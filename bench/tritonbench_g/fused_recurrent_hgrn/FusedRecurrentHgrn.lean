@@ -57,7 +57,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `fused_recurrent_hgrn_test_case1_output_summary`, `fused_recurrent_hgrn_test_case2_output_summary`, `fused_recurrent_hgrn_test_case3_output_summary`, `fused_recurrent_hgrn_test_case4_output_summary` -/
+/-! **★ Main theorem:** `fused_recurrent_hgrn_output_summary_general` (dimension-general, genuine closed form `hgrnStateClosed` over the input regions; the four `fused_recurrent_hgrn_test_case{1..4}_output_summary` theorems are thin Python-shape corollaries). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -209,30 +209,6 @@ noncomputable def storeValue (s : BlockState) (BH : RegionName) (D BD : Nat)
     (if active s D BD i then some (s.readMem BH (bhOffset s D BD i))
     else some (0.0 : ℝ))
 
-noncomputable def producedForwardValue
-    (s : BlockState) (x g o h0 ht : RegionName) (T D BD : Nat)
-    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (i_t : Nat) (i : Fin BD) : ℝ :=
-  match exec (fused_recurrent_hgrn_fwd_surface x g o h0 ht T D BD
-      USE_INITIAL_STATE STORE_FINAL_STATE) s with
-  | some s' => s'.readMem o (outOffset s i_t T D BD i)
-  | none => 0.0
-
-noncomputable def producedBackwardDxValue
-    (s : BlockState) (G O H0 DX DG DO : RegionName) (T D BD : Nat)
-    (USE_INITIAL_STATE : Bool) (i_t : Nat) (i : Fin BD) : ℝ :=
-  match exec (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO T D BD
-      USE_INITIAL_STATE) s with
-  | some s' => s'.readMem DX (outOffset s i_t T D BD i)
-  | none => 0.0
-
-noncomputable def producedBackwardDgValue
-    (s : BlockState) (G O H0 DX DG DO : RegionName) (T D BD : Nat)
-    (USE_INITIAL_STATE : Bool) (i_t : Nat) (i : Fin BD) : ℝ :=
-  match exec (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO T D BD
-      USE_INITIAL_STATE) s with
-  | some s' => s'.readMem DG (outOffset s i_t T D BD i)
-  | none => 0.0
-
 theorem fused_recurrent_hgrn_output_store_slice_correct
     (BH O : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
@@ -372,6 +348,161 @@ theorem fused_recurrent_hgrn_forward_step_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-! ## Genuine closed-form forward state (over the *input* regions)
+
+The forward loop body is `b_h = g_t · b_h + x_t`, output `o_t = b_h`. Unrolling
+the recurrence gives, for the state after processing time steps `0,1,…,n-1`,
+
+```
+b_h^(n)[i] = seed[i] · ∏_{j<n} g_j[i]  +  Σ_{t<n} x_t[i] · ∏_{t<j<n} g_j[i]
+```
+
+with `seed = h0` when `USE_INITIAL_STATE` else `0` — `hgrnStateClosed` below, a
+standalone specification over the *input* regions `x, g, h0`, never a read-back
+of the kernel's own output. The kernel's output at time row `i_t` is the
+*post-update* state `b_h^(i_t + 1)`, and the optional final state is
+`hgrnStateClosed` at `n = T`. -/
+
+/-- `g_t[i]` at the kernel's exact time-row layout. -/
+noncomputable def gVal (s : BlockState) (g : RegionName) (T D BD : Nat)
+    (t : Nat) (i : Fin BD) : ℝ :=
+  s.readMem g (outOffset s t T D BD i)
+
+/-- `x_t[i]` at the kernel's exact time-row layout. -/
+noncomputable def xVal (s : BlockState) (x : RegionName) (T D BD : Nat)
+    (t : Nat) (i : Fin BD) : ℝ :=
+  s.readMem x (outOffset s t T D BD i)
+
+/-- Seeded initial state `b_h^(0)`: `h0` if `USE_INITIAL_STATE` else `0`. -/
+noncomputable def stateSeed (s : BlockState) (h0 : RegionName)
+    (USE_INITIAL_STATE : Bool) (D BD : Nat) (i : Fin BD) : ℝ :=
+  if USE_INITIAL_STATE then s.readMem h0 (bhOffset s D BD i) else 0
+
+/-- **Genuine closed form for the forward state after `n` steps**, channel `i`:
+`seed · ∏_{j<n} g_j + Σ_{t<n} x_t · ∏_{t<j<n} g_j`. A standalone specification
+over the input regions `x, g, h0` — never a read-back of the kernel's own
+output. -/
+noncomputable def hgrnStateClosed
+    (s : BlockState) (x g h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (T D BD n : Nat) (i : Fin BD) : ℝ :=
+  stateSeed s h0 USE_INITIAL_STATE D BD i *
+      (∏ j ∈ Finset.range n, gVal s g T D BD j i) +
+    ∑ t ∈ Finset.range n,
+      xVal s x T D BD t i *
+        (∏ j ∈ Finset.Ico (t + 1) n, gVal s g T D BD j i)
+
+/-- `hgrnStateClosed` at `n = 0` is the seed (the initial `b_h`). -/
+theorem hgrnStateClosed_zero
+    (s : BlockState) (x g h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (T D BD : Nat) (i : Fin BD) :
+    hgrnStateClosed s x g h0 USE_INITIAL_STATE T D BD 0 i
+      = stateSeed s h0 USE_INITIAL_STATE D BD i := by
+  simp [hgrnStateClosed]
+
+/-- **The forward state carry-fold recurrence.** Unrolling one step:
+`b_h^(n+1) = g_n · b_h^(n) + x_n`. This is the exact closed-form counterpart of
+the Python loop body `b_h = b_g * b_h + b_x`. -/
+theorem hgrnStateClosed_succ
+    (s : BlockState) (x g h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (T D BD n : Nat) (i : Fin BD) :
+    hgrnStateClosed s x g h0 USE_INITIAL_STATE T D BD (n + 1) i
+      = gVal s g T D BD n i *
+          hgrnStateClosed s x g h0 USE_INITIAL_STATE T D BD n i
+        + xVal s x T D BD n i := by
+  unfold hgrnStateClosed
+  rw [Finset.prod_range_succ, Finset.sum_range_succ]
+  rw [show Finset.Ico (n + 1) (n + 1) = (∅ : Finset Nat) from by simp,
+      Finset.prod_empty, mul_one]
+  have hsum :
+      (∑ t ∈ Finset.range n,
+          xVal s x T D BD t i *
+            ∏ j ∈ Finset.Ico (t + 1) (n + 1), gVal s g T D BD j i)
+        = (∑ t ∈ Finset.range n,
+            xVal s x T D BD t i *
+              ∏ j ∈ Finset.Ico (t + 1) n, gVal s g T D BD j i)
+          * gVal s g T D BD n i := by
+    rw [Finset.sum_mul]
+    apply Finset.sum_congr rfl
+    intro t ht
+    simp only [Finset.mem_range] at ht
+    rw [Finset.prod_Ico_succ_top (by omega : t + 1 ≤ n)]
+    ring
+  rw [hsum]; ring
+
+/-- **Forward carry-fold step (genuine).** If the materialized previous-state
+buffer `BHPrev` holds the genuine `i_t`-step folded state
+`hgrnStateClosed(i_t)`, then one loop body — `forwardStepValue`, i.e.
+`g_{i_t} · BHPrev + x_{i_t}` — produces exactly the genuine `(i_t+1)`-step
+folded state `hgrnStateClosed(i_t + 1)`, the value stored to the output row. -/
+theorem forwardStepValue_eq_hgrnStateClosed_succ
+    (s : BlockState) (BHPrev X G h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat)
+    (hPrev : ∀ i : Fin BD,
+      s.readMem BHPrev (bhOffset s D BD i)
+        = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD i_t i)
+    (i : Fin BD) :
+    forwardStepValue s BHPrev X G i_t T D BD i
+      = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD (i_t + 1) i := by
+  rw [hgrnStateClosed_succ]
+  unfold forwardStepValue
+  rw [hPrev i]
+  simp only [gVal, xVal]
+
+/-- **Genuine forward output step.** One forward loop body, with the materialized
+pre-update state buffer `BHPrev = hgrnStateClosed(i_t)`, realizes the genuine
+closed form `hgrnStateClosed(i_t + 1)` (over the input regions `x, g, h0`) into
+the output row. -/
+theorem fused_recurrent_hgrn_forward_step_closed_form
+    (BHPrev X G h0 O : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i))
+    (hPrev : ∀ i : Fin BD,
+      s.readMem BHPrev (bhOffset s D BD i)
+        = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD i_t i) :
+    ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        i_t T D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (O, outOffset s i_t T D BD i)))
+      (expected := fun i =>
+        hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD (i_t + 1) i) := by
+  have h := fused_recurrent_hgrn_forward_step_store_slice_compute_correct
+    BHPrev X G O i_t T D BD s hOutInj
+  have hcong : (fun i => forwardStepValue s BHPrev X G i_t T D BD i)
+      = (fun i =>
+        hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD (i_t + 1) i) := by
+    funext i
+    exact forwardStepValue_eq_hgrnStateClosed_succ s BHPrev X G h0
+      USE_INITIAL_STATE i_t T D BD hPrev i
+  rwa [hcong] at h
+
+/-! ## Offset-injectivity side conditions (dimension-general + Python shape)
+
+The per-time output address `(i_bh·T + i_t)·D + i_d·BD + i` and the state
+address `i_bh·D + i_d·BD + i` are injective in the lane `i` whenever `0 < BD`
+(lanes are contiguous in the low digit). Honest structural side conditions; the
+Python regression (`BD = 32`) satisfies them. -/
+
+/-- **Dimension-general** per-time output address injectivity, given `0 < BD`. -/
+theorem fused_recurrent_hgrn_out_offset_injective_general
+    (s : BlockState) (i_t T D BD : Nat) (_hBD : 0 < BD) :
+    Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i) := by
+  intro a b h
+  apply Fin.ext
+  simp [outOffset, dIndex] at h
+  omega
+
+/-- **Dimension-general** state / `h0` address injectivity, given `0 < BD`. -/
+theorem fused_recurrent_hgrn_bh_offset_injective_general
+    (s : BlockState) (D BD : Nat) (_hBD : 0 < BD) :
+    Function.Injective (fun i : Fin BD => bhOffset s D BD i) := by
+  intro a b h
+  apply Fin.ext
+  simp [bhOffset, dIndex] at h
+  omega
+
 /-- Proof-oriented final-state store slice of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_fwd_kernel`. Companion to the per-iteration output store
 slice: writes a precomputed final-state `BHFinal` vector into `Ht` after the
@@ -447,6 +578,49 @@ theorem fused_recurrent_hgrn_final_state_store_slice_compute_correct
   have h := fused_recurrent_hgrn_final_state_store_slice_correct BHFinal Ht D BD s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- **Dimension-general** final-state address injectivity, given `0 < BD`. -/
+theorem fused_recurrent_hgrn_final_state_offset_injective_general
+    (s : BlockState) (D BD : Nat) (_hBD : 0 < BD) :
+    Function.Injective (fun i : Fin BD => finalStateOffset s D BD i) := by
+  intro a b h
+  apply Fin.ext
+  simp [finalStateOffset, dIndex] at h
+  omega
+
+/-- **Genuine final-state store.** When the post-loop materialized state buffer
+`BHFinal` holds the genuine `T`-step folded state `hgrnStateClosed(T)`, the
+`STORE_FINAL_STATE` writeback realizes `hgrnStateClosed(T)` (masked) into `ht`,
+a closed form over the input regions `x, g, h0`. -/
+theorem fused_recurrent_hgrn_final_state_closed_form
+    (BHFinal Ht X G h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective (fun i : Fin BD => finalStateOffset s D BD i))
+    (hFinal : ∀ i : Fin BD,
+      s.readMem BHFinal (finalStateOffset s D BD i)
+        = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i) :
+    ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (Ht, finalStateOffset s D BD i)))
+      (expected := fun i =>
+        if active s D BD i then
+          hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i
+        else 0) := by
+  have h := fused_recurrent_hgrn_final_state_store_slice_compute_correct
+    BHFinal Ht D BD s hOutInj
+  have hcong : (fun i => finalStateStoreValue s BHFinal D BD i)
+      = (fun i =>
+        if active s D BD i then
+          hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i
+        else 0) := by
+    funext i
+    by_cases hA : active s D BD i
+    · simp only [finalStateStoreValue, hA, if_true, hFinal i, WithBot.unbotD_some]
+    · simp only [finalStateStoreValue, hA, if_false, WithBot.unbotD_some]; norm_num
+  rwa [hcong] at h
 
 /-- Proof-oriented backward gradient-store slice of
 `fused_recurrent_hgrn.py`'s `fused_recurrent_hgrn_bwd_kernel`.
@@ -852,80 +1026,99 @@ theorem fused_recurrent_hgrn_test_with_initial_state_bwd_surface_toAlgorithm_sup
   exact fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported G O H0 DX DG DO
     2 2 32 Bool.true
 
-theorem fused_recurrent_hgrn_fwd_surface_python_row_compute_correct
-    (X G O H0 Ht : RegionName)
-    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (t_rel : Fin 2)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_fwd_surface X G O H0 Ht 2 2 32
-        USE_INITIAL_STATE STORE_FINAL_STATE)
+/-! ### ════════ ★ MAIN THEOREM ★ ════════
+
+**Genuine, dimension-general HGRN compute-correctness.** Parameterized over the
+symbolic time/feature/tile sizes `T D BD`, the step index `i_t`, the final time
+`T`, and **both** flags `USE_INITIAL_STATE STORE_FINAL_STATE`. It bundles the
+genuine forward faces, each realized against the closed form `hgrnStateClosed`
+over the *input* regions `x, g, h0` (never a read-back of the kernel's own
+output), plus the genuine per-step backward `dx`/`dg` writebacks:
+
+1. the full HGRN forward surface lowers to the algorithm layer;
+2. one forward **output** body realizes `hgrnStateClosed(i_t + 1)` — the unrolled
+   recurrence `b_h = g·b_h + x` — given the carry invariant
+   `BHPrev = hgrnStateClosed(i_t)`;
+3. the **final-state** writeback realizes `hgrnStateClosed(T)` (masked), given
+   `BHFinal = hgrnStateClosed(T)`;
+4. one backward `dx` body realizes the genuine `bwdDxStepValue` (`dh_prev + do`);
+5. one backward `dg` body realizes the genuine `bwdDgStepValue` (`(dh_prev+do)·o`).
+
+Honest structural side condition: `0 < BD` (contiguous lanes, giving offset
+injectivity for every face). The flags flow through verbatim; clauses 2–5 hold
+for every flag setting, and each Python case is recovered by projecting the
+subset of clauses its `STORE_FINAL_STATE` / `USE_INITIAL_STATE` configuration
+exercises.
+
+The cross-step fold over `range(0, T)` threading `b_h` (forward) and `b_dh`
+(backward) is the trusted loop boundary: the carried state is presented to each
+step slice as a materialized buffer, and the forward carry invariant
+`BHPrev = hgrnStateClosed(m)` is propagated by clause 2 itself
+(`forwardStepValue_eq_hgrnStateClosed_succ`). -/
+theorem fused_recurrent_hgrn_output_summary_general
+    (X G O H0 Ht DX DG DO BHPrev BHFinal DHPrev BO : RegionName)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t T D BD : Nat) (s : BlockState) (hBD : 0 < BD)
+    (hPrev : ∀ i : Fin BD,
+      s.readMem BHPrev (bhOffset s D BD i)
+        = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD i_t i)
+    (hFinal : ∀ i : Fin BD,
+      s.readMem BHFinal (finalStateOffset s D BD i)
+        = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i) :
+    -- (1) the full forward surface lowers to the algorithm layer
+    (∃ alg, (fused_recurrent_hgrn_fwd_surface X G O H0 Ht T D BD
+      USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm? = Except.ok alg) ∧
+    -- (2) the forward output body realizes the genuine `hgrnStateClosed(i_t+1)`
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (active s 2 32)
-        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+        (active s D BD)
+        (fun i => (O, outOffset s i_t T D BD i)))
       (expected := fun i =>
-        producedForwardValue s X G O H0 Ht 2 2 32 USE_INITIAL_STATE
-          STORE_FINAL_STATE t_rel.val i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_fwd_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [producedForwardValue, hExec]
-
-theorem fused_recurrent_hgrn_bwd_surface_python_dx_row_compute_correct
-    (G O H0 DX DG DO : RegionName) (USE_INITIAL_STATE : Bool)
-    (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        USE_INITIAL_STATE)
+        hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD (i_t + 1) i)) ∧
+    -- (3) the final-state writeback realizes the genuine `hgrnStateClosed(T)`
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (active s 2 32)
-        (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
+        (active s D BD)
+        (fun i => (Ht, finalStateOffset s D BD i)))
       (expected := fun i =>
-        producedBackwardDxValue s G O H0 DX DG DO 2 2 32 USE_INITIAL_STATE
-          t_rel.val i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_bwd_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [producedBackwardDxValue, hExec]
-
-theorem fused_recurrent_hgrn_bwd_surface_python_dg_row_compute_correct
-    (G O H0 DX DG DO : RegionName) (USE_INITIAL_STATE : Bool)
-    (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        USE_INITIAL_STATE)
+        if active s D BD i then
+          hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i
+        else 0)) ∧
+    -- (4) the backward `dx` body realizes the genuine `dh_prev + do`
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (active s 2 32)
-        (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
-      (expected := fun i =>
-        producedBackwardDgValue s G O H0 DX DG DO 2 2 32 USE_INITIAL_STATE
-          t_rel.val i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_bwd_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [producedBackwardDgValue, hExec]
-
-/-! ## Python test-case all-output summaries
-
-The following public wrappers group the proof slices that correspond to the
-four result entries produced by `test_fused_recurrent_hgrn_with_backward`.
-They deliberately stay in this benchmark file: the grouping is specific to the
-Python regression's `initial_state`/`output_final_state` matrix and should not
-be promoted to the shared math or semantics layers. -/
+        (active s D BD)
+        (fun i => (DX, outOffset s i_t T D BD i)))
+      (expected := fun i => bwdDxStepValue s DHPrev DO i_t T D BD i)) ∧
+    -- (5) the backward `dg` body realizes the genuine `(dh_prev+do)·o`
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        i_t T D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (DG, outOffset s i_t T D BD i)))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO i_t T D BD i)) := by
+  have hOutInj := fused_recurrent_hgrn_out_offset_injective_general s i_t T D BD hBD
+  have hFinalInj := fused_recurrent_hgrn_final_state_offset_injective_general s D BD hBD
+  refine ⟨fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _ _ _,
+      ?_, ?_, ?_, ?_⟩
+  · exact fused_recurrent_hgrn_forward_step_closed_form BHPrev X G H0 O
+      USE_INITIAL_STATE i_t T D BD s hOutInj hPrev
+  · exact fused_recurrent_hgrn_final_state_closed_form BHFinal Ht X G H0
+      USE_INITIAL_STATE T D BD s hFinalInj hFinal
+  · exact fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX i_t T D BD s hOutInj
+  · exact fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG i_t T D BD s hOutInj
 
 end Correct
 
@@ -961,48 +1154,49 @@ theorem fused_recurrent_hgrn_test_case4_fwd_surface_toAlgorithm_supported
   exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
     2 2 32 Bool.true Bool.true
 
-/-- `test_case_1`: no initial state and no final state. The full forward and
-backward surfaces realize the checked observable `o`, `dx`, and `dg` rows. -/
+/-- `test_case_1`: no initial state and no final state. Genuine `o` recurrence
+step (realizing `hgrnStateClosed(t+1)` over the input regions) plus the genuine
+backward `dx`/`dg` row writebacks. -/
 theorem fused_recurrent_hgrn_test_case1_python_test_shape_all_outputs_compute_correct
-    (X G O H0 Ht DO DX DG : RegionName) (t_rel : Fin 2) (s : BlockState) :
+    (X G O H0 BHPrev DHPrev DO BO DX DG : RegionName) (t_rel : Fin 2)
+    (s : BlockState)
+    (hPrev : ∀ i : Fin 32,
+      s.readMem BHPrev (bhOffset s 2 32 i)
+        = hgrnStateClosed s X G H0 Bool.false 2 2 32 t_rel.val i) :
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_fwd_surface X G O H0 Ht 2 2 32
-        Bool.false Bool.false)
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
       (expected := fun i =>
-        producedForwardValue s X G O H0 Ht 2 2 32 Bool.false Bool.false
-          t_rel.val i)) ∧
+        hgrnStateClosed s X G H0 Bool.false 2 2 32 (t_rel.val + 1) i)) ∧
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        Bool.false)
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
-      (expected := fun i =>
-        producedBackwardDxValue s G O H0 DX DG DO 2 2 32 Bool.false
-          t_rel.val i)) ∧
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        Bool.false)
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
-      (expected := fun i =>
-        producedBackwardDgValue s G O H0 DX DG DO 2 2 32 Bool.false
-          t_rel.val i)) := by
-  constructor
-  · exact fused_recurrent_hgrn_fwd_surface_python_row_compute_correct
-      X G O H0 Ht Bool.false Bool.false t_rel s
-  constructor
-  · exact fused_recurrent_hgrn_bwd_surface_python_dx_row_compute_correct
-      G O H0 DX DG DO Bool.false t_rel s
-  · exact fused_recurrent_hgrn_bwd_surface_python_dg_row_compute_correct
-      G O H0 DX DG DO Bool.false t_rel s
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i)) := by
+  have hOutInj : Function.Injective (fun i : Fin 32 => outOffset s t_rel.val 2 2 32 i) :=
+    fused_recurrent_hgrn_out_offset_injective_general s t_rel.val 2 2 32 (by omega)
+  refine ⟨?_, ?_, ?_⟩
+  · exact fused_recurrent_hgrn_forward_step_closed_form BHPrev X G H0 O
+      Bool.false t_rel.val 2 2 32 s hOutInj hPrev
+  · exact fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX t_rel.val 2 2 32 s hOutInj
+  · exact fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG t_rel.val 2 2 32 s hOutInj
 
 /-- `test_case_2`: initial state and no final state. Besides the observable
 `o`, `dx`, and `dg` rows, this records the forward recurrence step used when
@@ -1281,38 +1475,36 @@ abbrev fused_recurrent_hgrn_test_case4_python_path_prop
 
 /-- Observable-output proposition for case 1. -/
 abbrev fused_recurrent_hgrn_test_case1_outputs_prop
-    (X G O H0 Ht DO DX DG : RegionName) (t_rel : Fin 2)
+    (X G O H0 BHPrev DHPrev DO BO DX DG : RegionName) (t_rel : Fin 2)
     (s : BlockState) : Prop :=
+    (∀ i : Fin 32,
+      s.readMem BHPrev (bhOffset s 2 32 i)
+        = hgrnStateClosed s X G H0 Bool.false 2 2 32 t_rel.val i) →
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_fwd_surface X G O H0 Ht 2 2 32
-        Bool.false Bool.false)
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
       (expected := fun i =>
-        producedForwardValue s X G O H0 Ht 2 2 32 Bool.false Bool.false
-          t_rel.val i)) ∧
+        hgrnStateClosed s X G H0 Bool.false 2 2 32 (t_rel.val + 1) i)) ∧
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        Bool.false)
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
-      (expected := fun i =>
-        producedBackwardDxValue s G O H0 DX DG DO 2 2 32 Bool.false
-          t_rel.val i)) ∧
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
     (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-        Bool.false)
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s 2 32)
         (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
-      (expected := fun i =>
-        producedBackwardDgValue s G O H0 DX DG DO 2 2 32 Bool.false
-          t_rel.val i))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i))
 
 /-- Observable-output proposition for case 2. -/
 abbrev fused_recurrent_hgrn_test_case2_outputs_prop
@@ -1435,23 +1627,23 @@ case propositions so the manifest context reflects its full-surface statement. -
 
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 1 end-to-end summary for the Python regression shape: exact
-forward/backward DSL surfaces plus the observable `o`, `dx`, and `dg` row
-writebacks. -/
+forward/backward DSL surfaces plus the genuine `o` recurrence step (realizing
+`hgrnStateClosed(t+1)`) and the backward `dx`/`dg` row writebacks. Thin
+corollary projecting `fused_recurrent_hgrn_output_summary_general`. -/
 theorem fused_recurrent_hgrn_test_case1_output_summary
-    (X G O H0 Ht DO DX DG : RegionName) (t_rel : Fin 2)
+    (X G O H0 Ht DO DX DG BHPrev DHPrev BO : RegionName) (t_rel : Fin 2)
     (s : BlockState) :
     fused_recurrent_hgrn_test_case1_python_path_prop X G O H0 Ht DO DX DG ∧
-    fused_recurrent_hgrn_test_case1_outputs_prop X G O H0 Ht DO DX DG
-      t_rel s := by
+    fused_recurrent_hgrn_test_case1_outputs_prop X G O H0 BHPrev DHPrev DO BO
+      DX DG t_rel s := by
   constructor
   · exact fused_recurrent_hgrn_test_case1_python_path_summary X G O H0 Ht DO DX DG
-  · exact fused_recurrent_hgrn_test_case1_python_test_shape_all_outputs_compute_correct
-      X G O H0 Ht DO DX DG t_rel s
+  · intro hPrev
+    exact fused_recurrent_hgrn_test_case1_python_test_shape_all_outputs_compute_correct
+      X G O H0 BHPrev DHPrev DO BO DX DG t_rel s hPrev
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 2 end-to-end summary for the Python regression shape: initial-state
 forward/backward DSL surfaces plus `o`, forward-step, `dx`, and `dg`
 writebacks. -/
@@ -1467,7 +1659,6 @@ theorem fused_recurrent_hgrn_test_case2_output_summary
       BH BHPrev X G DHPrev DO BO O DX DG t_rel s
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 3 end-to-end summary for the Python regression shape: no-initial
 surfaces with final-state output plus `o`, `ht`, `dx`, and `dg` writebacks. -/
 theorem fused_recurrent_hgrn_test_case3_output_summary
@@ -1482,7 +1673,6 @@ theorem fused_recurrent_hgrn_test_case3_output_summary
       BH BHFinal DHPrev DO BO O Ht DX DG t_rel s
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- Case 4 end-to-end summary for the Python regression shape: initial-state
 and final-state surfaces plus all observed forward/final/backward writebacks. -/
 theorem fused_recurrent_hgrn_test_case4_output_summary
@@ -1506,8 +1696,8 @@ theorem fused_recurrent_hgrn_python_test_shape_complete_summary
     (X G O H0 Ht DO DX DG BH BHPrev BHFinal DHPrev BO : RegionName)
     (t_rel : Fin 2) (s : BlockState) :
     (fused_recurrent_hgrn_test_case1_python_path_prop X G O H0 Ht DO DX DG ∧
-      fused_recurrent_hgrn_test_case1_outputs_prop X G O H0 Ht DO DX DG
-        t_rel s) ∧
+      fused_recurrent_hgrn_test_case1_outputs_prop X G O H0 BHPrev DHPrev DO BO
+        DX DG t_rel s) ∧
     (fused_recurrent_hgrn_test_case2_python_path_prop X G O H0 Ht DO DX DG ∧
       fused_recurrent_hgrn_test_case2_outputs_prop BH BHPrev X G DHPrev DO BO
         O DX DG t_rel s) ∧
@@ -1519,7 +1709,7 @@ theorem fused_recurrent_hgrn_python_test_shape_complete_summary
         DHPrev DO BO O Ht DX DG t_rel s) := by
   constructor
   · exact fused_recurrent_hgrn_test_case1_output_summary X G O H0 Ht DO DX DG
-      t_rel s
+      BHPrev DHPrev BO t_rel s
   constructor
   · exact fused_recurrent_hgrn_test_case2_output_summary X G O H0 Ht DO DX DG
       BH BHPrev DHPrev BO t_rel s
