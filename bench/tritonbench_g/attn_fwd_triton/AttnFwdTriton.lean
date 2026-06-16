@@ -6050,23 +6050,30 @@ theorem aftgKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLO
   · rw [if_pos ⟨hjlt, hiff.mp hc⟩, if_pos hc]
   · rw [if_neg (fun hh => hc (hiff.mpr hh.2)), if_neg hc]
 
-/-- General sentinel boundedness side-condition. -/
+/-- General sentinel boundedness side-condition (**causal-only, non-strict**).
+
+The kernel masks every non-causal key with the `-1e6` `tl.where` sentinel, so only
+the **kept** (causal) keys `j ≤ qStart + i` need a boundedness assumption, and only
+`≥ -1e6` (non-strict) is required: the masked keys are pinned to the sentinel and
+never raise the running max. This mirrors the pinned `aftScoreBound` form. -/
 def aftgScoreBoundG
     (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
     (keyScale : Fin SEQ → ℝ) (qStart : Nat) : Prop :=
-  ∀ (j : Fin SEQ) (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL),
-    keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
-      > -1000000.0
+  ∀ (j : Fin SEQ) (i : Fin BLOCK_M), j.val ≤ qStart + i.val →
+    (0:ℝ) - 1000000.0
+      ≤ keyScale j * Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))
 
-/-- General: under `aftgScoreBoundG`, running max over a nonempty causal window
-exceeds the `-1e6` sentinel. -/
+/-- General: under the **causal-only, non-strict** `aftgScoreBoundG`, the running
+max over a nonempty causal window is `≥` the `-1e6` sentinel. Key `0` is always
+causal-kept (`0 ≤ qStart + i`), so its kept score `≥ -1e6` (the weaker bound) is a
+member of the window's `foldr ⊔ ⊥`, hence a lower bound on the running max. -/
 theorem aftgRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0 < SEQ)
     (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL)
     (hsb : aftgScoreBoundG qT kT vT keyScale qStart) :
-    aftgRunningMaxG qT kT vT keyScale qStart hi i d > some (-1000000.0 : ℝ) := by
+    aftgRunningMaxG qT kT vT keyScale qStart hi i d ≥ some (-1000000.0 : ℝ) := by
   unfold aftgRunningMaxG aftgKeysUptoG
-  have hkey0 : ((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) > -1000000.0 := by
-    have := hsb ⟨0, hSEQ⟩ i d
+  have hkey0 : ((-1000000.0 : ℝ)) ≤ ((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ) := by
+    have := hsb ⟨0, hSEQ⟩ i (by simp)
     simpa [aftgKVG] using this
   have hmem : ((((aftgKVG qT kT vT keyScale i d ⟨0, hSEQ⟩).1 : ℝ)) : WithBot ℝ) ∈
       ((List.finRange SEQ).filterMap (fun j : Fin SEQ =>
@@ -6079,8 +6086,8 @@ theorem aftgRunningMaxG_gt_sentinel (qStart hi : Nat) (hhi : 1 ≤ hi) (hSEQ : 0
     refine ⟨⟨0, hSEQ⟩, List.mem_finRange _, ?_⟩
     rw [if_pos ⟨show (0:Nat) < hi from by omega, Nat.zero_le _⟩]
   have hle := aftg_mem_le_foldr_sup _ _ hmem
-  refine lt_of_lt_of_le ?_ hle
-  exact (WithBot.coe_lt_coe).mpr hkey0
+  refine le_trans ?_ hle
+  exact (WithBot.coe_le_coe).mpr hkey0
 
 /-- General `aftgBlockG` map-and-sum: reindex block `c`'s causal window onto
 `Fin BLOCK_N` lanes (global key `c·BLOCK_N + jL`). -/
@@ -6493,11 +6500,10 @@ theorem aftg_mij_reg_eq_maskedG (BLOCK_N : Nat) (hBN : 0 < BLOCK_N) (hBM : 0 < B
       rw [hBSk]
       refine Finset.le_sup_of_le (Finset.mem_univ (⟨0, hBN⟩ : Fin BLOCK_N)) ?_
       rw [if_pos (show 0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val ≤ qStart + i.val from by simp)]
-      refine le_of_lt ?_
-      rw [WithBot.coe_lt_coe]
-      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i ⟨0, hBD⟩
+      rw [WithBot.coe_le_coe]
+      have hbnd := hsb ⟨0 * BLOCK_N + (⟨0, hBN⟩ : Fin BLOCK_N).val, by simp only [Nat.zero_mul, Nat.add_zero]; exact hSEQ⟩ i (by simp)
       simpa [aftgKVG] using hbnd
-    · refine le_sup_of_le_left (le_of_lt ?_)
+    · refine le_sup_of_le_left ?_
       rw [hMdef]
       exact aftgRunningMaxG_gt_sentinel qT kT vT keyScale qStart (c * BLOCK_N) (by
         have : 1 ≤ c := by omega
