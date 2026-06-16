@@ -62,6 +62,11 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- Faithful DSL port of `context_attn_mistral.py`'s `_fwd_kernel`. -/
 def context_attn_mistral_fwd_kernel_surface
     (Q K V : RegionName) (sm_scale : ℝ)
@@ -343,118 +348,6 @@ theorem context_attn_mistral_final_store_slice_compute_correct
     stride_obs stride_oh stride_od BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
-
-/-! ## Python test-shape wrappers
-
-The checked Python tests use `H = 6`, `N_CTX = 1024`, and `D_HEAD = 128`
-with contiguous output row/head/dimension strides `(768, 128, 1)`. The launcher
-uses `BLOCK_M = BLOCK_N = 128` and `BLOCK_DMODEL = 128` for both tested batch
-sizes. -/
-
-theorem context_attn_mistral_python_test_shape_offset_injective
-    (s : BlockState) (B_Start_Loc : RegionName) :
-    Function.Injective
-      (fun idx : TileIndex [128, 128] =>
-        outOffset s B_Start_Loc 768 128 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, startLoc, mIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem context_attn_mistral_final_store_python_test_shape_compute_correct
-    (Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_final_store_slice Acc B_Start_Loc
-        B_Seqlen Out 786432 128 768 1 768 128 1 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
-  exact context_attn_mistral_final_store_slice_compute_correct Acc B_Start_Loc
-    B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
-    (context_attn_mistral_python_test_shape_offset_injective s B_Start_Loc)
-
-noncomputable def producedContextAttnMistralOutValue
-    (s : BlockState) (Q K V : RegionName)
-    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
-    (sliding_window : Nat) (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (context_attn_mistral_fwd_kernel_surface Q K V
-      ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-      768 128 1 768 128 1 768 128 1 768 128 1
-      1 sliding_window 128 128 128).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s B_Start_Loc 768 128 1 128 idx)
-  | none => 0.0
-
-theorem context_attn_mistral_surface_python_test_shape_compute_correct
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (sliding_window : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        1 sliding_window 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
-          sliding_window idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [context_attn_mistral_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedContextAttnMistralOutValue, hExec]
-
-/-- Public Python test-shape summary for `context_attn_mistral.py`.
-
-This records the faithful full `_fwd_kernel` surface for the checked contiguous
-Mistral layouts and observes the final `Out` writeback directly after executing
-each sliding-window variant. -/
-theorem context_attn_mistral_python_test_shape_output_summary
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
-    (Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        1 10 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
-          10 idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
-        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-        768 128 1 768 128 1 768 128 1 768 128 1
-        1 20 128 128 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
-        (fun idx : TileIndex [128, 128] =>
-          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
-          20 idx) := by
-  constructor
-  · exact context_attn_mistral_surface_python_test_shape_compute_correct Q K V
-      B_Start_Loc B_Seqlen Out 10 s
-  · exact context_attn_mistral_surface_python_test_shape_compute_correct Q K V
-      B_Start_Loc B_Seqlen Out 20 s
 
 
 section MistralGeneral
@@ -5208,5 +5101,126 @@ theorem context_attn_mistral_genuine_output_summary
       ComputeCorrect.WriteMap.writeIf, hoff] using hgen
 
 end MistralGeneralExec
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests use `H = 6`, `N_CTX = 1024`, and `D_HEAD = 128`
+with contiguous output row/head/dimension strides `(768, 128, 1)`. The launcher
+uses `BLOCK_M = BLOCK_N = 128` and `BLOCK_DMODEL = 128` for both tested batch
+sizes. -/
+
+theorem context_attn_mistral_python_test_shape_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s B_Start_Loc 768 128 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_mistral_final_store_python_test_shape_compute_correct
+    (Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_final_store_slice Acc B_Start_Loc
+        B_Seqlen Out 786432 128 768 1 768 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
+  exact context_attn_mistral_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
+    (context_attn_mistral_python_test_shape_offset_injective s B_Start_Loc)
+
+noncomputable def producedContextAttnMistralOutValue
+    (s : BlockState) (Q K V : RegionName)
+    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (sliding_window : Nat) (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (context_attn_mistral_fwd_kernel_surface Q K V
+      ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+      768 128 1 768 128 1 768 128 1 768 128 1
+      1 sliding_window 128 128 128).toAlgKernel s with
+  | some s' => s'.readMem Out (outOffset s B_Start_Loc 768 128 1 128 idx)
+  | none => 0.0
+
+theorem context_attn_mistral_surface_python_test_shape_compute_correct
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (sliding_window : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        1 sliding_window 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
+          sliding_window idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_mistral_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedContextAttnMistralOutValue, hExec]
+
+/-- Public Python test-shape summary for `context_attn_mistral.py`.
+
+This records the faithful full `_fwd_kernel` surface for the checked contiguous
+Mistral layouts and observes the final `Out` writeback directly after executing
+each sliding-window variant. -/
+theorem context_attn_mistral_python_test_shape_output_summary
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        1 10 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
+          10 idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := context_attn_mistral_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        1 20 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedContextAttnMistralOutValue s Q K V B_Start_Loc B_Seqlen Out
+          20 idx) := by
+  constructor
+  · exact context_attn_mistral_surface_python_test_shape_compute_correct Q K V
+      B_Start_Loc B_Seqlen Out 10 s
+  · exact context_attn_mistral_surface_python_test_shape_compute_correct Q K V
+      B_Start_Loc B_Seqlen Out 20 s
+
+end TestShape
+
 
 end VeriTile.Bench.TritonBenchG.ContextAttnMistral
