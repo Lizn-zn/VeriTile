@@ -66,7 +66,9 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem:** `lightning_attention_python_test_shape_output_summary` -/
+/-! **★ Main theorem:** `lightning_attention_output_summary_general`
+(dimension-general); the pinned
+`lightning_attention_python_test_shape_output_summary` is a concrete corollary. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1202,13 +1204,140 @@ theorem lightning_attention_bwd_dv_store_slice_compute_correct
   exact lightning_attention_bwd_grad_store_slice_compute_correct DVPre DV
     n width BLOCK WIDTH s hOutInj
 
+/-! ## Dimension-general offset injectivity
+
+The flat `[d, BLOCK_MODEL]` carry-tile offset `a · BLOCK_MODEL + c` and the
+flat `[BLOCK, BLOCK_MODEL]` output-tile offset `r · BLOCK_MODEL + c` are
+injective for **every** symbolic `BLOCK_MODEL`: the column coordinate `c` is a
+`Fin BLOCK_MODEL`, so `c < BLOCK_MODEL` and the row/column factorization is
+unique. No concrete dimension is needed — `omega` discharges the bound from the
+`Fin` proofs carried by the index. -/
+
+/-- `kvOffset` is injective for every `d`, `BLOCK_MODEL` (the column coordinate
+is `< BLOCK_MODEL` by its `Fin` bound). -/
+theorem kvOffset_injective (d BLOCK_MODEL : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [d, BLOCK_MODEL] => kvOffset BLOCK_MODEL idx) := by
+  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
+  simp only [kvOffset] at h
+  have hr : ra = rb := by
+    rcases Nat.lt_trichotomy ra rb with hlt | heq | hgt
+    · have : (ra + 1) * BLOCK_MODEL ≤ rb * BLOCK_MODEL := Nat.mul_le_mul_right _ hlt
+      simp [Nat.add_mul] at this; omega
+    · exact heq
+    · have : (rb + 1) * BLOCK_MODEL ≤ ra * BLOCK_MODEL := Nat.mul_le_mul_right _ hgt
+      simp [Nat.add_mul] at this; omega
+  subst rb
+  have hc : ca = cb := by omega
+  subst cb; rfl
+
+/-- `oInterOffset` is injective for every `BLOCK`, `BLOCK_MODEL` (the column
+coordinate is `< BLOCK_MODEL` by its `Fin` bound). -/
+theorem oInterOffset_injective (BLOCK BLOCK_MODEL : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => oInterOffset BLOCK_MODEL idx) := by
+  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
+  simp only [oInterOffset] at h
+  have hr : ra = rb := by
+    rcases Nat.lt_trichotomy ra rb with hlt | heq | hgt
+    · have : (ra + 1) * BLOCK_MODEL ≤ rb * BLOCK_MODEL := Nat.mul_le_mul_right _ hlt
+      simp [Nat.add_mul] at this; omega
+    · exact heq
+    · have : (rb + 1) * BLOCK_MODEL ≤ ra * BLOCK_MODEL := Nat.mul_le_mul_right _ hgt
+      simp [Nat.add_mul] at this; omega
+  subst rb
+  have hc : ca = cb := by omega
+  subst cb; rfl
+
+/-! ### ════════ ★ MAIN THEOREM (dimension-general) ★ ════════ -/
+
+/-- **Genuine, dimension-general forward compute-correctness summary** for the
+lightning-attention kernel. Symbolic in every dimension
+(`d e BLOCK NUM_BLOCK BLOCK_MODEL`) and over an arbitrary loop index `m` and
+materialized carry buffer; no dimension is pinned. Exposes:
+
+1. **Surface lowering** of the forward and both backward kernels (every
+   dimension symbolic).
+2. **`kv` carry-fold body — genuine closed form.** One `kv += tl.dot(k_trans,
+   v)` body realizes its spec `kvStepSpec`, and under the loop-carry invariant
+   (`KVPrev = kvClosed m`, `k_trans`/`v` reading the genuine block-`m` entries)
+   that spec equals exactly `kvClosed (m+1)` — the running `Σ kᵀ·v` over the
+   first `m+1` key blocks. This is the genuine standalone closed form over the
+   input regions `K`, `V`, never an `exec` read-back.
+3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes its genuine spec
+   `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
+   the inter-block half of `oRowClosed`.
+
+Honest side-conditions only: `0 < BLOCK_MODEL` (column tiling is nonempty) is
+not even needed here because injectivity holds unconditionally from the `Fin`
+bounds; the carry hypotheses `hPrev`/`hK`/`hV` are the documented loop-carry
+invariant of the `NUM_BLOCK` driver. -/
+theorem lightning_attention_output_summary_general
+    (Q K V Out DO DQ DK DV KVPrev KTrans Vreg KVOut OInter : RegionName)
+    (s : BlockState)
+    (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL m : Nat)
+    (hPrev : ∀ idx : TileIndex [d, BLOCK_MODEL],
+      s.readMem KVPrev (kvOffset BLOCK_MODEL idx)
+        = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL m idx.1.val idx.2.1.val)
+    (hK : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
+      s.readMem KTrans (idx.1.val * BLOCK + j.val)
+        = fwdKVal s K n d idx.1.val (m * BLOCK + j.val))
+    (hV : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
+      s.readMem Vreg (j.val * BLOCK_MODEL + idx.2.1.val)
+        = fwdVVal s Vreg n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val)) :
+    -- (1) surface lowering of forward + both backward kernels (symbolic dims)
+    (∃ alg, (lightning_attention_forward_surface Q K V Out _b h n d e BLOCK
+      NUM_BLOCK BLOCK_MODEL).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (lightning_attention_bwd_intra_surface Q K V DO DQ DK DV
+      _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+      _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK).toAlgorithm? = Except.ok alg) ∧
+    -- (2) kv carry-fold body realizes kvStepSpec ...
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans Vreg KVOut
+        d BLOCK BLOCK_MODEL)
+      (initialState := s)
+      (write := fun idx : TileIndex [d, BLOCK_MODEL] =>
+        some (KVOut, kvOffset BLOCK_MODEL idx))
+      (expected := fun idx : TileIndex [d, BLOCK_MODEL] =>
+        kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx)) ∧
+    -- ... and that spec is the genuine closed-form kvClosed (m+1) under the carry invariant
+    (∀ idx : TileIndex [d, BLOCK_MODEL],
+      kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
+        = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val) ∧
+    -- (3) o_inter producer realizes its genuine spec oInterDotSpec
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
+        BLOCK d BLOCK_MODEL)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
+        some (OInter, oInterOffset BLOCK_MODEL idx))
+      (expected := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
+        oInterDotSpec s Q KVPrev BLOCK d BLOCK_MODEL idx)) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact lightning_attention_forward_surface_toAlgorithm_supported Q K V Out
+      _b h n d e BLOCK NUM_BLOCK BLOCK_MODEL
+  · exact lightning_attention_bwd_intra_surface_toAlgorithm_supported Q K V
+      DO DQ DK DV _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK
+  · exact lightning_attention_bwd_inter_surface_toAlgorithm_supported Q K V
+      DO DQ DK DV _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK
+  · exact lightning_attention_forward_kv_step_slice_compute_correct KVPrev KTrans
+      Vreg KVOut d BLOCK BLOCK_MODEL s (kvOffset_injective d BLOCK_MODEL)
+  · intro idx
+    exact kvStepSpec_eq_kvClosed_succ s KVPrev KTrans Vreg K Vreg
+      n d e BLOCK BLOCK_MODEL m hPrev hK hV idx
+  · exact lightning_attention_forward_o_inter_dot_slice_compute_correct Q KVPrev
+      OInter BLOCK d BLOCK_MODEL s (oInterOffset_injective BLOCK BLOCK_MODEL)
+
 /-! ## Python test-shape wrappers
 
 The checked Python test uses `b = 2`, `h = 8`, `n = 128`, `d = 64`, and
 `e = 128`. The forward launcher fixes `BLOCK = 64`, `NUM_BLOCK = 2`, and
 `BLOCK_MODEL = 32`, so each forward output tile has shape `[64, 32]`. The
 backward launcher uses `BLOCK = 64`; DQ/DK row tiles have width `64`, and DV
-row tiles have width `128`. -/
+row tiles have width `128`. The pinned summaries below are now thin
+corollaries of the dimension-general headline
+`lightning_attention_output_summary_general`. -/
 
 end Correct
 
@@ -1654,14 +1783,16 @@ theorem lightning_attention_forward_o_inter_python_test_shape_compute_correct
 
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-! ### Concrete-shape corollary of the dimension-general main theorem -/
 /-- **Genuine** launched-surface output summary for the checked Python forward
-shape. Exposes (1) the surface lowering of the forward + both backward kernels,
-(2) the `kv += tl.dot(k_trans, v)` carry-fold body realizing its genuine spec
-`kvStepSpec` and (3) the `o_inter = tl.dot(q, kv)` inter-block producer realizing
-its genuine spec `oInterDotSpec`. Every `expected` is a closed-form value over
-the input/state regions — there is no `exec` read-back of the kernel's own
-output. -/
+shape — a thin concrete-dimension instance of the dimension-general headline
+`lightning_attention_output_summary_general` (`d = 64`, `BLOCK = 64`,
+`BLOCK_MODEL = 32`). Exposes (1) the surface lowering of the forward + both
+backward kernels, (2) the `kv += tl.dot(k_trans, v)` carry-fold body realizing
+its genuine spec `kvStepSpec` and (3) the `o_inter = tl.dot(q, kv)` inter-block
+producer realizing its genuine spec `oInterDotSpec`. Every `expected` is a
+closed-form value over the input/state regions — there is no `exec` read-back of
+the kernel's own output. -/
 theorem lightning_attention_python_test_shape_output_summary
     (Q K V Out DO DQ DK DV KVPrev KTrans KVOut OInter : RegionName)
     (s : BlockState) :
