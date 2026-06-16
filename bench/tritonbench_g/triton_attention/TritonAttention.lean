@@ -90,6 +90,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+
+section Correct
+
 /-- DSL port of `triton_attention.py`'s `_fwd_kernel`. -/
 def triton_attention_fwd_kernel
     (Q K V L M Out : RegionName)
@@ -1990,156 +1994,6 @@ theorem triton_attention_python_bwd_score_offset_injective :
   subst nb
   rfl
 
-theorem triton_attention_forward_output_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (hzRowOffset : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_output_store_slice Acc Out
-        hzRowOffset 1024 64 1 128 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (Out, outOffset s hzRowOffset 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (storeValue s Acc hzRowOffset 1024 128 64 idx)))) := by
-  exact triton_attention_forward_output_store_slice_compute_correct Acc Out
-    hzRowOffset 1024 64 1 128 64 s
-    (triton_attention_python_output_offset_injective s hzRowOffset)
-
-theorem triton_attention_forward_l_store_python_test_shape_compute_correct
-    (LPrev L : RegionName) (off_hz : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_l_store_slice LPrev L off_hz 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => lStoreSpec s LPrev off_hz 128 128 i) := by
-  exact triton_attention_forward_l_store_slice_compute_correct LPrev L
-    off_hz 128 128 s (triton_attention_python_row_offset_injective s off_hz)
-
-theorem triton_attention_forward_m_store_python_test_shape_compute_correct
-    (MPrev M : RegionName) (off_hz : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_m_store_slice MPrev M off_hz 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => mStoreSpec s MPrev off_hz 128 128 i) := by
-  exact triton_attention_forward_m_store_slice_compute_correct MPrev M
-    off_hz 128 128 s (triton_attention_python_row_offset_injective s off_hz)
-
-theorem triton_attention_bwd_preprocess_newdo_store_python_test_shape_compute_correct
-    (NewDOAcc NewDO : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_store_slice
-        NewDOAcc NewDO 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        newdoStoreSpec s NewDOAcc 128 64 idx) := by
-  exact triton_attention_bwd_preprocess_newdo_store_slice_compute_correct
-    NewDOAcc NewDO 128 64 s (triton_attention_python_newdo_offset_injective s)
-
-theorem triton_attention_bwd_preprocess_newdo_formula_python_test_shape_compute_correct
-    (DO L NewDO : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_formula_slice
-        DO L NewDO 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        newdoFormulaSpec s DO L 128 64 idx) := by
-  exact triton_attention_bwd_preprocess_newdo_formula_slice_compute_correct
-    DO L NewDO 128 64 s (triton_attention_python_newdo_offset_injective s)
-
-theorem triton_attention_bwd_preprocess_delta_formula_python_test_shape_compute_correct
-    (Out DO L Delta : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_formula_slice
-        Out DO L Delta 128 64)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaFormulaSpec s Out DO L 128 64 i) := by
-  exact triton_attention_bwd_preprocess_delta_formula_slice_compute_correct
-    Out DO L Delta 128 64 s
-
-theorem triton_attention_bwd_preprocess_delta_store_python_test_shape_compute_correct
-    (DeltaAcc Delta : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_store_slice
-        DeltaAcc Delta 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaStoreSpec s DeltaAcc 128 i) := by
-  exact triton_attention_bwd_preprocess_delta_store_slice_compute_correct
-    DeltaAcc Delta 128 s
-
-theorem triton_attention_bwd_dq_store_python_test_shape_compute_correct
-    (DQPre DQ : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_dq_store_slice DQPre DQ 4
-        32768 8192 64 1 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        bwdGradStoreSpec s DQPre 4 32768 8192 64 1 128 idx) := by
-  exact triton_attention_bwd_dq_store_slice_compute_correct DQPre DQ 4
-    32768 8192 64 1 128 64 s
-    (triton_attention_python_bwd_grad_offset_injective s)
-
-theorem triton_attention_bwd_dk_store_python_test_shape_compute_correct
-    (DKPre DK : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_dkdv_store_slice DKPre DK 4 1024
-        32768 8192 64 1 128 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        bwdGradStoreSpec s DKPre 4 32768 8192 64 1 128 idx) := by
-  exact triton_attention_bwd_dk_store_slice_compute_correct DKPre DK 4 1024
-    32768 8192 64 1 128 64 s
-    (triton_attention_python_bwd_grad_offset_injective s)
-
-theorem triton_attention_bwd_dv_store_python_test_shape_compute_correct
-    (DVPre DV : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_dkdv_store_slice DVPre DV 4 1024
-        32768 8192 64 1 128 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        bwdGradStoreSpec s DVPre 4 32768 8192 64 1 128 idx) := by
-  exact triton_attention_bwd_dv_store_slice_compute_correct DVPre DV 4 1024
-    32768 8192 64 1 128 64 s
-    (triton_attention_python_bwd_grad_offset_injective s)
-
-/-! ## Genuine closed-form backward-gradient specs (main `_bwd_kernel`)
-
-The definitions below give the **genuine** closed-form `DQ`/`DK`/`DV` gradient
-values that `_bwd_kernel` stores at the checked Python launch shape
-`(B,H,T,D)=(2,4,128,64)`, `num_block = 1`, `BLOCK_M = BLOCK_N = 128`,
-`BLOCK_DMODEL = 64`, strides `(32768,8192,64,1)×3`, `sm_scale = 1/√64`.
-
-They are expressed purely against the **loaded** memory of `Q`/`K`/`V`/`DO`/`M`/
-`Delta`/`DQ` (via `s.readMem` at the `make_block_ptr`/pointer addresses) and the
-program ids `s.pids 0` (`off_hz`), with `off_z = pids 0 / 4`, `off_h = pids 0 % 4`
-— **never** referencing `exec`/`producedBwdKernelD…`. The block-ptr base for a
-program is `off_z·32768 + off_h·8192`; the query row `i`, key row `j`, channel
-`e` block-ptr addresses are `base + i·64 + e`, `base + j·64 + e`; the `m`/`Delta`
-rows are at `off_hz·128 + i`. The fp16 rounding before the `tl.dot` accumulators
-(and before the `DV`/`DK` stores) is modelled exactly as
-`FloatDType.fp16.storeValue (FloatDType.real.cast .fp16 (some ·))`, mirroring the
-banked `bwdDqDotStepSpec` / dv-dk store slices. -/
-
 /-- Block-ptr base offset for the program: `off_z·32768 + off_h·8192`. -/
 def bwdKBase (s : BlockState) : Nat :=
   s.pids 0 / 4 * 32768 + s.pids 0 % 4 * 8192
@@ -2256,87 +2110,6 @@ noncomputable def producedBwdKernelDVValue
       2 4 128 1024 1 128 64 128) s with
   | some s' => s'.readMem DV (bwdGradOffset s 4 32768 8192 64 1 128 idx)
   | none => 0.0
-
-theorem triton_attention_bwd_kernel_dq_python_test_shape_compute_correct
-    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  simp [producedBwdKernelDQValue, hExec]
-
-theorem triton_attention_bwd_kernel_dk_python_test_shape_compute_correct
-    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBwdKernelDKValue, hExec]
-
-theorem triton_attention_bwd_kernel_dv_python_test_shape_compute_correct
-    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedBwdKernelDVValue, hExec]
-
-/-! ### Genuine backward exec chain (main `_bwd_kernel`)
-
-The lowered body of `_bwd_kernel` at the checked Python launch is
-`bwdPreLoop ++ [Stmt.forRange "start_n" 0 1 1 outerBody]`, with the outer body
-ending in two fp16 `DV`/`DK` stores after a single-iteration inner
-`Stmt.forRangeDyn "start_m"` whose body ends in the real `DQ` store. Both ranges
-are single-iteration (`num_block = 1`). -/
 
 /-- Block-ptr `make_block_ptr` op (parentShape `[1024,64]`, block `[128,64]`,
 strides `[64,1]`, dynamic row offset `off_z·stride_qz_2d + off_h·stride_qh_2d`,
@@ -2672,60 +2445,6 @@ theorem bwdPreLoop_eval (s : BlockState) (Q K V DO DQ DK DV : RegionName)
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_same]
-
-theorem triton_attention_bwd_score_p_formula_python_test_shape_compute_correct
-    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
-    (s : BlockState) (hRegions : PTile ≠ DSTile) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (PTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
-          128 64 idx) := by
-  exact triton_attention_bwd_score_p_formula_slice_compute_correct QTile KTile
-    VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
-    128 64 s triton_attention_python_bwd_score_offset_injective hRegions
-
-theorem triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
-    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
-    (s : BlockState) (hRegions : PTile ≠ DSTile) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (DSTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
-          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx) := by
-  exact triton_attention_bwd_score_ds_formula_slice_compute_correct QTile KTile
-    VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
-    128 64 s triton_attention_python_bwd_score_offset_injective hRegions
-
-/-! ## Genuine closed-form forward specs (causal natural-exp FlashAttention-1)
-
-The forward `_fwd_kernel` is a **causal** FlashAttention-1 forward using the
-natural exponential (`tl.exp`), scalar `sm_scale = 1/√64`, the causal mask
-`tl.where(offs_m[:,None] ≥ start_n + offs_n[None,:], qk, -inf)`, and a dynamic
-KV-loop bound `(start_m + 1) * BLOCK_M` so only causal blocks contribute. For
-the Python test shape `(B,H,T,D) = (2,4,128,64)`, `BLOCK_M = BLOCK_N = 128`,
-`BLOCK_DMODEL = 64`, strides `(stride_qz,stride_qh,stride_qm,stride_qk) =
-(32768,8192,64,1)` etc., a single M-block per program (`start_m = pids 0`),
-`off_hz = pids 1`, and `stride_qh_2d = 8192 / 64 / 1 = 128`.
-
-These definitions give the **genuine** closed-form values that `_fwd_kernel`
-computes — the natural-exp causal attention block (`Out`), the per-row
-log-sum-exp denominator (`L`), and the per-row score maximum (`M`) — written
-against `VeriTile.Triton.attentionRealCausalBlock` and the underlying
-`scaledScore`, **not** re-derived from the kernel's own `exec`. They are the
-intended replacements for the self-referential `producedTritonAttentionForward*`
-carriers below; the exec-reduction bridge to these specs (porting the
-FlashAttention-1 causal exec recipe of `VeriTile/Examples/FlashAttention1/` to
-this `make_block_ptr` / `forRangeDyn` kernel surface, plus the two extra L/M
-masked stores) is the remaining proof stage tracked for this kernel. -/
 
 /-- Q tile for the test-shape forward: row `i`, channel `e` of the M-block of
 program `(pids 0, pids 1)` reads memory at
@@ -4910,556 +4629,6 @@ theorem ta_exec (Q K V L M Out : RegionName) (s : BlockState)
     rw [hloff] at hMi
     rw [hMi, ← fwdMSpec_eq_mPartial]
     simp only [fwdMSpec, fwdCausalSet, htileQ, htileK, hsppids]
-
-set_option maxHeartbeats 1600000 in
-/-- **Genuine forward `Out`-store correctness.** Every active output lane of the
-`_fwd_kernel` holds the closed-form causal attention block `fwdOutSpec` (the
-natural-exp `oPartial / lPartial` ratio of the loaded Q/K/V tiles), at the checked
-honest grid (`pids 0 = 0`, `pids 1 < B·H = 8`). -/
-theorem triton_attention_forward_surface_out_python_test_shape_compute_correct
-    (Q K V L M Out : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
-    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => active s (s.pids 1 * 128) 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (Out, outOffset s (s.pids 1 * 128) 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (some (fwdOutSpec s Q K V idx)))) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  obtain ⟨sF, hstep, hO, _, _⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  simp only [ComputeCorrect.OutputReadable.read_memcell]
-  exact hO idx hActive
-
-set_option maxHeartbeats 1600000 in
-/-- **Genuine forward `L`-store correctness.** Every row lane holds the genuine
-m-shifted causal normalizer `fwdLSpec` (`Σ_{j ≤ …} exp(score − M_row)`). -/
-theorem triton_attention_forward_surface_l_python_test_shape_compute_correct
-    (Q K V L M Out : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
-    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lRowOffset s (s.pids 1) 128 128 i))
-      (expected := fun i : Fin 128 => fwdLSpec s Q K i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  obtain ⟨sF, hstep, _, hLrb, _⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  simp only [ComputeCorrect.OutputReadable.read_real]
-  exact hLrb i
-
-set_option maxHeartbeats 1600000 in
-/-- **Genuine forward `M`-store correctness.** Every row lane holds the genuine
-per-row causal score maximum `fwdMSpec`. -/
-theorem triton_attention_forward_surface_m_python_test_shape_compute_correct
-    (Q K V L M Out : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
-    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (M, lRowOffset s (s.pids 1) 128 128 i))
-      (expected := fun i : Fin 128 => fwdMSpec s Q K i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  obtain ⟨sF, hstep, _, _, hMrb⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-  rw [hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  simp only [ComputeCorrect.OutputReadable.read_real]
-  exact hMrb i
-
-/-- Python forward shape summary: final output plus the row-wise `L` and `M`
-side stores are compute-correct for the tested block shape. -/
-theorem triton_attention_forward_python_test_shape_all_outputs_compute_correct
-    (Acc LPrev MPrev Out L M : RegionName) (hzRowOffset off_hz : Nat)
-    (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_output_store_slice Acc Out
-        hzRowOffset 1024 64 1 128 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (Out, outOffset s hzRowOffset 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (storeValue s Acc hzRowOffset 1024 128 64 idx))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_l_store_slice LPrev L off_hz 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => lStoreSpec s LPrev off_hz 128 128 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_m_store_slice MPrev M off_hz 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => mStoreSpec s MPrev off_hz 128 128 i)) := by
-  constructor
-  · exact triton_attention_forward_output_store_python_test_shape_compute_correct
-      Acc Out hzRowOffset s
-  constructor
-  · exact triton_attention_forward_l_store_python_test_shape_compute_correct
-      LPrev L off_hz s
-  · exact triton_attention_forward_m_store_python_test_shape_compute_correct
-      MPrev M off_hz s
-
-/-- Python backward-preprocess shape summary: the full `_bwd_preprocess`
-surface realizes both observable outputs for the tested block shape. -/
-theorem triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
-        128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
-        128 64)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 =>
-        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
-  constructor
-  · exact triton_attention_bwd_preprocess_newdo_surface_compute_correct
-      Out DO L NewDO Delta 128 64 s
-  · exact triton_attention_bwd_preprocess_delta_surface_compute_correct
-      Out DO L NewDO Delta 128 64 s
-
-/-- Python backward gradient shape summary: the full `_bwd_kernel` realizes the
-final `DQ`, `DK`, and `DV` outputs for the tested block shape. -/
-theorem triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
-    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx)) := by
-  constructor
-  · exact triton_attention_bwd_kernel_dq_python_test_shape_compute_correct
-      Q K V Out DO DQ DK DV L M Delta s
-  constructor
-  · exact triton_attention_bwd_kernel_dk_python_test_shape_compute_correct
-      Q K V Out DO DQ DK DV L M Delta s
-  · exact triton_attention_bwd_kernel_dv_python_test_shape_compute_correct
-      Q K V Out DO DQ DK DV L M Delta s
-
-/-- Python backward score arithmetic shape summary: the `P` probability tile
-and `DS` score-gradient tile are compute-correct for the tested block shape. -/
-theorem triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct
-    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
-    (s : BlockState) (hRegions : PTile ≠ DSTile) :
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (PTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
-          128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (DSTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
-          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) := by
-  constructor
-  · exact triton_attention_bwd_score_p_formula_python_test_shape_compute_correct
-      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
-  · exact triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
-      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
-
-/-- Python-shape arithmetic surface for the main `_bwd_kernel` score step.
-
-This pins the checked launch's one-block backward inner step at
-`BLOCK_M = BLOCK_N = 128`, `BLOCK_DMODEL = 64`, and `sm_scale = 1 / sqrt(64)`.
-It exposes compute-correct `P` and `DS` tiles that feed the checked DQ/DK/DV
-dot-step proofs, instead of treating those score-side inputs as opaque
-precomputed regions. -/
-theorem triton_attention_bwd_score_python_test_shape_formula_summary
-    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
-    (s : BlockState) (hRegions : PTile ≠ DSTile) :
-    (∃ alg, (triton_attention_bwd_score_formula_slice QTile KTile VTile DOTile
-      MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
-      128 64).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (PTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
-          128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
-        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (DSTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
-          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) := by
-  constructor
-  · exact triton_attention_bwd_score_formula_slice_toAlgorithm_supported
-      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile
-      ((Real.sqrt (64 : ℝ))⁻¹) 128 64
-  · exact triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct
-      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/-- Public Python forward summary for `triton_attention.py`.
-
-The surface conjunct pins the faithful `_fwd_kernel` launch for the checked
-shape `(B, H, T, D) = (2, 4, 128, 64)`, contiguous Q/K/V/O strides
-`(32768, 8192, 64, 1)`, `BLOCK_M = BLOCK_N = 128`, and
-`BLOCK_DMODEL = 64`. The output conjuncts read back the Python-observable
-`Out`, `L`, and `M` stores from that full surface. -/
-theorem triton_attention_forward_python_test_shape_output_summary
-    (Q K V L M Out : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
-    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (triton_attention_fwd_kernel Q K V L M Out
-      ((Real.sqrt (64 : ℝ))⁻¹)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 1024 128 64 128).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => active s (s.pids 1 * 128) 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (Out, outOffset s (s.pids 1 * 128) 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (some (fwdOutSpec s Q K V idx))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lRowOffset s (s.pids 1) 128 128 i))
-      (expected := fun i : Fin 128 => fwdLSpec s Q K i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_fwd_kernel Q K V L M Out
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 128 64 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (M, lRowOffset s (s.pids 1) 128 128 i))
-      (expected := fun i : Fin 128 => fwdMSpec s Q K i)) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · exact triton_attention_fwd_kernel_toAlgorithm_supported Q K V L M Out
-      ((Real.sqrt (64 : ℝ))⁻¹)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 1024 128 64 128
-  · exact triton_attention_forward_surface_out_python_test_shape_compute_correct
-      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-  · exact triton_attention_forward_surface_l_python_test_shape_compute_correct
-      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-  · exact triton_attention_forward_surface_m_python_test_shape_compute_correct
-      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
-
-/-- Public Python backward-preprocess summary for `triton_attention.py`.
-
-This records the faithful `_bwd_preprocess` full surface at `BLOCK_M = 128`
-and `D_HEAD = 64`, and connects both Python-observable `NewDO` and `Delta`
-outputs directly to the produced full-surface values. -/
-theorem triton_attention_bwd_preprocess_python_test_shape_output_summary
-    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
-    (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
-      128 64).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
-        128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
-        128 64)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 =>
-        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
-  constructor
-  · exact triton_attention_bwd_preprocess_toAlgorithm_supported
-      Out DO L NewDO Delta 128 64
-  · exact triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-      Out DO L NewDO Delta s
-
-/-- Public Python backward-gradient summary for `triton_attention.py`.
-
-The surface conjunct pins the checked Python launch of the main `_bwd_kernel`
-for `(B, H, T, D) = (2, 4, 128, 64)` with `num_block = 1`; the output
-conjuncts connect the Python-observable `DQ`, `DK`, and `DV` writes directly to
-the produced full-kernel values. -/
-theorem triton_attention_bwd_grads_python_test_shape_output_summary
-    (Q K V Out DO DQ DK DV L M Delta : RegionName)
-    (s : BlockState) :
-    (∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-      ((Real.sqrt (64 : ℝ))⁻¹)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 1024 1 128 64 128).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx)) := by
-  constructor
-  · exact triton_attention_bwd_kernel_toAlgorithm_supported Q K V Out DO DQ DK
-      DV L M Delta ((Real.sqrt (64 : ℝ))⁻¹)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 1024 1 128 64 128
-  · exact triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
-      Q K V Out DO DQ DK DV L M Delta s
-
-/-- Combined checked-shape backward summary for `triton_attention.py`.
-
-This exposes the main `_bwd_kernel` surface, final `DQ`/`DK`/`DV` writebacks,
-and the score-side `P`/`DS` arithmetic producer in one public target. -/
-theorem triton_attention_bwd_python_test_shape_complete_summary
-    (Q K V Out DO DQ DK DV L M Delta PTile DSTile : RegionName)
-    (s : BlockState) (hRegions : PTile ≠ DSTile) :
-    ((∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-      ((Real.sqrt (64 : ℝ))⁻¹)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 128 1024 1 128 64 128).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
-        ((Real.sqrt (64 : ℝ))⁻¹)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 128 1024 1 128 64 128)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
-        (fun idx : TileIndex [128, 64] =>
-          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 64] =>
-        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx))) ∧
-    ((∃ alg, (triton_attention_bwd_score_formula_slice Q K V DO M Delta
-      PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice Q K V DO M Delta
-        PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (PTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScorePFormulaSpec s Q K M ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_score_formula_slice Q K V DO M Delta
-        PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 128] =>
-        some (DSTile, bwdScoreOffset 128 idx))
-      (expected := fun idx : TileIndex [128, 128] =>
-        bwdScoreDSFormulaSpec s Q K V DO M Delta ((Real.sqrt (64 : ℝ))⁻¹)
-          128 64 idx))) := by
-  constructor
-  · exact triton_attention_bwd_grads_python_test_shape_output_summary Q K V Out
-      DO DQ DK DV L M Delta s
-  · exact triton_attention_bwd_score_python_test_shape_formula_summary Q K V
-      DO M Delta PTile DSTile s hRegions
 
 set_option maxRecDepth 8000 in
 /-- **Boundary-checked block-ptr load** for `_bwd_kernel`'s `bwdPtrTile`. With
@@ -7874,5 +7043,827 @@ theorem triton_attention_bwd_grads_genuine_output_summary
     obtain rfl : sF = s' := Option.some.inj hExec
     simp only [ComputeCorrect.OutputReadable.read_memcell]
     exact hDK idx
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
+
+theorem triton_attention_forward_output_store_python_test_shape_compute_correct
+    (Acc Out : RegionName) (hzRowOffset : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_output_store_slice Acc Out
+        hzRowOffset 1024 64 1 128 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (Out, outOffset s hzRowOffset 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (storeValue s Acc hzRowOffset 1024 128 64 idx)))) := by
+  exact triton_attention_forward_output_store_slice_compute_correct Acc Out
+    hzRowOffset 1024 64 1 128 64 s
+    (triton_attention_python_output_offset_injective s hzRowOffset)
+
+theorem triton_attention_forward_l_store_python_test_shape_compute_correct
+    (LPrev L : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_l_store_slice LPrev L off_hz 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 => lStoreSpec s LPrev off_hz 128 128 i) := by
+  exact triton_attention_forward_l_store_slice_compute_correct LPrev L
+    off_hz 128 128 s (triton_attention_python_row_offset_injective s off_hz)
+
+theorem triton_attention_forward_m_store_python_test_shape_compute_correct
+    (MPrev M : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_m_store_slice MPrev M off_hz 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 => mStoreSpec s MPrev off_hz 128 128 i) := by
+  exact triton_attention_forward_m_store_slice_compute_correct MPrev M
+    off_hz 128 128 s (triton_attention_python_row_offset_injective s off_hz)
+
+theorem triton_attention_bwd_preprocess_newdo_store_python_test_shape_compute_correct
+    (NewDOAcc NewDO : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_newdo_store_slice
+        NewDOAcc NewDO 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (NewDO, newdoOffset s 128 64 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        newdoStoreSpec s NewDOAcc 128 64 idx) := by
+  exact triton_attention_bwd_preprocess_newdo_store_slice_compute_correct
+    NewDOAcc NewDO 128 64 s (triton_attention_python_newdo_offset_injective s)
+
+theorem triton_attention_bwd_preprocess_newdo_formula_python_test_shape_compute_correct
+    (DO L NewDO : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_newdo_formula_slice
+        DO L NewDO 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (NewDO, newdoOffset s 128 64 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        newdoFormulaSpec s DO L 128 64 idx) := by
+  exact triton_attention_bwd_preprocess_newdo_formula_slice_compute_correct
+    DO L NewDO 128 64 s (triton_attention_python_newdo_offset_injective s)
+
+theorem triton_attention_bwd_preprocess_delta_formula_python_test_shape_compute_correct
+    (Out DO L Delta : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_delta_formula_slice
+        Out DO L Delta 128 64)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
+      (expected := fun i : Fin 128 => deltaFormulaSpec s Out DO L 128 64 i) := by
+  exact triton_attention_bwd_preprocess_delta_formula_slice_compute_correct
+    Out DO L Delta 128 64 s
+
+theorem triton_attention_bwd_preprocess_delta_store_python_test_shape_compute_correct
+    (DeltaAcc Delta : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_delta_store_slice
+        DeltaAcc Delta 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
+      (expected := fun i : Fin 128 => deltaStoreSpec s DeltaAcc 128 i) := by
+  exact triton_attention_bwd_preprocess_delta_store_slice_compute_correct
+    DeltaAcc Delta 128 s
+
+theorem triton_attention_bwd_dq_store_python_test_shape_compute_correct
+    (DQPre DQ : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_dq_store_slice DQPre DQ 4
+        32768 8192 64 1 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        bwdGradStoreSpec s DQPre 4 32768 8192 64 1 128 idx) := by
+  exact triton_attention_bwd_dq_store_slice_compute_correct DQPre DQ 4
+    32768 8192 64 1 128 64 s
+    (triton_attention_python_bwd_grad_offset_injective s)
+
+theorem triton_attention_bwd_dk_store_python_test_shape_compute_correct
+    (DKPre DK : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_dkdv_store_slice DKPre DK 4 1024
+        32768 8192 64 1 128 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        bwdGradStoreSpec s DKPre 4 32768 8192 64 1 128 idx) := by
+  exact triton_attention_bwd_dk_store_slice_compute_correct DKPre DK 4 1024
+    32768 8192 64 1 128 64 s
+    (triton_attention_python_bwd_grad_offset_injective s)
+
+theorem triton_attention_bwd_dv_store_python_test_shape_compute_correct
+    (DVPre DV : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_dkdv_store_slice DVPre DV 4 1024
+        32768 8192 64 1 128 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        bwdGradStoreSpec s DVPre 4 32768 8192 64 1 128 idx) := by
+  exact triton_attention_bwd_dv_store_slice_compute_correct DVPre DV 4 1024
+    32768 8192 64 1 128 64 s
+    (triton_attention_python_bwd_grad_offset_injective s)
+
+/-! ## Genuine closed-form backward-gradient specs (main `_bwd_kernel`)
+
+The definitions below give the **genuine** closed-form `DQ`/`DK`/`DV` gradient
+values that `_bwd_kernel` stores at the checked Python launch shape
+`(B,H,T,D)=(2,4,128,64)`, `num_block = 1`, `BLOCK_M = BLOCK_N = 128`,
+`BLOCK_DMODEL = 64`, strides `(32768,8192,64,1)×3`, `sm_scale = 1/√64`.
+
+They are expressed purely against the **loaded** memory of `Q`/`K`/`V`/`DO`/`M`/
+`Delta`/`DQ` (via `s.readMem` at the `make_block_ptr`/pointer addresses) and the
+program ids `s.pids 0` (`off_hz`), with `off_z = pids 0 / 4`, `off_h = pids 0 % 4`
+— **never** referencing `exec`/`producedBwdKernelD…`. The block-ptr base for a
+program is `off_z·32768 + off_h·8192`; the query row `i`, key row `j`, channel
+`e` block-ptr addresses are `base + i·64 + e`, `base + j·64 + e`; the `m`/`Delta`
+rows are at `off_hz·128 + i`. The fp16 rounding before the `tl.dot` accumulators
+(and before the `DV`/`DK` stores) is modelled exactly as
+`FloatDType.fp16.storeValue (FloatDType.real.cast .fp16 (some ·))`, mirroring the
+banked `bwdDqDotStepSpec` / dv-dk store slices. -/
+
+theorem triton_attention_bwd_kernel_dq_python_test_shape_compute_correct
+    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [producedBwdKernelDQValue, hExec]
+
+theorem triton_attention_bwd_kernel_dk_python_test_shape_compute_correct
+    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedBwdKernelDKValue, hExec]
+
+theorem triton_attention_bwd_kernel_dv_python_test_shape_compute_correct
+    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedBwdKernelDVValue, hExec]
+
+/-! ### Genuine backward exec chain (main `_bwd_kernel`)
+
+The lowered body of `_bwd_kernel` at the checked Python launch is
+`bwdPreLoop ++ [Stmt.forRange "start_n" 0 1 1 outerBody]`, with the outer body
+ending in two fp16 `DV`/`DK` stores after a single-iteration inner
+`Stmt.forRangeDyn "start_m"` whose body ends in the real `DQ` store. Both ranges
+are single-iteration (`num_block = 1`). -/
+
+theorem triton_attention_bwd_score_p_formula_python_test_shape_compute_correct
+    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
+    (s : BlockState) (hRegions : PTile ≠ DSTile) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (PTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
+          128 64 idx) := by
+  exact triton_attention_bwd_score_p_formula_slice_compute_correct QTile KTile
+    VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
+    128 64 s triton_attention_python_bwd_score_offset_injective hRegions
+
+theorem triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
+    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
+    (s : BlockState) (hRegions : PTile ≠ DSTile) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (DSTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
+          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx) := by
+  exact triton_attention_bwd_score_ds_formula_slice_compute_correct QTile KTile
+    VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
+    128 64 s triton_attention_python_bwd_score_offset_injective hRegions
+
+/-! ## Genuine closed-form forward specs (causal natural-exp FlashAttention-1)
+
+The forward `_fwd_kernel` is a **causal** FlashAttention-1 forward using the
+natural exponential (`tl.exp`), scalar `sm_scale = 1/√64`, the causal mask
+`tl.where(offs_m[:,None] ≥ start_n + offs_n[None,:], qk, -inf)`, and a dynamic
+KV-loop bound `(start_m + 1) * BLOCK_M` so only causal blocks contribute. For
+the Python test shape `(B,H,T,D) = (2,4,128,64)`, `BLOCK_M = BLOCK_N = 128`,
+`BLOCK_DMODEL = 64`, strides `(stride_qz,stride_qh,stride_qm,stride_qk) =
+(32768,8192,64,1)` etc., a single M-block per program (`start_m = pids 0`),
+`off_hz = pids 1`, and `stride_qh_2d = 8192 / 64 / 1 = 128`.
+
+These definitions give the **genuine** closed-form values that `_fwd_kernel`
+computes — the natural-exp causal attention block (`Out`), the per-row
+log-sum-exp denominator (`L`), and the per-row score maximum (`M`) — written
+against `VeriTile.Triton.attentionRealCausalBlock` and the underlying
+`scaledScore`, **not** re-derived from the kernel's own `exec`. They are the
+intended replacements for the self-referential `producedTritonAttentionForward*`
+carriers below; the exec-reduction bridge to these specs (porting the
+FlashAttention-1 causal exec recipe of `VeriTile/Examples/FlashAttention1/` to
+this `make_block_ptr` / `forRangeDyn` kernel surface, plus the two extra L/M
+masked stores) is the remaining proof stage tracked for this kernel. -/
+
+set_option maxHeartbeats 1600000 in
+/-- **Genuine forward `Out`-store correctness.** Every active output lane of the
+`_fwd_kernel` holds the closed-form causal attention block `fwdOutSpec` (the
+natural-exp `oPartial / lPartial` ratio of the loaded Q/K/V tiles), at the checked
+honest grid (`pids 0 = 0`, `pids 1 < B·H = 8`). -/
+theorem triton_attention_forward_surface_out_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => active s (s.pids 1 * 128) 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (Out, outOffset s (s.pids 1 * 128) 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (some (fwdOutSpec s Q K V idx)))) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  obtain ⟨sF, hstep, hO, _, _⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+  rw [hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_memcell]
+  exact hO idx hActive
+
+set_option maxHeartbeats 1600000 in
+/-- **Genuine forward `L`-store correctness.** Every row lane holds the genuine
+m-shifted causal normalizer `fwdLSpec` (`Σ_{j ≤ …} exp(score − M_row)`). -/
+theorem triton_attention_forward_surface_l_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lRowOffset s (s.pids 1) 128 128 i))
+      (expected := fun i : Fin 128 => fwdLSpec s Q K i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  obtain ⟨sF, hstep, _, hLrb, _⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+  rw [hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact hLrb i
+
+set_option maxHeartbeats 1600000 in
+/-- **Genuine forward `M`-store correctness.** Every row lane holds the genuine
+per-row causal score maximum `fwdMSpec`. -/
+theorem triton_attention_forward_surface_m_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (M, lRowOffset s (s.pids 1) 128 128 i))
+      (expected := fun i : Fin 128 => fwdMSpec s Q K i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  obtain ⟨sF, hstep, _, _, hMrb⟩ := ta_exec Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+  rw [hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact hMrb i
+
+/-- Python forward shape summary: final output plus the row-wise `L` and `M`
+side stores are compute-correct for the tested block shape. -/
+theorem triton_attention_forward_python_test_shape_all_outputs_compute_correct
+    (Acc LPrev MPrev Out L M : RegionName) (hzRowOffset off_hz : Nat)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_output_store_slice Acc Out
+        hzRowOffset 1024 64 1 128 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (Out, outOffset s hzRowOffset 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (storeValue s Acc hzRowOffset 1024 128 64 idx))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_l_store_slice LPrev L off_hz 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 => lStoreSpec s LPrev off_hz 128 128 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_forward_m_store_slice MPrev M off_hz 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 => mStoreSpec s MPrev off_hz 128 128 i)) := by
+  constructor
+  · exact triton_attention_forward_output_store_python_test_shape_compute_correct
+      Acc Out hzRowOffset s
+  constructor
+  · exact triton_attention_forward_l_store_python_test_shape_compute_correct
+      LPrev L off_hz s
+  · exact triton_attention_forward_m_store_python_test_shape_compute_correct
+      MPrev M off_hz s
+
+/-- Python backward-preprocess shape summary: the full `_bwd_preprocess`
+surface realizes both observable outputs for the tested block shape. -/
+theorem triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
+    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (NewDO, newdoOffset s 128 64 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
+      (expected := fun i : Fin 128 =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
+  constructor
+  · exact triton_attention_bwd_preprocess_newdo_surface_compute_correct
+      Out DO L NewDO Delta 128 64 s
+  · exact triton_attention_bwd_preprocess_delta_surface_compute_correct
+      Out DO L NewDO Delta 128 64 s
+
+/-- Python backward gradient shape summary: the full `_bwd_kernel` realizes the
+final `DQ`, `DK`, and `DV` outputs for the tested block shape. -/
+theorem triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
+    (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx)) := by
+  constructor
+  · exact triton_attention_bwd_kernel_dq_python_test_shape_compute_correct
+      Q K V Out DO DQ DK DV L M Delta s
+  constructor
+  · exact triton_attention_bwd_kernel_dk_python_test_shape_compute_correct
+      Q K V Out DO DQ DK DV L M Delta s
+  · exact triton_attention_bwd_kernel_dv_python_test_shape_compute_correct
+      Q K V Out DO DQ DK DV L M Delta s
+
+/-- Python backward score arithmetic shape summary: the `P` probability tile
+and `DS` score-gradient tile are compute-correct for the tested block shape. -/
+theorem triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct
+    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
+    (s : BlockState) (hRegions : PTile ≠ DSTile) :
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (PTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
+          128 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (DSTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
+          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) := by
+  constructor
+  · exact triton_attention_bwd_score_p_formula_python_test_shape_compute_correct
+      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
+  · exact triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
+      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
+
+/-- Python-shape arithmetic surface for the main `_bwd_kernel` score step.
+
+This pins the checked launch's one-block backward inner step at
+`BLOCK_M = BLOCK_N = 128`, `BLOCK_DMODEL = 64`, and `sm_scale = 1 / sqrt(64)`.
+It exposes compute-correct `P` and `DS` tiles that feed the checked DQ/DK/DV
+dot-step proofs, instead of treating those score-side inputs as opaque
+precomputed regions. -/
+theorem triton_attention_bwd_score_python_test_shape_formula_summary
+    (QTile KTile VTile DOTile MVec DeltaVec PTile DSTile : RegionName)
+    (s : BlockState) (hRegions : PTile ≠ DSTile) :
+    (∃ alg, (triton_attention_bwd_score_formula_slice QTile KTile VTile DOTile
+      MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
+      128 64).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (PTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScorePFormulaSpec s QTile KTile MVec ((Real.sqrt (64 : ℝ))⁻¹)
+          128 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
+        DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (DSTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
+          ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) := by
+  constructor
+  · exact triton_attention_bwd_score_formula_slice_toAlgorithm_supported
+      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile
+      ((Real.sqrt (64 : ℝ))⁻¹) 128 64
+  · exact triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct
+      QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
+
+
+/-- Public Python forward summary for `triton_attention.py`.
+
+The surface conjunct pins the faithful `_fwd_kernel` launch for the checked
+shape `(B, H, T, D) = (2, 4, 128, 64)`, contiguous Q/K/V/O strides
+`(32768, 8192, 64, 1)`, `BLOCK_M = BLOCK_N = 128`, and
+`BLOCK_DMODEL = 64`. The output conjuncts read back the Python-observable
+`Out`, `L`, and `M` stores from that full surface. -/
+theorem triton_attention_forward_python_test_shape_output_summary
+    (Q K V L M Out : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hpid1 : s.pids 1 < 8)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (triton_attention_fwd_kernel Q K V L M Out
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 128 64 128).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => active s (s.pids 1 * 128) 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (Out, outOffset s (s.pids 1 * 128) 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (some (fwdOutSpec s Q K V idx))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lRowOffset s (s.pids 1) 128 128 i))
+      (expected := fun i : Fin 128 => fwdLSpec s Q K i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (M, lRowOffset s (s.pids 1) 128 128 i))
+      (expected := fun i : Fin 128 => fwdMSpec s Q K i)) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · exact triton_attention_fwd_kernel_toAlgorithm_supported Q K V L M Out
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 128 64 128
+  · exact triton_attention_forward_surface_out_python_test_shape_compute_correct
+      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+  · exact triton_attention_forward_surface_l_python_test_shape_compute_correct
+      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+  · exact triton_attention_forward_surface_m_python_test_shape_compute_correct
+      Q K V L M Out s hpid0 hpid1 hLOut hMOut hLM hundef
+
+/-- Public Python backward-preprocess summary for `triton_attention.py`.
+
+This records the faithful `_bwd_preprocess` full surface at `BLOCK_M = 128`
+and `D_HEAD = 64`, and connects both Python-observable `NewDO` and `Delta`
+outputs directly to the produced full-surface values. -/
+theorem triton_attention_bwd_preprocess_python_test_shape_output_summary
+    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
+    (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
+      128 64).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (NewDO, newdoOffset s 128 64 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
+      (expected := fun i : Fin 128 =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
+  constructor
+  · exact triton_attention_bwd_preprocess_toAlgorithm_supported
+      Out DO L NewDO Delta 128 64
+  · exact triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
+      Out DO L NewDO Delta s
+
+/-- Public Python backward-gradient summary for `triton_attention.py`.
+
+The surface conjunct pins the checked Python launch of the main `_bwd_kernel`
+for `(B, H, T, D) = (2, 4, 128, 64)` with `num_block = 1`; the output
+conjuncts connect the Python-observable `DQ`, `DK`, and `DV` writes directly to
+the produced full-kernel values. -/
+theorem triton_attention_bwd_grads_python_test_shape_output_summary
+    (Q K V Out DO DQ DK DV L M Delta : RegionName)
+    (s : BlockState) :
+    (∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 1 128 64 128).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx)) := by
+  constructor
+  · exact triton_attention_bwd_kernel_toAlgorithm_supported Q K V Out DO DQ DK
+      DV L M Delta ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 1 128 64 128
+  · exact triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
+      Q K V Out DO DQ DK DV L M Delta s
+
+/-- Combined checked-shape backward summary for `triton_attention.py`.
+
+This exposes the main `_bwd_kernel` surface, final `DQ`/`DK`/`DV` writebacks,
+and the score-side `P`/`DS` arithmetic producer in one public target. -/
+theorem triton_attention_bwd_python_test_shape_complete_summary
+    (Q K V Out DO DQ DK DV L M Delta PTile DSTile : RegionName)
+    (s : BlockState) (hRegions : PTile ≠ DSTile) :
+    ((∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 1 128 64 128).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (DQ, bwdGradOffset s 4 32768 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDQValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DK, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDKValue s Q K V Out DO DQ DK DV L M Delta idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 1 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => bwdGradActive s 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (DV, bwdGradOffset s 4 32768 8192 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedBwdKernelDVValue s Q K V Out DO DQ DK DV L M Delta idx))) ∧
+    ((∃ alg, (triton_attention_bwd_score_formula_slice Q K V DO M Delta
+      PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice Q K V DO M Delta
+        PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (PTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScorePFormulaSpec s Q K M ((Real.sqrt (64 : ℝ))⁻¹) 128 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_score_formula_slice Q K V DO M Delta
+        PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹) 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (DSTile, bwdScoreOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bwdScoreDSFormulaSpec s Q K V DO M Delta ((Real.sqrt (64 : ℝ))⁻¹)
+          128 64 idx))) := by
+  constructor
+  · exact triton_attention_bwd_grads_python_test_shape_output_summary Q K V Out
+      DO DQ DK DV L M Delta s
+  · exact triton_attention_bwd_score_python_test_shape_formula_summary Q K V
+      DO M Delta PTile DSTile s hRegions
+
+end TestShape
 
 end VeriTile.Bench.TritonBenchG.TritonAttention
