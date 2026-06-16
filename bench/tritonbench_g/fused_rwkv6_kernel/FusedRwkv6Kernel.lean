@@ -842,12 +842,6 @@ and the state update realizes `stateClosed(t+1)` — closed forms over the *inpu
 regions, never a read-back of the kernel's own output. Case 1: no initial / no
 final state; case 2: initial state; case 3: final state; case 4: both. -/
 
-end Correct
-
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
@@ -931,6 +925,12 @@ theorem fused_recurrent_rwkv6_output_summary_general
       USE_INITIAL_STATE m s_k_h s_v_h K V BK BV s hFinalInj hPrev
   · exact fused_recurrent_rwkv6_final_state_closed_form BHFinal ht k v w h0
       USE_INITIAL_STATE s_k_h s_v_h K V BK BV T s hFinalInj hFinal
+
+end Correct
+
+/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+
+section TestShape
 
 /-! ## Genuine Python regression-shape corollaries
 
