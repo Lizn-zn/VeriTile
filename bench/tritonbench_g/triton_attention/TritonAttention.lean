@@ -3372,77 +3372,6 @@ theorem ta_load_q_eval
   congr 1
   simp only [fwdQTile, hpids0, hpids1, Nat.zero_add, Nat.mul_one]
 
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **General `k = tl.load(k_tile_ptr, boundary_check=(0,1))`** → `fwdKTileG` cells.
-Contiguous strides (`HEAD_DIM = BLOCK_DMODEL`), parent `[D0, BLOCK_DMODEL]`,
-offsets `[off_hz·stride_hz_2d, 0]`. Every lane in bounds via `hrow`. -/
-theorem ta_load_k_evalG
-    (K : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
-    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
-    (hpids1 : s.pids 1 = off_hz)
-    (hp : evalOp ptrOp s = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
-    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
-    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
-      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-          some (fwdKTileG s K stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
-  rw [ta_load_blockPtr_bc_eval K 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
-    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
-  refine congrArg some ?_
-  ext idx
-  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
-  simp only [hi, hj, and_self, if_true]
-  congr 1
-  simp only [fwdKTileG, hpids1, Nat.mul_one]
-  ring
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **General `v = tl.load(v_tile_ptr, boundary_check=(0,1))`** → `fwdVTileG` cells. -/
-theorem ta_load_v_evalG
-    (V : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
-    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
-    (hpids1 : s.pids 1 = off_hz)
-    (hp : evalOp ptrOp s = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
-    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
-    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
-      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-          some (fwdVTileG s V stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
-  rw [ta_load_blockPtr_bc_eval V 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
-    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
-  refine congrArg some ?_
-  ext idx
-  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
-  simp only [hi, hj, and_self, if_true]
-  congr 1
-  simp only [fwdVTileG, hpids1, Nat.mul_one]
-  ring
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **General `q = tl.load(q_tile_ptr)`** → `fwdQTileG` cells (no boundary check). -/
-theorem ta_load_q_evalG
-    (Q : RegionName) (off_hz start_m stride_hz_2d D0 BLOCK_M BLOCK_DMODEL : Nat)
-    (ptrOp : Op .blockPtr [BLOCK_M, BLOCK_DMODEL]) (s : BlockState)
-    (hpids0 : s.pids 0 = start_m) (hpids1 : s.pids 1 = off_hz)
-    (hp : evalOp ptrOp s = some
-      ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        { region := Q, baseOffset := 0,
-          parentShape := [D0, BLOCK_DMODEL], blockShape := [BLOCK_M, BLOCK_DMODEL], strides := [BLOCK_DMODEL, 1],
-          offsets := [off_hz * stride_hz_2d + start_m * BLOCK_M, 0] }⟩) :
-    evalOp (.load .real (.blockPtr ptrOp []) .none) s
-      = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          some (fwdQTileG s Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL idx)⟩ := by
-  rw [load_blockPtr_Q_eval Q 0 D0 BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
-    BLOCK_DMODEL 1 (off_hz * stride_hz_2d + start_m * BLOCK_M) ptrOp s hp]
-  refine congrArg some ?_
-  ext idx
-  congr 1
-  simp only [fwdQTileG, hpids0, hpids1, Nat.mul_one]
-  ring
-
 /-- `evalOp` helper for the `>=` causal predicate (`Op.ge`), which has no
 dedicated `@[simp]` form. Mirror of `flash_attn`'s `evalOp_ge`. -/
 theorem ta_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
@@ -4086,6 +4015,77 @@ def taPostLoopG (L M Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL : Nat) : List
     Stmt.store .fp16 [BLOCK_M, BLOCK_DMODEL] (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_DMODEL] "out_tile_ptr") [0, 1])
       (Op.ref .fp16 [BLOCK_M, BLOCK_DMODEL] "acc") MaskOpt.none ]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `k = tl.load(k_tile_ptr, boundary_check=(0,1))`** → `fwdKTileG` cells.
+Contiguous strides (`HEAD_DIM = BLOCK_DMODEL`), parent `[D0, BLOCK_DMODEL]`,
+offsets `[off_hz·stride_hz_2d, 0]`. Every lane in bounds via `hrow`. -/
+theorem ta_load_k_evalG
+    (K : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
+    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
+    (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
+    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
+      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+          some (fwdKTileG s K stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
+  rw [ta_load_blockPtr_bc_eval K 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
+    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
+  refine congrArg some ?_
+  ext idx
+  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
+  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
+  simp only [hi, hj, and_self, if_true]
+  congr 1
+  simp only [fwdKTileG, hpids1, Nat.mul_one]
+  ring
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `v = tl.load(v_tile_ptr, boundary_check=(0,1))`** → `fwdVTileG` cells. -/
+theorem ta_load_v_evalG
+    (V : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
+    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
+    (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
+    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
+      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+          some (fwdVTileG s V stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
+  rw [ta_load_blockPtr_bc_eval V 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
+    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
+  refine congrArg some ?_
+  ext idx
+  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
+  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
+  simp only [hi, hj, and_self, if_true]
+  congr 1
+  simp only [fwdVTileG, hpids1, Nat.mul_one]
+  ring
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `q = tl.load(q_tile_ptr)`** → `fwdQTileG` cells (no boundary check). -/
+theorem ta_load_q_evalG
+    (Q : RegionName) (off_hz start_m stride_hz_2d D0 BLOCK_M BLOCK_DMODEL : Nat)
+    (ptrOp : Op .blockPtr [BLOCK_M, BLOCK_DMODEL]) (s : BlockState)
+    (hpids0 : s.pids 0 = start_m) (hpids1 : s.pids 1 = off_hz)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        { region := Q, baseOffset := 0,
+          parentShape := [D0, BLOCK_DMODEL], blockShape := [BLOCK_M, BLOCK_DMODEL], strides := [BLOCK_DMODEL, 1],
+          offsets := [off_hz * stride_hz_2d + start_m * BLOCK_M, 0] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          some (fwdQTileG s Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL idx)⟩ := by
+  rw [load_blockPtr_Q_eval Q 0 D0 BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
+    BLOCK_DMODEL 1 (off_hz * stride_hz_2d + start_m * BLOCK_M) ptrOp s hp]
+  refine congrArg some ?_
+  ext idx
+  congr 1
+  simp only [fwdQTileG, hpids0, hpids1, Nat.mul_one]
+  ring
+
 set_option maxRecDepth 8000 in
 /-- **General body split.** The general (contiguous-stride) forward kernel lowers
 to `taPreLoopG ++ forRangeDyn :: taPostLoopG`. The dynamic causal loop bound is
@@ -4311,6 +4311,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N)
     (qtile : Tile .real [BLOCK_M, BLOCK_DMODEL]) (mtile ltile : Tile .real [BLOCK_M])
     (acctile : Tile .real [BLOCK_M, BLOCK_DMODEL])
+    (K V : RegionName) (D0 rowOff : Nat)
     (kTfn vTfn : TileIndex [BLOCK_N, BLOCK_DMODEL] → ℝ)
     (gm : Fin BLOCK_M → Nat)
     (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
@@ -4320,15 +4321,14 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (hmp : sin.regs .real [BLOCK_M] "m_prev" = some mtile)
     (hlp : sin.regs .real [BLOCK_M] "l_prev" = some ltile)
     (hacc : sin.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some acctile)
+    (hkp : sin.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL rowOff))
+    (hvp : sin.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL rowOff))
     (hkload : ∀ t : BlockState, t.mem = sin.mem → t.pids = sin.pids →
         evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [0, 1]) .none) t
           = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (kTfn idx)⟩)
     (hvload : ∀ t : BlockState, t.mem = sin.mem → t.pids = sin.pids →
         evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) .none) t
           = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (vTfn idx)⟩)
-    (kAdv vAdv : Tile .blockPtr [BLOCK_N, BLOCK_DMODEL])
-    (hkadv : evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [BLOCK_N, 0]) sin = some kAdv)
-    (hvadv : evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [BLOCK_N, 0]) sin = some vAdv)
     (hundef : ∀ rg o, sin.undef rg o = 0) :
     ∃ (rmaxT : Tile .real [BLOCK_M]) (qk0 qk1 : Tile .real [BLOCK_M, BLOCK_N]),
       Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qk1 = some rmaxT ∧
@@ -4374,8 +4374,8 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
             ∧ sF.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some
                 (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
                   acc1T (Tile.dot [] pT (⟨fun idx => some (vTfn idx)⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL])))
-            ∧ sF.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some kAdv
-            ∧ sF.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some vAdv
+            ∧ sF.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (rowOff + BLOCK_N))
+            ∧ sF.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (rowOff + BLOCK_N))
             ∧ sF.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = sin.regs .real [BLOCK_M, BLOCK_DMODEL] "q"
             ∧ sF.regs .nat [BLOCK_M] "offs_m" = sin.regs .nat [BLOCK_M] "offs_m"
             ∧ sF.regs .nat [BLOCK_N] "offs_n" = sin.regs .nat [BLOCK_N] "offs_n"
@@ -4437,7 +4437,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (ta_alpha_eval _ BLOCK_M ltile mtile mcurrT (by simp [hlp]) (by simp [hmp]) (by simp [hmc])))]
   -- L8: p = exp(qk - m_curr)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_p_eval _ BLOCK_M BLOCK_N (by simp) qk1 mcurrT (by simp [hqk1]) (by simp [hmc])))]
+    (ta_p_eval _ BLOCK_M BLOCK_N (by decide) qk1 mcurrT (by simp [hqk1]) (by simp [hmc])))]
   -- L9: l_curr = sum p + l_prev
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_lij_eval _ BLOCK_M BLOCK_N pexpT lprev1T (by simp [hpexp]) (by simp [hlp1, hal])))]
@@ -4446,10 +4446,10 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (ta_lrcp_eval _ BLOCK_M lcurrT (by simp [hlc])))]
   -- L11: p *= l_rcp
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_p_rcp_eval _ BLOCK_M BLOCK_N (by simp) pexpT lrcpT (by simp [hpexp]) (by simp [hlr])))]
+    (ta_p_rcp_eval _ BLOCK_M BLOCK_N (by decide) pexpT lrcpT (by simp [hpexp]) (by simp [hlr])))]
   -- L12: acc *= (l_prev * l_rcp)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_acc_rescale_eval _ BLOCK_M BLOCK_DMODEL (by simp) acctile lprev1T lrcpT (by simp [hacc]) (by simp [hlp1, hal]) (by simp [hlr])))]
+    (ta_acc_rescale_eval _ BLOCK_M BLOCK_DMODEL (by decide) acctile lprev1T lrcpT (by simp [hacc]) (by simp [hlp1, hal]) (by simp [hlr])))]
   -- L13: p -> fp16
   rw [stepStmts.cons_some (@stepStmt_assign_eq_some .fp16 [BLOCK_M, BLOCK_N] "p"
     (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")) _
@@ -4459,7 +4459,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) MaskOpt.none) _
         = some vT from by
-      rw [hvload _ (by simp [BlockState.setReg_readMem]) (by simp [BlockState.setReg_pids])]))]
+      rw [hvload _ (by simp) (by simp)]))]
   -- L15: acc += dot(p, v)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_acc_eval _ BLOCK_M BLOCK_N BLOCK_DMODEL acc1T pT vT (by simp [hacc1]) (by simp [hpT]) (by simp [hvT])))]
@@ -4471,12 +4471,12 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (ta_reg_carry_eval _ BLOCK_M "m_curr" mcurrT (by simp [hmc])))]
   -- L18: k_tile_ptr advance
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [BLOCK_N, 0]) _ = some kAdv from by
-      rw [← hkadv]; congr 1 <;> simp [BlockState.setReg_ne_name]))]
+    (ta_advance_row_eval _ K 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1 rowOff BLOCK_N "k_tile_ptr"
+      (by simp [hkp, taKVPtrTileG])))]
   -- L19: v_tile_ptr advance
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [BLOCK_N, 0]) _ = some vAdv from by
-      rw [← hvadv]; congr 1 <;> simp [BlockState.setReg_ne_name]))]
+    (ta_advance_row_eval _ V 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1 rowOff BLOCK_N "v_tile_ptr"
+      (by simp [hvp, taKVPtrTileG])))]
   rw [stepStmts.nil]
   refine ⟨_, rfl, ?_, ?_, ?_, mcurrT, lcurrT, lrcpT, pT, acc1T, rfl, rfl, rfl, rfl, rfl,
     ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -4486,8 +4486,8 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
   · simp [hmc]
   · simp [hlc]
   · simp [hacc1, hpT, hvT]
-  · simp [BlockState.setReg_ne_name]
-  · simp [BlockState.setReg_ne_name]
+  · simp [taKVPtrTileG]
+  · simp [taKVPtrTileG]
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_ne_name]
