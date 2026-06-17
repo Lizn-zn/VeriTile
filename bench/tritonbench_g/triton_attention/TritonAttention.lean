@@ -4038,6 +4038,7 @@ theorem ta_load_k_evalG
   simp only [hi, hj, and_self, if_true]
   congr 1
   simp only [fwdKTileG, hpids1, Nat.mul_one]
+  congr 1
   ring
 
 set_option maxHeartbeats 1600000 in
@@ -4061,6 +4062,7 @@ theorem ta_load_v_evalG
   simp only [hi, hj, and_self, if_true]
   congr 1
   simp only [fwdVTileG, hpids1, Nat.mul_one]
+  congr 1
   ring
 
 set_option maxHeartbeats 1600000 in
@@ -4084,6 +4086,7 @@ theorem ta_load_q_evalG
   ext idx
   congr 1
   simp only [fwdQTileG, hpids0, hpids1, Nat.mul_one]
+  congr 1
   ring
 
 set_option maxRecDepth 8000 in
@@ -4437,7 +4440,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (ta_alpha_eval _ BLOCK_M ltile mtile mcurrT (by simp [hlp]) (by simp [hmp]) (by simp [hmc])))]
   -- L8: p = exp(qk - m_curr)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_p_eval _ BLOCK_M BLOCK_N (by decide) qk1 mcurrT (by simp [hqk1]) (by simp [hmc])))]
+    (ta_p_eval _ BLOCK_M BLOCK_N Nat.one_lt_two qk1 mcurrT (by simp [hqk1]) (by simp [hmc])))]
   -- L9: l_curr = sum p + l_prev
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_lij_eval _ BLOCK_M BLOCK_N pexpT lprev1T (by simp [hpexp]) (by simp [hlp1, hal])))]
@@ -4446,10 +4449,10 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (ta_lrcp_eval _ BLOCK_M lcurrT (by simp [hlc])))]
   -- L11: p *= l_rcp
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_p_rcp_eval _ BLOCK_M BLOCK_N (by decide) pexpT lrcpT (by simp [hpexp]) (by simp [hlr])))]
+    (ta_p_rcp_eval _ BLOCK_M BLOCK_N Nat.one_lt_two pexpT lrcpT (by simp [hpexp]) (by simp [hlr])))]
   -- L12: acc *= (l_prev * l_rcp)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ta_acc_rescale_eval _ BLOCK_M BLOCK_DMODEL (by decide) acctile lprev1T lrcpT (by simp [hacc]) (by simp [hlp1, hal]) (by simp [hlr])))]
+    (ta_acc_rescale_eval _ BLOCK_M BLOCK_DMODEL Nat.one_lt_two acctile lprev1T lrcpT (by simp [hacc]) (by simp [hlp1, hal]) (by simp [hlr])))]
   -- L13: p -> fp16
   rw [stepStmts.cons_some (@stepStmt_assign_eq_some .fp16 [BLOCK_M, BLOCK_N] "p"
     (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")) _
