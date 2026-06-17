@@ -5766,6 +5766,96 @@ theorem ta_exec (Q K V L M Out : RegionName) (s : BlockState)
     rw [hMi, ← fwdMSpec_eq_mPartial]
     simp only [fwdMSpec, fwdCausalSet, htileQ, htileK, hsppids]
 
+/-! ## ════════ General forward invariant + step + postLoop + exec ════════
+
+Dimension-general mirror of the pinned `taInvariant`/`ta_*`/`ta_exec` stack above.
+The single test-shape block (`numKVBlocks = 1`) is replaced by an arbitrary number
+of streaming KV blocks; the running registers after `c = i / BLOCK_N` iterations
+bind to the `FA1MathCausal` causal accumulators
+(`mPartial`/`lPartial`/`oPartial` at block count `c`, over the loaded span
+`SEQ = BLOCK_N · numKVBlocks`). -/
+
+open VeriTile.Examples.FA1MathCausal in
+/-- General `q·kᵀ` dot cell (symbolic dims). -/
+theorem ta_dot_score_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL : Nat)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT : TileIndex [BLOCK_N, BLOCK_DMODEL] → ℝ)
+    (r : Fin BLOCK_M) (j : Fin BLOCK_N) :
+    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+        (Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))).data
+        (r, j, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin BLOCK_DMODEL => qT (r, e, PUnit.unit) * kT (j, e, PUnit.unit))) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin BLOCK_DMODEL) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·)
+          ((⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL]).data (r, e, PUnit.unit))
+          ((Tile.transpose [] (⟨fun idx => some (kT idx)⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL])).data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin BLOCK_DMODEL) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (qT (r, e, PUnit.unit) * kT (j, e, PUnit.unit)) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by
+        rw [Tile.transpose_nil_data]; rfl)]
+  rw [WithBot.sum_someTerm_eq_some]
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- General masked qk cell `qk1(r,j) = maskedScore qS qT kT sc r (blockIndex c jL)`.
+The kernel's causal predicate `SN + j ≤ qS + r` (with `SN = c·BLOCK_N`) and the
+in-range key index `blockIndex BLOCK_N numKVBlocks c _ j = c·BLOCK_N + j` match the
+`FA1MathCausal.maskedScore` causal `≤` condition exactly. -/
+theorem ta_qk1_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
+    (c : Nat) (hc : c < numKVBlocks) (r : Fin BLOCK_M) (j : Fin BLOCK_N) :
+    (if c * BLOCK_N + j.val ≤ qS + r.val then
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+            (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+              (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+          (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+      else (⊥ : WithBot ℝ))
+      = maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) j) := by
+  set jg := StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) j with hjg
+  have hjgval : jg.val = c * BLOCK_N + j.val := rfl
+  by_cases h : c * BLOCK_N + j.val ≤ qS + r.val
+  · rw [if_pos h]
+    rw [Tile.bop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarR, Tile.scalar_data,
+      NumericDType.mul, NumericDType.add]
+    rw [ta_dot_score_cellG BLOCK_M BLOCK_N BLOCK_DMODEL qT
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit)) r j]
+    rw [maskedScore_of_le qS qT kT sc r jg (by rw [hjgval]; exact h)]
+    simp only [StreamingAccumulator.scaledScore, WithBot.realAdd, WithBot.realMul,
+      Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_; ring
+  · rw [if_neg h, maskedScore_of_not_le qS qT kT sc r jg (by rw [hjgval]; exact h)]
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- General block sup of masked qk cells = the `c`-th block sup term of `mPartial`. -/
+theorem ta_rmax_blocksupG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat) (hBN : 0 < BLOCK_N)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
+    (c : Nat) (hc : c < numKVBlocks) (r : Fin BLOCK_M) :
+    (Finset.univ : Finset (Fin BLOCK_N)).sup' ⟨⟨0, hBN⟩, Finset.mem_univ _⟩
+        (fun j : Fin BLOCK_N =>
+          if c * BLOCK_N + j.val ≤ qS + r.val then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+                  (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                    some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+              (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+          else (⊥ : WithBot ℝ))
+      = (Finset.univ : Finset (Fin BLOCK_N)).sup
+          (fun jLocal => maskedScore qS qT kT sc r
+            (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal)) := by
+  rw [Finset.sup'_eq_sup]
+  refine Finset.sup_congr rfl (fun j _ => ?_)
+  rw [ta_qk1_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc r j]
+
 set_option maxRecDepth 8000 in
 /-- **Boundary-checked block-ptr load** for `_bwd_kernel`'s `bwdPtrTile`. With
 `pids 0 < 8` every lane is in bounds (`off_z·512 + off_h·128 + i < 1024`), so the
