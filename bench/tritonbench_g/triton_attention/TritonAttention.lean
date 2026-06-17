@@ -6749,6 +6749,183 @@ theorem ta_postLoopG
       (fun idx : TileIndex [BLOCK_M] => FloatDType.real.storeValue (mTile.data idx)) hrawInj (i, PUnit.unit)]
     simp only [hmTile, FloatDType.real_storeValue]
 
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **General full-kernel forward execution chain.** Running the lowered
+`_fwd_kernel` body (`taPreLoopG ++ forRangeDyn(0, (pids0+1)·BLOCK_M, BLOCK_N) ::
+taPostLoopG`) from a clean state `s`, with `numKVBlocks = (pids0+1)·BLOCK_M /
+BLOCK_N` causal KV blocks (`SEQ = BLOCK_N·numKVBlocks = (pids0+1)·BLOCK_M`), reaches
+a final state `sF` whose `Out`/`L`/`M` stores hold the genuine general closed-form
+values `fwdOutSpecG`/`fwdLSpecG`/`fwdMSpecG`. Honest side conditions: positive
+block dims, `BLOCK_N ∣ (pids0+1)·BLOCK_M`, contiguous layout, the output-offset
+injectivity, and the boundary `pids1·stride_hz_2d + BLOCK_M·(pids0+1) ≤ D0`. -/
+theorem ta_execG (Q K V L M Out : RegionName) (s : BlockState) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
+    (hdvd : BLOCK_N ∣ (s.pids 0 + 1) * BLOCK_M)
+    (hbound : s.pids 1 * (stride_qh / BLOCK_DMODEL) + (s.pids 0 + 1) * BLOCK_M ≤ D0)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (houtinj : Function.Injective (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        (s.pids 1 * (stride_qh / BLOCK_DMODEL) + s.pids 0 * BLOCK_M + idx.1.val) * BLOCK_DMODEL + idx.2.1.val * 1))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, exec (triton_attention_fwd_kernel Q K V L M Out sc
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N) s = some sF
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          active s (s.pids 1 * (stride_qh / BLOCK_DMODEL)) D0 BLOCK_M idx →
+          sF.mem Out (outOffset s (s.pids 1 * (stride_qh / BLOCK_DMODEL)) BLOCK_DMODEL 1 BLOCK_M idx)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (fwdOutSpecG s Q K V (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL
+                    ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc idx))))
+      ∧ (∀ i : Fin BLOCK_M, sF.readMem L (lRowOffset s (s.pids 1) N_CTX BLOCK_M i)
+          = fwdLSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+              (Nat.mul_pos (Nat.succ_pos _) hBM) i)
+      ∧ (∀ i : Fin BLOCK_M, sF.readMem M (lRowOffset s (s.pids 1) N_CTX BLOCK_M i)
+          = fwdMSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+              (Nat.mul_pos (Nat.succ_pos _) hBM) i) := by
+  set stride_hz_2d := stride_qh / BLOCK_DMODEL with hstr
+  set numKVBlocks := (s.pids 0 + 1) * BLOCK_M / BLOCK_N with hnum
+  have hSEQ : BLOCK_N * numKVBlocks = (s.pids 0 + 1) * BLOCK_M := by
+    rw [hnum, Nat.mul_div_cancel' hdvd]
+  have hnumpos : 0 < numKVBlocks := by
+    rw [hnum]; exact Nat.div_pos (Nat.le_of_dvd (by positivity) hdvd) hBN
+  -- decompose the body
+  have hbody : exec (triton_attention_fwd_kernel Q K V L M Out sc
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N) s
+        = stepStmts (taPreLoopG Q K V Out sc stride_qh D0 BLOCK_M BLOCK_N BLOCK_DMODEL
+            ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+                  (Op.mul .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+                  (Op.constNat BLOCK_N) (taLoopBodyG sc BLOCK_M BLOCK_N BLOCK_DMODEL)
+                :: taPostLoopG L M Out N_CTX BLOCK_M BLOCK_DMODEL)) s := by
+    show stepStmts (triton_attention_fwd_kernel Q K V L M Out sc
+          stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+          stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+          Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body s = _
+    rw [ta_body_splitG]
+  rw [hbody]
+  -- preLoop
+  obtain ⟨sp, hpre, hsppids, hspmem, hspundef, hsmStart, hohp, homp, honp, hmpp, hlpp, haccp,
+      hqp, hkpp, hvpp, hopp⟩ := taPreLoop_evalG s Q K V Out sc stride_qh D0 BLOCK_M BLOCK_N BLOCK_DMODEL hundef
+  rw [stepStmts.append_some hpre]
+  -- invariant base case at counter 0
+  have hinv0 : taInvariantG Q K V Out sp sc stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks 0 sp := by
+    refine ta_invariant_zeroG Q K V Out sp sc stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks
+      ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ hspundef
+    · exact hmpp
+    · exact hlpp
+    · exact haccp
+    · rw [hqp]; refine congrArg some ?_; ext idx
+      simp only [fwdQTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    · rw [homp, hsppids]
+    · exact honp
+    · rw [hkpp, hsppids, hstr]
+    · rw [hvpp, hsppids, hstr]
+    · rw [hopp, hsppids, hstr]
+    · rw [hohp, hsppids]
+  -- run the loop via forRangeDyn_inv
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n") (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+      (stepOp := Op.constNat BLOCK_N)
+      (P := fun i st => taInvariantG Q K V Out sp sc stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks i st)
+      (s_init := sp)
+      (by rw [evalOp_constNat])
+      (by rw [evalOp_mul, evalOp_add, evalOp_ref, hsmStart]
+          simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+          refine congrArg some ?_
+          ext u
+          simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+            NumericDType.add, NumericDType.mul]
+          show (s.pids 0 + 1) * BLOCK_M = BLOCK_N * numKVBlocks
+          rw [hSEQ])
+      (by rw [evalOp_constNat])
+      (by omega)
+      hinv0
+      (fun i st hi hP => ta_attn_stepG Q K V Out sp sc stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks
+        hBM hBN hBD (by rw [hsppids, hstr, hSEQ]; exact hbound) i st hi hP)
+  rw [stepStmts.cons_some hloop]
+  -- final counter = SEQ
+  have hfinal : final = BLOCK_N * numKVBlocks := by
+    simp only [taInvariantG] at hinvL
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    rw [hSEQ] at hfin hle ⊢
+    omega
+  subst hfinal
+  -- postLoop
+  obtain ⟨sF, hpostStep, hO, hLrb, hMrb⟩ :=
+    ta_postLoopG Q K V L M Out sp sc stride_hz_2d D0 N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks sL
+      hBM hBN hBD hLOut hMOut hLM
+      (by simp only [hsppids]; exact houtinj) hinvL
+  refine ⟨sF, hpostStep, ?_, ?_, ?_⟩
+  · -- Out readback
+    intro idx hActive
+    have htileQ : fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
+        = fwdQTileG s Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL := by
+      funext i; simp only [fwdQTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTileG sp K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+        = fwdKTileG s K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL := by
+      funext i; simp only [fwdKTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileV : fwdVTileG sp V stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+        = fwdVTileG s V stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL := by
+      funext i; simp only [fwdVTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hooff : outOffset sp (sp.pids 1 * stride_hz_2d) BLOCK_DMODEL 1 BLOCK_M idx
+        = outOffset s (s.pids 1 * stride_hz_2d) BLOCK_DMODEL 1 BLOCK_M idx := by
+      simp only [outOffset, rowIndex, hsppids]
+    have hOidx := hO idx (by simp only [active, rowIndex, hsppids]; simpa only [active, rowIndex] using hActive)
+    rw [hooff] at hOidx
+    rw [hOidx]
+    refine congrArg (MemCell.of .fp16) (congrArg (FloatDType.real.cast FloatDType.fp16) (congrArg some ?_))
+    rw [show (s.pids 0 + 1) * BLOCK_M = BLOCK_N * numKVBlocks from hSEQ.symm]
+    rw [fwdOutSpecG_eq_streaming s Q K V stride_hz_2d BLOCK_DMODEL BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL hBN hnumpos sc idx]
+    rw [htileQ, htileK, htileV, hsppids]
+  · -- L readback
+    intro i
+    have htileQ : fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
+        = fwdQTileG s Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL := by
+      funext i; simp only [fwdQTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTileG sp K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+        = fwdKTileG s K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL := by
+      funext i; simp only [fwdKTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hloff : lRowOffset sp (sp.pids 1) N_CTX BLOCK_M i = lRowOffset s (s.pids 1) N_CTX BLOCK_M i := by
+      simp only [lRowOffset, rowIndex, hsppids]
+    have hLi := hLrb i
+    rw [hloff] at hLi
+    rw [hLi, lPartial_eq_fwdLSpecG sp Q K stride_hz_2d BLOCK_DMODEL BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL hBN hnumpos sc i]
+    -- align the expected SEQ `(pids0+1)*BLOCK_M` with the bridge's `BLOCK_N*numKVBlocks`
+    have hcast : ∀ (SEQ : Nat) (heq : BLOCK_N * numKVBlocks = SEQ) (hpos : 0 < SEQ),
+        fwdLSpecG sp Q K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc
+            (heq ▸ hpos) i
+          = fwdLSpecG s Q K stride_hz_2d BLOCK_DMODEL SEQ BLOCK_M BLOCK_DMODEL sc hpos i := by
+      intro SEQ heq hpos; subst heq
+      simp only [fwdLSpecG, fwdMSpecG, fwdCausalSetG, htileQ, htileK, hsppids]
+    exact hcast ((s.pids 0 + 1) * BLOCK_M) hSEQ (Nat.mul_pos (Nat.succ_pos _) hBM)
+  · -- M readback
+    intro i
+    have htileQ : fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
+        = fwdQTileG s Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL := by
+      funext i; simp only [fwdQTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have htileK : fwdKTileG sp K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+        = fwdKTileG s K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL := by
+      funext i; simp only [fwdKTileG]; unfold BlockState.readMem; rw [hspmem, hsppids]
+    have hloff : lRowOffset sp (sp.pids 1) N_CTX BLOCK_M i = lRowOffset s (s.pids 1) N_CTX BLOCK_M i := by
+      simp only [lRowOffset, rowIndex, hsppids]
+    have hMi := hMrb i
+    rw [hloff] at hMi
+    rw [hMi, ← fwdMSpecG_eq_mPartial sp Q K stride_hz_2d BLOCK_DMODEL BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL hBN hnumpos sc i]
+    have hcast : ∀ (SEQ : Nat) (heq : BLOCK_N * numKVBlocks = SEQ) (hpos : 0 < SEQ),
+        fwdMSpecG sp Q K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc
+            (heq ▸ hpos) i
+          = fwdMSpecG s Q K stride_hz_2d BLOCK_DMODEL SEQ BLOCK_M BLOCK_DMODEL sc hpos i := by
+      intro SEQ heq hpos; subst heq
+      simp only [fwdMSpecG, fwdCausalSetG, htileQ, htileK, hsppids]
+    exact hcast ((s.pids 0 + 1) * BLOCK_M) hSEQ (Nat.mul_pos (Nat.succ_pos _) hBM)
+
 set_option maxRecDepth 8000 in
 /-- **Boundary-checked block-ptr load** for `_bwd_kernel`'s `bwdPtrTile`. With
 `pids 0 < 8` every lane is in bounds (`off_z·512 + off_h·128 + i < 1024`), so the
