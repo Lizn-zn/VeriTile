@@ -3035,6 +3035,193 @@ theorem fwdOutSpecG_eq_streaming
     (fwdVTileG s V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
     sc idx).symm
 
+/-- Sup of `f` over `Fin (k+1)` splits as the sup over the `castSucc` lanes
+joined with the last lane. (Mathlib has no `Fin.sup_univ_castSucc`; proved by
+antisymmetry.) -/
+theorem fin_sup_univ_castSucc {α} [SemilatticeSup α] [OrderBot α]
+    (k : Nat) (f : Fin (k + 1) → α) :
+    (Finset.univ : Finset (Fin (k + 1))).sup f
+      = (Finset.univ : Finset (Fin k)).sup (fun i => f i.castSucc) ⊔ f (Fin.last k) := by
+  apply le_antisymm
+  · apply Finset.sup_le
+    intro i _
+    rcases Fin.eq_castSucc_or_eq_last i with ⟨j, rfl⟩ | rfl
+    · exact le_sup_of_le_left (Finset.le_sup (f := fun i => f i.castSucc) (Finset.mem_univ j))
+    · exact le_sup_right
+  · apply sup_le
+    · apply Finset.sup_le; intro i _; exact Finset.le_sup (Finset.mem_univ _)
+    · exact Finset.le_sup (Finset.mem_univ _)
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **mPartial global-sup form.** The running causal max after `k` blocks equals
+the `Finset.sup` (over block index `n < k` and lane `jL < Bk`) of the per-key
+`maskedScore`. Proved by induction on `k` using `mPartial_succ_of_lt`. -/
+theorem mPartialG_eq_blockSup {M D Bk : Nat}
+    (qStart : Nat) (Q : TileIndex [M, D] → ℝ) (N : Nat)
+    (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ) (i : Fin M)
+    (k : Nat) (hk : k ≤ N) :
+    mPartial Bk qStart Q N K scale k i
+      = (Finset.univ : Finset (Fin k)).sup (fun n =>
+          (Finset.univ : Finset (Fin Bk)).sup (fun jL =>
+            maskedScore qStart Q K scale i
+              (StreamingAccumulator.blockIndex Bk N n.val
+                (Nat.lt_of_lt_of_le n.isLt hk) jL))) := by
+  induction k with
+  | zero => simp [mPartial]
+  | succ k' ih =>
+      have hk' : k' ≤ N := Nat.le_of_succ_le hk
+      rw [mPartial_succ_of_lt qStart Q N K scale k' (Nat.lt_of_succ_le hk) i]
+      rw [ih hk']
+      rw [fin_sup_univ_castSucc]
+      have hlast : (Finset.univ : Finset (Fin Bk)).sup (fun jLocal =>
+            maskedScore qStart Q K scale i
+              (StreamingAccumulator.blockIndex Bk N k' (Nat.lt_of_succ_le hk) jLocal))
+          = (Finset.univ : Finset (Fin Bk)).sup (fun jL =>
+              maskedScore qStart Q K scale i
+                (StreamingAccumulator.blockIndex Bk N (Fin.last k').val
+                  (Nat.lt_of_lt_of_le (Fin.last k').isLt hk) jL)) := by
+        refine Finset.sup_congr rfl (fun jL _ => ?_)
+        congr 1
+      have hcast : (Finset.univ : Finset (Fin k')).sup (fun n =>
+            (Finset.univ : Finset (Fin Bk)).sup (fun jL =>
+              maskedScore qStart Q K scale i
+                (StreamingAccumulator.blockIndex Bk N n.val
+                  (Nat.lt_of_lt_of_le n.isLt hk') jL)))
+          = (Finset.univ : Finset (Fin k')).sup (fun n =>
+              (Finset.univ : Finset (Fin Bk)).sup (fun jL =>
+                maskedScore qStart Q K scale i
+                  (StreamingAccumulator.blockIndex Bk N n.castSucc.val
+                    (Nat.lt_of_lt_of_le n.castSucc.isLt hk) jL))) := by
+        refine Finset.sup_congr rfl (fun n _ => ?_)
+        refine Finset.sup_congr rfl (fun jL _ => ?_)
+        congr 1
+      rw [hlast, hcast, max_comm]
+
+open VeriTile.Examples.FA1MathCausal in
+/-- WithBot `Finset.sup` over the block-product equals the flat sup over the full
+key range `Fin (Bk·N)`, via `blockIndexEquiv`. -/
+theorem withBot_blockSup_eq_flat {M D Bk N : Nat}
+    (qStart : Nat) (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ) (i : Fin M) :
+    (Finset.univ : Finset (Fin N)).sup (fun n =>
+        (Finset.univ : Finset (Fin Bk)).sup (fun jL =>
+          maskedScore qStart Q K scale i
+            (StreamingAccumulator.blockIndex Bk N n.val n.isLt jL)))
+      = (Finset.univ : Finset (Fin (Bk * N))).sup (fun j =>
+          maskedScore qStart Q K scale i j) := by
+  conv_rhs =>
+    rw [← Finset.map_univ_equiv (StreamingAccumulator.blockIndexEquiv Bk N).symm,
+      Finset.sup_map, ← Finset.univ_product_univ, Finset.sup_product_left]
+  refine Finset.sup_congr rfl (fun n _ => ?_)
+  refine Finset.sup_congr rfl (fun jL _ => ?_)
+  show maskedScore qStart Q K scale i
+      (StreamingAccumulator.blockIndex Bk N n.val n.isLt jL)
+    = maskedScore qStart Q K scale i
+        ((StreamingAccumulator.blockIndexEquiv Bk N).symm (n, jL))
+  congr 1
+  -- `blockIndex Bk N n.val _ jL = (blockIndexEquiv Bk N).symm (n, jL)`. Both sides
+  -- are `Fin (Bk*N)` with value `n.val * Bk + jL.val`; compare via `Fin.ext`.
+  apply Fin.ext
+  show n.val * Bk + jL.val
+    = ((StreamingAccumulator.blockIndexEquiv Bk N).symm (n, jL)).val
+  show n.val * Bk + jL.val
+    = ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv.symm
+        (finProdFinEquiv (n, jL))).val
+  show n.val * Bk + jL.val = (finProdFinEquiv (n, jL)).val
+  show n.val * Bk + jL.val = jL.val + Bk * n.val
+  ring
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **General M closed-form bridge.** The FA1 running causal max `mPartial` over all
+`numKVBlocks` blocks, read out via `unbotD 0`, equals the genuine `fwdMSpecG`. -/
+theorem fwdMSpecG_eq_mPartial
+    (s : BlockState) (Q K : RegionName)
+    (stride_hz_2d HEAD_DIM BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL : Nat)
+    (hBN : 0 < BLOCK_N) (hnum : 0 < numKVBlocks) (sc : ℝ) (i : Fin BLOCK_M) :
+    fwdMSpecG s Q K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc
+        (Nat.mul_pos hBN hnum) i
+      = (mPartial BLOCK_N (s.pids 0 * BLOCK_M)
+          (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+          (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          sc numKVBlocks i).unbotD 0 := by
+  rw [mPartialG_eq_blockSup (s.pids 0 * BLOCK_M)
+    (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+    (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i
+    numKVBlocks (le_refl _)]
+  rw [show (fun (n : Fin numKVBlocks) =>
+        (Finset.univ : Finset (Fin BLOCK_N)).sup (fun jL =>
+          maskedScore (s.pids 0 * BLOCK_M)
+            (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+            (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i
+            (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks n.val (Nat.lt_of_lt_of_le n.isLt (le_refl _)) jL)))
+      = (fun (n : Fin numKVBlocks) =>
+          (Finset.univ : Finset (Fin BLOCK_N)).sup (fun jL =>
+            maskedScore (s.pids 0 * BLOCK_M)
+              (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+              (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i
+              (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks n.val n.isLt jL))) from by
+        funext n; refine Finset.sup_congr rfl (fun jL _ => by congr 1)]
+  rw [withBot_blockSup_eq_flat (s.pids 0 * BLOCK_M)
+    (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+    (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i]
+  rw [show (fun (j : Fin (BLOCK_N * numKVBlocks)) =>
+        maskedScore (s.pids 0 * BLOCK_M)
+          (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+          (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i j)
+      = (fun (j : Fin (BLOCK_N * numKVBlocks)) =>
+          if j.val ≤ s.pids 0 * BLOCK_M + i.val then
+            ((scaledScore (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+              (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i j : ℝ) : WithBot ℝ)
+          else ⊥) from by
+        funext j
+        unfold maskedScore
+        by_cases hj : j.val ≤ s.pids 0 * BLOCK_M + i.val
+        · simp only [hj, if_true]; rfl
+        · simp only [hj, if_false]]
+  rw [withBot_sup_masked_unbotD (fun j : Fin (BLOCK_N * numKVBlocks) => j.val ≤ s.pids 0 * BLOCK_M + i.val)
+    (fun j => scaledScore (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+      (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc i j)
+    (fwdCausalSetG_nonempty s (BLOCK_N * numKVBlocks) BLOCK_M (Nat.mul_pos hBN hnum) i)]
+  rfl
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **General L closed-form bridge (stored value).** The kernel stores `l_prev`
+(the final m-shifted online-softmax normalizer), which is the FA1 `lPartial` over
+all `numKVBlocks` blocks — exactly the genuine `fwdLSpecG`. -/
+theorem lPartial_eq_fwdLSpecG
+    (s : BlockState) (Q K : RegionName)
+    (stride_hz_2d HEAD_DIM BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL : Nat)
+    (hBN : 0 < BLOCK_N) (hnum : 0 < numKVBlocks) (sc : ℝ) (i : Fin BLOCK_M) :
+    lPartial BLOCK_N (s.pids 0 * BLOCK_M)
+        (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+        (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        sc numKVBlocks i
+      = fwdLSpecG s Q K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc
+          (Nat.mul_pos hBN hnum) i := by
+  rw [lPartial_eq_mShifted (Bk := BLOCK_N) hBN (s.pids 0 * BLOCK_M)
+    (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+    (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc
+    numKVBlocks (le_refl _) i]
+  rw [lFree_eq_flat]
+  rw [show (mPartial BLOCK_N (s.pids 0 * BLOCK_M)
+        (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+        (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        sc numKVBlocks i).unbotD 0
+      = fwdMSpecG s Q K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc
+          (Nat.mul_pos hBN hnum) i from
+    (fwdMSpecG_eq_mPartial s Q K stride_hz_2d HEAD_DIM BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL hBN hnum sc i).symm]
+  unfold fwdLSpecG
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro j _
+  simp only [StreamingAccumulator.scaledScore, scaledScore]
+  by_cases hj : j.val ≤ s.pids 0 * BLOCK_M + i.val
+  · simp only [hj, if_true]
+    rw [Real.exp_sub, Real.exp_neg]
+    ring
+  · simp only [hj, if_false]
+    ring
+
 /-! ## Forward loop-body per-statement op-eval recipes (RECIPE LAYER)
 
 The 19-statement `forRangeDyn` body of `_fwd_kernel` (STAGE=3, diagonal causal
