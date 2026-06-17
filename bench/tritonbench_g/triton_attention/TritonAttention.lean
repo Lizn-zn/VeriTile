@@ -41,7 +41,10 @@ triton_attention_bwd_python_test_shape_complete_summary             ← TOP THEO
        └─ triton_attention_bwd_score_{p,ds}_formula_python_test_shape_compute_correct
             └─ triton_attention_bwd_score_{p,ds}_formula_slice_compute_correct   ← closed-form P/DS
 
-triton_attention_forward_python_test_shape_output_summary           ← TOP (forward Out/L/M)
+triton_attention_forward_output_summary_general                     ← ★ TOP (forward Out/L/M, dimension-general)
+  └─ ta_execG → taPreLoop_evalG / ta_attn_stepG / ta_postLoopG (general streaming stack)
+       └─ fwdOutSpecG / fwdLSpecG / fwdMSpecG (genuine input-memory causal specs)
+triton_attention_forward_python_test_shape_output_summary           ← TOP (forward Out/L/M, test shape)
   └─ triton_attention_forward_surface_{out,l,m}_python_test_shape_compute_correct
        └─ triton_attention_forward_{output,l,m}_store_slice_compute_correct → ..._correct
 
@@ -90,7 +93,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `triton_attention_forward_python_test_shape_output_summary`, `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary` -/
+/-! **★ Main theorems:** `triton_attention_forward_output_summary_general` (forward, dimension-general), `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -9342,6 +9345,109 @@ theorem triton_attention_bwd_grads_genuine_output_summary
     simp only [ComputeCorrect.OutputReadable.read_memcell]
     exact hDK idx
 
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **★ MAIN (forward, dimension-general).** Public symbolic-dimension forward
+output summary for `triton_attention.py`'s `_fwd_kernel`. For arbitrary symbolic
+`N_CTX`/`D_HEAD = BLOCK_DMODEL`/`BLOCK_M`/`BLOCK_N` and a contiguous layout, the
+lowered kernel's `Out`/`L`/`M` writes Realize the genuine general closed-form
+specs `fwdOutSpecG`/`fwdLSpecG`/`fwdMSpecG` — defined purely over the **input**
+`Q`/`K`/`V` memory (causal natural-exp attention over the streaming KV span
+`SEQ = (pids0+1)·BLOCK_M`), never over the kernel's own readback. Honest side
+conditions: positive block dims, `BLOCK_N ∣ (pids0+1)·BLOCK_M`, contiguous
+strides, output-offset injectivity, and the boundary
+`pids1·(stride_qh/BLOCK_DMODEL) + (pids0+1)·BLOCK_M ≤ D0`. -/
+theorem triton_attention_forward_output_summary_general
+    (Q K V L M Out : RegionName) (s : BlockState) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
+    (hdvd : BLOCK_N ∣ (s.pids 0 + 1) * BLOCK_M)
+    (hbound : s.pids 1 * (stride_qh / BLOCK_DMODEL) + (s.pids 0 + 1) * BLOCK_M ≤ D0)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L)
+    (houtinj : Function.Injective (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        (s.pids 1 * (stride_qh / BLOCK_DMODEL) + s.pids 0 * BLOCK_M + idx.1.val) * BLOCK_DMODEL + idx.2.1.val * 1))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (triton_attention_fwd_kernel Q K V L M Out sc
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out sc
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s (s.pids 1 * (stride_qh / BLOCK_DMODEL)) D0 BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          (Out, outOffset s (s.pids 1 * (stride_qh / BLOCK_DMODEL)) BLOCK_DMODEL 1 BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (fwdOutSpecG s Q K V (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL
+              ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc idx))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out sc
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (L, lRowOffset s (s.pids 1) N_CTX BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        fwdLSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+          (Nat.mul_pos (Nat.succ_pos _) hBM) i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out sc
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (M, lRowOffset s (s.pids 1) N_CTX BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        fwdMSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+          (Nat.mul_pos (Nat.succ_pos _) hBM) i)) := by
+  obtain ⟨sF, hstep, hO, hLrb, hMrb⟩ :=
+    ta_execG Q K V L M Out s sc stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N
+      hBM hBN hBD hdvd hbound hLOut hMOut hLM houtinj hundef
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · exact triton_attention_fwd_kernel_toAlgorithm_supported Q K V L M Out sc
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N
+  · -- Out
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_memcell]
+    exact hO idx hActive
+  · -- L
+    unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    exact hLrb i
+  · -- M
+    unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    exact hMrb i
+
 end Correct
 
 /-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
@@ -10167,4 +10273,3 @@ theorem triton_attention_bwd_python_test_shape_complete_summary
 end TestShape
 
 end VeriTile.Bench.TritonBenchG.TritonAttention
-
