@@ -5990,6 +5990,96 @@ theorem ta_pv_dot_blockG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
     refine congrArg some ?_; ring
   · rw [WithBot.sum_someTerm_eq_some, ← Finset.mul_sum]
 
+open VeriTile.Examples.FA1MathCausal in
+/-- **General loop invariant** for the triton forward streaming loop. Counter
+`i = c · BLOCK_N` (`c = i / BLOCK_N` blocks processed) over `numKVBlocks` blocks of
+`BLOCK_N` keys (span `SEQ = BLOCK_N · numKVBlocks`). Running registers bind to
+`FA1MathCausal` accumulators; K/V block pointers sit at row offset
+`pids1·stride_hz_2d + i`. -/
+noncomputable def taInvariantG
+    (Q K V Out : RegionName) (s0 : BlockState) (sc : ℝ)
+    (stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (i : Nat) (s : BlockState) : Prop :=
+  let qS := s0.pids 0 * BLOCK_M
+  let qT := fwdQTileG s0 Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL
+  let kT := fwdKTileG s0 K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+  let vT := fwdVTileG s0 V stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL
+  s.pids = s0.pids ∧ i % BLOCK_N = 0 ∧ i ≤ BLOCK_N * numKVBlocks ∧
+  (s.regs .real [BLOCK_M] "m_prev" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      mPartial BLOCK_N qS qT numKVBlocks kT sc (i / BLOCK_N) r.1⟩) ∧
+  (s.regs .real [BLOCK_M] "l_prev" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      ((lPartial BLOCK_N qS qT numKVBlocks kT sc (i / BLOCK_N) r.1 : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      ((oPartial BLOCK_N qS qT numKVBlocks kT vT sc (i / BLOCK_N) idx
+          / lPartial BLOCK_N qS qT numKVBlocks kT sc (i / BLOCK_N) idx.1 : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (qT idx)⟩) ∧
+  (s.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => qS + r.val))) ∧
+  (s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))) ∧
+  (s.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some
+    (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (s0.pids 1 * stride_hz_2d + i))) ∧
+  (s.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some
+    (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (s0.pids 1 * stride_hz_2d + i))) ∧
+  (s.regs .blockPtr [BLOCK_M, BLOCK_DMODEL] "out_tile_ptr" = some
+    (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      { region := Out, baseOffset := 0, parentShape := [D0, BLOCK_DMODEL],
+        blockShape := [BLOCK_M, BLOCK_DMODEL], strides := [BLOCK_DMODEL, 1],
+        offsets := [s0.pids 1 * stride_hz_2d + s0.pids 0 * BLOCK_M, 0] }⟩)) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **General invariant base case.** At `c = 0` the running registers are
+`mPartial 0 = ⊥`, `lPartial 0 = 0`, `oPartial 0 / lPartial 0 = 0 / 0 = 0`. -/
+theorem ta_invariant_zeroG
+    (Q K V Out : RegionName) (sp : BlockState) (sc : ℝ)
+    (stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (hm : sp.regs .real [BLOCK_M] "m_prev" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩)
+    (hl : sp.regs .real [BLOCK_M] "l_prev" = some ⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩)
+    (hacc : sp.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0 : ℝ)⟩)
+    (hq : sp.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        some (fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL idx)⟩)
+    (hoffm : sp.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => sp.pids 0 * BLOCK_M + r.val)))
+    (hoffn : sp.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hkp : sp.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some
+        (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (sp.pids 1 * stride_hz_2d)))
+    (hvp : sp.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some
+        (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (sp.pids 1 * stride_hz_2d)))
+    (hop : sp.regs .blockPtr [BLOCK_M, BLOCK_DMODEL] "out_tile_ptr" = some
+        (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          { region := Out, baseOffset := 0, parentShape := [D0, BLOCK_DMODEL],
+            blockShape := [BLOCK_M, BLOCK_DMODEL], strides := [BLOCK_DMODEL, 1],
+            offsets := [sp.pids 1 * stride_hz_2d + sp.pids 0 * BLOCK_M, 0] }⟩))
+    (hoh : sp.regs .nat [] "off_hz" = some (Tile.scalar (sp.pids 1)))
+    (hundef : ∀ rg o, sp.undef rg o = 0) :
+    taInvariantG Q K V Out sp sc stride_hz_2d D0 BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks 0 sp := by
+  unfold taInvariantG
+  refine ⟨rfl, by simp, by simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hm]; refine congrArg some ?_; ext r
+    show (⊥ : WithBot ℝ) = mPartial BLOCK_N (sp.pids 0 * BLOCK_M) _ numKVBlocks _ sc (0 / BLOCK_N) r.1
+    rw [Nat.zero_div]; rfl
+  · rw [hl]; refine congrArg some ?_; ext r
+    show some (0 : ℝ) = ((lPartial BLOCK_N (sp.pids 0 * BLOCK_M) _ numKVBlocks _ sc (0 / BLOCK_N) r.1 : ℝ) : WithBot ℝ)
+    rw [Nat.zero_div]; rfl
+  · rw [hacc]; refine congrArg some ?_; ext idx
+    show some (0 : ℝ) = ((oPartial BLOCK_N (sp.pids 0 * BLOCK_M)
+        (fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL) numKVBlocks
+        (fwdKTileG sp K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        (fwdVTileG sp V stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc (0 / BLOCK_N) idx
+        / lPartial BLOCK_N (sp.pids 0 * BLOCK_M) (fwdQTileG sp Q stride_hz_2d BLOCK_DMODEL BLOCK_M BLOCK_DMODEL)
+          numKVBlocks (fwdKTileG sp K stride_hz_2d BLOCK_DMODEL (BLOCK_N * numKVBlocks) BLOCK_DMODEL) sc (0 / BLOCK_N) idx.1 : ℝ) : WithBot ℝ)
+    rw [Nat.zero_div]
+    show some (0 : ℝ) = ((0 / 0 : ℝ) : WithBot ℝ)
+    rw [div_zero]; rfl
+  · rw [hq]
+  · rw [hoffm]
+  · rw [hoffn]
+  · rw [hkp]; simp
+  · rw [hvp]; simp
+  · rw [hop]
+  · rw [hoh]
+  · exact hundef
+  · rfl
+
 set_option maxRecDepth 8000 in
 /-- **Boundary-checked block-ptr load** for `_bwd_kernel`'s `bwdPtrTile`. With
 `pids 0 < 8` every lane is in bounds (`off_z·512 + off_h·128 + i < 1024`), so the
