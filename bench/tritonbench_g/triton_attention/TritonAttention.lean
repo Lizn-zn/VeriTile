@@ -4084,9 +4084,8 @@ theorem ta_load_q_evalG
     BLOCK_DMODEL 1 (off_hz * stride_hz_2d + start_m * BLOCK_M) ptrOp s hp]
   refine congrArg some ?_
   ext idx
-  congr 1
-  simp only [fwdQTileG, hpids0, hpids1, Nat.mul_one]
-  congr 1
+  simp only [fwdQTileG, hpids0, hpids1]
+  congr 2
   ring
 
 set_option maxRecDepth 8000 in
@@ -4461,8 +4460,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
   -- L14: v = load(v_tile_ptr [0,1])
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) MaskOpt.none) _
-        = some vT from by
-      rw [hvload _ (by simp) (by simp)]))]
+        = some vT from hvload _ (by simp) (by simp)))]
   -- L15: acc += dot(p, v)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_acc_eval _ BLOCK_M BLOCK_N BLOCK_DMODEL acc1T pT vT (by simp [hacc1]) (by simp [hpT]) (by simp [hvT])))]
