@@ -4460,7 +4460,7 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
   -- L14: v = load(v_tile_ptr [0,1])
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) MaskOpt.none) _
-        = some vT from hvload _ (by simp only [BlockState.setReg_mem]) (by simp only [BlockState.setReg_pids])))]
+        = some vT from hvload _ (by rfl) (by rfl)))]
   -- L15: acc += dot(p, v)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_acc_eval _ BLOCK_M BLOCK_N BLOCK_DMODEL acc1T pT vT (by simp [hacc1]) (by simp [hpT]) (by simp [hvT])))]
@@ -4651,8 +4651,7 @@ theorem taPreLoop_evalG (s : BlockState) (Q K V Out : RegionName) (sc : ℝ)
   · simp
   · simp
   · simp
-  · refine congrArg some ?_; ext idx
-    simp only [fwdQTileG, BlockState.setReg_readMem, BlockState.setReg_pids, castTile_self]
+  · rw [BlockState.setReg_same]
   · simp
   · simp
   · simp
