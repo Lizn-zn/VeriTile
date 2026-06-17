@@ -4652,6 +4652,8 @@ theorem taPreLoop_evalG (s : BlockState) (Q K V Out : RegionName) (sc : ℝ)
   · simp
   · simp
   · rw [BlockState.setReg_same]
+    refine congrArg some ?_; ext idx
+    simp only [fwdQTileG, BlockState.setReg_readMem, BlockState.setReg_pids]
   · simp
   · simp
   · simp
