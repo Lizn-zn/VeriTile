@@ -2898,6 +2898,143 @@ theorem exp_fwdMSpec_mul_fwdLSpec
   · simp only [hj, if_false]
     rw [mul_zero]
 
+/-! ### ════════ GENERAL (dimension-symbolic) forward spec layer ════════
+
+The pinned `fwdQTile`/`fwdKTile`/`fwdVTile`/`fwdOutSpec`/`fwdLSpec`/`fwdMSpec`
+above are typed at the Python test shape (`BLOCK_M = … = 128`, `HEAD_DIM = 64`,
+single KV block of width `128`, scale `1/√64`). The following `*G` versions are
+dimension-general over symbolic `BLOCK_M` (query rows), `BLOCK_DMODEL` (active
+head channels), `HEAD_DIM` (the memory row stride), `stride_hz_2d` (the
+per-`off_hz` row offset), the key span `SEQ`, the scale `sc`, and `numKVBlocks`
+causal KV blocks (`SEQ = BLOCK_N · numKVBlocks`).
+
+The FlashAttention-1 causal streaming math (`FA1MathCausal.mPartial`/`lPartial`/
+`oPartial`, the bridge `streaming_eq_attentionRealCausalBlock`, the `succ`
+recurrences, and `withBot_sup_masked_unbotD`) is ALREADY general over arbitrary
+`Bk`/`numKVBlocks`/key length, so the general bridges below reuse it directly.
+The pinned bridges (`fwdOutSpec_eq_streaming` etc.) are the `numKVBlocks = 1`,
+`[128,64]` instantiations of these. -/
+
+/-- General Q tile: output tile-row `i`, head channel `e` reads
+`(pids1·stride_hz_2d + pids0·BLOCK_M + i)·HEAD_DIM + e` — the kernel's
+`make_block_ptr` Q address with `stride_qm = HEAD_DIM`, `stride_qk = 1`,
+offset `off_hz·stride_qh_2d + start_m·BLOCK_M`. -/
+noncomputable def fwdQTileG (s : BlockState) (Q : RegionName)
+    (stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL : Nat) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q ((s.pids 1 * stride_hz_2d + s.pids 0 * BLOCK_M + i.val) * HEAD_DIM + e.val)
+
+/-- General K tile: key row `j` (global, over the loaded key span `SEQ`),
+channel `e` reads `(pids1·stride_hz_2d + j)·HEAD_DIM + e`. -/
+noncomputable def fwdKTileG (s : BlockState) (K : RegionName)
+    (stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL : Nat) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K ((s.pids 1 * stride_hz_2d + j.val) * HEAD_DIM + e.val)
+
+/-- General V tile: value row `j`, channel `e` reads
+`(pids1·stride_hz_2d + j)·HEAD_DIM + e`. -/
+noncomputable def fwdVTileG (s : BlockState) (V : RegionName)
+    (stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL : Nat) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem V ((s.pids 1 * stride_hz_2d + j.val) * HEAD_DIM + e.val)
+
+/-- General genuine closed-form forward `Out`: the natural-exp causal attention
+block at query start `pids0·BLOCK_M`, scale `sc`, over the loaded key span `SEQ`.
+Expressed via `attentionRealCausalBlock`, independent of the kernel `exec`. -/
+noncomputable def fwdOutSpecG
+    (s : BlockState) (Q K V : RegionName)
+    (stride_hz_2d HEAD_DIM SEQ BLOCK_M BLOCK_DMODEL : Nat)
+    (sc : ℝ) (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  attentionRealCausalBlock (s.pids 0 * BLOCK_M)
+    (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+    (fwdKTileG s K stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL)
+    (fwdVTileG s V stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL)
+    sc idx
+
+/-- General causal key set for query row `i`: keys `j ≤ pids0·BLOCK_M + i` within
+the loaded span `SEQ`. Nonempty because `j = 0` always qualifies (needs
+`0 < SEQ`). -/
+def fwdCausalSetG (s : BlockState) (SEQ BLOCK_M : Nat) (i : Fin BLOCK_M) :
+    Finset (Fin SEQ) :=
+  Finset.univ.filter (fun j : Fin SEQ => j.val ≤ s.pids 0 * BLOCK_M + i.val)
+
+theorem fwdCausalSetG_nonempty (s : BlockState) (SEQ BLOCK_M : Nat) (hSEQ : 0 < SEQ)
+    (i : Fin BLOCK_M) : (fwdCausalSetG s SEQ BLOCK_M i).Nonempty := by
+  refine ⟨⟨0, hSEQ⟩, ?_⟩
+  simp [fwdCausalSetG]
+
+/-- General genuine closed-form forward `M` for query row `i`: the per-row maximum
+causal score `max_{j ≤ pids0·BLOCK_M + i} score i j` over the (nonempty) causal
+key set within the loaded span `SEQ`. -/
+noncomputable def fwdMSpecG
+    (s : BlockState) (Q K : RegionName)
+    (stride_hz_2d HEAD_DIM SEQ BLOCK_M BLOCK_DMODEL : Nat) (sc : ℝ)
+    (hSEQ : 0 < SEQ) (i : Fin BLOCK_M) : ℝ :=
+  (fwdCausalSetG s SEQ BLOCK_M i).sup' (fwdCausalSetG_nonempty s SEQ BLOCK_M hSEQ i)
+    (fun j : Fin SEQ =>
+      scaledScore (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+        (fwdKTileG s K stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL) sc i j)
+
+/-- General genuine closed-form forward `L` for query row `i`: the **m-shifted**
+causal softmax normalizer `Σ_{j ≤ pids0·BLOCK_M + i} exp(score i j − M_row)` over
+the loaded span `SEQ`, with `M_row = fwdMSpecG`. This is exactly the value the
+kernel stores (the running m-shifted `l_prev`); the un-shifted log-sum-exp is
+recovered with the separately stored `M`. -/
+noncomputable def fwdLSpecG
+    (s : BlockState) (Q K : RegionName)
+    (stride_hz_2d HEAD_DIM SEQ BLOCK_M BLOCK_DMODEL : Nat) (sc : ℝ)
+    (hSEQ : 0 < SEQ) (i : Fin BLOCK_M) : ℝ :=
+  Finset.univ.sum (fun j : Fin SEQ =>
+    if j.val ≤ s.pids 0 * BLOCK_M + i.val then
+      Real.exp (scaledScore (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+        (fwdKTileG s K stride_hz_2d HEAD_DIM SEQ BLOCK_DMODEL) sc i j
+        - fwdMSpecG s Q K stride_hz_2d HEAD_DIM SEQ BLOCK_M BLOCK_DMODEL sc hSEQ i)
+    else 0)
+
+/-! ### General FA1 bridges (`numKVBlocks`-arbitrary)
+
+Mirror the pinned `fwdOutSpec_eq_streaming` / `fwdMSpec_eq_mPartial` /
+`lPartial_eq_fwdLSpec` at symbolic dims and arbitrary `numKVBlocks`, reusing the
+already-general `FA1MathCausal` lemmas. `SEQ = BLOCK_N · numKVBlocks`. -/
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **General output closed-form bridge.** The FA1 streaming end-ratio
+`oPartial / lPartial` over all `numKVBlocks` causal blocks (block width `BLOCK_N`,
+total key span `SEQ = BLOCK_N·numKVBlocks`) equals the genuine `fwdOutSpecG`. -/
+theorem fwdOutSpecG_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (stride_hz_2d HEAD_DIM BLOCK_N numKVBlocks BLOCK_M BLOCK_DMODEL : Nat)
+    (hBN : 0 < BLOCK_N) (hnum : 0 < numKVBlocks) (sc : ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) :
+    fwdOutSpecG s Q K V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc idx
+      = oPartial BLOCK_N (s.pids 0 * BLOCK_M)
+          (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+          (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          (fwdVTileG s V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          sc numKVBlocks idx /
+        lPartial BLOCK_N (s.pids 0 * BLOCK_M)
+          (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL) numKVBlocks
+          (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          sc numKVBlocks idx.1 := by
+  rw [show fwdOutSpecG s Q K V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_DMODEL sc idx
+        = VeriTile.Examples.attentionRealCausalBlock (s.pids 0 * BLOCK_M)
+            (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+            (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+            (fwdVTileG s V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+            sc idx from by
+        unfold fwdOutSpecG VeriTile.Triton.attentionRealCausalBlock
+          VeriTile.Examples.attentionRealCausalBlock scaledScore
+        rfl]
+  exact (streaming_eq_attentionRealCausalBlock (Bk := BLOCK_N) hBN
+    (s.pids 0 * BLOCK_M) (fwdQTileG s Q stride_hz_2d HEAD_DIM BLOCK_M BLOCK_DMODEL)
+    numKVBlocks hnum
+    (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+    (fwdVTileG s V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+    sc idx).symm
+
 /-! ## Forward loop-body per-statement op-eval recipes (RECIPE LAYER)
 
 The 19-statement `forRangeDyn` body of `_fwd_kernel` (STAGE=3, diagonal causal
