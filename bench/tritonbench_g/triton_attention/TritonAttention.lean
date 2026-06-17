@@ -3871,6 +3871,170 @@ def taKVPtrTile (R : RegionName) (rowOff : Nat) : Tile .blockPtr [128, 64] :=
     { region := R, baseOffset := 0, parentShape := [1024, 64],
       blockShape := [128, 64], strides := [64, 1], offsets := [rowOff, 0] }⟩
 
+/-! ### ════════ General (symbolic-dimension) forward exec AST ════════
+
+Dimension-general counterparts of `taPreLoop`/`taLoopBody`/`taPostLoop`/
+`taKVPtrTile`, parameterized over `D0` (the 2D parent rows), `N_CTX`, `BLOCK_M`,
+`BLOCK_N`, `BLOCK_DMODEL` (= `D_HEAD`) with contiguous strides
+(`stride_qm = stride_kn = stride_vk = stride_om = BLOCK_DMODEL`,
+`stride_qk = stride_kk = stride_vn = stride_on = 1`). They are the exact
+parametric lowering of `triton_attention_fwd_kernel`, with the test-shape
+numerals replaced by the corresponding dimension parameters. -/
+
+/-- General K/V block-pointer tile at row offset `rowOff`. -/
+def taKVPtrTileG (R : RegionName) (D0 BLOCK_N BLOCK_DMODEL rowOff : Nat) :
+    Tile .blockPtr [BLOCK_N, BLOCK_DMODEL] :=
+  ⟨fun _ : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+    { region := R, baseOffset := 0, parentShape := [D0, BLOCK_DMODEL],
+      blockShape := [BLOCK_N, BLOCK_DMODEL], strides := [BLOCK_DMODEL, 1],
+      offsets := [rowOff, 0] }⟩
+
+/-- General preLoop (13 deterministic prefix statements). -/
+def taPreLoopG (Q K V Out : RegionName) (sc : ℝ)
+    (stride_qh D0 BLOCK_M BLOCK_N BLOCK_DMODEL : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_hz" (Op.programId 1),
+    Stmt.assign .nat [BLOCK_M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+    Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+    Stmt.assign .real [BLOCK_M] "m_prev"
+      (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [BLOCK_M] "l_prev" (Op.full [BLOCK_M] (Op.const 0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)),
+    Stmt.assign .nat [] "stride_qh_2d"
+      (Op.floorDiv .nat Broadcast.nil
+        (Op.floorDiv .nat Broadcast.nil (Op.constNat stride_qh) (Op.constNat BLOCK_DMODEL)) (Op.constNat 1)),
+    Stmt.assign .blockPtr [BLOCK_M, BLOCK_DMODEL] "q_tile_ptr"
+      (Op.makeBlockPtrDynOffsets Q (Op.constNat 0) [D0, BLOCK_DMODEL] [BLOCK_M, BLOCK_DMODEL] [BLOCK_DMODEL, 1]
+        [Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)), Op.constNat 0]),
+    Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr"
+      (Op.makeBlockPtrDynOffsets K (Op.constNat 0) [D0, BLOCK_DMODEL] [BLOCK_N, BLOCK_DMODEL] [BLOCK_DMODEL, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+          Op.constNat 0]),
+    Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr"
+      (Op.makeBlockPtrDynOffsets V (Op.constNat 0) [D0, BLOCK_DMODEL] [BLOCK_N, BLOCK_DMODEL] [BLOCK_DMODEL, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"),
+          Op.constNat 0]),
+    Stmt.assign .blockPtr [BLOCK_M, BLOCK_DMODEL] "out_tile_ptr"
+      (Op.makeBlockPtrDynOffsets Out (Op.constNat 0) [D0, BLOCK_DMODEL] [BLOCK_M, BLOCK_DMODEL] [BLOCK_DMODEL, 1]
+        [Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.ref .nat [] "stride_qh_2d"))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)), Op.constNat 0]),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_DMODEL] "q_tile_ptr") []) MaskOpt.none) ]
+
+/-- General loop body (19 statements). -/
+def taLoopBodyG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL : Nat) : List Stmt :=
+  [ Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk" (Op.full [BLOCK_M, BLOCK_N] (Op.const 0)),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "q")
+          (Op.transpose (batch := []) (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "k")))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.const sc)),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.broadcast Op.negInf [BLOCK_M, BLOCK_N])),
+    Stmt.assign .real [BLOCK_M] "m_curr"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil)
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))
+          (Op.ref .real [BLOCK_M] "m_prev"))
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))
+        (Op.ref .real [BLOCK_M] "m_prev")),
+    Stmt.assign .real [BLOCK_M] "l_prev"
+      (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BLOCK_M] "l_prev")
+        (Op.exp (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BLOCK_M] "m_prev") (Op.ref .real [BLOCK_M] "m_curr")))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p"
+      (Op.exp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "m_curr")))),
+    Stmt.assign .real [BLOCK_M] "l_curr"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p"))
+        (Op.ref .real [BLOCK_M] "l_prev")),
+    Stmt.assign .real [BLOCK_M] "l_rcp"
+      (Op.div .real Broadcast.scalarL (Op.const (1.0 : ℝ)) (Op.ref .real [BLOCK_M] "l_curr")),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_N] "p") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_rcp"))),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.mul .real (Broadcast.consSame Broadcast.nil)
+            (Op.ref .real [BLOCK_M] "l_prev") (Op.ref .real [BLOCK_M] "l_rcp")))),
+    Stmt.assign .fp16 [BLOCK_M, BLOCK_N] "p"
+      (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BLOCK_M, BLOCK_N] "p"))
+          (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v"))),
+    Stmt.assign .real [BLOCK_M] "l_prev" (Op.ref .real [BLOCK_M] "l_curr"),
+    Stmt.assign .real [BLOCK_M] "m_prev" (Op.ref .real [BLOCK_M] "m_curr"),
+    Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [BLOCK_N, 0]),
+    Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [BLOCK_N, 0]) ]
+
+/-- General postLoop (8 statements). -/
+def taPostLoopG (L M Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [BLOCK_M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+    Stmt.assign .ptr [BLOCK_M] "l_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat N_CTX))
+          (Op.ref .nat [BLOCK_M] "offs_m"))),
+    Stmt.assign .ptr [BLOCK_M] "m_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat N_CTX))
+          (Op.ref .nat [BLOCK_M] "offs_m"))),
+    Stmt.store .real [BLOCK_M] (MemAccess.ptr (Op.ref .ptr [BLOCK_M] "l_ptrs"))
+      (Op.ref .real [BLOCK_M] "l_prev") MaskOpt.none,
+    Stmt.store .real [BLOCK_M] (MemAccess.ptr (Op.ref .ptr [BLOCK_M] "m_ptrs"))
+      (Op.ref .real [BLOCK_M] "m_prev") MaskOpt.none,
+    Stmt.assign .fp16 [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")),
+    Stmt.store .fp16 [BLOCK_M, BLOCK_DMODEL] (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_DMODEL] "out_tile_ptr") [0, 1])
+      (Op.ref .fp16 [BLOCK_M, BLOCK_DMODEL] "acc") MaskOpt.none ]
+
+set_option maxRecDepth 8000 in
+/-- **General body split.** The general (contiguous-stride) forward kernel lowers
+to `taPreLoopG ++ forRangeDyn :: taPostLoopG`. The dynamic causal loop bound is
+`(start_m + 1) · BLOCK_M`, step `BLOCK_N`. `Z`/`H` are arbitrary (unused in the
+body); `stride_qz`/`stride_qh` carry the per-batch/head offset (unused by the
+2D `make_block_ptr` row offset apart from `stride_qh_2d`). -/
+theorem ta_body_splitG (Q K V L M Out : RegionName) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    (triton_attention_fwd_kernel Q K V L M Out sc
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+      Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body
+      = taPreLoopG Q K V Out sc stride_qh D0 BLOCK_M BLOCK_N BLOCK_DMODEL
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+              (Op.constNat BLOCK_N) (taLoopBodyG sc BLOCK_M BLOCK_N BLOCK_DMODEL)
+            :: taPostLoopG L M Out N_CTX BLOCK_M BLOCK_DMODEL) := by
+  rfl
+
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Loop-body execution chain.** Entered at counter `start_n = 0` (the single
