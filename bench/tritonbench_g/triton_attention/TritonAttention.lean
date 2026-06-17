@@ -4325,12 +4325,11 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (hacc : sin.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some acctile)
     (hkp : sin.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr" = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL rowOff))
     (hvp : sin.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr" = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL rowOff))
-    (hkload : ∀ t : BlockState, t.mem = sin.mem → t.pids = sin.pids →
-        evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [0, 1]) .none) t
-          = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (kTfn idx)⟩)
-    (hvload : ∀ t : BlockState, t.mem = sin.mem → t.pids = sin.pids →
-        evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) .none) t
-          = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (vTfn idx)⟩)
+    (hrow : ∀ i : Fin BLOCK_N, rowOff + i.val < D0)
+    (hkload : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+        kTfn idx = sin.readMem K ((rowOff + idx.1.val) * BLOCK_DMODEL + idx.2.1.val))
+    (hvload : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+        vTfn idx = sin.readMem V ((rowOff + idx.1.val) * BLOCK_DMODEL + idx.2.1.val))
     (hundef : ∀ rg o, sin.undef rg o = 0) :
     ∃ (rmaxT : Tile .real [BLOCK_M]) (qk0 qk1 : Tile .real [BLOCK_M, BLOCK_N]),
       Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qk1 = some rmaxT ∧
@@ -4417,8 +4416,19 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
   refine ⟨rmaxT, qk0, qk1, hrm, rfl, rfl, ?_⟩
   -- execution chain
   unfold taLoopBodyG
-  -- L1: k = load(k_tile_ptr [0,1])
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (hkload sin rfl rfl))]
+  -- L1: k = load(k_tile_ptr [0,1]); discharge via the block-ptr-bc recipe against
+  -- the entry register `hkp`, then per-cell `hkload` (entry-state readMem).
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [0, 1]) .none) sin
+        = some kT from by
+      rw [ta_load_blockPtr_bc_eval K 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1 rowOff
+        (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") sin (by rw [evalOp_ref, hkp]; rfl)]
+      refine congrArg some ?_; ext idx
+      have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
+      have hi : rowOff + idx.1.val < D0 := hrow idx.1
+      simp only [hi, hj, and_self, if_true]
+      show some (kTfn idx) = _
+      rw [hkload idx]))]
   -- L2: qk = zeros
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (ta_qkzeros_eval _ BLOCK_M BLOCK_N))]
   -- L3: qk += dot(q, trans k)
@@ -4457,10 +4467,20 @@ theorem taLoopBody_stepsG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL SN : Nat) (si
     (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")) _
     (⟨fun i => FloatDType.real.cast FloatDType.fp16 (pT.data i)⟩ : Tile .fp16 [BLOCK_M, BLOCK_N])
     (ta_pfp16_eval _ BLOCK_M BLOCK_N pT (by simp [hpT])))]
-  -- L14: v = load(v_tile_ptr [0,1])
+  -- L14: v = load(v_tile_ptr [0,1]); the load reads `v_tile_ptr` (untouched by
+  -- L1-L13) and the setReg tower preserves `sin`'s mem, so per-cell `hvload` applies.
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [0, 1]) MaskOpt.none) _
-        = some vT from hvload _ (by rfl) (by rfl)))]
+        = some vT from by
+      rw [ta_load_blockPtr_bc_eval V 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1 rowOff
+        (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") _
+        (by rw [evalOp_ref]; simp only [BlockState.setReg_ne_name]; rw [hvp]; rfl)]
+      refine congrArg some ?_; ext idx
+      have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
+      have hi : rowOff + idx.1.val < D0 := hrow idx.1
+      simp only [hi, hj, and_self, if_true, BlockState.setReg_readMem]
+      show _ = some (vTfn idx)
+      rw [hvload idx]))]
   -- L15: acc += dot(p, v)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (ta_acc_eval _ BLOCK_M BLOCK_N BLOCK_DMODEL acc1T pT vT (by simp [hacc1]) (by simp [hpT]) (by simp [hvT])))]
