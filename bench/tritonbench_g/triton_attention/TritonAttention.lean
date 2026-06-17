@@ -5856,6 +5856,140 @@ theorem ta_rmax_blocksupG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat) (hBN 
   refine Finset.sup_congr rfl (fun j _ => ?_)
   rw [ta_qk1_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc r j]
 
+open VeriTile.Examples.FA1MathCausal in
+/-- General `pexp` cell `exp(qk1(r,j) − Mr)` (with `Mr = mPartial (c+1)`). -/
+theorem ta_pexp_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
+    (c : Nat) (hc : c < numKVBlocks) (mNew : Fin BLOCK_M → WithBot ℝ) (r : Fin BLOCK_M) (j : Fin BLOCK_N) :
+    WithBot.realExp (WithBot.realSub
+        (if c * BLOCK_N + j.val ≤ qS + r.val then
+            (Tile.bop NumericDType.real.mul Broadcast.scalarR
+              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+                  (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                    some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+              (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
+          else (⊥ : WithBot ℝ))
+        (mNew r))
+      = some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) j))
+          (mNew r))).unbotD 0) := by
+  rw [ta_qk1_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc r j]
+  exact realExp_eq_some_unbotD _
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- General masked exp block-sum cell `Σ_j pexp(r,j)`. -/
+theorem ta_pexp_block_sumG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
+    (c : Nat) (hc : c < numKVBlocks) (mNew : Fin BLOCK_M → WithBot ℝ) (r : Fin BLOCK_M) :
+    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+        (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+              if c * BLOCK_N + idx.2.1.val ≤ qS + idx.1.val then
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+                      (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                        some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+                  (Tile.scalar (some sc : WithBot ℝ))).data idx
+              else (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+            (Tile.expandDim ⟨1, by simp⟩
+              (⟨fun r : TileIndex [BLOCK_M] => mNew r.1⟩ : Tile .real [BLOCK_M]))))).data
+        (r, PUnit.unit)
+      = some ((Finset.univ : Finset (Fin BLOCK_N)).sum (fun jLocal =>
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal))
+            (mNew r))).unbotD 0)) := by
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ k : Fin (TileShape.axisDim [BLOCK_M, BLOCK_N] (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)),
+      (Tile.uop WithBot.realExp
+          (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+              if c * BLOCK_N + idx.2.1.val ≤ qS + idx.1.val then
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                    (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+                      (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                        some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+                  (Tile.scalar (some sc : WithBot ℝ))).data idx
+              else (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+            (Tile.expandDim ⟨1, by simp⟩
+              (⟨fun r : TileIndex [BLOCK_M] => mNew r.1⟩ : Tile .real [BLOCK_M])))).data
+          (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) (r, PUnit.unit) k)
+        = (some ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) k))
+            (mNew r))).unbotD 0) : WithBot ℝ) := by
+    intro k
+    rw [show (TileShape.insertAxisIndex [BLOCK_M, BLOCK_N] (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+          (r, PUnit.unit) k) = (r, k, PUnit.unit) from rfl]
+    rw [Tile.uop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.sub]
+    exact ta_pexp_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc mNew r k
+  rw [Finset.sum_congr rfl (fun k _ => hcell k)]
+  rw [WithBot.sum_someTerm_eq_some]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- General `p·v` dot cell. -/
+theorem ta_pv_dot_blockG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT vT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
+    (c : Nat) (hc : c < numKVBlocks) (mNew : Fin BLOCK_M → WithBot ℝ)
+    (r : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) (lrcpT : Tile .real [BLOCK_M]) (lrcpVal : ℝ)
+    (hlrcp : lrcpT.data (r, PUnit.unit) = some lrcpVal) :
+    (Tile.dot []
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Tile.uop WithBot.realExp
+            (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+                if c * BLOCK_N + idx.2.1.val ≤ qS + idx.1.val then
+                  (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+                      (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
+                        (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+                          some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
+                    (Tile.scalar (some sc : WithBot ℝ))).data idx
+                else (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
+              (Tile.expandDim ⟨1, by simp⟩
+                (⟨fun r : TileIndex [BLOCK_M] => mNew r.1⟩ : Tile .real [BLOCK_M]))))
+          (Tile.expandDim ⟨1, by simp⟩ lrcpT))
+        (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+          some (vT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL])).data (r, d, PUnit.unit)
+      = some (lrcpVal * (Finset.univ : Finset (Fin BLOCK_N)).sum (fun jLocal =>
+          (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+            (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal))
+            (mNew r))).unbotD 0
+            * vT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal, d, PUnit.unit))) := by
+  rw [Tile.dot_nil_data]
+  refine Eq.trans (b := @Finset.sum (Fin BLOCK_N) (WithBot ℝ) _ Finset.univ
+      (fun j => (some (lrcpVal *
+        ((WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y)
+          (maskedScore qS qT kT sc r (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) j))
+          (mNew r))).unbotD 0
+          * vT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) j, d, PUnit.unit))) : WithBot ℝ)))
+    (Finset.sum_congr rfl (fun j (_ : j ∈ Finset.univ) => ?_)) ?_
+  · rw [Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.mul]
+    rw [hlrcp]
+    rw [Tile.uop_data, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+      TileShape.dropInsertedIndex, NumericDType.sub]
+    rw [ta_pexp_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc mNew r j]
+    simp only [WithBot.realMul, Option.map₂_some_some]
+    refine congrArg some ?_; ring
+  · rw [WithBot.sum_someTerm_eq_some, ← Finset.mul_sum]
+
 set_option maxRecDepth 8000 in
 /-- **Boundary-checked block-ptr load** for `_bwd_kernel`'s `bwdPtrTile`. With
 `pids 0 < 8` every lane is in bounds (`off_z·512 + off_h·128 + i < 1024`), so the
