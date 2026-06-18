@@ -759,7 +759,7 @@ theorem flash_advance_col_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [(0:Nat), d]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff + d] }⟩) := by
@@ -778,7 +778,7 @@ theorem flash_advance_row_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff, 0] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, (0:Nat)]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff + d, 0] }⟩) := by
@@ -2461,9 +2461,9 @@ def flashLoopBody (IS_CAUSAL : Bool) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "nume"))),
     Stmt.assign .real [128] "max" (Op.ref .real [128] "max_new"),
     Stmt.assign .blockPtr [64, 64] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [0, 64]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [(0:Nat), (64:Nat)]),
     Stmt.assign .blockPtr [64, 64] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [64, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [(64:Nat), (0:Nat)]) ]
 
 /-- The lowered body `drop 16` is `forRangeDyn … flashLoopBody :: postLoop`. -/
 theorem flashLoopBody_check (Q K V L O : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool) :
@@ -2596,9 +2596,9 @@ def flashLoopBodyTail (IS_CAUSAL : Bool) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "nume"))),
     Stmt.assign .real [128] "max" (Op.ref .real [128] "max_new"),
     Stmt.assign .blockPtr [64, 64] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [0, 64]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [(0:Nat), (64:Nat)]),
     Stmt.assign .blockPtr [64, 64] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [64, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [(64:Nat), (0:Nat)]) ]
 
 /-- `flashLoopBody` is the 2 loads, then the qk seed/mask prefix, then the tail. -/
 theorem flashLoopBody_eq_tail (IS_CAUSAL : Bool) :
@@ -4498,9 +4498,9 @@ def flashLoopBodyG (IS_CAUSAL : Bool) (BLOCK_M BLOCK_N DIM : Nat) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "nume"))),
     Stmt.assign .real [BLOCK_M] "max" (Op.ref .real [BLOCK_M] "max_new"),
     Stmt.assign .blockPtr [DIM, BLOCK_N] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [DIM, BLOCK_N] "K_block_ptr") [0, BLOCK_N]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [DIM, BLOCK_N] "K_block_ptr") [(0:Nat), BLOCK_N]),
     Stmt.assign .blockPtr [BLOCK_N, DIM] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, DIM] "V_block_ptr") [BLOCK_N, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, DIM] "V_block_ptr") [BLOCK_N, (0:Nat)]) ]
 
 /-- The general L4–L14 tail of `flashLoopBodyG`. -/
 def flashLoopBodyTailG (BLOCK_M BLOCK_N DIM : Nat) : List Stmt :=
@@ -4541,9 +4541,9 @@ def flashLoopBodyTailG (BLOCK_M BLOCK_N DIM : Nat) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "nume"))),
     Stmt.assign .real [BLOCK_M] "max" (Op.ref .real [BLOCK_M] "max_new"),
     Stmt.assign .blockPtr [DIM, BLOCK_N] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [DIM, BLOCK_N] "K_block_ptr") [0, BLOCK_N]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [DIM, BLOCK_N] "K_block_ptr") [(0:Nat), BLOCK_N]),
     Stmt.assign .blockPtr [BLOCK_N, DIM] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, DIM] "V_block_ptr") [BLOCK_N, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, DIM] "V_block_ptr") [BLOCK_N, (0:Nat)]) ]
 
 /-- `flashLoopBodyG` is the 2 loads, then the qk seed/mask prefix, then the tail. -/
 theorem flashLoopBodyG_eq_tail (IS_CAUSAL : Bool) (BLOCK_M BLOCK_N DIM : Nat) :
