@@ -251,15 +251,25 @@ check" case (`tl.load` without `boundary_check`). -/
     BlockPtr.inBounds ptr idx [] = true := by
   simp [BlockPtr.inBounds]
 
-def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
+private def nthDInt (xs : List Int) (i : Nat) : Int :=
+  xs.getD i 0
+
+/-- Advance a block pointer by per-axis **signed** offset deltas (Triton's
+`tl.advance`). Pointer offsets are non-negative addresses, so each advanced axis
+is `((offset : Int) + delta).toNat`; for the common non-negative delta this is
+just `offset + delta`, and signed deltas model a backward pointer rewind (used by
+e.g. multi-block backward attention). -/
+def advance (ptr : BlockPtr) (deltas : List Int) : BlockPtr :=
   let offsets :=
     (List.range (max ptr.offsets.length deltas.length)).map
-      (fun axis => nthD ptr.offsets axis + nthD deltas axis)
+      (fun axis => ((nthD ptr.offsets axis : Int) + nthDInt deltas axis).toNat)
   { ptr with offsets := offsets }
 
-/-- `advance` on a well-formed 2D block-pointer adds the per-axis deltas to the
-per-axis offsets (`[rowOff, colOff]` advanced by `[dRow, dCol]`). The `region`,
-`baseOffset`, `parentShape`, `blockShape`, `strides` are unchanged. -/
+/-- `advance` on a well-formed 2D block-pointer by **non-negative** (`Nat`-coerced)
+per-axis deltas adds them to the per-axis offsets (`[rowOff, colOff]` advanced by
+`[↑dRow, ↑dCol]`). The `region`, `baseOffset`, `parentShape`, `blockShape`,
+`strides` are unchanged. This is the normal form for every `tl.advance` whose
+deltas are non-negative (the vast majority); it preserves the pre-`Int` behavior. -/
 @[simp] theorem advance_2d_offsets
     (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff
       dRow dCol : Nat) :
@@ -267,11 +277,45 @@ per-axis offsets (`[rowOff, colOff]` advanced by `[dRow, dCol]`). The `region`,
       { region := region, baseOffset := base, parentShape := [rows, cols],
         blockShape := [BT, BS], strides := [strideT, strideS],
         offsets := [rowOff, colOff] }
-      [dRow, dCol] =
+      [(dRow : Int), (dCol : Int)] =
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [rowOff + dRow, colOff + dCol] } := by
-  simp [BlockPtr.advance, nthD, List.range, List.range.loop]
+  simp only [BlockPtr.advance, nthD, nthDInt, List.range, List.range.loop,
+    List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+    List.getD_nil, List.length_cons, List.length_nil, BlockPtr.mk.injEq,
+    List.cons.injEq, and_true, true_and, Nat.max_self]
+  omega
+
+/-- `Int.toNat` of a sum of two `Nat`-casts collapses to `Nat` addition. Terminal
+`@[simp]` normalizer so advanced block-ptr offsets (which go through `Int` + `toNat`)
+reduce back to plain `Nat` arithmetic regardless of the delta's coercion form. -/
+@[simp] theorem toNat_natCast_add_natCast (a b : Nat) :
+    (((a : Int)) + (b : Int)).toNat = a + b := by omega
+
+@[simp] theorem toNat_zero_add_natCast (a : Nat) :
+    (((0 : Int)) + (a : Int)).toNat = a := by omega
+
+@[simp] theorem toNat_natCast_add_zero (a : Nat) :
+    (((a : Int)) + (0 : Int)).toNat = a := by omega
+
+/-- General signed-delta form of `advance` on a 2D block pointer: each axis is
+`((off : Int) + d).toNat`. `@[simp]` so it fires for any delta form; the `toNat`
+normalizers above then collapse the non-negative cases to `Nat` addition. -/
+@[simp] theorem advance_2d_offsets_int
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (dRow dCol : Int) :
+    BlockPtr.advance
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, colOff] }
+      [dRow, dCol] =
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [((rowOff : Int) + dRow).toNat, ((colOff : Int) + dCol).toNat] } := by
+  simp only [BlockPtr.advance, nthD, nthDInt, List.range, List.range.loop,
+    List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+    List.getD_nil, List.length_cons, List.length_nil, Nat.max_self]
 
 @[simp] theorem inBounds_empty_parent_axis0 (ptr : BlockPtr) (idx : List Nat) :
     BlockPtr.inBounds { ptr with parentShape := [0], offsets := [0] } idx [0] = false := by

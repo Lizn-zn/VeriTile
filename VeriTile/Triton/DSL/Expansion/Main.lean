@@ -1316,14 +1316,14 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.advance($p:tritonExpr, [$deltas:tritonExpr,*])) => do
       let p' ← expandExpr env p
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
-      let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
+      let deltasTerm ← intCoeListTerm "tl.advance offsets" deltas
       pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
   | `(tritonExpr| tl.advance($p:tritonExpr, $offsetsKw:ident=($deltas:tritonExpr,*))) => do
       unless offsetsKw.getId.toString == "offsets" do
         Macro.throwError "tl.advance kwarg must be `offsets`"
       let p' ← expandExpr env p
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
-      let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
+      let deltasTerm ← intCoeListTerm "tl.advance offsets" deltas
       pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
   | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)

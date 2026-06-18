@@ -237,7 +237,7 @@ inductive Op : TileDType → TileShape → Type where
                 (parentShape : List Nat) → (blockShape : TileShape) →
                 (strides : List Nat) → (offsets : List (Op .nat [])) →
                 Op .blockPtr blockShape
-  | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
+  | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Int) → Op .blockPtr shape
   | load      : (dtype : TileDType) → MemAccess dtype shape →
                 MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
