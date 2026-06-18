@@ -2443,11 +2443,11 @@ private noncomputable def bwdInnerBody : List Stmt :=
         (Op.ref .ptr [128, 64] "dq_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.constNat 64))),
     Stmt.assign .blockPtr [128, 64] "q_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "do_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "dq_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [128, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(128:Nat), (0:Nat)]) ]
 
 /-- The lowered outer (`start_n`) loop body of `_bwd_kernel`. -/
 private noncomputable def bwdOuterBody (Delta M : RegionName) : List Stmt :=
@@ -2482,23 +2482,23 @@ private noncomputable def bwdOuterBody (Delta M : RegionName) : List Stmt :=
     Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo")
       (Op.mul .nat Broadcast.nil (Op.constNat 1) (Op.constNat 128)) (Op.constNat 128) bwdInnerBody,
     Stmt.assign .blockPtr [128, 64] "q_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [0, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(0:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "do_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [0, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(0:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "dq_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [0, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(0:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "k_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "v_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.store .fp16 [128, 64] (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "dv_tile_ptr") [0, 1])
       (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "dv")) MaskOpt.none,
     Stmt.store .fp16 [128, 64] (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "dk_tile_ptr") [0, 1])
       (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "dk")) MaskOpt.none,
     Stmt.assign .blockPtr [128, 64] "dv_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dv_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dv_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "dk_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dk_tile_ptr") [128, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dk_tile_ptr") [(128:Nat), (0:Nat)]) ]
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 100000 in
@@ -3713,7 +3713,7 @@ theorem ta_advance_row_eval (s : BlockState) (region : RegionName)
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [rowOff, 0] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, (0:Nat)]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
@@ -3822,9 +3822,9 @@ def taLoopBody (sc : ℝ) : List Stmt :=
     Stmt.assign .real [128] "l_prev" (Op.ref .real [128] "l_curr"),
     Stmt.assign .real [128] "m_prev" (Op.ref .real [128] "m_curr"),
     Stmt.assign .blockPtr [128, 64] "k_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "v_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [128, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [(128:Nat), (0:Nat)]) ]
 
 /-- The 8 lowered postLoop statements of the Python-shape triton-attention
 forward body: recompute `start_m`/`offs_m`, the L/M row pointers, the dual L/M
@@ -3989,9 +3989,9 @@ def taLoopBodyG (sc : ℝ) (BLOCK_M BLOCK_N BLOCK_DMODEL : Nat) : List Stmt :=
     Stmt.assign .real [BLOCK_M] "l_prev" (Op.ref .real [BLOCK_M] "l_curr"),
     Stmt.assign .real [BLOCK_M] "m_prev" (Op.ref .real [BLOCK_M] "m_curr"),
     Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [BLOCK_N, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "k_tile_ptr") [BLOCK_N, (0:Nat)]),
     Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [BLOCK_N, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, BLOCK_DMODEL] "v_tile_ptr") [BLOCK_N, (0:Nat)]) ]
 
 /-- General postLoop (8 statements). -/
 def taPostLoopG (L M Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL : Nat) : List Stmt :=
@@ -7649,11 +7649,11 @@ private noncomputable def bwdInnerChunk4 : List Stmt :=
         (Op.ref .ptr [128, 64] "dq_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.constNat 64))),
     Stmt.assign .blockPtr [128, 64] "q_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "do_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "dq_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [128, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(128:Nat), (0:Nat)]) ]
 
 /-- The `dq` store statement of chunk 4 (stmt 15). -/
 private def bwdInnerChunk4store : List Stmt :=
@@ -7667,11 +7667,11 @@ private def bwdInnerChunk4adv : List Stmt :=
         (Op.ref .ptr [128, 64] "dq_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.constNat 64))),
     Stmt.assign .blockPtr [128, 64] "q_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "do_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [128, 0]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(128:Nat), (0:Nat)]),
     Stmt.assign .blockPtr [128, 64] "dq_tile_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [128, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(128:Nat), (0:Nat)]) ]
 
 private theorem bwdInnerChunk4_split :
     bwdInnerChunk4 = bwdInnerChunk4store ++ bwdInnerChunk4adv := rfl
@@ -8086,26 +8086,26 @@ private theorem bwdInnerChunk4adv_step (t : BlockState)
   set sA := t.setReg "dq_ptrs" .ptr [128, 64]
     (Tile.ptrAdd Broadcast.scalarR tdqp (Tile.scalar (128 * 64))) with hsA
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [128, 0]) sA
-      = some ⟨fun i => (tqp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(128:Nat), (0:Nat)]) sA
+      = some ⟨fun i => (tqp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htqp, Option.bind_eq_bind, Option.bind_some]))]
-  set sB := sA.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tqp.data i).advance [128, 0]⟩ with hsB
+  set sB := sA.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tqp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsB
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [128, 0]) sB
-      = some ⟨fun i => (tdop.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(128:Nat), (0:Nat)]) sB
+      = some ⟨fun i => (tdop.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsB, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdop, Option.bind_eq_bind, Option.bind_some]))]
-  set sC := sB.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdop.data i).advance [128, 0]⟩ with hsC
+  set sC := sB.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdop.data i).advance [(128:Nat), (0:Nat)]⟩ with hsC
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [128, 0]) sC
-      = some ⟨fun i => (tdqtp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(128:Nat), (0:Nat)]) sC
+      = some ⟨fun i => (tdqtp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsC, hsB, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdqtp, Option.bind_eq_bind, Option.bind_some])), stepStmts.nil]
-  set sD := sC.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdqtp.data i).advance [128, 0]⟩ with hsD
+  set sD := sC.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdqtp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsD
   refine ⟨sD, rfl, ?_, ?_, ?_, ?_⟩
   · rw [hsD, hsC, hsB, hsA]; simp only [BlockState.setReg_pids]
   · rw [hsD, hsC, hsB, hsA]; rfl
@@ -8498,37 +8498,37 @@ private theorem bwdInnerChunk4adv_step' (t : BlockState)
   set sA := t.setReg "dq_ptrs" .ptr [128, 64]
     (Tile.ptrAdd Broadcast.scalarR tdqp (Tile.scalar (128 * 64))) with hsA
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [128, 0]) sA
-      = some ⟨fun i => (tqp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(128:Nat), (0:Nat)]) sA
+      = some ⟨fun i => (tqp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htqp, Option.bind_eq_bind, Option.bind_some]))]
-  set sB := sA.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tqp.data i).advance [128, 0]⟩ with hsB
+  set sB := sA.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tqp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsB
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [128, 0]) sB
-      = some ⟨fun i => (tdop.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(128:Nat), (0:Nat)]) sB
+      = some ⟨fun i => (tdop.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsB, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdop, Option.bind_eq_bind, Option.bind_some]))]
-  set sC := sB.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdop.data i).advance [128, 0]⟩ with hsC
+  set sC := sB.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdop.data i).advance [(128:Nat), (0:Nat)]⟩ with hsC
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [128, 0]) sC
-      = some ⟨fun i => (tdqtp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(128:Nat), (0:Nat)]) sC
+      = some ⟨fun i => (tdqtp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsC, hsB, hsA]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdqtp, Option.bind_eq_bind, Option.bind_some])), stepStmts.nil]
-  set sD := sC.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdqtp.data i).advance [128, 0]⟩ with hsD
+  set sD := sC.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdqtp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsD
   refine ⟨sD, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hsD, hsC, hsB, hsA]; simp only [BlockState.setReg_pids]
   · rw [hsD, hsC, hsB, hsA]; rfl
   · intro R o; rw [hsD, hsC, hsB, hsA]; simp only [BlockState.setReg_mem]
-  · refine ⟨⟨fun i => (tqp.data i).advance [128, 0]⟩, ?_⟩
+  · refine ⟨⟨fun i => (tqp.data i).advance [(128:Nat), (0:Nat)]⟩, ?_⟩
     simp only [hsD, hsC, hsB, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
       not_false_eq_true, BlockState.setReg_same]
-  · refine ⟨⟨fun i => (tdop.data i).advance [128, 0]⟩, ?_⟩
+  · refine ⟨⟨fun i => (tdop.data i).advance [(128:Nat), (0:Nat)]⟩, ?_⟩
     simp only [hsD, hsC, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
       not_false_eq_true, BlockState.setReg_same]
-  · refine ⟨⟨fun i => (tdqtp.data i).advance [128, 0]⟩, ?_⟩
+  · refine ⟨⟨fun i => (tdqtp.data i).advance [(128:Nat), (0:Nat)]⟩, ?_⟩
     rw [hsD, BlockState.setReg_same]
   · intro dt sh nm h1 h2 h3 h4
     rw [hsD, hsC, hsB, hsA]
@@ -8973,42 +8973,42 @@ private theorem bwdOuterBody_step (s sOuter : BlockState) (Q K V DO DQ DK DV M D
   -- the 5 advances (q/do/dq [0,0]; k/v [128,0]) only assign block ptrs
   obtain ⟨tq, htq⟩ := hInq
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [0, 0]) sInner
-      = some ⟨fun i => (tq.data i).advance [0, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "q_tile_ptr") [(0:Nat), (0:Nat)]) sInner
+      = some ⟨fun i => (tq.data i).advance [(0:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval]; simp only [evalOp_ref, htq, Option.bind_eq_bind, Option.bind_some]))]
-  set sa1 := sInner.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tq.data i).advance [0, 0]⟩ with hsa1
+  set sa1 := sInner.setReg "q_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tq.data i).advance [(0:Nat), (0:Nat)]⟩ with hsa1
   obtain ⟨tdo, htdo⟩ := hIndo
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [0, 0]) sa1
-      = some ⟨fun i => (tdo.data i).advance [0, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "do_tile_ptr") [(0:Nat), (0:Nat)]) sa1
+      = some ⟨fun i => (tdo.data i).advance [(0:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsa1]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdo, Option.bind_eq_bind, Option.bind_some]))]
-  set sa2 := sa1.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdo.data i).advance [0, 0]⟩ with hsa2
+  set sa2 := sa1.setReg "do_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdo.data i).advance [(0:Nat), (0:Nat)]⟩ with hsa2
   obtain ⟨tdq, htdq⟩ := hIndq
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [0, 0]) sa2
-      = some ⟨fun i => (tdq.data i).advance [0, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dq_tile_ptr") [(0:Nat), (0:Nat)]) sa2
+      = some ⟨fun i => (tdq.data i).advance [(0:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsa2, hsa1]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdq, Option.bind_eq_bind, Option.bind_some]))]
-  set sa3 := sa2.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdq.data i).advance [0, 0]⟩ with hsa3
+  set sa3 := sa2.setReg "dq_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdq.data i).advance [(0:Nat), (0:Nat)]⟩ with hsa3
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [128, 0]) sa3
-      = some ⟨fun i => ((bwdPtrTile s K 0).data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "k_tile_ptr") [(128:Nat), (0:Nat)]) sa3
+      = some ⟨fun i => ((bwdPtrTile s K 0).data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsa3, hsa2, hsa1]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         hk_tp, Option.bind_eq_bind, Option.bind_some]))]
   set sa4 := sa3.setReg "k_tile_ptr" .blockPtr [128, 64]
-    ⟨fun i => ((bwdPtrTile s K 0).data i).advance [128, 0]⟩ with hsa4
+    ⟨fun i => ((bwdPtrTile s K 0).data i).advance [(128:Nat), (0:Nat)]⟩ with hsa4
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [128, 0]) sa4
-      = some ⟨fun i => ((bwdPtrTile s V 0).data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "v_tile_ptr") [(128:Nat), (0:Nat)]) sa4
+      = some ⟨fun i => ((bwdPtrTile s V 0).data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsa4, hsa3, hsa2, hsa1]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         hv_tp, Option.bind_eq_bind, Option.bind_some]))]
   set sa5 := sa4.setReg "v_tile_ptr" .blockPtr [128, 64]
-    ⟨fun i => ((bwdPtrTile s V 0).data i).advance [128, 0]⟩ with hsa5
+    ⟨fun i => ((bwdPtrTile s V 0).data i).advance [(128:Nat), (0:Nat)]⟩ with hsa5
   -- readbacks in sa5: dv reg, dk reg, dv_tile_ptr, dk_tile_ptr (all preserved by the 5 advances)
   have hsa5_regs : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName},
       nm ≠ "q_tile_ptr" → nm ≠ "do_tile_ptr" → nm ≠ "dq_tile_ptr" → nm ≠ "k_tile_ptr" →
@@ -9070,18 +9070,18 @@ private theorem bwdOuterBody_step (s sOuter : BlockState) (Q K V DO DQ DK DV M D
         (dt := .blockPtr) (sh := [128, 64]) (nm' := "dk_tile_ptr")]; exact hdktpDV⟩
   obtain ⟨tdvtp, htdvtp⟩ := hdvtpDK
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dv_tile_ptr") [128, 0]) sDK
-      = some ⟨fun i => (tdvtp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dv_tile_ptr") [(128:Nat), (0:Nat)]) sDK
+      = some ⟨fun i => (tdvtp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval]; simp only [evalOp_ref, htdvtp, Option.bind_eq_bind, Option.bind_some]))]
-  set sb1 := sDK.setReg "dv_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdvtp.data i).advance [128, 0]⟩ with hsb1
+  set sb1 := sDK.setReg "dv_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdvtp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsb1
   obtain ⟨tdktp, htdktp⟩ := hdktpDK
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dk_tile_ptr") [128, 0]) sb1
-      = some ⟨fun i => (tdktp.data i).advance [128, 0]⟩ from by
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "dk_tile_ptr") [(128:Nat), (0:Nat)]) sb1
+      = some ⟨fun i => (tdktp.data i).advance [(128:Nat), (0:Nat)]⟩ from by
       rw [advanceBlockPtr_eval, hsb1]
       simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
         htdktp, Option.bind_eq_bind, Option.bind_some])), stepStmts.nil]
-  set sb2 := sb1.setReg "dk_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdktp.data i).advance [128, 0]⟩ with hsb2
+  set sb2 := sb1.setReg "dk_tile_ptr" .blockPtr [128, 64] ⟨fun i => (tdktp.data i).advance [(128:Nat), (0:Nat)]⟩ with hsb2
   -- final state mem facts
   have hb2mem : ∀ R o, sb2.mem R o = sDK.mem R o := by
     intro R o; rw [hsb2, hsb1]; simp only [BlockState.setReg_mem]

@@ -865,7 +865,7 @@ theorem aft3_advance_k_eval (s : BlockState) (region : RegionName)
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [0, colOff] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [(0:Nat), d]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
@@ -873,7 +873,7 @@ theorem aft3_advance_k_eval (s : BlockState) (region : RegionName)
   simp only [evalOp, evalOp_ref, hkp, Option.bind]
   refine congrArg some ?_
   ext i
-  rfl
+  simp [BlockPtr.advance_2d_offsets]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -886,7 +886,7 @@ theorem aft3_advance_v_eval (s : BlockState) (region : RegionName)
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [rowOff, 0] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, (0:Nat)]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
@@ -894,7 +894,7 @@ theorem aft3_advance_v_eval (s : BlockState) (region : RegionName)
   simp only [evalOp, evalOp_ref, hkp, Option.bind]
   refine congrArg some ?_
   ext i
-  rfl
+  simp [BlockPtr.advance_2d_offsets]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
@@ -1168,8 +1168,8 @@ def aft3LoopBody : List Stmt :=
     Stmt.assign TileDType.real [64, 64] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [64, 64] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "p") (Op.ref TileDType.real [64, 64] "v"))))),
     Stmt.assign TileDType.real [64] "m_i" ((Op.ref TileDType.real [64] "m_ij")),
-    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [64, 0]),
-    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [0, 64]) ]
+    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [(64:Nat), (0:Nat)]),
+    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [(0:Nat), (64:Nat)]) ]
 
 def aft3PostLoop (M Out L : RegionName) : List Stmt :=
   [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [64] "m_i" ((Op.add NumericDType.real Broadcast.nil.consSame (Op.ref TileDType.real [64] "m_i") (Op.ref TileDType.real [64] "l_i").log2)), Stmt.assign TileDType.real [64, 64] "acc" ((Op.div NumericDType.real Broadcast.nil.consR.consSame (Op.ref TileDType.real [64, 64] "acc") (Op.expandDim ⟨1, by decide⟩ (Op.ref TileDType.real [64] "l_i"))))] [Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "l_ptrs")) ((Op.ref TileDType.real [64] "l_i")) MaskOpt.none],
@@ -2249,8 +2249,8 @@ def aft3LoopBody3 : List Stmt :=
     Stmt.assign TileDType.real [64, 64] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [64, 64] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [64, 64] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "p") (Op.ref TileDType.real [64, 64] "v"))))),
     Stmt.assign TileDType.real [64] "m_i" ((Op.ref TileDType.real [64] "m_ij")),
-    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [64, 0]),
-    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [0, 64]) ]
+    Stmt.assign TileDType.blockPtr [64, 64] "V_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "V_block_ptr").advanceBlockPtr [(64:Nat), (0:Nat)]),
+    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr" ((Op.ref TileDType.blockPtr [64, 64] "K_block_ptr").advanceBlockPtr [(0:Nat), (64:Nat)]) ]
 
 
 set_option maxHeartbeats 1600000 in
@@ -4466,8 +4466,8 @@ def aft3LoopBodyG (sm_scale : ℝ) (off size BM ND BN : Nat) : List Stmt :=
     Stmt.assign TileDType.real [BN, ND] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [BM, ND] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [BM, ND] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [BM, BN] "p") (Op.ref TileDType.real [BN, ND] "v"))))),
     Stmt.assign TileDType.real [BM] "m_i" ((Op.ref TileDType.real [BM] "m_ij")),
-    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, 0]),
-    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [0, BN]) ]
+    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, (0:Nat)]),
+    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [(0:Nat), BN]) ]
 
 /-- General lowered loop body (case 2, complement sliding window) — inner select
 condition is constexpr-true. -/
@@ -4489,8 +4489,8 @@ def aft3LoopBodyG2 (sm_scale : ℝ) (off size BM ND BN : Nat) : List Stmt :=
     Stmt.assign TileDType.real [BN, ND] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [BM, ND] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [BM, ND] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [BM, BN] "p") (Op.ref TileDType.real [BN, ND] "v"))))),
     Stmt.assign TileDType.real [BM] "m_i" ((Op.ref TileDType.real [BM] "m_ij")),
-    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, 0]),
-    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [0, BN]) ]
+    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, (0:Nat)]),
+    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [(0:Nat), BN]) ]
 
 /-- General lowered loop body (case 3, no window) — both sliding-window guards
 constexpr-false. -/
@@ -4512,8 +4512,8 @@ def aft3LoopBodyG3 (sm_scale : ℝ) (off BM ND BN : Nat) : List Stmt :=
     Stmt.assign TileDType.real [BN, ND] "v" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none),
     Stmt.assign TileDType.real [BM, ND] "acc" ((Op.add NumericDType.real Broadcast.nil.consSame.consSame (Op.ref TileDType.real [BM, ND] "acc") ((Op.dot (batch := []) (Op.ref TileDType.real [BM, BN] "p") (Op.ref TileDType.real [BN, ND] "v"))))),
     Stmt.assign TileDType.real [BM] "m_i" ((Op.ref TileDType.real [BM] "m_ij")),
-    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, 0]),
-    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [0, BN]) ]
+    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" ((Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr").advanceBlockPtr [BN, (0:Nat)]),
+    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" ((Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr").advanceBlockPtr [(0:Nat), BN]) ]
 
 /-- General lowered postLoop statements. -/
 def aft3PostLoopG (M Out L : RegionName) (BM ND : Nat) : List Stmt :=

@@ -183,6 +183,23 @@ def natListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
         `($d :: $tail)
   pure (← go dimTerms.toList, dimTerms.toList)
 
+/-- Like `natListTerm` but produces a `List Int` whose entries are the
+non-negative deltas coerced from `Nat` (`↑d`). Used for `tl.advance` deltas:
+`BlockPtr.advance` takes signed `Int` deltas, but the common case is
+non-negative, and `↑Nat`-coerced deltas keep the `advance_2d_offsets` normal
+form (`offset + delta`) that downstream proofs expect. -/
+def intCoeListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
+    MacroM (TSyntax `term) := do
+  let mut dimTerms : Array (TSyntax `term) := #[]
+  for d in dims do
+    dimTerms := dimTerms.push (← natDimTerm ctx d)
+  let rec go : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List Int))
+    | d :: rest => do
+        let tail ← go rest
+        `((((($d : Nat) : Int))) :: $tail)
+  go dimTerms.toList
+
 def paddingOptionTerm (s : String) : MacroM (TSyntax `term) := do
   match s with
   | "zero" => `(PaddingOption.zero)

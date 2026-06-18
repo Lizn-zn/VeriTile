@@ -49,7 +49,7 @@ theorem makeBlockPtr2_eval (region : RegionName) (baseOffset : Op .nat [])
 /-- **`advanceBlockPtr` eval** (`tl.advance`): advances every lane's `BlockPtr`
 by `deltas` (per-axis offset add). -/
 @[simp] theorem advanceBlockPtr_eval {shape : TileShape}
-    (ptr : Op .blockPtr shape) (deltas : List Nat) (s : BlockState) :
+    (ptr : Op .blockPtr shape) (deltas : List Int) (s : BlockState) :
     evalOp (.advanceBlockPtr ptr deltas) s
       = (do
           let p ← evalOp ptr s

@@ -543,7 +543,7 @@ theorem advance_col_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [(0:Nat), d]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff + d] }⟩) := by
@@ -559,7 +559,7 @@ theorem advance_row_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff, 0] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, (0:Nat)]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff + d, 0] }⟩) := by
@@ -1113,9 +1113,9 @@ def attnLoopBody (B0 : RegionName) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [32, 64].length) Bool.false (Op.ref .real [32, 64] "p"))),
     Stmt.assign .real [32] "m_i" (Op.ref .real [32] "m_i_new"),
     Stmt.assign .blockPtr [64, 64] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [0, 64]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [(0:Nat), (64:Nat)]),
     Stmt.assign .blockPtr [64, 64] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [64, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [(64:Nat), (0:Nat)]) ]
 
 theorem attnLoopBody_check (Q K V B0 Out : RegionName) :
     (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
@@ -2135,9 +2135,9 @@ def attnLoopBodyG (B0 : RegionName)
         (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p"))),
     Stmt.assign .real [BLOCK_M] "m_i" (Op.ref .real [BLOCK_M] "m_i_new"),
     Stmt.assign .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr") [0, BLOCK_N]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr") [(0:Nat), BLOCK_N]),
     Stmt.assign .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr") [BLOCK_N, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr") [BLOCK_N, (0:Nat)]) ]
 
 @[simp] theorem computeOp_toAlgorithm?_alg {dtype : ComputeDType} {shape : TileShape}
     (e : Op dtype.eraseDType shape) :

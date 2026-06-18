@@ -248,7 +248,7 @@ theorem advance_col_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [(0:Nat), d]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff + d] }⟩) := by
@@ -266,7 +266,7 @@ theorem advance_row_eval (s : BlockState) (region : RegionName)
       (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff, 0] }⟩)) :
-    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, (0:Nat)]) s
       = some (⟨fun _ : TileIndex [BT, BS] =>
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff + d, 0] }⟩) := by
@@ -875,9 +875,9 @@ def attnLoopBody (B0 : RegionName) : List Stmt :=
         (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "p"))),
     Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_i_new"),
     Stmt.assign .blockPtr [128, 64] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") [0, 64]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") [(0:Nat), (64:Nat)]),
     Stmt.assign .blockPtr [64, 128] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") [64, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") [(64:Nat), (0:Nat)]) ]
 
 /-- The lowered 15-statement `forRangeDyn` body, dimension-parameterized over
 `BLOCK_M BLOCK_N HEAD_DIM stride_b0m`. Specializes to `attnLoopBody` at the
@@ -938,9 +938,9 @@ def attnLoopBodyG (B0 : RegionName)
         (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p"))),
     Stmt.assign .real [BLOCK_M] "m_i" (Op.ref .real [BLOCK_M] "m_i_new"),
     Stmt.assign .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr") [0, BLOCK_N]),
+      (Op.advanceBlockPtr (Op.ref .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr") [(0:Nat), BLOCK_N]),
     Stmt.assign .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr") [BLOCK_N, 0]) ]
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr") [BLOCK_N, (0:Nat)]) ]
 
 /-- The Python-shape lowered body `drop 19` is the `forRangeDyn` loop over
 `attnLoopBody`, then the 3 post-loop statements. By `rfl`. -/

@@ -955,7 +955,7 @@ def attentionScoreCase1LoopBody : List Stmt :=
       (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil) (Op.ref TileDType.real [64] "o")
         (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [64, 64] "p"))),
     Stmt.assign TileDType.blockPtr [64, 64] "Q_block_ptr"
-      (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [64, 0]),
+      (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [(64:Nat), (0:Nat)]),
     Stmt.assign TileDType.ptr [64] "m_ptrs"
       (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [64] "m_ptrs") (Op.constNat 64))]
 
@@ -1024,7 +1024,7 @@ def attentionScoreCase1LoopBodyG (BN BD swo sws N_CTX : Nat) : List Stmt :=
       (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil) (Op.ref TileDType.real [BN] "o")
         (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [BN, BN] "p"))),
     Stmt.assign TileDType.blockPtr [BN, BD] "Q_block_ptr"
-      (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [BN, BD] "Q_block_ptr") [BN, 0]),
+      (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [BN, BD] "Q_block_ptr") [BN, (0:Nat)]),
     Stmt.assign TileDType.ptr [BN] "m_ptrs"
       (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [BN] "m_ptrs") (Op.constNat BN))]
 
@@ -1512,12 +1512,13 @@ theorem score_loopBody_eval
       (by simp [ho]) (by simp)))]
   -- stmt 12: Q_block_ptr = advance [64, 0]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [64,64] "Q_block_ptr") [64, 0]) _
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [64,64] "Q_block_ptr") [(64:Nat), (0:Nat)]) _
         = some (⟨fun _ : TileIndex [64, 64] =>
             { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
               blockShape := [64, 64], strides := [64, 1], offsets := [c * 64 + 64, 0] }⟩
             : Tile .blockPtr [64,64]) from by
-      rw [advanceBlockPtr_eval]; simp [hQbp]))]
+      rw [advanceBlockPtr_eval]; simp [hQbp]
+      funext i; congr 1 <;> omega))]
   -- stmt 13: m_ptrs += 64
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [64] "m_ptrs") (Op.constNat 64)) _
@@ -1726,12 +1727,13 @@ theorem score_loopBody_evalG
         (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]))
       (by simp [ho]) (by simp)))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BN,BD] "Q_block_ptr") [BN, 0]) _
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BN,BD] "Q_block_ptr") [BN, (0:Nat)]) _
         = some (⟨fun _ : TileIndex [BN, BD] =>
             { region := Q, baseOffset := case1QKOffsetQG s H stride_qz stride_qh, parentShape := [N_CTX, BD],
               blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [c * BN + BN, 0] }⟩
             : Tile .blockPtr [BN,BD]) from by
-      rw [advanceBlockPtr_eval]; simp [hQbp]))]
+      rw [advanceBlockPtr_eval]; simp [hQbp]
+      funext i; congr 1 <;> omega))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "m_ptrs") (Op.constNat BN)) _
         = some (⟨fun idx : TileIndex [BN] =>
