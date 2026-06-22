@@ -10141,6 +10141,417 @@ private theorem bwd_inner_stepG (s sin : BlockState) (Q K V DO M Delta DQ : Regi
       h2rest h5 h6 h11 h7 h8,
       h1rest h1 h2 h3 h4]
 
+/-- **General inner-loop invariant** at counter `i` (key block `n` fixed,
+`kRow = n·BM`).  Carries: the dv/dk accumulators at the running partial column
+sums (`t = i/BM - n` query blocks processed), the q/do/dq block pointers at row
+`i`, the fixed k/v tiles, the loop-invariant offs/ptr registers, the preserved
+`pids`/`undef`, the input memory unchanged off `DQ`, and the running `DQ` memory:
+visited query rows (blocks `[n, i/BM)`, i.e. global rows `n·BM ≤ I < i`) have
+received this KV block's `bwdDqKeyContrib`, unvisited rows still hold the entry
+value `s0`'s `DQ`. -/
+noncomputable def bwdInnerInvariantG
+    (s0 : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD D0 NCTX n num_block : Nat) (sc : ℝ)
+    (i : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids ∧ i % BM = 0 ∧ n * BM ≤ i ∧ i ≤ num_block * BM ∧
+  (∀ R o, R ≠ DQ → s.mem R o = s0.mem R o) ∧
+  (∀ I e : Nat, I < num_block * BM → e < BD →
+    s.readMem DQ (bwdKBase s0 + I * BD + e)
+      = s0.readMem DQ (bwdKBase s0 + I * BD + e)
+        + (if n * BM ≤ I ∧ I < i then bwdDqKeyContrib s0 Q K V DO M Delta BM BD NCTX sc n I e else 0)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧
+  (s.regs .nat [BM] "offs_m" = some (Tile.vec (fun iL : Fin BM => iL.val))) ∧
+  (s.regs .nat [BM] "offs_n" = some (Tile.vec (fun j : Fin BM => n * BM + j.val))) ∧
+  (s.regs .blockPtr [BM, BD] "q_tile_ptr" = some (bwdPtrTileG Q (bwdKBase s0) D0 BM BD i)) ∧
+  (s.regs .blockPtr [BM, BD] "do_tile_ptr" = some (bwdPtrTileG DO (bwdKBase s0) D0 BM BD i)) ∧
+  (s.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s0) D0 BM BD i)) ∧
+  (s.regs .real [BM, BD] "k"
+    = some (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelKG s0 K BD (n * BM + ij.1.val) ij.2.1.val)⟩)) ∧
+  (s.regs .real [BM, BD] "v"
+    = some (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelVG s0 V BD (n * BM + ij.1.val) ij.2.1.val)⟩)) ∧
+  (s.regs .real [BM, BD] "dv"
+    = some (⟨fun idx : TileIndex [BM, BD] =>
+        some (bwdAccDvCell s0 Q K M DO BM BD NCTX sc n (i / BM - n) idx.1.val idx.2.1.val)⟩)) ∧
+  (s.regs .real [BM, BD] "dk"
+    = some (⟨fun idx : TileIndex [BM, BD] =>
+        some (bwdAccDkCell s0 Q K V DO M Delta BM BD NCTX sc n (i / BM - n) idx.1.val idx.2.1.val)⟩)) ∧
+  (s.regs .ptr [] "m_ptrs" = some (Tile.scalar (M, s0.pids 0 * NCTX))) ∧
+  (s.regs .ptr [] "D_ptrs" = some (Tile.scalar (Delta, s0.pids 0 * NCTX))) ∧
+  (∃ t, s.regs .ptr [BM, BD] "dq_ptrs" = some t)
+
+/-- **`dv` accumulator recurrence.** At query block `n+t` (counter `(n+t)·BM`) and
+KV block `n`, `bwdInnerDvG` folds the block-`(n+t)` sub-sum onto the running
+accumulator tile, advancing `bwdAccDvCell` from `t` to `t+1`. -/
+theorem bwdInnerDvG_accStep (s0 : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX n t : Nat) (sc : ℝ) :
+    bwdInnerDvG s0 Q K M DO BM BD NCTX ((n + t) * BM) (n * BM) sc
+        (⟨fun idx : TileIndex [BM, BD] =>
+          some (bwdAccDvCell s0 Q K M DO BM BD NCTX sc n t idx.1.val idx.2.1.val)⟩)
+      = (⟨fun idx : TileIndex [BM, BD] =>
+          some (bwdAccDvCell s0 Q K M DO BM BD NCTX sc n (t + 1) idx.1.val idx.2.1.val)⟩) := by
+  refine Tile.ext (fun idx => ?_)
+  obtain ⟨j, e, u⟩ := idx
+  rw [bwdInnerDvG_cell]
+  simp only [Option.map₂_some_some]
+  rw [bwdAccDvCell_succ]
+  refine congrArg some ?_
+  congr 1
+
+/-- **`dk` accumulator recurrence.** -/
+theorem bwdInnerDkG_accStep (s0 : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX n t : Nat) (sc : ℝ) :
+    bwdInnerDkG s0 Q K V DO M Delta BM BD NCTX ((n + t) * BM) (n * BM) sc
+        (⟨fun idx : TileIndex [BM, BD] =>
+          some (bwdAccDkCell s0 Q K V DO M Delta BM BD NCTX sc n t idx.1.val idx.2.1.val)⟩)
+      = (⟨fun idx : TileIndex [BM, BD] =>
+          some (bwdAccDkCell s0 Q K V DO M Delta BM BD NCTX sc n (t + 1) idx.1.val idx.2.1.val)⟩) := by
+  refine Tile.ext (fun idx => ?_)
+  obtain ⟨j, e, u⟩ := idx
+  rw [bwdInnerDkG_cell]
+  simp only [Option.map₂_some_some]
+  rw [bwdAccDkCell_succ]
+  refine congrArg some ?_
+  congr 1
+
+/-! #### State-congruence of kernel/accumulator tiles off the `DQ` region.
+
+When the inner loop steps the `DQ` store between iterations, the running state
+`sCur` differs from the inner-loop entry state only in the `DQ` region (and in
+loop registers).  All the `bwdKernel*G` loads (and hence the `dv`/`dk`/`dq`
+tiles) read only `Q`/`K`/`V`/`DO`/`M`/`Delta` plus `pids` — never `DQ` — so they
+are invariant under such state changes.  These congruences let the per-iteration
+`bwd_inner_stepG` (driven with reference state `sCur`, so `hmem` is `rfl`) report
+its results in the fixed entry-state vocabulary `s0`. -/
+
+/-- `bwdKBase` depends only on `pids`. -/
+theorem bwdKBase_congr {s s0 : BlockState} (hpids : s.pids = s0.pids) :
+    bwdKBase s = bwdKBase s0 := by simp only [bwdKBase, hpids]
+
+theorem bwdKernelKG_congr {s s0 : BlockState} (K : RegionName) (BD J e : Nat)
+    (hpids : s.pids = s0.pids) (hK : s.mem K = s0.mem K) :
+    bwdKernelKG s K BD J e = bwdKernelKG s0 K BD J e := by
+  simp only [bwdKernelKG, BlockState.readMem, hK, bwdKBase_congr hpids]
+
+theorem bwdKernelQG_congr {s s0 : BlockState} (Q : RegionName) (BD I e : Nat)
+    (hpids : s.pids = s0.pids) (hQ : s.mem Q = s0.mem Q) :
+    bwdKernelQG s Q BD I e = bwdKernelQG s0 Q BD I e := by
+  simp only [bwdKernelQG, BlockState.readMem, hQ, bwdKBase_congr hpids]
+
+theorem bwdKernelVG_congr {s s0 : BlockState} (V : RegionName) (BD J e : Nat)
+    (hpids : s.pids = s0.pids) (hV : s.mem V = s0.mem V) :
+    bwdKernelVG s V BD J e = bwdKernelVG s0 V BD J e := by
+  simp only [bwdKernelVG, BlockState.readMem, hV, bwdKBase_congr hpids]
+
+theorem bwdKernelDOG_congr {s s0 : BlockState} (DO : RegionName) (BD I e : Nat)
+    (hpids : s.pids = s0.pids) (hDO : s.mem DO = s0.mem DO) :
+    bwdKernelDOG s DO BD I e = bwdKernelDOG s0 DO BD I e := by
+  simp only [bwdKernelDOG, BlockState.readMem, hDO, bwdKBase_congr hpids]
+
+theorem bwdKernelMG_congr {s s0 : BlockState} (M : RegionName) (NCTX I : Nat)
+    (hpids : s.pids = s0.pids) (hM : s.mem M = s0.mem M) :
+    bwdKernelMG s M NCTX I = bwdKernelMG s0 M NCTX I := by
+  simp only [bwdKernelMG, BlockState.readMem, hM, hpids]
+
+theorem bwdKernelDiG_congr {s s0 : BlockState} (Delta : RegionName) (NCTX I : Nat)
+    (hpids : s.pids = s0.pids) (hD : s.mem Delta = s0.mem Delta) :
+    bwdKernelDiG s Delta NCTX I = bwdKernelDiG s0 Delta NCTX I := by
+  simp only [bwdKernelDiG, BlockState.readMem, hD, hpids]
+
+theorem bwdKernelPG_congr {s s0 : BlockState} (Q K M : RegionName) (BD NCTX : Nat) (sc : ℝ)
+    (I J : Nat) (hpids : s.pids = s0.pids)
+    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hM : s.mem M = s0.mem M) :
+    bwdKernelPG s Q K M BD NCTX sc I J = bwdKernelPG s0 Q K M BD NCTX sc I J := by
+  simp only [bwdKernelPG, bwdKernelQKG]
+  by_cases h : J ≤ I
+  · rw [if_pos h, if_pos h, bwdKernelMG_congr M NCTX I hpids hM]
+    refine congrArg (fun x => Real.exp (x * sc - _)) ?_
+    refine Finset.sum_congr rfl (fun e _ => ?_)
+    rw [bwdKernelQG_congr Q BD I e.val hpids hQ, bwdKernelKG_congr K BD J e.val hpids hK]
+  · rw [if_neg h, if_neg h]
+
+theorem bwdKernelDSG_congr {s s0 : BlockState} (Q K V DO M Delta : RegionName) (BD NCTX : Nat)
+    (sc : ℝ) (I J : Nat) (hpids : s.pids = s0.pids)
+    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hV : s.mem V = s0.mem V)
+    (hDO : s.mem DO = s0.mem DO) (hM : s.mem M = s0.mem M) (hDe : s.mem Delta = s0.mem Delta) :
+    bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J
+      = bwdKernelDSG s0 Q K V DO M Delta BD NCTX sc I J := by
+  simp only [bwdKernelDSG, bwdKernelDPG]
+  rw [bwdKernelPG_congr Q K M BD NCTX sc I J hpids hQ hK hM,
+    bwdKernelDiG_congr Delta NCTX I hpids hDe]
+  have hsum : (∑ e : Fin BD, bwdKernelDOG s DO BD I e.val * bwdKernelVG s V BD J e.val)
+      = ∑ e : Fin BD, bwdKernelDOG s0 DO BD I e.val * bwdKernelVG s0 V BD J e.val := by
+    refine Finset.sum_congr rfl (fun e _ => ?_)
+    rw [bwdKernelDOG_congr DO BD I e.val hpids hDO, bwdKernelVG_congr V BD J e.val hpids hV]
+  rw [hsum]
+
+/-- `bwdInnerDvG` is invariant under state changes off `Q`/`K`/`M`/`DO`. -/
+theorem bwdInnerDvG_congr {s s0 : BlockState} (Q K M DO : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD])
+    (hpids : s.pids = s0.pids)
+    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hM : s.mem M = s0.mem M)
+    (hDO : s.mem DO = s0.mem DO) :
+    bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc acc
+      = bwdInnerDvG s0 Q K M DO BM BD NCTX qRow kRow sc acc := by
+  refine Tile.ext (fun idx => ?_)
+  obtain ⟨j, e, u⟩ := idx
+  rw [bwdInnerDvG_cell, bwdInnerDvG_cell]
+  refine congrArg (Option.map₂ (· + ·) (acc.data (j, e, PUnit.unit))) (congrArg some ?_)
+  refine Finset.sum_congr rfl (fun iL _ => ?_)
+  rw [bwdKernelPG_congr Q K M BD NCTX sc _ _ hpids hQ hK hM,
+    bwdKernelDOG_congr DO BD _ e.val hpids hDO]
+
+/-- `bwdInnerDkG` is invariant under state changes off `Q`/`K`/`V`/`DO`/`M`/`Delta`. -/
+theorem bwdInnerDkG_congr {s s0 : BlockState} (Q K V DO M Delta : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD])
+    (hpids : s.pids = s0.pids)
+    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hV : s.mem V = s0.mem V)
+    (hDO : s.mem DO = s0.mem DO) (hM : s.mem M = s0.mem M) (hDe : s.mem Delta = s0.mem Delta) :
+    bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc acc
+      = bwdInnerDkG s0 Q K V DO M Delta BM BD NCTX qRow kRow sc acc := by
+  refine Tile.ext (fun idx => ?_)
+  obtain ⟨j, e, u⟩ := idx
+  rw [bwdInnerDkG_cell, bwdInnerDkG_cell]
+  refine congrArg (Option.map₂ (· + ·) (acc.data (j, e, PUnit.unit))) (congrArg some ?_)
+  refine Finset.sum_congr rfl (fun iL _ => ?_)
+  rw [bwdKernelDSG_congr Q K V DO M Delta BD NCTX sc _ _ hpids hQ hK hV hDO hM hDe,
+    bwdKernelQG_congr Q BD _ e.val hpids hQ]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General inner-loop step** (the `forRangeDyn_inv` `h_step`).  Advancing the
+counter from `i` to `i + BM` (query block `i/BM → i/BM + 1`) preserves the inner
+invariant: the body runs `bwd_inner_stepG` with reference state `sin` itself (so
+its `hmem` is `rfl`), then the off-`DQ` congruences re-express the results in the
+fixed entry vocabulary `s0`, the accumulator recurrences advance `dv`/`dk`, and
+the `DQ` read-modify-write extends the running per-key-block contribution to the
+newly-visited block. -/
+private theorem bwdInnerInvariant_stepG (s0 : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD D0 NCTX n num_block : Nat) (sc : ℝ)
+    (hBM : 0 < BM) (hbdvd : BD ∣ bwdKBase s0)
+    (hbound : bwdKBase s0 / BD + num_block * BM ≤ D0)
+    (hQDQ : Q ≠ DQ) (hKDQ : K ≠ DQ) (hVDQ : V ≠ DQ) (hDODQ : DO ≠ DQ)
+    (hMDQ : M ≠ DQ) (hDeDQ : Delta ≠ DQ)
+    (i : Nat) (s : BlockState) (hilt : i < num_block * BM)
+    (hinv : bwdInnerInvariantG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc i s) :
+    ∃ s', stepStmts (bwdInnerBodyG sc BM BD) (s.setReg "start_m" .nat [] (Tile.scalar i)) = some s'
+      ∧ bwdInnerInvariantG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc (i + BM) s' := by
+  obtain ⟨hpids, hmod, hni, hile, hmemoff, hdq, hundef, homm, honn, hqp, hdop, hdqp,
+    hk, hv, hdv, hdk, hmptr, hDptr, hdqptrs⟩ := hinv
+  -- counter algebra: i = (n + t) * BM, with t = i/BM - n
+  set t := i / BM - n with htdef
+  have hdvd : BM ∣ i := Nat.dvd_of_mod_eq_zero hmod
+  have hnle : n ≤ i / BM := (Nat.le_div_iff_mul_le hBM).mpr hni
+  have hidiv : i / BM = n + t := by omega
+  have hieq : i = (n + t) * BM := by
+    conv_lhs => rw [← Nat.div_mul_cancel hdvd]
+    rw [hidiv]
+  have hidivBM : (i + BM) / BM = n + t + 1 := by
+    rw [Nat.add_div_right _ hBM, hidiv]
+  -- reference state for bwd_inner_stepG is `sin` itself (hmem becomes rfl)
+  set sin := s.setReg "start_m" .nat [] (Tile.scalar i) with hsin
+  have hsinpids : sin.pids = s0.pids := by rw [hsin]; simpa using hpids
+  have hsinmemoff : ∀ R o, R ≠ DQ → sin.mem R o = s0.mem R o := by
+    intro R o hR; rw [hsin]; simp only [BlockState.setReg_mem]; exact hmemoff R o hR
+  have hsinmemfun : ∀ R : RegionName, R ≠ DQ → sin.mem R = s0.mem R := by
+    intro R hR; funext o; exact hsinmemoff R o hR
+  -- register readbacks in `sin` (setReg start_m preserves all but start_m)
+  have hsin_reg : ∀ {dt sh nm}, nm ≠ "start_m" → sin.regs dt sh nm = s.regs dt sh nm := by
+    intro dt sh nm h; rw [hsin, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h]
+  -- i + BM ≤ num_block * BM  (block n+t is strictly below num_block)
+  have hntlt : n + t < num_block := by
+    have : (n + t) * BM < num_block * BM := by rw [← hieq]; exact hilt
+    exact Nat.lt_of_mul_lt_mul_right this
+  have hiBMle : i + BM ≤ num_block * BM := by
+    calc i + BM = (n + t + 1) * BM := by rw [hieq]; ring
+      _ ≤ num_block * BM := Nat.mul_le_mul_right BM hntlt
+  -- bwdKBase sin = bwdKBase s0
+  have hkbeq : bwdKBase sin = bwdKBase s0 := bwdKBase_congr hsinpids
+  have hbdvd_sin : BD ∣ bwdKBase sin := by rw [hkbeq]; exact hbdvd
+  -- prove hrow bound (global row form)
+  have hrow : ∀ iL : Fin BM, bwdKBase sin / BD + i + iL.val < D0 := by
+    intro iL
+    have hiL := iL.isLt
+    rw [hkbeq]
+    omega
+  -- the prior accumulators (as tiles), in `s0` vocabulary
+  set accDv : Tile .real [BM, BD] := ⟨fun idx : TileIndex [BM, BD] =>
+    some (bwdAccDvCell s0 Q K M DO BM BD NCTX sc n t idx.1.val idx.2.1.val)⟩ with haccDv
+  set accDk : Tile .real [BM, BD] := ⟨fun idx : TileIndex [BM, BD] =>
+    some (bwdAccDkCell s0 Q K V DO M Delta BM BD NCTX sc n t idx.1.val idx.2.1.val)⟩ with haccDk
+  -- apply the inner-body step with reference = sin
+  obtain ⟨sF, hstep, hFpids, hFundef, hFdv, hFdk, hFdq, hFmem, hFdisj,
+      hFqp, hFdop, hFdqp, hFdqptrs, hFrest⟩ :=
+    bwd_inner_stepG sin sin Q K V DO M Delta DQ BM BD D0 NCTX i (n * BM) sc accDv accDk
+      hbdvd_sin hrow rfl
+      (by rw [hsin, BlockState.setReg_same])
+      (by rw [hsin_reg (by decide)]; exact homm)
+      (by rw [hsin_reg (by decide)]; exact honn)
+      (by rw [hsin_reg (by decide), hqp, bwdKBase_congr hsinpids])
+      (by rw [hsin_reg (by decide), hdop, bwdKBase_congr hsinpids])
+      (by rw [hsin_reg (by decide), hdqp, bwdKBase_congr hsinpids])
+      (by rw [hsin_reg (by decide), hk]; refine congrArg some (Tile.ext (fun ij => ?_))
+          simp only [bwdKernelKG_congr K BD _ ij.2.1.val hsinpids (hsinmemfun K hKDQ)])
+      (by rw [hsin_reg (by decide), hv]; refine congrArg some (Tile.ext (fun ij => ?_))
+          simp only [bwdKernelVG_congr V BD _ ij.2.1.val hsinpids (hsinmemfun V hVDQ)])
+      (by rw [hsin_reg (by decide), hdv])
+      (by rw [hsin_reg (by decide), hdk])
+      (by rw [hsin_reg (by decide), hmptr]; rw [hsinpids])
+      (by rw [hsin_reg (by decide), hDptr]; rw [hsinpids])
+      (by obtain ⟨tt, htt⟩ := hdqptrs; exact ⟨tt, by rw [hsin_reg (by decide)]; exact htt⟩)
+  refine ⟨sF, hstep, ?_⟩
+  -- assemble the invariant at i + BM
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hFpids]; exact hsinpids
+  · rw [Nat.add_mod_right]; exact hmod
+  · omega
+  · exact hiBMle
+  · -- mem off DQ preserved
+    intro R o hR
+    rw [hFmem R o hR, hsinmemoff R o hR]
+  · -- DQ running formula at i + BM
+    intro I e hI he
+    have hBD : 0 < BD := lt_of_le_of_lt (Nat.zero_le e) he
+    by_cases hvis : i ≤ I ∧ I < i + BM
+    · -- newly visited block: I = i + iL for some iL < BM
+      obtain ⟨hIge, hIlt⟩ := hvis
+      set iL : Fin BM := ⟨I - i, by omega⟩ with hiL
+      have hIeq : I = i + iL.val := by simp only [hiL]; omega
+      -- LHS: rewrite I → i + iL throughout, express via bwdInnerDqG readback
+      rw [hIeq]
+      rw [show bwdKBase s0 = bwdKBase sin from (bwdKBase_congr hsinpids).symm]
+      rw [hFdq ⟨iL, ⟨e, he⟩, PUnit.unit⟩]
+      rw [bwdInnerDqG_cell]
+      simp only [WithBot.unbotD_some]
+      rw [show bwdKBase sin = bwdKBase s0 from bwdKBase_congr hsinpids]
+      -- sin.readMem DQ at row i+iL (≥ i) equals s0 value (unvisited at counter i)
+      have hsinDQ : sin.readMem DQ (bwdKBase s0 + (i + iL.val) * BD + e)
+          = s0.readMem DQ (bwdKBase s0 + (i + iL.val) * BD + e) := by
+        rw [show sin.readMem DQ (bwdKBase s0 + (i + iL.val) * BD + e)
+              = s.readMem DQ (bwdKBase s0 + (i + iL.val) * BD + e) from by
+            unfold BlockState.readMem; rw [hsin]; simp only [BlockState.setReg_mem]]
+        rw [hdq (i + iL.val) e (by omega) he, if_neg (by omega)]
+        ring
+      rw [hsinDQ, if_pos (show n * BM ≤ i + iL.val ∧ i + iL.val < i + BM from ⟨by omega, by omega⟩)]
+      refine congrArg (s0.readMem DQ (bwdKBase s0 + (i + iL.val) * BD + e) + ·) ?_
+      simp only [bwdDqKeyContrib]
+      refine Finset.sum_congr rfl (fun jL _ => ?_)
+      rw [bwdKernelDSG_congr Q K V DO M Delta BD NCTX sc _ _ hsinpids
+          (hsinmemfun Q hQDQ) (hsinmemfun K hKDQ) (hsinmemfun V hVDQ)
+          (hsinmemfun DO hDODQ) (hsinmemfun M hMDQ) (hsinmemfun Delta hDeDQ),
+        bwdKernelKG_congr K BD _ e hsinpids (hsinmemfun K hKDQ)]
+    · -- unvisited block: address disjoint from the store image; preserved
+      have hdisj : ∀ idx : TileIndex [BM, BD],
+          bwdKBase s0 + I * BD + e ≠ bwdKBase sin + (i + idx.1.val) * BD + idx.2.1.val := by
+        intro idx hcontra
+        rw [show bwdKBase sin = bwdKBase s0 from bwdKBase_congr hsinpids] at hcontra
+        have he2 : idx.2.1.val < BD := idx.2.1.isLt
+        have hkey : I * BD + e = (i + idx.1.val) * BD + idx.2.1.val := by omega
+        have hmod1 : (I * BD + e) % BD = e := by
+          rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt he
+        have hmod2 : ((i + idx.1.val) * BD + idx.2.1.val) % BD = idx.2.1.val := by
+          rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt he2
+        have heq : e = idx.2.1.val := by rw [← hmod1, ← hmod2, hkey]
+        have hIeq2 : I = i + idx.1.val := by
+          have : I * BD = (i + idx.1.val) * BD := by omega
+          exact Nat.eq_of_mul_eq_mul_right hBD this
+        have := idx.1.isLt; omega
+      rw [hFdisj (bwdKBase s0 + I * BD + e) hdisj]
+      rw [show sin.readMem DQ (bwdKBase s0 + I * BD + e)
+            = s.readMem DQ (bwdKBase s0 + I * BD + e) from by
+          unfold BlockState.readMem; rw [hsin]; simp only [BlockState.setReg_mem]]
+      rw [hdq I e hI he]
+      by_cases hlo : n * BM ≤ I ∧ I < i
+      · rw [if_pos hlo, if_pos ⟨hlo.1, by omega⟩]
+      · rw [if_neg hlo, if_neg (by
+          rintro ⟨hge, hlt2⟩
+          exact hlo ⟨hge, by omega⟩)]
+  · rw [hFundef]; exact hundef
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide)]; exact homm
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide)]; exact honn
+  · rw [hFqp, bwdKBase_congr hsinpids]
+  · rw [hFdop, bwdKBase_congr hsinpids]
+  · rw [hFdqp, bwdKBase_congr hsinpids]
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide), hk]
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide), hv]
+  · -- dv accumulator advances t → t+1
+    rw [hFdv]
+    rw [bwdInnerDvG_congr Q K M DO BM BD NCTX i (n * BM) sc accDv hsinpids
+        (hsinmemfun Q hQDQ) (hsinmemfun K hKDQ) (hsinmemfun M hMDQ) (hsinmemfun DO hDODQ)]
+    rw [show (i + BM) / BM - n = t + 1 from by rw [hidivBM]; omega]
+    rw [haccDv, hieq, bwdInnerDvG_accStep]
+  · -- dk accumulator advances t → t+1
+    rw [hFdk]
+    rw [bwdInnerDkG_congr Q K V DO M Delta BM BD NCTX i (n * BM) sc accDk hsinpids
+        (hsinmemfun Q hQDQ) (hsinmemfun K hKDQ) (hsinmemfun V hVDQ) (hsinmemfun DO hDODQ)
+        (hsinmemfun M hMDQ) (hsinmemfun Delta hDeDQ)]
+    rw [show (i + BM) / BM - n = t + 1 from by rw [hidivBM]; omega]
+    rw [haccDk, hieq, bwdInnerDkG_accStep]
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide)]; exact hmptr
+  · rw [hFrest (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide), hsin_reg (by decide)]; exact hDptr
+  · -- dq_ptrs exists (modified by the body; supplied by the inner step)
+    exact hFdqptrs
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General inner-loop driver.** Runs the *whole* inner `forRangeDyn` over
+`start_m ∈ [n·BM, num_block·BM)` (step `BM`) for KV block `n`, from an entry
+state `s` satisfying `bwdInnerInvariantG … (n·BM)` and exposing `lo = n·BM`.
+The result is a final state satisfying `bwdInnerInvariantG … (num_block·BM)` —
+i.e. the `dv`/`dk` registers hold the running accumulation over *all* query
+blocks `[n, num_block)` (= the full column sums, lower blocks being causally
+zero), and `DQ` holds the entry value plus this KV block's contribution for
+every query row `I ≥ n·BM`. -/
+private theorem bwdInnerLoop_driveG (s0 : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD D0 NCTX n num_block : Nat) (sc : ℝ)
+    (hBM : 0 < BM) (hbdvd : BD ∣ bwdKBase s0)
+    (hbound : bwdKBase s0 / BD + num_block * BM ≤ D0) (hn : n ≤ num_block)
+    (hQDQ : Q ≠ DQ) (hKDQ : K ≠ DQ) (hVDQ : V ≠ DQ) (hDODQ : DO ≠ DQ)
+    (hMDQ : M ≠ DQ) (hDeDQ : Delta ≠ DQ)
+    (s : BlockState)
+    (hlo : s.regs .nat [] "lo" = some (Tile.scalar (n * BM)))
+    (hinv : bwdInnerInvariantG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc (n * BM) s) :
+    ∃ sF, stepStmt (Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo")
+        (Op.mul .nat Broadcast.nil (Op.constNat num_block) (Op.constNat BM)) (Op.constNat BM)
+        (bwdInnerBodyG sc BM BD)) s = some sF
+      ∧ bwdInnerInvariantG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc (num_block * BM) sF := by
+  obtain ⟨final, sFinal, hstep, hfinalge, hPfinal⟩ :=
+    forRangeDyn_inv (idx := "start_m") (startOp := Op.ref .nat [] "lo")
+      (stopOp := Op.mul .nat Broadcast.nil (Op.constNat num_block) (Op.constNat BM))
+      (stepOp := Op.constNat BM) (start := n * BM) (stop := num_block * BM) (step := BM)
+      (body := bwdInnerBodyG sc BM BD)
+      (P := fun i st => bwdInnerInvariantG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc i st)
+      (s_init := s)
+      (by rw [evalOp_ref, hlo])
+      (by simp only [evalOp_mul, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+          refine congrArg some (Tile.ext (fun u => ?_))
+          rw [Tile.scalar_data]
+          simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+            NumericDType.mul])
+      (by rw [evalOp_constNat])
+      (by omega)
+      hinv
+      (fun i st hi hP => bwdInnerInvariant_stepG s0 Q K V DO M Delta DQ BM BD D0 NCTX n num_block sc
+        hBM hbdvd hbound hQDQ hKDQ hVDQ hDODQ hMDQ hDeDQ i st hi hP)
+  -- final counter equals num_block * BM (invariant pins i ≤ num_block * BM)
+  have hfinalle : final ≤ num_block * BM := hPfinal.2.2.2.1
+  have hfeq : final = num_block * BM := le_antisymm hfinalle hfinalge
+  refine ⟨sFinal, hstep, ?_⟩
+  rw [← hfeq]; exact hPfinal
+
+
+
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **Chunk-4 advances.** The four pointer-advance assigns preserve `mem`,
