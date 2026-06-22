@@ -8378,6 +8378,264 @@ theorem bwd_ds_evalG (s : BlockState) (BM : Nat) (sc : ℝ)
   rw [evalOp_mul, evalOp_mul]
   simp only [evalOp_ref, evalOp_const, hp, hdp, Option.bind_eq_bind, Option.bind_some]
 
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General boundary-checked block-ptr `.real` load** of `bwdPtrTileG R D0 BM BD
+rowOff`.  Each lane `(i,e)` is in bounds (`rowOff + i < D0`, `e < BD`) and reads
+`R[(rowOff + i)·BD + e]`. -/
+theorem bwd_load_bc_evalG
+    (R : RegionName) (base D0 BM BD rowOff : Nat) (ptrOp : Op .blockPtr [BM, BD]) (s t : BlockState)
+    (hbdvd : BD ∣ base)
+    (hmem : t.mem = s.mem)
+    (hrow : ∀ i : Fin BM, base / BD + rowOff + i.val < D0)
+    (hp : evalOp ptrOp t = some (bwdPtrTileG R base D0 BM BD rowOff)) :
+    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) t
+      = some ⟨fun idx : TileIndex [BM, BD] =>
+          some (s.readMem R (base + (rowOff + idx.1.val) * BD + idx.2.1.val))⟩ := by
+  have hp' : evalOp ptrOp t = some
+      ⟨fun _ : TileIndex [BM, BD] =>
+        { region := R, baseOffset := 0, parentShape := [D0, BD],
+          blockShape := [BM, BD], strides := [BD, 1],
+          offsets := [base / BD + rowOff, 0] }⟩ := by
+    rw [hp]; simp only [bwdPtrTileG]
+  rw [ta_load_blockPtr_bc_eval R 0 D0 BD BM BD BD 1 (base / BD + rowOff) ptrOp t hp']
+  refine congrArg some ?_
+  ext idx
+  have he : idx.2.1.val < BD := idx.2.1.isLt
+  have hi : base / BD + rowOff + idx.1.val < D0 := hrow idx.1
+  simp only [hi, he, and_self, if_true]
+  simp only [BlockState.readMem, hmem]
+  congr 1
+  rw [show base / BD + rowOff + idx.1.val = base / BD + (rowOff + idx.1.val) from by omega,
+    Nat.add_mul, Nat.div_mul_cancel hbdvd]
+  ring
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General no-boundary-check block-ptr `.real` load** of `bwdPtrTileG R D0 BM BD
+rowOff` (the `dq = tl.load(dq_tile_ptr)` load).  Reads each lane `(i,e)` at
+`R[(rowOff + i)·BD + e]`. -/
+theorem bwd_load_nobc_evalG
+    (R : RegionName) (base D0 BM BD rowOff : Nat) (ptrOp : Op .blockPtr [BM, BD]) (s t : BlockState)
+    (hbdvd : BD ∣ base)
+    (hmem : t.mem = s.mem)
+    (hp : evalOp ptrOp t = some (bwdPtrTileG R base D0 BM BD rowOff)) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) t
+      = some ⟨fun idx : TileIndex [BM, BD] =>
+          some (s.readMem R (base + (rowOff + idx.1.val) * BD + idx.2.1.val))⟩ := by
+  have hp' : evalOp ptrOp t = some
+      ⟨fun _ : TileIndex [BM, BD] =>
+        { region := R, baseOffset := 0, parentShape := [D0, BD],
+          blockShape := [BM, BD], strides := [BD, 1],
+          offsets := [base / BD + rowOff, 0] }⟩ := by
+    rw [hp]; simp only [bwdPtrTileG]
+  simp only [evalOp, hp', Option.bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [BlockPtr.inBounds_nil_checkedAxes, Bool.and_true, Bool.true_and, if_true,
+    TileShape.blockPtr_address_2d_row_offset_index, BlockState.readMemValue_real]
+  simp only [BlockState.readMem, hmem]
+  congr 1
+  rw [show base / BD + rowOff + idx.1.val = base / BD + (rowOff + idx.1.val) from by omega,
+    Nat.add_mul, Nat.div_mul_cancel hbdvd]
+  ring
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General no-boundary-check `.real` block-ptr store** of `bwdPtrTileG R D0 BM BD
+rowOff`: writes each lane `(i,e)` to `R[(rowOff + i)·BD + e]` with value
+`(vt.data idx).unbotD 0`. -/
+theorem bwd_store_dq_evalG (s sPre : BlockState) (R : RegionName) (base D0 BM BD rowOff : Nat)
+    (hbdvd : BD ∣ base)
+    (vt : Tile .real [BM, BD])
+    (hptr : sPre.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG R base D0 BM BD rowOff))
+    (hval : sPre.regs .real [BM, BD] "dq" = some vt) :
+    stepStmt (Stmt.store .real [BM, BD]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") [])
+        (Op.ref .real [BM, BD] "dq") MaskOpt.none) sPre
+      = some ((TileShape.allIndices [BM, BD]).foldl
+          (fun acc idx => acc.writeMem R (base + (rowOff + idx.1.val) * BD + idx.2.1.val)
+            ((vt.data idx).unbotD 0)) sPre) := by
+  unfold stepStmt
+  simp only [evalOp_ref, hptr, hval, Option.bind_eq_bind, Option.bind_some, Option.map]
+  refine congrArg some ?_
+  refine List.foldl_ext _ _ _ (fun acc idx _ => ?_)
+  rw [bwdPtrTileG]
+  simp only [BlockPtr.inBounds_nil_checkedAxes, Bool.and_true, Bool.true_and, if_true,
+    TileShape.blockPtr_address_2d_row_offset_index, BlockState.writeMemTyped_real,
+    FloatDType.real_storeValue]
+  congr 1
+  rw [show base / BD + rowOff + idx.1.val = base / BD + (rowOff + idx.1.val) from by omega,
+    Nat.add_mul, Nat.div_mul_cancel hbdvd]
+  ring
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General fp16 boundary-checked block-ptr store** (dimension-general clone of
+`bwd_store_fp16_bc_eval`).  Storing `castFloat .real .fp16 (ref valNm)` through a
+`bwdPtrTileG R base D0 BM BD rowOff` block pointer (boundary check `[0,1]`) writes,
+for every in-bounds lane `(i,e)`, an fp16 `MemCell` at `R[base + (rowOff+i)·BD + e]`.
+Under `rowOff + i < D0` (the `hrow` side-condition) every lane is in bounds, so the
+readback at any lane is `MemCell.of .fp16 (real.cast fp16 (vt.data idx))`. -/
+private theorem bwd_store_fp16_bc_evalG (R : RegionName) (base D0 BM BD rowOff : Nat)
+    (sPre : BlockState) (ptrNm valNm : RegName) (vt : Tile .real [BM, BD])
+    (hbdvd : BD ∣ base)
+    (hrow : ∀ i : Fin BM, base / BD + rowOff + i.val < D0)
+    (hptr : sPre.regs .blockPtr [BM, BD] ptrNm = some (bwdPtrTileG R base D0 BM BD rowOff))
+    (hval : sPre.regs .real [BM, BD] valNm = some vt)
+    (hsome : ∀ idx : TileIndex [BM, BD], ∃ r : ℝ, vt.data idx = some r) :
+    ∃ sF, stepStmt (Stmt.store .fp16 [BM, BD]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] ptrNm) [0, 1])
+        (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) MaskOpt.none) sPre
+      = some sF
+      ∧ sF.pids = sPre.pids
+      ∧ (∀ idx : TileIndex [BM, BD],
+          sF.mem R (base + (rowOff + idx.1.val) * BD + idx.2.1.val)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (vt.data idx)))
+      ∧ (∀ (R' : RegionName) (o : Nat), R' ≠ R → sF.mem R' o = sPre.mem R' o) := by
+  set oOffFn : TileIndex [BM, BD] → Nat :=
+    fun idx => base + (rowOff + idx.1.val) * BD + idx.2.1.val with hoOffFn
+  set oValFn : TileIndex [BM, BD] → TileCarrier TileDType.fp16 :=
+    fun idx => FloatDType.real.cast FloatDType.fp16 (vt.data idx) with hoValFn
+  set oMask : TileIndex [BM, BD] → Prop :=
+    fun idx => base / BD + rowOff + idx.1.val < D0 ∧ 0 + idx.2.1.val < BD with hoMask
+  have hstore : stepStmt (Stmt.store .fp16 [BM, BD]
+      (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] ptrNm) [0, 1])
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) MaskOpt.none) sPre
+      = some ((TileShape.allIndices [BM, BD]).foldl
+          (fun acc idx => if oMask idx then acc.writeMemTyped .fp16 R (oOffFn idx) (oValFn idx) else acc) sPre) := by
+    have hvalop : evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) sPre
+        = some (⟨oValFn⟩ : Tile .fp16 [BM, BD]) := by
+      rw [evalOp_castFloat]; erw [evalOp_ref, hval]; rfl
+    have hopval : evalOp (Op.ref .blockPtr [BM, BD] ptrNm) sPre
+        = some (bwdPtrTileG R base D0 BM BD rowOff) := by rw [evalOp_ref]; exact hptr
+    unfold stepStmt
+    simp only [hopval, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    erw [hvalop]
+    rw [Option.bind_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ sPre ?_
+    intro acc idx _
+    simp only [bwdPtrTileG, Bool.true_and,
+      TileShape.blockPtr_inBounds_2d_offsets_index,
+      TileShape.blockPtr_address_2d_row_offset_index]
+    have hoff : 0 + (base / BD + rowOff + idx.1.val) * BD + idx.2.1.val * 1 = oOffFn idx := by
+      simp only [hoOffFn]
+      rw [show base / BD + rowOff + idx.1.val = base / BD + (rowOff + idx.1.val) from by omega,
+        Nat.add_mul, Nat.div_mul_cancel hbdvd]
+      ring
+    by_cases hmk : oMask idx
+    · rw [decide_eq_true (by simpa only [hoMask] using hmk), hoff]
+      rw [if_pos rfl, if_pos hmk]
+    · rw [decide_eq_false (by simpa only [hoMask] using hmk)]
+      rw [if_neg (by decide), if_neg hmk]
+  rw [hstore]
+  set sF := (TileShape.allIndices [BM, BD]).foldl
+      (fun acc idx => if oMask idx then acc.writeMemTyped .fp16 R (oOffFn idx) (oValFn idx) else acc) sPre
+    with hsF
+  have hinj : Function.Injective oOffFn := by
+    rw [hoOffFn]
+    rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+    simp only at h
+    have hkey' : (rowOff + ma) * BD + da = (rowOff + mb) * BD + db := by omega
+    have hmod1 : ((rowOff + ma) * BD + da) % BD = da := by
+      rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt hda
+    have hmod2 : ((rowOff + mb) * BD + db) % BD = db := by
+      rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt hdb
+    have hd : da = db := by rw [← hmod1, ← hmod2, hkey']
+    subst db
+    have hmeq : (rowOff + ma) * BD = (rowOff + mb) * BD := by omega
+    have hm : ma = mb := by
+      have := Nat.eq_of_mul_eq_mul_right (by omega : 0 < BD) hmeq
+      omega
+    subst mb; rfl
+  have hPids : sF.pids = sPre.pids := by
+    rw [hsF]
+    suffices h : ∀ (l : List (TileIndex [BM, BD])) (t : BlockState),
+        (l.foldl (fun acc idx => if oMask idx then acc.writeMemTyped .fp16 R (oOffFn idx) (oValFn idx) else acc) t).pids
+          = t.pids by exact h _ sPre
+    intro l
+    induction l with
+    | nil => intro t; rfl
+    | cons hd tl ih =>
+        intro t
+        rw [List.foldl_cons, ih]
+        by_cases hmk : oMask hd
+        · simp only [hmk, if_true, BlockState.writeMemTyped_pids]
+        · simp only [hmk, if_false]
+  have hMem : ∀ idx : TileIndex [BM, BD],
+      sF.mem R (base + (rowOff + idx.1.val) * BD + idx.2.1.val)
+        = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16 (vt.data idx)) := by
+    intro idx
+    have hmaskIdx : oMask idx := by
+      rw [hoMask]; exact ⟨hrow idx.1, by have := idx.2.1.isLt; omega⟩
+    rw [hsF]
+    rw [show base + (rowOff + idx.1.val) * BD + idx.2.1.val = oOffFn idx from rfl]
+    rw [scatter_memcell_fp16_prop_masked_nd sPre oOffFn oValFn oMask hinj idx]
+    rw [if_pos hmaskIdx]
+    obtain ⟨r, hr⟩ := hsome idx
+    simp only [hoValFn, hr, FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue,
+      FloatDType.ofWithBot, FloatDType.toWithBot, WithBot.unbotD_some]
+  have hOther : ∀ (R' : RegionName) (o : Nat), R' ≠ R → sF.mem R' o = sPre.mem R' o := by
+    intro R' o hne
+    rw [hsF, foldl_writeMemTyped_fp16_mask_other_region oMask oOffFn oValFn _ hne]
+  exact ⟨sF, rfl, hPids, hMem, hOther⟩
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General fp16-store register preservation** (dimension-general clone of
+`bwd_store_fp16_regs_eq`).  An fp16 block-ptr store leaves every register untouched. -/
+private theorem bwd_store_fp16_regs_eqG (sPre : BlockState) (BM BD : Nat)
+    (ptrTile : Tile .blockPtr [BM, BD]) (ptrNm valNm : RegName) (vt : Tile .real [BM, BD])
+    (hptr : sPre.regs .blockPtr [BM, BD] ptrNm = some ptrTile)
+    (hval : sPre.regs .real [BM, BD] valNm = some vt)
+    (sF : BlockState)
+    (hstep : stepStmt (Stmt.store .fp16 [BM, BD]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] ptrNm) [0, 1])
+        (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) MaskOpt.none) sPre = some sF)
+    {dt : TileDType} {sh : TileShape} {nm' : RegName} :
+    sF.regs dt sh nm' = sPre.regs dt sh nm' := by
+  have hvalop : evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) sPre
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (vt.data idx)⟩ : Tile .fp16 [BM, BD]) := by
+    rw [evalOp_castFloat]; erw [evalOp_ref, hval]; rfl
+  have hopval : evalOp (Op.ref .blockPtr [BM, BD] ptrNm) sPre
+      = some ptrTile := by rw [evalOp_ref]; exact hptr
+  rw [show stepStmt (Stmt.store .fp16 [BM, BD]
+      (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] ptrNm) [0, 1])
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] valNm)) MaskOpt.none) sPre
+      = some ((TileShape.allIndices [BM, BD]).foldl
+          (fun acc i =>
+            let bp := ptrTile.data i
+            let idx := TileShape.indexToList [BM, BD] i
+            if («true» && bp.inBounds idx [0, 1]) = «true» then
+              acc.writeMemTyped .fp16 bp.region (bp.address idx)
+                ((⟨fun idx => FloatDType.real.cast FloatDType.fp16 (vt.data idx)⟩ : Tile .fp16 [BM, BD]).data i)
+            else acc) sPre) from by
+        unfold stepStmt
+        simp only [hopval, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+        erw [hvalop]
+        rw [Option.bind_some]] at hstep
+  obtain rfl : sF = _ := Option.some.inj hstep.symm
+  suffices h : ∀ (l : List (TileIndex [BM, BD])) (t : BlockState),
+      (l.foldl (fun acc i =>
+        let bp := ptrTile.data i
+        let idx := TileShape.indexToList [BM, BD] i
+        if («true» && bp.inBounds idx [0, 1]) = «true» then
+          acc.writeMemTyped .fp16 bp.region (bp.address idx)
+            ((⟨fun idx => FloatDType.real.cast FloatDType.fp16 (vt.data idx)⟩ : Tile .fp16 [BM, BD]).data i)
+        else acc) t).regs dt sh nm' = t.regs dt sh nm' by exact h _ sPre
+  intro l
+  induction l with
+  | nil => intro t; rfl
+  | cons hd tl ih =>
+      intro t
+      rw [List.foldl_cons, ih]
+      by_cases hb : («true» && (ptrTile.data hd).inBounds (TileShape.indexToList [BM, BD] hd) [0, 1]) = «true»
+      · rw [if_pos hb, BlockState.writeMemTyped_regs]
+      · rw [if_neg hb]
+
+
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **No-boundary-check `.real` block-ptr load** of `bwdPtrTile s R 0` (inner body
