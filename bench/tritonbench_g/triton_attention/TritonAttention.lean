@@ -8635,6 +8635,265 @@ private theorem bwd_store_fp16_regs_eqG (sPre : BlockState) (BM BD : Nat)
       · rw [if_pos hb, BlockState.writeMemTyped_regs]
       · rw [if_neg hb]
 
+/-! ### ════════ General backward inner-body register tiles ════════
+
+Dimension-general (`BM`/`BD`) clones of the pinned `bwdInner{Qk,Qk1,P,Dp,Ds,Dv,Dk,Dq}`
+register tiles, parametric over the global query-block base row `qRow` (= `start_m`)
+and key-block base row `kRow` (= `lo = start_n·BM`).  Each cell lemma collapses to the
+Phase-1 `G` spec helpers (`bwdKernelQKG`/`PG`/`DPG`/`DSG`) at global rows
+`I = qRow + iL`, `J = kRow + jL`.  Score blocks are square `[BM, BM]`; input/grad
+tiles `[BM, BD]`.  The fp16 round-trips use `bwd_fp16_roundtrip`. -/
+
+/-- The raw `qk` dot tile (`Σ_e q·k`), square block `[BM, BM]`. -/
+noncomputable def bwdInnerQkG (s : BlockState) (Q K : RegionName) (BM BD qRow kRow : Nat) :
+    Tile .real [BM, BM] :=
+  Tile.dot []
+    (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩
+      : Tile .real [BM, BD])
+    (Tile.transpose []
+      (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + idx.1.val) idx.2.1.val)⟩
+        : Tile .real [BM, BD]))
+
+/-- The causal-masked `qk` tile (`-inf` ⇒ `⊥` where `kRow+jL > qRow+iL`). -/
+noncomputable def bwdInnerQk1G (s : BlockState) (Q K : RegionName) (BM BD qRow kRow : Nat) :
+    Tile .real [BM, BM] :=
+  ⟨fun idx : TileIndex [BM, BM] =>
+    if kRow + idx.2.1.val ≤ qRow + idx.1.val then (bwdInnerQkG s Q K BM BD qRow kRow).data idx
+    else (⊥ : WithBot ℝ)⟩
+
+/-- The `p` tile `exp(qk1·sc − m[:,None])`. -/
+noncomputable def bwdInnerPG (s : BlockState) (Q K M : RegionName) (BM BD NCTX qRow kRow : Nat) (sc : ℝ) :
+    Tile .real [BM, BM] :=
+  Tile.uop WithBot.realExp
+    (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR (bwdInnerQk1G s Q K BM BD qRow kRow)
+        (Tile.scalar (some sc : WithBot ℝ)))
+      (Tile.expandDim ⟨1, by simp⟩
+        (⟨fun i : TileIndex [BM] => some (bwdKernelMG s M NCTX (qRow + i.1.val))⟩ : Tile .real [BM])))
+
+/-- The `dp` tile `(0 − Di[:,None]) + dot(do, trans(v))`. -/
+noncomputable def bwdInnerDpG (s : BlockState) (V DO Delta : RegionName) (BM BD NCTX qRow kRow : Nat) :
+    Tile .real [BM, BM] :=
+  Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (⟨fun _ : TileIndex [BM, BM] => some (0:ℝ)⟩ : Tile .real [BM, BM])
+      (Tile.expandDim ⟨1, by simp⟩
+        (⟨fun i : TileIndex [BM] => some (bwdKernelDiG s Delta NCTX (qRow + i.1.val))⟩ : Tile .real [BM])))
+    (Tile.dot []
+      (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩
+        : Tile .real [BM, BD])
+      (Tile.transpose []
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelVG s V BD (kRow + idx.1.val) idx.2.1.val)⟩
+          : Tile .real [BM, BD])))
+
+/-- The `ds` tile `p · dp · sc`. -/
+noncomputable def bwdInnerDsG (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) : Tile .real [BM, BM] :=
+  Tile.bop NumericDType.real.mul Broadcast.scalarR
+    (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc) (bwdInnerDpG s V DO Delta BM BD NCTX qRow kRow))
+    (Tile.scalar (some sc : WithBot ℝ))
+
+/-- Cell value of the raw `qk` dot. -/
+theorem bwdInnerQkG_cell (s : BlockState) (Q K : RegionName) (BM BD qRow kRow : Nat)
+    (i j : Fin BM) :
+    (bwdInnerQkG s Q K BM BD qRow kRow).data (i, j, PUnit.unit)
+      = some (bwdKernelQKG s Q K BD (qRow + i.val) (kRow + j.val)) := by
+  simp only [bwdInnerQkG, Tile.dot, Tile.transpose, bwdKernelQKG, bwdKernelQG, bwdKernelKG,
+    Option.map₂_some_some, WithBot.sum_someTerm_eq_some]
+
+/-- Cell value of the masked `p` tile (matches `bwdKernelPG`). -/
+theorem bwdInnerPG_cell (s : BlockState) (Q K M : RegionName) (BM BD NCTX qRow kRow : Nat) (sc : ℝ)
+    (i j : Fin BM) :
+    (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc).data (i, j, PUnit.unit)
+      = some (bwdKernelPG s Q K M BD NCTX sc (qRow + i.val) (kRow + j.val)) := by
+  have hqk1 : (bwdInnerQk1G s Q K BM BD qRow kRow).data (i, j, PUnit.unit)
+      = if kRow + j.val ≤ qRow + i.val then some (bwdKernelQKG s Q K BD (qRow + i.val) (kRow + j.val))
+        else (⊥ : WithBot ℝ) := by
+    simp only [bwdInnerQk1G]
+    by_cases h : kRow + j.val ≤ qRow + i.val
+    · rw [if_pos h, if_pos h, bwdInnerQkG_cell]
+    · rw [if_neg h, if_neg h]
+  simp only [bwdInnerPG, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.scalar, bwdKernelPG, hqk1, Tile.expandDim_data, TileShape.dropInsertedIndex_succ,
+    TileShape.dropInsertedIndex_nil, WithBot.realMul, WithBot.realSub]
+  by_cases h : kRow + j.val ≤ qRow + i.val
+  · simp only [if_pos h, NumericDType.mul, NumericDType.sub, WithBot.realMul,
+      WithBot.realSub, Option.map₂_some_some, WithBot.realExp_some]
+  · simp only [if_neg h, NumericDType.mul, NumericDType.sub, WithBot.realMul,
+      WithBot.realSub, Option.map₂_none_left, Option.map₂_none_right,
+      WithBot.realExp_bot]
+    rfl
+
+/-- Cell value of the `dp` tile (matches `bwdKernelDPG`). -/
+theorem bwdInnerDpG_cell (s : BlockState) (V DO Delta : RegionName) (BM BD NCTX qRow kRow : Nat)
+    (i j : Fin BM) :
+    (bwdInnerDpG s V DO Delta BM BD NCTX qRow kRow).data (i, j, PUnit.unit)
+      = some (bwdKernelDPG s V DO Delta BD NCTX (qRow + i.val) (kRow + j.val)) := by
+  simp only [bwdInnerDpG, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.expandDim_data, TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    Tile.dot, Tile.transpose, bwdKernelDPG, bwdKernelDOG, bwdKernelVG, bwdKernelDiG,
+    NumericDType.add, NumericDType.sub,
+    WithBot.realAdd, WithBot.realSub, Option.map₂_some_some, WithBot.sum_someTerm_eq_some,
+    Option.map₂_some_coe, Option.map₂_coe_some]
+  congr 1
+  ring
+
+/-- Cell value of the `ds` tile (matches `bwdKernelDSG`). -/
+theorem bwdInnerDsG_cell (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (i j : Fin BM) :
+    (bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data (i, j, PUnit.unit)
+      = some (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (qRow + i.val) (kRow + j.val)) := by
+  simp only [bwdInnerDsG, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar,
+    NumericDType.mul, WithBot.realMul]
+  rw [bwdInnerPG_cell, bwdInnerDpG_cell]
+  simp only [bwdKernelDSG, Option.map₂_some_some, Option.map₂_some_coe]
+
+/-- General `dv` accumulator delta after the inner body: `acc + dot((trans(p.to
+fp16)).to real, do)`.  Cell `(jL,e)` adds `Σ_iL fp16(pG (qRow+iL) (kRow+jL))·
+doG (qRow+iL) e` to the prior accumulator cell `acc[jL,e]`. -/
+noncomputable def bwdInnerDvG (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD]) :
+    Tile .real [BM, BD] :=
+  Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    acc
+    (Tile.dot []
+      (⟨fun idx : TileIndex [BM, BM] =>
+          FloatDType.fp16.cast FloatDType.real
+            ((Tile.transpose []
+              (⟨fun jdx : TileIndex [BM, BM] =>
+                  FloatDType.real.cast FloatDType.fp16 ((bwdInnerPG s Q K M BM BD NCTX qRow kRow sc).data jdx)⟩
+                : Tile .fp16 [BM, BM])).data idx)⟩ : Tile .real [BM, BM])
+      (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩
+        : Tile .real [BM, BD]))
+
+/-- General `dk` accumulator delta: `acc + dot((trans(ds.to fp16)).to real, q)`. -/
+noncomputable def bwdInnerDkG (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD]) :
+    Tile .real [BM, BD] :=
+  Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    acc
+    (Tile.dot []
+      (⟨fun idx : TileIndex [BM, BM] =>
+          FloatDType.fp16.cast FloatDType.real
+            ((Tile.transpose []
+              (⟨fun jdx : TileIndex [BM, BM] =>
+                  FloatDType.real.cast FloatDType.fp16 ((bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data jdx)⟩
+                : Tile .fp16 [BM, BM])).data idx)⟩ : Tile .real [BM, BM])
+      (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩
+        : Tile .real [BM, BD]))
+
+/-- General `dq` register tile: `dq_loaded + dot((ds.to fp16).to real, k)`, where
+`dq_loaded[iL,e] = DQ[bwdKBase s + (qRow+iL)·BD + e]`. -/
+noncomputable def bwdInnerDqG (s : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) : Tile .real [BM, BD] :=
+  Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    (⟨fun idx : TileIndex [BM, BD] =>
+        some (s.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩ : Tile .real [BM, BD])
+    (Tile.dot []
+      (⟨fun idx : TileIndex [BM, BM] =>
+          FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 ((bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data idx))⟩
+        : Tile .real [BM, BM])
+      (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + idx.1.val) idx.2.1.val)⟩
+        : Tile .real [BM, BD]))
+
+/-- Cell value of the `dv` accumulator delta:
+`dv[jL,e] = acc[jL,e] + Σ_iL fp16(pG (qRow+iL) (kRow+jL))·doG (qRow+iL) e`. -/
+theorem bwdInnerDvG_cell (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD]) (j : Fin BM) (e : Fin BD) :
+    (bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc acc).data (j, e, PUnit.unit)
+      = Option.map₂ (· + ·) (acc.data (j, e, PUnit.unit))
+          (some (∑ iL : Fin BM,
+            bwdFp16 (bwdKernelPG s Q K M BD NCTX sc (qRow + iL.val) (kRow + j.val)) *
+              bwdKernelDOG s DO BD (qRow + iL.val) e.val)) := by
+  simp only [bwdInnerDvG, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, WithBot.realAdd]
+  rw [Tile.dot_nil_data]
+  have hsum : (∑ iL : Fin BM, Option.map₂ (· * ·)
+        ((⟨fun idx : TileIndex [BM, BM] =>
+            FloatDType.fp16.cast FloatDType.real
+              ((Tile.transpose []
+                (⟨fun jdx : TileIndex [BM, BM] =>
+                    FloatDType.real.cast FloatDType.fp16 ((bwdInnerPG s Q K M BM BD NCTX qRow kRow sc).data jdx)⟩
+                  : Tile .fp16 [BM, BM])).data idx)⟩ : Tile .real [BM, BM]).data (j, iL, PUnit.unit))
+        ((⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩
+            : Tile .real [BM, BD]).data (iL, e, PUnit.unit)) : WithBot ℝ)
+      = some (∑ iL : Fin BM,
+          bwdFp16 (bwdKernelPG s Q K M BD NCTX sc (qRow + iL.val) (kRow + j.val)) *
+            bwdKernelDOG s DO BD (qRow + iL.val) e.val) := by
+    rw [← WithBot.sum_someTerm_eq_some]
+    refine Finset.sum_congr rfl (fun iL _ => ?_)
+    simp only [Tile.transpose]
+    rw [bwdInnerPG_cell, bwd_fp16_roundtrip]
+    simp only [Option.map₂_some_some]
+  rw [hsum]
+
+/-- Cell value of the `dk` accumulator delta. -/
+theorem bwdInnerDkG_cell (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (acc : Tile .real [BM, BD]) (j : Fin BM) (e : Fin BD) :
+    (bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc acc).data (j, e, PUnit.unit)
+      = Option.map₂ (· + ·) (acc.data (j, e, PUnit.unit))
+          (some (∑ iL : Fin BM,
+            bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (qRow + iL.val) (kRow + j.val)) *
+              bwdKernelQG s Q BD (qRow + iL.val) e.val)) := by
+  simp only [bwdInnerDkG, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, WithBot.realAdd]
+  rw [Tile.dot_nil_data]
+  have hsum : (∑ iL : Fin BM, Option.map₂ (· * ·)
+        ((⟨fun idx : TileIndex [BM, BM] =>
+            FloatDType.fp16.cast FloatDType.real
+              ((Tile.transpose []
+                (⟨fun jdx : TileIndex [BM, BM] =>
+                    FloatDType.real.cast FloatDType.fp16 ((bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data jdx)⟩
+                  : Tile .fp16 [BM, BM])).data idx)⟩ : Tile .real [BM, BM]).data (j, iL, PUnit.unit))
+        ((⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩
+            : Tile .real [BM, BD]).data (iL, e, PUnit.unit)) : WithBot ℝ)
+      = some (∑ iL : Fin BM,
+          bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (qRow + iL.val) (kRow + j.val)) *
+            bwdKernelQG s Q BD (qRow + iL.val) e.val) := by
+    rw [← WithBot.sum_someTerm_eq_some]
+    refine Finset.sum_congr rfl (fun iL _ => ?_)
+    simp only [Tile.transpose]
+    rw [bwdInnerDsG_cell, bwd_fp16_roundtrip]
+    simp only [Option.map₂_some_some]
+  rw [hsum]
+
+/-- Cell value of the `dq` tile:
+`dq[iL,e] = DQ[bwdKBase + (qRow+iL)·BD + e] + Σ_jL fp16(dsG (qRow+iL) (kRow+jL))·kG (kRow+jL) e`. -/
+theorem bwdInnerDqG_cell (s : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD NCTX qRow kRow : Nat) (sc : ℝ) (i : Fin BM) (e : Fin BD) :
+    (bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc).data (i, e, PUnit.unit)
+      = some (s.readMem DQ (bwdKBase s + (qRow + i.val) * BD + e.val) +
+          ∑ jL : Fin BM,
+            bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (qRow + i.val) (kRow + jL.val)) *
+              bwdKernelKG s K BD (kRow + jL.val) e.val) := by
+  simp only [bwdInnerDqG, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, WithBot.realAdd]
+  rw [Tile.dot_nil_data]
+  have hsum : (∑ jL : Fin BM, Option.map₂ (· * ·)
+        ((⟨fun idx : TileIndex [BM, BM] =>
+            FloatDType.fp16.cast FloatDType.real
+              (FloatDType.real.cast FloatDType.fp16 ((bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data idx))⟩
+          : Tile .real [BM, BM]).data (i, jL, PUnit.unit))
+        ((⟨fun idx : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + idx.1.val) idx.2.1.val)⟩
+            : Tile .real [BM, BD]).data (jL, e, PUnit.unit)) : WithBot ℝ)
+      = some (∑ jL : Fin BM,
+          bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (qRow + i.val) (kRow + jL.val)) *
+            bwdKernelKG s K BD (kRow + jL.val) e.val) := by
+    rw [← WithBot.sum_someTerm_eq_some]
+    refine Finset.sum_congr rfl (fun jL _ => ?_)
+    show Option.map₂ (· * ·)
+        (FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 ((bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc).data (i, jL, PUnit.unit))))
+        (some (bwdKernelKG s K BD (kRow + jL.val) e.val)) = _
+    rw [bwdInnerDsG_cell, bwd_fp16_roundtrip]
+    simp only [Option.map₂_some_some]
+  rw [hsum]
+  simp only [Option.map₂_some_some]
+
+
+
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
