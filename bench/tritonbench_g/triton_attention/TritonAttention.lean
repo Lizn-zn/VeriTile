@@ -7677,6 +7677,48 @@ theorem bwd_where_eval (s : BlockState) (BM BN : Nat)
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
+/-- **General `tl.where(offs_m_curr ≥ offs_n, qk, -inf)` eval** with arbitrary
+`offs_n[j] = gn j` (the general outer body sets `offs_n[j] = kRow + j`).  Kept
+lanes satisfy `gn j ≤ gm i`. -/
+theorem bwd_where_evalG (s : BlockState) (BM BN : Nat)
+    (gm : Fin BM → Nat) (gn : Fin BN → Nat) (qktile : Tile .real [BM, BN])
+    (hom : s.regs .nat [BM] "offs_m_curr" = some (Tile.vec gm))
+    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec gn))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m_curr"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+        (Op.ref .real [BM, BN] "qk") (Op.broadcast Op.negInf [BM, BN])) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          if gn idx.2.1 ≤ gm idx.1 then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
+  have hexpM : @evalOp TileDType.nat [BM, 1]
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m_curr")) s
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec gm)) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hom
+  have hexpN : @evalOp TileDType.nat [1, BN]
+      (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) s
+        = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec gn)) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hon
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast Op.negInf [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where, ta_evalOp_ge]
+  simp only [evalOp_ref, hexpM, hexpN, hqk, hbcast,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.cop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, Tile.vec,
+    ComparableDType.nat]
+  by_cases h : gn idx.2.1 ≤ gm idx.1
+  · rw [if_pos (by simpa using h)]; simp [h]
+  · rw [if_neg (by simpa using h)]; simp [h]
+
+
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
 /-- **`m = tl.load(m_ptrs + offs_m_curr)` statement eval** (and the analogous
 `Di = tl.load(D_ptrs + offs_m_curr)`). `m_ptrs` holds the scalar pointer
 `(region, regBase)`; with `offs_m_curr[i] = gm i` the load reads
@@ -8889,6 +8931,7 @@ theorem bwdInnerDqG_cell (s : BlockState) (Q K V DO M Delta DQ : RegionName)
         (some (bwdKernelKG s K BD (kRow + jL.val) e.val)) = _
     rw [bwdInnerDsG_cell, bwd_fp16_roundtrip]
     simp only [Option.map₂_some_some]
+
   rw [hsum]
   simp only [Option.map₂_some_some]
 
@@ -9419,6 +9462,684 @@ private theorem foldl_writeMem_other_region {α : Type} (W : RegionName)
       intro s R o hRW
       rw [List.foldl_cons, ih _ _ _ hRW, BlockState.writeMem]
       simp only [hRW, false_and, if_false]
+
+/-- A `writeMem` scatter over the same region preserves any offset disjoint from
+every written offset (no-mask form matching the `bwd` `DQ` store). -/
+private theorem foldl_writeMem_disjoint_offset {α : Type} (W : RegionName)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (l : List α) :
+    ∀ (s : BlockState) (o : Nat), (∀ k, k ∈ l → o ≠ offsetFn k) →
+      ((l.foldl (fun acc k => acc.writeMem W (offsetFn k) (valueFn k)) s).mem W o)
+        = s.mem W o := by
+  induction l with
+  | nil => intro s o _; rfl
+  | cons hd tl ih =>
+      intro s o hoff
+      rw [List.foldl_cons,
+        ih _ _ (fun k hk => hoff k (List.mem_cons_of_mem hd hk)), BlockState.writeMem]
+      simp only [true_and, if_neg (hoff hd List.mem_cons_self)]
+
+
+
+/-! ### ════════ General inner Q-block step (Phase 2, item 3) ════════
+
+Dimension-general (`BM`/`BD`) clone of `bwdInnerBody_step'`, parametric over the
+counter `start_m = qRow` (global query-block base row), the key-block base row
+`kRow = lo = start_n·BM`, and arbitrary prior `dv`/`dk` accumulator tiles.  The
+body is structurally `bwdInnerBodyG`; the proof reuses the general statement-evals
+and register tiles built above.  We split `bwdInnerBodyG` into the same four
+chunks for heartbeat budget. -/
+
+/-- General chunk slices of `bwdInnerBodyG`. -/
+private noncomputable def bwdInnerChunk1G (sc : ℝ) (BM BD : Nat) : List Stmt :=
+  (bwdInnerBodyG sc BM BD).take 5
+private noncomputable def bwdInnerChunk2G (sc : ℝ) (BM BD : Nat) : List Stmt :=
+  ((bwdInnerBodyG sc BM BD).drop 5).take 5
+private noncomputable def bwdInnerChunk3G (sc : ℝ) (BM BD : Nat) : List Stmt :=
+  ((bwdInnerBodyG sc BM BD).drop 10).take 5
+private noncomputable def bwdInnerChunk4G (sc : ℝ) (BM BD : Nat) : List Stmt :=
+  (bwdInnerBodyG sc BM BD).drop 15
+
+private theorem bwdInnerBody_chunksG (sc : ℝ) (BM BD : Nat) :
+    bwdInnerBodyG sc BM BD
+      = bwdInnerChunk1G sc BM BD ++ bwdInnerChunk2G sc BM BD
+        ++ bwdInnerChunk3G sc BM BD ++ bwdInnerChunk4G sc BM BD := by
+  unfold bwdInnerChunk1G bwdInnerChunk2G bwdInnerChunk3G bwdInnerChunk4G
+  rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General chunk 1 step.** -/
+private theorem bwdInnerChunk1_stepG (s sin : BlockState) (Q K M : RegionName)
+    (BM BD D0 NCTX qRow kRow : Nat) (sc : ℝ)
+    (hbdvd : BD ∣ bwdKBase s)
+    (hrow : ∀ i : Fin BM, bwdKBase s / BD + qRow + i.val < D0)
+    (hmem : sin.mem = s.mem)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar qRow))
+    (hom : sin.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => i.val)))
+    (hon : sin.regs .nat [BM] "offs_n" = some (Tile.vec (fun j : Fin BM => kRow + j.val)))
+    (hqptr : sin.regs .blockPtr [BM, BD] "q_tile_ptr"
+      = some (bwdPtrTileG Q (bwdKBase s) D0 BM BD qRow))
+    (hk : sin.regs .real [BM, BD] "k"
+      = some (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + ij.1.val) ij.2.1.val)⟩))
+    (hmptr : sin.regs .ptr [] "m_ptrs" = some (Tile.scalar (M, s.pids 0 * NCTX))) :
+    ∃ s1, stepStmts (bwdInnerChunk1G sc BM BD) sin = some s1
+      ∧ s1.pids = sin.pids ∧ s1.mem = sin.mem ∧ s1.undef = sin.undef
+      ∧ s1.regs .nat [BM] "offs_m_curr" = some (Tile.vec (fun i : Fin BM => qRow + i.val))
+      ∧ s1.regs .real [BM, BD] "q"
+          = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩)
+      ∧ s1.regs .real [BM, BM] "qk" = some (bwdInnerQk1G s Q K BM BD qRow kRow)
+      ∧ s1.regs .real [BM] "m"
+          = some (⟨fun i : TileIndex [BM] => some (bwdKernelMG s M NCTX (qRow + i.1.val))⟩)
+      ∧ (∀ {dt sh nm}, nm ≠ "offs_m_curr" → nm ≠ "q" → nm ≠ "qk" → nm ≠ "m" →
+          s1.regs dt sh nm = sin.regs dt sh nm) := by
+  unfold bwdInnerChunk1G bwdInnerBodyG
+  simp only [List.take]
+  have hvecmc : evalOp (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_m")
+      (Op.ref .nat [BM] "offs_m")) sin = some (Tile.vec (fun i : Fin BM => qRow + i.val)) := by
+    rw [bwd_offsmcurr_eval sin BM qRow (fun i : Fin BM => i.val) hsm hom]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hvecmc)]
+  set s0 := sin.setReg "offs_m_curr" .nat [BM] (Tile.vec (fun i : Fin BM => qRow + i.val)) with hs0
+  have homc0 : s0.regs .nat [BM] "offs_m_curr" = some (Tile.vec (fun i : Fin BM => qRow + i.val)) := by
+    rw [hs0]; simp only [BlockState.setReg_same]
+  -- q load
+  rw [stepStmts.cons_some (show stepStmt _ s0
+      = some (s0.setReg "q" .real [BM, BD]
+          (⟨fun idx : TileIndex [BM, BD] =>
+            some (s.readMem Q (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩)) from
+    stepStmt_assign_eq_some
+      (bwd_load_bc_evalG Q (bwdKBase s) D0 BM BD qRow (Op.ref .blockPtr [BM, BD] "q_tile_ptr") s s0
+        hbdvd (by rw [hs0]; exact hmem) hrow
+        (by rw [evalOp_ref, hs0];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hqptr)))]
+  set s1 := s0.setReg "q" .real [BM, BD]
+    (⟨fun idx : TileIndex [BM, BD] =>
+      some (s.readMem Q (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩) with hs1
+  -- qk dot
+  rw [stepStmts.cons_some (show stepStmt _ s1
+      = some (s1.setReg "qk" .real [BM, BM] (bwdInnerQkG s Q K BM BD qRow kRow)) from
+    stepStmt_assign_eq_some (by
+      rw [bwd_dot_trans_evalG s1 BM BD "q" "k"
+        (⟨fun idx : TileIndex [BM, BD] => some (s.readMem Q (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩)
+        (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + ij.1.val) ij.2.1.val)⟩)
+        (by rw [hs1]; simp only [BlockState.setReg_same])
+        (by rw [hs1, hs0];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hk)]
+      rfl))]
+  set s2 := s1.setReg "qk" .real [BM, BM] (bwdInnerQkG s Q K BM BD qRow kRow) with hs2
+  -- qk where-mask
+  rw [stepStmts.cons_some (show stepStmt _ s2
+      = some (s2.setReg "qk" .real [BM, BM] (bwdInnerQk1G s Q K BM BD qRow kRow)) from
+    stepStmt_assign_eq_some (by
+      have := bwd_where_evalG s2 BM BM (fun i : Fin BM => qRow + i.val) (fun j : Fin BM => kRow + j.val)
+        (bwdInnerQkG s Q K BM BD qRow kRow)
+        (by rw [hs2, hs1];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact homc0)
+        (by rw [hs2, hs1, hs0];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hon)
+        (by rw [hs2]; simp only [BlockState.setReg_same])
+      rw [this]; refine congrArg some ?_; ext idx; simp only [bwdInnerQk1G]))]
+  set s3 := s2.setReg "qk" .real [BM, BM] (bwdInnerQk1G s Q K BM BD qRow kRow) with hs3
+  have hs3mem : ∀ R o, s3.readMem R o = s.readMem R o := by
+    intro R o; rw [hs3, hs2, hs1, hs0]
+    simp only [BlockState.readMem, BlockState.setReg_mem, hmem]
+  -- m load
+  rw [stepStmts.cons_some (show stepStmt _ s3
+      = some (s3.setReg "m" .real [BM]
+          (⟨fun i : TileIndex [BM] => some (bwdKernelMG s M NCTX (qRow + i.1.val))⟩)) from
+    stepStmt_assign_eq_some (by
+      have hml := bwd_ptr_load_eval s3 BM "m_ptrs" M (s.pids 0 * NCTX)
+        (fun i : Fin BM => qRow + i.val)
+        (by rw [hs3, hs2, hs1, hs0];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hmptr)
+        (by rw [hs3, hs2, hs1];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact homc0)
+      rw [hml]; refine congrArg some ?_; ext i
+      simp only [bwdKernelMG, hs3mem M (s.pids 0 * NCTX + (qRow + i.1.val))])),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · rfl
+  · rw [hs3, hs2, hs1]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact homc0
+  · rw [hs3, hs2]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    rw [hs1]; simp only [BlockState.setReg_same]
+    refine congrArg some ?_; ext idx; simp only [bwdKernelQG]
+  · rw [hs3]; simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true]
+  · simp only [BlockState.setReg_same]
+  · intro dt sh nm h1 h2 h3 h4
+    rw [hs3, hs2, hs1, hs0]
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h2,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h1]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General chunk 2 step.** Steps `p`, `do_val`, `dv`-accumulate (onto prior
+`accDv`), `Di`, `dp`-init. -/
+private theorem bwdInnerChunk2_stepG (s sin : BlockState) (Q K M DO Delta : RegionName)
+    (BM BD D0 NCTX qRow kRow : Nat) (sc : ℝ) (accDv : Tile .real [BM, BD])
+    (hbdvd : BD ∣ bwdKBase s)
+    (hrow : ∀ i : Fin BM, bwdKBase s / BD + qRow + i.val < D0)
+    (hmem : sin.mem = s.mem)
+    (homc : sin.regs .nat [BM] "offs_m_curr" = some (Tile.vec (fun i : Fin BM => qRow + i.val)))
+    (hqk : sin.regs .real [BM, BM] "qk" = some (bwdInnerQk1G s Q K BM BD qRow kRow))
+    (hm : sin.regs .real [BM] "m"
+      = some (⟨fun i : TileIndex [BM] => some (bwdKernelMG s M NCTX (qRow + i.1.val))⟩))
+    (hdoptr : sin.regs .blockPtr [BM, BD] "do_tile_ptr"
+      = some (bwdPtrTileG DO (bwdKBase s) D0 BM BD qRow))
+    (hdv : sin.regs .real [BM, BD] "dv" = some accDv)
+    (hDptr : sin.regs .ptr [] "D_ptrs" = some (Tile.scalar (Delta, s.pids 0 * NCTX))) :
+    ∃ s2, stepStmts (bwdInnerChunk2G sc BM BD) sin = some s2
+      ∧ s2.pids = sin.pids ∧ s2.mem = sin.mem ∧ s2.undef = sin.undef
+      ∧ s2.regs .real [BM, BM] "p" = some (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc)
+      ∧ s2.regs .real [BM, BD] "do_val"
+          = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩)
+      ∧ s2.regs .real [BM, BD] "dv" = some (bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc accDv)
+      ∧ s2.regs .real [BM, BM] "dp"
+          = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (⟨fun _ : TileIndex [BM, BM] => some (0:ℝ)⟩ : Tile .real [BM, BM])
+              (Tile.expandDim ⟨1, by simp⟩
+                (⟨fun i : TileIndex [BM] => some (bwdKernelDiG s Delta NCTX (qRow + i.1.val))⟩ : Tile .real [BM])))
+      ∧ (∀ {dt sh nm}, nm ≠ "p" → nm ≠ "do_val" → nm ≠ "dv" → nm ≠ "Di" → nm ≠ "dp" →
+          s2.regs dt sh nm = sin.regs dt sh nm) := by
+  unfold bwdInnerChunk2G bwdInnerBodyG
+  simp only [List.drop, List.take]
+  -- p = exp(qk·sc − m[:,None])
+  rw [stepStmts.cons_some (show stepStmt _ sin
+      = some (sin.setReg "p" .real [BM, BM] (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc)) from
+    stepStmt_assign_eq_some (by
+      rw [bwd_p_eval sin BM BM (by simp) sc (bwdInnerQk1G s Q K BM BD qRow kRow)
+        (⟨fun i : TileIndex [BM] => some (bwdKernelMG s M NCTX (qRow + i.1.val))⟩) hqk hm]; rfl))]
+  set s_p := sin.setReg "p" .real [BM, BM] (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc) with hs_p
+  -- do_val load
+  rw [stepStmts.cons_some (show stepStmt _ s_p
+      = some (s_p.setReg "do_val" .real [BM, BD]
+          (⟨fun idx : TileIndex [BM, BD] =>
+            some (s.readMem DO (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩)) from
+    stepStmt_assign_eq_some
+      (bwd_load_bc_evalG DO (bwdKBase s) D0 BM BD qRow (Op.ref .blockPtr [BM, BD] "do_tile_ptr") s s_p
+        hbdvd (by rw [hs_p]; exact hmem) hrow
+        (by rw [evalOp_ref, hs_p];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hdoptr)))]
+  set s_do := s_p.setReg "do_val" .real [BM, BD]
+    (⟨fun idx : TileIndex [BM, BD] =>
+      some (s.readMem DO (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩) with hs_do
+  -- dv accumulate
+  rw [stepStmts.cons_some (show stepStmt _ s_do
+      = some (s_do.setReg "dv" .real [BM, BD] (bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc accDv)) from
+    stepStmt_assign_eq_some
+      (bwd_trans_fp16_dot_evalG s_do BM BD "dv" "p" "do_val"
+        accDv
+        (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc)
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩)
+        (by rw [hs_do, hs_p];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hdv)
+        (by rw [hs_do, hs_p];
+            simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+              not_false_eq_true])
+        (by rw [hs_do]; simp only [BlockState.setReg_same]
+            refine congrArg some ?_; ext idx; simp only [bwdKernelDOG])))]
+  set s_dv := s_do.setReg "dv" .real [BM, BD] (bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc accDv) with hs_dv
+  have hs_dvmem : ∀ R o, s_dv.readMem R o = s.readMem R o := by
+    intro R o; rw [hs_dv, hs_do, hs_p]
+    simp only [BlockState.readMem, BlockState.setReg_mem, hmem]
+  -- Di load
+  rw [stepStmts.cons_some (show stepStmt _ s_dv
+      = some (s_dv.setReg "Di" .real [BM]
+          (⟨fun i : TileIndex [BM] => some (s.readMem Delta (s.pids 0 * NCTX + (qRow + i.1.val)))⟩)) from
+    stepStmt_assign_eq_some (by
+      have hdil := bwd_ptr_load_eval s_dv BM "D_ptrs" Delta (s.pids 0 * NCTX)
+        (fun i : Fin BM => qRow + i.val)
+        (by rw [hs_dv, hs_do, hs_p];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact hDptr)
+        (by rw [hs_dv, hs_do, hs_p];
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            exact homc)
+      rw [hdil]; refine congrArg some ?_; ext i
+      simp only [hs_dvmem Delta (s.pids 0 * NCTX + (qRow + i.1.val))]))]
+  set s_Di := s_dv.setReg "Di" .real [BM]
+    (⟨fun i : TileIndex [BM] => some (s.readMem Delta (s.pids 0 * NCTX + (qRow + i.1.val)))⟩) with hs_Di
+  -- dp init
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (bwd_dpinit_eval s_Di BM BM (by simp)
+      (⟨fun i : TileIndex [BM] => some (s.readMem Delta (s.pids 0 * NCTX + (qRow + i.1.val)))⟩)
+      (by rw [hs_Di]; simp only [BlockState.setReg_same]))), stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · rfl
+  · rw [hs_Di, hs_dv, hs_do]
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    rw [hs_p]; simp only [BlockState.setReg_same]
+  · rw [hs_Di, hs_dv]
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    rw [hs_do]; simp only [BlockState.setReg_same]
+    refine congrArg some ?_; ext idx; simp only [bwdKernelDOG]
+  · rw [hs_Di]
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true]
+    rw [hs_dv]; simp only [BlockState.setReg_same]
+  · simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    refine congrArg _ ?_
+    refine congrArg _ ?_
+    ext i; simp only [bwdKernelDiG]
+  · intro dt sh nm h1 h2 h3 h4 h5
+    rw [hs_Di, hs_dv, hs_do, hs_p]
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h5,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h2,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h1]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General chunk 3 step.** Steps `dp`-dot, `ds`, `dk`-accumulate (onto prior
+`accDk`), `dq` load, `dq`-accumulate. -/
+private theorem bwdInnerChunk3_stepG (s sin : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD D0 NCTX qRow kRow : Nat) (sc : ℝ) (accDk : Tile .real [BM, BD])
+    (hbdvd : BD ∣ bwdKBase s)
+    (hmem : sin.mem = s.mem)
+    (hp : sin.regs .real [BM, BM] "p" = some (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc))
+    (hdoval : sin.regs .real [BM, BD] "do_val"
+      = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩))
+    (hdp : sin.regs .real [BM, BM] "dp"
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (⟨fun _ : TileIndex [BM, BM] => some (0:ℝ)⟩ : Tile .real [BM, BM])
+          (Tile.expandDim ⟨1, by simp⟩
+            (⟨fun i : TileIndex [BM] => some (bwdKernelDiG s Delta NCTX (qRow + i.1.val))⟩ : Tile .real [BM]))))
+    (hdk : sin.regs .real [BM, BD] "dk" = some accDk)
+    (hq : sin.regs .real [BM, BD] "q"
+      = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩))
+    (hv : sin.regs .real [BM, BD] "v"
+      = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelVG s V BD (kRow + idx.1.val) idx.2.1.val)⟩))
+    (hk : sin.regs .real [BM, BD] "k"
+      = some (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + idx.1.val) idx.2.1.val)⟩))
+    (hdqptr : sin.regs .blockPtr [BM, BD] "dq_tile_ptr"
+      = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow)) :
+    ∃ s3, stepStmts (bwdInnerChunk3G sc BM BD) sin = some s3
+      ∧ s3.pids = sin.pids ∧ s3.mem = sin.mem ∧ s3.undef = sin.undef
+      ∧ s3.regs .real [BM, BD] "dk" = some (bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc accDk)
+      ∧ s3.regs .real [BM, BD] "dq" = some (bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc)
+      ∧ s3.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow)
+      ∧ (∀ {dt sh nm}, nm ≠ "dp" → nm ≠ "ds" → nm ≠ "dk" → nm ≠ "dq" →
+          s3.regs dt sh nm = sin.regs dt sh nm) := by
+  unfold bwdInnerChunk3G bwdInnerBodyG
+  simp only [List.drop, List.take]
+  -- dp = dp + dot(do, trans(v))  (defeq bwdInnerDpG)
+  rw [stepStmts.cons_some (show stepStmt _ sin
+      = some (sin.setReg "dp" .real [BM, BM] (bwdInnerDpG s V DO Delta BM BD NCTX qRow kRow)) from
+    stepStmt_assign_eq_some
+      (bwd_dpdot_evalG sin BM BD
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (⟨fun _ : TileIndex [BM, BM] => some (0:ℝ)⟩ : Tile .real [BM, BM])
+          (Tile.expandDim ⟨1, by simp⟩
+            (⟨fun i : TileIndex [BM] => some (bwdKernelDiG s Delta NCTX (qRow + i.1.val))⟩ : Tile .real [BM])))
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelDOG s DO BD (qRow + idx.1.val) idx.2.1.val)⟩)
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelVG s V BD (kRow + idx.1.val) idx.2.1.val)⟩)
+        hdp hdoval hv))]
+  set s1 := sin.setReg "dp" .real [BM, BM] (bwdInnerDpG s V DO Delta BM BD NCTX qRow kRow) with hs1
+  -- ds = (p · dp) · sc  (defeq bwdInnerDsG)
+  rw [stepStmts.cons_some (show stepStmt _ s1
+      = some (s1.setReg "ds" .real [BM, BM] (bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc)) from
+    stepStmt_assign_eq_some
+      (bwd_ds_evalG s1 BM sc (bwdInnerPG s Q K M BM BD NCTX qRow kRow sc) (bwdInnerDpG s V DO Delta BM BD NCTX qRow kRow)
+        (by rw [hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hp)
+        (by rw [hs1]; simp only [BlockState.setReg_same])))]
+  set s2 := s1.setReg "ds" .real [BM, BM] (bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc) with hs2
+  -- dk accumulate
+  rw [stepStmts.cons_some (show stepStmt _ s2
+      = some (s2.setReg "dk" .real [BM, BD] (bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc accDk)) from
+    stepStmt_assign_eq_some
+      (bwd_trans_fp16_dot_evalG s2 BM BD "dk" "ds" "q"
+        accDk
+        (bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc)
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelQG s Q BD (qRow + idx.1.val) idx.2.1.val)⟩)
+        (by rw [hs2, hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hdk)
+        (by rw [hs2]; simp only [BlockState.setReg_same])
+        (by rw [hs2, hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hq)))]
+  set s3 := s2.setReg "dk" .real [BM, BD] (bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc accDk) with hs3
+  -- dq load
+  rw [stepStmts.cons_some (show stepStmt _ s3
+      = some (s3.setReg "dq" .real [BM, BD]
+          (⟨fun idx : TileIndex [BM, BD] =>
+            some (s.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩)) from
+    stepStmt_assign_eq_some
+      (bwd_load_nobc_evalG DQ (bwdKBase s) D0 BM BD qRow (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") s s3
+        hbdvd (by rw [hs3, hs2, hs1]; exact hmem)
+        (by rw [evalOp_ref, hs3, hs2, hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hdqptr)))]
+  set s4 := s3.setReg "dq" .real [BM, BD]
+    (⟨fun idx : TileIndex [BM, BD] =>
+      some (s.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩) with hs4
+  -- dq accumulate
+  rw [stepStmts.cons_some (show stepStmt _ s4
+      = some (s4.setReg "dq" .real [BM, BD] (bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc)) from
+    stepStmt_assign_eq_some
+      (bwd_fp16_dot_evalG s4 BM BD "dq" "ds" "k"
+        (⟨fun idx : TileIndex [BM, BD] =>
+          some (s.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val))⟩)
+        (bwdInnerDsG s Q K V DO M Delta BM BD NCTX qRow kRow sc)
+        (⟨fun idx : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + idx.1.val) idx.2.1.val)⟩)
+        (by rw [hs4]; simp only [BlockState.setReg_same])
+        (by rw [hs4, hs3]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true];
+            rw [hs2]; simp only [BlockState.setReg_same])
+        (by rw [hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hk))),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · rfl
+  · rw [hs4, hs3]; simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true]
+  · rw [hs4]; simp only [BlockState.setReg_same]
+  · rw [hs4, hs3, hs2, hs1]; simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hdqptr
+  · intro dt sh nm h1 h2 h3 h4
+    rw [hs4, hs3, hs2, hs1]
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h2,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h1]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General chunk 4 step.** Steps the `dq` store and the four pointer advances.
+The final `DQ` memory holds `dqSpec` at each lane; memory in any other region is
+unchanged; `q`/`do`/`dq` block pointers continue to exist; all other registers are
+preserved. -/
+private theorem bwdInnerChunk4_stepG (s sin : BlockState) (Q DO DQ : RegionName)
+    (BM BD D0 qRow : Nat) (sc : ℝ)
+    (hbdvd : BD ∣ bwdKBase s)
+    (dqt : Tile .real [BM, BD]) (dqSpec : TileIndex [BM, BD] → ℝ)
+    (hmem : sin.mem = s.mem)
+    (hdq : sin.regs .real [BM, BD] "dq" = some dqt)
+    (hdqcell : ∀ idx : TileIndex [BM, BD], (dqt.data idx).unbotD 0 = dqSpec idx)
+    (hdqptr : sin.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow))
+    (hdqptrs : ∃ t, sin.regs .ptr [BM, BD] "dq_ptrs" = some t)
+    (hqptr : sin.regs .blockPtr [BM, BD] "q_tile_ptr" = some (bwdPtrTileG Q (bwdKBase s) D0 BM BD qRow))
+    (hdoptr : sin.regs .blockPtr [BM, BD] "do_tile_ptr" = some (bwdPtrTileG DO (bwdKBase s) D0 BM BD qRow)) :
+    ∃ s4, stepStmts (bwdInnerChunk4G sc BM BD) sin = some s4
+      ∧ s4.pids = sin.pids ∧ s4.undef = sin.undef
+      ∧ (∀ idx : TileIndex [BM, BD],
+          s4.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) = dqSpec idx)
+      ∧ (∀ (R : RegionName) (o : Nat), R ≠ DQ → s4.mem R o = sin.mem R o)
+      ∧ (∀ o : Nat, (∀ idx : TileIndex [BM, BD],
+            o ≠ bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) →
+          s4.readMem DQ o = sin.readMem DQ o)
+      ∧ s4.regs .blockPtr [BM, BD] "q_tile_ptr" = some (bwdPtrTileG Q (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ s4.regs .blockPtr [BM, BD] "do_tile_ptr" = some (bwdPtrTileG DO (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ s4.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ (∃ tp, s4.regs .ptr [BM, BD] "dq_ptrs" = some tp)
+      ∧ (∀ {dt sh nm}, nm ≠ "dq" → nm ≠ "dq_ptrs" → nm ≠ "q_tile_ptr" →
+          nm ≠ "do_tile_ptr" → nm ≠ "dq_tile_ptr" → s4.regs dt sh nm = sin.regs dt sh nm) := by
+  unfold bwdInnerChunk4G bwdInnerBodyG
+  simp only [List.drop]
+  obtain ⟨tdqptrs, htdqptrs⟩ := hdqptrs
+  set tqp := bwdPtrTileG Q (bwdKBase s) D0 BM BD qRow with htqpdef
+  set tdop := bwdPtrTileG DO (bwdKBase s) D0 BM BD qRow with htdopdef
+  have htqp : sin.regs .blockPtr [BM, BD] "q_tile_ptr" = some tqp := hqptr
+  have htdop : sin.regs .blockPtr [BM, BD] "do_tile_ptr" = some tdop := hdoptr
+  -- store
+  rw [stepStmts.cons_some (bwd_store_dq_evalG s sin DQ (bwdKBase s) D0 BM BD qRow hbdvd dqt hdqptr hdq)]
+  set sStore := (TileShape.allIndices [BM, BD]).foldl
+    (fun acc idx => acc.writeMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val)
+      ((dqt.data idx).unbotD 0)) sin with hsStore
+  have hStpids : sStore.pids = sin.pids := by
+    rw [hsStore]; exact foldl_writeMem_pids_eq _ _ _ _ sin
+  have hStundef : sStore.undef = sin.undef := by
+    rw [hsStore]; funext R o; exact foldl_writeMem_undef DQ _ _ _ sin R o
+  have hStregs : ∀ {dt sh nm}, sStore.regs dt sh nm = sin.regs dt sh nm := by
+    intro dt sh nm; rw [hsStore]; exact BlockState.foldl_writeMem_regs _ _ _ _ sin dt sh nm
+  have hStDQ : ∀ idx : TileIndex [BM, BD],
+      sStore.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) = dqSpec idx := by
+    intro idx
+    rw [hsStore, BlockState.readMem]
+    have hinj : Function.Injective (fun idx : TileIndex [BM, BD] =>
+        bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) := by
+      rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+      simp only at h
+      have hkey : (qRow + ma) * BD + da = (qRow + mb) * BD + db := by omega
+      have hda' : da < BD := hda
+      have hdb' : db < BD := hdb
+      have hmod1 : ((qRow + ma) * BD + da) % BD = da := by
+        rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt hda'
+      have hmod2 : ((qRow + mb) * BD + db) % BD = db := by
+        rw [Nat.mul_add_mod']; exact Nat.mod_eq_of_lt hdb'
+      have hdaeq : da = db := by rw [← hmod1, ← hmod2, hkey]
+      obtain rfl : da = db := hdaeq
+      have hmeq : (qRow + ma) * BD = (qRow + mb) * BD := by omega
+      obtain rfl : ma = mb := by
+        have := Nat.eq_of_mul_eq_mul_right (by omega : 0 < BD) hmeq
+        omega
+      rfl
+    have hsc := BlockState.scatter_readback_nd (region := DQ) sin
+      (fun idx : TileIndex [BM, BD] => bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val)
+      (fun idx : TileIndex [BM, BD] => (dqt.data idx).unbotD 0) hinj idx
+    simp only [BlockState.readMem] at hsc
+    rw [hsc]; exact hdqcell idx
+  have hStother : ∀ (R : RegionName) (o : Nat), R ≠ DQ → sStore.mem R o = sin.mem R o := by
+    intro R o hRne; rw [hsStore]; exact foldl_writeMem_other_region DQ _ _ _ sin R o hRne
+  have hStdisjoint : ∀ o : Nat, (∀ idx : TileIndex [BM, BD],
+        o ≠ bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) →
+      sStore.readMem DQ o = sin.readMem DQ o := by
+    intro o hoff
+    unfold BlockState.readMem
+    rw [hsStore]
+    rw [foldl_writeMem_disjoint_offset DQ
+      (fun idx : TileIndex [BM, BD] => bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val)
+      (fun idx : TileIndex [BM, BD] => (dqt.data idx).unbotD 0)
+      (TileShape.allIndices [BM, BD]) sin o (fun k _ => hoff k)]
+  -- advances: dq_ptrs, q, do, dq_tile_ptr
+  have htdqptrsSt : sStore.regs .ptr [BM, BD] "dq_ptrs" = some tdqptrs := hStregs.trans htdqptrs
+  have htqpSt : sStore.regs .blockPtr [BM, BD] "q_tile_ptr" = some tqp := hStregs.trans htqp
+  have htdopSt : sStore.regs .blockPtr [BM, BD] "do_tile_ptr" = some tdop := hStregs.trans htdop
+  have htdqtpSt : sStore.regs .blockPtr [BM, BD] "dq_tile_ptr"
+      = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow) := hStregs.trans hdqptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BD] "dq_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BM) (Op.constNat BD))) sStore
+      = some (Tile.ptrAdd Broadcast.scalarR tdqptrs (Tile.scalar (BM * BD))) from by
+      rw [evalOp_ptrAdd]; simp only [evalOp_ref, htdqptrsSt, evalOp_mul, evalOp_constNat,
+        Option.bind_eq_bind, Option.bind_some]; rfl))]
+  set sA := sStore.setReg "dq_ptrs" .ptr [BM, BD]
+    (Tile.ptrAdd Broadcast.scalarR tdqptrs (Tile.scalar (BM * BD))) with hsA
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "q_tile_ptr") [BM, (0:Nat)]) sA
+      = some ⟨fun i => (tqp.data i).advance [BM, 0]⟩ from by
+      rw [advanceBlockPtr_eval, hsA]
+      simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        htqpSt, Option.bind_eq_bind, Option.bind_some, Nat.cast_zero]))]
+  set sB := sA.setReg "q_tile_ptr" .blockPtr [BM, BD] ⟨fun i => (tqp.data i).advance [BM, 0]⟩ with hsB
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "do_tile_ptr") [BM, (0:Nat)]) sB
+      = some ⟨fun i => (tdop.data i).advance [BM, 0]⟩ from by
+      rw [advanceBlockPtr_eval, hsB, hsA]
+      simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        htdopSt, Option.bind_eq_bind, Option.bind_some, Nat.cast_zero]))]
+  set sC := sB.setReg "do_tile_ptr" .blockPtr [BM, BD] ⟨fun i => (tdop.data i).advance [BM, 0]⟩ with hsC
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") [BM, (0:Nat)]) sC
+      = some ⟨fun i => ((bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow).data i).advance [BM, 0]⟩ from by
+      rw [advanceBlockPtr_eval, hsC, hsB, hsA]
+      simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        htdqtpSt, Option.bind_eq_bind, Option.bind_some, Nat.cast_zero])), stepStmts.nil]
+  set sD := sC.setReg "dq_tile_ptr" .blockPtr [BM, BD]
+    ⟨fun i => ((bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow).data i).advance [BM, 0]⟩ with hsD
+  have hmemD : ∀ R o, sD.mem R o = sStore.mem R o := by
+    intro R o; rw [hsD, hsC, hsB, hsA]; simp only [BlockState.setReg_mem]
+  refine ⟨sD, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [show sD.pids = sStore.pids from by rw [hsD, hsC, hsB, hsA]; rfl]; exact hStpids
+  · rw [show sD.undef = sStore.undef from by rw [hsD, hsC, hsB, hsA]; rfl]; exact hStundef
+  · intro idx
+    rw [BlockState.readMem, hmemD, ← BlockState.readMem, hStDQ idx]
+  · intro R o hRne
+    rw [hmemD, hStother R o hRne]
+  · intro o hoff
+    rw [show sD.readMem DQ o = sStore.readMem DQ o from by
+      unfold BlockState.readMem; rw [hmemD], hStdisjoint o hoff]
+  · rw [show sD.regs .blockPtr [BM, BD] "q_tile_ptr"
+          = some (⟨fun i => (tqp.data i).advance [BM, 0]⟩ : Tile .blockPtr [BM, BD]) from by
+        simp only [hsD, hsC, hsB, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true, BlockState.setReg_same],
+      htqpdef, bwdPtrTileG_advance]
+  · rw [show sD.regs .blockPtr [BM, BD] "do_tile_ptr"
+          = some (⟨fun i => (tdop.data i).advance [BM, 0]⟩ : Tile .blockPtr [BM, BD]) from by
+        simp only [hsD, hsC, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true, BlockState.setReg_same],
+      htdopdef, bwdPtrTileG_advance]
+  · rw [show sD.regs .blockPtr [BM, BD] "dq_tile_ptr"
+          = some (⟨fun i => ((bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow).data i).advance [BM, 0]⟩
+              : Tile .blockPtr [BM, BD]) from by
+        rw [hsD, BlockState.setReg_same],
+      bwdPtrTileG_advance]
+  · refine ⟨Tile.ptrAdd Broadcast.scalarR tdqptrs (Tile.scalar (BM * BD)), ?_⟩
+    rw [show sD.regs .ptr [BM, BD] "dq_ptrs" = sA.regs .ptr [BM, BD] "dq_ptrs" from by
+        rw [hsD, hsC, hsB]
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true],
+      hsA, BlockState.setReg_same]
+  · intro dt sh nm h1 h2 h3 h4 h5
+    rw [hsD, hsC, hsB, hsA]
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h5,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h4,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h3,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ h2]
+    exact hStregs
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General inner-body step.** From a state at counter `start_m = qRow` (the
+current query block) and fixed key block base `kRow`, exposing the loaded `k`/`v`
+tiles, the `q`/`do`/`dq` block pointers at row `qRow`, the `m`/`D` pointers, and
+arbitrary prior `dv`/`dk` accumulators `accDv`/`accDk`, stepping `bwdInnerBodyG`
+reaches a state whose `dv`/`dk` registers hold the block-`qRow` accumulation
+(`bwdInnerDvG`/`bwdInnerDkG` onto the priors), whose `DQ` memory holds the
+genuine `bwdInnerDqG` cell value, and which preserves `pids`/`undef`, `mem` off
+`DQ`, and every register not assigned by the body (in particular `k`/`v` and the
+KV/grad block pointers).  Generalizes `bwdInnerBody_step'`. -/
+private theorem bwd_inner_stepG (s sin : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BM BD D0 NCTX qRow kRow : Nat) (sc : ℝ)
+    (accDv accDk : Tile .real [BM, BD])
+    (hbdvd : BD ∣ bwdKBase s)
+    (hrow : ∀ i : Fin BM, bwdKBase s / BD + qRow + i.val < D0)
+    (hmem : sin.mem = s.mem)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar qRow))
+    (hom : sin.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => i.val)))
+    (hon : sin.regs .nat [BM] "offs_n" = some (Tile.vec (fun j : Fin BM => kRow + j.val)))
+    (hqptr : sin.regs .blockPtr [BM, BD] "q_tile_ptr" = some (bwdPtrTileG Q (bwdKBase s) D0 BM BD qRow))
+    (hdoptr : sin.regs .blockPtr [BM, BD] "do_tile_ptr" = some (bwdPtrTileG DO (bwdKBase s) D0 BM BD qRow))
+    (hdqptr : sin.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD qRow))
+    (hk : sin.regs .real [BM, BD] "k"
+      = some (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelKG s K BD (kRow + ij.1.val) ij.2.1.val)⟩))
+    (hv : sin.regs .real [BM, BD] "v"
+      = some (⟨fun ij : TileIndex [BM, BD] => some (bwdKernelVG s V BD (kRow + ij.1.val) ij.2.1.val)⟩))
+    (hdv : sin.regs .real [BM, BD] "dv" = some accDv)
+    (hdk : sin.regs .real [BM, BD] "dk" = some accDk)
+    (hmptr : sin.regs .ptr [] "m_ptrs" = some (Tile.scalar (M, s.pids 0 * NCTX)))
+    (hDptr : sin.regs .ptr [] "D_ptrs" = some (Tile.scalar (Delta, s.pids 0 * NCTX)))
+    (hdqptrs : ∃ t, sin.regs .ptr [BM, BD] "dq_ptrs" = some t) :
+    ∃ sF, stepStmts (bwdInnerBodyG sc BM BD) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.undef = sin.undef
+      ∧ sF.regs .real [BM, BD] "dv" = some (bwdInnerDvG s Q K M DO BM BD NCTX qRow kRow sc accDv)
+      ∧ sF.regs .real [BM, BD] "dk" = some (bwdInnerDkG s Q K V DO M Delta BM BD NCTX qRow kRow sc accDk)
+      ∧ (∀ idx : TileIndex [BM, BD],
+          sF.readMem DQ (bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val)
+            = WithBot.unbotD 0 ((bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc).data idx))
+      ∧ (∀ (R : RegionName) (o : Nat), R ≠ DQ → sF.mem R o = sin.mem R o)
+      ∧ (∀ o : Nat, (∀ idx : TileIndex [BM, BD],
+            o ≠ bwdKBase s + (qRow + idx.1.val) * BD + idx.2.1.val) →
+          sF.readMem DQ o = sin.readMem DQ o)
+      ∧ sF.regs .blockPtr [BM, BD] "q_tile_ptr" = some (bwdPtrTileG Q (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ sF.regs .blockPtr [BM, BD] "do_tile_ptr" = some (bwdPtrTileG DO (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ sF.regs .blockPtr [BM, BD] "dq_tile_ptr" = some (bwdPtrTileG DQ (bwdKBase s) D0 BM BD (qRow + BM))
+      ∧ (∃ tp, sF.regs .ptr [BM, BD] "dq_ptrs" = some tp)
+      ∧ (∀ {dt sh nm}, nm ≠ "offs_m_curr" → nm ≠ "q" → nm ≠ "qk" → nm ≠ "m" →
+          nm ≠ "p" → nm ≠ "do_val" → nm ≠ "Di" → nm ≠ "dp" → nm ≠ "ds" →
+          nm ≠ "dk" → nm ≠ "dv" → nm ≠ "dq" → nm ≠ "dq_ptrs" → nm ≠ "q_tile_ptr" →
+          nm ≠ "do_tile_ptr" → nm ≠ "dq_tile_ptr" →
+          sF.regs dt sh nm = sin.regs dt sh nm) := by
+  rw [bwdInnerBody_chunksG, List.append_assoc, List.append_assoc]
+  obtain ⟨tdqptrs, htdqptrs⟩ := hdqptrs
+  -- chunk 1
+  obtain ⟨s1, hc1, hp1pids, hp1mem, hp1undef, h1omc, h1q, h1qk, h1m, h1rest⟩ :=
+    bwdInnerChunk1_stepG s sin Q K M BM BD D0 NCTX qRow kRow sc hbdvd hrow hmem hsm hom hon hqptr hk hmptr
+  rw [stepStmts.append_some hc1]
+  have h1mem : s1.mem = s.mem := by rw [hp1mem, hmem]
+  -- chunk 2
+  obtain ⟨s2, hc2, hp2pids, hp2mem, hp2undef, h2p, h2do, h2dv, h2dp, h2rest⟩ :=
+    bwdInnerChunk2_stepG s s1 Q K M DO Delta BM BD D0 NCTX qRow kRow sc accDv hbdvd hrow h1mem h1omc h1qk h1m
+      (by rw [h1rest (by decide) (by decide) (by decide) (by decide)]; exact hdoptr)
+      (by rw [h1rest (by decide) (by decide) (by decide) (by decide)]; exact hdv)
+      (by rw [h1rest (by decide) (by decide) (by decide) (by decide)]; exact hDptr)
+  rw [stepStmts.append_some hc2]
+  have h2mem : s2.mem = s.mem := by rw [hp2mem, h1mem]
+  -- chunk 3
+  obtain ⟨s3, hc3, hp3pids, hp3mem, hp3undef, h3dk, h3dq, h3dqptr, h3rest⟩ :=
+    bwdInnerChunk3_stepG s s2 Q K V DO M Delta DQ BM BD D0 NCTX qRow kRow sc accDk hbdvd h2mem h2p h2do h2dp
+      (by rw [h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hdk)
+      (by rw [h2rest (by decide) (by decide) (by decide) (by decide) (by decide)]; exact h1q)
+      (by rw [h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hv)
+      (by rw [h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hk)
+      (by rw [h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hdqptr)
+  rw [stepStmts.append_some hc3]
+  have h3mem : s3.mem = s.mem := by rw [hp3mem, h2mem]
+  -- chunk 4
+  obtain ⟨s4, hc4, hp4pids, hp4undef, h4dq, h4mem, h4disj, h4q, h4do, h4dqp, h4dqptrs, h4rest⟩ :=
+    bwdInnerChunk4_stepG s s3 Q DO DQ BM BD D0 qRow sc hbdvd (bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc)
+      (fun idx => WithBot.unbotD 0 ((bwdInnerDqG s Q K V DO M Delta DQ BM BD NCTX qRow kRow sc).data idx))
+      h3mem h3dq (fun idx => rfl) h3dqptr
+      ⟨tdqptrs, by rw [h3rest (by decide) (by decide) (by decide) (by decide),
+            h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact htdqptrs⟩
+      (by rw [h3rest (by decide) (by decide) (by decide) (by decide),
+            h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hqptr)
+      (by rw [h3rest (by decide) (by decide) (by decide) (by decide),
+            h2rest (by decide) (by decide) (by decide) (by decide) (by decide),
+            h1rest (by decide) (by decide) (by decide) (by decide)]; exact hdoptr)
+  refine ⟨s4, hc4, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hp4pids, hp3pids, hp2pids, hp1pids]
+  · rw [hp4undef, hp3undef, hp2undef, hp1undef]
+  · rw [h4rest (by decide) (by decide) (by decide) (by decide) (by decide),
+      h3rest (by decide) (by decide) (by decide) (by decide)]
+    exact h2dv
+  · rw [h4rest (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact h3dk
+  · exact h4dq
+  · intro R o hRne
+    rw [h4mem R o hRne, hp3mem, hp2mem, hp1mem]
+  · intro o hoff
+    rw [h4disj o hoff,
+      show s3.readMem DQ o = sin.readMem DQ o from by
+        unfold BlockState.readMem; rw [h3mem, ← hmem]]
+  · exact h4q
+  · exact h4do
+  · exact h4dqp
+  · exact h4dqptrs
+  · intro dt sh nm h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+    rw [h4rest h12 h13 h14 h15 h16,
+      h3rest h8 h9 h10 h12,
+      h2rest h5 h6 h11 h7 h8,
+      h1rest h1 h2 h3 h4]
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
