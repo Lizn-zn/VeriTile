@@ -7793,6 +7793,143 @@ theorem bwdInnerDs_cell (s : BlockState) (Q K V DO M Delta : RegionName) (i j : 
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
+/-- **General** `qk = tl.dot(a, tl.trans(b))` raw-dot eval (no scale/zero-seed),
+parametric over `[BM, BD]` operand shape (result `[BM, BM]`). -/
+theorem bwd_dot_trans_evalG (s : BlockState) (BM BD : Nat) (na nb : RegName)
+    (atile btile : Tile .real [BM, BD])
+    (ha : s.regs .real [BM, BD] na = some atile)
+    (hb : s.regs .real [BM, BD] nb = some btile) :
+    @evalOp TileDType.real [BM, BM]
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] na)
+          (Op.transpose (batch := []) (Op.ref .real [BM, BD] nb))) s
+      = some (Tile.dot [] atile (Tile.transpose [] btile)) := by
+  have hbr : evalOp (Op.ref .real [BM, BD] nb) s = some btile := by rw [evalOp_ref, hb]
+  have har : evalOp (Op.ref .real [BM, BD] na) s = some atile := by rw [evalOp_ref, ha]
+  have htr : evalOp (Op.transpose (batch := []) (Op.ref .real [BM, BD] nb)) s
+      = some (Tile.transpose [] btile) := by
+    erw [evalOp_transpose [] (Op.ref .real [BM, BD] nb), hbr]; rfl
+  erw [evalOp_dot [] (Op.ref .real [BM, BD] na)
+    (Op.transpose (batch := []) (Op.ref .real [BM, BD] nb)), har, htr]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General** `acc += tl.dot((tl.trans(x.to(fp16))).to(real), y)` eval, parametric
+over `[BM, BM]` score-tile `x` and `[BM, BD]` `acc`/`y` (matches `dv`/`dk`). -/
+theorem bwd_trans_fp16_dot_evalG (s : BlockState) (BM BD : Nat) (nacc nx ny : RegName)
+    (acctile : Tile .real [BM, BD]) (xtile : Tile .real [BM, BM]) (ytile : Tile .real [BM, BD])
+    (hacc : s.regs .real [BM, BD] nacc = some acctile)
+    (hx : s.regs .real [BM, BM] nx = some xtile)
+    (hy : s.regs .real [BM, BD] ny = some ytile) :
+    @evalOp TileDType.real [BM, BD]
+        (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [BM, BD] nacc)
+          (Op.dot (batch := [])
+            (Op.castFloat .fp16 .real
+              (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx))))
+            (Op.ref .real [BM, BD] ny))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acctile
+          (Tile.dot []
+            (⟨fun idx : TileIndex [BM, BM] =>
+                FloatDType.fp16.cast FloatDType.real
+                  ((Tile.transpose []
+                    (⟨fun jdx : TileIndex [BM, BM] =>
+                        FloatDType.real.cast FloatDType.fp16 (xtile.data jdx)⟩ : Tile .fp16 [BM, BM])).data idx)⟩
+              : Tile .real [BM, BM])
+            ytile)) := by
+  have haccr : evalOp (Op.ref .real [BM, BD] nacc) s = some acctile := by rw [evalOp_ref, hacc]
+  have hyr : evalOp (Op.ref .real [BM, BD] ny) s = some ytile := by rw [evalOp_ref, hy]
+  have hxr : evalOp (Op.ref .real [BM, BM] nx) s = some xtile := by rw [evalOp_ref, hx]
+  have hcast : @evalOp TileDType.fp16 [BM, BM]
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx)) s
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (xtile.data idx)⟩ : Tile .fp16 [BM, BM]) := by
+    erw [evalOp_castFloat .real .fp16 (Op.ref .real [BM, BM] nx), hxr]; rfl
+  have htr : @evalOp TileDType.fp16 [BM, BM]
+      (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx))) s
+      = some (Tile.transpose [] (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (xtile.data idx)⟩ : Tile .fp16 [BM, BM])) := by
+    erw [evalOp_transpose [] (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx)), hcast]; rfl
+  have hcastback : @evalOp TileDType.real [BM, BM]
+      (Op.castFloat .fp16 .real
+        (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx)))) s
+      = some (⟨fun idx : TileIndex [BM, BM] =>
+          FloatDType.fp16.cast FloatDType.real
+            ((Tile.transpose []
+              (⟨fun jdx : TileIndex [BM, BM] =>
+                  FloatDType.real.cast FloatDType.fp16 (xtile.data jdx)⟩ : Tile .fp16 [BM, BM])).data idx)⟩
+        : Tile .real [BM, BM]) := by
+    erw [evalOp_castFloat .fp16 .real
+      (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx))), htr]; rfl
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := [])
+        (Op.castFloat .fp16 .real
+          (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx))))
+        (Op.ref .real [BM, BD] ny)) s
+      = some (Tile.dot []
+          (⟨fun idx : TileIndex [BM, BM] =>
+              FloatDType.fp16.cast FloatDType.real
+                ((Tile.transpose []
+                  (⟨fun jdx : TileIndex [BM, BM] =>
+                      FloatDType.real.cast FloatDType.fp16 (xtile.data jdx)⟩ : Tile .fp16 [BM, BM])).data idx)⟩
+            : Tile .real [BM, BM]) ytile) := by
+    erw [evalOp_dot []
+      (Op.castFloat .fp16 .real
+        (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nx))))
+      (Op.ref .real [BM, BD] ny), hcastback, hyr]; rfl
+  rw [evalOp_add]
+  simp only [haccr, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General** `dq += tl.dot((ds.to(fp16)).to(real), k)` eval (no transpose),
+parametric over `[BM, BM]` `ds` and `[BM, BD]` `dq`/`k`. -/
+theorem bwd_fp16_dot_evalG (s : BlockState) (BM BD : Nat) (ndq nds nk : RegName)
+    (dqtile : Tile .real [BM, BD]) (dstile : Tile .real [BM, BM]) (ktile : Tile .real [BM, BD])
+    (hdq : s.regs .real [BM, BD] ndq = some dqtile)
+    (hds : s.regs .real [BM, BM] nds = some dstile)
+    (hk : s.regs .real [BM, BD] nk = some ktile) :
+    @evalOp TileDType.real [BM, BD]
+        (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [BM, BD] ndq)
+          (Op.dot (batch := [])
+            (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds)))
+            (Op.ref .real [BM, BD] nk))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) dqtile
+          (Tile.dot []
+            (⟨fun idx : TileIndex [BM, BM] =>
+                FloatDType.fp16.cast FloatDType.real
+                  (FloatDType.real.cast FloatDType.fp16 (dstile.data idx))⟩ : Tile .real [BM, BM])
+            ktile)) := by
+  have hdqr : evalOp (Op.ref .real [BM, BD] ndq) s = some dqtile := by rw [evalOp_ref, hdq]
+  have hkr : evalOp (Op.ref .real [BM, BD] nk) s = some ktile := by rw [evalOp_ref, hk]
+  have hdsr : evalOp (Op.ref .real [BM, BM] nds) s = some dstile := by rw [evalOp_ref, hds]
+  have hcast : @evalOp TileDType.fp16 [BM, BM]
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds)) s
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (dstile.data idx)⟩ : Tile .fp16 [BM, BM]) := by
+    erw [evalOp_castFloat .real .fp16 (Op.ref .real [BM, BM] nds), hdsr]; rfl
+  have hcastback : @evalOp TileDType.real [BM, BM]
+      (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds))) s
+      = some (⟨fun idx : TileIndex [BM, BM] =>
+          FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 (dstile.data idx))⟩ : Tile .real [BM, BM]) := by
+    erw [evalOp_castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds)), hcast]
+    refine congrArg some ?_; ext idx; rfl
+  have hdot : @evalOp TileDType.real [BM, BD]
+      (Op.dot (batch := [])
+        (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds)))
+        (Op.ref .real [BM, BD] nk)) s
+      = some (Tile.dot []
+          (⟨fun idx : TileIndex [BM, BM] =>
+              FloatDType.fp16.cast FloatDType.real
+                (FloatDType.real.cast FloatDType.fp16 (dstile.data idx))⟩ : Tile .real [BM, BM]) ktile) := by
+    erw [evalOp_dot []
+      (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] nds)))
+      (Op.ref .real [BM, BD] nk), hcastback, hkr]; rfl
+  rw [evalOp_add]
+  simp only [hdqr, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
 /-- `qk = tl.dot(a, tl.trans(b))` raw-dot eval (no scale/zero-seed). -/
 theorem bwd_dot_trans_eval (s : BlockState) (na nb : RegName)
     (atile btile : Tile .real [128, 64])
@@ -8193,6 +8330,46 @@ theorem bwd_ds_eval (s : BlockState) (sc : ℝ)
         (Op.mul .real Broadcast.scalarR
           (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
             (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "dp"))
+          (Op.const sc)) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            ptile dptile)
+          (Tile.scalar (some sc : WithBot ℝ))) := by
+  rw [evalOp_mul, evalOp_mul]
+  simp only [evalOp_ref, evalOp_const, hp, hdp, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `dp = dp + dot(do, trans(v))` eval**, parametric over `[BM, BD]`. -/
+theorem bwd_dpdot_evalG (s : BlockState) (BM BD : Nat) (dptile : Tile .real [BM, BM])
+    (dotile vtile : Tile .real [BM, BD])
+    (hdp : s.regs .real [BM, BM] "dp" = some dptile)
+    (hdo : s.regs .real [BM, BD] "do_val" = some dotile)
+    (hv : s.regs .real [BM, BD] "v" = some vtile) :
+    @evalOp TileDType.real [BM, BM]
+        (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [BM, BM] "dp")
+          (Op.dot (batch := []) (Op.ref .real [BM, BD] "do_val")
+            (Op.transpose (batch := []) (Op.ref .real [BM, BD] "v")))) s
+      = some (Tile.bop NumericDType.real.add
+          (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) dptile
+          (Tile.dot [] dotile (Tile.transpose [] vtile))) := by
+  rw [evalOp_add]
+  simp only [evalOp_ref, hdp, Option.bind_eq_bind, Option.bind_some]
+  rw [bwd_dot_trans_evalG s BM BD "do_val" "v" dotile vtile hdo hv]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **General `ds = (p · dp) · sc` eval**, parametric over `[BM, BM]`. -/
+theorem bwd_ds_evalG (s : BlockState) (BM : Nat) (sc : ℝ)
+    (ptile dptile : Tile .real [BM, BM])
+    (hp : s.regs .real [BM, BM] "p" = some ptile)
+    (hdp : s.regs .real [BM, BM] "dp" = some dptile) :
+    @evalOp TileDType.real [BM, BM]
+        (Op.mul .real Broadcast.scalarR
+          (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [BM, BM] "p") (Op.ref .real [BM, BM] "dp"))
           (Op.const sc)) s
       = some (Tile.bop NumericDType.real.mul Broadcast.scalarR
           (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
