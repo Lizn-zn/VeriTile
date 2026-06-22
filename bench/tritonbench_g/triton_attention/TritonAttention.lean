@@ -2304,6 +2304,422 @@ noncomputable def bwdKernelDQSpec
       bwdFp16 (bwdKernelDS s Q K V DO M Delta idx.1 j) *
         bwdKernelK s K j ⟨idx.2.1.val, by omega⟩
 
+/-! ### ════════ Generalized backward-gradient spec layer (Phase 1) ════════
+
+Dimension-general genuine backward-gradient specs over the **input** memory
+`Q`/`K`/`V`/`DO`/`M`/`Delta`, parametric over `BM = BLOCK_M = BLOCK_N` (square
+score blocks), `BD = BLOCK_DMODEL` (head dim), and `nb = num_block` (so the
+sequence length is `N_CTX = nb * BM`).  Global query/key rows range over
+`Fin (nb * BM)`; head channels over `Fin BD`.  Memory layout mirrors the pinned
+specs: tile stride `BD`, base `bwdKBase`, `M`/`Delta` indexed at
+`pids0 * (nb*BM) + I`.
+
+These collapse to the pinned `Fin 128`/`Fin 64` specs at `BM = 128`, `BD = 64`,
+`nb = 1`.  The honest closed forms hold for the genuine FlashAttention-1
+backward math; the bridges below are the per-block partial-sum recurrences that
+the eventual two-level loop invariant produces.
+
+These defs and lemmas are **surface-independent** (they reference only the input
+memory and the pinned spec layer, never the kernel AST), ported verbatim from
+the parked `generalize/triton-bwd-grads` branch. -/
+
+/-- Loaded `q[I,e] = Q[base + I·BD + e]` at global query row `I`. -/
+noncomputable def bwdKernelQG (s : BlockState) (Q : RegionName) (BD : Nat)
+    (I : Nat) (e : Nat) : ℝ :=
+  s.readMem Q (bwdKBase s + I * BD + e)
+
+/-- Loaded `k[J,e] = K[base + J·BD + e]` at global key row `J`. -/
+noncomputable def bwdKernelKG (s : BlockState) (K : RegionName) (BD : Nat)
+    (J : Nat) (e : Nat) : ℝ :=
+  s.readMem K (bwdKBase s + J * BD + e)
+
+/-- Loaded `v[J,e] = V[base + J·BD + e]`. -/
+noncomputable def bwdKernelVG (s : BlockState) (V : RegionName) (BD : Nat)
+    (J : Nat) (e : Nat) : ℝ :=
+  s.readMem V (bwdKBase s + J * BD + e)
+
+/-- Loaded `do[I,e] = DO[base + I·BD + e]`. -/
+noncomputable def bwdKernelDOG (s : BlockState) (DO : RegionName) (BD : Nat)
+    (I : Nat) (e : Nat) : ℝ :=
+  s.readMem DO (bwdKBase s + I * BD + e)
+
+/-- Loaded `m[I] = M[off_hz·N_CTX + I]` (`N_CTX = nb·BM`). -/
+noncomputable def bwdKernelMG (s : BlockState) (M : RegionName) (NCTX : Nat)
+    (I : Nat) : ℝ :=
+  s.readMem M (s.pids 0 * NCTX + I)
+
+/-- Loaded `Di[I] = Delta[off_hz·N_CTX + I]`. -/
+noncomputable def bwdKernelDiG (s : BlockState) (Delta : RegionName) (NCTX : Nat)
+    (I : Nat) : ℝ :=
+  s.readMem Delta (s.pids 0 * NCTX + I)
+
+/-- `qk[I,J] = Σ_e q[I,e]·k[J,e]` (the `tl.dot(q, trans(k))` score). -/
+noncomputable def bwdKernelQKG (s : BlockState) (Q K : RegionName) (BD : Nat)
+    (I J : Nat) : ℝ :=
+  ∑ e : Fin BD, bwdKernelQG s Q BD I e.val * bwdKernelKG s K BD J e.val
+
+/-- `p[I,J] = exp(qk·sm_scale − m[I])` with causal masking (`J ≤ I` keeps the
+score, else `0`); mirrors the kernel `tl.where` / `tl.exp`. -/
+noncomputable def bwdKernelPG (s : BlockState) (Q K M : RegionName) (BD NCTX : Nat)
+    (sc : ℝ) (I J : Nat) : ℝ :=
+  if J ≤ I then
+    Real.exp (bwdKernelQKG s Q K BD I J * sc - bwdKernelMG s M NCTX I)
+  else 0
+
+/-- `dp[I,J] = (Σ_e do[I,e]·v[J,e]) − Di[I]`. -/
+noncomputable def bwdKernelDPG (s : BlockState) (V DO Delta : RegionName) (BD NCTX : Nat)
+    (I J : Nat) : ℝ :=
+  (∑ e : Fin BD, bwdKernelDOG s DO BD I e.val * bwdKernelVG s V BD J e.val)
+    - bwdKernelDiG s Delta NCTX I
+
+/-- `ds[I,J] = p[I,J]·dp[I,J]·sm_scale`. -/
+noncomputable def bwdKernelDSG (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BD NCTX : Nat) (sc : ℝ) (I J : Nat) : ℝ :=
+  bwdKernelPG s Q K M BD NCTX sc I J * bwdKernelDPG s V DO Delta BD NCTX I J * sc
+
+/-- **Genuine general `DV` value.** `dv[J,e] = fp16( Σ_I fp16(p[I,J]) · do[I,e] )`,
+summed over **all** global query rows `I ∈ [0, N_CTX)` (causal `p` zeroes `I<J`),
+fp16-cast on store. -/
+noncomputable def bwdKernelDVSpecG
+    (s : BlockState) (Q K M DO : RegionName) (BD NCTX : Nat) (sc : ℝ)
+    (J e : Nat) : ℝ :=
+  bwdFp16
+    (∑ I : Fin NCTX,
+      bwdFp16 (bwdKernelPG s Q K M BD NCTX sc I.val J) * bwdKernelDOG s DO BD I.val e)
+
+/-- **Genuine general `DK` value.** `dk[J,e] = fp16( Σ_I fp16(ds[I,J]) · q[I,e] )`. -/
+noncomputable def bwdKernelDKSpecG
+    (s : BlockState) (Q K V DO M Delta : RegionName) (BD NCTX : Nat) (sc : ℝ)
+    (J e : Nat) : ℝ :=
+  bwdFp16
+    (∑ I : Fin NCTX,
+      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I.val J) *
+        bwdKernelQG s Q BD I.val e)
+
+/-- **Genuine general `DQ` value.** `dq[I,e] = priorDQ[I,e] + Σ_J fp16(ds[I,J])·k[J,e]`,
+summed over **all** global key rows `J ∈ [0, N_CTX)` (causal `p ⇒ ds` zeroes
+`J>I`), stored real (no fp16 cast on the `DQ` store). -/
+noncomputable def bwdKernelDQSpecG
+    (s : BlockState) (Q K V DO M Delta DQ : RegionName) (BD NCTX : Nat) (sc : ℝ)
+    (I e : Nat) : ℝ :=
+  s.readMem DQ (bwdKBase s + I * BD + e) +
+    ∑ J : Fin NCTX,
+      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J.val) *
+        bwdKernelKG s K BD J.val e
+
+/-! #### Pinned-spec compatibility bridges (`G` collapses to `Fin 128`/`Fin 64`) -/
+
+/-- At `BD = 64`, `NCTX = 128`, `sc = 1/√64`, the general loaded `q` agrees with
+the pinned `bwdKernelQ` (keyed on `Nat` channel `e`). -/
+theorem bwdKernelQG_eq (s : BlockState) (Q : RegionName) (i : Fin 128) (e : Nat) (he : e < 64) :
+    bwdKernelQG s Q 64 i.val e = bwdKernelQ s Q i ⟨e, by omega⟩ := rfl
+
+theorem bwdKernelKG_eq (s : BlockState) (K : RegionName) (j : Fin 128) (e : Nat) (he : e < 64) :
+    bwdKernelKG s K 64 j.val e = bwdKernelK s K j ⟨e, by omega⟩ := rfl
+
+theorem bwdKernelVG_eq (s : BlockState) (V : RegionName) (j : Fin 128) (e : Nat) (he : e < 64) :
+    bwdKernelVG s V 64 j.val e = bwdKernelV s V j ⟨e, by omega⟩ := rfl
+
+theorem bwdKernelDOG_eq (s : BlockState) (DO : RegionName) (i : Fin 128) (e : Nat) (he : e < 64) :
+    bwdKernelDOG s DO 64 i.val e = bwdKernelDO s DO i ⟨e, by omega⟩ := rfl
+
+theorem bwdKernelMG_eq (s : BlockState) (M : RegionName) (i : Fin 128) (hH : s.pids 1 = 0) :
+    bwdKernelMG s M 128 i.val = bwdKernelM s M i := by
+  simp only [bwdKernelMG, bwdKernelM]
+
+theorem bwdKernelDiG_eq (s : BlockState) (Delta : RegionName) (i : Fin 128) :
+    bwdKernelDiG s Delta 128 i.val = bwdKernelDi s Delta i := by
+  simp only [bwdKernelDiG, bwdKernelDi]
+
+theorem bwdKernelQKG_eq (s : BlockState) (Q K : RegionName) (i j : Fin 128) :
+    bwdKernelQKG s Q K 64 i.val j.val = bwdKernelQK s Q K i j := by
+  simp only [bwdKernelQKG, bwdKernelQK, bwdKernelQG, bwdKernelKG, bwdKernelQ, bwdKernelK]
+
+theorem bwdKernelPG_eq (s : BlockState) (Q K M : RegionName) (i j : Fin 128) :
+    bwdKernelPG s Q K M 64 128 (Real.sqrt (64 : ℝ))⁻¹ i.val j.val = bwdKernelP s Q K M i j := by
+  simp only [bwdKernelPG, bwdKernelP, bwdKernelQKG_eq, bwdKernelMG, bwdKernelM]
+
+theorem bwdKernelDPG_eq (s : BlockState) (V DO Delta : RegionName) (i j : Fin 128) :
+    bwdKernelDPG s V DO Delta 64 128 i.val j.val = bwdKernelDP s V DO Delta i j := by
+  simp only [bwdKernelDPG, bwdKernelDP, bwdKernelDOG, bwdKernelVG, bwdKernelDO, bwdKernelV,
+    bwdKernelDiG, bwdKernelDi]
+
+theorem bwdKernelDSG_eq (s : BlockState) (Q K V DO M Delta : RegionName) (i j : Fin 128) :
+    bwdKernelDSG s Q K V DO M Delta 64 128 (Real.sqrt (64 : ℝ))⁻¹ i.val j.val
+      = bwdKernelDS s Q K V DO M Delta i j := by
+  simp only [bwdKernelDSG, bwdKernelDS, bwdKernelPG_eq, bwdKernelDPG_eq]
+
+/-- The general `DV` spec collapses to the pinned `bwdKernelDVSpec` at the
+checked launch shape. -/
+theorem bwdKernelDVSpecG_eq (s : BlockState) (Q K V DO M Delta : RegionName)
+    (idx : TileIndex [128, 64]) :
+    bwdKernelDVSpecG s Q K M DO 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
+      = bwdKernelDVSpec s Q K V DO M Delta idx := by
+  obtain ⟨j, ⟨e, he⟩, u⟩ := idx
+  simp only [bwdKernelDVSpecG, bwdKernelDVSpec]
+  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun i _ => ?_))
+  rw [bwdKernelPG_eq, bwdKernelDOG_eq s DO i e he]
+
+theorem bwdKernelDKSpecG_eq (s : BlockState) (Q K V DO M Delta : RegionName)
+    (idx : TileIndex [128, 64]) :
+    bwdKernelDKSpecG s Q K V DO M Delta 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
+      = bwdKernelDKSpec s Q K V DO M Delta idx := by
+  obtain ⟨j, ⟨e, he⟩, u⟩ := idx
+  simp only [bwdKernelDKSpecG, bwdKernelDKSpec]
+  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun i _ => ?_))
+  rw [bwdKernelDSG_eq, bwdKernelQG_eq s Q i e he]
+
+theorem bwdKernelDQSpecG_eq (s : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (idx : TileIndex [128, 64]) :
+    bwdKernelDQSpecG s Q K V DO M Delta DQ 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
+      = bwdKernelDQSpec s Q K V DO M Delta DQ idx := by
+  obtain ⟨i, ⟨e, he⟩, u⟩ := idx
+  simp only [bwdKernelDQSpecG, bwdKernelDQSpec]
+  refine congrArg (s.readMem DQ (bwdKBase s + i.val * 64 + e) + ·)
+    (Finset.sum_congr rfl (fun j _ => ?_))
+  rw [bwdKernelDSG_eq, bwdKernelKG_eq s K j e he]
+
+/-! #### Block-decomposition partial-sum bridges (two-level loop content)
+
+The genuine `DV`/`DK` per-cell sums range over **all** global query rows
+`I ∈ Fin (BM·nb)`.  The two-level loop produces these as an iterated
+accumulation: for a fixed KV block, the inner Q-block loop accumulates the
+per-block sub-sums.  These bridges rewrite the flat `Fin (BM·nb)` sum as a
+`Fin nb × Fin BM` block-decomposed double sum (outer query block `m`, local row
+`iL`, global row `= m·BM + iL`), exactly the order the loop visits.  They are the
+backward analog of the forward `mPartialG_eq_blockSup` block-decomposition. -/
+
+/-- A flat sum over global query rows `Fin (BM·nb)` decomposes blockwise into
+`∑ (queryBlock m : Fin nb) ∑ (localRow iL : Fin BM) f (m·BM + iL)`.  The body is
+indexed by the global row `(blockIndexEquiv BM nb).symm (m, iL)` whose value is
+`m·BM + iL`. -/
+theorem bwd_flatSum_eq_blockSum {BM nb : Nat} (f : Fin (BM * nb) → ℝ) :
+    (∑ I : Fin (BM * nb), f I)
+      = ∑ m : Fin nb, ∑ iL : Fin BM,
+          f ((StreamingAccumulator.blockIndexEquiv BM nb).symm (m, iL)) := by
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  rw [← Equiv.sum_comp (StreamingAccumulator.blockIndexEquiv BM nb).symm f]
+
+/-- The global row value of `(blockIndexEquiv BM nb).symm (m, iL)` is `m·BM + iL`. -/
+theorem bwd_blockIndexEquiv_symm_val {BM nb : Nat} (m : Fin nb) (iL : Fin BM) :
+    ((StreamingAccumulator.blockIndexEquiv BM nb).symm (m, iL)).val
+      = m.val * BM + iL.val := by
+  show ((Fin.castOrderIso (Nat.mul_comm BM nb)).toEquiv.symm
+      (finProdFinEquiv (m, iL))).val = m.val * BM + iL.val
+  show (finProdFinEquiv (m, iL)).val = m.val * BM + iL.val
+  show iL.val + BM * m.val = m.val * BM + iL.val
+  rw [Nat.mul_comm m.val BM]; omega
+
+/-- **DV block-decomposition bridge.** -/
+theorem bwdKernelDVSpecG_blockSum (s : BlockState) (Q K M DO : RegionName)
+    (BD BM nb : Nat) (sc : ℝ) (J e : Nat) :
+    bwdKernelDVSpecG s Q K M DO BD (BM * nb) sc J e
+      = bwdFp16 (∑ m : Fin nb, ∑ iL : Fin BM,
+          bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc (m.val * BM + iL.val) J) *
+            bwdKernelDOG s DO BD (m.val * BM + iL.val) e) := by
+  simp only [bwdKernelDVSpecG]
+  refine congrArg bwdFp16 ?_
+  rw [bwd_flatSum_eq_blockSum
+    (fun I : Fin (BM * nb) =>
+      bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc I.val J) * bwdKernelDOG s DO BD I.val e)]
+  refine Finset.sum_congr rfl (fun m _ => Finset.sum_congr rfl (fun iL _ => ?_))
+  rw [bwd_blockIndexEquiv_symm_val]
+
+/-- **DK block-decomposition bridge.** -/
+theorem bwdKernelDKSpecG_blockSum (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BD BM nb : Nat) (sc : ℝ) (J e : Nat) :
+    bwdKernelDKSpecG s Q K V DO M Delta BD (BM * nb) sc J e
+      = bwdFp16 (∑ m : Fin nb, ∑ iL : Fin BM,
+          bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc (m.val * BM + iL.val) J) *
+            bwdKernelQG s Q BD (m.val * BM + iL.val) e) := by
+  simp only [bwdKernelDKSpecG]
+  refine congrArg bwdFp16 ?_
+  rw [bwd_flatSum_eq_blockSum
+    (fun I : Fin (BM * nb) =>
+      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I.val J) *
+        bwdKernelQG s Q BD I.val e)]
+  refine Finset.sum_congr rfl (fun m _ => Finset.sum_congr rfl (fun iL _ => ?_))
+  rw [bwd_blockIndexEquiv_symm_val]
+
+/-- **DQ block-decomposition bridge.** The genuine general `DQ` cell sum ranges
+over all global **key** rows; for a fixed query block, the inner loop streams the
+key blocks, so the natural decomposition is over key blocks (block `n`, local
+col `jL`, global col `n·BM + jL`). -/
+theorem bwdKernelDQSpecG_blockSum (s : BlockState) (Q K V DO M Delta DQ : RegionName)
+    (BD BM nb : Nat) (sc : ℝ) (I e : Nat) :
+    bwdKernelDQSpecG s Q K V DO M Delta DQ BD (BM * nb) sc I e
+      = s.readMem DQ (bwdKBase s + I * BD + e) +
+        ∑ n : Fin nb, ∑ jL : Fin BM,
+          bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I (n.val * BM + jL.val)) *
+            bwdKernelKG s K BD (n.val * BM + jL.val) e := by
+  simp only [bwdKernelDQSpecG]
+  refine congrArg (s.readMem DQ (bwdKBase s + I * BD + e) + ·) ?_
+  rw [bwd_flatSum_eq_blockSum
+    (fun J : Fin (BM * nb) =>
+      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I J.val) *
+        bwdKernelKG s K BD J.val e)]
+  refine Finset.sum_congr rfl (fun n _ => Finset.sum_congr rfl (fun jL _ => ?_))
+  rw [bwd_blockIndexEquiv_symm_val]
+
+/-! #### Inner-loop accumulator infrastructure (surface-independent)
+
+The inner `start_m` loop, for a fixed KV block `n` (key base `n·BM`), streams the
+query blocks `m = n, n+1, …, num_block-1`, accumulating into the `dv`/`dk`
+registers.  These defs name the per-query-block column sub-sums and their running
+partial accumulation; the `_full` bridges show that after the inner loop runs
+`nb - n` iterations the accumulator equals the full block-decomposed column sum
+(the causally-zero lower blocks `m < n` are added for free), and the
+`_fp16_eq_spec` bridges connect the fp16-cast accumulator to the genuine general
+`DV`/`DK` specs.  Ported verbatim from the parked branch (spec-only). -/
+
+/-- Per-query-block `dv` column sub-sum (KV block `n`, query block `m`,
+cell `(j,e)`): `Σ_iL fp16(pG (m·BM+iL) (n·BM+j))·doG (m·BM+iL) e`. -/
+noncomputable def bwdSubDv (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n m j e : Nat) : ℝ :=
+  ∑ iL : Fin BM,
+    bwdFp16 (bwdKernelPG s Q K M BD NCTX sc (m * BM + iL.val) (n * BM + j)) *
+      bwdKernelDOG s DO BD (m * BM + iL.val) e
+
+/-- Per-query-block `dk` column sub-sum (KV block `n`, query block `m`,
+cell `(j,e)`): `Σ_iL fp16(dsG (m·BM+iL) (n·BM+j))·qG (m·BM+iL) e`. -/
+noncomputable def bwdSubDk (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n m j e : Nat) : ℝ :=
+  ∑ iL : Fin BM,
+    bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc (m * BM + iL.val) (n * BM + j)) *
+      bwdKernelQG s Q BD (m * BM + iL.val) e
+
+/-- **Causal zero of `dv` sub-sum below the diagonal block.** For a query block
+`m < n`, every query row `m·BM+iL` lies before every key row `n·BM+j`, so
+`pG = 0` and the sub-sum vanishes. -/
+theorem bwdSubDv_zero_of_lt (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n m j e : Nat) (hjm : j < BM) (hmn : m < n) :
+    bwdSubDv s Q K M DO BM BD NCTX sc n m j e = 0 := by
+  refine Finset.sum_eq_zero (fun iL _ => ?_)
+  have hlt : m * BM + iL.val < n * BM + j := by
+    have h1 : m * BM + iL.val < (m + 1) * BM := by
+      have := iL.isLt; rw [Nat.add_mul, Nat.one_mul]; omega
+    have h2 : (m + 1) * BM ≤ n * BM := Nat.mul_le_mul_right BM hmn
+    omega
+  have hp0 : bwdKernelPG s Q K M BD NCTX sc (m * BM + iL.val) (n * BM + j) = 0 := by
+    simp only [bwdKernelPG, if_neg (by omega : ¬ n * BM + j ≤ m * BM + iL.val)]
+  rw [hp0, show bwdFp16 0 = 0 from by simp only [bwdFp16, FloatDType.cast,
+      FloatDType.ofWithBot, FloatDType.toWithBot, FloatDType.storeValue]; norm_num, zero_mul]
+
+/-- **Causal zero of `dk` sub-sum below the diagonal block.** -/
+theorem bwdSubDk_zero_of_lt (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n m j e : Nat) (hjm : j < BM) (hmn : m < n) :
+    bwdSubDk s Q K V DO M Delta BM BD NCTX sc n m j e = 0 := by
+  refine Finset.sum_eq_zero (fun iL _ => ?_)
+  have hlt : m * BM + iL.val < n * BM + j := by
+    have h1 : m * BM + iL.val < (m + 1) * BM := by
+      have := iL.isLt; rw [Nat.add_mul, Nat.one_mul]; omega
+    have h2 : (m + 1) * BM ≤ n * BM := Nat.mul_le_mul_right BM hmn
+    omega
+  have hds0 : bwdKernelDSG s Q K V DO M Delta BD NCTX sc (m * BM + iL.val) (n * BM + j) = 0 := by
+    simp only [bwdKernelDSG, bwdKernelPG, if_neg (by omega : ¬ n * BM + j ≤ m * BM + iL.val),
+      zero_mul]
+  rw [hds0, show bwdFp16 0 = 0 from by simp only [bwdFp16, FloatDType.cast,
+      FloatDType.ofWithBot, FloatDType.toWithBot, FloatDType.storeValue]; norm_num, zero_mul]
+
+/-- Running `dv` accumulator cell after `t` inner iterations from KV block `n`:
+the sum of the sub-sums of query blocks `n, n+1, …, n+t-1`. -/
+noncomputable def bwdAccDvCell (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n t j e : Nat) : ℝ :=
+  ∑ m ∈ Finset.range t, bwdSubDv s Q K M DO BM BD NCTX sc n (n + m) j e
+
+/-- Running `dk` accumulator cell after `t` inner iterations from KV block `n`. -/
+noncomputable def bwdAccDkCell (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n t j e : Nat) : ℝ :=
+  ∑ m ∈ Finset.range t, bwdSubDk s Q K V DO M Delta BM BD NCTX sc n (n + m) j e
+
+theorem bwdAccDvCell_succ (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n t j e : Nat) :
+    bwdAccDvCell s Q K M DO BM BD NCTX sc n (t + 1) j e
+      = bwdAccDvCell s Q K M DO BM BD NCTX sc n t j e
+        + bwdSubDv s Q K M DO BM BD NCTX sc n (n + t) j e := by
+  simp only [bwdAccDvCell, Finset.sum_range_succ]
+
+theorem bwdAccDkCell_succ (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n t j e : Nat) :
+    bwdAccDkCell s Q K V DO M Delta BM BD NCTX sc n (t + 1) j e
+      = bwdAccDkCell s Q K V DO M Delta BM BD NCTX sc n t j e
+        + bwdSubDk s Q K V DO M Delta BM BD NCTX sc n (n + t) j e := by
+  simp only [bwdAccDkCell, Finset.sum_range_succ]
+
+/-- At the end of the inner loop (`t = nb - n`, `n ≤ nb`), the running `dv`
+accumulator equals the **full** block-decomposed column sum over all query
+blocks `m ∈ Fin nb`: the lower blocks `m < n` are causally zero. -/
+theorem bwdAccDvCell_full (s : BlockState) (Q K M DO : RegionName)
+    (BM BD NCTX nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
+    bwdAccDvCell s Q K M DO BM BD NCTX sc n (nb - n) j e
+      = ∑ m : Fin nb, bwdSubDv s Q K M DO BM BD NCTX sc n m.val j e := by
+  rw [Finset.sum_fin_eq_sum_range]
+  rw [← Finset.sum_range_add_sum_Ico _ hn]
+  have hlow : (∑ m ∈ Finset.range n,
+      (if h : m < nb then bwdSubDv s Q K M DO BM BD NCTX sc n m j e else 0)) = 0 := by
+    refine Finset.sum_eq_zero (fun m hm => ?_)
+    rw [Finset.mem_range] at hm
+    by_cases h : m < nb
+    · rw [dif_pos h, bwdSubDv_zero_of_lt s Q K M DO BM BD NCTX sc n m j e hjm hm]
+    · rw [dif_neg h]
+  rw [hlow, zero_add]
+  rw [bwdAccDvCell]
+  rw [Finset.sum_Ico_eq_sum_range]
+  refine Finset.sum_congr rfl (fun t ht => ?_)
+  rw [Finset.mem_range] at ht
+  rw [dif_pos (by omega : n + t < nb)]
+
+/-- At the end of the inner loop, the running `dk` accumulator equals the full
+block-decomposed column sum over all query blocks. -/
+theorem bwdAccDkCell_full (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
+    bwdAccDkCell s Q K V DO M Delta BM BD NCTX sc n (nb - n) j e
+      = ∑ m : Fin nb, bwdSubDk s Q K V DO M Delta BM BD NCTX sc n m.val j e := by
+  rw [Finset.sum_fin_eq_sum_range]
+  rw [← Finset.sum_range_add_sum_Ico _ hn]
+  have hlow : (∑ m ∈ Finset.range n,
+      (if h : m < nb then bwdSubDk s Q K V DO M Delta BM BD NCTX sc n m j e else 0)) = 0 := by
+    refine Finset.sum_eq_zero (fun m hm => ?_)
+    rw [Finset.mem_range] at hm
+    by_cases h : m < nb
+    · rw [dif_pos h, bwdSubDk_zero_of_lt s Q K V DO M Delta BM BD NCTX sc n m j e hjm hm]
+    · rw [dif_neg h]
+  rw [hlow, zero_add]
+  rw [bwdAccDkCell]
+  rw [Finset.sum_Ico_eq_sum_range]
+  refine Finset.sum_congr rfl (fun t ht => ?_)
+  rw [Finset.mem_range] at ht
+  rw [dif_pos (by omega : n + t < nb)]
+
+/-- **`dv` accumulator → genuine spec bridge.** -/
+theorem bwdAccDvCell_full_fp16_eq_spec (s : BlockState) (Q K M DO : RegionName)
+    (BM BD nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
+    bwdFp16 (bwdAccDvCell s Q K M DO BM BD (BM * nb) sc n (nb - n) j e)
+      = bwdKernelDVSpecG s Q K M DO BD (BM * nb) sc (n * BM + j) e := by
+  rw [bwdAccDvCell_full s Q K M DO BM BD (BM * nb) nb sc n j e hjm hn]
+  rw [bwdKernelDVSpecG_blockSum]
+  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun m _ => ?_))
+  rw [bwdSubDv]
+
+/-- **`dk` accumulator → genuine spec bridge.** -/
+theorem bwdAccDkCell_full_fp16_eq_spec (s : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
+    bwdFp16 (bwdAccDkCell s Q K V DO M Delta BM BD (BM * nb) sc n (nb - n) j e)
+      = bwdKernelDKSpecG s Q K V DO M Delta BD (BM * nb) sc (n * BM + j) e := by
+  rw [bwdAccDkCell_full s Q K V DO M Delta BM BD (BM * nb) nb sc n j e hjm hn]
+  rw [bwdKernelDKSpecG_blockSum]
+  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun m _ => ?_))
+  rw [bwdSubDk]
+
+/-- Single-key-block `DQ` contribution at global query row `I`, channel `e`
+(KV block `n`): `Σ_jL fp16(dsG I (n·BM+jL))·kG (n·BM+jL) e`.  The inner-loop
+read-modify-write of `DQ` adds exactly this for each query row it visits. -/
+noncomputable def bwdDqKeyContrib (s0 : BlockState) (Q K V DO M Delta : RegionName)
+    (BM BD NCTX : Nat) (sc : ℝ) (n I e : Nat) : ℝ :=
+  ∑ jL : Fin BM,
+    bwdFp16 (bwdKernelDSG s0 Q K V DO M Delta BD NCTX sc I (n * BM + jL.val)) *
+      bwdKernelKG s0 K BD (n * BM + jL.val) e
+
 noncomputable def producedBwdKernelDQValue
     (s : BlockState) (Q K V Out DO DQ DK DV L M Delta : RegionName)
     (idx : TileIndex [128, 64]) : ℝ :=
@@ -2527,6 +2943,250 @@ theorem bwd_body_split (Q K V Out DO DQ DK DV L M Delta : RegionName) :
       = bwdPreLoop Q K V DO DQ DK DV
         ++ [Stmt.forRange "start_n" 0 1 1 (bwdOuterBody Q DO DQ Delta M)] := by
   unfold triton_attention_bwd_kernel bwdPreLoop bwdOuterBody bwdInnerBody bwdMkPtr bwdMkPtrLo
+  rw [ComputeKernel.toAlgKernel_mk]
+  simp only [ComputeStmt.listToAlgorithm?_cons_assign_alg,
+    ComputeStmt.listToAlgorithm?_cons_assign_compute,
+    ComputeStmt.listToAlgorithm?_cons_store_alg,
+    ComputeStmt.listToAlgorithm?_cons_forRange,
+    ComputeStmt.listToAlgorithm?_cons_forRangeDyn,
+    ComputeStmt.listToAlgorithm?_nil,
+    ComputeExpr.toAlgorithm?_alg, ComputeExpr.toAlgorithm?_compute_full_alg,
+    ComputeOp.toAlgorithm?_full_alg, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+  rfl
+
+/-! ### ════════ Generalized backward-gradient AST layer (Phase 2) ════════
+
+Dimension-general clones of the lowered `_bwd_kernel` loop bodies on the **new**
+faithful surface (dynamic loop-counter `lo` offset for the `q`/`do`/`dq` block
+pointers, built inside the outer body; no post-inner `[0,0]` rewinds), parametric
+over `BM = BLOCK_M = BLOCK_N` (square score blocks), `BD = BLOCK_DMODEL` (head
+dim) and `nb = num_block`.  Strides are pinned to the contiguous launch
+(`stride_qm = BD`, `stride_qk = 1`) used by the top theorem, mirroring the
+forward `taLoopBodyG`/`ta_body_splitG`.  These collapse to the pinned
+`bwdInnerBody`/`bwdOuterBody`/`bwdPreLoop` at `BM = 128`, `BD = 64`, `nb = 1`. -/
+
+/-- General `make_block_ptr` op (k/v/dk/dv style, no `lo`): parent `[D0, BD]`,
+block `[BM, BD]`, contiguous strides `[BD, 1]`, dynamic row offset
+`off_z·stride_qz_2d + off_h·stride_qh_2d`, col `0`. -/
+private def bwdMkPtrG (R : RegionName) (D0 BM BD : Nat) : Op .blockPtr [BM, BD] :=
+  Op.makeBlockPtrDynOffsets R (Op.constNat 0) [D0, BD] [BM, BD] [BD, 1]
+    [Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.ref .nat [] "stride_qz_2d"))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.ref .nat [] "stride_qh_2d")),
+      Op.constNat 0]
+
+/-- General in-loop `make_block_ptr` op (q/do/dq style): adds the dynamic loop
+offset `lo = start_n · BM` to the base-row offset. -/
+private def bwdMkPtrLoG (R : RegionName) (D0 BM BD : Nat) : Op .blockPtr [BM, BD] :=
+  Op.makeBlockPtrDynOffsets R (Op.constNat 0) [D0, BD] [BM, BD] [BD, 1]
+    [Op.add .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.ref .nat [] "stride_qz_2d"))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.ref .nat [] "stride_qh_2d")))
+        (Op.ref .nat [] "lo"),
+      Op.constNat 0]
+
+/-- General block-ptr tile value: every lane is the same `make_block_ptr`-style
+block pointer into region `R` with parentShape `[D0, BD]`, blockShape `[BM, BD]`,
+contiguous strides `[BD, 1]`, `baseOffset = 0`, and 2-D offsets
+`[base/BD + rowOff, 0]`.  When `BD ∣ base` the address of lane `(i,e)` is
+`(base/BD + rowOff + i)·BD + e = base + (rowOff + i)·BD + e`. -/
+def bwdPtrTileG (R : RegionName) (base D0 BM BD rowOff : Nat) :
+    Tile .blockPtr [BM, BD] :=
+  ⟨fun _ : TileIndex [BM, BD] =>
+    { region := R, baseOffset := 0, parentShape := [D0, BD],
+      blockShape := [BM, BD], strides := [BD, 1],
+      offsets := [base / BD + rowOff, 0] }⟩
+
+/-- Advancing the general block-ptr tile by `[BM, 0]` shifts the row offset by
+`BM`, yielding the same `bwdPtrTileG` at row `rowOff + BM`. -/
+theorem bwdPtrTileG_advance (R : RegionName) (base D0 BM BD rowOff : Nat) :
+    (⟨fun i => ((bwdPtrTileG R base D0 BM BD rowOff).data i).advance [BM, 0]⟩
+        : Tile .blockPtr [BM, BD])
+      = bwdPtrTileG R base D0 BM BD (rowOff + BM) := by
+  refine Tile.ext (fun i => ?_)
+  simp only [bwdPtrTileG, BlockPtr.advance_2d_offsets_int, BlockPtr.toNat_natCast_add_natCast,
+    BlockPtr.toNat_natCast_add_zero, BlockPtr.toNat_zero_add_natCast, BlockPtr.mk.injEq,
+    List.cons.injEq, and_true, true_and, Nat.add_assoc]
+
+/-- General pre-loop statements of `_bwd_kernel` (new surface): `off_hz`/`off_z`/
+`off_h`/`stride_qz_2d`/`stride_qh_2d` and the k/v/dk/dv block pointers (the
+q/do/dq pointers are constructed in the outer body). -/
+private def bwdPreLoopG (K V DK DV : RegionName)
+    (stride_qz stride_qh D0 BM BD H : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "off_hz" (Op.programId 0),
+    Stmt.assign .nat [] "off_z"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "off_h"
+      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign .nat [] "stride_qz_2d"
+      (Op.floorDiv .nat Broadcast.nil
+        (Op.floorDiv .nat Broadcast.nil (Op.constNat stride_qz) (Op.constNat BD)) (Op.constNat 1)),
+    Stmt.assign .nat [] "stride_qh_2d"
+      (Op.floorDiv .nat Broadcast.nil
+        (Op.floorDiv .nat Broadcast.nil (Op.constNat stride_qh) (Op.constNat BD)) (Op.constNat 1)),
+    Stmt.assign .blockPtr [BM, BD] "k_tile_ptr" (bwdMkPtrG K D0 BM BD),
+    Stmt.assign .blockPtr [BM, BD] "v_tile_ptr" (bwdMkPtrG V D0 BM BD),
+    Stmt.assign .blockPtr [BM, BD] "dk_tile_ptr" (bwdMkPtrG DK D0 BM BD),
+    Stmt.assign .blockPtr [BM, BD] "dv_tile_ptr" (bwdMkPtrG DV D0 BM BD) ]
+
+/-- General lowered inner (`start_m`) loop body of `_bwd_kernel`. -/
+private noncomputable def bwdInnerBodyG (sc : ℝ) (BM BD : Nat) : List Stmt :=
+  [ Stmt.assign .nat [BM] "offs_m_curr"
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_m") (Op.ref .nat [BM] "offs_m")),
+    Stmt.assign .real [BM, BD] "q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "q_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [BM, BM] "qk"
+      (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.transpose (batch := []) (Op.ref .real [BM, BD] "k"))),
+    Stmt.assign .real [BM, BM] "qk"
+      (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m_curr"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BM] "offs_n")))
+        (Op.ref .real [BM, BM] "qk") (Op.broadcast Op.negInf [BM, BM])),
+    Stmt.assign .real [BM] "m"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "m_ptrs") (Op.ref .nat [BM] "offs_m_curr")))
+        MaskOpt.none),
+    Stmt.assign .real [BM, BM] "p"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.mul .real Broadcast.scalarR (Op.ref .real [BM, BM] "qk") (Op.const sc))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "m")))),
+    Stmt.assign .real [BM, BD] "do_val"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "do_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [BM, BD] "dv"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "dv")
+        (Op.dot (batch := [])
+          (Op.castFloat .fp16 .real
+            (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] "p"))))
+          (Op.ref .real [BM, BD] "do_val"))),
+    Stmt.assign .real [BM] "Di"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "D_ptrs") (Op.ref .nat [BM] "offs_m_curr")))
+        MaskOpt.none),
+    Stmt.assign .real [BM, BM] "dp"
+      (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.full [BM, BM] (Op.const 0))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "Di"))),
+    Stmt.assign .real [BM, BM] "dp"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BM] "dp")
+        (Op.dot (batch := []) (Op.ref .real [BM, BD] "do_val")
+          (Op.transpose (batch := []) (Op.ref .real [BM, BD] "v")))),
+    Stmt.assign .real [BM, BM] "ds"
+      (Op.mul .real Broadcast.scalarR
+        (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [BM, BM] "p") (Op.ref .real [BM, BM] "dp"))
+        (Op.const sc)),
+    Stmt.assign .real [BM, BD] "dk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "dk")
+        (Op.dot (batch := [])
+          (Op.castFloat .fp16 .real
+            (Op.transpose (batch := []) (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] "ds"))))
+          (Op.ref .real [BM, BD] "q"))),
+    Stmt.assign .real [BM, BD] "dq"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") []) MaskOpt.none),
+    Stmt.assign .real [BM, BD] "dq"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "dq")
+        (Op.dot (batch := [])
+          (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [BM, BM] "ds")))
+          (Op.ref .real [BM, BD] "k"))),
+    Stmt.store .real [BM, BD] (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") [])
+      (Op.ref .real [BM, BD] "dq") MaskOpt.none,
+    Stmt.assign .ptr [BM, BD] "dq_ptrs"
+      (Op.ptrAdd Broadcast.scalarR
+        (Op.ref .ptr [BM, BD] "dq_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BM) (Op.constNat BD))),
+    Stmt.assign .blockPtr [BM, BD] "q_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "q_tile_ptr") [BM, (0:Nat)]),
+    Stmt.assign .blockPtr [BM, BD] "do_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "do_tile_ptr") [BM, (0:Nat)]),
+    Stmt.assign .blockPtr [BM, BD] "dq_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "dq_tile_ptr") [BM, (0:Nat)]) ]
+
+/-- General lowered outer (`start_n`) loop body of `_bwd_kernel` (new surface):
+the q/do/dq block pointers are constructed here at dynamic row offset `lo`, the
+inner loop streams `start_m` from `lo` to `nb·BM` step `BM`, and k/v/dk/dv
+advance by `[BM,0]` per outer iter. -/
+private noncomputable def bwdOuterBodyG (Q DO DQ Delta M : RegionName)
+    (sc : ℝ) (stride_qz stride_qh D0 BM BD nb N_CTX : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "lo"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BM)),
+    Stmt.assign .blockPtr [BM, BD] "q_tile_ptr" (bwdMkPtrLoG Q D0 BM BD),
+    Stmt.assign .blockPtr [BM, BD] "do_tile_ptr" (bwdMkPtrLoG DO D0 BM BD),
+    Stmt.assign .blockPtr [BM, BD] "dq_tile_ptr" (bwdMkPtrLoG DQ D0 BM BD),
+    Stmt.assign .ptr [] "DQ"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase DQ)
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh)))),
+    Stmt.assign .nat [BM] "offs_qm"
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "lo") (Op.arange BM)),
+    Stmt.assign .nat [BM] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BM)) (Op.arange BM)),
+    Stmt.assign .nat [BM] "offs_m" (Op.arange BM),
+    Stmt.assign .nat [BD] "offs_k" (Op.arange BD),
+    Stmt.assign .ptr [BM, BD] "dq_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "DQ")
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_qm")) (Op.constNat BD))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_k")) (Op.constNat 1)))),
+    Stmt.assign .ptr [] "D_ptrs"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase Delta)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat N_CTX))),
+    Stmt.assign .ptr [] "m_ptrs"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase M)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat N_CTX))),
+    Stmt.assign .real [BM, BD] "dv" (Op.full [BM, BD] (Op.const 0)),
+    Stmt.assign .real [BM, BD] "dk" (Op.full [BM, BD] (Op.const 0)),
+    Stmt.assign .real [BM, BD] "k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "k_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.assign .real [BM, BD] "v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "v_tile_ptr") [0, 1]) MaskOpt.none),
+    Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo")
+      (Op.mul .nat Broadcast.nil (Op.constNat nb) (Op.constNat BM)) (Op.constNat BM)
+      (bwdInnerBodyG sc BM BD),
+    Stmt.assign .blockPtr [BM, BD] "k_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "k_tile_ptr") [BM, (0:Nat)]),
+    Stmt.assign .blockPtr [BM, BD] "v_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "v_tile_ptr") [BM, (0:Nat)]),
+    Stmt.store .fp16 [BM, BD] (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "dv_tile_ptr") [0, 1])
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] "dv")) MaskOpt.none,
+    Stmt.store .fp16 [BM, BD] (MemAccess.blockPtr (Op.ref .blockPtr [BM, BD] "dk_tile_ptr") [0, 1])
+      (Op.castFloat .real .fp16 (Op.ref .real [BM, BD] "dk")) MaskOpt.none,
+    Stmt.assign .blockPtr [BM, BD] "dv_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "dv_tile_ptr") [BM, (0:Nat)]),
+    Stmt.assign .blockPtr [BM, BD] "dk_tile_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [BM, BD] "dk_tile_ptr") [BM, (0:Nat)]) ]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **General body split.** The general (contiguous-stride) backward kernel lowers
+to `bwdPreLoopG ++ [forRange start_n 0 nb 1 bwdOuterBodyG]` on the new surface.
+`stride_qm = stride_kn = stride_vk = BD`, `stride_qk = stride_kk = stride_vn = 1`;
+`stride_qz`/`stride_qh` carry the per-batch/head pointer offset. Collapses to the
+pinned `bwd_body_split` at `BM = 128`, `BD = 64`, `nb = 1`, `D0 = 1024`,
+`N_CTX = 128`, `H = 4`, `stride_qz = 32768`, `stride_qh = 8192`. -/
+theorem bwd_body_splitG (Q K V Out DO DQ DK DV L M Delta : RegionName) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 nb BM BD : Nat) :
+    (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
+      stride_qz stride_qh BD 1 stride_qz stride_qh BD 1 stride_qz stride_qh BD 1
+      Z H N_CTX D0 nb BM BD BM).toAlgKernel.body
+      = bwdPreLoopG K V DK DV stride_qz stride_qh D0 BM BD H
+        ++ [Stmt.forRange "start_n" 0 nb 1
+              (bwdOuterBodyG Q DO DQ Delta M sc stride_qz stride_qh D0 BM BD nb N_CTX)] := by
+  unfold triton_attention_bwd_kernel bwdPreLoopG bwdOuterBodyG bwdInnerBodyG
+    bwdMkPtrG bwdMkPtrLoG
   rw [ComputeKernel.toAlgKernel_mk]
   simp only [ComputeStmt.listToAlgorithm?_cons_assign_alg,
     ComputeStmt.listToAlgorithm?_cons_assign_compute,
