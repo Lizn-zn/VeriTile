@@ -52,8 +52,10 @@ supporting head-slice + per-store track (one Q/K head, one row):
   └─ rope_backward_k1_head_compute_correct
 ```
 
-Full-kernel offset disjointness within a half pair is supplied by
-`qFirstHalf_ne_qSecondHalf` / `kFirstHalf_ne_kSecondHalf`.
+Full-kernel offset disjointness within a half pair is discharged inline (by
+`omega`) in the readback peel; `qFirstHalf_ne_qSecondHalf` /
+`kFirstHalf_ne_kSecondHalf` state the same fact standalone but are not invoked by
+the body proof.
 
 ## Modeling boundary
 
@@ -300,7 +302,7 @@ theorem newAdd_value_eval (s : BlockState) (PN PH : Nat)
   simp only [Tile.bop_data, Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
     Broadcast.leftIndex_leadR, Broadcast.rightIndex_leadR]
 
-/-- `new_*_tile_2 = t2·cos − t1·sin` value recipe (second-half backward store). -/
+/-- `new_*_tile_2 = t1·cos − t2·sin` value recipe (second-half backward store). -/
 theorem newSub_value_eval (s : BlockState) (PN PH : Nat)
     (t1 t2 : Tile .real [PN, PH]) (cosrow sinrow : Tile .real [PH])
     (n1 n2 cn sn : RegName)
@@ -764,12 +766,12 @@ The kernel issues four stores in sequence:
   4. K at `second_half_k_offsets = first_half_k_offsets + hd / 2`
 
 For the Q first-half readback we
-* strip the K-side foldls via `foldl_writeMem_const_region_prop_masked_readMem_other`
+* strip the K-side foldls via `foldl_writeMem_const_region_bool_masked_readMem_other`
   (cross-region: `Q ≠ K`);
 * strip the Q second-half foldl via
-  `foldl_writeMem_same_region_disjoint_offsets_readMem` (intra-region,
+  `foldl_writeMem_same_region_disjoint_offsets_readMem_bool` (intra-region,
   disjoint offsets thanks to the `+ hd / 2` shift);
-* finally apply `scatter_readback_prop_masked_nd` to the Q first-half foldl.
+* finally apply `scatter_readback_prop_masked_nd_of_true` to the Q first-half foldl.
 
 Disjointness uses `hd / 2 + hd / 2 ≤ hd` and the active-region bound
 `d < hd / 2` to rule out wrap-around between adjacent heads. -/
@@ -895,7 +897,7 @@ theorem qFirstHalf_ne_qSecondHalf
 
 Mirrors the Q first-half proof: target offset is `qFullSecondOffset`. The
 foldl-stack is `Q1 . Q2 . K1 . K2` (innermost to outermost); we peel K2, K1
-(cross-region), then apply `scatter_readback_prop_masked_nd` to Q2, and in
+(cross-region), then apply `scatter_readback_prop_masked_nd_of_true` to Q2, and in
 the inactive case peel Q1 via offset-disjointness. -/
 
 /-- Spec for the full kernel's Q second-half output under

@@ -37,8 +37,7 @@ lane loads from the strided row).
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The `other=-float('inf')` masked-load default does not affect any
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The `other=-float('inf')` masked-load default does not affect any
 in-bounds (`col_offsets < n_cols`) lane, which is all the spec constrains;
 out-of-bounds output columns are preserved verbatim. No output/input
 disjointness is assumed: the row is read into registers before the scatter.

@@ -30,11 +30,10 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_kernel_genuine_output_compute_correct_general      ← GENERAL TOP THEOREM (dimension-parameterized)
-  ├─ attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ ClosedForm.attention_kernel_genuine_output_compute_correct
-       └─ ClosedForm.attention_kernel_exec    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
-            └─ (every Out lane = genuine closed form `attentionKernelSpec`)
+ClosedForm.attention_kernel_genuine_output_compute_correct_general  ← GENERAL TOP THEOREM (dimension-parameterized)
+       (lowers surface → algorithm inline via computeCorrect_of_toAlgKernel)
+  └─ ClosedForm.attention_kernel_exec_general    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
+       └─ (every Out lane = genuine closed form `attentionKernelSpec`)
 ```
 
 ## Modeling boundary
@@ -51,8 +50,7 @@ The top summary asserts the **genuine** closed form: every observable `Out` lane
 equals the base-2 streaming-softmax `attentionKernelSpec` (= `attnGenScore fscore
 vFlat`) of the loaded Q/K/V tiles under the kernel's actual bias-augmented per-key
 score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec`,
-NOT a self-referential readback. The `final_store` lemmas isolate the final
-`acc / l_i` store (`normalizedAccValue`). This is a single-program
+NOT a self-referential readback. This is a single-program
 scope (the store is unmasked at this shape since `N_CTX` is a multiple of
 `BLOCK_M`); cross-program composition into the full output is the trusted host
 boundary.
@@ -197,12 +195,12 @@ sorry-free; this section supplies the kernel-specific `evalOp` reductions
 (`makeBlockPtrDyn`/`makeBlockPtr`-with-dynamic-row-offset and the K/V/Q
 block-pointer loads at their resolved contiguous addresses) plus the genuine
 score/tile specification `fscore`/`qRaw`/`kFlat`/`vFlat`/`b0Val`/`b1Val`. The
-remaining `exec`-side assembly (preLoop base case, the 15-statement loop-body
+`exec`-side assembly (preLoop base case, the 15-statement loop-body
 invariant step over `forRangeDyn`, the `acc /= l_i` + block-pointer-store
-epilogue, and the `ComputeCorrect.Realizes` bench bridge) mirrors
-`VeriTile.Examples.AttentionForwardClosedForm`, swapping in the generalized
-`mPg`/`lPg`/`oPg` invariant, the `forRangeDyn` loop driver, and these block-ptr
-lemmas. -/
+epilogue, and the `ComputeCorrect.Realizes` bench bridge) is built in-file,
+mirroring `VeriTile.Examples.AttentionForwardClosedForm`, swapping in the
+generalized `mPg`/`lPgK`/`oPg` invariant, the `forRangeDyn` loop driver, and
+these block-ptr lemmas. -/
 
 namespace ClosedForm
 

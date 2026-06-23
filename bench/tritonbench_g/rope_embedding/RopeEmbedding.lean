@@ -29,9 +29,9 @@ per-program statement covers every program of the grid.
 ```
 rope_embedding_python_case{1,2,3,4}_output_summary    ← TOP (abbrev aliases)
   = rope_embedding_python_case{1,2,3,4}_forward_backward_summary
-      ├─ rope_embedding_python_caseN_forward_surface_toAlgorithm_supported
-      ├─ rope_embedding_python_caseN_backward_surface_toAlgorithm_supported
-      │     └─ rope_embedding_surface_toAlgorithm_supported
+      ├─ rope_embedding_python_caseN_forward_surface_toAlgorithm_supported  ┐
+      ├─ rope_embedding_python_caseN_backward_surface_toAlgorithm_supported ┤
+      │     └─ rope_embedding_surface_toAlgorithm_supported  (shared by both)
       ├─ rope_embedding_python_caseN_first_half_compute_correct
       │     └─ rope_embedding_forward_first_half_compute_correct
       │          └─ rope_embedding_forward_first_half_correct
@@ -62,7 +62,7 @@ loaded and the backward spec uses the `sin1 := -sin1` flip. Scoping is
 active lanes `col_offsets < head_dim//2`; out-of-bounds lanes are preserved
 verbatim. The four `caseN` summaries instantiate the proved generic lemmas at
 the concrete shapes of the Python `test_case_{1..4}` (and the `BACKWARD_PASS`
-heuristic is modeled by the `Bool` argument; `@triton.autotune` is not modeled).
+heuristic is modeled by the `Bool` argument).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RopeEmbedding

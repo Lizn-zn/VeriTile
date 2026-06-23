@@ -33,10 +33,11 @@ rope_transform_python_forward_output_summary          ← TOP THEOREM (genuine)
   ├─ rope_transform_k0_forward_correct  → ropeForwardKernelK0Spec  (k1·cos − k2·sin)
   └─ rope_transform_k1_forward_correct  → ropeForwardKernelK1Spec  (k2·cos + k1·sin)
        each reads back one full `[pad_n_qh, pad_hd/2]` store from the REAL
-       `triton_rope_surface` (`BACKWARD_PASS = false`) via `rope_forward_body_steps`
+       `triton_rope_surface` (`BACKWARD_PASS = false`), bridging the surface to
+       its body via `rope_exec_eq` (which uses `triton_rope_surface_forward_body :
+       (surface).body = ropeForwardBody`, by rfl) and then `rope_forward_body_steps`
 
-rope_forward_body_steps (the load-bearing lemma)
-  ├─ triton_rope_surface_forward_body : (surface).body = ropeForwardBody     (by rfl)
+rope_forward_body_steps (the load-bearing lemma, steps `ropeForwardBody` directly)
   ├─ 22 prologue assigns stepped via the standalone offset/mask/load recipes
   │    (firstHalf_offsets_eval, firstMask_eval, ptr_plus_offsets_eval,
   │     load_ptr_maskOther_real, …; expandDim wall handled by the *_arange recipes)
@@ -50,8 +51,9 @@ rope_kernel_o0o1_row_all_outputs_compute_correct
   └─ rope_kernel_o0o1_row_o1_compute_correct → rope_kernel_o0o1_row_o1_correct
 ```
 
-Offset disjointness within a half pair is supplied by
-`qFirstHalf_ne_qSecondHalf` / `kFirstHalf_ne_kSecondHalf`.
+Offset disjointness within a half pair is discharged inline (by `omega`) in the
+readback peel; `qFirstHalf_ne_qSecondHalf` / `kFirstHalf_ne_kSecondHalf` are
+standalone statements of the same fact but are not invoked by the body proof.
 
 ## Modeling boundary
 

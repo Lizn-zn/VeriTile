@@ -2762,13 +2762,14 @@ The next stage (full assembly) chains these via `stepStmts.cons_some` /
 `forRangeAux` invariants, exactly as `LayerNormKernels` chains its per-stmt
 `have h_k : stepStmt … = some (… .setReg …)` facts. The backing surface
 definitions and the genuine closed forms (`bwdDQInterClosed`, `bwdDKInterClosed`,
-`bwdDGSummand`, `bwdDGClosed`) are already banked above; only the assembly that
+`bwdDGSummand`, `bwdDGClosed`) are already banked above, and the assembly that
 threads the reverse `cum_grad_dg` scan + `last_g` capture through these recipes
-remains.
+is now complete, sorry-free.
 
 `s_qk_h`, `DK`, `BK`, etc. are kept symbolic so each recipe is reusable at any
-loop row / pointer position; the assembly instantiates the test shape
-(`s_qk_h = 64`, `DK = 8`, `BT = 2`, `BK = 4`). -/
+loop row / pointer position; the assembled main theorems stay symbolic over
+these block sizes (the Python test shape `s_qk_h = 64`, `DK = 8`, `BT = 2`,
+`BK = 4` is only a recovered instance, not a fixed assumption). -/
 
 section BwdRecipes
 

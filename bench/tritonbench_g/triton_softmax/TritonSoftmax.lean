@@ -35,8 +35,7 @@ the normalizing division.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The row reduction (`tl.max` / `tl.sum`) runs over the full padded
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The row reduction (`tl.max` / `tl.sum`) runs over the full padded
 `BLOCK_SIZE` tile, with masked lanes set to `⊥` matching `other=-float("inf")`,
 so padding lanes do not contribute to the max or sum. Out-of-bounds lanes
 (`i ≥ n_cols`) are not stored, preserving the prior output value. The spec

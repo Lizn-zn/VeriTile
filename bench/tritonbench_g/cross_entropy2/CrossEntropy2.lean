@@ -45,9 +45,8 @@ results are the proof-oriented store *slices* (precomputed
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.heuristics`
-(`HAS_SMOOTHING`) and `@triton.autotune` are not modeled (`HAS_SMOOTHING`/`SPLIT`
-are plain `Bool` parameters). The `.to(tl.float32)`/`.to(tl.int64)` casts erase
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `HAS_SMOOTHING`/`SPLIT`
+are plain `Bool`/`constexpr` parameters modeled as `Bool`. The `.to(tl.float32)`/`.to(tl.int64)` casts erase
 to identity at the algorithm layer. The forward LSE uses
 `other = -float("inf")` for out-of-block lanes. The masked `dlogits` store leaves
 inactive lanes (`col_offsets ≥ n_cols`) untouched and assumes the per-tile output

@@ -39,7 +39,7 @@ lanes hold `softmaxSpec`, out-of-bounds lanes are preserved.
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the approximate `tl.exp`
-is modeled as exact `WithBot.realExp`; `@triton.autotune` / `num_warps` are not
+is modeled as exact `WithBot.realExp`; the manual `num_warps` heuristic is not
 modeled. The `.to(tl.float32)` casts on the loaded row and mask reduce to the
 identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`). The
 reduction runs over the full `BLOCK_SIZE` block, but masked input lanes load `⊥`

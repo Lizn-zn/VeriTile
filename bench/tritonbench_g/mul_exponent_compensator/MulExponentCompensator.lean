@@ -37,8 +37,7 @@ optimizer/reduction oracle applies. Inputs are presented via `InputLoadedAt`
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The Python compile-time literal `2.0 ** (127 - 15)` is modeled by the
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The Python compile-time literal `2.0 ** (127 - 15)` is modeled by the
 noncomputable real constant `exponentCompensator` and injected as a real scalar
 antiquote — its bit pattern (a float32 exponent-bias compensator) is not
 otherwise interpreted. No output/input disjointness is assumed: the input is

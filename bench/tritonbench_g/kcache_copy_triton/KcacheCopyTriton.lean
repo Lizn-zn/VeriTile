@@ -31,8 +31,10 @@ copy_to_kcache_seqlen_n1_surface_output_summary       ← TOP THEOREM (decode pa
   ├─ copy_to_kcache_seqlen_n1_surface_toAlgorithm_supported    surface lowers
   └─ copy_to_kcache_seqlen_n1_surface_compute_correct  ← ComputeCorrect over the scatter
        └─ copy_to_kcache_seqlen_n1_surface_correct       executed-state readback per cell
-            ├─ copy_to_kcache_seqlen_n1_old_layout_block_compute_correct   (legacy layout)
-            └─ copy_to_kcache_seqlen_n1_new_layout_xblock_compute_correct  (split-x layout)
+
+(separate consumers of _surface_compute_correct, not on the top-theorem path:
+  copy_to_kcache_seqlen_n1_old_layout_block_compute_correct   (legacy layout)
+  copy_to_kcache_seqlen_n1_new_layout_xblock_compute_correct  (split-x layout))
 ```
 The `n_tokens > 1` (prefill) path is covered at the surface-lowering level only
 (`copy_to_kcache_seqlen_n_kernel{,_signed}_toAlgorithm_supported` plus the
@@ -51,8 +53,8 @@ cellwise readback correctness is proved for the `n_tokens = 1` decode path; the
 `cur_token_shift` arithmetic is outside the Nat-only pointer readback). The
 destination block id is gathered from `BLOCK_TABLES` and the in-block slot from
 `seq_lengths`; the readback theorems carry an `hOutInj` injectivity side
-condition (no two cells of one program alias). `@triton.autotune` is not
-modeled.
+condition (no two cells of one program alias). The launch-time `num_warps`
+heuristic is not modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KcacheCopyTriton

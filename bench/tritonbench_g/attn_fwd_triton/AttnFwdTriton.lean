@@ -31,9 +31,9 @@ statements cover every program of the grid.
 attn_fwd_triton_output_summary_general                     ← TOP THEOREM
   ├─ attn_fwd_triton_surface_toAlgorithm_supported          surface lowers to the algorithm layer
   └─ aftg_exec_generalG                                     full surface executes; Out = closed form
+       ├─ aftgPreLoopG_invariant                            preLoop establishes the ⊥-seed invariant
        ├─ aftgLoopBodyG / aftg_attn_stepG                   per-block streaming loop step (forRange_inv)
-       └─ attn_fwd_triton_final_store_slice_compute_correct
-            └─ attn_fwd_triton_final_store_slice_correct    ← algorithm-layer readback per lane
+       └─ aftgPostLoopG_eval                                postLoop normalizes + stores; Out readback
 ```
 
 ## Modeling boundary
@@ -5018,7 +5018,7 @@ namespace AftgFoundation
 open VeriTile.Triton
 
 /-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
-`N_CTX`/`HEAD_ACTIVE`). Mirrors `aftgLoopBody` with the test-shape numerals replaced
+`N_CTX`/`HEAD_ACTIVE`). Mirrors `aftLoopBody` with the test-shape numerals replaced
 by the corresponding dimension parameters. -/
 def aftgLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
@@ -5128,7 +5128,7 @@ def aftgLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat
 
 /-- General preLoop (22 deterministic prefix statements), symbolic dims with
 contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`).
-Mirrors `aftgPreLoop` with the test-shape numerals replaced by the corresponding
+Mirrors `aftPreLoop` with the test-shape numerals replaced by the corresponding
 dimension parameters. -/
 def aftgPreLoopG (Q K V QScale KScale Out : RegionName)
     (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
@@ -5412,8 +5412,8 @@ theorem attnFwdTritonOutSpecG_eq_streaming
 
 /-! ### General ⊥-seed online-softmax foundation math
 
-Mirrors the pinned `aftgKV`/`aftgKeysUpto`/`aftgBlock`/`aftgRunningMax`/`aftgStateBot`/
-`aftgStateBot1` over symbolic `BLOCK_M`(query rows)/`BLOCK_DMODEL`(channels)/
+Mirrors the pinned `aftKV`/`aftKeysUpto`/`aftBlock`/`aftRunningMax`/`aftStateBot`/
+`aftStateBot1` over symbolic `BLOCK_M`(query rows)/`BLOCK_DMODEL`(channels)/
 `SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
 (`osStepBot`, `osStepBot_foldl_consistent`, `osStepBot_block_eq`,
 `osStepBot_bot_seed_indep`, `aftg_filterMap_window_split`, `aftg_filterMap_foldr_sup`,

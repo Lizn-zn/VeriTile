@@ -34,8 +34,8 @@ applies. Inputs are presented via `InputLoadedAt` (the values each lane loads).
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. No output/input disjointness is assumed: both inputs are read into
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). No output/input
+disjointness is assumed: both inputs are read into
 registers before the scatter, so the result is correct even if `output_ptr`
 aliases an input.
 -/

@@ -30,7 +30,8 @@ var_len_copy_kernel_triton_small_length_output_summary    ← TOP THEOREM
        └─ var_len_copy_kernel_triton_small_length_correct     algorithm-layer readback per lane
 ```
 The per-chunk slice `var_len_copy_one_chunk_{correct,compute_correct}` proves a
-single fixed chunk index, underlying the single-iteration full-kernel proof.
+single fixed chunk index; it is an independent proof that parallels (rather than
+feeds) the single-iteration full-kernel proof.
 
 ## Modeling boundary
 
@@ -42,7 +43,7 @@ Python-tested **small-length regime** `0 < length ≤ BLOCK_SIZE` (lengths
 loop runs exactly once (`chunk = 0`); longer multi-chunk segments are not
 covered by the full-kernel theorem (only by the per-chunk slice). The proofs
 carry an `hOutInj` injectivity side condition on the destination offsets (no two
-lanes of one program alias). `@triton.autotune` is not modeled.
+lanes of one program alias).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.VarLenCopy

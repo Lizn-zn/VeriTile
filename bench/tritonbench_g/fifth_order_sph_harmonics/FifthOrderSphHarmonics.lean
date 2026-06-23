@@ -570,7 +570,7 @@ theorem fifth_order_fwd_channel_store_slice_compute_correct
   simpa [hActive] using h
 
 /-- Disjointness helper: the Y00 readback offset at lane `i` differs from
-any `Y0k` store offset at lane `idx`, for `k ∈ [1, output_stride - 1]`. -/
+any `Y0k` store offset at lane `idx`, for `k ∈ [1, 10]`. -/
 private theorem y0k_offset_disjoint
     (s : BlockState) (block_size col_offset output_stride : Nat)
     (hStride : 10 < output_stride)
@@ -605,7 +605,7 @@ private theorem y0k_offset_disjoint
       exact (Nat.mul_lt_mul_right hpos).mpr hlt
     have h2 : idx.1.val * output_stride ≤ idx.1.val * output_stride + k := Nat.le_add_right _ _
     exact absurd hkey (Nat.ne_of_lt (Nat.lt_of_lt_of_le h1 h2))
-  · -- i.val = idx.1.val: kkey reduces to 0 = k, contradicts hk_pos.
+  · -- i.val = idx.1.val: hkey reduces to 0 = k, contradicts hk_pos.
     rw [heqv] at hkey
     have : k = 0 := by omega
     exact absurd this (Nat.pos_iff_ne_zero.mp hk_pos)
@@ -2705,9 +2705,9 @@ they remain disjoint by the stride argument.
 The polynomial expressions for `g_x`, `g_y`, `g_z` (11 terms each, ~30
 constants per dimension) are too lengthy to verify by full transcription
 within the time budget. We provide the disjointness infrastructure here
-(`coord_dim_offset_disjoint`) and an existence theorem
-(`fifth_order_bwd_surface_succeeds`) that demonstrates the kernel is
-well-formed and the disjoint-offsets strip pattern is applicable. The
+(`coord_dim_offset_disjoint`) and a lowering theorem
+(`fifth_order_bwd_surface_toAlgorithm_supported`) that demonstrates the kernel
+lowers to the algorithm layer. The
 polynomial-correctness specs `gradXSpec`/`gradYSpec`/`gradZSpec` with
 their `_correct`/`_compute_correct` lemmas are left for future work. -/
 

@@ -1144,12 +1144,6 @@ theorem chunk_gla_simple_exec_glaOutput
 
 /-! ## Public Python-case coverage summaries
 
-Each summary certifies that (i) the full GLA producer surface lowers to the
-algorithm layer, and (ii) under the producer hypothesis `hBO` the output store
-realizes the genuine GLA closed form `glaOutput` at the case's exact shape. -/
-
-/-! ## Public Python-case coverage summaries
-
 Each summary certifies that (i) the full GLA forward surface lowers to the
 algorithm layer, and (ii) executing it writes the genuine GLA closed form
 `glaOutput` to `o` at every active output lane — derived end-to-end from

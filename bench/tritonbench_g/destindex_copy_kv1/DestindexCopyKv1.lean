@@ -43,7 +43,6 @@ row index is data-dependent: `dest_index = Dest_loc[cur_index]`, read from the
 nat region `Dest_loc`; the proofs carry an `hOutInj` side condition that the
 resulting output offset map is injective over the tile (no two cells of one
 program alias), which the host guarantees via distinct dest rows / strides.
-`@triton.autotune` is not modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.DestindexCopyKv1

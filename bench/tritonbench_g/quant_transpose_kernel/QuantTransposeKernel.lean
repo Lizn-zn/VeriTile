@@ -29,7 +29,7 @@ quantize_global_transpose_python_case{1,2,3,4}_blocked_output_summary  ← TOP T
   └─ quantize_global_transpose_python_case{1..4}_compute_correct       per-Python-shape compute correctness
        ├─ quantize_global_transpose_scaled_store_slice_compute_correct ← ComputeCorrect over the masked transposed store
        │    └─ quantize_global_transpose_scaled_store_slice_correct    ← algorithm-layer readback per tile lane
-       └─ quantize_global_transpose_python_case{1,2,3,4}_offset_injective  output-address injectivity per shape
+       └─ quantize_global_transpose_python_case{1,case2_case4,3}_offset_injective  output-address injectivity per shape (cases 2 & 4 share one lemma)
 ```
 
 The pre-rounding spec is `scale127 · (a · absmax_inv)` per lane

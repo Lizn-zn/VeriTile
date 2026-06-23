@@ -36,7 +36,7 @@ ksoftmax_forward_plain_output_summary               ← TOP THEOREM
 The full Python surfaces (`ksoftmax_forward_surface`, the `qk`/`bk` mask
 variants, and `ksoftmax_backward_surface`) each have a `*_toAlgorithm_supported`
 lemma showing they lower to the algorithm layer. The arithmetic correctness is
-proved for the plain forward slice `ksoftmax_forward_plain` (the tested
+proved for the plain forward slice `ksoftmax_forward_plain` (the
 non-mask, non-causal, non-fp16, non-log path): `ksoftmaxSpec` is the exact
 stable softmax over the masked row (`reduceMax`, lane-wise `exp`, `reduceSum`,
 quotient). In-bounds lanes hold `ksoftmaxSpec`, out-of-bounds lanes preserved.

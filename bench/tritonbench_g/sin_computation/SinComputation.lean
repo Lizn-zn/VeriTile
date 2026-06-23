@@ -34,7 +34,7 @@ The spec is plain elementwise `Real.sin (xs i)`. Inputs are presented via
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float), and `tl.sin` is modeled by
-the exact `Real.sin`; `@triton.autotune` is not modeled. No output/input
+the exact `Real.sin`. No output/input
 disjointness is assumed: the input is read into registers before the scatter, so
 the result is correct even if `out_ptr` aliases `in_ptr0`.
 -/

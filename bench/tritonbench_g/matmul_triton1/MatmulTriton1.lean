@@ -32,8 +32,8 @@ matmul_triton1_closed_form_correct                ← TOP THEOREM (ComputeCorrec
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
-`num_warps` are not modeled. The host launch (grid, linear-pid scheduling) is
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The host launch (grid,
+linear-pid scheduling) is
 the trusted boundary; the per-program statement is universally quantified over
 `s`, so it covers every program of the grid. The layout contract is the kernel's
 own contiguity: `x[i,k]` at `X + i·k_size + k`, `y[k,j]` at `Y + k·n_size + j`,
@@ -233,7 +233,7 @@ noncomputable def yElem (s : BlockState) (Y : RegionName) (NS NB N : Nat)
   s.readMem Y (k * NS + colIndex s NS NB N j)
 
 /-- **Genuine GEMM spec**: `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} X[i,k] · Y[k,j]`,
-an instance of the shared `gemmSum` (`Math.Matmul`) with this kernel's `X`/`Y`
+an instance of the shared `gemmSum` (`Kernel.Matmul`) with this kernel's `X`/`Y`
 layout accessors. -/
 noncomputable def matmulSpec (s : BlockState) (X Y : RegionName)
     (KS NS NB M N BLOCK_K numKBlocks : Nat) (i : Fin M) (j : Fin N) : ℝ :=

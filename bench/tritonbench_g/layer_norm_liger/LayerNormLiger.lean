@@ -55,8 +55,7 @@ scalar `Mean` / `RSTD` stores are characterized via `WithBot.unbotD 0` of their
 carriers. This is a single-block kernel: `BLOCK_SIZE` covers the whole row in one
 pass, with the `col_offsets < n_cols` mask handling the padded tail.
 Output/output disjointness among `Y`, `Mean`, `RSTD` is assumed (`Y ≠ Mean`,
-`Y ≠ RSTD`, `Mean ≠ Y`, `Mean ≠ RSTD`, `RSTD ≠ Y`). `@triton.autotune` is not
-modeled.
+`Y ≠ RSTD`, `Mean ≠ Y`, `Mean ≠ RSTD`, `RSTD ≠ Y`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.LayerNormLiger

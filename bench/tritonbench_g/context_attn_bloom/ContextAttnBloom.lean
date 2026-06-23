@@ -1456,7 +1456,7 @@ to equal the surface's `toAlgKernel` loop body by `rfl` (`bloomBody_split`). -/
 (`(√96)⁻¹`, fed `/ log 2` into the base-2 fold so `pow2 (score/log2) = exp score`). -/
 noncomputable def sm_scale_bloom : ℝ := (Real.sqrt (96 : ℝ))⁻¹
 
-/-- The 24 lowered bloom loop-body statements (transcribed from
+/-- The 26 lowered bloom loop-body statements (transcribed from
 `#print context_attn_bloom_fwd_kernel_surface`; checked by `rfl` via
 `bloomBody_split`). -/
 noncomputable def bloomLoopBody (Q K V Req_to_tokens B_req_idx : RegionName) : List Stmt :=

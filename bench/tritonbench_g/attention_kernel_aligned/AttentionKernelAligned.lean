@@ -34,14 +34,14 @@ per-program statement covers every program of the grid.
 ```
 attention_kernel_aligned_python_test_shape_output_summary_general    ← GENERAL TOP THEOREM (dimension-parameterized, genuine, NON-self-referential)
   ├─ attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ ClosedForm.aligned_genuine_output_compute_correct
-       └─ ClosedForm.aligned_exec    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
+  └─ ClosedForm.aligned_genuine_output_compute_correct_general
+       └─ ClosedForm.aligned_exec_general    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
             └─ (every Out lane = genuine closed form `alignedClosedForm`)
 
 genuine producer closed form (sorry-free; exec assembly now connected):
   alignedClosedForm  := attentionRealBase2ScalarScaleBias (loaded Q/K/V) (sm_scale·log2e) (rel_h+rel_w bias)
   alignedClosedForm_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
-  aligned_exec : preLoop (→ invariant 0) + forRangeDyn_inv over aligned_step + aligned_postLoop;
+  aligned_exec : preLoop (→ invariant 0) + forRangeDyn_inv over attn_step + attn_postLoop;
     attnGenScore_eq_alignedClosedForm bridges the genuine `fscore` softmax to `alignedClosedForm`
     (with `log2e = 1.44269504`, the kernel's literal `qk_scale` constant).
 ```

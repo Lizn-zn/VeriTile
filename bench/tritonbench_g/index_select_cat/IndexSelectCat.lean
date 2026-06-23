@@ -34,8 +34,8 @@ cells, with out-of-range cells preserved — no optimizer/reduction oracle appli
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The output offset is the contiguous `i·stride0 + col·stride1`, which is
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The output offset is the
+contiguous `i·stride0 + col·stride1`, which is
 injective in `(i, col)`; the per-cell injectivity hypothesis `hOutInj` captures
 this so a pointwise readback holds. The gathered source row offset is
 data-dependent (read from `index_ptr`) but only feeds the *value*, not the

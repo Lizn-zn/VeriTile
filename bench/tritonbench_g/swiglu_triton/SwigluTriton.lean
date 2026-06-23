@@ -9,8 +9,9 @@ import VeriTile.Triton.Math.Activation
 
 Two SwiGLU kernels. `_swiglu_forward_kernel`: program `row` loads gate `a` and
 value `b` for its row and stores `silu(a) · b` to `c`. `_swiglu_backward_kernel`:
-recomputes `silu(a)` from the upstream gradient `dc` and writes the two input
-gradients in place — `da` into `a_ptr`, `db` into `b_ptr`. Both are masked by
+recomputes `silu(a)` from the loaded gate `a`, then combines it with the upstream
+gradient `dc` and writes the two input gradients in place — `da` into `a_ptr`,
+`db` into `b_ptr`. Both are masked by
 `col_offsets < n_cols`.
 
 ## Scope

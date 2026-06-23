@@ -28,10 +28,9 @@ per-program statement covers every program of the grid.
 diag_ssm_forward_kernel_output_summary           ← TOP THEOREM (forward)
   ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
   └─ diag_ssm_forward_kernel_compute_correct      ComputeCorrect over the time-step stores
-       └─ diag_ssm_forward_kernel_correct
-            └─ diag_ssm_forward_kernel_compute_correct_of_algorithm
-                 └─ diag_ssm_forward_kernel_alg_post_of_exec
-                      └─ diagSsmForwardForLoop_context_of_preloop   (loop-invariant fold)
+       └─ diag_ssm_forward_kernel_compute_correct_of_algorithm
+            └─ diag_ssm_forward_kernel_alg_post_of_exec
+                 └─ diagSsmForwardForLoop_context_of_preloop   (loop-invariant fold)
 
 diag_ssm_backward_kernel_compute_correct          ← TOP THEOREM (backward)
   └─ diag_ssm_backward_kernel_compute_correct_of_algorithm
@@ -48,7 +47,7 @@ not the proof target). The recurrent state-carry is verified in full here: a
 execution every active output offset holds the SSM spec value
 `diagSsmForwardSpecAt` (and the backward gradient specs) — i.e. the cross-step
 state recurrence is proved, not trusted. Dtype casts erase to the identity.
-`@triton.autotune` is not modeled. Side conditions: output-store-offset
+Side conditions: output-store-offset
 injectivity (`hOutInj`) and output/input region-distinctness hypotheses
 (e.g. `x_ptr ≠ y_ptr`, the gradient-region distinctness chain) are explicit.
 -/

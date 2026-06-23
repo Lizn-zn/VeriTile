@@ -55,13 +55,14 @@ register casts erase to the identity at the algorithm layer (post-erasure all
 dtypes unify to `ℝ`). `cos`/`sin` are modeled as **precomputed inputs** loaded
 from memory, not computed; the `CONJUGATE` flag selects the `sin := -sin` spec.
 The four `caseN` instantiations cover the Python-observable shapes (varying
-`IS_VARLEN`, `IS_SEQLEN_OFFSETS_TENSOR`, `INTERLEAVED`-false, and `CONJUGATE`).
+`IS_VARLEN`, `IS_SEQLEN_OFFSETS_TENSOR`, `INTERLEAVED`, and `CONJUGATE` — e.g.
+case 3 is the `INTERLEAVED = true`, `CONJUGATE = true` path).
 The top summary `rotary_transform_ops_python_output_summary` exposes the
 **genuine** rotary closed form: the full surface lowers to the algorithm layer,
 and both output halves of the non-interleaved rotation body read back to
 `rotaryO0Spec`/`rotaryO1Spec` (`x0·cos − x1·sin`, `x0·sin + x1·cos`) — the
 actual embedding from the precomputed `COS`/`SIN` cache, not a re-executed
-kernel value. The interleaved branch and `@triton.autotune` are not modeled.
+kernel value. The interleaved branch is not modeled at the value level.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RotaryTransformOps

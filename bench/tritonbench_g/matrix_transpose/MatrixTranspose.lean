@@ -37,8 +37,7 @@ address arithmetic). No optimizer/reduction oracle applies.
 
 Arithmetic over addresses is exact `Nat`; element values are over `ℝ` (the
 upstream `float16` dtype is erased — post-erasure all dtypes unify to `ℝ`, so the
-transpose is value-preserving and not bit-accurate). `@triton.autotune` is not
-modeled. The proof carries an explicit no-alias side condition `hOutInj`: the
+transpose is value-preserving and not bit-accurate). The proof carries an explicit no-alias side condition `hOutInj`: the
 output address map `outAddr` must be injective over output tile indices (the
 standard non-overlapping-store assumption); the host's contiguous `out` buffer
 satisfies it.

@@ -53,9 +53,10 @@ out-of-range lanes are masked to `0` (load `other=0.0`, plus the explicit
 `N`. The mean is `(∑ x) / N`, the variance `(∑ (x - mean)²) / N`, and
 `rstd = 1 / sqrt(var + eps)`; the affine step is `(x - mean) * rstd * w`. The
 fullN theorem requires only `0 < BLOCK_SIZE` plus output/input region
-disjointness (`X ≠ Y`, `W ≠ Y`); the one-block slice additionally assumes
-`0 < N ≤ BLOCK_SIZE`. The kernel's unused `stride_*_hd` strides are carried as
-unused Lean parameters. `@triton.autotune` is not modeled.
+disjointness (`X ≠ Y`, `W ≠ Y`); the one-block slice instead assumes
+`0 < N`, `N ≤ BLOCK_SIZE`, and output-offset injectivity (`hOutInj`), and does
+*not* need `0 < BLOCK_SIZE`/`X ≠ Y`/`W ≠ Y`. The kernel's unused `stride_*_hd`
+strides are carried as unused Lean parameters.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.LayernormFwdTriton

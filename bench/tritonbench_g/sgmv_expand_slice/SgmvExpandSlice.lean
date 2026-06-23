@@ -45,8 +45,7 @@ sgmv_expand_slice_closed_form_correct            ← TOP THEOREM (ComputeCorrect
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
-`num_warps` are not modeled. The host launch (grid, the `(pid, cur_batch)` ↦
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The host launch (grid, the `(pid, cur_batch)` ↦
 `(pid_m, pid_n)` linearization, the `pid_m·BLOCK_M > M` early-return, and the
 `lora_index == -1` sentinel skip) is the *trusted boundary*; the per-program
 statement is universally quantified over `s`, so it covers every program of the
@@ -57,8 +56,8 @@ load (`K = BLOCK_K · numKBlocks`) — the kernel's main numeric path. The metad
 loads them. `tl.max_contiguous` / `tl.multiple_of` are layout hints erased into
 the same `% M` / `% N` value expression. The masked store is scoped to *active*
 lanes (`offset_m < M` and `offset_n < N`); an output-offset injectivity
-hypothesis `hInj` (distinct active lanes hit distinct addresses) is a side
-condition, discharged for the Python test shape.
+hypothesis `hInj` (distinct active lanes hit distinct addresses) is carried as an
+open side condition all the way up to the top theorem (not discharged here).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SgmvExpandSlice

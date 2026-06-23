@@ -39,8 +39,8 @@ applies. Inputs are presented via `InputLoadedAt` (the values each lane loads).
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. No output/input disjointness is assumed: each kernel reads its input
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). No output/input
+disjointness is assumed: each kernel reads its input
 into registers before the scatter, so `mul2_kernel` is correct even if `out_ptr`
 aliases `in_ptr0`, and `mul2_inplace_kernel` is correct writing back in place.
 -/

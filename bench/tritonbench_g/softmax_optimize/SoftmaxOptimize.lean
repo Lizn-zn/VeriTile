@@ -295,7 +295,7 @@ being `⊥`-load no-ops), and `laneState_congr` (state depends only on `pid`/`me
 `softmax_kernel_online_v2_surface_exec_correct` assembles the seed, both pass-1
 loops (`pass1LoopA_run`/`pass1LoopB_run`), the `tl.max`/`tl.sum` cross-lane
 reduction collapse to `∑ over Fin N` (`reduction_step`, using the
-lane×tile→`Fin N` partition `VeriTile.Triton.sum_exp_partition`), and the two
+lane×tile→`Fin N` partition `lane_tile_partition`), and the two
 pass-2 store loops (`pass2LoopA_run`/`pass2LoopB_run`) with their
 scatter-readback — establishing that the full `softmax_kernel_online_v2_surface`
 writes `softmaxOptimizeFullSpec` to every active output column. -/

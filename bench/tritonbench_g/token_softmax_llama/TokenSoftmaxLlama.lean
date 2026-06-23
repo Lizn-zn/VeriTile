@@ -41,7 +41,7 @@ The two `output_summary` theorems pin the kernel at the Python test shapes.
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` masking and
-the `exp`/division are real-valued); `@triton.autotune` / `num_warps` are not
+the `exp`/division are real-valued); `num_warps` is not
 modeled. The `(...).to(tl.float32)` cast reduces to the identity at the algorithm
 layer (post-erasure all dtypes unify to `ℝ`). The verified statement is scoped to
 the **final masked probability store** into `Prob_Out`: the expected value is the

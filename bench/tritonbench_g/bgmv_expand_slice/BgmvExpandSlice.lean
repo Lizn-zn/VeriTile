@@ -42,8 +42,8 @@ the slice-offset output address — including the `lora_index = -1` sentinel gua
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The numeric theorem covers the main `ADD_INPUTS = false`, no-`CAST_TYPE`
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The numeric theorem covers
+the main `ADD_INPUTS = false`, no-`CAST_TYPE`
 config (`bgmv_full`); the `ADD_INPUTS` accumulation and `CAST_TYPE` variants are
 exercised only by the lowering theorem on the general surface, not folded into
 the numeric statement. The GEMV `tl.sum` accumulator is modeled exactly as

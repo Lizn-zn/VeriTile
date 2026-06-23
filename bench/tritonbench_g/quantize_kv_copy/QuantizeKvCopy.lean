@@ -32,11 +32,11 @@ destindex_copy_quantize_kv_group_python_output_summary        ← TOP THEOREM
   ├─ ..._group_real_surface_toAlgorithm_supported             surface lowers to the algorithm layer
   ├─ ..._group_real_surface_value_output_compute_correct      genuine int8 value readback
   │    ├─ scatter_readback_int_prop_masked_nd                 per-lane int store readback
-  │    ├─ foldl_writeMemTyped_fp16_prop_masked_readMemValue_int_other   peel trailing fp16 store
+  │    ├─ foldl_writeMem_prop_masked_readMemValue_int_other    peel trailing scale store
   │    └─ ..._group_python_value_offset_injective             no-collision lemma
-  └─ ..._group_real_surface_scale_output_compute_correct      genuine fp16 scale readback
-       ├─ scatter_readback_fp16_prop_masked_nd                per-group fp16 store readback
-       ├─ foldl_writeMemTyped_int_prop_masked_readMemValue_fp16_other   peel prior int store
+  └─ ..._group_real_surface_scale_output_compute_correct      genuine scale readback
+       ├─ BlockState.scatter_readback_prop_masked_nd          per-group scale store readback
+       ├─ foldl_writeMemTyped_int_prop_masked_readMem_other   peel prior int store
        └─ ..._group_python_scale_offset_injective             no-collision lemma
 ```
 
@@ -69,12 +69,12 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! ## Integer / fp16 memory infra
+/-! ## Integer memory infra
 
 The genuine value store writes an `.int` channel (the `.to(tl.int8)` quotient)
-and the scale store writes an `.fp16` channel. The following lemmas are the
-`.int`/`.fp16` analogues of the `.nat`/`.real` scatter-readback and
-cross-channel preservation lemmas in `VeriTile.Triton.Semantics.State`. -/
+while the scale store writes the `.real` channel. The following lemmas are the
+`.int` analogues of the `.nat`/`.real` scatter-readback and cross-channel
+preservation lemmas in `VeriTile.Triton.Semantics.State`. -/
 
 /-- `.int` masked-foldl preservation: writes whose (masked) offsets all miss `o`
 leave `readMemValue .int region o` unchanged. -/
@@ -470,7 +470,7 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_compute_correct
   simpa [hActive] using Option.some.inj h
 
 /-- Proof-oriented scale-writeback slice of `quantize_kv_copy.py`'s grouped
-`_fwd_kernel_destindex_copy_kv`. Companion to the value-store slice: this
+`_fwd_kernel_destindex_copy_quantize_kv`. Companion to the value-store slice: this
 covers the 1D `Out_scale` writeback from a precomputed `Scale` tile under
 the destination-indexed grouped addressing. -/
 def destindex_copy_quantize_kv_group_scale_store_slice

@@ -46,9 +46,8 @@ discharged ComputeCorrect results are the proof-oriented store *slices*
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.heuristics` and
-`@triton.autotune` are not modeled (`DO_SOFTCAPPING`/`DO_LOGIT_SCALING` are plain
-`Bool` parameters). The hard-coded `label_idx != -100` sentinel is preserved as
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.heuristics` is
+not modeled (`DO_SOFTCAPPING`/`DO_LOGIT_SCALING` are plain `Bool` parameters). The hard-coded `label_idx != -100` sentinel is preserved as
 the literal `-100`. The `.to(tl.float32)`/`.to(tl.int32)`/`.to(tl.int64)` casts
 erase to identity at the algorithm layer. The forward logits load uses
 `other = -float("inf")` for out-of-vocab lanes. The masked backward store leaves

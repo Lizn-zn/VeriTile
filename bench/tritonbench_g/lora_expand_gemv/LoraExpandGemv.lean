@@ -49,8 +49,8 @@ bridge `reduceSum_active_eq_spec` collapses the `tl.sum` over `BLOCK_K` keys to
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The full theorem holds for arbitrary `split_n_length` and `BLOCK_N`
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The full theorem holds for
+arbitrary `split_n_length` and `BLOCK_N`
 (`0 < BLOCK_N`), with the `for n` loop running `⌈split_n_length/BLOCK_N⌉` blocks;
 masked lanes load `0` (matching `other=0.0`). The verified path is
 `ADD_INPUTS = false`, no `CAST_TYPE`, and the masked input load (general `EVEN_K`

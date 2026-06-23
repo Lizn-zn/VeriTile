@@ -284,8 +284,8 @@ For program `(start_m, cur_bh)`, query lane `i` (global row
 `gi = start_m·BLOCK_M + i`), streamed key index `j`, head channel `e`:
 
 * **gather**    `kv_loc(j) = Req_to_tokens[stride_b·req_idx + stride_s·j]` — the
-  physical token slot read by `kv_loc = tl.load(Req_to_tokens + …)` (line 108).
-* **raw score** `raw i j = Σ_e Q[gi,e]·K[kv_loc(j),e]` (`tl.dot q k`, line 117);
+  physical token slot read by `kv_loc = tl.load(Req_to_tokens + …)` (line 120).
+* **raw score** `raw i j = Σ_e Q[gi,e]·K[kv_loc(j),e]` (`tl.dot q k`, line 129);
 * **scale**     `qk·sm_scale` with `sm_scale = (1/√D)·1.4426950408889634`;
 * **softmax**   base-2 `tl.math.exp2`;
 * **mask**      `(gi + prompt_cache_len) ≥ j`: future keys get score `-1e8`, i.e.
@@ -1861,12 +1861,12 @@ theorem ctx_evalOp_load_region_maskOther {dtype : TileDType} {shape : TileShape}
 
 /-! ## exec-assembly: preLoop (Milestone 1)
 
-The compiled body of `context_attn_fwd_kernel_int8kv_surface` at the Python test
+The compiled body of `context_attn_llama_fwd_kernel_surface` at the Python test
 shape (`BLOCK_M = BLOCK_N = BLOCK_DMODEL = 128`, `H = 16`, `kv_group_num = 1`,
-contiguous strides) is a 24-statement list: 19 preLoop statements, the
-`forRangeDyn start_n 0 (block_mask·block_end_loc) 128` streaming loop (18-stmt
+contiguous strides) is a 25-statement list: 20 preLoop statements, the
+`forRangeDyn start_n 0 (block_mask·block_end_loc) 128` streaming loop (19-stmt
 body), and 4 post-loop statements (`acc /= l_i`, `off_o`, `out_ptrs`, masked
-store). This section banks the **preLoop** execution: the 19 deterministic
+store). This section banks the **preLoop** execution: the 20 deterministic
 prologue statements step a clean input state to the loop-entry state, exposing
 every register the loop invariant / loop body reads back (`m_i = ⊥` seed,
 `l_i`/`acc = 0` seeds, the scaled-and-masked `q` tile, the index vectors, the
@@ -1999,7 +1999,7 @@ theorem ctxRowMask_eval {BM D : Nat} (s : BlockState) (gOM : Fin BM → Nat) (sl
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **PreLoop execution (Milestone 1).** From a clean input state (`undef = 0`),
-the 19 deterministic prologue statements step to the loop-entry state, exposing
+the 20 deterministic prologue statements step to the loop-entry state, exposing
 every register the streaming loop / its invariant reads back: the runtime scalars
 (`start_m`, `cur_batch = pid₁/16`, `cur_head = pid₁%16`, `cur_kv_head`,
 `prompt_cache_len`, `cur_batch_in_all_start_index`, `cur_batch_seq_len`,
@@ -2699,7 +2699,7 @@ theorem ctxBody_split (Q K V Out : RegionName)
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **LoopBody execution (Milestone 2 / M1).** The 18 lowered loop-body statements,
+/-- **LoopBody execution (Milestone 2 / M1).** The 19 lowered loop-body statements,
 from a state exposing the loop-entry registers, step to a final state whose
 running-softmax registers carry one more block of the online-softmax recurrence:
 `m_i = max(m_i, max(qk·sm−sentinel, 1))`, `l_i = l_i·α + Σexp2(qk−m_ij)`,
@@ -2949,7 +2949,7 @@ theorem ctxLoopBody_steps (Q K V Req_to_tokens B_req_idx : RegionName) (sin : Bl
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **M3 — `ctx_attn_step`: the streaming loop body advances `ctxInvariant` by one
-block.** From the invariant at block `c` (`i = c·128`, `(c+1)·128 ≤ S`), the 18
+block.** From the invariant at block `c` (`i = c·128`, `(c+1)·128 ≤ S`), the 19
 lowered loop-body statements step to the invariant at block `c+1`. The running
 `m_i`/`l_i`/`acc` registers advance by one `osStepBot` block over `ctxG` — proved
 via `gStateBot_succ_explicit` (the explicit one-block rescale-and-add) matched
@@ -3458,7 +3458,7 @@ theorem gStateBot_zero (S : Nat) (g : Fin S → ℝ × ℝ) : gStateBot S 0 g = 
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **`context_attn_fwd.py` whole-kernel exec assembly (BLOCK_M = 128).** Steps the
+/-- **`context_attn_llama.py` whole-kernel exec assembly (BLOCK_M = 128).** Steps the
 entire faithful surface and reads off the genuine masked closed form
 `contextAttnExactFoldM` at every active `Out` lane (inactive lanes preserved). -/
 theorem context_attn_llama_exec_block128
@@ -3663,7 +3663,7 @@ def ctxFwdBel (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BM : 
   let b := sl + plen
   if a < b then a else b
 
-/-- **Genuine closed-form output value** of `context_attn_fwd.py` at the Python test
+/-- **Genuine closed-form output value** of `context_attn_llama.py` at the Python test
 shape, BLOCK_M = 128: the boundary-masked causal-softmax fold `contextAttnExactFoldM`
 of the loaded Q/K/V memory — a pure function of memory, NOT the kernel's executed
 readback. -/
@@ -3695,7 +3695,7 @@ def ctxFwdWindow64 (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) :
   let bm := if 64 * s.pids 0 < sl then 1 else 0
   128 * ((bm * bel + 127) / 128)
 
-/-- **Genuine closed-form output value** of `context_attn_fwd.py` at the Python test
+/-- **Genuine closed-form output value** of `context_attn_llama.py` at the Python test
 shape, BLOCK_M = 64 (Tesla): the boundary-masked causal-softmax fold
 `contextAttnExactFoldM` of the loaded Q/K/V memory — a pure function of memory, NOT
 the kernel's executed readback. -/
@@ -3707,8 +3707,8 @@ noncomputable def ctxFwdGenuineOutValue64
     (ctxFwdBel s B_Seqlen B_Prompt_Cache_Len 64) idx
 
 
-/-- The Python-shape (Tesla) preLoop: the first 19 lowered statements of the
-context surface kernel at `BLOCK_M = 64` (`offs_n = arange 64`, `block_start_loc =
+/-- The Python-shape (Tesla) preLoop: the first 20 lowered statements of the
+context surface kernel at `BLOCK_M = 64` (`offs_n = arange 128`, `block_start_loc =
 64·start_m`, q/acc rows `[64, 128]`). -/
 def ctxPreLoop64 (Q : RegionName) (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat) :
     List Stmt :=
@@ -4019,7 +4019,7 @@ theorem ctxPreLoop_eval64
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
-/-- The 18 lowered loop-body statements of the Tesla-shape context surface body
+/-- The 19 lowered loop-body statements of the Tesla-shape context surface body
 (`BLOCK_M = 64`, `BLOCK_N = BLOCK_DMODEL = 128`: only the query/row axis is 64; the
 key tile stays `[128,128]`, qk/p/acc rows are 64). -/
 noncomputable def ctxLoopBody64 (Q K V Req_to_tokens B_req_idx : RegionName) : List Stmt :=
@@ -4153,7 +4153,7 @@ theorem ctxBody_split64 (Q K V Out : RegionName)
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **LoopBody execution (Tesla, BLOCK_M = 64).** The 18 loop-body statements advance
+/-- **LoopBody execution (Tesla, BLOCK_M = 64).** The 19 loop-body statements advance
 the running-softmax registers one block, at the `[64,…]` shapes. -/
 theorem ctxLoopBody_steps64 (Q K V Req_to_tokens B_req_idx : RegionName) (sin : BlockState) (SN : Nat)
     (gOM : Fin 64 → Nat) (cb ckvh ch plen sl bel cbsi rqi : Nat)
@@ -4918,7 +4918,7 @@ theorem ctxPostLoop_eval64
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **`context_attn_fwd.py` whole-kernel exec assembly (Tesla, BLOCK_M = 64).** Steps
+/-- **`context_attn_llama.py` whole-kernel exec assembly (Tesla, BLOCK_M = 64).** Steps
 the entire faithful surface and reads off the genuine masked closed form
 `contextAttnExactFoldM` at every active `Out` lane (inactive lanes preserved). The
 streaming step is `BLOCK_N = 128`. -/

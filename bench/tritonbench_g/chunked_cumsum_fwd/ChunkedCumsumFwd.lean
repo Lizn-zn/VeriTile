@@ -52,8 +52,8 @@ chunked_cumsum_fwd_summary_general                            ← TOP THEOREM
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
-`BLOCK_SIZE_H ∈ {1..64}` config set) is not modeled — proofs fix the four
-checked Python shapes (`batch,seqlen,nheads = 2,10,4`, `chunk_size = 5`),
+`BLOCK_SIZE_H ∈ {1..64}` config set) is not modeled — the proofs are
+dimension-general (universally quantified over all `Nat` dimensions and strides),
 covering the four `HAS_DT_BIAS` / `DT_SOFTPLUS` flag combinations. The
 `.to(tl.float32)` casts erase to the identity at the algorithm layer
 (post-erasure all dtypes unify to `ℝ`). The per-block prepared-`dt` store, the
@@ -808,8 +808,8 @@ sibling `chunk_cumsum_kernel`. The genuine `dA_cumsum` specification is
 `dAClosed` — the standalone within-chunk prefix `Finset.sum`
 `Σ_{k ≤ idx.chunk, active} dt[head,k] · A[head]` — never a read-back of the
 kernel's own output. Output-offset injectivity (`dtOutOffset` / `dACsOutOffset`
-injective) is the trusted host-side address-layout side condition, supplied as a
-hypothesis (it is discharged concretely in the Python test-shape corollaries). -/
+injective) is the trusted host-side address-layout side condition, carried as an
+open hypothesis of the dimension-general top theorem. -/
 
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
@@ -902,7 +902,7 @@ injectivity — every output slice realizes its genuine specification, with the
 `dA_cumsum` compute slice realizing the standalone closed form `dAClosed`. This
 removes the test-shape pin: the statement is universally quantified over all
 `Nat` dimension/stride parameters (cf. the symbolic sibling
-`chunk_cumsum_scalar_python_test_shape_summary` generalized over `T`, `BT`). -/
+`chunk_cumsum_scalar_output_summary_general`, generalized over `T`, `BT`). -/
 theorem chunked_cumsum_fwd_summary_general
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)

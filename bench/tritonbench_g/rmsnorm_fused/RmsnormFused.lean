@@ -48,7 +48,7 @@ reciprocal std is `rstd = 1 / sqrt(meanSq + eps)`; the affine step is
 `x_hat * w`. The Python wrapper picks `BLOCK_SIZE ≥ N` (raising otherwise), so
 correctness is stated under the `0 < N ≤ BLOCK_SIZE` precondition, where both
 `range(0, N, BLOCK_SIZE)` loops execute exactly the `off = 0` iteration (single
-block). `@triton.autotune` is not modeled.
+block).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormFused
@@ -67,8 +67,7 @@ runtime precondition. Under the precondition both `range(0, N, BLOCK_SIZE)`
 loops execute exactly the `off = 0` iteration.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `N: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
-  parameters. -/
+- Python `N` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameters. -/
 def rms_norm_fwd_fused
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ) :
     ComputeKernel := triton {

@@ -35,7 +35,7 @@ matmul_kernel_closed_form_correct                 ← TOP THEOREM (ComputeCorrec
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the dot reduction is
 accumulated over `ℝ` and the modeled `tl.cast(..., fp16)` is the placeholder
-`FloatDType.real.cast .fp16`. `@triton.autotune` / `num_warps` are not modeled.
+`FloatDType.real.cast .fp16`.
 The host launch (grid, 2-D program scheduling) is the trusted boundary; the
 per-program statement is universally quantified over `s`, covering every program
 of the grid. The layout contract is the kernel's hard-coded `4096×4096`
