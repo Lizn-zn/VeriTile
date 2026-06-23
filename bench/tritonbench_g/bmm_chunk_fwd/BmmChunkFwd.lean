@@ -560,9 +560,8 @@ theorem bmask_alltrue (s : BlockState) (BN BK chunk_size K c : Nat) (gn : Fin BN
 
 /-! ## Prologue: the scalar pids and index vectors -/
 
-/-- **preLoop scalars** (statements 0–6): the pid derivation plus the three
-index vectors. Steps to a state where `pid_b/pid_c/pid_h/pid_m/pid_n` hold their
-derived values and `offs_m/offs_n/offs_k` hold their readbacks. -/
+/-- **preLoop scalars** (statements 0–6): the pid derivation. Steps to a state
+where `pid_b/pid_c/pid_h/pid_m/pid_n` hold their derived values. -/
 theorem preLoop_scalars (s : BlockState) (chunk_size ngroups BM BN BK : Nat) :
     ∃ s7,
       stepStmts

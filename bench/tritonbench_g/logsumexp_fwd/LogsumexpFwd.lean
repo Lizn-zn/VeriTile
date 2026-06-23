@@ -42,9 +42,11 @@ logsumexp_fwd_kernel_grid_blockLSE_correct        ← whole-grid per-block block
   └─ logsumexp_fwd_kernel_correct_full            (shared masked-lane core)
 ```
 
-The spec is the standard mathematical `LSE` / `blockLSE` / `partialLSE_full`
-from the `VeriTile.Triton.Math.LogSumExp` (`TiledLogSumExp`) oracle — the math
-is *not* inline-duplicated here.
+The spec is the standard mathematical `LSE` (from
+`VeriTile.Triton.Math.LogSumExp`) together with the tiled
+`blockLSE` / `partialLSE_full` / `scaledLane_full` / `validLanes` (from
+`VeriTile.Triton.Semantics.TiledIndexing`), under the `TiledLogSumExp`
+oracle — the math is *not* inline-duplicated here.
 
 ## Modeling boundary
 

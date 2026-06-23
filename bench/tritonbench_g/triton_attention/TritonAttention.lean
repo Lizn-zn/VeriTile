@@ -14,7 +14,7 @@ import VeriTile.Examples.FlashAttention1
 `triton_attention.py` is a full FlashAttention training pipeline of three
 `@triton.jit` kernels: `_fwd_kernel` (online-softmax forward, stores the output
 `Out` plus the running `L`/`M` log-sum-exp rows), `_bwd_preprocess` (computes
-`NewDO = DO` and the per-row `Delta = sum(DO·O)`), and `_bwd_kernel` (the main
+`NewDO = DO/L` and the per-row `Delta = sum(O·(DO/L))`), and `_bwd_kernel` (the main
 backward producing the `DQ`/`DK`/`DV` gradients, with the score-side `P`/`DS`
 arithmetic as an inner step). Scaling is `1/√D`.
 
@@ -3559,7 +3559,7 @@ value the kernel *literally* stores: `_fwd_kernel` keeps `l_prev` as the running
 final `tl.store(l_ptrs, l_prev)` records exactly this m-shifted sum — **not** the
 un-shifted `Σ exp(score)` nor its log. (Recovering the un-shifted log-sum-exp
 needs the separately stored `M`: `log L + M = log(Σ exp(score))`. See
-`lPartial_eq_exp_fwdLSpec_sub_fwdMSpec`.) The in-loop `l_rcp = 1/l_curr`
+`exp_fwdMSpec_mul_fwdLSpec`.) The in-loop `l_rcp = 1/l_curr`
 division only rescales the output `p`/`acc`; it never touches the stored
 `l_prev`. -/
 noncomputable def fwdLSpec
@@ -13918,12 +13918,12 @@ These definitions give the **genuine** closed-form values that `_fwd_kernel`
 computes — the natural-exp causal attention block (`Out`), the per-row
 log-sum-exp denominator (`L`), and the per-row score maximum (`M`) — written
 against `VeriTile.Triton.attentionRealCausalBlock` and the underlying
-`scaledScore`, **not** re-derived from the kernel's own `exec`. They are the
-intended replacements for the self-referential `producedTritonAttentionForward*`
-carriers below; the exec-reduction bridge to these specs (porting the
-FlashAttention-1 causal exec recipe of `VeriTile/Examples/FlashAttention1/` to
-this `make_block_ptr` / `forRangeDyn` kernel surface, plus the two extra L/M
-masked stores) is the remaining proof stage tracked for this kernel. -/
+`scaledScore`, **not** re-derived from the kernel's own `exec`. The
+exec-reduction bridge to these specs (porting the FlashAttention-1 causal exec
+recipe of `VeriTile/Examples/FlashAttention1/` to this `make_block_ptr` /
+`forRangeDyn` kernel surface, plus the two extra L/M masked stores) is fully
+discharged sorry-free via `ta_exec` (pinned) and `ta_execG` (dimension-general),
+which the genuine `Out`/`L`/`M` store-correctness theorems below invoke. -/
 
 set_option maxHeartbeats 1600000 in
 /-- **Genuine forward `Out`-store correctness.** Every active output lane of the

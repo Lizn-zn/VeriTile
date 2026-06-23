@@ -55,7 +55,7 @@ stores `r` and `mu` are characterized via `WithBot.unbotD 0` wrappers
 covers the whole row in one pass, with the `col_offsets < n_cols` mask handling
 the padded tail. Output/input region disjointness is assumed where a store
 region must not alias another output (`Y ≠ r`, `Y ≠ mu`, `r ≠ Y`, `r ≠ mu`,
-`mu ≠ Y`). `@triton.autotune` is not modeled.
+`mu ≠ Y`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FastLayernorm

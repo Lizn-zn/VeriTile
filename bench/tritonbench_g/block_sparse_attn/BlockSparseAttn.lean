@@ -46,8 +46,8 @@ block_sparse_attn_python_case1_output_closed_form_summary                ← TOP
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp`, `tl.dot`, and the
-`softmax_scale` multiply are not modeled at the bit level); `@triton.autotune`
-is not modeled. The verified result is the **genuine closed form**: the full
+`softmax_scale` multiply are not modeled at the bit level). The verified result
+is the **genuine closed form**: the full
 faithful kernel surface (prologue + CSR `forRangeDyn` online-softmax loop + the
 two masked `out` stores) is unfolded statement-by-statement and proven to write
 `blockSparseAttnClosedForm` (NOT a self-referential executed value) at every
@@ -2450,7 +2450,7 @@ the elaborated `block_sparse_attention_kernel` AST at this shape. `bsa_body_spli
 proves the identity by `rfl`. The loop body is `BSALoopBody`'s 26 algorithm-layer
 statements documented in `section BSARecipes`. -/
 
-/-- The 25 lowered pre-loop statements (static_print marker through `end_l`). -/
+/-- The 29 lowered pre-loop statements (static_print marker through `end_l`). -/
 def bsaPreLoop (Out Q K V : RegionName) (R C : Region .nat) : List Stmt :=
   [ Stmt.ifThen (Op.constBool «false») [],
     Stmt.assign .nat [] "q_seq_len" (Op.constNat 16),
@@ -2838,7 +2838,7 @@ noncomputable def bsaInvariant
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
-/-- **Pre-loop execution.** The 25 deterministic pre-loop statements step a clean
+/-- **Pre-loop execution.** The 29 deterministic pre-loop statements step a clean
 input state (`undef = 0`) to a state satisfying `bsaInvariant … 0` — the loop-entry
 base case (`m_i = ⊥`, `l_i = 0`, `acc = acc2 = 0`, via the `bsaMPartial`/
 `bsaLPartial`/`bsaOPartial` zero recurrences). The streaming data is arbitrary;

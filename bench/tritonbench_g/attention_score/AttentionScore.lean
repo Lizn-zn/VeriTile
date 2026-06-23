@@ -60,12 +60,13 @@ window; case4: smaller sliding-window size). `case1` is a standalone theorem;
 
 ```
 attention_score_python_case1_output_summary_general          ← GENERAL TOP THEOREM (dimension-parameterized, genuine closed form)
-  ├─ attention_score_python_case1_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ attention_score_case1_genuine_compute_correct                masked Out store = case1OutClosedForm
-       └─ attention_score_case1_exec_eq_closedForm               full exec unfold (preLoop+loop+post)
+  ├─ attention_score_kernel_toAlgorithm_supported                 surface lowers to algorithm layer
+  └─ attention_score_case1_genuine_compute_correct_general        masked Out store = case1OutClosedFormG
+       └─ attention_score_case1_exec_eq_closedForm_general       full exec unfold (preLoop+loop+post)
 
-attention_score_python_case1_output_summary                  ← TEST-SHAPE COROLLARY (case 1)
-  └─ attention_score_python_case1_output_summary_general @ Python shape
+attention_score_python_case1_output_summary                  ← TEST-SHAPE PINNED SUMMARY (case 1, independent chain)
+  ├─ attention_score_python_case1_surface_toAlgorithm_supported
+  └─ attention_score_case1_genuine_compute_correct (→ attention_score_case1_exec_eq_closedForm)
 
 attention_score_python_case{2,3,4}_output_summary            ← abbrev = *_output_surface_summary
   └─ attention_score_python_case{2,3,4}_output_surface_summary
@@ -795,10 +796,10 @@ theorem attention_score_case1_body_length
         Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.length = 21 := by
   rfl
 
-/-- The case-1 loop sits at body index 16 and is a `forRangeDyn` over `start_m`
-with the static `[0, 128)` step-`64` range (the `lo`/`hi` register bounds), i.e.
-exactly two iterations. The `drop 16` tail (loop + 4 post statements) has length 5,
-and the loop body itself (`headLoopBody`) has length 14. Verified by `rfl` on the
+/-- The case-1 loop sits at body index 16: `drop 16` of the lowered body is a
+`forRangeDyn` over `start_m` with step `64` (the `lo`/`hi` register bounds give the
+`[0, 128)` range, i.e. exactly two iterations) followed by the post statements.
+The loop body itself is `attentionScoreCase1LoopBody`. Proved by `rfl` on the
 lowered body. -/
 theorem attention_score_case1_loop_at_16
     (Q K M Out : RegionName) (sm_scale : ℝ) :

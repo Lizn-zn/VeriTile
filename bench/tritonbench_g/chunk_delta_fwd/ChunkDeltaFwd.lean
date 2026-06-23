@@ -50,6 +50,9 @@ per-program statements cover every program of the grid.
 
 ```
 chunk_delta_fwd_python_case{1,2}_output_summary          ← TOP THEOREMS
+  └─ chunk_delta_fwd_exec_genuine                            (per-store exec readback)
+
+chunk_delta_fwd_output_summary_general                   (dimension-general headline)
   ├─ chunk_delta_rule_fwd_h_surface_toAlgorithm_supported   full surface lowers
   ├─ chunk_delta_fwd_h_store_slice_realizes_state           (state store h)
   ├─ chunk_delta_fwd_v_new_store_slice_realizes_vNew        (corrected v_new)
@@ -937,7 +940,7 @@ s_h_h=16384, s_h_t=64, K=V=64, BT=BC=32, BK=BV=64, NT=4`) through:
 
 * the prologue (`i_k`/`i_v`/`i_bh`, `b_h = 0`, the `USE_INITIAL_STATE` seed);
 * the outer **static** `forRange "i_t" 0 4 1` carrying the `[64,64]` state tile
-  `b_h = cdfStateTile i_t` (= `stateValue i_t`), with the chunk-start `h[i_t]`
+  `b_h = cdfCarryTile i_t` (the actual fold the kernel computes), with the chunk-start `h[i_t]`
   store and the cumulative `v_new[i_t]` store materialized for chunks `< i_t`;
 * the inner **dynamic** `forRangeDyn "i_c" 0 1 1` (single inner chunk, `BC=BT`)
   loading `b_k`/`b_d`/`b_v`, correcting `b_v ← b_v − dot(b_d,b_h)`, storing

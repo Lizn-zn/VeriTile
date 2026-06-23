@@ -34,8 +34,7 @@ read by the block pointer.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The Python test mixes `float16`/`float32` and passes
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The Python test mixes `float16`/`float32` and passes
 `check_dtype=False`; post-erasure all dtypes unify to `ℝ`, so the cast is the
 identity here. The unused `stride_y` argument is kept as `_stride_y`. The store
 target `y_ptr` is taken disjoint enough that the row-vector scatter is injective

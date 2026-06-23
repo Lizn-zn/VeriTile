@@ -1026,7 +1026,7 @@ def nopadPreLoop (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) : Lis
             (Op.ref .nat [] "cur_batch_seq_len")).where
         (Op.constNat 1) (Op.constNat 0)) ]
 
-/-- The 21 lowered loop-body statements of the Python-shape `context_attn_nopad`
+/-- The 22 lowered loop-body statements of the Python-shape `context_attn_nopad`
 forward `forRangeDyn` body (online-normalized streaming softmax over one KV
 block). `start_n = start_n` and `p = p` are the lowered `tl.multiple_of` /
 `p.to(v.dtype)` no-ops. -/
@@ -4634,7 +4634,7 @@ def nopadPreLoopG (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
             (Op.ref .nat [] "cur_batch_seq_len")).where
         (Op.constNat 1) (Op.constNat 0)) ]
 
-/-- General loop-body statement list (21 stmts), strides `(rs, hs, 1)`. -/
+/-- General loop-body statement list (22 stmts), strides `(rs, hs, 1)`. -/
 def nopadLoopBodyG (sc : ℝ) (rs hs BLK DM : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
     Stmt.assign .real [DM, BLK] "k"
@@ -6417,7 +6417,7 @@ instance activeGDecidable (s : BlockState) (B_Seqlen : RegionName) (BLK DM : Nat
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
+/-! # ══════════ GENERAL — dimension-general public summary ══════════ -/
 
 
 section General

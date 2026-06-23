@@ -55,7 +55,6 @@ top theorems are stated at the **Python test shapes** (`HEAD_DIM = 64`,
 `KCACHE_X ∈ {64, 8}`, block_size 16, etc.), with explicit offset-injectivity
 lemmas (no two cells of one program alias) proved by `omega` for those shapes.
 The split-x case quantifies over every `split_x : Fin (HEAD_DIM // KCACHE_X)`.
-`@triton.autotune` is not modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KvCacheCopy

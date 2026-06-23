@@ -260,7 +260,7 @@ def flash_decode2_phi_accumulator_step_kernel
 /-- Scalar companion for the same Phi stage2 recurrence step.
 
 It proves the `sum_exp = sum_exp * old_scale + exp_logic` update with the same
-Python test-shape addressing used by the vector accumulator step. -/
+symbolic stride addressing as the vector accumulator step. -/
 def flash_decode2_phi_sum_exp_step_kernel
     (Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut : RegionName)
     (block_seq_n

@@ -37,7 +37,7 @@ cell off the scatter.
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the modeled
 `tl.cast(..., fp16)` is the placeholder `FloatDType.real.cast .fp16`. The single
-`(1, 1)` host launch, `@triton.autotune`/`num_warps`/`num_ctas`, and the TMA
+`(1, 1)` host launch, `num_warps`/`num_ctas`, and the TMA
 `order` scheduling tuples are the trusted boundary; the per-program statement is
 universally quantified over the input state `s`. The layout contract is exactly
 the block pointers the kernel constructs: with offsets `(0, 0)` the load/store

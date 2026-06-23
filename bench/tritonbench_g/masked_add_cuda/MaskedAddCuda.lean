@@ -37,8 +37,8 @@ lane reads are taken directly from the initial `BlockState` memory.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The kernel reads `grad`/`p` into registers before the in-place scatter
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The kernel reads `grad`/`p`
+into registers before the in-place scatter
 back to `grad_ptr`, so the masked store is correct in place; no extra
 disjointness side condition is required.
 -/

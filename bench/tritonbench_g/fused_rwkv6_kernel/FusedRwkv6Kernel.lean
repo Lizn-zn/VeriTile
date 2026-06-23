@@ -28,7 +28,8 @@ b_h^(m)[j_v,j_k] = h0[j_v,j_k] · ∏_{j<m} exp(w_j[j_k])
 ```
 
 — `stateClosed` below, a standalone specification over the *input* regions
-`q,k,v,w,u,h0`, never a read-back of the kernel's own output. This is the
+`k,v,w,h0` (the `q`/`u` channels enter only in `outputClosed`), never a
+read-back of the kernel's own output. This is the
 gated-recurrence carry-fold of `chunk_gate_recurrence` (PR #290), generalized
 from a *scalar* gate to the per-channel decay gate `exp(w_t[j_k])` and an
 outer-product source `k_t ⊗ v_t`. The per-step output is the reduction
@@ -194,7 +195,7 @@ instance activeDecidable (s : BlockState) (V BV : Nat) (jv : Fin BV) :
 
 /-! ## Genuine closed-form data (over the *input* regions)
 
-`qVal/kVal/vVal/wVal/uVal/h0Val` read the kernel's exact block-pointer layouts at
+`qVal/kVal/vVal/uVal/h0Val` read the kernel's exact block-pointer layouts at
 time row `t`. The decay gate is the per-channel `decay s w t j_k = exp(w_t[j_k])`. -/
 
 /-- `q[t][j_k]·scale` — the kernel multiplies the loaded `q` row by `scale`. -/
@@ -231,7 +232,7 @@ noncomputable def stateSeed (s : BlockState) (h0 : RegionName)
 
 /-- **Genuine closed form for the state after `m` steps**, tile element `idx`:
 `seed · ∏_{j<m} exp(w_j) + Σ_{t<m} (k_t·v_t) · ∏_{t<j<m} exp(w_j)`. This is a
-standalone specification over the input regions `q,k,v,w,h0` — never a read-back
+standalone specification over the input regions `k,v,w,h0` — never a read-back
 of the kernel's own output. -/
 noncomputable def stateClosed
     (s : BlockState) (k v w h0 : RegionName) (USE_INITIAL_STATE : Bool)

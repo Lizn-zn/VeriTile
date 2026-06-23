@@ -34,8 +34,8 @@ on active cells — no optimizer/reduction oracle applies.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The destination row is data-dependent (read from `index_ptr`), so a
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The destination row is
+data-dependent (read from `index_ptr`), so a
 per-cell injectivity hypothesis `hStoreInj` on the scatter offsets is required as
 a side condition — it captures the no-duplicate-destination property the caller
 must supply (overlapping indices would race in the underlying scatter). The

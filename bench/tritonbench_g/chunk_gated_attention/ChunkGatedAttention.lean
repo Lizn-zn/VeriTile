@@ -37,17 +37,16 @@ chunk_gated_attention_output_summary_general                  ← TOP THEOREM (d
   └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
 
 chunk_gated_attention_python_test_shape_output_summary        ← pinned corollary (bench shape)
-  ├─ chunk_gated_attention_cum_python_bs16_compute_correct      (cumulative-normalizer store)
-  │    └─ chunk_gated_attention_cum_compute_slice_compute_correct
-  │         └─ chunk_gated_attention_cum_compute_slice_correct  (= cumComputeStoreValue, causal m_s @ b_s)
-  ├─ chunk_gated_attention_h_state_store_slice_closed_form      (per-chunk h-state store; ×4 flag combos)
-  │    ├─ chunk_gated_attention_h_state_store_slice_compute_correct
-  │    └─ hClosed_zero / hClosed_succ                           (gated carry-fold recurrence algebra)
-  └─ chunk_gated_attention_final_state_store_slice_closed_form  (final ht store)
-       └─ chunk_gated_attention_final_state_store_slice_compute_correct
+  ├─ chunk_gated_attention_cum_compute_slice_closed_form_general (cumulative-normalizer store)
+  ├─ chunk_gated_attention_h_state_store_slice_closed_form_general (per-chunk h-state store; ×4 flag combos)
+  └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
+       (+ `*_offset_injective` side lemmas at the bench shape)
+
+`hClosed_zero` / `hClosed_succ` capture the gated carry-fold recurrence algebra
+standalone; they are not invoked by the summary proofs.
 ```
 
-The four `(USE_INITIAL_STATE, GATEK, STORE_FINAL_STATE)` flag combinations in the
+The four `(GATEK, USE_INITIAL_STATE, STORE_FINAL_STATE)` flag combinations in the
 summary match the four Python `fwd_inner` test cases. Offset-injectivity side
 lemmas (`*_offset_injective`) at the bench shape underpin the store readbacks.
 

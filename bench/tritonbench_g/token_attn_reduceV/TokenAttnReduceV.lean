@@ -1697,9 +1697,10 @@ side-conditions only:
 No shape-specific numeric cheats; `expected` is the self-reference-free closed
 form over input memory, never the kernel's executed value. The Python test
 cases below are thin corollaries instantiating this at `BLOCK_DMODEL = 64`,
-`BLOCK_N = 128` (the `stride_req_to_tokens_b ∈ {128, 64}` gather-stride does not
-enter the value spec, so all three collapse to the same instantiation up to
-that stride). -/
+`BLOCK_N = 128` and the checked `stride_req_to_tokens_b` gather-stride
+(`128` for cases 1/3, `64` for case 2). That stride feeds `vLoc`/`vMasked`, so
+it genuinely enters the PV-reduction value spec; the cases are distinct
+instantiations, not a single collapsed one. -/
 theorem token_attn_reducev_output_summary_general
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
@@ -1745,7 +1746,8 @@ The three `python_case{1,2,3}_output_summary` theorems pin
 `BLOCK_DMODEL = 64`, `BLOCK_N = 128` and the checked output strides; they are
 recovered as direct instantiations of `token_attn_reducev_output_summary_general`
 above (cases 1/3 share `stride_req_to_tokens_b = 128`, case 2 uses `64`; that
-gather-stride does not enter the PV-reduction value spec). -/
+gather-stride feeds `vLoc`/`vMasked` and so does enter the PV-reduction value
+spec, making the cases distinct instantiations). -/
 theorem token_attn_reducev_python_case1_output_summary
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)

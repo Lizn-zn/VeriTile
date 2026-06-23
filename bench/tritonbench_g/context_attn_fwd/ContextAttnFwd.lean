@@ -2777,7 +2777,7 @@ theorem gStateBot_score_congr (S hi : Nat) (g1 g2 : Fin S → ℝ × ℝ)
 after `c+1` blocks equals the kernel's one-shot rescale-and-add over block `c`'s
 reindexed `Fin BN` lanes, anchored to the state after `c` blocks. This is the
 exact tuple `(m_ij, l_i', acc')` the loop body computes (instantiated at `BN = 128`
-for the regular path, `BN = 64` for the Tesla path). -/
+for both paths; only `BLOCK_M` differs between the regular and Tesla paths). -/
 theorem gStateBot_succ_explicit (S BN c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 1) * BN ≤ S) :
     let st := gStateBot S (c * BN) g
     let M' := st.1 ⊔ Finset.univ.sup (fun jL : Fin BN =>
@@ -3593,7 +3593,7 @@ noncomputable def ctxFwdGenuineOutValue128
     (ctxFwdBel s B_Seqlen B_Prompt_Cache_Len 128) idx
 
 /-! ## BLOCK_M = 64 (Tesla) exec assembly — duplicate of the BLOCK_M=128 chain at
-the `[64,...]` tile shapes (`BLOCK_M = BLOCK_N = 64`, `BLOCK_DMODEL = 128`).
+the `[64,...]` tile shapes (`BLOCK_M = 64`, `BLOCK_N = BLOCK_DMODEL = 128`).
 
 The block math (`gStateBot`/`gStateBot_succ_explicit`/…) and all op-eval recipes
 and tile bridges are BN/BM/D-parametric (shared with the 128 path). Only the

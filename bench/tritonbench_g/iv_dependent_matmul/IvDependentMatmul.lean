@@ -42,9 +42,9 @@ and `B`:
 All five therefore compute the same value `Σ_k A·B`. The canonical `pre_load`
 surface — where the loaded A/B pointers at iteration `k` are the pure functions
 `a_ptr + k·BK·sak` / `b_ptr + k·BK·sbk` of the loop counter — is verified here
-as the genuine matmul, and the four other scheduling modes are characterized by
-their identical loaded pointers. The remaining surfaces are kept as
-`*_toAlgorithm_supported` lowering witnesses.
+as the genuine matmul. Only the `pre_load` surface is mechanized; the four other
+scheduling modes are described informally above (they load identical per-block
+pointers and so compute the same product), but no surface is built for them.
 
 ## Proof architecture
 
@@ -60,10 +60,10 @@ iv_dependent_matmul_closed_form_correct      ← TOP THEOREM (ComputeCorrect.Rea
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float, except that the final fp16
-output cast is modeled by `FloatDType.real.cast .fp16`). `@triton.autotune` /
-`num_warps` / `num_stages` are not modeled. The string-valued `type` is
-represented by the canonical `pre_load` surface (the other modes' lowering is
-witnessed separately); they all load the same per-block tiles, so they compute
+output cast is modeled by `FloatDType.real.cast .fp16`). The launch-time
+`num_stages` is not modeled. The string-valued `type` is represented by the
+canonical `pre_load` surface only (the other four modes are described informally
+and are not mechanized); they all load the same per-block tiles, so they compute
 the same product. Program ids are universally quantified through the kernel's own
 `pid_m`/`pid_n` derivation, so the per-program statement covers every program of
 the grid. The layout contract is the kernel's own strided pointer arithmetic:
@@ -75,7 +75,8 @@ Preconditions for the general theorem: `0 < BLOCK_SIZE_K` and `K` divisible into
 `numKBlocks` full K-blocks (so the per-block K-tail load mask is satisfied for
 every loaded lane); tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`,
 making `% M`/`% N` the identity and the store mask all-true); output-address
-injectivity; clean initial `undef`.
+injectivity, discharged here from the concrete contract `stride_cn = 1` and
+`BN ≤ stride_cm` (row-major C tile); clean initial `undef`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.IvDependentMatmul
@@ -959,7 +960,8 @@ cast) of the loaded `A`/`B` tiles — NOT the kernel's own executed value.
 `PM`/`PN` are the kernel's own `pid_m = pid // cdiv N BN` / `pid_n = pid % cdiv N BN`.
 Preconditions: `0 < BK`; all tile rows/cols in-bounds (`PM·BM + i < M`,
 `PN·BN + j < N`), making the modular addressing the identity and the store mask
-all-true; output-address injectivity; clean initial `undef`. The four remaining
+all-true; output-address injectivity, supplied concretely by `stride_cn = 1`
+(`hcn`) and `BN ≤ stride_cm` (`hbnle`); clean initial `undef`. The four remaining
 scheduling modes load the same per-block tiles and therefore compute the same
 product. -/
 theorem iv_dependent_matmul_closed_form_correct

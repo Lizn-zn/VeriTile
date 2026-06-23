@@ -43,7 +43,7 @@ lemma `l2VarCarrier_eq_l2NormSqSum` (over `Semantics.MaskedReduction`). Arithmet
 is over `ℝ` (not bit-accurate IEEE float); the masked load `other=0.0`, the
 `tl.where(cols < N, x, 0.0)` masking, and the `.to(tl.float32)` cast all reduce to
 the algorithm-layer behavior (post-erasure all dtypes unify to `ℝ`); `√`/`⁻¹` are
-the real square root and inverse. `@triton.autotune` is not modeled. Inputs are
+the real square root and inverse. Inputs are
 presented via the `s.readMem`-resolved tile `l2Load`.
 -/
 

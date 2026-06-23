@@ -45,7 +45,6 @@ output buffers are distinct, so the `rope` store does not clobber `O_nope`).
 Both stores carry an injectivity side condition (`hOutNopeInj` / `hOutRopeInj`)
 that each program's output offset map is injective over its tile. The kernel's
 unused head-count / head-stride arguments are kept at the signature boundary.
-`@triton.autotune` is not modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.DestindexCopy

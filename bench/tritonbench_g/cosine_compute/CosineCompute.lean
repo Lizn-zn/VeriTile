@@ -35,8 +35,7 @@ applies. Inputs are presented via `InputLoadedAt` (the values each lane loads).
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. The `(a_value).to(tl.float32)` cast reduces to the identity at the
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The `(a_value).to(tl.float32)` cast reduces to the identity at the
 algorithm layer (post-erasure all dtypes unify to `ℝ`). No output/input
 disjointness is assumed: the input is read into registers before the scatter, so
 the result is correct even if `b` aliases `a`.

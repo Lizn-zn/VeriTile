@@ -31,8 +31,9 @@ per-program statement covers every program of the grid.
 ```
 attention_forward_triton_closed_form_correct                  ← TOP THEOREM (genuine closed form)
   expected = attentionRealBase2PerKeyScale (qTile) (kTile) (vTile) (keyScale)
-  ├─ attention_forward_triton_surface_toAlgorithm_supported   surface lowers to the algorithm layer
   └─ (online-softmax recurrence == batch base-2 softmax, Math/Attention.lean)
+     (the surface lowers to the algorithm layer inline via `rfl`, so the standalone
+      `attention_forward_triton_surface_toAlgorithm_supported` lemma is not invoked here)
 
 attention_forward_triton_final_store_slice_compute_correct    ← ComputeCorrect over the masked Out store
   └─ attention_forward_triton_final_store_slice_correct        algorithm-layer readback per lane
@@ -41,7 +42,7 @@ attention_forward_triton_final_store_slice_compute_correct    ← ComputeCorrect
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `float16`/`float32`
-casts collapse to the identity post-erasure; `@triton.autotune` /
+casts collapse to the identity post-erasure; the launch-time
 `num_warps`/`num_stages` are not modeled. Cross-program composition into the
 full `[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 

@@ -51,7 +51,8 @@ register casts erase to the identity at the algorithm layer (post-erasure all
 dtypes unify to `ℝ`). `cos`/`sin` are modeled as **precomputed inputs** loaded
 from memory, not computed; the `CONJUGATE` flag selects the `sin := -sin` spec.
 The four `caseN` instantiations cover the Python-observable shapes (varying
-`IS_VARLEN`, `IS_SEQLEN_OFFSETS_TENSOR`, and `CONJUGATE`; all non-interleaved).
+`IS_VARLEN`, `IS_SEQLEN_OFFSETS_TENSOR`, `INTERLEAVED`, and `CONJUGATE` — e.g.
+case 2 is the varlen `INTERLEAVED = true` path).
 The top summary `rotary_transform_python_output_summary` is **genuine, not
 self-referential**: it pairs the full-surface algorithm lowering with the
 combined-row `ComputeCorrect` result whose `expected` value is the actual rotary
@@ -59,8 +60,8 @@ closed form `(x0·cos − x1·sin, x0·sin + x1·cos)` read from the `COS`/`SIN`
 cache (`rotaryO0Spec`/`rotaryO1Spec`), covering both output halves on every
 active lane. The row lemmas establish a single `BLOCK_M × (BLOCK_K/2)` row tile;
 the stronger `rotary-2d-tile-value-lift` lift of this row result onto the full
-2D surface store is a documented #153 follow-up. The interleaved branch and
-`@triton.autotune` are not modeled.
+2D surface store is a documented #153 follow-up. The interleaved branch is not
+modeled at the value level.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RotaryTransform

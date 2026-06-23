@@ -29,9 +29,12 @@ statement covers every program of the grid.
 
 ```
 context_attn_mistral_genuine_output_summary_general        ← TOP THEOREM (symbolic, dimension-general)
+  └─ mistral_exec_general                                     whole-kernel exec → genuine closed form
   └─ context_attn_mistral_genuine_output_summary             concrete shape corollary (sliding_window ∈ {10, 20})
-       └─ context_attn_mistral_final_store_slice_compute_correct
-            └─ context_attn_mistral_final_store_slice_correct           algorithm-layer readback per lane
+
+(separate per-lane store-slice chain, not a dependency of the summary above:
+  context_attn_mistral_final_store_slice_compute_correct
+    └─ context_attn_mistral_final_store_slice_correct         algorithm-layer readback per lane)
 (supporting: context_attn_mistral_fwd_kernel_surface_toAlgorithm_supported)
 ```
 
@@ -3001,7 +3004,7 @@ def mistralPreLoopG (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
             (Op.ref .nat [] "cur_batch_seq_len")).where
         (Op.constNat 1) (Op.constNat 0)) ]
 
-/-- General lowered loop-body statements (24), strides `(rs, hs, 1)`: two
+/-- General lowered loop-body statements (25), strides `(rs, hs, 1)`: two
 causal+sliding-window `where`s against the `-1e9 = 0-1e9` sentinel, the `m_ij ==
 -1e9 → 0` guard, and the `l_i_new == 0 → 1e-9` guard. -/
 def mistralLoopBodyG (sc : ℝ) (sw rs hs BLK DM : Nat) : List Stmt :=

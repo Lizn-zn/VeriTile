@@ -30,11 +30,14 @@ statement covers every program of the grid.
 token_attn_llama2_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per Python test case)
   ├─ token_attn_llama2_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
   └─ token_attn_llama2_surface_output_compute_correct                 full surface, masked score store
-       ├─ token_attn_llama2_score_store_python_max{64,32}_compute_correct
-       │    └─ token_attn_llama2_score_store_slice_compute_correct
-       │         └─ token_attn_llama2_score_store_slice_correct        algorithm-layer readback per lane
-       └─ token_attn_llama2_python_max{64,32}_offset_injective
-(also: token_attn_llama2_python_case{i}_output_surface_summary — surface-only variants)
+       └─ token_attn_llama2_closed_form_correct                       exec readback per lane = closed form
+            ├─ llama2_preLoop            prelude assigns → loop-entry invariant
+            └─ llama2_loop_body_store    single active iteration writes the masked dot score
+(also: token_attn_llama2_python_case{i}_output_surface_summary — surface-only variants:
+  └─ token_attn_llama2_score_store_python_max{64,32}_compute_correct
+       └─ token_attn_llama2_score_store_slice_compute_correct
+            └─ token_attn_llama2_score_store_slice_correct            algorithm-layer readback per lane
+  + token_attn_llama2_python_max{64,32}_offset_injective)
 ```
 
 ## Modeling boundary
@@ -833,9 +836,9 @@ theorem llama2_preLoop
   · funext rg o; simp
   · intro rg o; simp [hundef]
 
-/-- The 8-statement loop body of `token_attn_llama2_surface` (q load, offs_n_new,
-k_loc gather, off_k, k gather, att_value reduce, sm_scale mul, masked store),
-transcribed. Independent of region names except `Q`/`K`/`B_Loc`/`Att_Out`. -/
+/-- The 9-statement loop body of `token_attn_llama2_surface` (q load, offs_n_new,
+k_loc gather, off_k, k gather, att_value reduce, sm_scale mul, off_o, masked
+store), transcribed. Independent of region names except `Q`/`K`/`B_Loc`/`Att_Out`. -/
 def llama2LoopBody
     (Q K B_Loc Att_Out : RegionName) (sm_scale : ℝ)
     (stride_b_loc_b stride_b_loc_s stride_kbs stride_kh stride_kd att_stride_h att_stride_bs
@@ -898,8 +901,9 @@ def llama2LoopBody
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **Loop-body store readback** (the single active iteration). Given the
-loop-entry invariant on `st` (= the prelude post-state) and a fixed
-`cur_batch_in_all_start_index = SL`, the body run from `st.setReg "start_mark" 0`
+loop-entry invariant on `st` (= the prelude post-state), which pins
+`cur_batch_in_all_start_index = startLoc s0 B_Start_Loc`, the body run from
+`st.setReg "start_mark" 0`
 writes, at every `Att_Out[outOffset … i]`, the dot score on active lanes and the
 original value on inactive lanes. -/
 theorem llama2_loop_body_store

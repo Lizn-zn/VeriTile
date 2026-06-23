@@ -29,8 +29,8 @@ the per-program statements cover every program of the grid.
 ```
 softmax_reducev_genuine_output_compute_correct_general      ← TOP THEOREM
   └─ sr_execG                                  ← exec-side unfold of the streaming loop
-       └─ sr_attn_stepG                        ← per-block online-softmax step
-            └─ softmax_reducev_final_store_slice_correct  (per-lane normalized readback)
+       ├─ sr_attn_stepG                        ← per-block online-softmax step
+       └─ srPostLoopG_eval                     ← per-lane normalized readback (final store)
 ```
 
 The top theorem holds for `other_kv_index : Int` free (any sentinel) and at
@@ -41,7 +41,7 @@ variants as instances.
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init,
 `exp`, running-max rescaling, and the final division are real-valued);
-`@triton.autotune` / `num_warps` / `num_stages` are not modeled. The verified
+`num_warps` / `num_stages` are not modeled. The verified
 statement is scoped to the **final normalized store** to `Out`: the expected
 value is `acc / e_sum` (`softmaxReducevFinalSpec`), and — discharging the loop —
 the genuine input-side `softmaxReducevWeightedSum` (`sr_exec`),

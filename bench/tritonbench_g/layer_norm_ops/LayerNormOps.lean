@@ -272,7 +272,7 @@ residual-add slice covering the `DX`/optional `DRESIDUAL_IN` writebacks after
 non-RMS `DX` formula slices after the reductions have been supplied, and one
 integrated non-RMS+bias row slice for partial `DW`/`DB`. The dimension-general
 `*_core_outputs_compute_correct_general` theorems group those pieces by the
-backward cases observed by `test_layer_norm_fwd_bwd`. The "End-to-end surface correctness" section at the
+backward cases observed by `test_layer_norm_fwd_bwd`. The "Python test-shape aggregate outputs" section at the
 bottom of the file proves `Y` and `Rstd` outputs of the actual surface kernel
 `layer_norm_fwd_1pass_surface` itself, specialised to the RMS/no-residual/no-bias
 branch — the first per-kernel-surface (not slice) correctness in the file. Full
@@ -2925,8 +2925,8 @@ theorem layer_norm_ops_bwd_bias_db_one_row_compute_correct
 
 /-! ## Backward non-RMS+bias one-row integrated slice
 
-This is the first integrated backward row slice for #133. Unlike the smaller
-`DX`/`DW`/`DB` slices below, this kernel keeps the Python row arithmetic together:
+This is the first non-RMS integrated backward row slice for #133. Unlike the smaller
+`DX`/`DW`/`DB` slices above, this kernel keeps the Python row arithmetic together:
 `xhat`, `wdy`, partial `dw`, partial `db`, `c1`, `c2`, `dx`, then the three
 observable stores `DX`, `DW`, and `DB`. The theorems here prove the integrated
 `DW` and `DB` stores; `DX` still needs a reduction-heavy readback theorem. -/

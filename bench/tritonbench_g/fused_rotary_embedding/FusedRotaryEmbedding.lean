@@ -32,7 +32,7 @@ decoding_fused_rotary_embedding_output_summary_general  ← TOP (dimension-gener
        ├─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
        ├─ context_k_cache_{first,second}_half_guarded_store_slice_compute_correct
        │      ⊳ *_store_slice_correct
-       └─ context_v_cache_guarded_store_slice_compute_correct ⊳ v_cache_store_slice_correct
+       └─ context_v_cache_guarded_store_slice_compute_correct ⊳ v_cache_guarded_store_slice_correct
 ```
 
 ## Modeling boundary
@@ -43,7 +43,7 @@ loaded per lane; rotation is proved as masked first-half and second-half faces
 for both Q and K. The `cur_head_idx % KV_GROUP_NUM == 0` guard on the K-rotary and
 K/V cache-fill path is modeled (the guard predicate `handleKv` gates the
 writeback). The paged-cache offsets read `BLOCK_TABLES` and `context_lengths`
-as natural-number index regions. `@triton.autotune` is not modeled. Side
+as natural-number index regions. Side
 conditions: store-offset injectivity and cache-region distinctness hypotheses.
 -/
 

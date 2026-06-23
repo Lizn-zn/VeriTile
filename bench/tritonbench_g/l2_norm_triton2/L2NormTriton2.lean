@@ -54,7 +54,7 @@ oracle sum-of-squares and dot product by the bridging lemmas
 float); the masked loads `other=0.0`, the `tl.where(cols < N, ·, 0.0)` masking,
 and the `.to(tl.float32)` casts all reduce to the algorithm-layer behavior
 (post-erasure all dtypes unify to `ℝ`); `√`/`⁻¹` are the real square root and
-inverse. `@triton.autotune` is not modeled. Inputs are presented via the
+inverse. Inputs are presented via the
 `s.readMem`-resolved tile `l2Load`.
 -/
 

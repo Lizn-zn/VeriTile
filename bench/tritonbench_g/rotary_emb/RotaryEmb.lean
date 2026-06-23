@@ -35,9 +35,10 @@ rotary_emb_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS
        └─ rotary_emb_k1_block_compute_correct → rotary_emb_k1_block_correct   (K odd lanes)
 ```
 
-The interleaved even/odd offset families are shown disjoint by
-`rotary_emb_python_q_even/odd_offset_injective` and
-`rotary_emb_python_k_even/odd_offset_injective`. There are also
+The interleaved even/odd offset families are shown collision-free (injective)
+by `rotary_emb_python_q_even/odd_offset_injective` and
+`rotary_emb_python_k_even/odd_offset_injective` (these prove within-family
+injectivity, not even-vs-odd disjointness). There are also
 `rotary_emb_q_surface_toAlgorithm_supported` / `rotary_emb_k_surface_toAlgorithm_supported`
 splits and `qFullOffset`/`activeFullQ` full-tile scaffolding.
 
@@ -52,7 +53,7 @@ and odd dimension lanes, not computed. Scoping is **one block-store at a time**
 The four `caseN` summaries instantiate the proved generic lemmas at the concrete
 contiguous shapes of the Python test cases (case 1 `(total_len, 8, 64)`,
 `BLOCK_HEAD = 4`, `BLOCK_SEQ = 16`, `BLOCK_DMODEL = 64`; the others vary
-`head_dim`/`BLOCK_DMODEL`). `@triton.autotune` is not modeled.
+`head_dim`/`BLOCK_DMODEL`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RotaryEmb
@@ -1212,17 +1213,16 @@ theorem rotary_emb_python_case4_output_summary
       512 64 1 512 64 1 64 1 64 1 64 8 8 4 16 64
   · exact rotary_emb_python_case4_all_outputs_compute_correct Q K Cos Sin s
 
-/-! ## Full-kernel Q first-half (off_q0) correctness
+/-! ## Full-kernel Q first-half (off_q0) scaffolding
 
 The Python test runs the full `_rotary_kernel` which writes 4 stores: Q at
 `off_q0` (even), Q at `off_q1` (odd), K at `off_k0` (even), K at `off_k1` (odd).
-Per #139's audit, the slice proofs above aren't sufficient — we need
-full-kernel proofs.
+Per #139's audit, the slice proofs above aren't sufficient — a full-kernel proof
+would be needed.
 
-This section establishes the Q first-half store for the full kernel under the
-assumption that `Q ≠ K` and `stride_qd ≠ 0` (the latter is needed to prove the
-intra-region Q first-half vs Q second-half offsets disjoint: they differ by
-parity of the dimension factor). -/
+This section provides only scaffolding definitions (`qFullOffset`,
+`cosFullOffset`, `sinFullOffset`, `activeFullQ`, `rotaryKernelQ0Spec`) toward a
+future full-kernel proof; there is no correctness theorem here. -/
 
 /-- Q first-half offset of the full `rotary_kernel_surface`. The tile shape is
 `[BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL/2]`. The even dimension factor is

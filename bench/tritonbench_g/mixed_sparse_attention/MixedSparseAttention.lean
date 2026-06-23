@@ -42,7 +42,7 @@ the matching `_case{i}_store_summary` theorems package the store-only facts.)
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`, `tl.dot`, and the
 `sm_scale · log2(e)` scaling are not modeled at the bit level);
-`@triton.autotune` is not modeled. The verified result is the **genuine
+`num_warps` / `num_stages` are not modeled. The verified result is the **genuine
 closed-form attention output** `mixedSparseAttnClosedForm` for all four cases:
 the full faithful surface kernel, executed statement-by-statement via
 `msa_exec` (cases 1/3/4) and `msa_exec32` (case 2), writes
@@ -8086,21 +8086,19 @@ end MSAFoundation
 
 open VeriTile.Triton
 
-/-! ## Genuine closed-form top summaries (block64 cases 1 and 4)
+/-! ## Genuine closed-form top summaries (all four Python cases)
 
-The two block64, `sm_scale = 0.1` Python test cases (case 1 and the alternate-
-`seqlens` case 4) are CLOSED genuinely: the full faithful surface kernel, executed
-statement-by-statement (`msa_exec`), writes the genuine non-self-referential
+All four Python test cases are CLOSED genuinely: the full faithful surface kernel,
+executed statement-by-statement, writes the genuine non-self-referential
 `mixedSparseAttnClosedForm` to `Out` (as the `fp16` output cell) at every active
 output lane. NOT a self-referential executed value. Faithful side conditions
-(`num_cols ≤ BLOCK_N = 64` and a positive online-softmax denominator per active
-lane) are supplied as hypotheses.
+(`num_cols ≤ BLOCK_N` and a positive online-softmax denominator per active lane)
+are supplied as hypotheses.
 
-Case 3 (`sm_scale = 0.2`) and case 2 (`BLOCK_M = BLOCK_N = 32`) reuse a different
-lowered body — the genuine streaming machinery here is specialized to the
-`sm_scale = 0.1`, block64 lowering — and are out of scope of the genuine closed
-form (analogous to `block_sparse_attn`'s `EVEN = false` case-2). Their store-only
-`_store_summary` facts remain available. -/
+The block64 cases — case 1, the alternate-`seqlens` case 4 (both
+`sm_scale = 0.1`), and case 3 (`sm_scale = 0.2`) — are executed via `msa_exec`;
+case 2 (`BLOCK_M = BLOCK_N = 32`) reuses the block32 lowering and is executed via
+`msa_exec32`. Each case's `_store_summary` fact remains available alongside. -/
 
 /-- **Genuine Python case 1 closed-form summary** (`BLOCK_M=BLOCK_N=64`,
 `sm_scale=0.1`). The executed surface kernel's `fp16` `Out` cell at every active

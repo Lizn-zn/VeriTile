@@ -30,10 +30,10 @@ token_attn_mistral_output_summary_general                     ← HEADLINE (symb
   ├─ token_attn_mistral_surface_toAlgorithm_supported                  surface lowers to the algorithm layer
   └─ token_attn_mistral_closed_form_compute_correct                    full surface, final store = closed form
        └─ token_attn_mistral_closed_form_correct                       exec readback = tokenAttnMistralClosedForm
-token_attn_mistral_python_case{1,2,3,4}_output_summary        ← thin corollaries (one per Python test case)
             ├─ mistral_preLoop          14 prelude assigns → entry invariant (acc = partialAcc 0)
             ├─ mistral_loop_step        5-stmt body advances partialAcc by one BLOCK_N block (forRangeDyn_inv)
             └─ mistral_postLoop         cast + off_o + out_ptrs + unmasked store readback = closed form
+token_attn_mistral_python_case{1,2,3,4}_output_summary        ← thin corollaries (one per Python test case)
 (supporting: token_attn_mistral_python_test_shape_offset_injective;
  algebra: partialAcc_block_succ / partialAcc_eq_PVValue; recipes: mistral_*_eval)
 ```
@@ -2001,7 +2001,7 @@ realizes the genuine, self-reference-free PV-reduction closed form
 `tokenAttnMistralClosedForm` (which incorporates `sliding_window` symbolically via
 `startIndex`/`vActive`) at every `[BLOCK_DMODEL]` output lane.
 
-Honest side-conditions only: `0 < BLOCK_DMODEL`, `0 < BLOCK_N`, the contiguous
+Honest side-conditions only: `0 < BLOCK_N`, the contiguous
 layout hyps `stride_pbs = 1` / `stride_req_to_tokens_s = 1` (faithful to the
 checked test's contiguous `Prob`/`Req_to_tokens`), output-offset injectivity
 `hOutInj`, and a clean `undef` state `hundef`. The four `python_case*` theorems

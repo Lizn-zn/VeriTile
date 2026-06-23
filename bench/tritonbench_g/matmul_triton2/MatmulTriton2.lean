@@ -437,7 +437,7 @@ theorem matmul_body_split (A B C : RegionName)
 
 /-! ## Loop invariant -/
 
-/-- **Loop invariant** (counter `i = c · BLOCK_K`).
+/-- **Loop invariant** (counter `i = c`).
 
 After `c` K-blocks: program ids and `mem`/`undef` fixed; the `offs_am` / `offs_bn`
 / `offs_k` registers seeded; `accumulator` equals the partial GEMM accumulator

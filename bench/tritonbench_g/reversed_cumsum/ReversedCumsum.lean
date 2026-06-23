@@ -41,7 +41,8 @@ per-slice value-level correctness (the computational content):
   reversed_cumsum_single_block_surface_compute_correct → ..._correct   (single-BT chunk, b_z = 0)
   reversed_cumsum_cumsum_slice_compute_correct         → ..._correct   (one chunk with carry)
   reversed_cumsum_store_slice_compute_correct          → ..._correct   (boundary-checked writeback)
-       └─ cumsumStoreValue / storeValue  (`Tile.dot` with upperTriTile + carryValue)
+       └─ cumsumStoreValue (`Tile.dot` with upperTriTile + carryValue)
+          / storeValue (plain boundary-checked echo)
   + active-masked variants (reversed_cumsum_*_active_compute_correct) and the
     per-Python-shape case{1..4} compute-correct instantiations.
 ```

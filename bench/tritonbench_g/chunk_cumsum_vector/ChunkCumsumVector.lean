@@ -1399,7 +1399,7 @@ theorem chunk_cumsum_vector_python_case1_slice_summary
     chunk_cumsum_vector_store_python_case1_compute_correct BC Z s,
     chunk_cumsum_vector_cumsum_python_case1_closed_form SReg Carry Z s hcarry⟩
 
-/-- **Public Python case 2 summary (`B = H = 1`, `T = 8`, `S = 10`).** See
+/-- **Public Python case 2 summary (`B = 2`, `H = 3`, `T = 8`, `S = 10`).** See
 `chunk_cumsum_vector_python_case1_slice_summary`. -/
 theorem chunk_cumsum_vector_python_case2_slice_summary
     (BC SReg Carry Z : RegionName) (s : BlockState)
@@ -1438,7 +1438,7 @@ theorem chunk_cumsum_vector_python_case2_slice_summary
     chunk_cumsum_vector_store_python_case2_compute_correct BC Z s,
     chunk_cumsum_vector_cumsum_python_case2_closed_form SReg Carry Z s hcarry⟩
 
-/-- **Public Python case 3 summary (`B = H = T = 1`, `S = 5`).** See
+/-- **Public Python case 3 summary (`B = 2`, `H = 3`, `T = 1`, `S = 5`).** See
 `chunk_cumsum_vector_python_case1_slice_summary`. -/
 theorem chunk_cumsum_vector_python_case3_slice_summary
     (BC SReg Carry Z : RegionName) (s : BlockState)

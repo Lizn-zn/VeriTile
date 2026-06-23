@@ -1709,9 +1709,10 @@ noncomputable def oBlockPtrAFC (s0 : BlockState) (Out : RegionName) :
   ⟨fun idx : TileIndex [128, 128] => (Out.cast, baseOffsetAFC s0 + (s0.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val)⟩
 
 /-- **Sentinel boundedness side-condition.** For a faithful bounded-input kernel,
-every causally-kept key's coerced score exceeds the `-1e6` masking sentinel — i.e.
-the streamed running max is never `⊥` once a key is kept, and the kept scores stay
-above `-1e6`. Captured as: at the full window, the running max is `> -1e6`
+every key's coerced score exceeds the `-1e6` masking sentinel (the def quantifies
+over all `j` with strict `>`) — i.e. the streamed running max is never `⊥` once a
+key is kept, and the scores stay above `-1e6`. Captured as: at the full window,
+the running max is `> -1e6`
 (equivalently the masked-block `max(m_i, -1e6)` agrees with `afcRunningMax`). This
 is a legitimate precondition for bounded `Q`/`K` (analogous to #316's `undef = 0` /
 `M ≠ Out` preconditions). -/
@@ -2215,7 +2216,7 @@ state `s` (with `s.undef ≡ 0`) to the loop-entry state `s0`, exposing every
 register readback the loop body / invariant base case needs: the running
 `m_i`/`l_i`/`acc` registers carry the kernel seeds (`full ⊥`, `full 1.0`,
 `full 0`), the index vectors (`offs_m`/`offs_n`/`offs_k`), the four streamed
-pointer tiles (`K_ptrs`/`K_scale_ptr`/`V_ptrs`/`Q_ptrs`), the loaded masked `q`
+pointer tiles (`K_ptrs`/`K_scale_ptr`/`V_ptrs`/`O_block_ptr`), the loaded masked `q`
 tile and scalar `q_scale`, the program ids and `start_m`/`off_hz` scalars, and
 preserves `pids`/`mem`/`undef`.
 
@@ -6300,7 +6301,7 @@ realizes the **genuine closed-form causal attention** `attnFwdCausalOutSpec`
 (base-2 / `exp2`, per-key score scale, causal mask) at every active output lane —
 no longer a self-referential "executed kernel output" carrier. Side conditions:
 clean input (`undef = 0`) and the sentinel score bound `afcScoreBound` (every
-causally-kept key's coerced score exceeds the `-1e6` masking sentinel), both
+key's coerced score exceeds the `-1e6` masking sentinel), both
 genuine preconditions of single-program correctness. -/
 theorem attn_fwd_causal_python_test_shape_output_summary
     (Q K V QScale KScale Out : RegionName) (s : BlockState)

@@ -37,7 +37,7 @@ preserved.
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the approximate `tl.exp`
-is modeled as exact `WithBot.realExp`; `@triton.autotune` / `num_warps` are not
+is modeled as exact `WithBot.realExp`; the manual `num_warps` heuristic is not
 modeled. The reduction runs over the full `BLOCK_SIZE` block, but masked lanes
 load `⊥` (matching `other=-float("inf")`), so the reduction-over-padded-block
 matches the upstream `-inf` semantics. No output/input disjointness is assumed:

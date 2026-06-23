@@ -10,7 +10,7 @@ import VeriTile.Triton.LoopInvariant
 `batched_vecmat_kernel` is a batched vector-matrix multiply: for batch row tile
 `m_index` and column tile `n_index`, program `(m,n)` loops over K blocks,
 loading an `A` tile `[block_m, block_k]` and a `B` tile
-`[block_m, block_n, block_k]`, broadcasts `A`, reduces `tl.sum(expanded_a * b,
+`[block_n, block_m, block_k]`, broadcasts `A`, reduces `tl.sum(expanded_a * b,
 axis=2)`, transposes, accumulates into `vecmat`, and stores the
 `[block_m, block_n]` tile to `output`.
 

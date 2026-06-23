@@ -49,14 +49,14 @@ Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
 erased (post-erasure all dtypes unify to `ℝ`). This is a **partial / blocked**
 verification: the cache stores are proved per masked K/V tile and per
 scale/zero metadata slice at the **Python test shapes** (`num_heads = 4`,
-`head_dim = head_dim_v = 16`, `BLOCK = 4`, contiguous strides) for selected
+`head_dim = head_dim_v = 16`, `BLOCK = 8`, contiguous strides) for selected
 `SIDX` / `BIDX` / `KV_BLOCK_IDX` source/cache block positions — not the full
 data-dependent loop bounds. The destination block offset is gathered from
 `BlockOffsets`; offset-injectivity (no two cells of one program alias) is
 discharged by explicit lemmas for those shapes. The int8 quant value stores are
 modeled as a copy of the (rounded) source value at the algorithm layer (the
 rounding is `ℝ`-erased); int4 packing is represented at its store surface.
-`@triton.autotune` is not modeled.
+The launch-time `num_warps` setting is not modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KvCacheFilling
@@ -1406,7 +1406,7 @@ theorem fill_kv_cache_python_test_layout_all_outputs_compute_correct
 /-- Public Python non-quantized cache-fill summary for the checked layout.
 
 The surface conjunct pins the faithful `_fill_kv_cache_kernel` launch for
-`num_heads = 4`, `head_dim = head_dim_v = 16`, `BLOCK = 4`, and contiguous
+`num_heads = 4`, `head_dim = head_dim_v = 16`, `BLOCK = 8`, and contiguous
 K/V state/cache strides used by the benchmark. The output conjunct exposes the
 checked K-cache and V-cache tile writebacks for the selected source/cache
 block positions. -/
