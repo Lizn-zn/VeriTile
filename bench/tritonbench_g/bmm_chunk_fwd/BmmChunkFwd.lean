@@ -29,7 +29,7 @@ the kernel's own strided batch/chunk/head/row/col addressing.
 
 ```
 bmm_chunk_fwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
-  └─ bmm_chunk_fwd_exec_closed_form               ← exec-side closed form (every active cell = ∑_k A·B)
+  └─ bmm_exec_closed_form                         ← exec-side closed form (every active cell = ∑_k A·B)
        ├─ bmm_preLoop      (P 0: acc = 0, a/b pointers seeded with batch offset)
        ├─ bmm_step         (one K-block: acc += tl.dot advances the partial sum)
        ├─ bmm_loop         (forRangeDyn drives the K-loop via forRangeAux_inv)

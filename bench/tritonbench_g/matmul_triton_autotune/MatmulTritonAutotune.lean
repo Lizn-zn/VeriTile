@@ -29,7 +29,7 @@ independently of the kernel from the loaded `A`/`B` tiles.
 ```
 matmul_autotune_closed_form_correct               ← TOP THEOREM (ComputeCorrect.Realizes)
   └─ matmul_autotune_exec_closed_form             ← exec-side closed form (every active cell)
-       ├─ matmul_preLoop      (P 0: accumulator = 0, pointers seeded, schedule derived)
+       ├─ preLoop      (P 0: accumulator = 0, pointers seeded, schedule derived)
        ├─ matmul_step         (one K-block: masked dot advances the partial sum)
        ├─ matmul_postLoop     (activation tail + fp16 cast + masked store = closed form)
        └─ forRange_inv        (loop-invariant principle, drives the K-loop)

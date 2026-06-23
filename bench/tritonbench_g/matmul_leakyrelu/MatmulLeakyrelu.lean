@@ -26,7 +26,7 @@ the leaky-ReLU activation, derived from the loaded `A`/`B` tiles.
 
 ```
 matmul_leakyrelu_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
-  └─ matmul_leakyrelu_exec_closed_form               ← exec-side closed form (every active cell = fp16(leakyrelu(∑_k A·B)))
+  └─ mlr_exec_closed_form               ← exec-side closed form (every active cell = fp16(leakyrelu(∑_k A·B)))
        ├─ mlr_preLoop      (P 0: accumulator = 0, a/b pointers seeded)
        ├─ mlr_step         (one K-block: accumulator += tl.dot advances the partial sum)
        ├─ mlr_postLoop     (activation + fp16 cast + masked store = the closed form)

@@ -24,7 +24,12 @@ quantified, the per-program statement covers every row of the grid.
 ## Proof architecture
 
 ```
-softmax_kernel_online_v2_one_tile_output_summary       ← TOP THEOREM (one-tile slice)
+softmax_kernel_online_v2_surface_exec_correct          ← TOP THEOREM (full multi-tile surface)
+  ├─ pass1LoopA_run / pass1LoopB_run                    pass-1 online recurrence over all tiles
+  ├─ reduction_step                                     cross-lane (max, denom) collapse
+  └─ pass2LoopA_run / pass2LoopB_run                    pass-2 stores `softmaxOptimizeFullSpec`
+
+softmax_kernel_online_v2_one_tile_output_summary       slice corollary (one-tile `N ≤ TILE_N` regime)
   ├─ (toAlgorithm? = Except.ok _)                       slice lowers to the algorithm layer
   └─ softmax_kernel_online_v2_one_tile_compute_correct  ← ComputeCorrect over the masked store
        └─ softmax_kernel_online_v2_one_tile_correct     ← algorithm-layer readback per lane
@@ -35,10 +40,12 @@ softmax_kernel_online_v2_surface_toAlgorithm_supported  full surface lowers (low
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
-modeled. **This port is partial / blocked.** The full online-recurrence surface
-`softmax_kernel_online_v2_surface` is only proved to *lower* to the algorithm
-layer (`..._surface_toAlgorithm_supported`); its full value correctness is not
-established. Cellwise value correctness is proved against the one-tile
+modeled. Full-surface exec-level value correctness **is** established: the full
+online-recurrence surface `softmax_kernel_online_v2_surface` is proved to write
+the genuine full-row softmax `softmaxOptimizeFullSpec` to every active output
+column via `softmax_kernel_online_v2_surface_exec_correct` (the lowering fact
+`..._surface_toAlgorithm_supported` is a supporting layer). Cellwise value
+correctness is also proved against the one-tile
 specialization `softmax_kernel_online_v2_one_tile` (the `N ≤ TILE_N` regime where
 the online loops collapse to a single masked tile), whose `softmaxOptimizeSpec`
 is the stable softmax: `reduceMax` over the padded tile, `exp(row - rowMax)`,
@@ -233,7 +240,8 @@ theorem softmax_kernel_online_v2_one_tile_compute_correct
 masked store to `output_ptr` is compute-correct — every active lane (`i < N`)
 holds the stable-softmax value `softmaxOptimizeSpec`, out-of-bounds lanes are
 preserved. (Covers the `N ≤ TILE_N` collapsed-loop regime; the full online
-surface is only proved to lower, see `..._surface_toAlgorithm_supported`.) -/
+surface's exec-level value correctness is established separately, see
+`softmax_kernel_online_v2_surface_exec_correct`.) -/
 theorem softmax_kernel_online_v2_one_tile_output_summary
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
@@ -283,11 +291,14 @@ the per-lane `laneState` over all `⌈N/TILE_N⌉` tiles (`pass1InvA`). Supporti
 `loopB_bodyMvB_eq` (the body advances `laneState` by one tile, masked-out lanes
 being `⊥`-load no-ops), and `laneState_congr` (state depends only on `pid`/`mem`).
 
-**Remaining** (to wire the genuine `ComputeCorrect.Realizes` top theorem for the
-full surface): the `tl.max`/`tl.sum` cross-lane reduction collapse to `∑ over
-Fin N` (the lane×tile→`Fin N` partition is available as
-`VeriTile.Triton.sum_exp_partition`), and the two pass-2 store loops with their
-scatter-readback — see `..._surface_toAlgorithm_supported` for the lowering. -/
+**Full-surface top theorem complete (sorry-free):**
+`softmax_kernel_online_v2_surface_exec_correct` assembles the seed, both pass-1
+loops (`pass1LoopA_run`/`pass1LoopB_run`), the `tl.max`/`tl.sum` cross-lane
+reduction collapse to `∑ over Fin N` (`reduction_step`, using the
+lane×tile→`Fin N` partition `VeriTile.Triton.sum_exp_partition`), and the two
+pass-2 store loops (`pass2LoopA_run`/`pass2LoopB_run`) with their
+scatter-readback — establishing that the full `softmax_kernel_online_v2_surface`
+writes `softmaxOptimizeFullSpec` to every active output column. -/
 
 /-- The loaded input row as a function of the genuine column index `j : Fin N`:
 `input[pid_m, j]` at memory address `linearOffset s N j = s.pid·N + j`. -/

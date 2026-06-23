@@ -28,9 +28,9 @@ grid.
 ## Proof architecture
 
 ```
-mixed_sparse_attention_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per test case)
+mixed_sparse_attention_python_case{1,2,3,4}_output_closed_form_summary  ← TOP THEOREMS (one per test case)
   ├─ mixed_sparse_attention_python_case{i}_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ mixed_sparse_attention_python_case{i}_surface_output_compute_correct
+  └─ msa_exec / msa_exec32                                                 streaming exec writes the closed form
        └─ mixed_sparse_attention_output_store_python_block{64,32}_compute_correct
             └─ mixed_sparse_attention_output_store_slice_compute_correct
                  └─ mixed_sparse_attention_output_store_slice_correct       algorithm-layer readback per lane
@@ -42,15 +42,17 @@ the matching `_case{i}_store_summary` theorems package the store-only facts.)
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`, `tl.dot`, and the
 `sm_scale · log2(e)` scaling are not modeled at the bit level);
-`@triton.autotune` is not modeled. The verified result is **final-store
-scoped**: the proof establishes that the masked `Out` store copies the
-accumulator slice `Acc` at the correct, injective output offsets and preserves
-inactive lanes (the `offs_m < seqlen` and `start_m·BLOCK_M ≥ seqlen`
-early-exit masking) — the written value is
-`mixedSparseAttentionCase{i}SurfaceOutValue`, an opaque carrier for the
-online-softmax + mixed-sparsity recurrence (which dense blocks and which sparse
-columns are visited), which is **not** re-derived as a closed-form attention
-formula here. Side conditions: layout `(Z,H,N_CTX) = (2,4,128)`, `BLOCK_DMODEL
+`@triton.autotune` is not modeled. The verified result is the **genuine
+closed-form attention output** `mixedSparseAttnClosedForm` for all four cases:
+the full faithful surface kernel, executed statement-by-statement via
+`msa_exec` (cases 1/3/4) and `msa_exec32` (case 2), writes
+`mixedSparseAttnClosedForm` — the closed-form online-softmax over the visited
+dense blocks and sparse columns, a function of memory and never
+self-referential — to every active `Out` lane, while preserving inactive lanes
+(the `offs_m < seqlen` and `start_m·BLOCK_M ≥ seqlen` early-exit masking) at the
+correct, injective output offsets. The store readback is carried by
+`accStoreValue`; the closed-form fact is the top theorem
+`..._output_closed_form_summary`. Side conditions: layout `(Z,H,N_CTX) = (2,4,128)`, `BLOCK_DMODEL
 = 64`, `fp16`; cases differ by `(BLOCK_M, BLOCK_N)` (64 or 32), `sm_scale`, and
 the `seqlens` tensor, matching the four Python test cases.
 -/

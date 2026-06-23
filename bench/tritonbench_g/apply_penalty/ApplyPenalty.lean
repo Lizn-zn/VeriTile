@@ -61,8 +61,10 @@ This is satisfiable for normal padded blocks (inactive/out-of-window lanes may
 hold default or duplicated token ids and are simply not constrained); the
 correctness claim is correspondingly restricted to the active lanes. The
 integer-to-float promotion in `batch_ids_count * cur_freqency` and the
-`tl.where(logit > 0, …)` branch are modeled directly. The specs reference the
-`ℝ` ordered-field operations directly, not `VeriTile.Triton.Math.*`.
+`tl.where(logit > 0, …)` branch are modeled directly. The penalty spec
+`penaltyValue` goes through `VeriTile.Triton.Math.Optimizer`'s Lion oracle
+(`TiledOptimizer.lionPenalty`); the surrounding arithmetic is the `ℝ`
+ordered-field operations directly.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ApplyPenalty
