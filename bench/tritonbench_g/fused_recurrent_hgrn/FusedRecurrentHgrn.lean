@@ -24,16 +24,21 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-fused_recurrent_hgrn_python_test_shape_complete_summary   ← TOP THEOREM
-  ├─ fused_recurrent_hgrn_test_case{1..4}_output_summary   per-case summaries
-  │    ├─ *_surface_toAlgorithm_supported                  surface lowers to algorithm layer
-  │    └─ *_python_test_shape_all_outputs_compute_correct  ComputeCorrect over all stores
-  │         ├─ fused_recurrent_hgrn_output_store_slice_compute_correct
-  │         ├─ fused_recurrent_hgrn_forward_step_store_slice_compute_correct
-  │         ├─ fused_recurrent_hgrn_final_state_store_slice_compute_correct
-  │         ├─ fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
-  │         └─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
-  └─ (each *_compute_correct over a *_correct algorithm-layer readback per lane)
+fused_recurrent_hgrn_output_summary_general               ← TOP THEOREM (dimension-general)
+  ├─ (surface lowers to algorithm layer)
+  ├─ fused_recurrent_hgrn_output_store_slice_compute_correct       (hgrnStateClosed forward)
+  ├─ fused_recurrent_hgrn_forward_step_store_slice_compute_correct
+  ├─ fused_recurrent_hgrn_final_state_store_slice_compute_correct
+  ├─ fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
+  └─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
+
+Thin Python-shape corollaries (section TestShape, recovered by projecting the
+clauses each flag configuration exercises):
+fused_recurrent_hgrn_python_test_shape_complete_summary
+  └─ fused_recurrent_hgrn_test_case{1..4}_output_summary
+       ├─ *_surface_toAlgorithm_supported                 surface lowers to algorithm layer
+       └─ *_python_test_shape_all_outputs_compute_correct ComputeCorrect over all stores
+            (over the same *_store_slice_compute_correct lemmas above)
 ```
 
 ## Modeling boundary

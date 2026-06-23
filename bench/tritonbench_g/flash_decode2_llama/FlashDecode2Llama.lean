@@ -27,20 +27,18 @@ program of the grid.
 ## Proof architecture
 
 ```
-flash_decode2_llama_python_test_shape_output_summary          ← TOP THEOREM (final store)
+flash_decode2_llama_normalization_output_summary_general      ← TOP THEOREM (final store)
   ├─ flash_decode2_llama_surface_toAlgorithm_supported          surface lowers
-  └─ flash_decode2_llama_normalization_store_python_test_shape_compute_correct
-       └─ flash_decode2_llama_normalization_store_kernel_compute_correct
-            └─ flash_decode2_llama_normalization_store_kernel_correct  (acc / sum_exp readback)
+  └─ flash_decode2_llama_normalization_store_kernel_compute_correct
+       └─ flash_decode2_llama_normalization_store_kernel_correct  (acc / sum_exp readback)
 
-flash_decode2_llama_python_test_shape_running_max_output_summary  ← TOP THEOREM (recurrence)
+flash_decode2_llama_running_max_output_summary_general        ← TOP THEOREM (recurrence)
   ├─ flash_decode2_llama_surface_toAlgorithm_supported
-  └─ flash_decode2_llama_running_max_step_python_test_shape_compute_correct
-       └─ flash_decode2_llama_running_max_step_kernel_compute_correct
+  └─ flash_decode2_llama_running_max_step_kernel_compute_correct
 ```
 
 There is also a `flash_decode2_llama_final_store_slice_*` chain (raw `O` store
-without normalization) feeding the test-shape lemmas.
+without normalization).
 
 ## Modeling boundary
 
@@ -52,8 +50,11 @@ is split across two separately-proven faces rather than one whole-loop theorem:
 (= `acc / sum_exp`) at each `outOffset`, over a one-block output footprint; and
 (2) one **running-max recurrence step** — `new_max_logic = max(tlogic, max_logic)`
 (`runningMaxStepValue`) written as a scalar. Both hold for the universally
-quantified program ids at the Python test shape (`BLOCK_DMODEL = 32`,
-`BLOCK_SEQ = 8`, `batch = 2`, `head = 4`, `seq_block = 3`). The intermediate
+quantified program ids and are fully dimension-general — parameterized over a
+symbolic `BLOCK_DMODEL` and every stride (no hardcoded shape literals). The
+checked Python test shape (`BLOCK_DMODEL = 32`, `BLOCK_SEQ = 8`, `batch = 2`,
+`head = 4`, `seq_block = 3`) is only background, an instance of the general
+statements. The intermediate
 `Acc`/`SumExp` register state is taken as given (it is what the running recurrence
 maintains); the full loop is not unrolled into a single closed-form spec, so the
 end-to-end "`O = softmax-weighted combine of all blocks`" statement is the
@@ -293,12 +294,14 @@ theorem flash_decode2_llama_final_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
-/-! ## Python test-shape wrappers
+/-! ## Normalization-store correctness (dimension-general)
 
-The checked Python tests allocate `O` with shape `(2, 4, 32)`, so the
-contiguous output strides are `(128, 32, 1)`. `mid_out` has `head_dim = 32`,
-so `BLOCK_DMODEL = 32`; the varying `B_Seqlen` and `block_seq` cases do not
-change the final output layout. -/
+The theorems below are symbolic in `BLOCK_DMODEL` and every stride; no shape
+literals are hardcoded. For background, the checked Python tests allocate `O`
+with shape `(2, 4, 32)` (contiguous output strides `(128, 32, 1)`) and `mid_out`
+has `head_dim = 32` (so `BLOCK_DMODEL = 32`); the varying `B_Seqlen` and
+`block_seq` cases do not change the final output layout. That concrete shape is
+just one instance of the general statements. -/
 
 /-- Algorithm-layer correctness for LLaMA stage2 normalization plus writeback. -/
 theorem flash_decode2_llama_normalization_store_kernel_correct

@@ -30,7 +30,11 @@ The kernel is a **global** cumulative sum: each output flat index `flat` holds
 kernel's own output.
 
 ```
-chunk_cumsum_scalar_python_test_shape_summary                  ← TOP THEOREM
+chunk_cumsum_scalar_output_summary_general                     ← TOP THEOREM
+  ├─ chunk_cumsum_scalar_surface_toAlgorithm_supported         full surface lowers
+  └─ chunk_cumsum_scalar_surface_global_cumsum                 O = global prefix Σ (carry-fold)
+
+chunk_cumsum_scalar_python_test_shape_summary                  (T=4, BT=16 corollary)
   ├─ chunk_cumsum_scalar_python_test_shape_surface_toAlgorithm_supported
   │     └─ chunk_cumsum_scalar_surface_toAlgorithm_supported   full surface lowers
   └─ chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct

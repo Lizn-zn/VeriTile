@@ -30,24 +30,23 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_kernel_python_test_shape_output_summary            ← TOP THEOREM
+attention_kernel_genuine_output_compute_correct_general      ← GENERAL TOP THEOREM (dimension-parameterized)
   ├─ attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
   └─ ClosedForm.attention_kernel_genuine_output_compute_correct
        └─ ClosedForm.attention_kernel_exec    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
             └─ (every Out lane = genuine closed form `attentionKernelSpec`)
-
-attention_kernel_final_store_python_test_shape_compute_correct
-  └─ attention_kernel_final_store_slice_compute_correct       ← ComputeCorrect over the final Out store
-       └─ attention_kernel_final_store_slice_correct          ← algorithm-layer readback (normalizedAccValue)
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 (`fp16`/`bf16`) casts collapse to the identity post-erasure; `@triton.autotune`
-/ `num_warps`/`num_stages` are not modeled. The output summary is stated at the
-Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=128, BLOCK_M=BLOCK_N=64`,
-`sm_scale=0.1`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(16384,128,1)`).
+/ `num_warps`/`num_stages` are not modeled. The output summary is dimension-general
+(symbolic `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale` and strides);
+the Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=128, BLOCK_M=BLOCK_N=64`,
+`sm_scale=0.1`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(16384,128,1)`)
+is the special case (the pinned `attention_kernel_genuine_output_compute_correct`
+is that corollary).
 The top summary asserts the **genuine** closed form: every observable `Out` lane
 equals the base-2 streaming-softmax `attentionKernelSpec` (= `attnGenScore fscore
 vFlat`) of the loaded Q/K/V tiles under the kernel's actual bias-augmented per-key

@@ -31,7 +31,10 @@ program of each grid.
 ## Proof architecture
 
 ```
-triton_attention_bwd_python_test_shape_complete_summary             ← TOP THEOREM (bwd grads + score)
+triton_attention_bwd_grads_genuine_output_summary_general           ← ★ MAIN (bwd grads, multi-block dimension-general)
+  └─ genuine input-memory closed forms: bwdKernelDQSpecG (priorDQ + Σ_J fp16(ds)·k);
+       DV[J,e] = Σ_I fp16(p)·do, DK[J,e] = Σ_I fp16(ds)·q (genuine fp16 column sums)
+triton_attention_bwd_python_test_shape_complete_summary             ← TOP (bwd grads + score, test shape)
   ├─ triton_attention_bwd_grads_python_test_shape_output_summary
   │    ├─ triton_attention_bwd_kernel_toAlgorithm_supported
   │    └─ triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
@@ -70,11 +73,18 @@ modeling depth differs by kernel:
   `FA1MathCausal` streaming accumulators), `fwdLSpec` (the stored m-shifted
   normalizer `lPartial`), and `fwdMSpec` (the per-row causal score maximum
   `mPartial`). See `ta_exec` and the `triton_attention_forward_surface_*` theorems.
-* **Backward grads** (`DQ`, `DK`, `DV`) are **final-store scoped**: the proofs
-  establish the masked/full stores write the accumulator slices at the correct,
-  injective offsets and preserve inactive lanes; the written values are the
-  opaque `producedBwdKernelD{Q,K,V}Value` carriers, not re-derived as closed
-  forms.
+* **Backward grads** (`DQ`, `DK`, `DV`) are verified at two fidelity tiers.
+  The **genuine tier** — the ★ MAIN dimension-general
+  `triton_attention_bwd_grads_genuine_output_summary_general` together with the
+  pinned `triton_attention_bwd_grads_genuine_output_summary` — checks the stores
+  against explicit closed forms defined over the **input** memory (never
+  re-reading `exec`): `DQ = priorDQ + Σ_J fp16(ds)·k` (`bwdKernelDQSpecG`),
+  `DV[J,e] = Σ_I fp16(p)·do`, and `DK[J,e] = Σ_I fp16(ds)·q` (the genuine fp16
+  column sums over all query rows). A separate **lower-fidelity
+  `_python_test_shape_` tier** is **final-store scoped**: it establishes the
+  masked/full stores write the accumulator slices at the correct, injective
+  offsets and preserve inactive lanes, but the written values are only the opaque
+  `producedBwdKernelD{Q,K,V}Value` carriers, not re-derived as closed forms.
 * **Backward preprocess** and the **backward score `P`/`DS` step** are verified
   against explicit closed-form specs (`bwdScorePFormulaSpec`,
   `bwdScoreDSFormulaSpec`, and the `newdo`/`delta` formula slices), not opaque

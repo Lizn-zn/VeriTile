@@ -27,19 +27,15 @@ the per-program statements cover every program of the grid.
 ## Proof architecture
 
 ```
-softmax_reducev_python_test_shape_output_summary      ← TOP THEOREM
-  ├─ softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported  surface lowers
-  ├─ softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported     (other_kv_index = 0)
-  │    └─ softmax_reducev_surface_toAlgorithm_supported
-  └─ softmax_reducev_surface_output_compute_correct     ← ComputeCorrect of the store
-       ├─ softmax_reducev_python_output_offset_injective
-       └─ softmax_reducev_python_test_shape_final_output_compute_correct
-            └─ softmax_reducev_final_store_slice_compute_correct
-                 └─ softmax_reducev_final_store_slice_correct  (per-lane normalized readback)
+softmax_reducev_genuine_output_compute_correct_general      ← TOP THEOREM
+  └─ sr_execG                                  ← exec-side unfold of the streaming loop
+       └─ sr_attn_stepG                        ← per-block online-softmax step
+            └─ softmax_reducev_final_store_slice_correct  (per-lane normalized readback)
 ```
 
-The top theorem covers both `other_kv_index ∈ {-1, 0}` test variants at the
-Python test shape (`BLOCK_DMODEL = 64`, `BLOCK_N = 64`).
+The top theorem holds for `other_kv_index : Int` free (any sentinel) and at
+symbolic `BLOCK_DMODEL`/`BLOCK_N`, covering both `other_kv_index ∈ {-1, 0}` test
+variants as instances.
 
 ## Modeling boundary
 
@@ -52,7 +48,7 @@ the genuine input-side `softmaxReducevWeightedSum` (`sr_exec`),
 read off at each `outOffset`, over a one-block output footprint with the program
 ids universally quantified. The streaming online-softmax loop (running max,
 rescale-and-accumulate, paged-V gather) feeds those `Acc`/`ESum` values; the side
-condition is the offset-injectivity of the `Out` slice at the test shape.
+condition is the offset-injectivity of the `Out` slice (symbolic-`BLOCK_DMODEL`).
 
 ## Genuine closed form (input-side, non-self-referential)
 
@@ -65,10 +61,11 @@ logits and gathered value rows:
 bridges the verified `acc / e_sum` store spec to this closed form, and
 `softmax_reducev_final_store_slice_weighted_sum_correct` proves the verified
 final-store slice *realizes* it under the loop-output contract (`Acc` / `ESum`
-hold the closed-form numerator / denominator — exact over `ℝ`). What remains to
-fully discharge the full-surface top theorem's self-reference is the `exec`-side
+hold the closed-form numerator / denominator — exact over `ℝ`). The `exec`-side
 unfold of the dynamic (`forRangeDyn`) online-softmax loop with the paged-V gather
-— the multi-thousand-line FA-1/attention-forward analogue.
+is now discharged sorry-free by `sr_exec` and the dimension-general `sr_execG`,
+so the top theorem `softmax_reducev_genuine_output_compute_correct_general`
+realizes the genuine input-side closed form directly.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxReducev

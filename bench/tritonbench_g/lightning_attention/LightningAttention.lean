@@ -36,8 +36,8 @@ Genuine forward closed form (NOT self-referential):
   kvClosed / kvClosed_succ                          kv carry-fold over K·V
   oRowClosed                                        causal linear-attention output row
   kvStepSpec_eq_kvClosed_succ                       carry invariant: body advances kvClosed
-  lightning_attention_forward_kv_step_compute_correct      kv += dot(k_trans, v) body
-  lightning_attention_forward_o_inter_compute_correct      o_inter = dot(q, kv) body
+  lightning_attention_forward_kv_step_slice_compute_correct      kv += dot(k_trans, v) body
+  lightning_attention_forward_o_inter_dot_slice_compute_correct  o_inter = dot(q, kv) body
   lightning_attention_python_test_shape_output_summary     genuine launched-surface summary
 ```
 

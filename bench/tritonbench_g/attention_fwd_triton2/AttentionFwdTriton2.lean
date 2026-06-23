@@ -32,13 +32,12 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_fwd_triton2_python_test_shape_output_summary       ← TOP THEOREM (genuine closed form)
+attention_fwd_triton2_output_summary_general                 ← GENERAL TOP THEOREM (dimension-parameterized, genuine closed form)
   ├─ attention_fwd_triton2_surface_toAlgorithm_supported      surface lowers to the algorithm layer
   └─ attention_fwd_triton2_closed_form_correct                ← genuine closed-form value
        └─ (online-softmax recurrence == batch base-2 softmax, Math/Attention.lean)
 
-attention_fwd_triton2_final_store_python_test_shape_compute_correct
-  └─ attention_fwd_triton2_final_store_slice_compute_correct  ← ComputeCorrect over the masked Out store
+attention_fwd_triton2_final_store_slice_compute_correct      ← ComputeCorrect over the masked Out store
        └─ attention_fwd_triton2_final_store_slice_correct     ← algorithm-layer readback per lane
 ```
 
@@ -46,9 +45,10 @@ attention_fwd_triton2_final_store_python_test_shape_compute_correct
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `float16`/`float32`/
 `bfloat16` casts collapse to the identity post-erasure; `@triton.autotune` /
-`num_warps`/`num_stages` are not modeled. The output summary is stated at the
-Python test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64`,
-contiguous strides, 96 active head lanes). Cross-program composition into the
+`num_warps`/`num_stages` are not modeled. The output summary is dimension-general
+(symbolic shape/strides); the Python test shape
+(`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64`,
+contiguous strides, 96 active head lanes) is the special case. Cross-program composition into the
 full `[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 
 ## Top theorem: closed-form value (NOT self-referential)
@@ -491,8 +491,7 @@ The only layout assumptions are the contiguity contracts the kernel relies on
 (`stride_qm = stride_kn = HEAD_DIM`, head stride `1`), `0 < BLOCK_N`,
 `HEAD_ACTIVE ≤ BLOCK_DMODEL`, `HEAD_ACTIVE ≤ HEAD_DIM`, and a clean initial
 `undef`. The Python test case (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128,
-BLOCK_N=64, HEAD_ACTIVE=96, numKVBlocks=2`) is the special case recovered by
-`attention_fwd_triton2_python_test_shape_output_summary`. -/
+BLOCK_N=64, HEAD_ACTIVE=96, numKVBlocks=2`) is the special case. -/
 theorem attention_fwd_triton2_output_summary_general
     (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks

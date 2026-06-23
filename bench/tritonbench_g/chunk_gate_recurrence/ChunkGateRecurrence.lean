@@ -31,23 +31,23 @@ The genuine forward closed-form spec is `fwdClosed`, a standalone
 read-back of the kernel's own output `O`.
 
 ```
-chunk_gate_recurrence_forward_python_test_shape_summary        ← TOP (forward)
-  ├─ chunk_gate_recurrence_python_test_{with,no}_last_kv_fwd_surface_toAlgorithm_supported
-  │     └─ chunk_gate_recurrence_fwd_surface_toAlgorithm_supported
-  └─ chunk_gate_recurrence_forward_python_test_shape_all_outputs_compute_correct
-       ├─ chunk_gate_recurrence_fwd_initial_last_kv_closed_form   (fwdClosed 0 = last_kv)
-       ├─ chunk_gate_recurrence_fwd_initial_zero_closed_form      (fwdClosed 0 = 0)
-       └─ chunk_gate_recurrence_fwd_step_closed_form              (carry-fold step)
-            └─ forwardStepSpec_eq_fwdClosed_succ
-                 └─ fwdClosed_succ   (fwdClosed(m+1) = fwdClosed(m)·d_m + S_m)
+chunk_gate_recurrence_forward_output_summary_general          ← TOP (forward)
+  ├─ chunk_gate_recurrence_fwd_surface_toAlgorithm_supported    full surface lowers
+  ├─ chunk_gate_recurrence_fwd_initial_last_kv_closed_form_general  (fwdClosed 0 = last_kv)
+  ├─ chunk_gate_recurrence_fwd_initial_zero_closed_form_general     (fwdClosed 0 = 0)
+  └─ chunk_gate_recurrence_forward_step_store_slice_closed_form (carry-fold step)
+       └─ forwardStepSpec_eq_fwdClosed_succ
+            └─ fwdClosed_succ   (fwdClosed(m+1) = fwdClosed(m)·d_m + S_m)
 
-chunk_gate_recurrence_backward_python_test_shape_summary       ← TOP (backward)
-  ├─ chunk_gate_recurrence_python_test_bwd_surface_toAlgorithm_supported
-  │     └─ chunk_gate_recurrence_bwd_surface_toAlgorithm_supported
-  └─ chunk_gate_recurrence_backward_python_test_shape_all_outputs_compute_correct
-       ├─ chunk_gate_recurrence_bwd_DI_surface_compute_correct   (Dacc·d_i + DS_i)
-       ├─ chunk_gate_recurrence_bwd_DG_surface_compute_correct   (Σ Dacc·S_i)
-       └─ chunk_gate_recurrence_bwd_DL_surface_compute_correct   (post-loop acc)
+chunk_gate_recurrence_forward_python_test_shape_summary        (test-shape corollary)
+
+chunk_gate_recurrence_backward_output_summary_general         ← TOP (backward)
+  ├─ chunk_gate_recurrence_bwd_surface_toAlgorithm_supported   full surface lowers
+  ├─ chunk_gate_recurrence_bwd_dacc_step_DI_store_slice_compute_correct  (Dacc·d_i + DS_i)
+  ├─ chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct       (Σ Dacc·S_i)
+  └─ chunk_gate_recurrence_bwd_DL_store_slice_compute_correct            (post-loop acc)
+
+chunk_gate_recurrence_backward_python_test_shape_summary       (test-shape corollary)
 
 per-store slice lemmas (modeled exactly, fed materialized state buffers):
   forward:  forward_store_slice / initial_last_kv_store_slice /

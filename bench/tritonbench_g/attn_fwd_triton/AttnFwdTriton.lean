@@ -28,12 +28,12 @@ statements cover every program of the grid.
 ## Proof architecture
 
 ```
-attn_fwd_triton_python_test_shape_output_summary           ← TOP THEOREM
+attn_fwd_triton_output_summary_general                     ← TOP THEOREM
   ├─ attn_fwd_triton_surface_toAlgorithm_supported          surface lowers to the algorithm layer
-  └─ attn_fwd_triton_surface_python_test_shape_compute_correct
-       └─ attn_fwd_triton_final_store_python_test_shape_compute_correct
-            └─ attn_fwd_triton_final_store_slice_compute_correct
-                 └─ attn_fwd_triton_final_store_slice_correct   ← algorithm-layer readback per lane
+  └─ aftg_exec_generalG                                     full surface executes; Out = closed form
+       ├─ aftgLoopBodyG / aftg_attn_stepG                   per-block streaming loop step (forRange_inv)
+       └─ attn_fwd_triton_final_store_slice_compute_correct
+            └─ attn_fwd_triton_final_store_slice_correct    ← algorithm-layer readback per lane
 ```
 
 ## Modeling boundary
@@ -46,16 +46,20 @@ the inlined `forRange` streaming loop + postLoop) is executed and its `Out` stor
 is proven equal to `attnFwdTritonOutSpec` — masked base-2 (`exp2`) per-key-scale
 **causal** softmax (`keyScale = aftKeyScale = q_scale · k_scale[block]`,
 `keep = causalKeep qStart`, head-active `q`/`k`/`v` masks at `e/d ≥ 96`) — at
-every active output lane (`attn_fwd_triton_python_test_shape_output_summary`). The
+every active output lane (`attn_fwd_triton_output_summary_general`). The
 inner online-softmax recurrence (`m_i`/`l_i`/`acc` updates, the final `acc / l_i`
 normalization) is reconciled to this closed form via the ⊥-seeded `aftStateBot`
 streaming fold and `aftStateBot_full_eq_spec`; the loop is driven by `forRange_inv`
-+ `aft_attn_step`. Two genuine side conditions are explicit: `aftScoreBound` (the
-`-1e6` `tl.where` mask sentinel is inert — every kept score `≥ -1e6`) and the
-clean `undef ≡ 0` initial state. Side condition: the test-shape wrapper fixes the
-concrete layout (`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`,
-`BLOCK_N = 64`, strides `(65536, 16384, 128, 1)`, mask = first 96 head lanes) and
-uses `STAGE = 3`.
++ `aftg_attn_stepG`. The result is **dimension-general**: it holds for arbitrary
+symbolic block/head dimensions at the contiguous layout (`stride_qm = HEAD_DIM`,
+`stride_qk = 1`, `stride_kn = HEAD_DIM`). Its side conditions (documented at the
+theorem's banner) are: positive blocks (`BLOCK_DMODEL`, `BLOCK_N`, `BLOCK_M > 0`),
+`N_CTX = BLOCK_N · numKVBlocks` with `numKVBlocks > 0`, clean input
+(`undef ≡ 0`), the `-1e6` `tl.where` mask sentinel being inert
+(`aftgScoreBoundG` — every kept score `≥ -1e6`), and output-offset injectivity.
+The Python test-shape layout (`Z = 2`, `H = 4`,
+`N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
+`HEAD_ACTIVE = 96`, `STAGE = 3`) is only one instance of this general theorem.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton

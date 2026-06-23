@@ -29,7 +29,7 @@ of the grid.
 ## Proof architecture
 
 ```
-attention_fwd_triton1_python_test_shape_output_summary               ← TOP THEOREM
+attention_fwd_triton1_output_summary_general                         ← GENERAL TOP THEOREM (dimension-parameterized)
   ├─ attention_fwd_triton1_exec_outputClosedForm                      exec O = outputClosedForm
   │    ├─ aft1_exec_carry            prologue + 32-chunk forRangeDyn loop → b_h = Σ Kᵀ·V, O = aft1Out
   │    │    ├─ aft1_prologue_inv                       reaches the carry invariant aft1Inv 0
@@ -45,9 +45,10 @@ attention_fwd_triton1_python_test_shape_output_summary               ← TOP THE
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
 the identity post-erasure; `@triton.autotune` / `num_warps`/`num_stages` are not
-modeled. The output summary is stated at the Python test shape
+modeled. The output summary is dimension-general (symbolic `s_qh`, `BT`, `BD`,
+`NT`, `scale`, strides, …); the Python test shape
 (`B=2, H=8, T=1024, D=128, BT=32, BD=128, NT=32`, `scale = 1/sqrt(128)`,
-contiguous strides). The default-branch (`STORE=false, IFCOND=false`) `O`
+contiguous strides) is the special case. The default-branch (`STORE=false, IFCOND=false`) `O`
 writeback is stated against the genuine `outputClosedForm` — the linear-attention
 local `(scale·Q·K·V)` plus recurrent `(scale·Q·b_h_c)` terms, expressed purely over
 input memory with **no self-reference** to the executed kernel. The full kernel is
@@ -256,7 +257,7 @@ theorem recurrentState_eq_sum_bhFormulaSpec
 
 /-! ## `output_summary` — placeholder
 
-The public genuine output summary `attention_fwd_triton1_python_test_shape_output_summary`
+The public genuine output summary `attention_fwd_triton1_output_summary_general`
 is stated below (after the closed-form derivation) against the genuine
 `outputClosedForm`, not against any self-referential executed value. -/
 
