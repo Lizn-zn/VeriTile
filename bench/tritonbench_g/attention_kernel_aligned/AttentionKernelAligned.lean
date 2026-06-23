@@ -32,7 +32,7 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_kernel_aligned_python_test_shape_output_summary    ← TOP THEOREM (genuine, NON-self-referential)
+attention_kernel_aligned_python_test_shape_output_summary_general    ← GENERAL TOP THEOREM (dimension-parameterized, genuine, NON-self-referential)
   ├─ attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
   └─ ClosedForm.aligned_genuine_output_compute_correct
        └─ ClosedForm.aligned_exec    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
@@ -50,9 +50,11 @@ genuine producer closed form (sorry-free; exec assembly now connected):
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 (`fp16`/`bf16`) casts collapse to the identity post-erasure; `@triton.autotune`
-/ `num_warps`/`num_stages` are not modeled. The output summary is stated at the
-Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=64, BLOCK_M=32, BLOCK_N=64`,
-`sm_scale=1.0`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(8192,64,1)`).
+/ `num_warps`/`num_stages` are not modeled. The output summary is dimension-general
+(symbolic `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale` and strides);
+the Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=64, BLOCK_M=32, BLOCK_N=64`,
+`sm_scale=1.0`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(8192,64,1)`)
+is the special case.
 The public summary asserts the **genuine** closed form: every observable `Out`
 lane equals the base-2 streaming-softmax `alignedClosedForm` of the loaded Q/K/V
 tiles under the scalar score scale `sm_scale·log2(e)` and the fused `rel_h+rel_w`
@@ -3272,10 +3274,9 @@ Records the faithful aligned attention surface and asserts that every observable
 `rel_h + rel_w` bias `b0 + b1`) — NOT the kernel's own executed readback.
 Genuinely general over `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale`
 and the head/bias strides (`P_SEQ = 0`, contiguous Q/K/V/Out layout). The Python
-test-shape theorem `attention_kernel_aligned_python_test_shape_output_summary` is
-the instance at `sm_scale = 1.0`, `stride_qh = 8192`, `stride_b0h = 8192`,
+test shape (`sm_scale = 1.0`, `stride_qh = 8192`, `stride_b0h = 8192`,
 `stride_b0m = 128`, `BLOCK_M = 32`, `BLOCK_N = HEAD = 64`, `BIAS_LAST_SIZE = 64`,
-`nB = 2`. -/
+`nB = 2`) is the special case. -/
 theorem attention_kernel_aligned_python_test_shape_output_summary_general
     (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     (stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)

@@ -28,13 +28,11 @@ statement covers every program of the grid.
 ## Proof architecture
 
 ```
-context_attn_mistral_python_test_shape_output_summary       ← TOP THEOREM (bundles sliding_window ∈ {10, 20})
-  └─ context_attn_mistral_surface_python_test_shape_compute_correct   full surface, final store
-       └─ context_attn_mistral_final_store_python_test_shape_compute_correct
-            └─ context_attn_mistral_final_store_slice_compute_correct
-                 └─ context_attn_mistral_final_store_slice_correct      algorithm-layer readback per lane
-(supporting: context_attn_mistral_python_test_shape_offset_injective,
-             context_attn_mistral_fwd_kernel_surface_toAlgorithm_supported)
+context_attn_mistral_genuine_output_summary_general        ← TOP THEOREM (symbolic, dimension-general)
+  └─ context_attn_mistral_genuine_output_summary             concrete shape corollary (sliding_window ∈ {10, 20})
+       └─ context_attn_mistral_final_store_slice_compute_correct
+            └─ context_attn_mistral_final_store_slice_correct           algorithm-layer readback per lane
+(supporting: context_attn_mistral_fwd_kernel_surface_toAlgorithm_supported)
 ```
 
 ## Modeling boundary
@@ -43,17 +41,21 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is no
 modeled. The verified compute claim is scoped to the **final masked writeback**
 of the accumulated `acc` tile into `Out`: every active lane
 (`offs_m < cur_batch_seq_len`, with `offs_d < head_dim` folded into the slice)
-holds the surface-produced `acc` value (`producedContextAttnMistralOutValue`),
-and out-of-bounds lanes are preserved. The online-softmax streaming loop
-(`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal + sliding-window band mask, and
-the `m_ij == -1e9 → 0` numerical guard) is carried *inside* the surface kernel
-and reflected in the produced-value spec rather than re-proven as a closed-form
-softmax identity. Note the top theorem bundles only the compute-correct claims;
-`toAlgorithm?` lowering is available separately as
+holds the **genuine** sliding-window causal-softmax closed form
+`mistralGenuineOutValueG` (the boundary-masked sliding-window-softmax fold of the
+loaded Q/K/V memory, `-1e9` sentinel kept), and out-of-bounds lanes are preserved
+— a pure function of memory, NOT a self-referential executed readback. The
+online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal +
+sliding-window band mask, and the `m_ij == -1e9 → 0` numerical guard) is decoded
+statement-by-statement and proven to collapse to that closed form. Note the top
+theorem bundles only the compute-correct claim; `toAlgorithm?` lowering is
+available separately as
 `context_attn_mistral_fwd_kernel_surface_toAlgorithm_supported` but is not folded
-into this summary. The summary is instantiated at the Python test shape
-(`BLOCK_M=BLOCK_DMODEL=BLOCK_N=128`, `sliding_window ∈ {10, 20}`); other shapes
-are not covered by the top theorem.
+into this summary. The top theorem is dimension-general: it is stated over
+symbolic `BLK`/`DM` (with `BLOCK_M = BLOCK_N = BLK`, `BLOCK_DMODEL = DM`), the
+sliding window `sw`, and the layout strides `(rs, hs, 1)`. The Python test shape
+(`BLK = DM = 128`, `rs = 768`, `hs = 128`, `sliding_window ∈ {10, 20}`) is
+recovered as a concrete special case.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ContextAttnMistral

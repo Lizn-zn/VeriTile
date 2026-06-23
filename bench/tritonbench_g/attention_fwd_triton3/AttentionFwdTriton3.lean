@@ -44,21 +44,22 @@ attention_fwd_triton3_python_caseN_output_summary            ← TOP THEOREMS (N
   └─ attention_fwd_triton3_caseN_surface_m_compute_correct     M-row store
 
 (supporting per-store slice lemmas, factored out:
-   attention_fwd_triton3_final_store_slice_compute_correct
    attention_fwd_triton3_end_output_formula_store_slice_compute_correct
-   attention_fwd_triton3_end_m_formula_store_slice_compute_correct
-   attention_fwd_triton3_l_store_slice_compute_correct
-   attention_fwd_triton3_m_store_slice_compute_correct)
+   attention_fwd_triton3_end_m_formula_store_slice_compute_correct)
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
 the identity post-erasure; `@triton.autotune`/`@triton.heuristics` and
-`num_warps`/`num_stages` are not modeled. The summaries are stated at the Python
-test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=BLOCK_N=64`,
-`sm_scale = 1/8`, contiguous strides, 64 active lanes) with the case-specific
-`SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags baked into the launch
+`num_warps`/`num_stages` are not modeled. The case 1/2/3 main summaries are
+dimension-general (`attention_fwd_triton3_python_case{1,2,3}_output_summary_general`,
+symbolic shape/strides); the Python test shape
+(`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=BLOCK_N=64`,
+`sm_scale = 1/8`, contiguous strides, 64 active lanes) is the special case
+(recovered by the pinned `..._python_case{1,2,3}_output_summary` corollaries).
+Only case 4 remains pinned at the test shape. The case-specific
+`SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked into the launch
 arguments.
 
 ## Genuine closed forms (cases 1/2/3)

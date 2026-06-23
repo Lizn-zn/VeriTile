@@ -59,10 +59,13 @@ window; case4: smaller sliding-window size). `case1` is a standalone theorem;
 `*_output_surface_summary` theorems.
 
 ```
-attention_score_python_case1_output_summary                  ← TOP THEOREM (genuine closed form)
+attention_score_python_case1_output_summary_general          ← GENERAL TOP THEOREM (dimension-parameterized, genuine closed form)
   ├─ attention_score_python_case1_surface_toAlgorithm_supported   surface lowers to algorithm layer
   └─ attention_score_case1_genuine_compute_correct                masked Out store = case1OutClosedForm
        └─ attention_score_case1_exec_eq_closedForm               full exec unfold (preLoop+loop+post)
+
+attention_score_python_case1_output_summary                  ← TEST-SHAPE COROLLARY (case 1)
+  └─ attention_score_python_case1_output_summary_general @ Python shape
 
 attention_score_python_case{2,3,4}_output_summary            ← abbrev = *_output_surface_summary
   └─ attention_score_python_case{2,3,4}_output_surface_summary
@@ -77,9 +80,12 @@ attention_score_final_store_python_test_shape_compute_correct
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the output-dtype cast
 collapses to the identity post-erasure; `@triton.autotune`/`@triton.heuristics`
-and `num_warps`/`num_stages` are not modeled. The summaries are stated at the
-Python test shape (`B=2, H=4, N_CTX=NKV_CTX=128, D_MODEL=64,
-BLOCK_M=BLOCK_N=64`, contiguous strides) with the case-specific
+and `num_warps`/`num_stages` are not modeled. The case 1 main summary is
+dimension-general (`attention_score_python_case1_output_summary_general`, symbolic
+shape/strides); the Python test shape (`B=2, H=4, N_CTX=NKV_CTX=128, D_MODEL=64,
+BLOCK_M=BLOCK_N=64`, contiguous strides) is the special case (recovered by the
+pinned `attention_score_python_case1_output_summary`). Cases 2/3/4 remain pinned
+at the test shape, with the case-specific
 `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW` flags and window sizes baked into
 the launch arguments; `sm_scale` is kept universally quantified. The `Out`
 writeback is stated against the genuine `case1OutClosedForm` (the masked-`exp2`

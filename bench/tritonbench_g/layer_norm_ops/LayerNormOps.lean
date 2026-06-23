@@ -39,9 +39,9 @@ forward one-block surface, each with a `*_correct` (algorithm-layer readback)
 and `*_compute_correct` (ComputeCorrect) pair, covering the constexpr matrix of
 {plain, RMS} × {bias, no-bias} × {residual, no-residual} for the `Y`, `Mean`,
 `Rstd`, and `RESIDUAL_OUT` stores, plus the backward writeback slices. The
-public `*_output_summary` abbrevs (e.g.
-`layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary`)
-alias the composed `*_compute_correct` results at the tested Python shapes. For
+dimension-general headline theorems (e.g.
+`layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general`)
+compose those `*_compute_correct` slices at symbolic shapes. For
 example, the forward `Y` slices reduce through `layer_norm_ops_fwd_y_store_slice_compute_correct`:
 
 ```
@@ -270,16 +270,15 @@ residual-add slice covering the `DX`/optional `DRESIDUAL_IN` writebacks after
 `dx += dres`, plus recomputed-`Y` slices for both `xhat * W + B` and
 `xhat * W`, checked `c1`/`c2` reduction-production slices, base RMS and
 non-RMS `DX` formula slices after the reductions have been supplied, and one
-integrated non-RMS+bias row slice for partial `DW`/`DB`. The Python test-shape
-wrappers group those pieces by the backward cases observed by
-`test_layer_norm_fwd_bwd`. The "End-to-end surface correctness" section at the
+integrated non-RMS+bias row slice for partial `DW`/`DB`. The dimension-general
+`*_core_outputs_compute_correct_general` theorems group those pieces by the
+backward cases observed by `test_layer_norm_fwd_bwd`. The "End-to-end surface correctness" section at the
 bottom of the file proves `Y` and `Rstd` outputs of the actual surface kernel
 `layer_norm_fwd_1pass_surface` itself, specialised to the RMS/no-residual/no-bias
 branch — the first per-kernel-surface (not slice) correctness in the file. Full
 backward surface lowering is proved by `layer_norm_bwd_surface_toAlgorithm_supported`;
 the observable backward outputs for the Python-tested branches are covered by
-the compositional row/reduction/store theorems and the grouped Python
-test-shape wrappers below.
+the compositional row/reduction/store theorems below.
 -/
 
 /-- Proof-oriented RMS/no-residual/no-bias slice of `layer_norm_ops.py`'s
@@ -3900,14 +3899,13 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
     hOutInj hExec i
   simpa [hActive] using h
 
-/-! ## Python forward test-shape wrappers
+/-! ## Dimension-general offset injectivity + headline theorems
 
-`layer_norm_ops.py`'s checked forward cases use `M = 64`, `N = 1024`, and
-contiguous row-major `[M, N]` tensors. Thus `x`, `y`, `residual`, and
-`residual_out` all use row stride `1024`, and float32 inputs choose
-`BLOCK_N = min(65536 / 4, next_power_of_2 1024) = 1024`. The Python tests
-always pass a bias tensor, and cover plain+bias, RMS+bias, and
-residual+plain+bias forward branches. -/
+The `*_offset_general_injective` helpers below establish injectivity of the
+forward/backward store offsets for arbitrary stride and tile width. The
+`*_compute_correct_general` headline theorems then compose the per-slice results
+at symbolic shapes, covering plain+bias, RMS+bias, and residual+plain+bias
+forward branches plus the backward core/residual-add outputs. -/
 
 /-- General injectivity for a `s.pid * stride + i.val` row-vector store offset,
 for any stride and tile width.  -/

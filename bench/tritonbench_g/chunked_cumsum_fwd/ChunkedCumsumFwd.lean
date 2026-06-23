@@ -35,24 +35,18 @@ stated and proven **general over `nheads`, `chunk_size` and the block sizes**
 independently along its own axis).
 
 ```
-chunked_cumsum_fwd_python_test_case{1,2,3,4}_slice_summary     ← TOP THEOREMS
-  ├─ chunked_cumsum_fwd_python_test_case{n}_surface_toAlgorithm_supported
-  │     └─ chunked_cumsum_fwd_surface_toAlgorithm_supported    full surface lowers
-  └─ chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
-       ├─ chunked_cumsum_dt_out_python_test_shape_compute_correct
-       │     └─ chunked_cumsum_dt_out_store_slice_compute_correct
-       │          └─ chunked_cumsum_dt_out_store_slice_correct
-       ├─ chunked_cumsum_dA_cs_store_python_test_shape_compute_correct
-       │     └─ chunked_cumsum_dA_cs_store_slice_compute_correct
-       │          └─ chunked_cumsum_dA_cs_store_slice_correct
-       └─ chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
-            └─ chunked_cumsum_dA_cs_compute_slice_closed_form  (= dAClosed)
-                 ├─ chunked_cumsum_dA_cs_compute_slice_compute_correct
-                 │    └─ chunked_cumsum_dA_cs_compute_slice_correct
-                 └─ dAComputedCumsumSpec_eq_dAClosed  (cumsum = prefix Σ)
-                      └─ scan2d_axis1_sum / scan2d_axis1_sum_if
-
-chunked_cumsum_fwd_python_test_case{1,2,3,4}_output_summary    (= slice_summary aliases)
+chunked_cumsum_fwd_summary_general                            ← TOP THEOREM
+  ├─ chunked_cumsum_fwd_surface_toAlgorithm_supported          full surface lowers
+  └─ chunked_cumsum_fwd_all_outputs_compute_correct_general
+       ├─ chunked_cumsum_dt_out_store_slice_compute_correct
+       │     └─ chunked_cumsum_dt_out_store_slice_correct
+       ├─ chunked_cumsum_dA_cs_store_slice_compute_correct
+       │     └─ chunked_cumsum_dA_cs_store_slice_correct
+       └─ chunked_cumsum_dA_cs_compute_slice_closed_form  (= dAClosed)
+            ├─ chunked_cumsum_dA_cs_compute_slice_compute_correct
+            │    └─ chunked_cumsum_dA_cs_compute_slice_correct
+            └─ dAComputedCumsumSpec_eq_dAClosed  (cumsum = prefix Σ)
+                 └─ scan2d_axis1_sum / scan2d_axis1_sum_if
 ```
 
 ## Modeling boundary

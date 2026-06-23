@@ -29,27 +29,24 @@ the grid.
 ## Proof architecture
 
 ```
-flash_decode2_phi_python_test_shape_summary                  ← TOP THEOREM (masked final store)
-  ├─ flash_decode2_phi_surface_toAlgorithm_supported  (×4 BLOCK_SEQ surfaces)
-  └─ flash_decode2_phi_final_store_python_test_shape_compute_correct
-       └─ flash_decode2_phi_final_store_slice_compute_correct
-            └─ flash_decode2_phi_final_store_slice_correct
+flash_decode2_phi_normalization_output_summary_general       ← TOP (acc/sum_exp store)
+  ├─ flash_decode2_phi_surface_toAlgorithm_supported
+  └─ flash_decode2_phi_normalization_store_kernel_compute_correct
+       └─ flash_decode2_phi_normalization_store_kernel_correct
 
-flash_decode2_phi_python_test_shape_normalization_store_output_summary  ← TOP (acc/sum_exp store)
-  └─ flash_decode2_phi_normalization_store_python_test_shape_compute_correct
-       └─ flash_decode2_phi_normalization_store_kernel_compute_correct
-            └─ flash_decode2_phi_normalization_store_kernel_correct
+flash_decode2_phi_masked_accumulator_output_summary_general  ← TOP (one loop step)
+  ├─ flash_decode2_phi_surface_toAlgorithm_supported
+  ├─ flash_decode2_phi_accumulator_step_kernel_compute_correct
+  │    └─ flash_decode2_phi_accumulator_step_kernel_correct
+  └─ flash_decode2_phi_sum_exp_step_kernel_compute_correct
 
-flash_decode2_phi_python_test_shape_masked_accumulator_output_summary  ← TOP (one loop step)
-  ├─ flash_decode2_phi_accumulator_step_python_test_shape_compute_correct
-  │    └─ flash_decode2_phi_accumulator_step_kernel_compute_correct
-  │         └─ flash_decode2_phi_accumulator_step_kernel_correct
-  └─ flash_decode2_phi_sum_exp_step_python_test_shape_compute_correct
-       └─ flash_decode2_phi_sum_exp_step_kernel_compute_correct
-
-flash_decode2_phi_python_test_shape_running_max_output_summary  ← TOP (running-max invariant)
-  using runningMaxAfter (runningMaxAfter_zero / runningMaxAfter_succ)
+flash_decode2_phi_running_max_output_summary_general         ← TOP (running-max invariant)
+  ├─ flash_decode2_phi_surface_toAlgorithm_supported
+  └─ using runningMaxAfter (runningMaxAfter_zero / runningMaxAfter_succ)
 ```
+
+There is also a `flash_decode2_phi_final_store_slice_*` chain (raw masked `Out`
+store without normalization, via `flash_decode2_phi_final_store_slice_correct`).
 
 ## Modeling boundary
 
@@ -57,10 +54,14 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init, `exp`
 running-max rescaling, and the final division are real-valued);
 `@triton.autotune` / `num_warps` / `num_stages` are not modeled. The verification
 is split across four separately-proven faces rather than one whole-loop theorem,
-all at the Python test shape (`head_dim = 64`, `BLOCK_DMODEL = 64`, four
-`BLOCK_SEQ ∈ {16, 17, 8, 32}` surfaces, `batch = 2`, `head = 4`, `seq_block = 3`):
-(1) the **masked final store** to `Out` (`finalStoreValue`, mask `active s 64 i`
-= `offs_d < head_dim`); (2) the **final normalization store** (`acc / sum_exp` =
+all fully dimension-general — parameterized over symbolic `head_dim`,
+`BLOCK_DMODEL`, `BLOCK_SEQ`, and every stride (no hardcoded shape literals). For
+background, the checked Python tests use `head_dim = 64`, `BLOCK_DMODEL = 64`,
+four `BLOCK_SEQ ∈ {16, 17, 8, 32}` surfaces, `batch = 2`, `head = 4`,
+`seq_block = 3`, just one instance of the general statements:
+(1) the **masked final store** to `Out` (`finalStoreValue`, mask
+`active s head_dim i` = `offs_d < head_dim`); (2) the **final normalization
+store** (`acc / sum_exp` =
 `normalizedStoreValue`); (3) one **masked accumulator step** plus the matching
 **sum-exp step** of the loop body (`accumulatorStepValue` / `sumExpStepValue`);
 and (4) the **running-max loop invariant** stated recursively as `runningMaxAfter`
@@ -485,12 +486,14 @@ theorem flash_decode2_phi_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-! ## Python test-shape wrappers
+/-! ## Step / store correctness (dimension-general)
 
-The checked Python tests allocate `Out` with shape `(2, 4, 64)`, so the
-contiguous output strides are `(256, 64, 1)`. `head_dim = 64` and
-`BLOCK_DMODEL = next_power_of_2(64) = 64`; the varied `block_seq` cases do not
-change the final output layout. -/
+The theorems below are symbolic in `head_dim`, `BLOCK_DMODEL`, and every stride;
+no shape literals are hardcoded. For background, the checked Python tests
+allocate `Out` with shape `(2, 4, 64)` (contiguous output strides `(256, 64, 1)`)
+with `head_dim = 64` and `BLOCK_DMODEL = next_power_of_2(64) = 64`; the varied
+`block_seq` cases do not change the final output layout. That concrete shape is
+just one instance of the general statements. -/
 
 /-- Algorithm-layer correctness for one masked Phi accumulator update. -/
 theorem flash_decode2_phi_accumulator_step_kernel_correct

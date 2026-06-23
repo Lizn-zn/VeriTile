@@ -24,18 +24,15 @@ covers every program. Both the old and new cache layouts are covered.
 ## Proof architecture
 
 ```
-decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary  ← TOP
+decoding_fused_rotary_embedding_output_summary_general  ← TOP (dimension-general)
   ├─ decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
   │      surface lowers to the algorithm layer
-  └─ decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_all_outputs_compute_correct
-       ├─ q_{first,second}_half_python_test_shape_compute_correct
-       │      └─ q_{first,second}_half_compute_correct ⊳ q_{first,second}_half_correct
-       ├─ k_{first,second}_half_python_test_shape_compute_correct
-       │      └─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
-       ├─ context_k_cache_{first,second}_half_{old,new}_layout_python_test_shape_compute_correct
-       │      └─ k_cache_*_guarded_store_slice_compute_correct ⊳ *_store_slice_correct
-       └─ context_v_cache_python_test_shape_compute_correct
-            └─ v_cache_guarded_store_slice_compute_correct ⊳ v_cache_store_slice_correct
+  └─ decoding_fused_rotary_embedding_all_outputs_compute_correct_general
+       ├─ q_{first,second}_half_compute_correct ⊳ q_{first,second}_half_correct
+       ├─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
+       ├─ context_k_cache_{first,second}_half_guarded_store_slice_compute_correct
+       │      ⊳ *_store_slice_correct
+       └─ context_v_cache_guarded_store_slice_compute_correct ⊳ v_cache_store_slice_correct
 ```
 
 ## Modeling boundary
@@ -1739,13 +1736,15 @@ theorem decoding_fused_rotary_embedding_context_v_cache_guarded_store_slice_comp
       KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM s
       hOutInj
 
-/-! ## Python test-shape wrappers
+/-! ## All-outputs correctness (dimension-general)
 
-The checked `fused_rotary_embedding.py` test uses `total_tokens = 16`,
-`q_head_num = 8`, `kv_head_num = 4`, `head_dim = 64`, `block_size = 4`,
-and the default 4D K/V cache layout in its first case. The wrappers below pin
-those strides and expose the Q/K rotary writes plus guarded K/V cache writes
-for that concrete Python shape. -/
+The two main theorems below are symbolic in every stride and dimension (rotary
+half width `HALF_DIM`, V head dim `HEAD_DIM`, `block_size`, `KV_GROUP_NUM`, …);
+no test-shape literals are hardcoded. For background, the checked
+`fused_rotary_embedding.py` test uses `total_tokens = 16`, `q_head_num = 8`,
+`kv_head_num = 4`, `head_dim = 64`, `block_size = 4`, and the default 4D K/V
+cache layout in its first case — just one instance of the general statements,
+which cover both the old and new cache layouts. -/
 
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
@@ -1916,8 +1915,8 @@ theorem decoding_fused_rotary_embedding_all_outputs_compute_correct_general
 
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **General top theorem (genuine closed form).** Dimension-general companion
-to `decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary`.
+/-- **General top theorem (genuine closed form).** Dimension-general all-outputs
+summary built on `decoding_fused_rotary_embedding_all_outputs_compute_correct_general`.
 Over symbolic strides/dims (`x`, all Q/K/cos/sin/cache strides, the rotary half
 width `HALF_DIM`, the V head dim `HEAD_DIM`, `block_size`, `KV_GROUP_NUM`): the
 faithful full kernel surface lowers to the algorithm layer, AND every output —

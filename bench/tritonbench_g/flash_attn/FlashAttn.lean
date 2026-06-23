@@ -88,16 +88,18 @@ Causal}`), the `max`/`denom` channel-independence lemmas
 `flashState_{fst,snd_fst}_eq`, and the `attnInvariant` definition binding the
 kernel's 14 live registers to `flashState` after `c` blocks.
 
-The **remaining stage** (not yet closed) is the exec-side `preLoop`/`attn_step`/
-`attn_postLoop` proofs over this `attnInvariant` (threading the loop-body op-eval
-recipes — including the causal `tl.where(off_m ≥ start_n+off_n, qk, -inf)` mask —
-and the WithBot `reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one
-`flashState_succ` step), plus the dual `O`/`L` stores composed via
-`forRangeDyn_inv` and read off through `flashState_full_eq_spec{,_causal}`. That
-mirrors `VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
-skeleton, now retargeted onto the block-pointer foundation and the `flashState`
-recurrence above. No self-referential / tautological summary is asserted in its
-place.
+The exec-side `preLoop`/`attn_step`/`attn_postLoop` stage over this
+`attnInvariant` is now **closed, sorry-free**: the loop-body step
+`flash_attn_step_general` threads the loop-body op-eval recipes — including the
+causal `tl.where(off_m ≥ start_n+off_n, qk, -inf)` mask — and the WithBot
+`reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one `flashState_succ`
+step; `flash_attn_exec_general` composes it via `forRangeDyn_inv` together with
+the dual `O`/`L` stores, read off through `flashState_full_eq_spec{,_causal}`.
+These assemble into the genuine top theorems
+`flash_attn_python_case1/2_genuine_compute_correct_general`. That mirrors
+`VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
+skeleton, retargeted onto the block-pointer foundation and the `flashState`
+recurrence above. No self-referential / tautological summary is asserted.
 
 ## Modeling boundary
 

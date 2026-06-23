@@ -28,54 +28,46 @@ per-program statements cover every program of the grid.
 ## Proof architecture
 
 ```
-decay_cumsum_python_test_shape_complete_summary               ← TOP THEOREM
-  ├─ decay_cumsum_prepare_python_test_shape_summary
-  │     ├─ prepare_qg_kg_python_test_surface_toAlgorithm_supported
-  │     └─ decay_cumsum_prepare_python_test_shape_all_outputs_compute_correct
-  │          ├─ prepare_qg_decay_python_test_shape_compute_correct
-  │          └─ prepare_kg_decay_python_test_shape_compute_correct
-  ├─ decay_cumsum_forward_python_test_shape_summary
-  │     ├─ fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
-  │     └─ decay_cumsum_forward_python_test_shape_all_outputs_compute_correct
-  │          ├─ fwd_decay_cumsum_store_python_test_shape_compute_correct
-  │          └─ fwd_decay_cumsum_step_python_test_shape_compute_correct
-  └─ decay_cumsum_backward_python_test_shape_summary
-        ├─ bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
-        └─ decay_cumsum_backward_python_test_shape_all_outputs_compute_correct
-             ├─ bwd_decay_cumsum_dq_inter_python_test_shape_compute_correct
-             ├─ bwd_decay_cumsum_dk_inter_python_test_shape_compute_correct
-             ├─ bwd_decay_cumsum_dg_python_test_shape_compute_correct
-             └─ bwd_decay_dg_step_python_test_shape_compute_correct
+There is no single 3-kernel bundling theorem. The three kernels are verified by
+three separate dimension-general top results (each symbolic in the block sizes
+`BT`/`BK`/`DK` and the strides):
 
-per-store slice lemmas (modeled exactly, fed materialized state buffers):
-  prepare:  prepare_qg_decay_store_slice / prepare_kg_decay_store_slice
-  forward:  fwd_decay_cumsum_store_slice / fwd_decay_cumsum_step_store_slice
-  backward: bwd_decay_cumsum_store_slice / bwd_decay_dg_step_store_slice
-each with a `*_correct` (algorithm-layer readback) and `*_compute_correct` face.
+forward kernel:
+  fwd_decay_cumsum_full_surface_closed_general              ← TOP THEOREM (forward)
+       └─ fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
 
-decay_cumsum_{prepare,forward,backward}_python_test_shape_output_summary (aliases)
+prepare kernel:
+  prepare_qg_kg_full_surface_qg_closed_general             ← TOP THEOREM (prepare, qg)
+  prepare_qg_kg_full_surface_kg_closed_general             ← TOP THEOREM (prepare, kg)
+       └─ prepare_qg_kg_python_test_surface_toAlgorithm_supported
+
+backward kernel:
+  decay_cumsum_backward_python_test_shape_closed_output_summary_general  ← TOP THEOREM (backward)
+       (realizes genuine closed forms bwdDQInterClosed / bwdDKInterClosed / bwdDGClosed)
+       └─ bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
+
+each top result is the symbolic statement; the concrete Python shape is a
+recovered special case.
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float). There is no
-`@triton.autotune` on these kernels; proofs fix the checked Python shape
-`B,H,T,DK = 2,2,4,8`, `BT,BK = 2,4`, `scale = 1`. The `.to(tl.float32)` /
-`.to(_.dtype.element_ty)` casts erase to the identity at the algorithm layer
-(post-erasure all dtypes unify to `ℝ`). The `inv_ln2` / `tl.math.exp2` decay
-factors are modeled as their real-valued counterparts. Each single time-step
-face — the forward `cum_decay += g * inv_ln2`, the per-step `qg`/`kg` scaling,
-and the backward `dq_inter *= exp2(g)`, `dk_inter *= exp2(last_g - g)`,
-`cum_grad_dg += dq*q - dk*k` — and each masked store are modeled exactly. The
-cross-step cumulative folds — the forward `range(BT)` loop threading
-`cum_decay`, and the reverse `range(BT-1,-1,-1)` loop threading `cum_grad_dg`
-plus the `last_g` capture — are left as the trusted boundary: the carried state
-is presented to each step slice as a materialized previous-state buffer
-(`CumPrev` / `CumGradPrev` / `*InterPre`), and the surface-output values
-(`decay{Prepare,Forward,Backward}SurfaceValue`) are defined as the actual
-surface readback so the summaries certify the modeled step faces agree with the
-executed surface at the verified shape. Output offset injectivity is a side
-condition (discharged for the test shape).
+`@triton.autotune` on these kernels. The top results are **dimension-
+parameterized**: they are stated over symbolic block sizes (`BT`/`BK`/`DK`) and
+strides, so the checked Python shape `B,H,T,DK = 2,2,4,8`, `BT,BK = 2,4`,
+`scale = 1` is only a recovered instance, not a fixed assumption. The
+`.to(tl.float32)` / `.to(_.dtype.element_ty)` casts erase to the identity at the
+algorithm layer (post-erasure all dtypes unify to `ℝ`). The `inv_ln2` /
+`tl.math.exp2` decay factors are modeled as their real-valued counterparts. Each
+kernel's full surface — including the cross-step cumulative folds: the forward
+`range(BT)` loop threading `cum_decay`, the per-step `qg`/`kg` scaling, and the
+reverse `range(BT-1,-1,-1)` loop threading `cum_grad_dg` plus the `last_g`
+capture — is executed and *proven* to realize a genuine, non self-referential
+closed form: the backward outputs collapse to `bwdDQInterClosed` /
+`bwdDKInterClosed` / `bwdDGClosed`, and the forward/prepare surfaces realize
+their respective closed-form decay specifications. Output offset injectivity is a
+side condition.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.DecayCumsum

@@ -1810,10 +1810,4 @@ theorem token_attn_reducev_python_case3_output_summary
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-end TestShape
-
 end VeriTile.Bench.TritonBenchG.TokenAttnReduceV

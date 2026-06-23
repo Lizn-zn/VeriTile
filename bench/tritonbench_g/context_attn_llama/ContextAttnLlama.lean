@@ -28,13 +28,13 @@ statement covers every program of the grid.
 ## Proof architecture
 
 ```
-context_attn_llama_python_test_shape_output_summary        ← TOP THEOREM (bundles both block shapes)
+context_attn_llama_surface_compute_correct_general         ← TOP THEOREM (symbolic, dimension-general)
   ├─ context_attn_llama_fwd_kernel_surface_toAlgorithm_supported   surface lowers to the algorithm layer
-  ├─ context_attn_llama_surface_python_block128_compute_correct    full surface, BLOCK_M=128 final store
+  ├─ context_attn_llama_surface_python_block128_compute_correct    concrete shape, BLOCK_M=128 final store
   │    └─ context_attn_llama_final_store_python_block128_compute_correct
   │         └─ context_attn_llama_final_store_slice_compute_correct
   │              └─ context_attn_llama_final_store_slice_correct    algorithm-layer readback per lane
-  └─ context_attn_llama_surface_python_block64_compute_correct     full surface, BLOCK_M=64 final store
+  └─ context_attn_llama_surface_python_block64_compute_correct     concrete shape, BLOCK_M=64 final store
        └─ context_attn_llama_final_store_python_block64_compute_correct
             └─ context_attn_llama_final_store_slice_compute_correct
 (supporting: context_attn_llama_python_block128_offset_injective,
@@ -55,9 +55,10 @@ online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the
 `Req_to_tokens` gathers, the `prompt_cache_len`-offset causal mask) is stepped
 statement-by-statement (`ctxPreLoop_eval`/`ctxLoopBody_steps`/`ctx_attn_step`/
 `ctxPostLoop_eval` composed by `forRangeDyn_inv`) and proven to collapse to that
-closed form. The summary is instantiated at the Python test shape (`H=16`,
-`BLOCK_DMODEL=BLOCK_N=128`, `BLOCK_M ∈ {128, 64}`); other shapes are not covered
-by the top theorem.
+closed form. The top theorem is dimension-general: it is stated over symbolic
+`BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`H` and the per-axis strides. The Python test
+shape (`H=16`, `BLOCK_DMODEL=BLOCK_N=128`, `BLOCK_M ∈ {128, 64}`) is recovered as
+a concrete special case.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ContextAttnLlama

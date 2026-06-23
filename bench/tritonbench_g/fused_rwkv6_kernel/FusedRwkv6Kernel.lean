@@ -42,7 +42,7 @@ o_m[j_v] = Σ_{j_k} ( b_h^(m)[j_v,j_k] + k_m[j_k]·v_m[j_v]·u[j_k] ) · scale·
 ## Proof architecture
 
 ```
-fused_recurrent_rwkv6_python_test_case{1..4}_output_summary    ← TOP THEOREMS
+fused_recurrent_rwkv6_output_summary_general                  ← TOP THEOREM (dimension-general)
   ├─ fused_recurrent_rwkv6_*_surface_toAlgorithm_supported     surface lowers
   ├─ fused_recurrent_rwkv6_state_step_closed_form              state carry-fold
   │      └─ stateStepSpec_eq_stateClosed_succ
@@ -51,6 +51,9 @@ fused_recurrent_rwkv6_python_test_case{1..4}_output_summary    ← TOP THEOREMS
   │      └─ outputStepSpec_eq_outputClosed   (Σ_{j_k} … = o_m)
   └─ fused_recurrent_rwkv6_final_state_closed_form             ht = b_h^(T)
        └─ stateClosed at m = T  +  final_state_store_slice
+
+fused_recurrent_rwkv6_python_test_case{1..4}_output_summary  ← thin Python-shape corollaries
+  └─ (instantiations of fused_recurrent_rwkv6_output_summary_general; section TestShape)
 ```
 
 ## Modeling boundary
@@ -836,7 +839,9 @@ theorem fused_recurrent_rwkv6_out_step_offset_injective
 
 /-! ## Genuine Python test-case summaries
 
-Each top theorem states: (i) the full RWKV6 surface lowers to the algorithm
+Each of these is a Python-shape corollary of
+`fused_recurrent_rwkv6_output_summary_general` (the dimension-general main
+theorem). Each states: (i) the full RWKV6 surface lowers to the algorithm
 layer, and (ii) the genuine per-step output reduction realizes `outputClosed(t)`
 and the state update realizes `stateClosed(t+1)` — closed forms over the *input*
 regions, never a read-back of the kernel's own output. Case 1: no initial / no

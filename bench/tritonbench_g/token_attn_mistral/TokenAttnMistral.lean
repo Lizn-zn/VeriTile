@@ -55,10 +55,12 @@ decode, the `mistral_loop_step` one-block accumulator advance driven through
 `forRangeDyn_inv`, and the `mistral_postLoop` unmasked-store readback — never by
 re-asserting the kernel's own executed value. The final store is **unmasked** (the
 whole `[BLOCK_DMODEL]` vector is written) and includes a `.to(Out.dtype)` cast
-that reduces to the identity at the algorithm layer. The summaries are
-instantiated at the four Python test-function shapes (all with `stride_pbs = 1`
-and `stride_req_to_tokens_s = 1`, varying `BLOCK_DMODEL`/strides/`sliding_window`);
-other shapes are not covered by the top theorems.
+that reduces to the identity at the algorithm layer. The headline theorem
+`token_attn_mistral_output_summary_general` is dimension-general and symbolic in
+`sliding_window`/strides, so it covers arbitrary shapes. The four per-case
+corollaries below instantiate it at the Python test-function shapes (all with
+`stride_pbs = 1` and `stride_req_to_tokens_s = 1`, varying
+`BLOCK_DMODEL`/strides/`sliding_window`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnMistral
@@ -533,10 +535,10 @@ theorem partialAcc_eq_PVValue
   rw [Finset.mem_range] at hn
   simp only [pMasked, vMasked, if_pos hn]
 
-/-! ### Remaining bridge (banked)
+/-! ### Surface readback bridge (proven sorry-free)
 
 `tokenAttnMistralClosedForm` is the genuine, self-reference-free PV spec.  The
-remaining step is the surface readback bridge
+surface readback bridge
 
 ```
 exec (token_attn_mistral_surface …) s = some s' →
@@ -544,7 +546,10 @@ exec (token_attn_mistral_surface …) s = some s' →
     tokenAttnMistralClosedForm … i
 ```
 
-Routing/decode notes for that bridge:
+is discharged by `token_attn_mistral_closed_form_correct`, assembled from
+`mistral_preLoop` (prelude decode), `mistral_loop_step` (one-block accumulator
+advance through `forRangeDyn_inv`), and `mistral_postLoop` (unmasked store
+readback).  Routing/decode notes for that bridge:
 
 * The kernel is the **PV reduce / accumulate** route (no online softmax): the
   genuine spec is the direct probability-weighted value sum
@@ -571,9 +576,9 @@ Routing/decode notes for that bridge:
   `tl.sum(p_value[:,None]·v_value, 0)` block reduction (`reduceSum_some`), and the
   `acc += …` accumulation; then the final unmasked store readback.
 
-### Banked progress toward the bridge
+### Algebraic ingredients of the bridge
 
-The two *algebraic* halves of the loop-invariant induction are now proven
+The two *algebraic* halves of the loop-invariant induction are proven
 sorry-free, together with the generic dynamic-loop principle:
 
 * `VeriTile.Triton.forRangeDyn_inv` — master invariant principle for
@@ -590,22 +595,26 @@ sorry-free, together with the generic dynamic-loop principle:
   `K ≥ attSeqLen`, the carry equals the genuine closed form
   `tokenAttnMistralPVValue` (tail tokens `n ≥ attSeqLen` are `p`-masked to `0`).
 
-### Remaining (the operational `exec` decode)
+### The operational `exec` decode (discharged)
 
-What is left is the purely mechanical state-stepping that connects the kernel's
-`stepStmts` to these algebraic facts (no further mathematical content):
+The purely mechanical state-stepping that connects the kernel's `stepStmts` to
+these algebraic facts (no further mathematical content) is carried out by the
+three step lemmas above:
 
-1. Prelude decode (14 assigns): thread `cur_batch`/`cur_head`/`cur_kv_head`,
+1. Prelude decode (14 assigns) — `mistral_preLoop`: thread
+   `cur_batch`/`cur_head`/`cur_kv_head`,
    `offs_n = arange 128`, `offs_d = arange 64`, the four metadata loads, the
    `tl.maximum(... , 0)` `startIndex`, the `v_loc_off`/`p_offs`/`v_offs` vectors,
    and `acc = full [BLOCK_DMODEL] 0` into a symbolic post-prelude state, mirroring
    `chunk_cumsum_kernel`'s prelude reduction.
-2. Loop step lemma: the 5-statement body (`start_n = multiple_of …` no-op,
+2. Loop step lemma — `mistral_loop_step`: the 5-statement body
+   (`start_n = multiple_of …` no-op,
    `p_value`/`v_loc`/`v_value` masked region loads, `acc += reduceSum (p[:,None]·v)`)
    advances `acc = partialAcc i` to `acc = partialAcc (i + BLOCK_N)` via
    `partialAcc_block_succ` + the per-lane load/`reduceSum` recipes, fed to
    `forRangeDyn_inv`.
-3. Final unmasked `[BLOCK_DMODEL]` store readback (`scatter_readback_nd`), then
+3. Final unmasked `[BLOCK_DMODEL]` store readback — `mistral_postLoop`
+   (`scatter_readback_nd`), then
    `partialAcc_eq_PVValue` to land on `tokenAttnMistralClosedForm`.
 
 NOTE: the closed form folds the per-lane offset arithmetic
@@ -614,8 +623,9 @@ NOTE: the closed form folds the per-lane offset arithmetic
 `p_offs[j] + start_n` (resp. `v_loc_off[j] + start_n·stride_req_to_tokens_s`).
 These coincide for the lane index `n = start_n + j` exactly when
 `stride_pbs = 1` and `stride_req_to_tokens_s = 1`, which holds for all four
-checked Python shapes; the operational decode should carry those two stride
-equalities as hypotheses (or instantiate at the concrete shapes).
+checked Python shapes; the operational decode carries those two stride
+equalities as hypotheses (instantiated at the concrete shapes in the per-case
+corollaries).
 -/
 
 /-! ## Per-statement op-eval recipes (the tedious recipe layer)
@@ -2142,12 +2152,6 @@ theorem token_attn_mistral_python_case4_output_summary
     s hundef (token_attn_mistral_python_test_shape_offset_injective s)
 
 end Correct
-
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-end TestShape
 
 end VeriTile.Bench.TritonBenchG.TokenAttnMistral
 
