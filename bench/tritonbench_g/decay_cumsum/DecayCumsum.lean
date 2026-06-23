@@ -2710,7 +2710,7 @@ The three genuine closed forms above (`bwdDQInterClosed`, `bwdDKInterClosed`,
 `bwdDGClosed`) are the honest, non self-referential specifications that replace
 the (now-deleted) `decayBackwardSurfaceValue`. They are connected to the executed
 `bwd_decay_global_cumsum_surface` in
-`decay_cumsum_backward_python_test_shape_closed_output_summary` (and its three
+`decay_cumsum_backward_python_test_shape_closed_output_summary_general` (and its three
 faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct` /
 `bwd_decay_cumsum_dg_closed_compute_correct`) at the end of this file, following
 the **forward** closed-form recipe (`fwd_decay_cumsum_full_surface_row{0,1}_closed`),

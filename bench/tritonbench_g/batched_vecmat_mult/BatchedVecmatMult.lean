@@ -33,7 +33,7 @@ emitted value.
 
 ```
 batched_vecmat_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
-  └─ batched_vecmat_exec_closed_form               ← exec-side closed form (every cell = ∑ A·B)
+  └─ vecmat_exec_closed_form                       ← exec-side closed form (every cell = ∑ A·B)
        ├─ vecmat_preLoop      (P 0: vecmat = 0, scalar regs seeded)
        ├─ vecmat_step         (one K-block: vecmat += trans(reduceSum(a·b)) advances the partial sum)
        ├─ vecmat_postLoop     (final unmasked store = the closed form)
