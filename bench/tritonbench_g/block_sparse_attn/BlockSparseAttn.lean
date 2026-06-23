@@ -1524,8 +1524,10 @@ attention value `blockSparseAttnClosedForm` (NOT the kernel's executed value):
 *given* that the accumulator region holds the closed form at each active lane
 (the loop-fill contract, which the trusted online-softmax recurrence
 establishes), the store-slice surface writes the closed-form attention output to
-`Out`. The remaining proof gap is exactly the loop-fill contract `hFill`; the
-store-side composition is closed here.
+`Out`. Here `hFill` is the loop-fill contract these store recipes *assume*; it is
+not a remaining gap — the top theorem
+`block_sparse_attn_python_case1_output_closed_form_summary` discharges the
+loop-fill end-to-end via `bsa_exec` ∘ `bsa_streaming_eq_closedForm`.
 
 `hFill` is the per-lane statement that the first/second D-block accumulator
 equals the causal natural-exp softmax attention over the CSR-selected keys, with

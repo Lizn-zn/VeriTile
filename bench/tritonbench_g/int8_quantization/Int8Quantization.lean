@@ -32,8 +32,9 @@ per_block_int8_python_case2_output_summary        ← TOP THEOREM (case 2)
   │    ├─ ..._full_surfaces_toAlgorithm_supported  full Q/K surface lowers
   │    └─ ..._all_outputs_compute_correct          all real-valued slices
   ├─ q/k_kernel_..._scaled_store_slice_compute_correct   value writeback
-  ├─ ..._scale_store_slice_compute_correct               scalar scale writeback
   │    └─ per_block_int8_scaled_store_slice_correct       algorithm-layer readback
+  ├─ ..._scale_store_slice_compute_correct               scalar scale writeback
+  │    └─ per_block_int8_scale_store_slice_correct        algorithm-layer readback
   └─ ..._offset_injective                                no-collision lemmas
 ```
 

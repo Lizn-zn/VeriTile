@@ -24,7 +24,7 @@ independent closed-form `∑_k X·Y` GEMM reference, derived from the loaded
 ```
 matmul_triton1_closed_form_correct                ← TOP THEOREM (ComputeCorrect.Realizes)
   └─ matmul_triton1_exec_closed_form              ← exec-side closed form (every cell = ∑_k X·Y)
-       ├─ matmul_preLoop      (P 0: z = 0, pointers seeded)
+       ├─ preLoop      (P 0: z = 0, pointers seeded)
        ├─ matmul_step         (one K-block: z += dot advances the partial sum)
        ├─ matmul_postLoop     (final unmasked store = the closed form)
        └─ forRange_inv        (loop-invariant principle, drives the K-loop)

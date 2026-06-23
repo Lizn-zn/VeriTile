@@ -25,7 +25,7 @@ reference value.
 ```
 matmul_kernel_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
   └─ matmul_kernel_exec_closed_form               ← exec-side closed form (every cell = fp16(∑_k A·B))
-       ├─ matmul_preLoop      (P 0: accumulator = 0, pointers seeded)
+       ├─ preLoop      (P 0: accumulator = 0, pointers seeded)
        ├─ matmul_step         (one K-block: accumulator += dot advances the partial sum)
        ├─ matmul_postLoop     (cast to fp16 + final store = the closed form)
        └─ forRange_inv        (loop-invariant principle, drives the K-loop)

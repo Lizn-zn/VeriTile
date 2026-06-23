@@ -37,7 +37,7 @@ stride `stride_ak`).
 
 ```
 bmm_chunk_bwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
-  └─ bmm_chunk_bwd_exec_closed_form               ← exec-side closed form (every active cell = ∑_cs Dout·A)
+  └─ bbwd_exec_closed_form                        ← exec-side closed form (every active cell = ∑_cs Dout·A)
        ├─ bbwd_preLoop      (P 0: acc = 0, dout/a pointers seeded with batch offset)
        ├─ bbwd_step         (one CS-block: acc += tl.dot advances the partial sum)
        ├─ bbwd_loop         (forRangeDyn drives the CS-loop via forRangeAux_inv)

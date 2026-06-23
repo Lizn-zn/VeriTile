@@ -28,7 +28,7 @@ program of the 2D grid.
 rmsnorm_implementation_compute_fullN_correct  ← TOP THEOREM (general N, multi-block)
   └─ rmsnorm_implementation_fullN_correct      ← algorithm-layer readback per column
        ├─ rmsnorm_implementation_staged_fullN_correct_from_preloop
-       ├─ rmsVarForRange_fullN_sum_of_preloop   ← var-loop forRange invariant
+       ├─ rmsVarForRange_context_of_preloop   ← var-loop forRange invariant
        └─ rmsOutForRange_fullN_of_init_stride_pos  ← output-loop forRange invariant
             └─ rmsOutLoopBody_step_output_invariant
 rmsnorm_implementation_compute_correct        ← one-block slice (0 < N ≤ BLOCK_N_SIZE)
