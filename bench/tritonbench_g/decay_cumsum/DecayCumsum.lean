@@ -3325,7 +3325,7 @@ state `s0`, executes exactly two iterations: `bwdIterBody` with `__rev_t = 0`
 (time row `t = BT-1 = 1`), then `bwdIterBody` with `__rev_t = 1` (time row
 `t = 0`), then terminates. This is the structural backbone for the 2-iteration
 assembly: each `stepStmts bwdIterBody` factor is discharged by the per-statement
-chaining (`bwdIterBody_head_eval` + `bwd_iter_tail_eval`). -/
+chaining from `bwdIterBody_head_eval`, assembled in `bwd_iter0_eval` / `bwd_iter1_eval`. -/
 theorem bwd_loop_unroll (s0 s1 s2 : BlockState)
     (h0 : stepStmts bwdIterBody (s0.setReg "__rev_t" .nat [] (Tile.scalar 0)) = some s1)
     (h1 : stepStmts bwdIterBody (s1.setReg "__rev_t" .nat [] (Tile.scalar 1)) = some s2) :

@@ -83,7 +83,7 @@ all-masked block the kernel registers go to `⊥` (`m_i=⊥, α=exp2(⊥−⊥)=
 acc=0`). The `⊥`-carrying running state `aft3StateBotK` (seed `(⊥,1,0)` at window
 `0`, then the seed-`0` `aft3StateBot`) tracks this faithfully through the loop
 invariant `attnInvariantK`, and the empty-window output is reconciled by `0/0 = 0`
-(`aft3StateBotK_full_eq_streaming`). The `M` writeback is the raw finalize
+(`aft3StateBotKG_full_eq_streaming`). The `M` writeback is the raw finalize
 `attentionFwdTriton3KMSpec = (m_i + log2 l_i).unbotD 0` (well-defined at empty
 rows: `(⊥ + log2 0).unbotD 0 = 0`).
 
