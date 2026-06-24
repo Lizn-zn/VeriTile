@@ -32,13 +32,20 @@ headline; `chunk_cumsum_scalar_python_test_shape_output_summary` is the `T = 4`,
 theorem chunk_cumsum_scalar_output_summary_general
     (S O : RegionName) (T BT : Nat) (s : BlockState)
     (hSO : O ≠ S) (hBT : 0 < BT) :
+    -- (1) the full surface lowers to the algorithm layer
     (∃ alg, (chunk_cumsum_scalar_surface S O T BT).toAlgorithm? = Except.ok alg) ∧
+    -- (2) the surface runs to completion (existence / termination)
     (∃ sfinal,
-      exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal ∧
-      ∀ flat, flat < T →
-        sfinal.readMem O (s.pids 0 * T + flat)
-          = ∑ m ∈ (Finset.range T).filter (fun m => m ≤ flat),
-              s.readMem S (s.pids 0 * T + m))
+      exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal) ∧
+    -- (3) standard Realizes: every in-range O lane holds the genuine global
+    --     prefix sum `Σ_{m ≤ flat, m < T} S[i_bh·T + m]`, read purely over input
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_surface S O T BT)
+      (initialState := s)
+      (write := fun i : Fin T => some (O, s.pids 0 * T + i.val))
+      (expected := fun i : Fin T =>
+        ∑ m ∈ (Finset.range T).filter (fun m => m ≤ i.val),
+          s.readMem S (s.pids 0 * T + m))
 ```
 
 **Assumptions / layout contracts:**

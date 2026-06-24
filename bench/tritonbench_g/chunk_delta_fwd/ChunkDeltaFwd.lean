@@ -2728,24 +2728,37 @@ theorem chunk_delta_fwd_python_case1_output_summary
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
     (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
     (hFv2 : final_state ≠ v) (hFd : final_state ≠ d) :
+    -- (1) the full surface lowers to the algorithm layer
     (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
       final_state 8192 128 1 8192 64 1 16384 64
       4 128 64 64 32 32 64 64 4 Bool.false Bool.false).toAlgorithm?
         = Except.ok alg) ∧
+    -- (2) the full surface runs to completion (existence / termination)
     (∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
         8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-        Bool.false Bool.false).toAlgKernel s = some sF
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          sF.readMem h (hOffset s j.val 16384 64 64 64 64 64 idx)
-            = hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                Bool.false j.val idx)
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64], vNewActive s j.val 0 128 64 32 32 64 idx →
-          sF.readMem v_new (vNewOffset s j.val 0 8192 64 1 32 32 64 idx)
-            = vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                Bool.false j.val idx)) := by
-  refine ⟨chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
-    initial_state final_state 8192 128 1 8192 64 1 16384 64
-    4 128 64 64 32 32 64 64 4 Bool.false Bool.false, ?_⟩
+        Bool.false Bool.false).toAlgKernel s = some sF) ∧
+    -- (3) standard Realizes (per output buffer): every active lane of the executed
+    --     whole kernel holds the genuine recurrence closed form
+    (∀ j : Fin 4, ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (h, hOffset s j.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          Bool.false j.val idx)) ∧
+    (∀ j : Fin 4, ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => vNewActive s j.val 0 128 64 32 32 64 idx)
+        (fun idx : TileIndex [32, 64] => (v_new, vNewOffset s j.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          Bool.false j.val idx)) := by
   obtain ⟨sF, hexec, hh, hvn, _⟩ :=
     chunk_delta_fwd_exec_genuine k v d v_new h initial_state final_state
       Bool.false Bool.false s hpids0 hVk hVv hVd hHv hHk hHv2 hHd
@@ -2753,7 +2766,35 @@ theorem chunk_delta_fwd_python_case1_output_summary
       (fun i_t => chunk_delta_fwd_v_new_python_test_shape_offset_injective s i_t)
       (fun i_t => chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
       (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
-  exact ⟨sF, hexec, hh, hvn⟩
+  obtain ⟨alg, halg⟩ := chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
+    initial_state final_state 8192 128 1 8192 64 1 16384 64
+    4 128 64 64 32 32 64 64 4 Bool.false Bool.false
+  have hk : (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+      Bool.false Bool.false).toAlgorithm?
+        = Except.ok (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+            8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+            Bool.false Bool.false).toAlgKernel := by
+    simp only [ComputeKernel.toAlgKernel, halg]
+  refine ⟨⟨alg, halg⟩, ⟨sF, hexec⟩, ?_, ?_⟩
+  · intro j
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hact
+    rw [hExec] at hexec
+    obtain rfl := Option.some.inj hexec
+    exact hh j idx hact
+  · intro j
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hact
+    rw [hExec] at hexec
+    obtain rfl := Option.some.inj hexec
+    exact hvn j idx hact
 
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
@@ -2768,28 +2809,46 @@ theorem chunk_delta_fwd_python_case2_output_summary
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
     (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
     (hFv2 : final_state ≠ v) (hFd : final_state ≠ d) :
+    -- (1) the full surface lowers to the algorithm layer
     (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
       final_state 8192 128 1 8192 64 1 16384 64
       4 128 64 64 32 32 64 64 4 Bool.true Bool.true).toAlgorithm?
         = Except.ok alg) ∧
+    -- (2) the full surface runs to completion (existence / termination)
     (∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
         8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-        Bool.true Bool.true).toAlgKernel s = some sF
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          sF.readMem h (hOffset s j.val 16384 64 64 64 64 64 idx)
-            = hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                Bool.true j.val idx)
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64], vNewActive s j.val 0 128 64 32 32 64 idx →
-          sF.readMem v_new (vNewOffset s j.val 0 8192 64 1 32 32 64 idx)
-            = vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                Bool.true j.val idx)
-      ∧ (∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          sF.readMem final_state (finalStateOffset s 64 64 64 64 idx)
-            = finalValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                Bool.true 4 idx)) := by
-  refine ⟨chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
-    initial_state final_state 8192 128 1 8192 64 1 16384 64
-    4 128 64 64 32 32 64 64 4 Bool.true Bool.true, ?_⟩
+        Bool.true Bool.true).toAlgKernel s = some sF) ∧
+    -- (3) standard Realizes (per output buffer): h, v_new, and final_state
+    (∀ j : Fin 4, ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (h, hOffset s j.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          Bool.true j.val idx)) ∧
+    (∀ j : Fin 4, ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => vNewActive s j.val 0 128 64 32 32 64 idx)
+        (fun idx : TileIndex [32, 64] => (v_new, vNewOffset s j.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          Bool.true j.val idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (final_state, finalStateOffset s 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        finalValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
+          Bool.true 4 idx) := by
   obtain ⟨sF, hexec, hh, hvn, hfin⟩ :=
     chunk_delta_fwd_exec_genuine k v d v_new h initial_state final_state
       Bool.true Bool.true s hpids0 hVk hVv hVd hHv hHk hHv2 hHd
@@ -2797,7 +2856,44 @@ theorem chunk_delta_fwd_python_case2_output_summary
       (fun i_t => chunk_delta_fwd_v_new_python_test_shape_offset_injective s i_t)
       (fun i_t => chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
       (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
-  exact ⟨sF, hexec, hh, hvn, hfin rfl⟩
+  obtain ⟨alg, halg⟩ := chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
+    initial_state final_state 8192 128 1 8192 64 1 16384 64
+    4 128 64 64 32 32 64 64 4 Bool.true Bool.true
+  have hk : (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+      Bool.true Bool.true).toAlgorithm?
+        = Except.ok (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
+            8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+            Bool.true Bool.true).toAlgKernel := by
+    simp only [ComputeKernel.toAlgKernel, halg]
+  have hfin' := hfin rfl
+  refine ⟨⟨alg, halg⟩, ⟨sF, hexec⟩, ?_, ?_, ?_⟩
+  · intro j
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hact
+    rw [hExec] at hexec
+    obtain rfl := Option.some.inj hexec
+    exact hh j idx hact
+  · intro j
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hact
+    rw [hExec] at hexec
+    obtain rfl := Option.some.inj hexec
+    exact hvn j idx hact
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hact
+    rw [hExec] at hexec
+    obtain rfl := Option.some.inj hexec
+    exact hfin' idx hact
 
 end Correct
 
