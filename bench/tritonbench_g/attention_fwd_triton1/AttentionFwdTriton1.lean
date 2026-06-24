@@ -30,14 +30,14 @@ of the grid.
 
 ```
 attention_fwd_triton1_output_summary_general                         ← GENERAL TOP THEOREM (dimension-parameterized)
-  ├─ attention_fwd_triton1_exec_outputClosedForm                      exec O = outputClosedForm
-  │    ├─ aft1_exec_carry            prologue + 32-chunk forRangeDyn loop → b_h = Σ Kᵀ·V, O = aft1Out
-  │    │    ├─ aft1_prologue_inv                       reaches the carry invariant aft1Inv 0
-  │    │    ├─ aft1Inv_step                            one iteration preserves aft1Inv (carry n→n+1)
-  │    │    │    └─ aft1_loopBody_iter_ff              full body: loads/dots/carry-update + O store
-  │    │    │         └─ aft1_loopBody_regs_ff         registers: b_o = aft1Out, b_h = aft1BhTile(c+1)
+  ├─ attention_fwd_triton1_exec_outputClosedFormG                     exec O = outputClosedForm
+  │    ├─ aft1_exec_carryG           prologue + 32-chunk forRangeDyn loop → b_h = Σ Kᵀ·V, O = aft1OutG
+  │    │    ├─ aft1_prologue_invG                      reaches the carry invariant aft1InvG 0
+  │    │    ├─ aft1InvG_step                           one iteration preserves aft1InvG (carry n→n+1)
+  │    │    │    └─ aft1_loopBody_iter_ffG             full body: loads/dots/carry-update + O store
+  │    │    │         └─ aft1_loopBody_regs_ffG        registers: b_o = aft1OutG, b_h = aft1BhTileG (c+1)
   │    │    └─ forRangeDyn_inv                         the dynamic-bound carry induction
-  │    └─ aft1Out_eq_outputClosedForm                  kernel-native output = genuine closed form
+  │    └─ aft1OutG_eq_outputClosedForm                 kernel-native output = genuine closed form
   └─ attention_fwd_kernel_surface_toAlgorithm_supported (×4 STORE/IFCOND branch lowerings)
 ```
 
