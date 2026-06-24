@@ -58,30 +58,10 @@ theorem rotary_nopad_python_case1_all_outputs_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rotary_embedding_q_surface Q Cos Sin
-        512 64 1 64 1 32 8 32 4`
-- `initialState : = s`
 - `fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx`
-- `expected : = fun idx =>
-        rotaryNopadQ0FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx`
-- `kernel : = rotary_embedding_q_surface Q Cos Sin
-        512 64 1 64 1 32 8 32 4`
-- `initialState : = s`
 - `fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx`
-- `expected : = fun idx =>
-        rotaryNopadQ1FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx`
-- `kernel : = rotary_embedding_k_surface K Cos Sin
-        256 64 1 64 1 32 2 32 4`
-- `initialState : = s`
 - `fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx`
-- `expected : = fun idx =>
-        rotaryNopadK0FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx`
-- `kernel : = rotary_embedding_k_surface K Cos Sin
-        256 64 1 64 1 32 2 32 4`
-- `initialState : = s`
 - `fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx`
-- `expected : = fun idx =>
-        rotaryNopadK1FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx`
 
 **Closed-form spec defs (transitive):** `rotary_embedding_kernel_surface`, `rotary_embedding_q_surface`, `activeFull`, `qFullFirstOffset`, `rotaryNopadQ0FullSpec`, `qFullSecondOffset`, `rotaryNopadQ1FullSpec`, `rotary_embedding_k_surface`, `activeKFull`, `kFullFirstOffset`, `rotaryNopadK0FullSpec`, `kFullSecondOffset`, `rotaryNopadK1FullSpec`, `cosFullOffset`
 

@@ -40,14 +40,6 @@ theorem matmul_tma_f32_closed_form_correct
 **Assumptions / layout contracts:**
 - `hcn : stride_cn = 1`
 - `hcm : BLOCK_N ≤ stride_cm`
-- `kernel : = matmul_tma_f32_surface A B C M N K stride_am stride_ak
-        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        some (C, cOffset stride_cm stride_cn idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
-          idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `matmul_tma_f32_surface`, `cOffset`, `matmulSpec`, `aElem`, `bElem`
 
@@ -169,11 +161,6 @@ theorem matmul_tma_f16_closed_form_correct
 **Assumptions / layout contracts:**
 - `hcn : stride_cn = 1`
 - `hcm : BLOCK_N ≤ stride_cm`
-- `kernel : = matmul_tma_f16_surface A B C M N K stride_am stride_ak
-        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        some (C, cOffset stride_cm stride_cn idx)`
 
 **Closed-form spec defs (transitive):** `matmul_tma_f16_surface`, `cOffset`, `matmulSpec`, `aElem`, `bElem`
 

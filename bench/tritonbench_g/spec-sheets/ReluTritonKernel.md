@@ -36,10 +36,7 @@ theorem relu_kernel_output_summary
 - `hBlockSize : 0 < block_size`
 - `xs : Fin block_size → ℝ`
 - `h_x : InputLoadedAt s x_ptr block_size xs`
-- `kernel : = relu_kernel x_ptr out_ptr N block_size`
-- `initialState : = s`
 - `fun i : Fin block_size => s.pid = 0 ∧ s.pid * block_size + i.val < N`
-- `expected : = fun i => TiledActivation.relu (xs i)`
 
 **Closed-form spec defs (transitive):** `relu_kernel`
 

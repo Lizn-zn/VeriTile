@@ -52,9 +52,6 @@ theorem matmul_autotune_closed_form_correct
 - `hcn : scn = 1`
 - `hbnle : BN ≤ scm`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn
-        BM BN BLOCK_K GM numKBlocks ACTIVATION`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `matmul_autotune_surface`, `active`, `cOffset`, `matmulSpec`, `rowGlobal`, `colGlobal`, `act`, `aElem`, `bElem`, `pidM`, `pidN`, `leakyReLU`, `rowIndex`, `colIndex`, `kernelMin`
 

@@ -49,8 +49,6 @@ theorem iv_dependent_matmul_closed_form_correct
 - `hcn : SCN = 1`
 - `hbnle : BN ≤ SCM`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = iv_dependent_matmul_pre_load_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `rowIndex`, `pidM`, `colIndex`, `pidN`, `iv_dependent_matmul_pre_load_surface`, `cOffset`, `outputCell`, `numPidN`, `matmulSpec`, `aElem`, `bElem`
 

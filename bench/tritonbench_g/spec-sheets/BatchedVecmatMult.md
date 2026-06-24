@@ -33,12 +33,7 @@ theorem batched_vecmat_one_row_block_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)`
-- `kernel : = batched_vecmat_one_row_block A B output dim_n dim_k N K
-        BLOCK_N BLOCK_K`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => nIndex s BLOCK_N i < N`
-- `expected : = fun i =>
-        vecmatSpec s A B dim_n dim_k N K BLOCK_N BLOCK_K i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `batched_vecmat_one_row_block`, `nIndex`, `vecmatSpec`, `vecmatProdTile`, `aOffset`, `bOffset`
 
@@ -164,12 +159,7 @@ theorem batched_vecmat_one_row_k_block_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)`
-- `kernel : = batched_vecmat_one_row_k_block A B output dim_n dim_k N K
-        BLOCK_N BLOCK_K`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => nIndex s BLOCK_N i < N`
-- `expected : = fun i =>
-        vecmatSpecK s A B dim_n dim_k N K BLOCK_N BLOCK_K i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `batched_vecmat_one_row_k_block`, `nIndex`, `vecmatSpecK`, `vecmatProdTileK`, `kIndex`, `aOffsetK`, `bOffsetK`
 
@@ -305,12 +295,7 @@ theorem batched_vecmat_one_row_k_accum_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)`
-- `kernel : = batched_vecmat_one_row_k_accum_slice AccPre A B Out
-        dim_n dim_k N K BLOCK_N BLOCK_K`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => nIndex s BLOCK_N i < N`
-- `expected : = fun i =>
-        vecmatAccumSpecK s AccPre A B dim_n dim_k N K BLOCK_N BLOCK_K i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `batched_vecmat_one_row_k_accum_slice`, `nIndex`, `vecmatAccumSpecK`, `vecmatProdTileK`, `kIndex`, `aOffsetK`, `bOffsetK`
 
@@ -452,13 +437,7 @@ theorem batched_vecmat_one_row_const_k_accum_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)`
-- `kernel : = batched_vecmat_one_row_const_k_accum_slice AccPre A B Out
-        dim_n dim_k N K BLOCK_N BLOCK_K kIdx`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => nIndex s BLOCK_N i < N`
-- `expected : = fun i =>
-        vecmatConstKAccumSpec s AccPre A B dim_n dim_k N K BLOCK_N BLOCK_K
-          kIdx i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `batched_vecmat_one_row_const_k_accum_slice`, `nIndex`, `vecmatConstKAccumSpec`, `vecmatAccumSpecK`, `withKIndex`, `vecmatProdTileK`, `kIndex`, `aOffsetK`, `bOffsetK`
 
@@ -692,13 +671,6 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         blockOutOffset s dim_n BLOCK_M BLOCK_N idx)`
-- `kernel : = batched_vecmat_block_output_store_slice VecmatPre output
-        dim_n BLOCK_M BLOCK_N`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        some (output, blockOutOffset s dim_n BLOCK_M BLOCK_N idx)`
-- `expected : = fun idx =>
-        blockOutputStoreSpec s VecmatPre dim_n BLOCK_M BLOCK_N idx`
 
 **Closed-form spec defs (transitive):** `blockOutOffset`, `batched_vecmat_block_output_store_slice`, `blockOutputStoreSpec`, `mIndex`, `nIndex`
 

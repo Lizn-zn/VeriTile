@@ -33,11 +33,6 @@ theorem mul_kernel_output_summary
 - `hBlockSize : 0 < BLOCK_SIZE`
 - `xs : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s src BLOCK_SIZE xs`
-- `kernel : = mul_kernel src dst BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_SIZE =>
-          some (dst, s.pid * BLOCK_SIZE + i.val)`
-- `expected : = fun i => xs i * exponentCompensator`
 
 **Closed-form spec defs (transitive):** `mul_kernel`, `exponentCompensator`
 

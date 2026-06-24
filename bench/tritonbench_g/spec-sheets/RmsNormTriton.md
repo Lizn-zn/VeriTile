@@ -36,11 +36,7 @@ theorem rms_norm_kernel_output_summary
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => rmsOutOffset s y_stride_r y_stride_c i)`
-- `kernel : = rms_norm_kernel Y X W y_stride_r y_stride_c x_stride_r x_stride_c
-        N eps BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < N`
-- `expected : = fun i => rmsNormSpec s X W x_stride_r x_stride_c N BLOCK_SIZE eps i`
 
 **Closed-form spec defs (transitive):** `rmsOutOffset`, `rms_norm_kernel`, `rmsNormSpec`, `rmsRrmsCarrier`, `rmsSumCarrier`, `rmsInputTile`
 

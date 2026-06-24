@@ -43,11 +43,6 @@ theorem matmul_triton1_closed_form_correct
 - `hBK : 0 < BLOCK_K`
 - `hN : N ≤ NS`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [M, N] => some (Z, zOffset s NS N M idx)`
-- `expected : = fun idx : TileIndex [M, N] =>
-        matmulSpec s X Y (BLOCK_K * numKBlocks) NS N M N BLOCK_K numKBlocks idx.1 idx.2.1`
 
 **Closed-form spec defs (transitive):** `matmul_triton1_surface`, `zOffset`, `matmulSpec`, `rowIndex`, `colIndex`, `xElem`, `yElem`, `numNBlocks`
 

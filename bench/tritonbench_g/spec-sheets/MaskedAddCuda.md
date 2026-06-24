@@ -34,12 +34,8 @@ theorem masked_add_kernel_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = masked_add_kernel grad_ptr p_ptr p_mask_ptr
-        n_elements alpha BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE =>
           maskedAddActive s p_mask_ptr n_elements BLOCK_SIZE i`
-- `expected : = fun i => maskedAddSpec s grad_ptr p_ptr alpha BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `masked_add_kernel`, `maskedAddActive`, `maskedAddOffset`, `maskedAddSpec`
 

@@ -94,24 +94,10 @@ theorem block_sparse_attn_python_case1_output_closed_form_summary
       selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 0 ≤ s.pids 0 * 16 + idx.1.val`
 - `fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val`
 - `fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val`
-- `kernel : = block_sparse_attention_kernel Out Q K V R C
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 16] => active s 16 16 idx`
 - `fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)`
-- `expected : = fun idx : TileIndex [16, 16] =>
-        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
-          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 0 1.0 idx.1 idx.2.1.val`
-- `kernel : = block_sparse_attention_kernel Out Q K V R C
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 16] => active s 16 16 idx`
 - `fun idx : TileIndex [16, 16] => (Out, out2Offset s 4 2048 512 32 16 16 idx)`
-- `expected : = fun idx : TileIndex [16, 16] =>
-        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
-          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 16 1.0 idx.1 idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `active`, `selKeyGlobal`, `bsaInvariant`, `qTileBSA`, `kRowBSA`, `vRowBSA`, `bsaLoopBody`, `block_sparse_attention_kernel`, `outOffset`, `blockSparseAttnClosedForm`, `out2Offset`, `mIndex`, `bsaMPartial`, `bsaLPartial`, `bsaOPartial`, `qBase`, `kvBase`, `offB`, `offH`, `dIndex`, `rawScoreBSA`, `maskedScore`, `offHkv`, `gScore`, `headGroups`
 

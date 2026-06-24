@@ -36,10 +36,7 @@ theorem log_softmax_kernel_output_summary
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)`
-- `kernel : = log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_N] => active s M N BLOCK_M idx`
-- `expected : = fun idx => logSoftmaxSpec s input_ptr M N K BLOCK_M BLOCK_N idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `log_softmax_kernel`, `active`, `logSoftmaxSpec`, `mIndex`, `nIndex`, `logSoftmaxInputTile`
 

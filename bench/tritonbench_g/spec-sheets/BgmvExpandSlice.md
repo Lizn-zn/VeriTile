@@ -48,12 +48,7 @@ theorem bgmv_full_output_summary
 - `hol : out_ptr ≠ lora_ptr`
 - `hcn : 0 < cn_stride`
 - `hlx : s.readMemValue .int (Region.cast lora_indices) (s.pids 1) = Int.ofNat li`
-- `kernel : = bgmv_full input_ptr lora_ptr out_ptr lora_indices K split_n_length xm_stride xk_stride
-        l0_stride lora_k_stride lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K`
-- `initialState : = s`
 - `fun _ : Fin split_n_length => True`
-- `expected : = fun g : Fin split_n_length =>
-        bgmvFullSpec s input_ptr lora_ptr li K split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride BLOCK_K g.val`
 
 **Closed-form spec defs (transitive):** `bgmv_full`, `cOff`, `bgmvFullSpec`, `prodGK`, `aElem`, `bElem`
 

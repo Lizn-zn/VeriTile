@@ -50,14 +50,7 @@ theorem rmsnorm_implementation_output_summary
 - `hStrideOutKPos : 0 < stride_out_k`
 - `hXOutNe : x_ptr ≠ out_ptr`
 - `hWOutNe : rms_w_ptr ≠ out_ptr`
-- `kernel : = rmsnorm_implementation x_ptr rms_w_ptr out_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps`
-- `initialState : = s`
 - `fun _ : Fin N_SIZE => True`
-- `expected : = fun i =>
-        rmsnormWeightedYFullNSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m
-          stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps i`
 
 **Closed-form spec defs (transitive):** `rmsnorm_implementation`, `outColOffset`, `rmsnormWeightedYFullNSpec`, `rmsnormYFullNSpec`, `rmsInvVarFullN`, `rmsVarFullNCarrier`
 

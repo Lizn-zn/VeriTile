@@ -54,19 +54,6 @@ theorem triton_attention_bwd_preprocess_genuine_output_summary_general
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         newdoOffset s BLOCK_M D_HEAD idx)`
-- `kernel : = triton_attention_bwd_preprocess Out DO L NewDO Delta
-        BLOCK_M D_HEAD`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_M, D_HEAD] =>
-        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, D_HEAD] =>
-        bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx`
-- `kernel : = triton_attention_bwd_preprocess Out DO L NewDO Delta
-        BLOCK_M D_HEAD`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i)`
-- `expected : = fun i : Fin BLOCK_M =>
-        bwdPreprocessDeltaSpecG s Out DO L BLOCK_M D_HEAD i`
 
 **Closed-form spec defs (transitive):** `newdoOffset`, `triton_attention_bwd_preprocess`, `bwdPreprocessNewDOSpecG`, `deltaOffset`, `bwdPreprocessDeltaSpecG`, `newdoMIndex`, `newdoNIndex`
 
@@ -231,21 +218,6 @@ theorem triton_attention_forward_output_summary_general
 - `hMOut : M ≠ Out`
 - `hLM : M ≠ L`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = triton_attention_fwd_kernel Q K V L M Out sc
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N`
-- `initialState : = s`
-- `kernel : = triton_attention_fwd_kernel Q K V L M Out sc
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N`
-- `initialState : = s`
-- `kernel : = triton_attention_fwd_kernel Q K V L M Out sc
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
-        Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `triton_attention_fwd_kernel`, `active`, `outOffset`, `fwdOutSpecG`, `lRowOffset`, `fwdLSpecG`, `fwdMSpecG`, `rowIndex`, `dIndex`, `fwdQTileG`, `fwdKTileG`, `fwdVTileG`, `fwdCausalSetG`
 
@@ -607,24 +579,10 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
 - `hin : ∀ R : RegionName, R = Q ∨ R = K ∨ R = V ∨ R = DO ∨ R = M ∨ R = Delta →
         R ≠ DV ∧ R ≠ DK ∧ R ≠ DQ`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM`
-- `initialState : = s`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
 - `fun idx : TileIndex [BM * nb, BD] => (DQ, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
-- `expected : = fun idx : TileIndex [BM * nb, BD] =>
-        bwdKernelDQSpecG s Q K V DO M Delta DQ BD (BM * nb) sc idx.1.val idx.2.1.val`
-- `kernel : = triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM`
-- `initialState : = s`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
 - `fun idx : TileIndex [BM * nb, BD] => (DV, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
-- `kernel : = triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM`
-- `initialState : = s`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
 - `fun idx : TileIndex [BM * nb, BD] => (DK, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
 

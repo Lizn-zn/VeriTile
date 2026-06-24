@@ -43,17 +43,10 @@ theorem context_attn_bloom_final_store_slice_compute_correct
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `kernel : = context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out head_dim stride_acc_b stride_acc_h stride_acc_m
-        stride_acc_d stride_obs stride_oh stride_od BLOCK_M BLOCK_DMODEL`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
           outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len head_dim stride_acc_b
-          stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_bloom_final_store_slice`, `active`, `accStoreValue`, `startLoc`, `mIndex`, `dIndex`, `seqLen`, `accOffset`, `promptLen`
 
@@ -222,16 +215,10 @@ theorem context_attn_bloom_final_store_python_block128_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 128 128`
-- `initialState : = s`
 - `fun idx : TileIndex [128, 128] =>
           active s B_Seqlen B_Prompt_Cache_Len 96 128 idx`
 - `fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 128 idx)`
-- `expected : = fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
-          128 idx`
 
 **Closed-form spec defs (transitive):** `context_attn_bloom_final_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `dIndex`, `startLoc`, `accOffset`, `promptLen`
 
@@ -388,16 +375,10 @@ theorem context_attn_bloom_final_store_python_block64_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 64 128`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 128] =>
           active s B_Seqlen B_Prompt_Cache_Len 96 64 idx`
 - `fun idx : TileIndex [64, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
-          64 idx`
 
 **Closed-form spec defs (transitive):** `context_attn_bloom_final_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `dIndex`, `startLoc`, `accOffset`, `promptLen`
 
@@ -558,14 +539,10 @@ theorem context_attn_bloom_surface_python_block128_compute_correct
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `initialState : = s`
 - `fun idx : TileIndex [128, 128] =>
           active s B_Seqlen B_Prompt_Cache_Len 96 128 idx`
 - `fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 128 idx)`
-- `expected : = fun idx : TileIndex [128, 128] =>
-        bloomFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen Out
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx`
 
 **Closed-form spec defs (transitive):** `context_attn_bloom_fwd_kernel_surface`, `active`, `outOffset`, `bloomFwdGenuineOutValue128`, `mIndex`, `seqLen`, `dIndex`, `startLoc`, `contextAttnBloomExactFoldM`, `sm_scale_bloom`, `bloomFwdWindow`, `bloomFwdBel`, `promptLen`, `gAccN`, `bloomKVM`, `gStateBot`, `bloomQTileM`, `bloomKTileM`, `bloomVTileM`, `gKeysUpto`, `osStepBot`, `ctxQTile`, `ctxKTile`, `ctxVTile`, `curHead`, `kvLoc`, `reqIdx`
 
@@ -1061,14 +1038,10 @@ theorem context_attn_bloom_surface_python_block64_compute_correct
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 128] =>
           active s B_Seqlen B_Prompt_Cache_Len 96 64 idx`
 - `fun idx : TileIndex [64, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 128] =>
-        bloomFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen Out
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx`
 
 **Closed-form spec defs (transitive):** `context_attn_bloom_fwd_kernel_surface`, `active`, `outOffset`, `bloomFwdGenuineOutValue64`, `mIndex`, `seqLen`, `dIndex`, `startLoc`, `contextAttnBloomExactFoldM`, `sm_scale_bloom`, `bloomFwdWindow`, `bloomFwdBel`, `promptLen`, `gAccN`, `bloomKVM`, `gStateBot`, `bloomQTileM`, `bloomKTileM`, `bloomVTileM`, `gKeysUpto`, `osStepBot`, `ctxQTile`, `ctxKTile`, `ctxVTile`, `curHead`, `kvLoc`, `reqIdx`
 
@@ -1590,20 +1563,10 @@ theorem context_attn_bloom_surface_compute_correct_general
 - `hOInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = context_attn_bloom_fwd_kernel_surface Q K V sm_scale
-        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len
-        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-        stride_req_b stride_req_s 1 head_dim BLOCK_M BLOCK_DMODEL BLOCK_N`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           (Out, outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        bloomFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-          sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
-          stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_N BLOCK_M idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_bloom_fwd_kernel_surface`, `active`, `bloomFwdGenuineOutValueG`, `startLoc`, `mIndex`, `dIndex`, `seqLen`, `contextAttnBloomExactFoldMG`, `bloomFwdWindowG`, `bloomFwdBel`, `promptLen`, `gAccN`, `bloomKVMG`, `gStateBot`, `bloomQTileMG`, `bloomKTileMG`, `bloomVTileMG`, `gKeysUpto`, `osStepBot`, `bloomQTileG`, `bloomKTileG`, `bloomVTileG`, `curHead`, `bloomKvLocG`, `reqIdx`
 

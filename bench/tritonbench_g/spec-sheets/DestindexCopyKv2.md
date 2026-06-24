@@ -44,15 +44,9 @@ theorem fwd_kernel_destindex_copy_kv_output_summary
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
         outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)`
-- `kernel : = fwd_kernel_destindex_copy_kv K Dest_loc Out
-        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-        head_num BLOCK_DMODEL BLOCK_HEAD`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num idx`
 - `fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
           (Out, outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)`
-- `expected : = fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-        s.readMem K (sourceAddr s stride_k_bs stride_k_h stride_k_d idx)`
 
 **Closed-form spec defs (transitive):** `outAddr`, `fwd_kernel_destindex_copy_kv`, `active`, `sourceAddr`, `destBase`, `headIndex`, `dimIndex`
 

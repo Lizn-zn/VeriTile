@@ -59,21 +59,9 @@ theorem chunk_cumsum_vector_python_case1_slice_summary
       s.readMem Carry (s.pids 1 * 20 + sIndex s 32 idx.2.1 * 1)
         = ∑ flat ∈ (Finset.range 4).filter (fun flat => flat < s.pids 2 * 16),
             s.readMem SReg (s.pids 1 * 20 + flat * 5 + sIndex s 32 idx.2.1 * 1)`
-- `kernel : = chunk_cumsum_vector_single_block_surface SReg Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        singleBlockCumsumVectorClosed s SReg 20 5 1 4 5 32 idx`
-- `kernel : = chunk_cumsum_vector_store_slice BC Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 20 5 1 4 5 16 32 idx`
-- `kernel : = chunk_cumsum_vector_cumsum_slice SReg Carry Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        globalCumsumVectorClosed s SReg 20 5 1 4 5 16 32 idx`
 
 **Closed-form spec defs (transitive):** `sIndex`, `chunk_cumsum_vector_surface`, `chunk_cumsum_vector_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `singleBlockCumsumVectorClosed`, `chunk_cumsum_vector_store_slice`, `active`, `tileOffset`, `storeValue`, `chunk_cumsum_vector_cumsum_slice`, `globalCumsumVectorClosed`, `tIndex`
 
@@ -366,21 +354,9 @@ theorem chunk_cumsum_vector_python_case2_slice_summary
       s.readMem Carry (s.pids 1 * 80 + sIndex s 32 idx.2.1 * 1)
         = ∑ flat ∈ (Finset.range 8).filter (fun flat => flat < s.pids 2 * 16),
             s.readMem SReg (s.pids 1 * 80 + flat * 10 + sIndex s 32 idx.2.1 * 1)`
-- `kernel : = chunk_cumsum_vector_single_block_surface SReg Z 80 10 1 8 10 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 8 10 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        singleBlockCumsumVectorClosed s SReg 80 10 1 8 10 32 idx`
-- `kernel : = chunk_cumsum_vector_store_slice BC Z 80 10 1 8 10 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 8 10 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 80 10 1 8 10 16 32 idx`
-- `kernel : = chunk_cumsum_vector_cumsum_slice SReg Carry Z 80 10 1 8 10 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 8 10 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        globalCumsumVectorClosed s SReg 80 10 1 8 10 16 32 idx`
 
 **Closed-form spec defs (transitive):** `sIndex`, `chunk_cumsum_vector_surface`, `chunk_cumsum_vector_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `singleBlockCumsumVectorClosed`, `chunk_cumsum_vector_store_slice`, `active`, `tileOffset`, `storeValue`, `chunk_cumsum_vector_cumsum_slice`, `globalCumsumVectorClosed`, `tIndex`
 
@@ -673,21 +649,9 @@ theorem chunk_cumsum_vector_python_case3_slice_summary
       s.readMem Carry (s.pids 1 * 5 + sIndex s 32 idx.2.1 * 1)
         = ∑ flat ∈ (Finset.range 1).filter (fun flat => flat < s.pids 2 * 16),
             s.readMem SReg (s.pids 1 * 5 + flat * 5 + sIndex s 32 idx.2.1 * 1)`
-- `kernel : = chunk_cumsum_vector_single_block_surface SReg Z 5 5 1 1 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 1 5 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        singleBlockCumsumVectorClosed s SReg 5 5 1 1 5 32 idx`
-- `kernel : = chunk_cumsum_vector_store_slice BC Z 5 5 1 1 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 1 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 5 5 1 1 5 16 32 idx`
-- `kernel : = chunk_cumsum_vector_cumsum_slice SReg Carry Z 5 5 1 1 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 1 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        globalCumsumVectorClosed s SReg 5 5 1 1 5 16 32 idx`
 
 **Closed-form spec defs (transitive):** `sIndex`, `chunk_cumsum_vector_surface`, `chunk_cumsum_vector_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `singleBlockCumsumVectorClosed`, `chunk_cumsum_vector_store_slice`, `active`, `tileOffset`, `storeValue`, `chunk_cumsum_vector_cumsum_slice`, `globalCumsumVectorClosed`, `tIndex`
 

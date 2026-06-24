@@ -49,18 +49,6 @@ theorem fill_kv_cache_python_test_layout_output_summary
         s.readMem VStates (vSourceOffset s SIDX 64 16 1 idx)))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = fill_k_cache_tile KStates KCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem KStates (kSourceOffset s SIDX 64 16 1 idx)`
-- `kernel : = fill_v_cache_tile VStates VCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem VStates (vSourceOffset s SIDX 64 16 1 idx)`
-
 **Closed-form spec defs (transitive):** `fill_kv_cache_kernel_surface`, `fill_k_cache_tile`, `active`, `kCacheOffset`, `kSourceOffset`, `fill_v_cache_tile`, `vCacheOffset`, `vSourceOffset`, `headIndex`, `dimIndex`, `blockOff`
 
 <details><summary><code>fill_kv_cache_kernel_surface</code></summary>
@@ -369,44 +357,18 @@ theorem fill_quant_int8_kv_cache_python_test_layout_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = fill_k_cache_tile QKPre KCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem QKPre (kSourceOffset s SIDX 64 16 1 idx)`
-- `kernel : = fill_v_cache_tile QVPre VCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem QVPre (vSourceOffset s SIDX 64 16 1 idx)`
-- `kernel : = fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (KScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s KScalePre i`
-- `kernel : = fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (KScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s KZeroPre i`
-- `kernel : = fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (VScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s VScalePre i`
-- `kernel : = fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (VScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s VZeroPre i`
 
 **Closed-form spec defs (transitive):** `quant_int8_compute_store_slice`, `fill_k_cache_tile`, `active`, `kCacheOffset`, `kSourceOffset`, `fill_v_cache_tile`, `vCacheOffset`, `vSourceOffset`, `fill_quant_meta_store_slice`, `metaActive`, `metaOffset`, `metaStoreSpec`, `headIndex`, `dimIndex`, `blockOff`
 
@@ -746,44 +708,18 @@ theorem fill_quant_int4_kv_cache_python_test_layout_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = fill_k_cache_tile QKPre KCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem QKPre (kSourceOffset s SIDX 64 16 1 idx)`
-- `kernel : = fill_v_cache_tile QVPre VCaches BlockOffsets
-        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem QVPre (vSourceOffset s SIDX 64 16 1 idx)`
-- `kernel : = fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (KScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s KScalePre i`
-- `kernel : = fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (KScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s KZeroPre i`
-- `kernel : = fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (VScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s VScalePre i`
-- `kernel : = fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
-        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => metaActive s 4 4 i`
 - `fun i : Fin 4 => (VScalesZeros,
           metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)`
-- `expected : = fun i : Fin 4 => metaStoreSpec s VZeroPre i`
 
 **Closed-form spec defs (transitive):** `quant_int4_compute_store_slice`, `fill_k_cache_tile`, `active`, `kCacheOffset`, `kSourceOffset`, `fill_v_cache_tile`, `vCacheOffset`, `vSourceOffset`, `fill_quant_meta_store_slice`, `metaActive`, `metaOffset`, `metaStoreSpec`, `headIndex`, `dimIndex`, `blockOff`
 

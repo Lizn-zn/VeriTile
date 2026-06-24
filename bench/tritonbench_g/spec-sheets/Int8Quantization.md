@@ -60,26 +60,6 @@ theorem per_block_int8_python_case1_internal_summary
       (expected := fun _ => scaleStoreSpec s KScalePre 4))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = per_block_int8_scaled_store_slice Q QInt8 QScale
-        256 64 128 2 (qPreScale 64)`
-- `initialState : = s`
-- `expected : = fun idx =>
-        perBlockInt8ScaledSpec s Q QScale 256 64 128 2 (qPreScale 64) idx`
-- `kernel : = per_block_int8_scale_store_slice QScalePre QScale 2`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (QScale, scaleOffset s 2)`
-- `expected : = fun _ => scaleStoreSpec s QScalePre 2`
-- `kernel : = per_block_int8_scaled_store_slice K KInt8 KScale
-        256 64 64 4 kPreScale`
-- `initialState : = s`
-- `expected : = fun idx =>
-        perBlockInt8ScaledSpec s K KScale 256 64 64 4 kPreScale idx`
-- `kernel : = per_block_int8_scale_store_slice KScalePre KScale 4`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (KScale, scaleOffset s 4)`
-- `expected : = fun _ => scaleStoreSpec s KScalePre 4`
-
 **Closed-form spec defs (transitive):** `q_kernel_per_block_int8_surface`, `k_kernel_per_block_int8_surface`, `per_block_int8_scale_compute_store_slice`, `qPreScale`, `kPreScale`, `per_block_int8_scaled_store_slice`, `active`, `xOffset`, `perBlockInt8ScaledSpec`, `per_block_int8_scale_store_slice`, `scaleOffset`, `scaleStoreSpec`, `rowIndex`, `baseOffset`, `colIndex`
 
 <details><summary><code>q_kernel_per_block_int8_surface</code></summary>
@@ -371,26 +351,6 @@ theorem per_block_int8_python_case2_internal_summary
       (write := fun _ : PUnit => some (KScale, scaleOffset s 8))
       (expected := fun _ => scaleStoreSpec s KScalePre 8))
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = per_block_int8_scaled_store_slice Q QInt8 QScale
-        512 128 128 4 (qPreScale 128)`
-- `initialState : = s`
-- `expected : = fun idx =>
-        perBlockInt8ScaledSpec s Q QScale 512 128 128 4 (qPreScale 128) idx`
-- `kernel : = per_block_int8_scale_store_slice QScalePre QScale 4`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (QScale, scaleOffset s 4)`
-- `expected : = fun _ => scaleStoreSpec s QScalePre 4`
-- `kernel : = per_block_int8_scaled_store_slice K KInt8 KScale
-        512 128 64 8 kPreScale`
-- `initialState : = s`
-- `expected : = fun idx =>
-        perBlockInt8ScaledSpec s K KScale 512 128 64 8 kPreScale idx`
-- `kernel : = per_block_int8_scale_store_slice KScalePre KScale 8`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (KScale, scaleOffset s 8)`
-- `expected : = fun _ => scaleStoreSpec s KScalePre 8`
 
 **Closed-form spec defs (transitive):** `q_kernel_per_block_int8_surface`, `k_kernel_per_block_int8_surface`, `per_block_int8_scale_compute_store_slice`, `qPreScale`, `kPreScale`, `per_block_int8_scaled_store_slice`, `active`, `xOffset`, `perBlockInt8ScaledSpec`, `per_block_int8_scale_store_slice`, `scaleOffset`, `scaleStoreSpec`, `rowIndex`, `baseOffset`, `colIndex`
 

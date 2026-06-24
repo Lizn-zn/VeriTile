@@ -32,10 +32,7 @@ theorem l2_norm_fwd_1pass_kernel_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = l2_norm_fwd_1pass_kernel X Y stride_x_row N eps BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => l2Spec s X stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `l2_norm_fwd_1pass_kernel`, `l2Spec`, `l2Load`
 

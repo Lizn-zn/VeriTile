@@ -43,12 +43,8 @@ theorem fifth_order_fwd_surface_y00_output_summary
 - `hStride : 10 < output_stride`
 - `hOutInj : Function.Injective
       (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)`
-- `kernel : = fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
-        output_numel col_offset output_stride`
-- `initialState : = s`
 - `fun i : Fin block_size =>
           outOffset s block_size col_offset output_stride i < output_numel`
-- `expected : = fun i => y00Spec s coord_ptr block_size coord_numel i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `fifth_order_fwd_surface`, `y00Spec`, `coordX`, `coordZ`, `coordOffset`
 

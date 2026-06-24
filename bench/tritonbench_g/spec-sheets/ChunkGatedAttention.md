@@ -107,32 +107,15 @@ theorem chunk_gated_attention_output_summary_general
       s.readMem BHFinal (finalStateOffset s KSize VSize BK BV idx)
         = hClosed s K V G H0 GATEK USE_INITIAL_STATE
             s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV NT idx`
-- `kernel : = chunk_gated_attention_cum_compute_slice SReg GCum s_s_h s_s_t
-        s_s_d T S BT BS`
-- `initialState : = s`
 - `fun idx : TileIndex [BT, BS] => active s T S BT BS idx`
 - `fun idx : TileIndex [BT, BS] =>
           (GCum, tileOffset s s_s_h s_s_t s_s_d BT BS idx)`
-- `expected : = fun idx : TileIndex [BT, BS] =>
-        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx`
-- `kernel : = chunk_gated_attention_h_state_store_slice BH H i_t
-        s_h_h s_h_t s_h_d KSize VSize BK BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BK, BV] => stateActive s KSize VSize BK BV idx`
 - `fun idx : TileIndex [BK, BV] =>
           (H, hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)`
-- `expected : = fun idx : TileIndex [BK, BV] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV i_t idx`
-- `kernel : = chunk_gated_attention_final_state_store_slice BHFinal Ht
-        KSize VSize BK BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BK, BV] => finalActive s KSize VSize BK BV idx`
 - `fun idx : TileIndex [BK, BV] =>
           (Ht, finalStateOffset s KSize VSize BK BV idx)`
-- `expected : = fun idx : TileIndex [BK, BV] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV NT idx`
 
 **Closed-form spec defs (transitive):** `tileOffset`, `hStateOffset`, `finalStateOffset`, `hClosed`, `chunk_gated_attention_cum_compute_slice`, `active`, `cumComputeStoreValue`, `chunk_gated_attention_h_state_store_slice`, `stateActive`, `chunk_gated_attention_final_state_store_slice`, `finalActive`, `tIndex`, `sIndex`, `kIndexState`, `vIndexState`, `kIndexFinal`, `vIndexFinal`, `hSeed`, `hGate`, `hStepTerm`, `lowerTriTile`, `sourceTile`
 

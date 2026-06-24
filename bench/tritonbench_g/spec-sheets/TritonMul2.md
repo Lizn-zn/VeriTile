@@ -48,14 +48,8 @@ theorem mul2_kernel_output_summary
 - `xs xsInplace : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs`
 - `h_xInplace : InputLoadedAt s ptr BLOCK_SIZE xsInplace`
-- `kernel : = mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `expected : = fun i => 2 * xs i`
-- `kernel : = mul2_inplace_kernel ptr n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `expected : = fun i => 2 * xsInplace i`
 
 **Closed-form spec defs (transitive):** `mul2_kernel`, `mul2_inplace_kernel`
 

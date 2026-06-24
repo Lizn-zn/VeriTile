@@ -42,17 +42,10 @@ theorem context_attn_llama_final_store_slice_compute_correct
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `kernel : = context_attn_llama_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out H stride_acc_b stride_acc_h stride_acc_m
-        stride_acc_d stride_obs stride_oh stride_od BLOCK_M BLOCK_DMODEL`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
           outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len H stride_acc_b
-          stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_llama_final_store_slice`, `active`, `accStoreValue`, `startLoc`, `mIndex`, `curHead`, `dIndex`, `seqLen`, `accOffset`, `curBatch`, `promptLen`
 
@@ -227,16 +220,10 @@ theorem context_attn_llama_final_store_python_block128_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = context_attn_llama_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 128 128`
-- `initialState : = s`
 - `fun idx : TileIndex [128, 128] =>
           active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx`
 - `fun idx : TileIndex [128, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)`
-- `expected : = fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
-          2048 1 128 idx`
 
 **Closed-form spec defs (transitive):** `context_attn_llama_final_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `startLoc`, `curHead`, `dIndex`, `accOffset`, `curBatch`, `promptLen`
 
@@ -411,16 +398,10 @@ theorem context_attn_llama_final_store_python_block64_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = context_attn_llama_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 64 128`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 128] =>
           active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx`
 - `fun idx : TileIndex [64, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
-          2048 1 64 idx`
 
 **Closed-form spec defs (transitive):** `context_attn_llama_final_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `startLoc`, `curHead`, `dIndex`, `accOffset`, `curBatch`, `promptLen`
 
@@ -599,14 +580,10 @@ theorem context_attn_llama_surface_python_block128_compute_correct
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `initialState : = s`
 - `fun idx : TileIndex [128, 128] =>
           active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx`
 - `fun idx : TileIndex [128, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)`
-- `expected : = fun idx : TileIndex [128, 128] =>
-        ctxFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx`
 
 **Closed-form spec defs (transitive):** `context_attn_llama_fwd_kernel_surface`, `active`, `outOffset`, `ctxFwdGenuineOutValue128`, `mIndex`, `seqLen`, `startLoc`, `curHead`, `dIndex`, `contextAttnExactFoldM`, `sm_scale_python`, `ctxFwdWindow`, `ctxFwdBel`, `curBatch`, `promptLen`, `gStateBot`, `ctxKVM`, `gKeysUpto`, `osStepBot`, `ctxQTileM`, `ctxKTileM`, `ctxVTileM`, `ctxQTile`, `ctxKTile`, `ctxVTile`, `ctxKvLoc`
 
@@ -1060,14 +1037,10 @@ theorem context_attn_llama_surface_python_block64_compute_correct
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 128] =>
           active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx`
 - `fun idx : TileIndex [64, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 128] =>
-        ctxFwdGenuineOutValue64 s Q K V B_Start_Loc B_Seqlen
-          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx`
 
 **Closed-form spec defs (transitive):** `context_attn_llama_fwd_kernel_surface`, `active`, `outOffset`, `ctxFwdGenuineOutValue64`, `mIndex`, `seqLen`, `startLoc`, `curHead`, `dIndex`, `contextAttnExactFoldM`, `sm_scale_python`, `ctxFwdWindow64`, `ctxFwdBel`, `curBatch`, `promptLen`, `gStateBot`, `ctxKVM`, `gKeysUpto`, `osStepBot`, `ctxQTileM`, `ctxKTileM`, `ctxVTileM`, `ctxQTile`, `ctxKTile`, `ctxVTile`, `ctxKvLoc`
 
@@ -1546,20 +1519,10 @@ theorem context_attn_llama_surface_compute_correct_general
 - `hOInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
-        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-        stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           (Out, outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        ctxFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
-          sm_scale H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
-          stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_llama_fwd_kernel_surface`, `active`, `ctxFwdGenuineOutValueG`, `startLoc`, `mIndex`, `curHead`, `dIndex`, `seqLen`, `contextAttnExactFoldMG`, `ctxFwdWindowG`, `ctxFwdBelG`, `curBatch`, `promptLen`, `gStateBot`, `ctxKVMG`, `gKeysUpto`, `osStepBot`, `ctxQTileMG`, `ctxKTileMG`, `ctxVTileMG`, `ctxQTileG`, `ctxKTileG`, `ctxVTileG`, `ctxKvLocG`
 

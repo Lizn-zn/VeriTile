@@ -27,10 +27,7 @@ theorem softmax_kernel_inner_one_tile_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N`
-- `initialState : = s`
 - `fun i : Fin TILE_N => i.val < N`
-- `expected : = fun i => softmaxFlaggemsSpec s input_ptr N TILE_N i`
 
 **Closed-form spec defs (transitive):** `softmax_kernel_inner_one_tile`, `softmaxFlaggemsSpec`, `softmaxFlaggemsInputTile`
 
@@ -128,13 +125,8 @@ theorem softmax_kernel_non_inner_one_tile_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRange : s.pids 1 * TILE_K + TILE_K ≤ K`
-- `kernel : = softmax_kernel_non_inner_one_tile_surface
-        output_ptr input_ptr N K TILE_N TILE_K`
-- `initialState : = s`
 - `fun idx : TileIndex [TILE_N, TILE_K] =>
           idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K`
-- `expected : = fun idx =>
-        softmaxFlaggemsNonInnerSpec s input_ptr N K TILE_N TILE_K idx`
 
 **Closed-form spec defs (transitive):** `softmax_kernel_non_inner_one_tile_surface`, `nonInnerOffset`, `softmaxFlaggemsNonInnerSpec`, `softmaxFlaggemsNonInnerInputTile`
 
@@ -267,13 +259,8 @@ theorem softmax_backward_kernel_inner_one_tile_compute_correct
 **Assumptions / layout contracts:**
 - `hOffInj : Function.Injective
       (fun idx : TileIndex [TILE_M, TILE_N] => innerBwdOffset s N TILE_M idx)`
-- `kernel : = softmax_backward_kernel_inner_one_tile_surface
-        out_ptr out_grad_ptr in_grad_ptr M N TILE_M TILE_N`
-- `initialState : = s`
 - `fun idx : TileIndex [TILE_M, TILE_N] =>
           innerBwdActive s M N TILE_M idx`
-- `expected : = fun idx =>
-        innerBwdSpec s out_ptr out_grad_ptr M N TILE_M TILE_N idx`
 
 **Closed-form spec defs (transitive):** `innerBwdOffset`, `softmax_backward_kernel_inner_one_tile_surface`, `innerBwdActive`, `innerBwdSpec`, `innerBwdRowIndex`, `innerBwdColIndex`, `innerBwdOutTile`, `innerBwdOutGradTile`
 
@@ -421,13 +408,8 @@ theorem softmax_backward_kernel_non_inner_one_tile_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRange : s.pids 1 * TILE_K + TILE_K ≤ K`
-- `kernel : = softmax_backward_kernel_non_inner_one_tile_surface
-        out_ptr out_grad_ptr in_grad_ptr N K TILE_N TILE_K`
-- `initialState : = s`
 - `fun idx : TileIndex [TILE_N, TILE_K] =>
           idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K`
-- `expected : = fun idx =>
-        nonInnerBwdSpec s out_ptr out_grad_ptr N K TILE_N TILE_K idx`
 
 **Closed-form spec defs (transitive):** `softmax_backward_kernel_non_inner_one_tile_surface`, `nonInnerOffset`, `nonInnerBwdSpec`, `nonInnerBwdOutTile`, `nonInnerBwdOutGradTile`
 

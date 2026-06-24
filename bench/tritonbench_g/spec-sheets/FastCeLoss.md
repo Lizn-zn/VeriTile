@@ -31,13 +31,7 @@ theorem cross_entropy_backward_store_slice_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = cross_entropy_backward_store_slice logits_ptr dloss_ptr Grad
-        VOCAB_SIZE logits_row_stride dloss_row_stride grad_row_stride BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => active s VOCAB_SIZE BLOCK_SIZE i`
-- `expected : = fun i =>
-        expectedBackward s dloss_ptr Grad dloss_row_stride grad_row_stride
-          BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `cross_entropy_backward_store_slice`, `active`, `logitsOffset`, `expectedBackward`, `colOffset`, `gradOffset`
 
@@ -132,12 +126,6 @@ theorem cross_entropy_lse_store_slice_compute_correct
       (expected := fun _ => lseStoreSpec s LsumPre)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = cross_entropy_lse_store_slice LsumPre logsumexp_ptr`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (logsumexp_ptr, lseOutOffset s)`
-- `expected : = fun _ => lseStoreSpec s LsumPre`
-
 **Closed-form spec defs (transitive):** `cross_entropy_lse_store_slice`, `lseOutOffset`, `lseStoreSpec`
 
 <details><summary><code>cross_entropy_lse_store_slice</code></summary>
@@ -185,12 +173,6 @@ theorem cross_entropy_loss_store_slice_compute_correct
       (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s))
       (expected := fun _ => lossStoreSpec s LossPre)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = cross_entropy_loss_store_slice LossPre loss_ptr`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (loss_ptr, lseOutOffset s)`
-- `expected : = fun _ => lossStoreSpec s LossPre`
 
 **Closed-form spec defs (transitive):** `cross_entropy_loss_store_slice`, `lseOutOffset`, `lossStoreSpec`
 

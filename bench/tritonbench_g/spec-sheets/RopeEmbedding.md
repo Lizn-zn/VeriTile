@@ -58,28 +58,10 @@ theorem rope_embedding_python_case1_forward_backward_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rope_embedding_forward_first_half Q cos sin
-        128 16 16 8 32 4 4 16`
-- `initialState : = sQ`
 - `fun i : Fin 16 => active sQ 32 4 4 16 i`
-- `expected : = fun i => ropeFirstSpec sQ Q cos sin 128 16 16 8 32 4 16 i`
-- `kernel : = rope_embedding_forward_second_half Q cos sin
-        128 16 16 8 32 4 4 16`
-- `initialState : = sQ`
 - `fun i : Fin 16 => active sQ 32 4 4 16 i`
-- `expected : = fun i => ropeSecondSpec sQ Q cos sin 128 16 16 8 32 4 16 i`
-- `kernel : = rope_embedding_backward_first_half dY cos sin
-        128 16 16 8 32 4 4 16`
-- `initialState : = sDY`
 - `fun i : Fin 16 => active sDY 32 4 4 16 i`
-- `expected : = fun i =>
-        ropeBackwardFirstSpec sDY dY cos sin 128 16 16 8 32 4 16 i`
-- `kernel : = rope_embedding_backward_second_half dY cos sin
-        128 16 16 8 32 4 4 16`
-- `initialState : = sDY`
 - `fun i : Fin 16 => active sDY 32 4 4 16 i`
-- `expected : = fun i =>
-        ropeBackwardSecondSpec sDY dY cos sin 128 16 16 8 32 4 16 i`
 
 **Closed-form spec defs (transitive):** `rope_embedding_surface`, `rope_embedding_forward_first_half`, `active`, `qFirstOffset`, `ropeFirstSpec`, `rope_embedding_forward_second_half`, `qSecondOffset`, `ropeSecondSpec`, `rope_embedding_backward_first_half`, `ropeBackwardFirstSpec`, `rope_embedding_backward_second_half`, `ropeBackwardSecondSpec`, `colIndex`, `headStart`, `cosOffset`, `sinOffset`, `rowMod`
 
@@ -452,28 +434,10 @@ theorem rope_embedding_python_case2_forward_backward_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rope_embedding_forward_first_half Q cos sin
-        2048 64 64 32 128 16 4 64`
-- `initialState : = sQ`
 - `fun i : Fin 64 => active sQ 128 16 4 64 i`
-- `expected : = fun i => ropeFirstSpec sQ Q cos sin 2048 64 64 32 128 4 64 i`
-- `kernel : = rope_embedding_forward_second_half Q cos sin
-        2048 64 64 32 128 16 4 64`
-- `initialState : = sQ`
 - `fun i : Fin 64 => active sQ 128 16 4 64 i`
-- `expected : = fun i => ropeSecondSpec sQ Q cos sin 2048 64 64 32 128 4 64 i`
-- `kernel : = rope_embedding_backward_first_half dY cos sin
-        2048 64 64 32 128 16 4 64`
-- `initialState : = sDY`
 - `fun i : Fin 64 => active sDY 128 16 4 64 i`
-- `expected : = fun i =>
-        ropeBackwardFirstSpec sDY dY cos sin 2048 64 64 32 128 4 64 i`
-- `kernel : = rope_embedding_backward_second_half dY cos sin
-        2048 64 64 32 128 16 4 64`
-- `initialState : = sDY`
 - `fun i : Fin 64 => active sDY 128 16 4 64 i`
-- `expected : = fun i =>
-        ropeBackwardSecondSpec sDY dY cos sin 2048 64 64 32 128 4 64 i`
 
 **Closed-form spec defs (transitive):** `rope_embedding_surface`, `rope_embedding_forward_first_half`, `active`, `qFirstOffset`, `ropeFirstSpec`, `rope_embedding_forward_second_half`, `qSecondOffset`, `ropeSecondSpec`, `rope_embedding_backward_first_half`, `ropeBackwardFirstSpec`, `rope_embedding_backward_second_half`, `ropeBackwardSecondSpec`, `colIndex`, `headStart`, `cosOffset`, `sinOffset`, `rowMod`
 
@@ -846,28 +810,10 @@ theorem rope_embedding_python_case3_forward_backward_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rope_embedding_forward_first_half Q cos sin
-        8192 128 128 64 256 32 4 128`
-- `initialState : = sQ`
 - `fun i : Fin 128 => active sQ 256 32 4 128 i`
-- `expected : = fun i => ropeFirstSpec sQ Q cos sin 8192 128 128 64 256 4 128 i`
-- `kernel : = rope_embedding_forward_second_half Q cos sin
-        8192 128 128 64 256 32 4 128`
-- `initialState : = sQ`
 - `fun i : Fin 128 => active sQ 256 32 4 128 i`
-- `expected : = fun i => ropeSecondSpec sQ Q cos sin 8192 128 128 64 256 4 128 i`
-- `kernel : = rope_embedding_backward_first_half dY cos sin
-        8192 128 128 64 256 32 4 128`
-- `initialState : = sDY`
 - `fun i : Fin 128 => active sDY 256 32 4 128 i`
-- `expected : = fun i =>
-        ropeBackwardFirstSpec sDY dY cos sin 8192 128 128 64 256 4 128 i`
-- `kernel : = rope_embedding_backward_second_half dY cos sin
-        8192 128 128 64 256 32 4 128`
-- `initialState : = sDY`
 - `fun i : Fin 128 => active sDY 256 32 4 128 i`
-- `expected : = fun i =>
-        ropeBackwardSecondSpec sDY dY cos sin 8192 128 128 64 256 4 128 i`
 
 **Closed-form spec defs (transitive):** `rope_embedding_surface`, `rope_embedding_forward_first_half`, `active`, `qFirstOffset`, `ropeFirstSpec`, `rope_embedding_forward_second_half`, `qSecondOffset`, `ropeSecondSpec`, `rope_embedding_backward_first_half`, `ropeBackwardFirstSpec`, `rope_embedding_backward_second_half`, `ropeBackwardSecondSpec`, `colIndex`, `headStart`, `cosOffset`, `sinOffset`, `rowMod`
 
@@ -1240,28 +1186,10 @@ theorem rope_embedding_python_case4_forward_backward_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rope_embedding_forward_first_half Q cos sin
-        32768 256 256 128 512 64 4 256`
-- `initialState : = sQ`
 - `fun i : Fin 256 => active sQ 512 64 4 256 i`
-- `expected : = fun i => ropeFirstSpec sQ Q cos sin 32768 256 256 128 512 4 256 i`
-- `kernel : = rope_embedding_forward_second_half Q cos sin
-        32768 256 256 128 512 64 4 256`
-- `initialState : = sQ`
 - `fun i : Fin 256 => active sQ 512 64 4 256 i`
-- `expected : = fun i => ropeSecondSpec sQ Q cos sin 32768 256 256 128 512 4 256 i`
-- `kernel : = rope_embedding_backward_first_half dY cos sin
-        32768 256 256 128 512 64 4 256`
-- `initialState : = sDY`
 - `fun i : Fin 256 => active sDY 512 64 4 256 i`
-- `expected : = fun i =>
-        ropeBackwardFirstSpec sDY dY cos sin 32768 256 256 128 512 4 256 i`
-- `kernel : = rope_embedding_backward_second_half dY cos sin
-        32768 256 256 128 512 64 4 256`
-- `initialState : = sDY`
 - `fun i : Fin 256 => active sDY 512 64 4 256 i`
-- `expected : = fun i =>
-        ropeBackwardSecondSpec sDY dY cos sin 32768 256 256 128 512 4 256 i`
 
 **Closed-form spec defs (transitive):** `rope_embedding_surface`, `rope_embedding_forward_first_half`, `active`, `qFirstOffset`, `ropeFirstSpec`, `rope_embedding_forward_second_half`, `qSecondOffset`, `ropeSecondSpec`, `rope_embedding_backward_first_half`, `ropeBackwardFirstSpec`, `rope_embedding_backward_second_half`, `ropeBackwardSecondSpec`, `colIndex`, `headStart`, `cosOffset`, `sinOffset`, `rowMod`
 

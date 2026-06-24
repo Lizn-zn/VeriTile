@@ -38,16 +38,8 @@ theorem reversed_cumsum_python_case1_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_store_slice BC Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 20 5 1 4 5 16 32 idx`
-- `kernel : = reversed_cumsum_cumsum_slice SReg Carry Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 20 5 1 4 5 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_store_slice`, `active`, `tileOffset`, `storeValue`, `reversed_cumsum_cumsum_slice`, `cumsumStoreValue`, `tIndex`, `sIndex`, `carryValue`, `upperTriTile`, `sourceTile`
 
@@ -277,13 +269,9 @@ theorem reversed_cumsum_python_case1_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_single_block_surface SReg Z 20 5 1 4 5 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx`
 - `fun idx : TileIndex [16, 32] =>
           (Z, singleBlockTileOffset s 20 5 1 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        reversedCumsumClosed s SReg 20 5 1 4 5 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `reversedCumsumClosed`, `sIndex`
 
@@ -446,16 +434,8 @@ theorem reversed_cumsum_python_case2_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_store_slice BC Z 64 8 1 8 8 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 8 8 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 64 8 1 8 8 16 32 idx`
-- `kernel : = reversed_cumsum_cumsum_slice SReg Carry Z 64 8 1 8 8 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 8 8 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 64 8 1 8 8 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_store_slice`, `active`, `tileOffset`, `storeValue`, `reversed_cumsum_cumsum_slice`, `cumsumStoreValue`, `tIndex`, `sIndex`, `carryValue`, `upperTriTile`, `sourceTile`
 
@@ -682,13 +662,9 @@ theorem reversed_cumsum_python_case2_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_single_block_surface SReg Z 64 8 1 8 8 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 8 8 32 idx`
 - `fun idx : TileIndex [16, 32] =>
           (Z, singleBlockTileOffset s 64 8 1 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        reversedCumsumClosed s SReg 64 8 1 8 8 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `reversedCumsumClosed`, `sIndex`
 
@@ -851,16 +827,8 @@ theorem reversed_cumsum_python_case3_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_store_slice BC Z 256 16 1 16 16 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 16 16 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 256 16 1 16 16 16 32 idx`
-- `kernel : = reversed_cumsum_cumsum_slice SReg Carry Z 256 16 1 16 16 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 16 16 16 32 idx`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 256 16 1 16 16 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_store_slice`, `active`, `tileOffset`, `storeValue`, `reversed_cumsum_cumsum_slice`, `cumsumStoreValue`, `tIndex`, `sIndex`, `carryValue`, `upperTriTile`, `sourceTile`
 
@@ -1087,13 +1055,9 @@ theorem reversed_cumsum_python_case3_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_single_block_surface SReg Z 256 16 1 16 16 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => singleBlockActive s 16 16 32 idx`
 - `fun idx : TileIndex [16, 32] =>
           (Z, singleBlockTileOffset s 256 16 1 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        reversedCumsumClosed s SReg 256 16 1 16 16 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_single_block_surface`, `singleBlockActive`, `singleBlockTileOffset`, `reversedCumsumClosed`, `sIndex`
 
@@ -1256,18 +1220,10 @@ theorem reversed_cumsum_python_case4_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_store_slice BC Z 1024 32 1 32 32 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx`
 - `fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        storeValue s BC 1024 32 1 32 32 16 32 idx`
-- `kernel : = reversed_cumsum_cumsum_slice SReg Carry Z 1024 32 1 32 32 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx`
 - `fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 1024 32 1 32 32 16 32 idx`
 
 **Closed-form spec defs (transitive):** `reversed_cumsum_surface`, `reversed_cumsum_store_slice`, `active`, `tileOffset`, `storeValue`, `reversed_cumsum_cumsum_slice`, `cumsumStoreValue`, `tIndex`, `sIndex`, `carryValue`, `upperTriTile`, `sourceTile`
 
@@ -1506,12 +1462,8 @@ theorem reversed_cumsum_python_case4_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = reversed_cumsum_cumsum_slice SReg Carry Z 1024 32 1 32 32 16 32`
-- `initialState : = s`
 - `fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx`
 - `fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)`
-- `expected : = fun idx : TileIndex [16, 32] =>
-        cumsumStoreValue s SReg Carry 1024 32 1 32 32 16 32 idx`
 - `∀ idx : TileIndex [16, 32],
       singleBlockStoreValue s SReg 1024 32 1 32 32 16 32 idx
         = reversedCumsumClosed s SReg 1024 32 1 32 32 16 32 idx`

@@ -46,9 +46,6 @@ theorem matmul_kernel_closed_form_correct
 **Assumptions / layout contracts:**
 - `hBN : BN ≤ 4096`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_kernel_surface C A B BM BN BLOCK_K numKBlocks`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BM, BN] => some (C, cOffset s BM BN idx)`
 
 **Closed-form spec defs (transitive):** `matmul_kernel_surface`, `cOffset`, `matmulSpec`, `rowGlobal`, `colGlobal`, `aElem`, `bElem`, `rowIndex`, `colIndex`
 

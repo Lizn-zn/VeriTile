@@ -226,7 +226,9 @@ def selfref_flags(text):
 def hypotheses(sig):
     """Pull binders that look like hypotheses (Prop-typed / h-named)."""
     hyps = []
-    for m in re.finditer(r"\(([^():]+):\s*([^()]*(?:\([^()]*\)[^()]*)*)\)", sig):
+    # `:(?!=)` so named arguments like `(kernel := …)` / `(expected := …)` are
+    # not mistaken for `name : type` binders.
+    for m in re.finditer(r"\(([^():]+):(?!=)\s*([^()]*(?:\([^()]*\)[^()]*)*)\)", sig):
         names, ty = m.group(1).strip(), m.group(2).strip()
         if any(s in ty for s in ("=", "≠", "<", "≤", "∣", "∈", "Prop", "→")) \
            or all(n.startswith("h") for n in names.split()):

@@ -97,30 +97,6 @@ theorem chunk_gate_recurrence_forward_output_summary_general
           (accOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)
         = fwdClosed s S D LastKv HAS_LAST_KV NUM_BLOCK D_MODEL_K D_MODEL_V
             BLOCK_MODEL_K BLOCK_MODEL_V t_rel idx`
-- `kernel : = chunk_gate_recurrence_initial_last_kv_store_slice LastKv O
-        NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (O, outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx)`
-- `expected : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        fwdClosed s S D LastKv Bool.true NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V 0 idx`
-- `kernel : = chunk_gate_recurrence_initial_zero_store_slice O NUM_BLOCK
-        D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (O, outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx)`
-- `expected : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        fwdClosed s S D LastKv Bool.false NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V 0 idx`
-- `kernel : = chunk_gate_recurrence_forward_step_store_slice AccPrev S D O
-        t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V`
-- `initialState : = s`
-- `expected : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        fwdClosed s S D LastKv HAS_LAST_KV NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V (t_rel + 1) idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `forwardStepTileOffset`, `accOffset`, `fwdClosed`, `chunk_gate_recurrence_fwd_surface`, `chunk_gate_recurrence_initial_last_kv_store_slice`, `chunk_gate_recurrence_initial_zero_store_slice`, `chunk_gate_recurrence_forward_step_store_slice`, `kIndex`, `vIndex`, `fwdSeed`, `fwdGate`, `dOffset`
 
@@ -482,34 +458,6 @@ theorem chunk_gate_recurrence_backward_output_summary_general
 - `hDLInj : Function.Injective
       (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)`
-- `kernel : = chunk_gate_recurrence_bwd_dacc_step_DI_store_slice DaccPrev
-        DS D DI t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-        BLOCK_MODEL_V`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (DI, timeTileOffset s t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V idx)`
-- `expected : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDaccStepSpec s DaccPrev DS D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V idx`
-- `kernel : = chunk_gate_recurrence_bwd_dg_step_store_slice DaccPrev DS
-        S D DG t_rel NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-        BLOCK_MODEL_V`
-- `initialState : = s`
-- `write : = fun _ : PUnit =>
-        some (DG, bwdDGOffset s t_rel NUM_BLOCK NUM_K NUM_V)`
-- `expected : = fun _ =>
-        bwdDGStepSpec s DaccPrev DS S D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V`
-- `kernel : = chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL
-        D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (DL, bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx)`
-- `expected : = fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDLStoreSpec s DaccPre D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx`
 
 **Closed-form spec defs (transitive):** `timeTileOffset`, `bwdDLOffset`, `chunk_gate_recurrence_bwd_surface`, `chunk_gate_recurrence_bwd_dacc_step_DI_store_slice`, `bwdDaccStepSpec`, `chunk_gate_recurrence_bwd_dg_step_store_slice`, `bwdDGOffset`, `bwdDGStepSpec`, `chunk_gate_recurrence_bwd_DL_store_slice`, `bwdDLStoreSpec`, `kIndex`, `vIndex`, `dOffset`
 

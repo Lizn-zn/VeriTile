@@ -48,13 +48,8 @@ theorem context_attn_mistral_genuine_output_summary_general
 - `hDM : 0 < DM`
 - `hDMrs : DM ≤ rs`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = context_attn_mistral_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
-        rs hs 1 rs hs 1 rs hs 1 rs hs 1 1 sw BLK DM BLK`
-- `initialState : = s`
 - `fun idx : TileIndex [BLK, DM] => mistralActiveG s B_Seqlen BLK DM idx`
 - `fun idx : TileIndex [BLK, DM] => (Out, mistralOutOffsetG s B_Start_Loc rs hs BLK DM idx)`
-- `expected : = fun idx : TileIndex [BLK, DM] =>
-        mistralGenuineOutValueG s Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM sw idx`
 
 **Closed-form spec defs (transitive):** `context_attn_mistral_fwd_kernel_surface`, `mistralActiveG`, `mistralOutOffsetG`, `mistralGenuineOutValueG`, `seqLen`, `startLoc`, `contextAttnMistralExactFoldMG`, `ctxMistralWindowG`, `ctxMistralBel`, `mistralScore`, `ctxVTileMG`, `mistralActive`, `ctxQTileG`, `ctxKTileMG`, `ctxVTileG`, `ctxKTileG`
 

@@ -36,12 +36,7 @@ theorem quantize_global_python_n1024_bs1024_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        1024 1024 127.0`
-- `initialState : = s`
 - `fun i : Fin 1024 => offset s 1024 i < 1024`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -143,12 +138,7 @@ theorem quantize_global_python_n2048_bs1024_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        2048 1024 127.0`
-- `initialState : = s`
 - `fun i : Fin 1024 => offset s 1024 i < 2048`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -250,12 +240,7 @@ theorem quantize_global_python_n2048_bs2048_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        2048 2048 127.0`
-- `initialState : = s`
 - `fun i : Fin 2048 => offset s 2048 i < 2048`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -357,12 +342,7 @@ theorem quantize_global_python_n3072_bs1024_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        3072 1024 127.0`
-- `initialState : = s`
 - `fun i : Fin 1024 => offset s 1024 i < 3072`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -464,12 +444,7 @@ theorem quantize_global_python_n3072_bs2048_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        3072 2048 127.0`
-- `initialState : = s`
 - `fun i : Fin 2048 => offset s 2048 i < 3072`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -571,12 +546,7 @@ theorem quantize_global_python_n4096_bs1024_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        4096 1024 127.0`
-- `initialState : = s`
 - `fun i : Fin 1024 => offset s 1024 i < 4096`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 
@@ -678,12 +648,7 @@ theorem quantize_global_python_n4096_bs2048_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
-        4096 2048 127.0`
-- `initialState : = s`
 - `fun i : Fin 2048 => offset s 2048 i < 4096`
-- `expected : = fun i =>
-        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i`
 
 **Closed-form spec defs (transitive):** `quantize_global_surface`, `quantize_global_scaled_store_slice`, `offset`, `quantizeGlobalScaledSpec`
 

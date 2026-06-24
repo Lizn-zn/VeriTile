@@ -39,11 +39,7 @@ theorem kldiv_backward_default_compute_correct
 - `hLenPos : 0 < n_cols`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s input_stride i)`
-- `kernel : = kldiv_backward_default input_ptr target_ptr
-        input_stride target_stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i => defaultSpec s target_ptr target_stride i`
 
 **Closed-form spec defs (transitive):** `kldiv_backward_default`, `defaultSpec`, `inOffset`
 
@@ -135,11 +131,7 @@ theorem kldiv_backward_log_target_compute_correct
 - `hLenPos : 0 < n_cols`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s input_stride i)`
-- `kernel : = kldiv_backward_log_target input_ptr target_ptr
-        input_stride target_stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i => logTargetSpec s target_ptr target_stride i`
 
 **Closed-form spec defs (transitive):** `kldiv_backward_log_target`, `logTargetSpec`, `inOffset`
 
@@ -229,12 +221,7 @@ theorem kldiv_forward_default_none_compute_correct
 - `hLenPos : 0 < n_cols`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)`
-- `kernel : = kldiv_forward_default_none y_ptr gt_ptr loss_ptr
-        y_stride gt_stride loss_stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        forwardDefaultSpec s y_ptr gt_ptr y_stride gt_stride i`
 
 **Closed-form spec defs (transitive):** `kldiv_forward_default_none`, `forwardDefaultSpec`, `inOffset`
 
@@ -334,12 +321,7 @@ theorem kldiv_forward_log_target_none_compute_correct
 - `hLenPos : 0 < n_cols`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)`
-- `kernel : = kldiv_forward_log_target_none y_ptr gt_ptr loss_ptr
-        y_stride gt_stride loss_stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        forwardLogTargetSpec s y_ptr gt_ptr y_stride gt_stride i`
 
 **Closed-form spec defs (transitive):** `kldiv_forward_log_target_none`, `forwardLogTargetSpec`, `inOffset`
 

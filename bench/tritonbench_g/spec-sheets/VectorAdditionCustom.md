@@ -36,10 +36,7 @@ theorem add_kernel_output_summary
 - `as bs : Fin BLOCK → ℝ`
 - `h_a : InputLoadedAt s A BLOCK as`
 - `h_b : InputLoadedAt s B BLOCK bs`
-- `kernel : = _add_kernel A B C size BLOCK`
-- `initialState : = s`
 - `fun i : Fin BLOCK => s.pid * BLOCK + i.val < size`
-- `expected : = fun i => as i + bs i`
 
 **Closed-form spec defs (transitive):** `_add_kernel`
 

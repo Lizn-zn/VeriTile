@@ -64,18 +64,8 @@ theorem update_fn_kernel_output_summary
 
 **Assumptions / layout contracts:**
 - `hRegions : p_ptr ≠ exp_avg_ptr`
-- `kernel : = update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements`
-- `expected : = fun i =>
-        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i`
-- `kernel : = update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements`
-- `expected : = fun i =>
-        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `update_fn_kernel`, `pFullSpec`, `expAvgFullSpec`
 

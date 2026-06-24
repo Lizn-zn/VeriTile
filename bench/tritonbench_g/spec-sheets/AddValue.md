@@ -35,10 +35,7 @@ theorem puzzle1_kernel_output_summary
 - `hBlockSize : 0 < BLOCK_SIZE`
 - `xs : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs`
-- `kernel : = puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < N`
-- `expected : = fun i => xs i + value`
 
 **Closed-form spec defs (transitive):** `puzzle1_kernel`
 

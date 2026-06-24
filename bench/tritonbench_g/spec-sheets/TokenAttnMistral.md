@@ -67,19 +67,6 @@ theorem token_attn_mistral_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)`
-- `kernel : = token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
-        B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
-        stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
-        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-        kv_group_num sliding_window BLOCK_DMODEL BLOCK_N`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_DMODEL =>
-        some (Out, outOffset s stride_obs stride_oh stride_od i)`
-- `expected : = fun i : Fin BLOCK_DMODEL =>
-        tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
-          B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
-          stride_ph stride_pbs stride_vbs stride_vh stride_vd kv_group_num
-          sliding_window BLOCK_DMODEL i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `token_attn_mistral_surface`, `tokenAttnMistralClosedForm`, `dIndex`, `tokenAttnMistralPVValue`, `attSeqLen`, `pOffset`, `vActive`, `vOffset`, `attStartLoc`, `startIndex`, `batchSeqLen`, `vLoc`, `reqIdx`
 

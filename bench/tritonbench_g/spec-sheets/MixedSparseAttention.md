@@ -37,14 +37,9 @@ theorem mixed_sparse_attention_python_case1_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
-        32768 8192 64 1 32768 8192 64 1 64 64`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx`
 - `fun idx : TileIndex [64, 64] =>
           (Out, outOffset s 4 32768 8192 64 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 64] =>
-        accStoreValue s Acc Seqlens 4 32768 8192 64 1 64 idx`
 
 **Closed-form spec defs (transitive):** `mixed_sparse_attention_fwd_kernel_surface`, `mixed_sparse_attention_output_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `offZ`, `offH`, `dIndex`, `accOffset`
 
@@ -312,14 +307,9 @@ theorem mixed_sparse_attention_python_case2_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
-        32768 8192 64 1 32768 8192 64 1 32 64`
-- `initialState : = s`
 - `fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx`
 - `fun idx : TileIndex [32, 64] =>
           (Out, outOffset s 4 32768 8192 64 1 32 idx)`
-- `expected : = fun idx : TileIndex [32, 64] =>
-        accStoreValue s Acc Seqlens 4 32768 8192 64 1 32 idx`
 
 **Closed-form spec defs (transitive):** `mixed_sparse_attention_fwd_kernel_surface`, `mixed_sparse_attention_output_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `offZ`, `offH`, `dIndex`, `accOffset`
 
@@ -587,14 +577,9 @@ theorem mixed_sparse_attention_python_case3_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
-        32768 8192 64 1 32768 8192 64 1 64 64`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx`
 - `fun idx : TileIndex [64, 64] =>
           (Out, outOffset s 4 32768 8192 64 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 64] =>
-        accStoreValue s Acc Seqlens 4 32768 8192 64 1 64 idx`
 
 **Closed-form spec defs (transitive):** `mixed_sparse_attention_fwd_kernel_surface`, `mixed_sparse_attention_output_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `offZ`, `offH`, `dIndex`, `accOffset`
 
@@ -862,14 +847,9 @@ theorem mixed_sparse_attention_python_case4_store_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = mixed_sparse_attention_output_store_slice Acc SeqlensAlt Out 4
-        32768 8192 64 1 32768 8192 64 1 64 64`
-- `initialState : = s`
 - `fun idx : TileIndex [64, 64] => active s 4 SeqlensAlt 64 idx`
 - `fun idx : TileIndex [64, 64] =>
           (Out, outOffset s 4 32768 8192 64 1 64 idx)`
-- `expected : = fun idx : TileIndex [64, 64] =>
-        accStoreValue s Acc SeqlensAlt 4 32768 8192 64 1 64 idx`
 
 **Closed-form spec defs (transitive):** `mixed_sparse_attention_fwd_kernel_surface`, `mixed_sparse_attention_output_store_slice`, `active`, `outOffset`, `accStoreValue`, `mIndex`, `seqLen`, `offZ`, `offH`, `dIndex`, `accOffset`
 

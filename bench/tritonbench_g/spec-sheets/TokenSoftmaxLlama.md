@@ -33,13 +33,8 @@ theorem token_softmax_llama_python_case1_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
-        Prob_Out 16 1 16 1 8`
-- `initialState : = s`
 - `fun i : Fin 8 => active s B_Seqlen i`
 - `fun i : Fin 8 => (Prob_Out, probOffset s B_Start_Loc 16 1 i)`
-- `expected : = fun i : Fin 8 =>
-        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 16 1 i`
 
 **Closed-form spec defs (transitive):** `token_softmax_surface`, `token_softmax_final_store_slice`, `active`, `probOffset`, `softmaxStoreValue`, `seqLen`, `tokenIndex`, `softmaxOffset`, `startLoc`
 
@@ -204,13 +199,8 @@ theorem token_softmax_llama_python_case2_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
-        Prob_Out 16 1 16 1 16`
-- `initialState : = s`
 - `fun i : Fin 16 => active s B_Seqlen i`
 - `fun i : Fin 16 => (Prob_Out, probOffset s B_Start_Loc 16 1 i)`
-- `expected : = fun i : Fin 16 =>
-        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 16 1 i`
 
 **Closed-form spec defs (transitive):** `token_softmax_surface`, `token_softmax_final_store_slice`, `active`, `probOffset`, `softmaxStoreValue`, `seqLen`, `tokenIndex`, `softmaxOffset`, `startLoc`
 
@@ -378,13 +368,8 @@ theorem token_softmax_llama_python_case1_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
-        16 1 16 1 8`
-- `initialState : = s`
 - `fun i : Fin 8 => active s B_Seqlen i`
 - `fun i : Fin 8 => (Prob_Out, probOffset s B_Start_Loc 16 1 i)`
-- `expected : = fun i : Fin 8 =>
-        tokenSoftmaxSpec s Logics B_Start_Loc B_Seqlen 16 1 8 i`
 
 **Closed-form spec defs (transitive):** `token_softmax_surface`, `active`, `probOffset`, `tokenSoftmaxSpec`, `seqLen`, `tokenIndex`, `tokenSoftmaxInputTile`, `startLoc`, `logicOffset`
 
@@ -547,13 +532,8 @@ theorem token_softmax_llama_python_case2_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
-        16 1 16 1 16`
-- `initialState : = s`
 - `fun i : Fin 16 => active s B_Seqlen i`
 - `fun i : Fin 16 => (Prob_Out, probOffset s B_Start_Loc 16 1 i)`
-- `expected : = fun i : Fin 16 =>
-        tokenSoftmaxSpec s Logics B_Start_Loc B_Seqlen 16 1 16 i`
 
 **Closed-form spec defs (transitive):** `token_softmax_surface`, `active`, `probOffset`, `tokenSoftmaxSpec`, `seqLen`, `tokenIndex`, `tokenSoftmaxInputTile`, `startLoc`, `logicOffset`
 

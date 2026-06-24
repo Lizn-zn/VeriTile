@@ -103,25 +103,6 @@ theorem fused_recurrent_hgrn_output_summary_general
 - `hFinal : ∀ i : Fin BD,
       s.readMem BHFinal (finalStateOffset s D BD i)
         = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i`
-- `kernel : = fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
-        i_t T D BD`
-- `initialState : = s`
-- `expected : = fun i =>
-        hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD (i_t + 1) i`
-- `kernel : = fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD`
-- `initialState : = s`
-- `expected : = fun i =>
-        if active s D BD i then
-          hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i
-        else 0`
-- `kernel : = fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
-        i_t T D BD`
-- `initialState : = s`
-- `expected : = fun i => bwdDxStepValue s DHPrev DO i_t T D BD i`
-- `kernel : = fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
-        i_t T D BD`
-- `initialState : = s`
-- `expected : = fun i => bwdDgStepValue s DHPrev DO BO i_t T D BD i`
 
 **Closed-form spec defs (transitive):** `bhOffset`, `hgrnStateClosed`, `finalStateOffset`, `fused_recurrent_hgrn_fwd_surface`, `fused_recurrent_hgrn_forward_step_store_slice`, `active`, `outOffset`, `fused_recurrent_hgrn_final_state_store_slice`, `fused_recurrent_hgrn_bwd_dx_step_store_slice`, `bwdDxStepValue`, `fused_recurrent_hgrn_bwd_dg_step_store_slice`, `bwdDgStepValue`, `dIndex`, `stateSeed`, `gVal`, `xVal`
 

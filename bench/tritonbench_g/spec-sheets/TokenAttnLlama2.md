@@ -33,14 +33,9 @@ theorem token_attn_llama2_python_case1_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_attn_llama2_score_store_slice AttValue B_Start_Loc
-        B_Seqlen Att_Out 64 256 64 256 64 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        attStoreValue s AttValue B_Start_Loc B_Seqlen 64 256 64 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `token_attn_llama2_score_store_slice`, `active`, `outOffset`, `attStoreValue`, `seqLen`, `blockOffset`, `startLoc`, `attValueOffset`
 
@@ -231,14 +226,9 @@ theorem token_attn_llama2_python_case2_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_attn_llama2_score_store_slice AttValue B_Start_Loc
-        B_Seqlen Att_Out 32 128 32 128 32 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 32 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 128 32 32 i)`
-- `expected : = fun i : Fin 32 =>
-        attStoreValue s AttValue B_Start_Loc B_Seqlen 32 128 32 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `token_attn_llama2_score_store_slice`, `active`, `outOffset`, `attStoreValue`, `seqLen`, `blockOffset`, `startLoc`, `attValueOffset`
 
@@ -429,14 +419,9 @@ theorem token_attn_llama2_python_case3_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_attn_llama2_score_store_slice AttValue B_Start_Loc
-        B_Seqlen Att_Out 64 256 64 256 64 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        attStoreValue s AttValue B_Start_Loc B_Seqlen 64 256 64 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `token_attn_llama2_score_store_slice`, `active`, `outOffset`, `attStoreValue`, `seqLen`, `blockOffset`, `startLoc`, `attValueOffset`
 
@@ -627,14 +612,9 @@ theorem token_attn_llama2_python_case4_output_surface_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = token_attn_llama2_score_store_slice AttValue B_Start_Loc
-        B_Seqlen Att_Out 64 256 64 256 64 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        attStoreValue s AttValue B_Start_Loc B_Seqlen 64 256 64 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `token_attn_llama2_score_store_slice`, `active`, `outOffset`, `attStoreValue`, `seqLen`, `blockOffset`, `startLoc`, `attValueOffset`
 
@@ -821,15 +801,9 @@ theorem token_attn_llama2_python_case1_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
-        B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        tokenAttnLlama2ClosedForm s Q K sm_scale B_Loc B_Start_Loc
-          B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `active`, `outOffset`, `tokenAttnLlama2ClosedForm`, `seqLen`, `blockOffset`, `startLoc`, `blockActive`, `tokenAttnLlama2DotScore`, `qOffset`, `kOffset`, `kLoc`
 
@@ -1054,15 +1028,9 @@ theorem token_attn_llama2_python_case2_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
-        B_Seqlen Att_Out 32 64 1 8192 2048 32 8192 2048 32 128 32 1 32 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 32 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 128 32 32 i)`
-- `expected : = fun i : Fin 32 =>
-        tokenAttnLlama2ClosedForm s Q K sm_scale B_Loc B_Start_Loc
-          B_Seqlen Att_Out 32 64 1 8192 2048 32 8192 2048 32 128 32 1 32 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `active`, `outOffset`, `tokenAttnLlama2ClosedForm`, `seqLen`, `blockOffset`, `startLoc`, `blockActive`, `tokenAttnLlama2DotScore`, `qOffset`, `kOffset`, `kLoc`
 
@@ -1287,15 +1255,9 @@ theorem token_attn_llama2_python_case3_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
-        B_Seqlen Att_Out 64 64 1 16384 4096 64 16384 4096 64 256 64 1 64 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        tokenAttnLlama2ClosedForm s Q K sm_scale B_Loc B_Start_Loc
-          B_Seqlen Att_Out 64 64 1 16384 4096 64 16384 4096 64 256 64 1 64 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `active`, `outOffset`, `tokenAttnLlama2ClosedForm`, `seqLen`, `blockOffset`, `startLoc`, `blockActive`, `tokenAttnLlama2DotScore`, `qOffset`, `kOffset`, `kLoc`
 
@@ -1520,15 +1482,9 @@ theorem token_attn_llama2_python_case4_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
-        B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32`
-- `initialState : = s`
 - `fun i : Fin 32 => active s B_Seqlen 64 32 i`
 - `fun i : Fin 32 =>
           (Att_Out, outOffset s B_Start_Loc 256 64 32 i)`
-- `expected : = fun i : Fin 32 =>
-        tokenAttnLlama2ClosedForm s Q K sm_scale B_Loc B_Start_Loc
-          B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32 i`
 
 **Closed-form spec defs (transitive):** `token_attn_llama2_surface`, `active`, `outOffset`, `tokenAttnLlama2ClosedForm`, `seqLen`, `blockOffset`, `startLoc`, `blockActive`, `tokenAttnLlama2DotScore`, `qOffset`, `kOffset`, `kLoc`
 

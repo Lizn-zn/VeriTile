@@ -37,15 +37,6 @@ theorem softmax_reducev_final_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)`
-- `kernel : = softmax_reducev_final_store_slice Acc ESum Out
-        stride_acc_bs stride_acc_h stride_acc_d stride_es_bs stride_es_h
-        stride_obs stride_oh stride_od BLOCK_DMODEL`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_DMODEL =>
-        some (Out, outOffset s stride_obs stride_oh stride_od i)`
-- `expected : = fun i =>
-        softmaxReducevFinalSpec s Acc ESum stride_acc_bs stride_acc_h
-          stride_acc_d stride_es_bs stride_es_h i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `softmax_reducev_final_store_slice`, `softmaxReducevFinalSpec`, `dIndex`, `accOffset`, `eSumOffset`
 
@@ -168,13 +159,6 @@ theorem softmax_reducev_genuine_output_compute_correct
 - `hseqpos : 0 < srSeqLen s BSeqLen.cast`
 - `hM : srRunningMax (srQkF s Logics BStartLoc.cast BSeqLen.cast) (srVF s V BLoc BSeqLen.cast)
       (srSeqLen s BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)`
-- `kernel : = softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)`
-- `initialState : = s`
-- `write : = fun d : Fin 64 => some (Out, outOffset s 128 64 1 d)`
-- `expected : = fun d : Fin 64 =>
-        softmaxReducevWeightedSum (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
-          (srVF s V BLoc BSeqLen.cast) d`
 
 **Closed-form spec defs (transitive):** `srSeqLen`, `srRunningMax`, `srQkF`, `srVF`, `softmax_reducev_surface`, `outOffset`, `softmaxReducevWeightedSum`, `srKeysUpto`, `srQk`, `srV`, `dIndex`, `softmaxReducevAcc`, `softmaxReducevDenom`, `srStartLoc`, `srVIndex`, `softmaxWeight`, `srOffBLoc`
 
@@ -484,13 +468,6 @@ theorem softmax_reducev_genuine_output_compute_correct_general
 - `hM : srRunningMax (srQkFG s Logics BStartLoc.cast BSeqLen.cast slh slb)
       (srVFG s V BLoc BSeqLen.cast mil sb ss svbs svh svd BLOCK_DMODEL)
       (srSeqLen s BSeqLen.cast) (⟨0, hD⟩ : Fin BLOCK_DMODEL) = (mr : WithBot ℝ)`
-- `kernel : = softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-        mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index`
-- `initialState : = s`
-- `write : = fun d : Fin BLOCK_DMODEL => some (Out, outOffsetG s sob soh sod d)`
-- `expected : = fun d : Fin BLOCK_DMODEL =>
-        softmaxReducevWeightedSum (srQkFG s Logics BStartLoc.cast BSeqLen.cast slh slb) mr
-          (srVFG s V BLoc BSeqLen.cast mil sb ss svbs svh svd BLOCK_DMODEL) d`
 
 **Closed-form spec defs (transitive):** `srSeqLen`, `outOffsetG`, `srRunningMax`, `srQkFG`, `srVFG`, `softmax_reducev_surface`, `softmaxReducevWeightedSum`, `srKeysUpto`, `srQkG`, `srVG`, `softmaxReducevAcc`, `softmaxReducevDenom`, `srStartLoc`, `srVIndexG`, `softmaxWeight`, `srOffBLocG`
 

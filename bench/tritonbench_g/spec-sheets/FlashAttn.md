@@ -41,18 +41,6 @@ theorem flash_attn_python_case1_store_summary
         lStoreSpec s Max Denom 128 1 128 1 128 i))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = flash_attn_output_store_slice OutBuffer O
-        8192 64 1 8192 64 1 128 64`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx)`
-- `kernel : = flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128`
-- `initialState : = s`
-- `write : = fun i : Fin 128 => some (L, lOffset s 128 128 i)`
-- `expected : = fun i =>
-        lStoreSpec s Max Denom 128 1 128 1 128 i`
-
 **Closed-form spec defs (transitive):** `flash_attn_fwd_kernel_surface`, `flash_attn_output_store_slice`, `outOffset`, `bufferOffset`, `flash_attn_l_store_slice`, `lOffset`, `lStoreSpec`, `mIndex`, `dIndex`, `maxOffset`, `denomOffset`
 
 <details><summary><code>flash_attn_fwd_kernel_surface</code></summary>
@@ -329,18 +317,6 @@ theorem flash_attn_python_case2_store_summary
       (expected := fun i =>
         lStoreSpec s Max Denom 128 1 128 1 128 i))
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = flash_attn_output_store_slice OutBuffer O
-        8192 64 1 8192 64 1 128 64`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx)`
-- `kernel : = flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128`
-- `initialState : = s`
-- `write : = fun i : Fin 128 => some (L, lOffset s 128 128 i)`
-- `expected : = fun i =>
-        lStoreSpec s Max Denom 128 1 128 1 128 i`
 
 **Closed-form spec defs (transitive):** `flash_attn_fwd_kernel_surface`, `flash_attn_output_store_slice`, `outOffset`, `bufferOffset`, `flash_attn_l_store_slice`, `lOffset`, `lStoreSpec`, `mIndex`, `dIndex`, `maxOffset`, `denomOffset`
 

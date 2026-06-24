@@ -36,11 +36,7 @@ theorem layer_norm_fwd_rms_one_block_y_compute_correct
 - `hWRstd : W ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_rms_one_block X Y W Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => rmsYSpec s X W stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_rms_one_block`, `rmsYSpec`, `xOffset`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`
 
@@ -185,12 +181,7 @@ theorem layer_norm_fwd_rms_bias_one_block_y_compute_correct
 - `hBRstd : B ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_rms_bias_one_block X Y W B Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        rmsBiasYSpec s X W B stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_rms_bias_one_block`, `rmsBiasYSpec`, `xOffset`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`
 
@@ -329,12 +320,6 @@ theorem layer_norm_fwd_rms_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_rms_one_block X Y W Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_rms_one_block`, `rmsInvVarFullSpec`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`, `xOffset`
 
@@ -462,12 +447,6 @@ theorem layer_norm_fwd_rms_bias_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_rms_bias_one_block X Y W B Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_rms_bias_one_block`, `rmsInvVarFullSpec`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`, `xOffset`
 
@@ -600,11 +579,7 @@ theorem layer_norm_fwd_plain_one_block_y_compute_correct
 - `hWRstd : W ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_plain_one_block X Y W Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => plainYSpec s X W stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_plain_one_block`, `plainYSpec`, `xOffset`, `plainMeanCarrier`, `plainInvCarrier`, `plainInputTile`, `plainVarCarrier`, `plainXbarTile`
 
@@ -777,12 +752,7 @@ theorem layer_norm_fwd_plain_bias_one_block_y_compute_correct
 - `hBRstd : B ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        plainBiasYSpec s X W B stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_plain_bias_one_block`, `plainBiasYSpec`, `xOffset`, `plainMeanCarrier`, `plainInvCarrier`, `plainInputTile`, `plainVarCarrier`, `plainXbarTile`
 
@@ -955,13 +925,7 @@ theorem layer_norm_fwd_plain_residual_one_block_y_compute_correct
 - `hWRstd : W ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
-        Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        plainResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
-          BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_plain_residual_one_block`, `plainResidualYSpec`, `plainResidualInputTile`, `plainResidualMeanCarrier`, `plainResidualInvCarrier`, `xOffset`, `resOffset`, `plainResidualVarCarrier`, `plainResidualXbarTile`
 
@@ -1149,13 +1113,6 @@ theorem layer_norm_fwd_plain_residual_one_block_mean_compute_correct
 **Assumptions / layout contracts:**
 - `hMeanRstd : Mean ≠ Rstd`
 - `hMeanY : Mean ≠ Y`
-- `kernel : = layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
-        Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, s.pid)`
-- `expected : = fun _ =>
-        plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_residual_one_block`, `plainResidualMeanFullSpec`, `plainResidualMeanCarrier`, `plainResidualInputTile`, `xOffset`, `resOffset`
 
@@ -1276,13 +1233,6 @@ theorem layer_norm_fwd_plain_residual_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
-        Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_residual_one_block`, `plainResidualInvVarFullSpec`, `plainResidualInvCarrier`, `plainResidualVarCarrier`, `plainResidualXbarTile`, `plainResidualInputTile`, `plainResidualMeanCarrier`, `xOffset`, `resOffset`
 
@@ -1459,13 +1409,7 @@ theorem layer_norm_fwd_rms_residual_one_block_y_compute_correct
 - `hWRstd : W ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_rms_residual_one_block X RESIDUAL Y W Rstd
-        stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        rmsResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
-          BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_rms_residual_one_block`, `rmsResidualYSpec`, `plainResidualInputTile`, `rmsResidualInvCarrier`, `xOffset`, `resOffset`, `rmsResidualVarCarrier`, `rmsResidualXbarTile`
 
@@ -1629,13 +1573,6 @@ theorem layer_norm_fwd_rms_residual_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_rms_residual_one_block X RESIDUAL Y W Rstd
-        stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_rms_residual_one_block`, `rmsResidualInvVarFullSpec`, `rmsResidualInvCarrier`, `rmsResidualVarCarrier`, `rmsResidualXbarTile`, `plainResidualInputTile`, `xOffset`, `resOffset`
 
@@ -1795,13 +1732,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_y_compute_correct
 - `hBRstd : B ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_rms_residual_bias_one_block X RESIDUAL Y W
-        B Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        rmsResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row N
-          BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_rms_residual_bias_one_block`, `rmsResidualBiasYSpec`, `plainResidualInputTile`, `rmsResidualInvCarrier`, `xOffset`, `resOffset`, `rmsResidualVarCarrier`, `rmsResidualXbarTile`
 
@@ -1968,13 +1899,6 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_rms_residual_bias_one_block X RESIDUAL Y W
-        B Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_rms_residual_bias_one_block`, `rmsResidualInvVarFullSpec`, `rmsResidualInvCarrier`, `rmsResidualVarCarrier`, `rmsResidualXbarTile`, `plainResidualInputTile`, `xOffset`, `resOffset`
 
@@ -2141,13 +2065,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_y_compute_correct
 - `hBRstd : B ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
-        W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        plainResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row N
-          BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_plain_residual_bias_one_block`, `plainResidualBiasYSpec`, `plainResidualInputTile`, `plainResidualMeanCarrier`, `plainResidualInvCarrier`, `xOffset`, `resOffset`, `plainResidualVarCarrier`, `plainResidualXbarTile`
 
@@ -2337,13 +2255,6 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_mean_compute_correct
 **Assumptions / layout contracts:**
 - `hMeanRstd : Mean ≠ Rstd`
 - `hMeanY : Mean ≠ Y`
-- `kernel : = layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
-        W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, s.pid)`
-- `expected : = fun _ =>
-        plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_residual_bias_one_block`, `plainResidualMeanFullSpec`, `plainResidualMeanCarrier`, `plainResidualInputTile`, `xOffset`, `resOffset`
 
@@ -2464,13 +2375,6 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
-        W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
-          BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_residual_bias_one_block`, `plainResidualInvVarFullSpec`, `plainResidualInvCarrier`, `plainResidualVarCarrier`, `plainResidualXbarTile`, `plainResidualInputTile`, `plainResidualMeanCarrier`, `xOffset`, `resOffset`
 
@@ -2640,12 +2544,6 @@ theorem layer_norm_fwd_plain_one_block_mean_compute_correct
 **Assumptions / layout contracts:**
 - `hMeanRstd : Mean ≠ Rstd`
 - `hMeanY : Mean ≠ Y`
-- `kernel : = layer_norm_fwd_plain_one_block X Y W Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, s.pid)`
-- `expected : = fun _ =>
-        plainMeanFullSpec s X stride_x_row N BLOCK_N`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_one_block`, `plainMeanFullSpec`, `plainMeanCarrier`, `plainInputTile`, `xOffset`
 
@@ -2744,12 +2642,6 @@ theorem layer_norm_fwd_plain_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_plain_one_block X Y W Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        plainInvVarFullSpec s X stride_x_row N BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_one_block`, `plainInvVarFullSpec`, `plainInvCarrier`, `plainVarCarrier`, `plainXbarTile`, `plainInputTile`, `plainMeanCarrier`, `xOffset`
 
@@ -2894,12 +2786,6 @@ theorem layer_norm_fwd_plain_bias_one_block_mean_compute_correct
 **Assumptions / layout contracts:**
 - `hMeanRstd : Mean ≠ Rstd`
 - `hMeanY : Mean ≠ Y`
-- `kernel : = layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, s.pid)`
-- `expected : = fun _ =>
-        plainMeanFullSpec s X stride_x_row N BLOCK_N`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_bias_one_block`, `plainMeanFullSpec`, `plainMeanCarrier`, `plainInputTile`, `xOffset`
 
@@ -2999,12 +2885,6 @@ theorem layer_norm_fwd_plain_bias_one_block_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
-        stride_x_row stride_y_row N BLOCK_N eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        plainInvVarFullSpec s X stride_x_row N BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_plain_bias_one_block`, `plainInvVarFullSpec`, `plainInvCarrier`, `plainVarCarrier`, `plainXbarTile`, `plainInputTile`, `plainMeanCarrier`, `xOffset`
 
@@ -3141,12 +3021,6 @@ theorem layer_norm_ops_fwd_mean_store_slice_compute_correct
       (expected := fun _ => meanStoreSpec s MeanPre)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_fwd_mean_store_slice MeanPre Mean`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, meanRowOffset s)`
-- `expected : = fun _ => meanStoreSpec s MeanPre`
-
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_mean_store_slice`, `meanRowOffset`, `meanStoreSpec`
 
 <details><summary><code>layer_norm_ops_fwd_mean_store_slice</code></summary>
@@ -3193,12 +3067,6 @@ theorem layer_norm_ops_fwd_rstd_store_slice_compute_correct
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
       (expected := fun _ => rstdStoreSpec s RstdPre)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, meanRowOffset s)`
-- `expected : = fun _ => rstdStoreSpec s RstdPre`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_rstd_store_slice`, `meanRowOffset`, `rstdStoreSpec`
 
@@ -3255,12 +3123,7 @@ theorem layer_norm_ops_bwd_row_vector_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_out_row i)`
-- `kernel : = layer_norm_ops_bwd_row_vector_store_slice ValuePre Out
-        stride_out_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdRowVectorStoreSpec s ValuePre stride_out_row i`
 
 **Closed-form spec defs (transitive):** `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3410,12 +3273,7 @@ theorem layer_norm_ops_fwd_residual_out_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdResidualOutOffset s stride_res_out_row i)`
-- `kernel : = layer_norm_ops_fwd_residual_out_store_slice ValuePre
-        RESIDUAL_OUT stride_res_out_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        fwdResidualOutStoreSpec s ValuePre stride_res_out_row i`
 
 **Closed-form spec defs (transitive):** `fwdResidualOutOffset`, `layer_norm_ops_fwd_residual_out_store_slice`, `fwdResidualOutStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3518,11 +3376,7 @@ theorem layer_norm_ops_fwd_y_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => fwdYStoreSpec s ValuePre stride_y_row i`
 
 **Closed-form spec defs (transitive):** `fwdYOffset`, `layer_norm_ops_fwd_y_store_slice`, `fwdYStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3633,11 +3487,7 @@ theorem layer_norm_ops_fwd_bias_y_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => fwdYStoreSpec s ValuePre stride_y_row i`
 
 **Closed-form spec defs (transitive):** `fwdYOffset`, `layer_norm_ops_fwd_y_store_slice`, `fwdYStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3745,11 +3595,7 @@ theorem layer_norm_ops_fwd_residual_y_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => fwdYStoreSpec s ValuePre stride_y_row i`
 
 **Closed-form spec defs (transitive):** `fwdYOffset`, `layer_norm_ops_fwd_y_store_slice`, `fwdYStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3857,11 +3703,7 @@ theorem layer_norm_ops_fwd_rms_bias_y_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => fwdYStoreSpec s ValuePre stride_y_row i`
 
 **Closed-form spec defs (transitive):** `fwdYOffset`, `layer_norm_ops_fwd_y_store_slice`, `fwdYStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -3971,11 +3813,7 @@ theorem layer_norm_ops_fwd_residual_bias_y_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => fwdYStoreSpec s ValuePre stride_y_row i`
 
 **Closed-form spec defs (transitive):** `fwdYOffset`, `layer_norm_ops_fwd_y_store_slice`, `fwdYStoreSpec`, `bwdRowVectorOffset`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorStoreSpec`
 
@@ -4073,10 +3911,7 @@ theorem layer_norm_ops_bwd_param_grad_store_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)`
-- `kernel : = layer_norm_ops_bwd_param_grad_store_slice GradPre Out N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => bwdParamGradStoreSpec s GradPre N i`
 
 **Closed-form spec defs (transitive):** `bwdParamGradOffset`, `layer_norm_ops_bwd_param_grad_store_slice`, `bwdParamGradStoreSpec`
 
@@ -4197,12 +4032,7 @@ theorem layer_norm_ops_bwd_rms_one_row_dw_compute_correct
 - `hDWDX : DW ≠ DX`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDWOffset s N i)`
-- `kernel : = layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
-        stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdRmsDWSpec s X DY Rstd stride_x_row stride_dy_row N BLOCK_N i`
 
 **Closed-form spec defs (transitive):** `bwdRmsDWOffset`, `layer_norm_ops_bwd_rms_one_row`, `bwdRmsDWSpec`, `bwdRmsDYTile`, `bwdRmsXhatTile`, `bwdRmsDYOffset`, `bwdRmsXTile`, `bwdRmsXOffset`
 
@@ -4340,11 +4170,7 @@ theorem layer_norm_ops_bwd_bias_db_one_row_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)`
-- `kernel : = layer_norm_ops_bwd_bias_db_one_row DY DB
-        stride_dy_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => bwdBiasDBSpec s DY stride_dy_row i`
 
 **Closed-form spec defs (transitive):** `bwdParamGradOffset`, `layer_norm_ops_bwd_bias_db_one_row`, `bwdBiasDBSpec`, `bwdRmsDYOffset`
 
@@ -4426,13 +4252,7 @@ theorem layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
 - `hDWDB : DW ≠ DB`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)`
-- `kernel : = layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
-        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row
-          N BLOCK_N i`
 
 **Closed-form spec defs (transitive):** `bwdParamGradOffset`, `layer_norm_ops_bwd_plain_bias_one_row`, `bwdPlainBiasDWSpec`, `bwdRmsDYTile`, `bwdPlainXhatTile`, `bwdRmsDYOffset`, `bwdRmsXOffset`
 
@@ -4576,11 +4396,7 @@ theorem layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
 - `hDBDW : DB ≠ DW`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)`
-- `kernel : = layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
-        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => bwdBiasDBSpec s DY stride_dy_row i`
 
 **Closed-form spec defs (transitive):** `bwdParamGradOffset`, `layer_norm_ops_bwd_plain_bias_one_row`, `bwdBiasDBSpec`, `bwdRmsDYOffset`
 
@@ -4676,13 +4492,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dx_compute_correct
 - `hDXDresIn : DX ≠ DRESIDUAL_IN`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)`
-- `kernel : = layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row
-        N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i`
 
 **Closed-form spec defs (transitive):** `bwdRmsDXOffset`, `layer_norm_ops_bwd_residual_add_store_slice`, `bwdResidualAddSpec`, `bwdDResidualOffset`
 
@@ -4768,13 +4578,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_compute_correct
 - `hDresInDX : DRESIDUAL_IN ≠ DX`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdDResidualInOffset s stride_dres_in_row i)`
-- `kernel : = layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row
-        N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i`
 
 **Closed-form spec defs (transitive):** `bwdDResidualInOffset`, `layer_norm_ops_bwd_residual_add_store_slice`, `bwdResidualAddSpec`, `bwdRmsDXOffset`, `bwdDResidualOffset`
 
@@ -4866,12 +4670,7 @@ theorem layer_norm_ops_bwd_recompute_y_bias_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
-        stride_xhat_row stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdRecomputeYBiasSpec s Xhat W B stride_xhat_row i`
 
 **Closed-form spec defs (transitive):** `bwdRowVectorOffset`, `layer_norm_ops_bwd_recompute_y_bias_slice`, `bwdRecomputeYBiasSpec`, `bwdRecomputeXhatOffset`
 
@@ -4955,12 +4754,7 @@ theorem layer_norm_ops_bwd_recompute_y_no_bias_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_y_row i)`
-- `kernel : = layer_norm_ops_bwd_recompute_y_no_bias_slice Xhat W Y
-        stride_xhat_row stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdRecomputeYNoBiasSpec s Xhat W stride_xhat_row i`
 
 **Closed-form spec defs (transitive):** `bwdRowVectorOffset`, `layer_norm_ops_bwd_recompute_y_no_bias_slice`, `bwdRecomputeYNoBiasSpec`, `bwdRecomputeXhatOffset`
 
@@ -5031,15 +4825,6 @@ theorem layer_norm_ops_bwd_c1_reduction_slice_compute_correct
         bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row
           N BLOCK_N)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        stride_xhat_row stride_dy_row N BLOCK_N`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (C1, s.pid)`
-- `expected : = fun _ =>
-        bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row
-          N BLOCK_N`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c1_reduction_slice`, `bwdC1ReductionSpec`, `bwdRecomputeXhatOffset`, `bwdRmsWdyTile`, `bwdRmsWTile`, `bwdRmsDYTile`, `bwdRmsDYOffset`
 
@@ -5162,14 +4947,6 @@ theorem layer_norm_ops_bwd_c2_reduction_slice_compute_correct
         bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        stride_dy_row N BLOCK_N`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (C2, s.pid)`
-- `expected : = fun _ =>
-        bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N`
-
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c2_reduction_slice`, `bwdC2ReductionSpec`, `bwdRmsWdyTile`, `bwdRmsWTile`, `bwdRmsDYTile`, `bwdRmsDYOffset`
 
 <details><summary><code>layer_norm_ops_bwd_c2_reduction_slice</code></summary>
@@ -5273,12 +5050,7 @@ theorem layer_norm_ops_bwd_rms_dx_from_c1_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)`
-- `kernel : = layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd
-        C1 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 stride_xhat_row stride_dy_row i`
 
 **Closed-form spec defs (transitive):** `bwdRmsDXOffset`, `layer_norm_ops_bwd_rms_dx_from_c1_slice`, `bwdRmsDXFromC1Spec`, `bwdRmsDYOffset`, `bwdRecomputeXhatOffset`
 
@@ -5376,13 +5148,7 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)`
-- `kernel : = layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY
-        Rstd C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2
-          stride_xhat_row stride_dy_row i`
 
 **Closed-form spec defs (transitive):** `bwdRmsDXOffset`, `layer_norm_ops_bwd_plain_dx_from_c1_c2_slice`, `bwdPlainDXFromC1C2Spec`, `bwdRmsDYOffset`, `bwdRecomputeXhatOffset`
 
@@ -5491,20 +5257,7 @@ theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        fwdYStoreSpec s ValuePre stride_y_row i`
-- `kernel : = layer_norm_ops_fwd_mean_store_slice MeanPre Mean`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, meanRowOffset s)`
-- `expected : = fun _ => meanStoreSpec s MeanPre`
-- `kernel : = layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, meanRowOffset s)`
-- `expected : = fun _ => rstdStoreSpec s RstdPre`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_mean_store_slice`, `meanRowOffset`, `meanStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
@@ -5669,16 +5422,7 @@ theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        fwdYStoreSpec s ValuePre stride_y_row i`
-- `kernel : = layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, meanRowOffset s)`
-- `expected : = fun _ => rstdStoreSpec s RstdPre`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `meanRowOffset`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
@@ -5835,26 +5579,8 @@ theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = layer_norm_ops_fwd_residual_out_store_slice ResidualPre
-        RESIDUAL_OUT stride_res_out_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        fwdResidualOutStoreSpec s ResidualPre stride_res_out_row i`
-- `kernel : = layer_norm_ops_fwd_y_store_slice ValuePre Y
-        stride_y_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        fwdYStoreSpec s ValuePre stride_y_row i`
-- `kernel : = layer_norm_ops_fwd_mean_store_slice MeanPre Mean`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, meanRowOffset s)`
-- `expected : = fun _ => meanStoreSpec s MeanPre`
-- `kernel : = layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, meanRowOffset s)`
-- `expected : = fun _ => rstdStoreSpec s RstdPre`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_residual_out_store_slice`, `fwdResidualOutOffset`, `fwdResidualOutStoreSpec`, `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_mean_store_slice`, `meanRowOffset`, `meanStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
@@ -6071,24 +5797,8 @@ theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
 
 **Assumptions / layout contracts:**
 - `hDWDX : DW ≠ DX`
-- `kernel : = layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        stride_xhat_row stride_dy_row N BLOCK_N`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (C1, s.pid)`
-- `expected : = fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N`
-- `kernel : = layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
-        stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 stride_xhat_row stride_dy_row i`
-- `kernel : = layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
-        stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdRmsDWSpec s X DY Rstd stride_x_row stride_dy_row N BLOCK_N i`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c1_reduction_slice`, `bwdC1ReductionSpec`, `layer_norm_ops_bwd_rms_dx_from_c1_slice`, `bwdRmsDXOffset`, `bwdRmsDXFromC1Spec`, `layer_norm_ops_bwd_rms_one_row`, `bwdRmsDWOffset`, `bwdRmsDWSpec`, `bwdRecomputeXhatOffset`, `bwdRmsWdyTile`, `bwdRmsDYOffset`, `bwdRmsDYTile`, `bwdRmsXhatTile`, `bwdRmsWTile`, `bwdRmsXTile`, `bwdRmsXOffset`
 
@@ -6405,38 +6115,9 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
 - `hDWDB : DW ≠ DB`
 - `hDBDX : DB ≠ DX`
 - `hDBDW : DB ≠ DW`
-- `kernel : = layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
-        stride_xhat_row stride_dy_row N BLOCK_N`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (C1, s.pid)`
-- `expected : = fun _ : PUnit =>
-        bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N`
-- `kernel : = layer_norm_ops_bwd_c2_reduction_slice W DY C2
-        stride_dy_row N BLOCK_N`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (C2, s.pid)`
-- `expected : = fun _ : PUnit =>
-        bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N`
-- `kernel : = layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
-        C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 stride_xhat_row
-          stride_dy_row i`
-- `kernel : = layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row N
-          BLOCK_N i`
-- `kernel : = layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
-        stride_x_row stride_dy_row stride_dx_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdBiasDBSpec s DY stride_dy_row i`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c1_reduction_slice`, `bwdC1ReductionSpec`, `layer_norm_ops_bwd_c2_reduction_slice`, `bwdC2ReductionSpec`, `layer_norm_ops_bwd_plain_dx_from_c1_c2_slice`, `bwdRmsDXOffset`, `bwdPlainDXFromC1C2Spec`, `layer_norm_ops_bwd_plain_bias_one_row`, `bwdParamGradOffset`, `bwdPlainBiasDWSpec`, `bwdBiasDBSpec`, `bwdRecomputeXhatOffset`, `bwdRmsWdyTile`, `bwdRmsDYOffset`, `bwdRmsDYTile`, `bwdPlainXhatTile`, `bwdRmsWTile`, `bwdRmsXOffset`
 
@@ -6768,18 +6449,8 @@ theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
 **Assumptions / layout contracts:**
 - `hDXDresIn : DX ≠ DRESIDUAL_IN`
 - `hDresInDX : DRESIDUAL_IN ≠ DX`
-- `kernel : = layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i`
-- `kernel : = layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
-        DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i : Fin BLOCK_N =>
-        bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_residual_add_store_slice`, `bwdRmsDXOffset`, `bwdResidualAddSpec`, `bwdDResidualInOffset`, `bwdDResidualOffset`
 
@@ -6882,12 +6553,7 @@ theorem layer_norm_fwd_1pass_surface_rms_only_y_compute_correct
 - `hWRstd : W ≠ Rstd`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)`
-- `kernel : = layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
-        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
-        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => rmsYSpec s X W stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_fwd_1pass_surface`, `rmsYSpec`, `xOffset`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`
 
@@ -7051,13 +6717,6 @@ theorem layer_norm_fwd_1pass_surface_rms_only_rstd_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRstdY : Rstd ≠ Y`
-- `kernel : = layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
-        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
-        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Rstd, s.pid)`
-- `expected : = fun _ =>
-        rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps`
 
 **Closed-form spec defs (transitive):** `layer_norm_fwd_1pass_surface`, `rmsInvVarFullSpec`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`, `xOffset`
 
@@ -7218,13 +6877,7 @@ theorem layer_norm_bwd_surface_zero_rows_db_zero_compute_correct
 
 **Assumptions / layout contracts:**
 - `hDBDW : DB ≠ DW`
-- `kernel : = layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
-        Bool.true Bool.false Bool.false Bool.true Bool.false`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun _ : Fin BLOCK_N => (0.0 : ℝ)`
 
 **Closed-form spec defs (transitive):** `layer_norm_bwd_surface`
 
@@ -7361,13 +7014,7 @@ theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
-        Bool.true Bool.false Bool.false Bool.false Bool.false`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun _ : Fin BLOCK_N => (0.0 : ℝ)`
 
 **Closed-form spec defs (transitive):** `layer_norm_bwd_surface`
 

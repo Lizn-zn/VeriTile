@@ -105,34 +105,10 @@ theorem rope_embedding_output_summary_general
       (fun i : Fin BLOCK_SIZE => qFirstOffset sK Q_row_stride head_dim i)`
 - `hKSecondInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => qSecondOffset sK Q_row_stride head_dim i)`
-- `kernel : = rope_embedding_q_first_half Q cos sin Q_row_stride
-        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE`
-- `initialState : = sQ`
 - `fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads BLOCK_SIZE i`
-- `expected : = fun i =>
-        ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride sin_row_stride
-          seqlen head_dim BLOCK_SIZE i`
-- `kernel : = rope_embedding_q_second_half Q cos sin Q_row_stride
-        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE`
-- `initialState : = sQ`
 - `fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads BLOCK_SIZE i`
-- `expected : = fun i =>
-        ropeSecondSpec sQ Q cos sin Q_row_stride cos_row_stride sin_row_stride
-          seqlen head_dim BLOCK_SIZE i`
-- `kernel : = rope_embedding_q_first_half K cos sin Q_row_stride
-        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE`
-- `initialState : = sK`
 - `fun i : Fin BLOCK_SIZE => active sK head_dim n_heads BLOCK_SIZE i`
-- `expected : = fun i =>
-        ropeFirstSpec sK K cos sin Q_row_stride cos_row_stride sin_row_stride
-          seqlen head_dim BLOCK_SIZE i`
-- `kernel : = rope_embedding_q_second_half K cos sin Q_row_stride
-        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE`
-- `initialState : = sK`
 - `fun i : Fin BLOCK_SIZE => active sK head_dim n_heads BLOCK_SIZE i`
-- `expected : = fun i =>
-        ropeSecondSpec sK K cos sin Q_row_stride cos_row_stride sin_row_stride
-          seqlen head_dim BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `qFirstOffset`, `qSecondOffset`, `rope_embedding_surface`, `rope_embedding_q_first_half`, `active`, `ropeFirstSpec`, `rope_embedding_q_second_half`, `ropeSecondSpec`, `headStart`, `colIndex`, `cosOffset`, `sinOffset`, `rowMod`
 

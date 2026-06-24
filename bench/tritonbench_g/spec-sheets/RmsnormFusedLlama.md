@@ -42,8 +42,6 @@ theorem rms_norm_fwd_fused_llama_output_summary
 - `hNle : N ≤ BLOCK_SIZE`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride i)`
-- `kernel : = rms_norm_fwd_fused_llama X Y W stride N BLOCK_SIZE eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < N`
 
 **Closed-form spec defs (transitive):** `yOffset`, `rms_norm_fwd_fused_llama`, `rmsnormSpec`, `rmsnormCarrierSpec`, `xOffset`, `rmsInvCarrier`, `rmsVarCarrier`, `rmsInputTile`

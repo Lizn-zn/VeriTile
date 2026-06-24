@@ -33,11 +33,7 @@ theorem dropout_kernel_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = dropout_kernel x_ptr x_keep_ptr output_ptr
-        n_elements p BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => dropoutOffset s BLOCK_SIZE i < n_elements`
-- `expected : = fun i => dropoutSpec s x_ptr x_keep_ptr p BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `dropout_kernel`, `dropoutOffset`, `dropoutSpec`
 

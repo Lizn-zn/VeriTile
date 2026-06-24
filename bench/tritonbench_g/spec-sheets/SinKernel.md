@@ -35,10 +35,7 @@ theorem kernel_function_output_summary
 - `hBlockSize : 0 < BLOCK_SIZE`
 - `xs : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs`
-- `kernel : = kernel_function x_ptr output_ptr n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `expected : = fun i => Real.sin (xs i)`
 
 **Closed-form spec defs (transitive):** `kernel_function`
 

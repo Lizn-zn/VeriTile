@@ -39,11 +39,7 @@ theorem ksoftmax_forward_plain_output_summary
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin DEPTH => yOffset s stride_ym stride_yn i)`
-- `kernel : = ksoftmax_forward_plain Y X
-        stride_ym stride_yn stride_xm stride_xn K DEPTH`
-- `initialState : = s`
 - `fun i : Fin DEPTH => i.val < K`
-- `expected : = fun i => ksoftmaxSpec s X stride_xm stride_xn K DEPTH i`
 
 **Closed-form spec defs (transitive):** `yOffset`, `ksoftmax_forward_surface`, `ksoftmax_forward_plain`, `ksoftmaxSpec`, `ksoftmaxInputTile`, `xOffset`
 

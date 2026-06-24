@@ -50,14 +50,7 @@ theorem copy_to_kcache_seqlen_n1_surface_output_summary
       (fun i : Fin KCACHE_X =>
         n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
           stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i)`
-- `kernel : = copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
-        seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
-        stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0
-        KCACHE_X`
-- `initialState : = s`
 - `fun _i : Fin KCACHE_X => True`
-- `expected : = fun i =>
-        s.readMem K (kSourceOffset s stride_kt stride_kh stride_kd KCACHE_X i)`
 
 **Closed-form spec defs (transitive):** `n1KCacheOffset`, `copy_to_kcache_seqlen_n1_surface`, `kSourceOffset`, `n1BlockId`, `n1OffsetLastBlock`, `dimIndex`, `n1LastBlockIdx`, `n1PastKvSeqLen`
 

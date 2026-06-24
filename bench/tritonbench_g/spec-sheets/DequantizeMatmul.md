@@ -31,13 +31,6 @@ theorem dequantize_matmul_python_128x128_output_summary
         dequantizeSpec s b_ptr b_scale_ptr 256 1 128 128 idx)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = dequantize_kernel b_ptr b_scale_ptr fpb_ptr
-        128 256 256 1 256 1 128 128`
-- `initialState : = s`
-- `expected : = fun idx =>
-        dequantizeSpec s b_ptr b_scale_ptr 256 1 128 128 idx`
-
 **Closed-form spec defs (transitive):** `dequantize_kernel`, `dequantizeActive`, `fpbOffset`, `dequantizeSpec`, `bOffset`, `nOffset`
 
 <details><summary><code>dequantize_kernel</code></summary>
@@ -151,13 +144,6 @@ theorem dequantize_matmul_python_64x256_output_summary
       (expected := fun idx =>
         dequantizeSpec s b_ptr b_scale_ptr 256 1 64 256 idx)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = dequantize_kernel b_ptr b_scale_ptr fpb_ptr
-        128 256 256 1 256 1 64 256`
-- `initialState : = s`
-- `expected : = fun idx =>
-        dequantizeSpec s b_ptr b_scale_ptr 256 1 64 256 idx`
 
 **Closed-form spec defs (transitive):** `dequantize_kernel`, `dequantizeActive`, `fpbOffset`, `dequantizeSpec`, `bOffset`, `nOffset`
 
@@ -273,13 +259,6 @@ theorem dequantize_matmul_python_32x256_output_summary
         dequantizeSpec s b_ptr b_scale_ptr 256 1 32 256 idx)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = dequantize_kernel b_ptr b_scale_ptr fpb_ptr
-        128 256 256 1 256 1 32 256`
-- `initialState : = s`
-- `expected : = fun idx =>
-        dequantizeSpec s b_ptr b_scale_ptr 256 1 32 256 idx`
-
 **Closed-form spec defs (transitive):** `dequantize_kernel`, `dequantizeActive`, `fpbOffset`, `dequantizeSpec`, `bOffset`, `nOffset`
 
 <details><summary><code>dequantize_kernel</code></summary>
@@ -393,13 +372,6 @@ theorem dequantize_matmul_python_256x64_output_summary
       (expected := fun idx =>
         dequantizeSpec s b_ptr b_scale_ptr 256 1 256 64 idx)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = dequantize_kernel b_ptr b_scale_ptr fpb_ptr
-        128 256 256 1 256 1 256 64`
-- `initialState : = s`
-- `expected : = fun idx =>
-        dequantizeSpec s b_ptr b_scale_ptr 256 1 256 64 idx`
 
 **Closed-form spec defs (transitive):** `dequantize_kernel`, `dequantizeActive`, `fpbOffset`, `dequantizeSpec`, `bOffset`, `nOffset`
 

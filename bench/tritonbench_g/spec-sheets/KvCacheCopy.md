@@ -46,18 +46,8 @@ theorem kv_cache_copy_python_case1_all_outputs_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths 0 256 64 1 4096 1024 0 64 10 1 16 64 64`
-- `initialState : = s`
 - `fun i : Fin 64 => kActive 0 64 64 i`
-- `expected : = fun i =>
-        s.readMem K (kSourceOffset s 0 256 64 1 64 i)`
-- `kernel : = copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64`
-- `initialState : = s`
 - `fun i : Fin 64 => active 64 i`
-- `expected : = fun i =>
-        s.readMem V (vSourceOffset s 256 64 1 i)`
 
 **Closed-form spec defs (transitive):** `copy_to_kvcache_seqlen1_kernel`, `copy_to_kcache_seqlen1_xblock`, `kActive`, `seqlen1KCacheOffset`, `kSourceOffset`, `copy_to_vcache_seqlen1_dblock`, `active`, `seqlen1VCacheOffset`, `vSourceOffset`, `kDimIndex`, `seqlen1BlockId`, `seqlen1OffsetLastBlock`, `dimIndex`, `seqlen1LastBlockIdx`, `seqlen1PastKvSeqLen`
 
@@ -352,18 +342,8 @@ theorem kv_cache_copy_python_case2_all_outputs_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-          context_lengths split_x.val 256 64 1 4096 1024 128 8 10 1 16 64 8`
-- `initialState : = s`
 - `fun i : Fin 8 => kActive split_x.val 64 8 i`
-- `expected : = fun i =>
-          s.readMem K (kSourceOffset s split_x.val 256 64 1 8 i)`
-- `kernel : = copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64`
-- `initialState : = s`
 - `fun i : Fin 64 => active 64 i`
-- `expected : = fun i =>
-        s.readMem V (vSourceOffset s 256 64 1 i)`
 
 **Closed-form spec defs (transitive):** `copy_to_kvcache_seqlen1_kernel`, `copy_to_kcache_seqlen1_xblock`, `kActive`, `seqlen1KCacheOffset`, `kSourceOffset`, `copy_to_vcache_seqlen1_dblock`, `active`, `seqlen1VCacheOffset`, `vSourceOffset`, `kDimIndex`, `seqlen1BlockId`, `seqlen1OffsetLastBlock`, `dimIndex`, `seqlen1LastBlockIdx`, `seqlen1PastKvSeqLen`
 
