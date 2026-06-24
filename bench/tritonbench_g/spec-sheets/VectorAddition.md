@@ -37,10 +37,7 @@ theorem add_kernel_output_summary
 - `xs ys : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs`
 - `h_y : InputLoadedAt s y_ptr BLOCK_SIZE ys`
-- `kernel : = add_kernel x_ptr y_ptr output_ptr n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `expected : = fun i => xs i + ys i`
 
 **Closed-form spec defs (transitive):** `add_kernel`
 

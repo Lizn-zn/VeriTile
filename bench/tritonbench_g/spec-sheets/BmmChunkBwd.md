@@ -41,9 +41,6 @@ theorem bmm_chunk_bwd_python_case1_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = bbwd_matmul_surface A Dout Db 32 32 64 1 8192 64 0 1
-        4096 1024 0 32 1 8192 64 0 1 BM BN 32`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `dbOffset`, `pidC`, `pidH`, `pidM`, `pidN`, `rowIndex`, `colIndex`, `bbwd_matmul_surface`, `dbCell`, `numPidN`, `cdiv`, `bbwdSpec`, `doutElem`, `aElem`, `doutOff`, `batchOff`
 

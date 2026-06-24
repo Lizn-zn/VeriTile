@@ -45,15 +45,7 @@ theorem attention_score_python_case1_output_summary_general
 - `hBNpos : 0 < BN`
 - `hdvd : BN ∣ ROUND_CTX`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = attention_score_kernel Q K M Out
-        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
-        stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
-        BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl`
-- `initialState : = s`
 - `fun i : Fin BN => case1OutActiveG s BN NKV_CTX i`
-- `expected : = fun i : Fin BN =>
-        case1OutClosedFormG s Q K M sm_scale H H_KV ROUND_CTX BN BN BD
-          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws i`
 
 **Closed-form spec defs (transitive):** `attention_score_kernel`, `case1OutActiveG`, `case1OutStoreOffsetG`, `case1OutClosedFormG`, `case1ColSumG`, `case1MaskG`, `case1WeightG`, `case1DistG`, `case1RawScoreG`, `case1QKOffsetQG`, `case1QKOffsetKG`, `case1MOffsetG`
 

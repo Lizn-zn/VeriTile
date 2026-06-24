@@ -45,14 +45,7 @@ theorem apply_penalty_output_summary
       active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
       tokenId s p_token_ids p_cumsum_seq_len i =
         tokenId s p_token_ids p_cumsum_seq_len j → i = j`
-- `kernel : = apply_penalty Logits presence_penalty freqency_penalty
-        repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b stride_logit_s BLOCK_P`
-- `initialState : = s`
 - `fun i : Fin BLOCK_P => active s p_cumsum_seq_len i`
-- `expected : = fun i => penaltyValue s Logits presence_penalty
-        freqency_penalty repetition_penalty p_token_ids p_token_counts
-        p_cumsum_seq_len stride_logit_b i`
 
 **Closed-form spec defs (transitive):** `active`, `tokenId`, `apply_penalty`, `activeStoreAddr`, `penaltyValue`, `tokenOffset`, `batchEnd`, `batchStart`
 

@@ -48,15 +48,7 @@ theorem layernorm_fwd_triton_output_summary
 - `hBlockPos : 0 < BLOCK_SIZE`
 - `hXYNe : X ≠ Y`
 - `hWYNe : W ≠ Y`
-- `kernel : = layernorm_fwd_triton X W Y
-        stride_x_N stride_x_hn stride_x_hd
-        stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
-        N BLOCK_SIZE eps`
-- `initialState : = s`
 - `fun _ : Fin N => True`
-- `expected : = fun i =>
-        layernormYFullNSpec s X W stride_x_N stride_x_hn stride_w_hn
-          N BLOCK_SIZE eps i`
 
 **Closed-form spec defs (transitive):** `layernorm_fwd_triton`, `yColOffset`, `layernormYFullNSpec`, `xColOffset`, `layernormMeanFullNSpec`, `layernormRstdFullNSpec`, `wColOffset`, `layernormVarFullNSpec`
 

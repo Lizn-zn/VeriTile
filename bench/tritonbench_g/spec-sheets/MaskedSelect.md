@@ -41,10 +41,6 @@ theorem masked_select_kernel_output_summary
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE =>
         maskedSelectStoreOffset s prefix_sum_ptr n_elements BLOCK_SIZE i)`
-- `kernel : = masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
-        n_elements BLOCK_SIZE`
-- `initialState : = s`
-- `expected : = fun i => s.readMem inp_ptr (maskedSelectOffset s BLOCK_SIZE i)`
 
 **Closed-form spec defs (transitive):** `maskedSelectStoreOffset`, `masked_select_kernel`, `active`, `maskedSelectOffset`
 

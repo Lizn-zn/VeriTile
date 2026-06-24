@@ -39,11 +39,7 @@ theorem swiglu_fwd_kernel_output_summary
 - `xs ys : Fin BLOCK_N → ℝ`
 - `h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i`
 - `h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i`
-- `kernel : = swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
-        ncols BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => s.pids 1 * BLOCK_N + i.val < ncols`
-- `expected : = fun i => TiledActivation.swiglu (xs i) (ys i)`
 
 **Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_fwd_kernel`
 

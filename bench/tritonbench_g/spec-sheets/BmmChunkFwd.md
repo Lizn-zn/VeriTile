@@ -41,9 +41,6 @@ theorem bmm_chunk_fwd_python_case1_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = bmm_matmul_surface A B Out 32 64 1 8192 64 0 1 8192 64 0 1
-        4096 1024 0 32 1 BM BN 32`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `outOffset`, `pidC`, `pidH`, `pidM`, `pidN`, `rowIndex`, `colIndex`, `bmm_matmul_surface`, `outputCell`, `numPidN`, `cdiv`, `bmmSpec`, `aElem`, `bElem`, `batchOff`
 
@@ -297,9 +294,6 @@ theorem bmm_chunk_fwd_python_case4_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = bmm_matmul_surface A B Out 32 64 4 32768 256 64 1 32768 256 64 1
-        16384 4096 1024 32 1 BM BN 32`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `outOffset`, `pidC`, `pidH`, `pidM`, `pidN`, `rowIndex`, `colIndex`, `bmm_matmul_surface`, `outputCell`, `numPidN`, `cdiv`, `bmmSpec`, `aElem`, `bElem`, `batchOff`
 

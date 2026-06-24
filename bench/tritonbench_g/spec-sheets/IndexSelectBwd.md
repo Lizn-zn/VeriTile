@@ -48,13 +48,6 @@ theorem index_select_cat_bwd_kernel_output_summary
       (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
         gradSourceStoreAddr s index_ptr num_indices stride0 stride1
           BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)`
-- `kernel : = index_select_cat_bwd_kernel grad_source_ptr index_ptr grad_output_ptr
-        num_rows num_indices num_cols stride0 stride1
-        BLOCK_SIZE_INDEX BLOCK_SIZE_COL`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem grad_output_ptr
-          (gradOutputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)`
 
 **Closed-form spec defs (transitive):** `gradSourceStoreAddr`, `index_select_cat_bwd_kernel`, `active`, `gradOutputAddr`, `outputIndex`, `colIndex`
 

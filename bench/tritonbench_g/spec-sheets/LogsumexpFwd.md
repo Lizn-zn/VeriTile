@@ -35,10 +35,6 @@ theorem logsumexp_fwd_kernel_output_summary
 **Assumptions / layout contracts:**
 - `xs : Fin (n+1) → ℝ`
 - `h_pid1 : s.pids 1 = 0`
-- `kernel : = logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (z, s.pids 0)`
-- `expected : = fun _ => LSE xs HAS_SCALE scale`
 
 **Closed-form spec defs (transitive):** `logsumexp_fwd_kernel`
 

@@ -69,15 +69,6 @@ theorem swiglu_bwd_kernel_output_summary
 - `h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i`
 - `h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i`
 - `h_dout : ∀ i : Fin BLOCK_N, s.readMem DOUT (swigluOffset s stride_dout_row BLOCK_N i) = douts i`
-- `kernel : = swiglu_bwd_kernel X Y DOUT OUT DX DY
-        stride_x_row stride_y_row stride_dout_row stride_out_row
-        stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT`
-- `initialState : = s`
-- `expected : = fun i =>
-        match i with
-        | .inl (.inl lane) => TiledActivation.swigluBwdA (douts lane) (xs lane) (ys lane)
-        | .inl (.inr lane) => TiledActivation.swigluBwdB (douts lane) (xs lane)
-        | .inr lane => TiledActivation.swiglu (xs lane) (ys lane)`
 
 **Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_bwd_kernel`
 

@@ -34,12 +34,7 @@ theorem softmax_kernel_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = softmax_kernel output_ptr input_ptr input_row_stride
-        output_row_stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i`
 
 **Closed-form spec defs (transitive):** `softmax_kernel`, `softmaxSpec`, `softmaxInputTile`
 

@@ -39,16 +39,7 @@ theorem quantize_rowwise_python_case1_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        6 3 4 127.0`
-- `initialState : = s`
 - `fun i : Fin 4 => i.val < 3`
-- `expected : = fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i`
-- `kernel : = quantize_rowwise_max_store_slice MaxVals output_maxs`
-- `initialState : = s`
-- `write : = ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s)`
-- `expected : = fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals`
 
 **Closed-form spec defs (transitive):** `quantize_rowwise_real_surface`, `quantize_rowwise_scaled_store_slice`, `offset`, `quantizeRowwiseScaledSpec`, `quantize_rowwise_max_store_slice`, `maxOffset`, `quantizeRowwiseMaxSpec`
 
@@ -202,16 +193,7 @@ theorem quantize_rowwise_python_case3_blocked_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        10 5 8 127.0`
-- `initialState : = s`
 - `fun i : Fin 8 => i.val < 5`
-- `expected : = fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i`
-- `kernel : = quantize_rowwise_max_store_slice MaxVals output_maxs`
-- `initialState : = s`
-- `write : = ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s)`
-- `expected : = fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals`
 
 **Closed-form spec defs (transitive):** `quantize_rowwise_real_surface`, `quantize_rowwise_scaled_store_slice`, `offset`, `quantizeRowwiseScaledSpec`, `quantize_rowwise_max_store_slice`, `maxOffset`, `quantizeRowwiseMaxSpec`
 

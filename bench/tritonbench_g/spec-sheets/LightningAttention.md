@@ -87,23 +87,9 @@ theorem lightning_attention_output_summary_general
 - `hV : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
       s.readMem Vreg (j.val * BLOCK_MODEL + idx.2.1.val)
         = fwdVVal s Vreg n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val)`
-- `kernel : = lightning_attention_forward_kv_step_slice KVPrev KTrans Vreg KVOut
-        d BLOCK BLOCK_MODEL`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [d, BLOCK_MODEL] =>
-        some (KVOut, kvOffset BLOCK_MODEL idx)`
-- `expected : = fun idx : TileIndex [d, BLOCK_MODEL] =>
-        kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx`
 - `∀ idx : TileIndex [d, BLOCK_MODEL],
       kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
         = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val`
-- `kernel : = lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
-        BLOCK d BLOCK_MODEL`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        some (OInter, oInterOffset BLOCK_MODEL idx)`
-- `expected : = fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        oInterDotSpec s Q KVPrev BLOCK d BLOCK_MODEL idx`
 
 **Closed-form spec defs (transitive):** `kvOffset`, `kvClosed`, `fwdKVal`, `fwdVVal`, `lightning_attention_forward_surface`, `lightning_attention_bwd_intra_surface`, `lightning_attention_bwd_inter_surface`, `lightning_attention_forward_kv_step_slice`, `kvStepSpec`, `lightning_attention_forward_o_inter_dot_slice`, `oInterOffset`, `oInterDotSpec`
 

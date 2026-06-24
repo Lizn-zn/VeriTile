@@ -43,12 +43,6 @@ theorem index_select_cat_fwd_kernel_output_summary
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
         outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)`
-- `kernel : = index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
-        num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL`
-- `initialState : = s`
-- `expected : = fun idx =>
-        s.readMem source_ptr
-          (sourceAddr s index_ptr stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)`
 
 **Closed-form spec defs (transitive):** `outputAddr`, `index_select_cat_fwd_kernel`, `active`, `sourceAddr`, `indexBase`, `colBase`
 

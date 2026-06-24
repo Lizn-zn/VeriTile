@@ -39,11 +39,7 @@ theorem rmsnorm_full_output_summary
 - `hox : o ≠ x`
 - `how : o ≠ w`
 - `hsok : 0 < sok`
-- `kernel : = VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
-        sxb sxm sxk srw sob som sok N B eps`
-- `initialState : = s`
 - `fun _ : Fin N => True`
-- `expected : = fun k : Fin N => rmsSpecFull s x w sxb sxm sxk srw N eps k.val`
 
 **Closed-form spec defs (transitive):** `rmsnorm_triton`, `outOff`, `rmsSpecFull`, `xOff`, `meanSq`
 

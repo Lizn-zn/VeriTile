@@ -31,11 +31,7 @@ theorem dequantize_rowwise_python_case1_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
-        8 4 4`
-- `initialState : = s`
 - `fun i : Fin 4 => i.val < 4`
-- `expected : = fun i => dequantizeRowwiseSpec s x_ptr state_x 4 (1.0 / 127) i`
 
 **Closed-form spec defs (transitive):** `dequantize_rowwise_kernel`, `dequantizeRowwiseSpec`
 
@@ -108,11 +104,7 @@ theorem dequantize_rowwise_python_case2_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
-        160 16 16`
-- `initialState : = s`
 - `fun i : Fin 16 => i.val < 16`
-- `expected : = fun i => dequantizeRowwiseSpec s x_ptr state_x 16 (1.0 / 127) i`
 
 **Closed-form spec defs (transitive):** `dequantize_rowwise_kernel`, `dequantizeRowwiseSpec`
 
@@ -185,11 +177,7 @@ theorem dequantize_rowwise_python_case3_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
-        40 8 8`
-- `initialState : = s`
 - `fun i : Fin 8 => i.val < 8`
-- `expected : = fun i => dequantizeRowwiseSpec s x_ptr state_x 8 (1.0 / 127) i`
 
 **Closed-form spec defs (transitive):** `dequantize_rowwise_kernel`, `dequantizeRowwiseSpec`
 
@@ -262,11 +250,7 @@ theorem dequantize_rowwise_python_case4_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
-        96 32 32`
-- `initialState : = s`
 - `fun i : Fin 32 => i.val < 32`
-- `expected : = fun i => dequantizeRowwiseSpec s x_ptr state_x 32 (1.0 / 127) i`
 
 **Closed-form spec defs (transitive):** `dequantize_rowwise_kernel`, `dequantizeRowwiseSpec`
 

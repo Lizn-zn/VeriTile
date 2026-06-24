@@ -123,29 +123,13 @@ theorem chunk_delta_fwd_output_summary_general
         s.readMem BHFinal (finalStateOffset s K V BK BV idx)
           = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
               K V BT BV BK USE_INITIAL_STATE NT idx`
-- `kernel : = chunk_delta_fwd_h_store_slice BH h i_t s_h_h s_h_t K V BK BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BK, BV] => active s K V BK BV idx`
 - `fun idx : TileIndex [BK, BV] => (h, hOffset s i_t s_h_h s_h_t K V BK BV idx)`
-- `expected : = fun idx : TileIndex [BK, BV] =>
-          hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE i_t idx`
-- `kernel : = chunk_delta_fwd_v_new_store_slice BVN v_new i_t 0
-          s_vo_h s_vo_t s_vo_d T V BT BT BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BT, BV] => vNewActive s i_t 0 T V BT BT BV idx`
 - `fun idx : TileIndex [BT, BV] =>
             (v_new, vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)`
-- `expected : = fun idx : TileIndex [BT, BV] =>
-          vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE i_t idx`
-- `kernel : = chunk_delta_fwd_final_state_store_slice BHFinal final_state K V BK BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BK, BV] => active s K V BK BV idx`
 - `fun idx : TileIndex [BK, BV] => (final_state, finalStateOffset s K V BK BV idx)`
-- `expected : = fun idx : TileIndex [BK, BV] =>
-          finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE NT idx`
 
 **Closed-form spec defs (transitive):** `hOffset`, `vNewOffset`, `finalStateOffset`, `active`, `hValue`, `vNewActive`, `vNewSpec`, `finalValue`, `chunk_delta_rule_fwd_h_surface`, `chunk_delta_fwd_h_store_slice`, `chunk_delta_fwd_v_new_store_slice`, `chunk_delta_fwd_final_state_store_slice`, `kIndex`, `vIndex`, `cIndex`, `stateValue`, `vNewValue`, `initElem`, `kElem`, `vElem`, `dElem`
 

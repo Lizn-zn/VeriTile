@@ -37,11 +37,7 @@ theorem square_kernel_output_summary
 - `hBlockSize : 0 < BLOCK_SIZE`
 - `xs : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs`
-- `kernel : = square_kernel output_ptr input_ptr input_row_stride output_row_stride
-        n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i => xs i * xs i`
 
 **Closed-form spec defs (transitive):** `square_kernel`
 

@@ -37,12 +37,6 @@ theorem kernel_output_summary
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [D_HEAD, SIZE_M] => outAddr out_stridex out_stridey idx)`
-- `kernel : = kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
-        SIZE_M D_HEAD`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [D_HEAD, SIZE_M] =>
-          some (Out, outAddr out_stridex out_stridey idx)`
-- `expected : = fun idx => s.readMem M (matrixAddr matrix_stridex matrix_stridey idx)`
 
 **Closed-form spec defs (transitive):** `outAddr`, `kernel`, `matrixAddr`
 

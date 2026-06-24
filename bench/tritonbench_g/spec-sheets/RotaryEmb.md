@@ -54,22 +54,10 @@ theorem rotary_emb_python_case1_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rotary_emb_q0_block Q Cos Sin 512 64 1 64 1 64 1 32 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => active s 32 8`
-- `expected : = fun i => rotaryQ0Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_q1_block Q Cos Sin 512 64 1 64 1 64 1 32 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => active s 32 8`
-- `expected : = fun i => rotaryQ1Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k0_block K Cos Sin 512 64 1 64 1 64 1 32 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => activeK s 32 8`
-- `expected : = fun i => rotaryK0Spec s K Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k1_block K Cos Sin 512 64 1 64 1 64 1 32 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => activeK s 32 8`
-- `expected : = fun i => rotaryK1Spec s K Cos Sin 512 64 1 64 1 64 1 i`
 
 **Closed-form spec defs (transitive):** `rotary_kernel_surface`, `rotary_emb_q0_block`, `active`, `qOffset`, `dimEven`, `rotaryQ0Spec`, `rotary_emb_q1_block`, `dimOdd`, `rotaryQ1Spec`, `rotary_emb_k0_block`, `activeK`, `kOffset`, `rotaryK0Spec`, `rotary_emb_k1_block`, `rotaryK1Spec`, `seqIndex`, `headIndex`, `cosOffset`, `sinOffset`
 
@@ -537,22 +525,10 @@ theorem rotary_emb_python_case2_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rotary_emb_q0_block Q Cos Sin 1024 128 1 128 1 128 1 32 8 64`
-- `initialState : = s`
 - `fun _ : Fin 64 => active s 32 8`
-- `expected : = fun i => rotaryQ0Spec s Q Cos Sin 1024 128 1 128 1 128 1 i`
-- `kernel : = rotary_emb_q1_block Q Cos Sin 1024 128 1 128 1 128 1 32 8 64`
-- `initialState : = s`
 - `fun _ : Fin 64 => active s 32 8`
-- `expected : = fun i => rotaryQ1Spec s Q Cos Sin 1024 128 1 128 1 128 1 i`
-- `kernel : = rotary_emb_k0_block K Cos Sin 1024 128 1 128 1 128 1 32 8 64`
-- `initialState : = s`
 - `fun _ : Fin 64 => activeK s 32 8`
-- `expected : = fun i => rotaryK0Spec s K Cos Sin 1024 128 1 128 1 128 1 i`
-- `kernel : = rotary_emb_k1_block K Cos Sin 1024 128 1 128 1 128 1 32 8 64`
-- `initialState : = s`
 - `fun _ : Fin 64 => activeK s 32 8`
-- `expected : = fun i => rotaryK1Spec s K Cos Sin 1024 128 1 128 1 128 1 i`
 
 **Closed-form spec defs (transitive):** `rotary_kernel_surface`, `rotary_emb_q0_block`, `active`, `qOffset`, `dimEven`, `rotaryQ0Spec`, `rotary_emb_q1_block`, `dimOdd`, `rotaryQ1Spec`, `rotary_emb_k0_block`, `activeK`, `kOffset`, `rotaryK0Spec`, `rotary_emb_k1_block`, `rotaryK1Spec`, `seqIndex`, `headIndex`, `cosOffset`, `sinOffset`
 
@@ -1020,22 +996,10 @@ theorem rotary_emb_python_case3_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rotary_emb_q0_block Q Cos Sin 512 64 1 64 1 64 1 32 8 16`
-- `initialState : = s`
 - `fun _ : Fin 16 => active s 32 8`
-- `expected : = fun i => rotaryQ0Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_q1_block Q Cos Sin 512 64 1 64 1 64 1 32 8 16`
-- `initialState : = s`
 - `fun _ : Fin 16 => active s 32 8`
-- `expected : = fun i => rotaryQ1Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k0_block K Cos Sin 512 64 1 64 1 64 1 32 8 16`
-- `initialState : = s`
 - `fun _ : Fin 16 => activeK s 32 8`
-- `expected : = fun i => rotaryK0Spec s K Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k1_block K Cos Sin 512 64 1 64 1 64 1 32 8 16`
-- `initialState : = s`
 - `fun _ : Fin 16 => activeK s 32 8`
-- `expected : = fun i => rotaryK1Spec s K Cos Sin 512 64 1 64 1 64 1 i`
 
 **Closed-form spec defs (transitive):** `rotary_kernel_surface`, `rotary_emb_q0_block`, `active`, `qOffset`, `dimEven`, `rotaryQ0Spec`, `rotary_emb_q1_block`, `dimOdd`, `rotaryQ1Spec`, `rotary_emb_k0_block`, `activeK`, `kOffset`, `rotaryK0Spec`, `rotary_emb_k1_block`, `rotaryK1Spec`, `seqIndex`, `headIndex`, `cosOffset`, `sinOffset`
 
@@ -1502,22 +1466,10 @@ theorem rotary_emb_python_case4_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = rotary_emb_q0_block Q Cos Sin 512 64 1 64 1 64 1 64 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => active s 64 8`
-- `expected : = fun i => rotaryQ0Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_q1_block Q Cos Sin 512 64 1 64 1 64 1 64 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => active s 64 8`
-- `expected : = fun i => rotaryQ1Spec s Q Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k0_block K Cos Sin 512 64 1 64 1 64 1 64 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => activeK s 64 8`
-- `expected : = fun i => rotaryK0Spec s K Cos Sin 512 64 1 64 1 64 1 i`
-- `kernel : = rotary_emb_k1_block K Cos Sin 512 64 1 64 1 64 1 64 8 32`
-- `initialState : = s`
 - `fun _ : Fin 32 => activeK s 64 8`
-- `expected : = fun i => rotaryK1Spec s K Cos Sin 512 64 1 64 1 64 1 i`
 
 **Closed-form spec defs (transitive):** `rotary_kernel_surface`, `rotary_emb_q0_block`, `active`, `qOffset`, `dimEven`, `rotaryQ0Spec`, `rotary_emb_q1_block`, `dimOdd`, `rotaryQ1Spec`, `rotary_emb_k0_block`, `activeK`, `kOffset`, `rotaryK0Spec`, `rotary_emb_k1_block`, `rotaryK1Spec`, `seqIndex`, `headIndex`, `cosOffset`, `sinOffset`
 

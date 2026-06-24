@@ -43,18 +43,10 @@ theorem attention_forward_triton_final_store_slice_compute_correct
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)`
-- `kernel : = attention_forward_triton_final_store_slice Acc Out H N_CTX
-        HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-        stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
           active s N_CTX HEAD_ACTIVE BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
           outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        s.readMem Acc
-          (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-            BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `attention_forward_triton_final_store_slice`, `active`, `accOffset`, `offZ`, `offH`, `mIndex`, `kIndex`
 

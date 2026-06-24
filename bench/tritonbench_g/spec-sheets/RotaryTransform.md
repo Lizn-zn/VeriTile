@@ -217,18 +217,8 @@ theorem rotary_transform_python_output_summary
 - `hOut1Inj : Function.Injective
       (fun i : Fin 16 =>
         out1Offset s 32768 256 64 1 16 8 i)`
-- `kernel : = rotary_kernel_o0o1_row OUT X COS SIN
-        128 128 16 128 32768 256 64 1 32768 256 64 1 8 16`
-- `initialState : = s`
 - `fun i : Fin 16 => active s 128 16 8 i`
-- `expected : = fun i =>
-        rotaryO0Spec s X COS SIN 128 128 32768 256 64 1 16 8 i`
-- `kernel : = rotary_kernel_o0o1_row OUT X COS SIN
-        128 128 16 128 32768 256 64 1 32768 256 64 1 8 16`
-- `initialState : = s`
 - `fun i : Fin 16 => active s 128 16 8 i`
-- `expected : = fun i =>
-        rotaryO1Spec s X COS SIN 128 128 32768 256 64 1 16 8 i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `out1Offset`, `rotary_kernel_surface`, `rotary_kernel_o0o1_row`, `active`, `rotaryO0Spec`, `rotaryO1Spec`, `rowIndex`, `dimIndex`, `rotOffset`, `x0Offset`, `x1Offset`
 

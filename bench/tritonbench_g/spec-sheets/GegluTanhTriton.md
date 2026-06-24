@@ -38,10 +38,7 @@ theorem geglu_tanh_forward_kernel_output_summary
 - `as bs : Fin BLOCK_SIZE → ℝ`
 - `h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i`
 - `h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i`
-- `kernel : = geglu_tanh_forward_kernel A B C stride n_cols BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i => TiledActivation.geluTanhFwd (as i) (bs i)`
 
 **Closed-form spec defs (transitive):** `gegluTanhOffset`, `geglu_tanh_forward_kernel`
 
@@ -135,18 +132,6 @@ theorem geglu_tanh_backward_kernel_output_summary
 - `h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (gegluTanhOffset s stride i) = dcs i`
 - `h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i`
 - `h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i`
-- `kernel : = geglu_tanh_backward_kernel DC A B stride n_cols BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>
-        match i with
-        | .inl lane =>
-            if lane.val < n_cols then some (A, gegluTanhOffset s stride lane) else none
-        | .inr lane =>
-            if lane.val < n_cols then some (B, gegluTanhOffset s stride lane) else none`
-- `expected : = fun i =>
-        match i with
-        | .inl lane => TiledActivation.geluTanhBwdA (dcs lane) (as lane) (bs lane)
-        | .inr lane => TiledActivation.geluTanhBwdB (dcs lane) (as lane)`
 
 **Closed-form spec defs (transitive):** `gegluTanhOffset`, `geglu_tanh_backward_kernel`
 

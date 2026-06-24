@@ -94,29 +94,9 @@ theorem fused_recurrent_rwkv6_output_summary_general
 - `hFinal : ∀ idx : TileIndex [BV, BK],
       s.readMem BHFinal (finalStateOffset s K V BK BV idx)
         = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV T idx`
-- `kernel : = fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        m s_k_h s_v_h B H T K V BK BV scale`
-- `initialState : = s`
 - `fun jv : Fin BV => active s V BV jv`
-- `expected : = fun jv : Fin BV =>
-        outputClosed s q k v w u h0 USE_INITIAL_STATE s_k_h s_v_h H K V BK BV
-          scale m jv`
-- `kernel : = fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
-        m s_k_h s_v_h K V BK BV`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BV, BK] =>
-        some (BHOut, finalStateOffset s K V BK BV idx)`
-- `expected : = fun idx =>
-        stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV
-          (m + 1) idx`
-- `kernel : = fused_recurrent_rwkv6_final_state_store_slice BHFinal ht K V BK BV`
-- `initialState : = s`
 - `fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx`
 - `fun idx : TileIndex [BV, BK] => (ht, finalStateOffset s K V BK BV idx)`
-- `expected : = fun idx : TileIndex [BV, BK] =>
-        if finalActive s K V BK BV idx then
-          stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV T idx
-        else 0`
 
 **Closed-form spec defs (transitive):** `finalStateOffset`, `stateClosed`, `fused_recurrent_rwkv6_fwd_surface`, `fused_recurrent_rwkv6_output_step_slice`, `active`, `outStepOffset`, `outputClosed`, `fused_recurrent_rwkv6_state_step_slice`, `fused_recurrent_rwkv6_final_state_store_slice`, `finalActive`, `kIndex`, `vIndex`, `stateSeed`, `decay`, `kVal`, `vVal`, `uVal`, `qVal`, `h0Val`
 

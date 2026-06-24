@@ -59,9 +59,6 @@ theorem var_len_copy_kernel_triton_small_length_output_summary
 - `fun i : Fin BLOCK_SIZE =>
         s.readMemValue .nat (Region.cast new_a_start : RegionName) (s.pids 0)
           + i.val`
-- `kernel : = var_len_copy_kernel_triton old_a_start old_a_len old_a_location
-        new_a_start new_a_location BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE =>
           i.val < s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0)`
 

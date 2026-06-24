@@ -63,26 +63,7 @@ theorem layer_norm_liger_forward_output_summary
 - `hRSTDY : RSTD ≠ Y`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)`
-- `kernel : = layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
-        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        layernormYSpec s X W B X_row_stride n_cols BLOCK_SIZE eps i`
-- `kernel : = layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
-        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (Mean, s.pid * Mean_row_stride)`
-- `expected : = fun _ =>
-        WithBot.unbotD 0
-          (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE)`
-- `kernel : = layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
-        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (RSTD, s.pid * RSTD_row_stride)`
-- `expected : = fun _ =>
-        WithBot.unbotD 0
-          (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_liger_forward_surface`, `layer_norm_liger_forward`, `layernormYSpec`, `layernormMeanCarrier`, `layernormInvVarCarrier`, `xOffset`, `layernormInputTile`, `layernormVarCarrier`, `layernormCenteredTile`
 

@@ -30,14 +30,6 @@ theorem load_reduce_kernel_output_summary
         matrixReduceSpec s x_ptr stride_xm stride_xn BLOCK_M BLOCK_N i)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = load_reduce_kernel x_ptr y_ptr stride_xm stride_xn stride_y
-        BLOCK_M BLOCK_N`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_M => some (y_ptr, i.val)`
-- `expected : = fun i =>
-        matrixReduceSpec s x_ptr stride_xm stride_xn BLOCK_M BLOCK_N i`
-
 **Closed-form spec defs (transitive):** `load_reduce_kernel`, `matrixReduceSpec`, `matrixReduceInputTile`
 
 <details><summary><code>load_reduce_kernel</code></summary>

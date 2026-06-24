@@ -51,30 +51,6 @@ theorem rope_transform_python_forward_output_summary
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hqk : Q ≠ K`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_qh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
-- `pad_n_kh : = 8`
-- `pad_hd_half : = 16/2`
 
 **Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeForwardKernelQ0Spec`, `qFullSecondOffset`, `ropeForwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeForwardKernelK0Spec`, `kFullSecondOffset`, `ropeForwardKernelK1Spec`, `cosFullFirstOffset`, `sinFullFirstOffset`
 

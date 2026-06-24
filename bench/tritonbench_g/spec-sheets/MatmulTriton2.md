@@ -31,10 +31,6 @@ theorem matmul_triton2_python_case1_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_triton2_surface A B C 256 256 256 256 1 256 1 256 1 128 256 64 8`
-- `initialState : = s`
-- `expected : = fun idx : TileIndex [128, 256] =>
-        matmulSpec s A B 256 256 128 256 8 256 1 256 1 64 4 idx.1 idx.2.1`
 
 **Closed-form spec defs (transitive):** `matmul_triton2_surface`, `active`, `cOffset`, `matmulSpec`, `cdiv`, `rowIndex`, `colIndex`, `aElem`, `bElem`, `pidM`, `pidN`, `numPidM`, `numPidN`
 
@@ -259,10 +255,6 @@ theorem matmul_triton2_python_case2_output_summary
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_triton2_surface A B C 64 64 64 64 1 64 1 64 1 32 64 32 8`
-- `initialState : = s`
-- `expected : = fun idx : TileIndex [32, 64] =>
-        matmulSpec s A B 64 64 32 64 8 64 1 64 1 32 2 idx.1 idx.2.1`
 
 **Closed-form spec defs (transitive):** `matmul_triton2_surface`, `active`, `cOffset`, `matmulSpec`, `cdiv`, `rowIndex`, `colIndex`, `aElem`, `bElem`, `pidM`, `pidN`, `numPidM`, `numPidN`
 

@@ -65,32 +65,6 @@ theorem prefill_cache_kernel_output_summary
 - `hOutInj : Function.Injective
       (fun i : Fin HIDDEN_DIM =>
         prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)`
-- `kernel : = prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
-        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
-        BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun i : Sum (Fin HIDDEN_DIM) (Fin HIDDEN_DIM) =>
-        match i with
-        | .inl idx =>
-            if prefillActive s total_length BLOCK_SIZE then
-              some (cos_output, prefillOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none
-        | .inr idx =>
-            if prefillActive s total_length BLOCK_SIZE then
-              some (sin_output, prefillOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none`
-- `expected : = fun i =>
-        match i with
-        | .inl idx =>
-            s.readMem cos_cache
-              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
-                BLOCK_SIZE N_ELEMENTS idx)
-        | .inr idx =>
-            s.readMem sin_cache
-              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
-                BLOCK_SIZE N_ELEMENTS idx)`
 
 **Closed-form spec defs (transitive):** `prefillOutOffset`, `prefill_cache_kernel`, `prefillActive`, `prefillCacheOffset`, `prefillIdx`, `prefillOriSeqIdx`
 
@@ -259,30 +233,6 @@ theorem decoding_cache_kernel_output_summary
 - `hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
         decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)`
-- `kernel : = decoding_cache_kernel cos_cache sin_cache lengths cos_output
-        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun i : Sum (TileIndex [BLOCK_SIZE, HIDDEN_DIM])
-          (TileIndex [BLOCK_SIZE, HIDDEN_DIM]) =>
-        match i with
-        | .inl idx =>
-            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
-              some (cos_output, decodeOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none
-        | .inr idx =>
-            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
-              some (sin_output, decodeOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none`
-- `expected : = fun i =>
-        match i with
-        | .inl idx =>
-            s.readMem cos_cache
-              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
-        | .inr idx =>
-            s.readMem sin_cache
-              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)`
 
 **Closed-form spec defs (transitive):** `decodeOutOffset`, `decoding_cache_kernel`, `decodeActive`, `decodeCacheOffset`, `rowIndex`
 

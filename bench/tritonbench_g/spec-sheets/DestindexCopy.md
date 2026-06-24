@@ -75,30 +75,6 @@ theorem fwd_kernel_destindex_copy_kv_output_summary
 - `hOutRopeInj : Function.Injective
       (fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
         outRopeAddr s Dest_loc stride_o_rope_bs stride_o_rope_d idx)`
-- `kernel : = fwd_kernel_destindex_copy_kv KV_nope KV_rope Dest_loc O_nope O_rope
-        stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
-        stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
-        stride_o_nope_bs stride_o_nope_h stride_o_nope_d
-        stride_o_rope_bs stride_o_rope_h stride_o_rope_d
-        kv_nope_head_num kv_rope_head_num
-        BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [1, BLOCK_DMODEL_NOPE] =>
-        some (O_nope, outNopeAddr s Dest_loc stride_o_nope_bs stride_o_nope_d idx)`
-- `expected : = fun idx : TileIndex [1, BLOCK_DMODEL_NOPE] =>
-        s.readMem KV_nope (sourceNopeAddr s stride_kv_nope_bs stride_kv_nope_d idx)`
-- `kernel : = fwd_kernel_destindex_copy_kv KV_nope KV_rope Dest_loc O_nope O_rope
-        stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
-        stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
-        stride_o_nope_bs stride_o_nope_h stride_o_nope_d
-        stride_o_rope_bs stride_o_rope_h stride_o_rope_d
-        kv_nope_head_num kv_rope_head_num
-        BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
-        some (O_rope, outRopeAddr s Dest_loc stride_o_rope_bs stride_o_rope_d idx)`
-- `expected : = fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
-        s.readMem KV_rope (sourceRopeAddr s stride_kv_rope_bs stride_kv_rope_d idx)`
 
 **Closed-form spec defs (transitive):** `outNopeAddr`, `outRopeAddr`, `fwd_kernel_destindex_copy_kv`, `sourceNopeAddr`, `sourceRopeAddr`, `destBase`, `dimNope`, `dimRope`
 

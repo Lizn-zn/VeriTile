@@ -49,19 +49,7 @@ theorem rms_layernorm_forward_output_summary
 - `hrY : r ≠ Y`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
-- `kernel : = rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
-          BLOCK_SIZE eps i`
-- `kernel : = rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (r, rOutOffset s r_row_stride)`
-- `expected : = fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps`
 
 **Closed-form spec defs (transitive):** `yOutOffset`, `rms_layernorm_forward`, `rmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
 
@@ -227,18 +215,7 @@ theorem gemma_rms_layernorm_forward_output_summary
 - `hrY : r ≠ Y`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
-- `kernel : = gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
-- `expected : = fun i =>
-        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i`
-- `kernel : = gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (r, rOutOffset s r_row_stride)`
-- `expected : = fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps`
 
 **Closed-form spec defs (transitive):** `yOutOffset`, `gemma_rms_layernorm_forward`, `gemmaRmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
 

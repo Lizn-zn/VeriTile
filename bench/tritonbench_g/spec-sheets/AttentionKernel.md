@@ -36,13 +36,6 @@ theorem attention_kernel_genuine_output_compute_correct
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
-        16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [64, 128] =>
-        some (Out, surfaceOutOffset s 16384 128 1 64 idx)`
 
 **Closed-form spec defs (transitive):** `attention_kernel_fwd_kernel_aligned_surface`, `surfaceOutOffset`, `attentionKernelSpec`, `mIndex`, `kIndex`, `fscore`, `vFlat`, `qRaw`, `kFlat`, `b0Val`, `b1Val`
 
@@ -320,13 +313,6 @@ theorem attention_kernel_genuine_output_compute_correct_general
 - `hHD : 0 < HEAD`
 - `hnB : 1 ≤ nB`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
-        stride_qh HEAD 1 stride_kh HEAD 1 stride_kh HEAD 1 stride_qh HEAD 1
-        stride_b0h stride_b0m 2 4 (BLOCK_N * nB) 0 BIAS_LAST_SIZE 128 HEAD BLOCK_M BLOCK_N
-        FloatDType.fp16`
-- `initialState : = s`
-- `write : = fun idx : TileIndex [BLOCK_M, HEAD] =>
-        some (Out, surfaceOutOffset s stride_qh HEAD 1 BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `attention_kernel_fwd_kernel_aligned_surface`, `surfaceOutOffset`, `attentionKernelSpec`, `mIndex`, `kIndex`, `fscore`, `vFlat`, `qRaw`, `kFlat`, `b0Val`, `b1Val`
 

@@ -32,10 +32,7 @@ theorem l2_norm_bwd_kernel_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = l2_norm_bwd_kernel X DY DX stride_x_row N eps BLOCK_N`
-- `initialState : = s`
 - `fun i : Fin BLOCK_N => i.val < N`
-- `expected : = fun i => l2BwdSpec s X DY stride_x_row N BLOCK_N eps i`
 
 **Closed-form spec defs (transitive):** `l2_norm_bwd_kernel`, `l2BwdOutOffset`, `l2BwdSpec`, `l2BwdLoad`
 

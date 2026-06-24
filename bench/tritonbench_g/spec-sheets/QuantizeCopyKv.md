@@ -39,17 +39,6 @@ theorem destindex_copy_quantize_kv_python_d64_summary
       (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i)))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = destindex_copy_quantize_kv_value_store_slice K DestLoc Out
-        OutScale 512 64 1 512 64 1 8 1 8 8 64`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantizeCopyKvValueSpec s K DestLoc OutScale 512 64 1 8 1 idx`
-- `kernel : = destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
-        OutScale 8 1 8 1 8 8`
-- `initialState : = s`
-- `expected : = fun i => quantizeCopyKvScaleSpec s Scale 8 1 i`
-
 **Closed-form spec defs (transitive):** `destindex_copy_quantize_kv_real_surface`, `destindex_copy_quantize_kv_value_store_slice`, `active`, `outOffset`, `quantizeCopyKvValueSpec`, `destindex_copy_quantize_kv_scale_store_slice`, `scaleActive`, `scaleOutOffset1`, `quantizeCopyKvScaleSpec`, `headIndex`, `destIndex`, `dimIndex`, `kOffset`, `scaleOffset`, `scaleSourceOffset`
 
 <details><summary><code>destindex_copy_quantize_kv_real_surface</code></summary>
@@ -312,17 +301,6 @@ theorem destindex_copy_quantize_kv_python_d256_summary
         (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
       (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i)))
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = destindex_copy_quantize_kv_value_store_slice K DestLoc Out
-        OutScale 2048 256 1 2048 256 1 8 1 8 8 256`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantizeCopyKvValueSpec s K DestLoc OutScale 2048 256 1 8 1 idx`
-- `kernel : = destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
-        OutScale 8 1 8 1 8 8`
-- `initialState : = s`
-- `expected : = fun i => quantizeCopyKvScaleSpec s Scale 8 1 i`
 
 **Closed-form spec defs (transitive):** `destindex_copy_quantize_kv_real_surface`, `destindex_copy_quantize_kv_value_store_slice`, `active`, `outOffset`, `quantizeCopyKvValueSpec`, `destindex_copy_quantize_kv_scale_store_slice`, `scaleActive`, `scaleOutOffset1`, `quantizeCopyKvScaleSpec`, `headIndex`, `destIndex`, `dimIndex`, `kOffset`, `scaleOffset`, `scaleSourceOffset`
 

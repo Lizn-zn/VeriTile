@@ -51,12 +51,7 @@ theorem fused_add_mul_activation_kernel_output_summary
       s.readMem x_ptr (fusedActivationOffset s BLOCK_SIZE i) = xs i`
 - `h_in : ∀ i : Fin BLOCK_SIZE,
       s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i`
-- `kernel : = fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
-        num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => fusedActivationOffset s BLOCK_SIZE i < xnumel`
-- `expected : = fun i =>
-        fusedActivationSpec ACTIVATION_SIGMOID (xs i) (biases i) (inputs i) multiplier`
 
 **Closed-form spec defs (transitive):** `fusedActivationOffset`, `fused_add_mul_activation_kernel`, `fusedActivationSpec`, `fusedActivationInput`
 

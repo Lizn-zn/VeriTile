@@ -47,8 +47,6 @@ theorem matmul_leakyrelu_fp8_closed_form_correct
 - `hcn : SCN = 1`
 - `hbnle : BN ≤ SCM`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `rowIndex`, `pidM`, `colIndex`, `pidN`, `matmul_leaky_relu_surface`, `cOffset`, `outputCell`, `numPidInGroup`, `groupSizeM`, `leakyrelu`, `matmulSpec`, `aElem`, `bElem`
 

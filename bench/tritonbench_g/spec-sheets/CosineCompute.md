@@ -34,10 +34,7 @@ theorem cos_func_output_summary
 - `hBlockSize : 0 < BLOCK_SIZE`
 - `xs : Fin BLOCK_SIZE → ℝ`
 - `h_x : InputLoadedAt s a BLOCK_SIZE xs`
-- `kernel : = cos_func a b n_elements BLOCK_SIZE`
-- `initialState : = s`
 - `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `expected : = fun i => Real.cos (xs i)`
 
 **Closed-form spec defs (transitive):** `cos_func`
 

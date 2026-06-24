@@ -35,10 +35,7 @@ theorem softmax_kernel_online_v2_one_tile_output_summary
 ```
 
 **Assumptions / layout contracts:**
-- `kernel : = softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N`
-- `initialState : = s`
 - `fun i : Fin TILE_N => i.val < N`
-- `expected : = fun i => softmaxOptimizeSpec s input_ptr N TILE_N i`
 
 **Closed-form spec defs (transitive):** `softmax_kernel_online_v2_one_tile`, `softmaxOptimizeSpec`, `softmaxOptimizeInputTile`
 

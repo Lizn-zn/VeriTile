@@ -41,23 +41,6 @@ theorem decay_cumsum_backward_python_test_shape_closed_output_summary_general :
         bwdDGClosed s DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t_rel i))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
-        Q K G DG s_qk_h DK BT BK`
-- `initialState : = s`
-- `expected : = fun i : Fin BK =>
-        bwdDQInterClosed s DQInner DQInter G s_qk_h DK BT BK t_rel i`
-- `kernel : = bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
-        Q K G DG s_qk_h DK BT BK`
-- `initialState : = s`
-- `expected : = fun i : Fin BK =>
-        bwdDKInterClosed s DKInner DKInter G s_qk_h DK BT BK t_rel i`
-- `kernel : = bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
-        Q K G DG s_qk_h DK BT BK`
-- `initialState : = s`
-- `expected : = fun i : Fin BK =>
-        bwdDGClosed s DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t_rel i`
-
 **Closed-form spec defs (transitive):** `bwd_decay_global_cumsum_surface`, `active`, `offset`, `bwdDQInterClosed`, `bwdDKInterClosed`, `bwdDGClosed`, `elemIndex`, `baseOffset`, `bwdDGSummand`
 
 <details><summary><code>bwd_decay_global_cumsum_surface</code></summary>

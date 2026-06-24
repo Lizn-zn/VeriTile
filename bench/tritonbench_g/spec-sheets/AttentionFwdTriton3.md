@@ -67,18 +67,8 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
 - `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0`
-- `initialState : = s`
 - `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
 - `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
-- `expected : = fun idx : TileIndex [BM, ND] =>
-        attentionFwdTriton3Case1OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case1OutSpecG`, `lRowOffset`, `attentionFwdTriton3KMSpecG`, `natSlidingWindowKeepG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -519,18 +509,8 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
 - `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1`
-- `initialState : = s`
 - `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
 - `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
-- `expected : = fun idx : TileIndex [BM, ND] =>
-        attentionFwdTriton3Case2OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1`
-- `initialState : = s`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case2OutSpecG`, `lRowOffset`, `attentionFwdTriton3KMSpecG`, `natComplementSlidingWindowKeepG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -971,20 +951,8 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
 - `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0`
-- `initialState : = s`
 - `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
 - `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
-- `expected : = fun idx : TileIndex [BM, ND] =>
-        attentionFwdTriton3Case3OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) idx`
-- `kernel : = attention_fwd_triton3_surface Q K V M Out L sm_scale
-        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
-        Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0`
-- `initialState : = s`
-- `expected : = fun i : Fin BM =>
-        attentionFwdTriton3Case3MSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) i hND`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case3OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case3MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBot1G`, `aft3KeysUptoG`, `aft3OsStepBot`
 

@@ -33,13 +33,6 @@ theorem quantize_global_transpose_python_case1_blocked_output_summary
         quantTransposeScaledSpec s A AbsmaxInv 256 1 128 128 127.0 idx)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = quantize_global_transpose_scaled_store_slice A AbsmaxInv B
-        256 1 128 1 128 256 128 128 127.0`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantTransposeScaledSpec s A AbsmaxInv 256 1 128 128 127.0 idx`
-
 **Closed-form spec defs (transitive):** `quantize_global_transpose_real_surface`, `quantize_global_transpose_scaled_store_slice`, `active`, `bOffset`, `quantTransposeScaledSpec`, `rowIndex`, `colIndex`, `aOffset`
 
 <details><summary><code>quantize_global_transpose_real_surface</code></summary>
@@ -199,13 +192,6 @@ theorem quantize_global_transpose_python_case2_blocked_output_summary
       (expected := fun idx =>
         quantTransposeScaledSpec s A AbsmaxInv 128 1 128 128 127.0 idx)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = quantize_global_transpose_scaled_store_slice A AbsmaxInv B
-        128 1 256 1 256 128 128 128 127.0`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantTransposeScaledSpec s A AbsmaxInv 128 1 128 128 127.0 idx`
 
 **Closed-form spec defs (transitive):** `quantize_global_transpose_real_surface`, `quantize_global_transpose_scaled_store_slice`, `active`, `bOffset`, `quantTransposeScaledSpec`, `rowIndex`, `colIndex`, `aOffset`
 
@@ -367,13 +353,6 @@ theorem quantize_global_transpose_python_case3_blocked_output_summary
         quantTransposeScaledSpec s A AbsmaxInv 256 1 128 128 127.0 idx)
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = quantize_global_transpose_scaled_store_slice A AbsmaxInv B
-        256 1 512 1 512 256 128 128 127.0`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantTransposeScaledSpec s A AbsmaxInv 256 1 128 128 127.0 idx`
-
 **Closed-form spec defs (transitive):** `quantize_global_transpose_real_surface`, `quantize_global_transpose_scaled_store_slice`, `active`, `bOffset`, `quantTransposeScaledSpec`, `rowIndex`, `colIndex`, `aOffset`
 
 <details><summary><code>quantize_global_transpose_real_surface</code></summary>
@@ -533,13 +512,6 @@ theorem quantize_global_transpose_python_case4_blocked_output_summary
       (expected := fun idx =>
         quantTransposeScaledSpec s A AbsmaxInv 512 1 128 128 127.0 idx)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = quantize_global_transpose_scaled_store_slice A AbsmaxInv B
-        512 1 256 1 256 512 128 128 127.0`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantTransposeScaledSpec s A AbsmaxInv 512 1 128 128 127.0 idx`
 
 **Closed-form spec defs (transitive):** `quantize_global_transpose_real_surface`, `quantize_global_transpose_scaled_store_slice`, `active`, `bOffset`, `quantTransposeScaledSpec`, `rowIndex`, `colIndex`, `aOffset`
 

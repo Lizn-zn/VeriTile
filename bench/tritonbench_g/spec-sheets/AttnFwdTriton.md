@@ -66,16 +66,9 @@ theorem attn_fwd_triton_output_summary_general
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = attn_fwd_triton_surface Q K V QScale KScale Out
-        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
-        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
-        Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE`
-- `initialState : = s`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => active s N_CTX HEAD_ACTIVE BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
           outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
-- `expected : = fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        attnFwdTritonOutSpecG s Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks (keyScaleAFT2G s QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `aftgScoreBoundG`, `qTileAFT2mG`, `kTileAFT2G`, `vTileAFT2mG`, `keyScaleAFT2G`, `qStartAFT2G`, `attn_fwd_triton_surface`, `active`, `attnFwdTritonOutSpecG`, `offZ`, `offH`, `mIndex`, `kIndex`, `qTileAFT2G`, `baseOffsetAFT2G`, `vTileAFT2G`
 

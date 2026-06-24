@@ -31,10 +31,6 @@ theorem argmax_kernel_1_value_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRegions : mid_value ≠ (Region.cast mid_index : RegionName)`
-- `kernel : = argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (mid_value, s.pid)`
-- `expected : = fun _ => argmaxKernel1ValueSpec s inp M BLOCK_SIZE`
 
 **Closed-form spec defs (transitive):** `argmax_kernel_1`, `argmaxKernel1ValueSpec`, `argmaxKernel1InputTile`
 
@@ -128,13 +124,6 @@ theorem argmax_kernel_1_index_compute_correct
           (argmaxKernel1IndexSpec s inp M BLOCK_SIZE : Nat))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false`
-- `initialState : = s`
-- `expected : =
-        fun _ : PUnit =>
-          (argmaxKernel1IndexSpec s inp M BLOCK_SIZE : Nat)`
-
 **Closed-form spec defs (transitive):** `argmax_kernel_1`, `argmaxKernel1IndexSpec`, `argmaxKernel1InputTile`
 
 <details><summary><code>argmax_kernel_1</code></summary>
@@ -222,12 +211,6 @@ theorem argmax_kernel_2_compute_correct
       (write := fun _ : PUnit => some (out, 0))
       (expected := fun _ => argmaxKernel2Spec s mid_value mid_index mid_size BLOCK_MID)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = argmax_kernel_2 mid_value mid_index out mid_size BLOCK_MID`
-- `initialState : = s`
-- `write : = fun _ : PUnit => some (out, 0)`
-- `expected : = fun _ => argmaxKernel2Spec s mid_value mid_index mid_size BLOCK_MID`
 
 **Closed-form spec defs (transitive):** `argmax_kernel_2`, `argmaxKernel2Spec`, `argmaxKernel2IndexOffset`, `argmaxKernel2InputTile`
 
@@ -328,11 +311,7 @@ theorem argmax_kernel_dim_single_block_compute_correct
 - `hNle : N ≤ BLOCK_N`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => argmaxKernelOutOffset s K BLOCK_M i)`
-- `kernel : = argmax_kernel inp out_index M N K BLOCK_M BLOCK_N Bool.false`
-- `initialState : = s`
 - `fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M`
-- `expected : = fun i =>
-        argmaxKernelDimSingleBlockSpec s inp M N K BLOCK_M BLOCK_N i`
 
 **Closed-form spec defs (transitive):** `argmaxKernelOutOffset`, `argmax_kernel`, `argmaxKernelDimSingleBlockSpec`, `argmaxKernelDimSingleBlockRowMax`, `argmaxKernelArgmaxSpec`, `argmaxKernelInputTile`
 

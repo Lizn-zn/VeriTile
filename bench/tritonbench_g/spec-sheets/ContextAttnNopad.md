@@ -47,14 +47,9 @@ theorem context_attn_nopad_output_summary_general
 - `hDM : 0 < DM`
 - `hDMrs : DM ≤ rs`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `kernel : = context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
-        rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK`
-- `initialState : = s`
 - `fun idx : TileIndex [BLK, DM] => activeG s B_Seqlen BLK idx`
 - `fun idx : TileIndex [BLK, DM] =>
           (Out, outOffsetG s B_Start_Loc rs hs BLK DM idx)`
-- `expected : = fun idx : TileIndex [BLK, DM] =>
-        ctxNopadGenuineOutValueG s Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM idx`
 
 **Closed-form spec defs (transitive):** `context_attn_nopad_fwd_kernel_surface`, `activeG`, `outOffsetG`, `ctxNopadGenuineOutValueG`, `seqLen`, `startLoc`, `contextAttnNopadExactFoldMG`, `ctxNopadWindowG`, `ctxNopadBel`, `ctxQTileG`, `ctxKTileMG`, `ctxVTileMG`, `ctxKTileG`, `ctxVTileG`
 

@@ -40,18 +40,6 @@ theorem destindex_copy_quantize_kv_transform_python_h12_d96_summary
         quantizeKvTransformScaleSpec s Scale 12 i)))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 12 96 16 128`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale 1152 96 1 12 1 idx`
-- `kernel : = destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale 12 12 1 12 16`
-- `initialState : = s`
-- `expected : = fun i =>
-        quantizeKvTransformScaleSpec s Scale 12 i`
-
 **Closed-form spec defs (transitive):** `destindex_copy_quantize_kv_transform_real_surface`, `destindex_copy_quantize_kv_transform_value_store_slice`, `active`, `outOffset`, `quantizeKvTransformValueSpec`, `destindex_copy_quantize_kv_transform_scale_store_slice`, `scaleActive`, `scaleOutOffset`, `quantizeKvTransformScaleSpec`, `headIndex`, `dimIndex`, `destIndex`, `kOffset`, `scaleOffset`, `scaleSourceOffset`
 
 <details><summary><code>destindex_copy_quantize_kv_transform_real_surface</code></summary>
@@ -316,18 +304,6 @@ theorem destindex_copy_quantize_kv_transform_python_h8_d64_summary
         quantizeKvTransformScaleSpec s Scale 8 i)))
 ```
 
-**Assumptions / layout contracts:**
-- `kernel : = destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale 512 64 1 512 64 1 8 1 8 64 8 64`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale 512 64 1 8 1 idx`
-- `kernel : = destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale 8 8 1 8 8`
-- `initialState : = s`
-- `expected : = fun i =>
-        quantizeKvTransformScaleSpec s Scale 8 i`
-
 **Closed-form spec defs (transitive):** `destindex_copy_quantize_kv_transform_real_surface`, `destindex_copy_quantize_kv_transform_value_store_slice`, `active`, `outOffset`, `quantizeKvTransformValueSpec`, `destindex_copy_quantize_kv_transform_scale_store_slice`, `scaleActive`, `scaleOutOffset`, `quantizeKvTransformScaleSpec`, `headIndex`, `dimIndex`, `destIndex`, `kOffset`, `scaleOffset`, `scaleSourceOffset`
 
 <details><summary><code>destindex_copy_quantize_kv_transform_real_surface</code></summary>
@@ -591,18 +567,6 @@ theorem destindex_copy_quantize_kv_transform_python_h1_d1_summary
       (expected := fun i =>
         quantizeKvTransformScaleSpec s Scale 1 i)))
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = destindex_copy_quantize_kv_transform_value_store_slice K
-        DestLoc Out OutScale 1 1 1 1 1 1 1 1 1 1 1 1`
-- `initialState : = s`
-- `expected : = fun idx =>
-        quantizeKvTransformValueSpec s K DestLoc OutScale 1 1 1 1 1 idx`
-- `kernel : = destindex_copy_quantize_kv_transform_scale_store_slice Scale
-        DestLoc OutScale 1 1 1 1 1`
-- `initialState : = s`
-- `expected : = fun i =>
-        quantizeKvTransformScaleSpec s Scale 1 i`
 
 **Closed-form spec defs (transitive):** `destindex_copy_quantize_kv_transform_real_surface`, `destindex_copy_quantize_kv_transform_value_store_slice`, `active`, `outOffset`, `quantizeKvTransformValueSpec`, `destindex_copy_quantize_kv_transform_scale_store_slice`, `scaleActive`, `scaleOutOffset`, `quantizeKvTransformScaleSpec`, `headIndex`, `dimIndex`, `destIndex`, `kOffset`, `scaleOffset`, `scaleSourceOffset`
 

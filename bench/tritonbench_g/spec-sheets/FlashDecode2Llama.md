@@ -46,15 +46,6 @@ theorem flash_decode2_llama_normalization_output_summary_general
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)`
-- `kernel : = flash_decode2_llama_normalization_store_kernel Acc SumExp O
-        stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
-        stride_obs stride_oh stride_od BLOCK_DMODEL`
-- `initialState : = s`
-- `write : = fun i : Fin BLOCK_DMODEL =>
-        some (O, outOffset s stride_obs stride_oh stride_od i)`
-- `expected : = fun i : Fin BLOCK_DMODEL =>
-        normalizedStoreValue s Acc SumExp stride_acc_b stride_acc_h
-          stride_acc_d stride_sum_b stride_sum_h i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `flash_decode2_llama_surface`, `flash_decode2_llama_normalization_store_kernel`, `normalizedStoreValue`, `dIndex`, `accOffset`, `sumExpOffset`
 
@@ -224,17 +215,6 @@ theorem flash_decode2_llama_running_max_output_summary_general
         runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n
           stride_mid_o_eb stride_mid_o_eh stride_logic_b stride_logic_h)
 ```
-
-**Assumptions / layout contracts:**
-- `kernel : = flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
-        MaxLogic NewMaxLogic block_seq_n stride_mid_o_eb stride_mid_o_eh
-        stride_logic_b stride_logic_h`
-- `initialState : = s`
-- `write : = ComputeCorrect.WriteMap.scalar NewMaxLogic
-        (sumExpOffset s stride_logic_b stride_logic_h)`
-- `expected : = fun _ : PUnit =>
-        runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n
-          stride_mid_o_eb stride_mid_o_eh stride_logic_b stride_logic_h`
 
 **Closed-form spec defs (transitive):** `flash_decode2_llama_surface`, `flash_decode2_llama_running_max_step_kernel`, `sumExpOffset`, `runningMaxStepValue`, `logicOffset`
 
