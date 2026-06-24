@@ -212,15 +212,17 @@ def closure(seed_text, defmap):
 
 
 def selfref_flags(text):
-    flags = []
-    if re.search(r"\bexec\b", text): flags.append("exec")
-    if "toAlgKernel" in text: flags.append("toAlgKernel")
-    if "SurfaceValue" in text: flags.append("*SurfaceValue")
-    if re.search(r"\bproduced[A-Z]", text): flags.append("produced*Value")
-    # readMem on an executed state binder (sF/sOut/sFin/s'): RHS self-reference
-    if re.search(r"\b(sF|sOut|sFin|sExec|s')\.readMem", text):
-        flags.append("readMem(executed-state)")
-    return flags
+    """Self-reference markers for a def BODY. The ONLY fakery signal is defining
+    a value by executing the kernel and reading back the result state
+    (`match exec … | some s' => s'.readMem …`). The mere mention of `exec`,
+    `toAlgKernel`, or a `produced`-prefixed NAME is not self-reference — those
+    appear in genuine lowering props and genuine closed forms named `produced*`
+    (e.g. ChunkGated's `producedChunkGatedAttentionHStateValue = hClosed …`),
+    so name-based heuristics produce false positives and are not used."""
+    if re.search(r"\b(sF|sOut|sFin|sExec|sfinal|sfin|s')\.readMem", text) or \
+       (re.search(r"match\s+exec\b", text) and ".readMem" in text):
+        return ["readMem(executed-state)"]
+    return []
 
 
 def hypotheses(sig):
@@ -281,15 +283,10 @@ def make_sheet(file_path, manifest):
         order = closure(sig_scan, defmap)
         all_defs.update(order)
         # self-ref scan. NOTE: every correctness statement mentions
-        # `exec(...)`/`sF.readMem` on its LHS — that is normal, not fakery.
-        # At the STATEMENT level only the unambiguous fake-carrier tokens
-        # (*SurfaceValue / produced*Value) are a risk (they only ever appear
-        # as self-referential RHS values). Generic exec/toAlgKernel/
-        # readMem-of-executed are scanned on the pulled DEF bodies, where they
-        # would mean the closed form itself is defined via execution.
+        # `exec(...)`/`sF.readMem` on its LHS — that is normal, not fakery. The
+        # real signal is a pulled `expected` DEF whose body reads back the
+        # executed state; scanned per-def below.
         sref = []
-        if "SurfaceValue" in sig_scan: sref.append("stmt:*SurfaceValue")
-        if re.search(r"\bproduced[A-Z]", sig_scan): sref.append("stmt:produced*Value")
         out.append("")
         if order:
             out.append("**Closed-form spec defs (transitive):** "
@@ -318,7 +315,18 @@ def make_sheet(file_path, manifest):
     if pinned:
         out.append("## Also present (pinned special-case summaries)")
         for d in pinned:
-            out.append(f"- `{d['name']}`")
+            # Secondary public summaries are scanned for self-reference too —
+            # a non-headline `_compute_correct`/`_summary` can still smuggle a
+            # `produced*Value`/exec-readback `expected` (e.g. cross-launch
+            # resume carriers). Flag them so the audit isn't headline-only.
+            psig = strip_comments(split_statement(d["text"])[0])
+            psref = []
+            for n in closure(psig, defmap):
+                psref += [f"{n}:{fl}" for fl in selfref_flags(body_of(defmap[n]))]
+            tag = (" ⚠ SELF-REF " + ",".join(sorted(set(psref)))) if psref else ""
+            if psref:
+                all_selfref.update(psref)
+            out.append(f"- `{d['name']}`{tag}")
         out.append("")
     # review-cost proxy: how hard is this spec to read?
     spec_text = "\n".join(defmap[n]["text"] for n in all_defs)

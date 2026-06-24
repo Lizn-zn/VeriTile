@@ -1290,9 +1290,9 @@ noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × �
 - `attention_fwd_triton3_end_output_formula_store_slice_compute_correct`
 - `attention_fwd_triton3_end_m_formula_store_slice_compute_correct`
 - `attention_fwd_triton3_end_output_formula_python_test_shape_compute_correct`
-- `attention_fwd_triton3_case4_surface_out_compute_correct`
-- `attention_fwd_triton3_case4_surface_m_compute_correct`
-- `attention_fwd_triton3_python_case4_output_summary`
+- `attention_fwd_triton3_case4_surface_out_compute_correct` ⚠ SELF-REF producedAttentionFwdTriton3Case4OutValue:readMem(executed-state)
+- `attention_fwd_triton3_case4_surface_m_compute_correct` ⚠ SELF-REF producedAttentionFwdTriton3Case4MValue:readMem(executed-state)
+- `attention_fwd_triton3_python_case4_output_summary` ⚠ SELF-REF producedAttentionFwdTriton3Case4MValue:readMem(executed-state),producedAttentionFwdTriton3Case4OutValue:readMem(executed-state)
 - `attention_fwd_triton3_python_end_output_formula_summary`
 - `attention_fwd_triton3_python_case3_output_summary`
 - `attention_fwd_triton3_python_case1_output_summary`
