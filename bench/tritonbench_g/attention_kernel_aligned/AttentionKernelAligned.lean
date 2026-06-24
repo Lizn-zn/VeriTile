@@ -59,8 +59,8 @@ The public summary asserts the **genuine** closed form: every observable `Out`
 lane equals the base-2 streaming-softmax `alignedClosedForm` of the loaded Q/K/V
 tiles under the scalar score scale `sm_scale·log2(e)` and the fused `rel_h+rel_w`
 bias — discharged whole-kernel by `ClosedForm.aligned_exec`, NOT a self-referential
-readback. The `producedOutputValue` definition and `*_surface_compute_correct`
-lemmas below are kept only as internal *execution observations*. The genuine
+readback. (The `producedOutputValue` definition below is retained only as a
+documented *execution observation*; it is referenced by no public summary.) The genuine
 producer closed form is `alignedClosedForm`, with the streaming bridge
 `alignedClosedForm_eq_streaming` and the exec-side assembly
 `ClosedForm.aligned_exec` both proved sorry-free. This is a
@@ -457,39 +457,6 @@ theorem attention_kernel_aligned_final_store_slice_compute_correct
     stride_om stride_on BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   exact Option.some.inj h
-
-theorem attention_kernel_aligned_fwd_kernel_aligned_surface_compute_correct
-    (Q K V B0 Out : RegionName) (sm_scale : ℝ)
-    (stride_qh stride_qm stride_qk
-      stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn
-      stride_oh stride_om stride_on
-      stride_b0h stride_b0m
-      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
-    (out_dtype : FloatDType) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
-        sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
-        stride_vh stride_vk stride_vn stride_oh stride_om stride_on
-        stride_b0h stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-        BLOCK_DMODEL BLOCK_M BLOCK_N out_dtype)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        some (Out, surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        producedOutputValue s Q K V B0 Out sm_scale stride_qh stride_qm
-          stride_qk stride_kh stride_kn stride_kk stride_vh stride_vk
-          stride_vn stride_oh stride_om stride_on stride_b0h stride_b0m
-          Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL BLOCK_M
-          BLOCK_N out_dtype idx) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_kernel_aligned_fwd_kernel_aligned_surface,
-      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  simp [producedOutputValue, hExec]
 
 /-! ## Genuine closed-form exec assembly (mirrors `attention_kernel` / PR #304)
 
