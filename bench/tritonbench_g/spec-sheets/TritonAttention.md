@@ -932,8 +932,8 @@ def dIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
 - `triton_attention_bwd_preprocess_newdo_formula_slice_compute_correct`
 - `triton_attention_bwd_preprocess_delta_formula_slice_compute_correct`
 - `triton_attention_bwd_preprocess_delta_store_slice_compute_correct`
-- `triton_attention_bwd_preprocess_newdo_surface_compute_correct`
-- `triton_attention_bwd_preprocess_delta_surface_compute_correct`
+- `triton_attention_bwd_preprocess_newdo_surface_compute_correct` ⚠ SELF-REF producedBwdPreprocessNewDOValue:readMem(executed-state)
+- `triton_attention_bwd_preprocess_delta_surface_compute_correct` ⚠ SELF-REF producedBwdPreprocessDeltaValue:readMem(executed-state)
 - `triton_attention_bwd_preprocess_newdo_genuine_compute_correct`
 - `triton_attention_bwd_preprocess_delta_genuine_compute_correct`
 - `triton_attention_bwd_score_p_formula_slice_compute_correct`
@@ -957,20 +957,20 @@ def dIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
 - `triton_attention_bwd_dq_store_python_test_shape_compute_correct`
 - `triton_attention_bwd_dk_store_python_test_shape_compute_correct`
 - `triton_attention_bwd_dv_store_python_test_shape_compute_correct`
-- `triton_attention_bwd_kernel_dq_python_test_shape_compute_correct`
-- `triton_attention_bwd_kernel_dk_python_test_shape_compute_correct`
-- `triton_attention_bwd_kernel_dv_python_test_shape_compute_correct`
+- `triton_attention_bwd_kernel_dq_python_test_shape_compute_correct` ⚠ SELF-REF producedBwdKernelDQValue:readMem(executed-state)
+- `triton_attention_bwd_kernel_dk_python_test_shape_compute_correct` ⚠ SELF-REF producedBwdKernelDKValue:readMem(executed-state)
+- `triton_attention_bwd_kernel_dv_python_test_shape_compute_correct` ⚠ SELF-REF producedBwdKernelDVValue:readMem(executed-state)
 - `triton_attention_bwd_score_p_formula_python_test_shape_compute_correct`
 - `triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct`
 - `triton_attention_forward_surface_out_python_test_shape_compute_correct`
 - `triton_attention_forward_surface_l_python_test_shape_compute_correct`
 - `triton_attention_forward_surface_m_python_test_shape_compute_correct`
 - `triton_attention_forward_python_test_shape_all_outputs_compute_correct`
-- `triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct`
-- `triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct`
+- `triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct` ⚠ SELF-REF producedBwdPreprocessDeltaValue:readMem(executed-state),producedBwdPreprocessNewDOValue:readMem(executed-state)
+- `triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct` ⚠ SELF-REF producedBwdKernelDKValue:readMem(executed-state),producedBwdKernelDQValue:readMem(executed-state),producedBwdKernelDVValue:readMem(executed-state)
 - `triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct`
 - `triton_attention_bwd_score_python_test_shape_formula_summary`
 - `triton_attention_forward_python_test_shape_output_summary`
-- `triton_attention_bwd_preprocess_python_test_shape_output_summary`
-- `triton_attention_bwd_grads_python_test_shape_output_summary`
-- `triton_attention_bwd_python_test_shape_complete_summary`
+- `triton_attention_bwd_preprocess_python_test_shape_output_summary` ⚠ SELF-REF producedBwdPreprocessDeltaValue:readMem(executed-state),producedBwdPreprocessNewDOValue:readMem(executed-state)
+- `triton_attention_bwd_grads_python_test_shape_output_summary` ⚠ SELF-REF producedBwdKernelDKValue:readMem(executed-state),producedBwdKernelDQValue:readMem(executed-state),producedBwdKernelDVValue:readMem(executed-state)
+- `triton_attention_bwd_python_test_shape_complete_summary` ⚠ SELF-REF producedBwdKernelDKValue:readMem(executed-state),producedBwdKernelDQValue:readMem(executed-state),producedBwdKernelDVValue:readMem(executed-state)

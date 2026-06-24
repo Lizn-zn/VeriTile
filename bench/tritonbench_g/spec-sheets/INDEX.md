@@ -1,18 +1,18 @@
 # Spec-sheet index
 
-- 141 kernels, 327 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 327 headline theorems, 3 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
 | 328 | [MixedSparseAttention.md](MixedSparseAttention.md) | 45 | 3 | 168 | 22 |  |
-| 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 |  |
+| 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 | ⚠producedBwdKernelDKValue:readMem(executed-state),producedBwdKernelDQValue:readMem(executed-state),producedBwdKernelDVValue:readMem(executed-state),producedBwdPreprocessDeltaValue:readMem(executed-state),producedBwdPreprocessNewDOValue:readMem(executed-state) |
 | 267 | [ContextAttnLlama.md](ContextAttnLlama.md) | 43 | 4 | 115 | 19 |  |
 | 264 | [ContextAttnBloom.md](ContextAttnBloom.md) | 42 | 4 | 115 | 19 |  |
 | 261 | [ContextAttnFwd.md](ContextAttnFwd.md) | 41 | 4 | 115 | 19 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
-| 239 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 26 | 2 | 102 | 57 |  |
+| 239 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 26 | 2 | 102 | 57 | ⚠producedAttentionFwdTriton3Case4MValue:readMem(executed-state),producedAttentionFwdTriton3Case4OutValue:readMem(executed-state) |
 | 227 | [RopeEmbedding.md](RopeEmbedding.md) | 17 | 0 | 160 | 16 |  |
 | 226 | [KvCacheFilling.md](KvCacheFilling.md) | 17 | 0 | 159 | 16 |  |
 | 208 | [ReversedCumsum.md](ReversedCumsum.md) | 18 | 1 | 134 | 19 |  |
@@ -76,7 +76,7 @@
 | 61 | [RowwiseQuantizationTriton.md](RowwiseQuantizationTriton.md) | 7 | 0 | 38 | 2 |  |
 | 60 | [MatmulLeakyrelu.md](MatmulLeakyrelu.md) | 13 | 2 | 15 | 4 |  |
 | 60 | [MatmulLeakyreluFp8.md](MatmulLeakyreluFp8.md) | 13 | 2 | 15 | 4 |  |
-| 59 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 3 | 21 | 5 |  |
+| 59 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 3 | 21 | 5 | ⚠producedOutputValue:readMem(executed-state) |
 | 59 | [DequantizeRowwise.md](DequantizeRowwise.md) | 2 | 1 | 48 | 4 |  |
 | 58 | [AttentionFwdTriton1.md](AttentionFwdTriton1.md) | 7 | 0 | 32 | 5 |  |
 | 58 | [GegluTanhTriton.md](GegluTanhTriton.md) | 3 | 0 | 40 | 9 |  |
