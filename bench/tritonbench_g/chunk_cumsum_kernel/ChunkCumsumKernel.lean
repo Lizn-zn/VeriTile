@@ -1355,15 +1355,36 @@ headline; `chunk_cumsum_scalar_python_test_shape_output_summary` is the `T = 4`,
 theorem chunk_cumsum_scalar_output_summary_general
     (S O : RegionName) (T BT : Nat) (s : BlockState)
     (hSO : O ≠ S) (hBT : 0 < BT) :
+    -- (1) the full surface lowers to the algorithm layer
     (∃ alg, (chunk_cumsum_scalar_surface S O T BT).toAlgorithm? = Except.ok alg) ∧
+    -- (2) the surface runs to completion (existence / termination)
     (∃ sfinal,
-      exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal ∧
-      ∀ flat, flat < T →
-        sfinal.readMem O (s.pids 0 * T + flat)
-          = ∑ m ∈ (Finset.range T).filter (fun m => m ≤ flat),
-              s.readMem S (s.pids 0 * T + m)) :=
-  ⟨chunk_cumsum_scalar_surface_toAlgorithm_supported S O T BT,
-   chunk_cumsum_scalar_surface_global_cumsum S O T BT s hSO hBT⟩
+      exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal) ∧
+    -- (3) standard Realizes: every in-range O lane holds the genuine global
+    --     prefix sum `Σ_{m ≤ flat, m < T} S[i_bh·T + m]`, read purely over input
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_surface S O T BT)
+      (initialState := s)
+      (write := fun i : Fin T => some (O, s.pids 0 * T + i.val))
+      (expected := fun i : Fin T =>
+        ∑ m ∈ (Finset.range T).filter (fun m => m ≤ i.val),
+          s.readMem S (s.pids 0 * T + m)) := by
+  obtain ⟨sfinal, hexec, hcum⟩ :=
+    chunk_cumsum_scalar_surface_global_cumsum S O T BT s hSO hBT
+  refine ⟨chunk_cumsum_scalar_surface_toAlgorithm_supported S O T BT,
+    ⟨sfinal, hexec⟩, ?_⟩
+  obtain ⟨alg, halg⟩ := chunk_cumsum_scalar_surface_toAlgorithm_supported S O T BT
+  have hk : (chunk_cumsum_scalar_surface S O T BT).toAlgorithm?
+      = Except.ok (chunk_cumsum_scalar_surface S O T BT).toAlgKernel := by
+    simp only [ComputeKernel.toAlgKernel, halg]
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel hk
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  rw [hExec] at hexec
+  obtain rfl := Option.some.inj hexec
+  exact hcum i.val i.isLt
 
 end Correct
 
@@ -1526,18 +1547,22 @@ theorem chunk_cumsum_scalar_python_test_shape_summary
 Instantiates the dimension-general headline
 `chunk_cumsum_scalar_output_summary_general` at the checked Python shape
 (`cdiv 4 16 = 1`, so the chunk loop runs once with carry `= 0`): the full surface
-lowers and computes the genuine global prefix sum
-`O[i_bh·4 + flat] = Σ_{m ≤ flat, m < 4} S[i_bh·4 + m]`. `expected` is a standalone
-`Finset.sum` over input memory, never a read-back of the kernel's own output. -/
+lowers, runs to completion, and (via the standard `Realizes` surface) computes the
+genuine global prefix sum `O[i_bh·4 + flat] = Σ_{m ≤ flat, m < 4} S[i_bh·4 + m]`.
+`expected` is a standalone `Finset.sum` over input memory, never a read-back of
+the kernel's own output. -/
 theorem chunk_cumsum_scalar_python_test_shape_output_summary
     (S O : RegionName) (s : BlockState) (hSO : O ≠ S) :
     (∃ alg, (chunk_cumsum_scalar_surface S O 4 16).toAlgorithm? = Except.ok alg) ∧
     (∃ sfinal,
-      exec (chunk_cumsum_scalar_surface S O 4 16).toAlgKernel s = some sfinal ∧
-      ∀ flat, flat < 4 →
-        sfinal.readMem O (s.pids 0 * 4 + flat)
-          = ∑ m ∈ (Finset.range 4).filter (fun m => m ≤ flat),
-              s.readMem S (s.pids 0 * 4 + m)) :=
+      exec (chunk_cumsum_scalar_surface S O 4 16).toAlgKernel s = some sfinal) ∧
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_surface S O 4 16)
+      (initialState := s)
+      (write := fun i : Fin 4 => some (O, s.pids 0 * 4 + i.val))
+      (expected := fun i : Fin 4 =>
+        ∑ m ∈ (Finset.range 4).filter (fun m => m ≤ i.val),
+          s.readMem S (s.pids 0 * 4 + m)) :=
   chunk_cumsum_scalar_output_summary_general S O 4 16 s hSO (by norm_num)
 
 /-! ## Surface-level loop induction (carry invariant)

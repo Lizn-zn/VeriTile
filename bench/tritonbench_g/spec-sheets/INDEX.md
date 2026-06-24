@@ -133,6 +133,7 @@
 | 23 | [SoftmaxOptimize.md](SoftmaxOptimize.md) | 3 | 0 | 13 | 1 |  |
 | 23 | [SquareMatrix.md](SquareMatrix.md) | 1 | 0 | 16 | 4 |  |
 | 23 | [VectorAddition.md](VectorAddition.md) | 1 | 0 | 15 | 5 |  |
+| 22 | [ChunkCumsumKernel.md](ChunkCumsumKernel.md) | 1 | 0 | 17 | 2 |  |
 | 22 | [MatrixReduction.md](MatrixReduction.md) | 3 | 0 | 13 | 0 |  |
 | 22 | [VectorAdditionCustom.md](VectorAdditionCustom.md) | 1 | 0 | 14 | 5 |  |
 | 21 | [AddValue.md](AddValue.md) | 1 | 0 | 14 | 4 |  |
@@ -144,5 +145,4 @@
 | 20 | [CosineCompute.md](CosineCompute.md) | 1 | 0 | 13 | 4 |  |
 | 20 | [LoraExpandGemv.md](LoraExpandGemv.md) | 1 | 0 | 12 | 5 |  |
 | 19 | [LogsumexpFwd.md](LogsumexpFwd.md) | 1 | 0 | 14 | 2 |  |
-| 15 | [ChunkCumsumKernel.md](ChunkCumsumKernel.md) | 1 | 0 | 10 | 2 |  |
 | 9 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 2 | 0 | 3 | 0 |  |
