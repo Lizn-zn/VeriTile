@@ -92,6 +92,13 @@ def rmsnorm_triton
 ```lean
 def outOff (s : BlockState) (sob som sok : Nat) (k : Nat) : Nat :=
   s.pids 0 * sob + s.pids 1 * som + k * sok
+
+end Wb
+
+namespace VarLoop
+open ScratchRms
+
+-- var-loop invariant
 ```
 </details>
 

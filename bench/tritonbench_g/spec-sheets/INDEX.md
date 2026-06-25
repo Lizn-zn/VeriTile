@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 141 kernels, 328 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 326 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -20,7 +20,6 @@
 | 201 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 15 | 0 | 136 | 20 |  |
 | 177 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
 | 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
-| 152 | [SoftmaxReducev.md](SoftmaxReducev.md) | 28 | 2 | 54 | 12 |  |
 | 150 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 19 | 1 | 91 | 1 |  |
 | 149 | [ChunkCumsumVector.md](ChunkCumsumVector.md) | 13 | 2 | 96 | 12 |  |
 | 149 | [Int8Quantization.md](Int8Quantization.md) | 15 | 0 | 104 | 0 |  |
@@ -33,6 +32,7 @@
 | 117 | [KldivTriton.md](KldivTriton.md) | 9 | 0 | 70 | 20 |  |
 | 116 | [FusedRwkv6Kernel.md](FusedRwkv6Kernel.md) | 19 | 4 | 47 | 8 |  |
 | 114 | [CacheTransformTriton.md](CacheTransformTriton.md) | 11 | 0 | 76 | 5 |  |
+| 114 | [SoftmaxReducev.md](SoftmaxReducev.md) | 22 | 1 | 39 | 8 |  |
 | 112 | [FastRopeEmbedding.md](FastRopeEmbedding.md) | 13 | 0 | 65 | 8 |  |
 | 110 | [QuantizeGlobal.md](QuantizeGlobal.md) | 4 | 0 | 91 | 7 |  |
 | 108 | [ChunkedCumsumFwd.md](ChunkedCumsumFwd.md) | 11 | 1 | 72 | 2 |  |
@@ -59,7 +59,6 @@
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
 | 76 | [QuantTransposeKernel.md](QuantTransposeKernel.md) | 8 | 0 | 52 | 0 |  |
 | 75 | [LayerNormLiger.md](LayerNormLiger.md) | 10 | 0 | 38 | 7 |  |
-| 73 | [AttentionKernel.md](AttentionKernel.md) | 11 | 1 | 33 | 6 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 10 | 1 | 34 | 7 |  |
 | 71 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 2 | 20 | 1 |  |
 | 70 | [DequantizeMatmul.md](DequantizeMatmul.md) | 6 | 0 | 52 | 0 |  |
@@ -82,6 +81,7 @@
 | 58 | [GegluTanhTriton.md](GegluTanhTriton.md) | 3 | 0 | 40 | 9 |  |
 | 58 | [QuantizeKvCopy.md](QuantizeKvCopy.md) | 12 | 1 | 20 | 1 |  |
 | 58 | [SwigluTriton.md](SwigluTriton.md) | 3 | 0 | 40 | 9 |  |
+| 57 | [AttentionKernel.md](AttentionKernel.md) | 11 | 1 | 18 | 5 |  |
 | 54 | [IvDependentMatmul.md](IvDependentMatmul.md) | 11 | 2 | 15 | 4 |  |
 | 54 | [MatmulTma.md](MatmulTma.md) | 6 | 2 | 30 | 4 |  |
 | 54 | [SwigluBackward.md](SwigluBackward.md) | 2 | 0 | 41 | 7 |  |
