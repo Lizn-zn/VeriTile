@@ -2695,65 +2695,6 @@ theorem fifth_order_fwd_surface_y10_compute_correct
     output_numel col_offset output_stride s s' hStride hOutInj hExec i
   simpa [hActive] using h
 
-/-! ### Backward surface infrastructure
-
-The bwd kernel stores to `coord_grad_ptr` at offsets `coord_row_offset + d`
-for `d ∈ {0, 1, 2}`, with `coord_row_offset = i*3 + base`. With coord_stride
-fixed at 3, the three offsets within one lane are disjoint, and across lanes
-they remain disjoint by the stride argument.
-
-The polynomial expressions for `g_x`, `g_y`, `g_z` (11 terms each, ~30
-constants per dimension) are too lengthy to verify by full transcription
-within the time budget. We provide the disjointness infrastructure here
-(`coord_dim_offset_disjoint`) and a lowering theorem
-(`fifth_order_bwd_surface_toAlgorithm_supported`) that demonstrates the kernel
-lowers to the algorithm layer. The
-polynomial-correctness specs `gradXSpec`/`gradYSpec`/`gradZSpec` with
-their `_correct`/`_compute_correct` lemmas are left for future work. -/
-
-/-- Disjointness for the bwd kernel: the `gd`-store offset at lane `i`
-(at coord_row + gd) differs from any other-dim store offset at lane `idx`
-(at coord_row + od), when `gd, od ∈ [0, 2]` and `gd ≠ od`. This mirrors
-`y0jk_offset_disjoint` but specialized to coord_stride = 3. -/
-theorem coord_dim_offset_disjoint
-    (s : BlockState) (block_size : Nat)
-    (gd od : Nat) (hgd_le : gd ≤ 2) (hod_le : od ≤ 2) (hne : gd ≠ od)
-    (i : Fin block_size) (idx : TileIndex [block_size]) :
-    i.val * 3 + block_size * 3 * s.pid + gd ≠
-      idx.1.val * 3 + block_size * 3 * s.pid + od := by
-  intro heq
-  have hbase :
-      i.val * 3 + gd + (block_size * 3 * s.pid) =
-      idx.1.val * 3 + od + (block_size * 3 * s.pid) := by
-    have hl : i.val * 3 + block_size * 3 * s.pid + gd =
-              i.val * 3 + gd + (block_size * 3 * s.pid) := by ring
-    have hr : idx.1.val * 3 + block_size * 3 * s.pid + od =
-              idx.1.val * 3 + od + (block_size * 3 * s.pid) := by ring
-    rw [hl, hr] at heq
-    exact heq
-  have hkey : i.val * 3 + gd = idx.1.val * 3 + od := Nat.add_right_cancel hbase
-  rcases Nat.lt_trichotomy i.val idx.1.val with hlt | heqv | hgt
-  · have hstep : i.val + 1 ≤ idx.1.val := hlt
-    have h1 : (i.val + 1) * 3 ≤ idx.1.val * 3 := Nat.mul_le_mul_right _ hstep
-    have h2 : (i.val + 1) * 3 = i.val * 3 + 3 := by ring
-    have h3 : i.val * 3 + gd < i.val * 3 + 3 :=
-      Nat.add_lt_add_left (Nat.lt_of_le_of_lt hgd_le (by norm_num)) _
-    have h4 : i.val * 3 + 3 ≤ idx.1.val * 3 := by rw [← h2]; exact h1
-    have h5 : i.val * 3 + gd < idx.1.val * 3 := Nat.lt_of_lt_of_le h3 h4
-    have h6 : idx.1.val * 3 ≤ idx.1.val * 3 + od := Nat.le_add_right _ _
-    exact absurd hkey (Nat.ne_of_lt (Nat.lt_of_lt_of_le h5 h6))
-  · rw [heqv] at hkey
-    exact hne (Nat.add_left_cancel hkey)
-  · have hstep : idx.1.val + 1 ≤ i.val := hgt
-    have h1 : (idx.1.val + 1) * 3 ≤ i.val * 3 := Nat.mul_le_mul_right _ hstep
-    have h2 : (idx.1.val + 1) * 3 = idx.1.val * 3 + 3 := by ring
-    have h3 : idx.1.val * 3 + od < idx.1.val * 3 + 3 :=
-      Nat.add_lt_add_left (Nat.lt_of_le_of_lt hod_le (by norm_num)) _
-    have h4 : idx.1.val * 3 + 3 ≤ i.val * 3 := by rw [← h2]; exact h1
-    have h5 : idx.1.val * 3 + od < i.val * 3 := Nat.lt_of_lt_of_le h3 h4
-    have h6 : i.val * 3 ≤ i.val * 3 + gd := Nat.le_add_right _ _
-    exact absurd hkey.symm (Nat.ne_of_lt (Nat.lt_of_lt_of_le h5 h6))
-
 /-- Per-kernel output summary for `fifth_order_fwd` (representative channel
 `Y00`): the DSL surface lowers to the algorithm layer, and the strided `Y00`
 store to `output_ptr` is compute-correct — every active lane holds the

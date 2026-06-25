@@ -144,13 +144,6 @@ theorem iv_dependent_matmul_pre_load_surface_toAlgorithm_supported
         some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
   unfold evalOp; simp [Tile.expandDim]; rfl
 
-theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
-    (x : Op .bool a) (y : Op .bool b) (s : BlockState) :
-    evalOp (.boolAnd bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s;
-      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
-  simp [evalOp]
-
 /-- `a_ptr` base eval: cell `(i,e) = (A, offs_am i · stride_am + e · stride_ak)`. -/
 theorem aptr_eval (s : BlockState) (A : RegionName) (M K SAM SAK : Nat) (gm : Fin M → Nat)
     (hm : s.regs .nat [M] "offs_am" = some (Tile.vec gm))

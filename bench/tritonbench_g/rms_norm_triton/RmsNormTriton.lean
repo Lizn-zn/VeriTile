@@ -88,12 +88,6 @@ noncomputable def rmsSumCarrier
       (rmsInputTile s X x_stride_r x_stride_c N BLOCK_SIZE)
       (rmsInputTile s X x_stride_r x_stride_c N BLOCK_SIZE))).data PUnit.unit
 
-noncomputable def rmsVarCarrier
-    (s : BlockState) (X : RegionName) (x_stride_r x_stride_c N BLOCK_SIZE : Nat) :
-    WithBot ℝ :=
-  Option.map (fun x => x / (N : ℝ))
-    (rmsSumCarrier s X x_stride_r x_stride_c N BLOCK_SIZE)
-
 noncomputable def rmsRrmsCarrier
     (s : BlockState) (X : RegionName) (x_stride_r x_stride_c N BLOCK_SIZE : Nat)
     (eps : ℝ) : WithBot ℝ :=

@@ -2318,25 +2318,6 @@ noncomputable def bwdKernelDSG (s : BlockState) (Q K V DO M Delta : RegionName)
     (BD NCTX : Nat) (sc : ℝ) (I J : Nat) : ℝ :=
   bwdKernelPG s Q K M BD NCTX sc I J * bwdKernelDPG s V DO Delta BD NCTX I J * sc
 
-/-- **Genuine general `DV` value.** `dv[J,e] = fp16( Σ_I fp16(p[I,J]) · do[I,e] )`,
-summed over **all** global query rows `I ∈ [0, N_CTX)` (causal `p` zeroes `I<J`),
-fp16-cast on store. -/
-noncomputable def bwdKernelDVSpecG
-    (s : BlockState) (Q K M DO : RegionName) (BD NCTX : Nat) (sc : ℝ)
-    (J e : Nat) : ℝ :=
-  bwdFp16
-    (∑ I : Fin NCTX,
-      bwdFp16 (bwdKernelPG s Q K M BD NCTX sc I.val J) * bwdKernelDOG s DO BD I.val e)
-
-/-- **Genuine general `DK` value.** `dk[J,e] = fp16( Σ_I fp16(ds[I,J]) · q[I,e] )`. -/
-noncomputable def bwdKernelDKSpecG
-    (s : BlockState) (Q K V DO M Delta : RegionName) (BD NCTX : Nat) (sc : ℝ)
-    (J e : Nat) : ℝ :=
-  bwdFp16
-    (∑ I : Fin NCTX,
-      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I.val J) *
-        bwdKernelQG s Q BD I.val e)
-
 /-- **Genuine general `DQ` value.** `dq[I,e] = priorDQ[I,e] + Σ_J fp16(ds[I,J])·k[J,e]`,
 summed over **all** global key rows `J ∈ [0, N_CTX)` (causal `p ⇒ ds` zeroes
 `J>I`), stored real (no fp16 cast on the `DQ` store). -/
@@ -2347,78 +2328,6 @@ noncomputable def bwdKernelDQSpecG
     ∑ J : Fin NCTX,
       bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J.val) *
         bwdKernelKG s K BD J.val e
-
-/-! #### Pinned-spec compatibility bridges (`G` collapses to `Fin 128`/`Fin 64`) -/
-
-/-- At `BD = 64`, `NCTX = 128`, `sc = 1/√64`, the general loaded `q` agrees with
-the pinned `bwdKernelQ` (keyed on `Nat` channel `e`). -/
-theorem bwdKernelQG_eq (s : BlockState) (Q : RegionName) (i : Fin 128) (e : Nat) (he : e < 64) :
-    bwdKernelQG s Q 64 i.val e = bwdKernelQ s Q i ⟨e, by omega⟩ := rfl
-
-theorem bwdKernelKG_eq (s : BlockState) (K : RegionName) (j : Fin 128) (e : Nat) (he : e < 64) :
-    bwdKernelKG s K 64 j.val e = bwdKernelK s K j ⟨e, by omega⟩ := rfl
-
-theorem bwdKernelVG_eq (s : BlockState) (V : RegionName) (j : Fin 128) (e : Nat) (he : e < 64) :
-    bwdKernelVG s V 64 j.val e = bwdKernelV s V j ⟨e, by omega⟩ := rfl
-
-theorem bwdKernelDOG_eq (s : BlockState) (DO : RegionName) (i : Fin 128) (e : Nat) (he : e < 64) :
-    bwdKernelDOG s DO 64 i.val e = bwdKernelDO s DO i ⟨e, by omega⟩ := rfl
-
-theorem bwdKernelMG_eq (s : BlockState) (M : RegionName) (i : Fin 128) (hH : s.pids 1 = 0) :
-    bwdKernelMG s M 128 i.val = bwdKernelM s M i := by
-  simp only [bwdKernelMG, bwdKernelM]
-
-theorem bwdKernelDiG_eq (s : BlockState) (Delta : RegionName) (i : Fin 128) :
-    bwdKernelDiG s Delta 128 i.val = bwdKernelDi s Delta i := by
-  simp only [bwdKernelDiG, bwdKernelDi]
-
-theorem bwdKernelQKG_eq (s : BlockState) (Q K : RegionName) (i j : Fin 128) :
-    bwdKernelQKG s Q K 64 i.val j.val = bwdKernelQK s Q K i j := by
-  simp only [bwdKernelQKG, bwdKernelQK, bwdKernelQG, bwdKernelKG, bwdKernelQ, bwdKernelK]
-
-theorem bwdKernelPG_eq (s : BlockState) (Q K M : RegionName) (i j : Fin 128) :
-    bwdKernelPG s Q K M 64 128 (Real.sqrt (64 : ℝ))⁻¹ i.val j.val = bwdKernelP s Q K M i j := by
-  simp only [bwdKernelPG, bwdKernelP, bwdKernelQKG_eq, bwdKernelMG, bwdKernelM]
-
-theorem bwdKernelDPG_eq (s : BlockState) (V DO Delta : RegionName) (i j : Fin 128) :
-    bwdKernelDPG s V DO Delta 64 128 i.val j.val = bwdKernelDP s V DO Delta i j := by
-  simp only [bwdKernelDPG, bwdKernelDP, bwdKernelDOG, bwdKernelVG, bwdKernelDO, bwdKernelV,
-    bwdKernelDiG, bwdKernelDi]
-
-theorem bwdKernelDSG_eq (s : BlockState) (Q K V DO M Delta : RegionName) (i j : Fin 128) :
-    bwdKernelDSG s Q K V DO M Delta 64 128 (Real.sqrt (64 : ℝ))⁻¹ i.val j.val
-      = bwdKernelDS s Q K V DO M Delta i j := by
-  simp only [bwdKernelDSG, bwdKernelDS, bwdKernelPG_eq, bwdKernelDPG_eq]
-
-/-- The general `DV` spec collapses to the pinned `bwdKernelDVSpec` at the
-checked launch shape. -/
-theorem bwdKernelDVSpecG_eq (s : BlockState) (Q K V DO M Delta : RegionName)
-    (idx : TileIndex [128, 64]) :
-    bwdKernelDVSpecG s Q K M DO 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
-      = bwdKernelDVSpec s Q K V DO M Delta idx := by
-  obtain ⟨j, ⟨e, he⟩, u⟩ := idx
-  simp only [bwdKernelDVSpecG, bwdKernelDVSpec]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun i _ => ?_))
-  rw [bwdKernelPG_eq, bwdKernelDOG_eq s DO i e he]
-
-theorem bwdKernelDKSpecG_eq (s : BlockState) (Q K V DO M Delta : RegionName)
-    (idx : TileIndex [128, 64]) :
-    bwdKernelDKSpecG s Q K V DO M Delta 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
-      = bwdKernelDKSpec s Q K V DO M Delta idx := by
-  obtain ⟨j, ⟨e, he⟩, u⟩ := idx
-  simp only [bwdKernelDKSpecG, bwdKernelDKSpec]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun i _ => ?_))
-  rw [bwdKernelDSG_eq, bwdKernelQG_eq s Q i e he]
-
-theorem bwdKernelDQSpecG_eq (s : BlockState) (Q K V DO M Delta DQ : RegionName)
-    (idx : TileIndex [128, 64]) :
-    bwdKernelDQSpecG s Q K V DO M Delta DQ 64 128 (Real.sqrt (64 : ℝ))⁻¹ idx.1.val idx.2.1.val
-      = bwdKernelDQSpec s Q K V DO M Delta DQ idx := by
-  obtain ⟨i, ⟨e, he⟩, u⟩ := idx
-  simp only [bwdKernelDQSpecG, bwdKernelDQSpec]
-  refine congrArg (s.readMem DQ (bwdKBase s + i.val * 64 + e) + ·)
-    (Finset.sum_congr rfl (fun j _ => ?_))
-  rw [bwdKernelDSG_eq, bwdKernelKG_eq s K j e he]
 
 /-! #### Block-decomposition partial-sum bridges (two-level loop content)
 
@@ -2450,37 +2359,6 @@ theorem bwd_blockIndexEquiv_symm_val {BM nb : Nat} (m : Fin nb) (iL : Fin BM) :
   show (finProdFinEquiv (m, iL)).val = m.val * BM + iL.val
   show iL.val + BM * m.val = m.val * BM + iL.val
   rw [Nat.mul_comm m.val BM]; omega
-
-/-- **DV block-decomposition bridge.** -/
-theorem bwdKernelDVSpecG_blockSum (s : BlockState) (Q K M DO : RegionName)
-    (BD BM nb : Nat) (sc : ℝ) (J e : Nat) :
-    bwdKernelDVSpecG s Q K M DO BD (BM * nb) sc J e
-      = bwdFp16 (∑ m : Fin nb, ∑ iL : Fin BM,
-          bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc (m.val * BM + iL.val) J) *
-            bwdKernelDOG s DO BD (m.val * BM + iL.val) e) := by
-  simp only [bwdKernelDVSpecG]
-  refine congrArg bwdFp16 ?_
-  rw [bwd_flatSum_eq_blockSum
-    (fun I : Fin (BM * nb) =>
-      bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc I.val J) * bwdKernelDOG s DO BD I.val e)]
-  refine Finset.sum_congr rfl (fun m _ => Finset.sum_congr rfl (fun iL _ => ?_))
-  rw [bwd_blockIndexEquiv_symm_val]
-
-/-- **DK block-decomposition bridge.** -/
-theorem bwdKernelDKSpecG_blockSum (s : BlockState) (Q K V DO M Delta : RegionName)
-    (BD BM nb : Nat) (sc : ℝ) (J e : Nat) :
-    bwdKernelDKSpecG s Q K V DO M Delta BD (BM * nb) sc J e
-      = bwdFp16 (∑ m : Fin nb, ∑ iL : Fin BM,
-          bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc (m.val * BM + iL.val) J) *
-            bwdKernelQG s Q BD (m.val * BM + iL.val) e) := by
-  simp only [bwdKernelDKSpecG]
-  refine congrArg bwdFp16 ?_
-  rw [bwd_flatSum_eq_blockSum
-    (fun I : Fin (BM * nb) =>
-      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I.val J) *
-        bwdKernelQG s Q BD I.val e)]
-  refine Finset.sum_congr rfl (fun m _ => Finset.sum_congr rfl (fun iL _ => ?_))
-  rw [bwd_blockIndexEquiv_symm_val]
 
 /-- **DQ block-decomposition bridge.** The genuine general `DQ` cell sum ranges
 over all global **key** rows; for a fixed query block, the inner loop streams the
@@ -2631,26 +2509,6 @@ theorem bwdAccDkCell_full (s : BlockState) (Q K V DO M Delta : RegionName)
   refine Finset.sum_congr rfl (fun t ht => ?_)
   rw [Finset.mem_range] at ht
   rw [dif_pos (by omega : n + t < nb)]
-
-/-- **`dv` accumulator → genuine spec bridge.** -/
-theorem bwdAccDvCell_full_fp16_eq_spec (s : BlockState) (Q K M DO : RegionName)
-    (BM BD nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
-    bwdFp16 (bwdAccDvCell s Q K M DO BM BD (BM * nb) sc n (nb - n) j e)
-      = bwdKernelDVSpecG s Q K M DO BD (BM * nb) sc (n * BM + j) e := by
-  rw [bwdAccDvCell_full s Q K M DO BM BD (BM * nb) nb sc n j e hjm hn]
-  rw [bwdKernelDVSpecG_blockSum]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun m _ => ?_))
-  rw [bwdSubDv]
-
-/-- **`dk` accumulator → genuine spec bridge.** -/
-theorem bwdAccDkCell_full_fp16_eq_spec (s : BlockState) (Q K V DO M Delta : RegionName)
-    (BM BD nb : Nat) (sc : ℝ) (n j e : Nat) (hjm : j < BM) (hn : n ≤ nb) :
-    bwdFp16 (bwdAccDkCell s Q K V DO M Delta BM BD (BM * nb) sc n (nb - n) j e)
-      = bwdKernelDKSpecG s Q K V DO M Delta BD (BM * nb) sc (n * BM + j) e := by
-  rw [bwdAccDkCell_full s Q K V DO M Delta BM BD (BM * nb) nb sc n j e hjm hn]
-  rw [bwdKernelDKSpecG_blockSum]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun m _ => ?_))
-  rw [bwdSubDk]
 
 /-- **`dv` accumulator → genuine raw column sum.** The end-of-loop `dv` cell (the
 value stored, *before* the fp16 cast) equals the flat genuine column sum
@@ -4744,56 +4602,6 @@ def taPostLoopG (L M Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL : Nat) : List
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **General `k = tl.load(k_tile_ptr, boundary_check=(0,1))`** → `fwdKTileG` cells.
-Contiguous strides (`HEAD_DIM = BLOCK_DMODEL`), parent `[D0, BLOCK_DMODEL]`,
-offsets `[off_hz·stride_hz_2d, 0]`. Every lane in bounds via `hrow`. -/
-theorem ta_load_k_evalG
-    (K : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
-    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
-    (hpids1 : s.pids 1 = off_hz)
-    (hp : evalOp ptrOp s = some (taKVPtrTileG K D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
-    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
-    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
-      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-          some (fwdKTileG s K stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
-  rw [ta_load_blockPtr_bc_eval K 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
-    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
-  refine congrArg some ?_
-  ext idx
-  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
-  simp only [hi, hj, and_self, if_true]
-  congr 1
-  simp only [fwdKTileG, hpids1, Nat.mul_one]
-  congr 1
-  ring
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **General `v = tl.load(v_tile_ptr, boundary_check=(0,1))`** → `fwdVTileG` cells. -/
-theorem ta_load_v_evalG
-    (V : RegionName) (off_hz stride_hz_2d D0 BLOCK_N BLOCK_DMODEL : Nat)
-    (ptrOp : Op .blockPtr [BLOCK_N, BLOCK_DMODEL]) (s : BlockState)
-    (hpids1 : s.pids 1 = off_hz)
-    (hp : evalOp ptrOp s = some (taKVPtrTileG V D0 BLOCK_N BLOCK_DMODEL (off_hz * stride_hz_2d)))
-    (hrow : ∀ i : Fin BLOCK_N, off_hz * stride_hz_2d + i.val < D0) :
-    evalOp (.load .real (.blockPtr ptrOp [0, 1]) .none) s
-      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-          some (fwdVTileG s V stride_hz_2d BLOCK_DMODEL BLOCK_N BLOCK_DMODEL idx)⟩ := by
-  rw [ta_load_blockPtr_bc_eval V 0 D0 BLOCK_DMODEL BLOCK_N BLOCK_DMODEL BLOCK_DMODEL 1
-    (off_hz * stride_hz_2d) ptrOp s (by rw [hp]; rfl)]
-  refine congrArg some ?_
-  ext idx
-  have hj : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  have hi : off_hz * stride_hz_2d + idx.1.val < D0 := hrow idx.1
-  simp only [hi, hj, and_self, if_true]
-  congr 1
-  simp only [fwdVTileG, hpids1, Nat.mul_one]
-  congr 1
-  ring
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
 /-- **General `q = tl.load(q_tile_ptr)`** → `fwdQTileG` cells (no boundary check). -/
 theorem ta_load_q_evalG
     (Q : RegionName) (off_hz start_m stride_hz_2d D0 BLOCK_M BLOCK_DMODEL : Nat)
@@ -6576,31 +6384,6 @@ theorem ta_qk1_cellG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat)
       Option.map₂, Option.bind, Option.map]
     refine congrArg some ?_; ring
   · rw [if_neg h, maskedScore_of_not_le qS qT kT sc r jg (by rw [hjgval]; exact h)]
-
-set_option maxHeartbeats 1600000 in
-open VeriTile.Examples.FA1MathCausal in
-/-- General block sup of masked qk cells = the `c`-th block sup term of `mPartial`. -/
-theorem ta_rmax_blocksupG (BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks : Nat) (hBN : 0 < BLOCK_N)
-    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
-    (kT : TileIndex [BLOCK_N * numKVBlocks, BLOCK_DMODEL] → ℝ) (sc : ℝ) (qS : Nat)
-    (c : Nat) (hc : c < numKVBlocks) (r : Fin BLOCK_M) :
-    (Finset.univ : Finset (Fin BLOCK_N)).sup' ⟨⟨0, hBN⟩, Finset.mem_univ _⟩
-        (fun j : Fin BLOCK_N =>
-          if c * BLOCK_N + j.val ≤ qS + r.val then
-            (Tile.bop NumericDType.real.mul Broadcast.scalarR
-              (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_N])
-                (Tile.dot [] (⟨fun idx => some (qT idx)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL])
-                  (Tile.transpose [] (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-                    some (kT (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) idx.1, idx.2.1, PUnit.unit))⟩ : Tile .real [BLOCK_N, BLOCK_DMODEL]))))
-              (Tile.scalar (some sc : WithBot ℝ))).data (r, j, PUnit.unit)
-          else (⊥ : WithBot ℝ))
-      = (Finset.univ : Finset (Fin BLOCK_N)).sup
-          (fun jLocal => maskedScore qS qT kT sc r
-            (StreamingAccumulator.blockIndex BLOCK_N numKVBlocks c (Nat.succ_le_iff.mpr hc) jLocal)) := by
-  rw [Finset.sup'_eq_sup]
-  refine Finset.sup_congr rfl (fun j _ => ?_)
-  rw [ta_qk1_cellG BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks qT kT sc qS c hc r j]
 
 open VeriTile.Examples.FA1MathCausal in
 /-- General `pexp` cell `exp(qk1(r,j) − Mr)` (with `Mr = mPartial (c+1)`). -/
@@ -10444,30 +10227,6 @@ theorem bwdInnerDkG_congr {s s0 : BlockState} (Q K V DO M Delta : RegionName)
   refine Finset.sum_congr rfl (fun iL _ => ?_)
   rw [bwdKernelDSG_congr Q K V DO M Delta BD NCTX sc _ _ hpids hQ hK hV hDO hM hDe,
     bwdKernelQG_congr Q BD _ e.val hpids hQ]
-
-/-- `bwdKernelDVSpecG` is invariant under state changes off `Q`/`K`/`M`/`DO`. -/
-theorem bwdKernelDVSpecG_congr {s s0 : BlockState} (Q K M DO : RegionName) (BD NCTX : Nat)
-    (sc : ℝ) (J e : Nat) (hpids : s.pids = s0.pids)
-    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hM : s.mem M = s0.mem M)
-    (hDO : s.mem DO = s0.mem DO) :
-    bwdKernelDVSpecG s Q K M DO BD NCTX sc J e
-      = bwdKernelDVSpecG s0 Q K M DO BD NCTX sc J e := by
-  simp only [bwdKernelDVSpecG]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun I _ => ?_))
-  rw [bwdKernelPG_congr Q K M BD NCTX sc I.val J hpids hQ hK hM,
-    bwdKernelDOG_congr DO BD I.val e hpids hDO]
-
-/-- `bwdKernelDKSpecG` is invariant under state changes off `Q`/`K`/`V`/`DO`/`M`/`Delta`. -/
-theorem bwdKernelDKSpecG_congr {s s0 : BlockState} (Q K V DO M Delta : RegionName) (BD NCTX : Nat)
-    (sc : ℝ) (J e : Nat) (hpids : s.pids = s0.pids)
-    (hQ : s.mem Q = s0.mem Q) (hK : s.mem K = s0.mem K) (hV : s.mem V = s0.mem V)
-    (hDO : s.mem DO = s0.mem DO) (hM : s.mem M = s0.mem M) (hDe : s.mem Delta = s0.mem Delta) :
-    bwdKernelDKSpecG s Q K V DO M Delta BD NCTX sc J e
-      = bwdKernelDKSpecG s0 Q K V DO M Delta BD NCTX sc J e := by
-  simp only [bwdKernelDKSpecG]
-  refine congrArg bwdFp16 (Finset.sum_congr rfl (fun I _ => ?_))
-  rw [bwdKernelDSG_congr Q K V DO M Delta BD NCTX sc I.val J hpids hQ hK hV hDO hM hDe,
-    bwdKernelQG_congr Q BD I.val e hpids hQ]
 
 /-- `bwdDqKeyContrib` is invariant under state changes off `Q`/`K`/`V`/`DO`/`M`/`Delta`. -/
 theorem bwdDqKeyContrib_congr {s s0 : BlockState} (Q K V DO M Delta : RegionName)

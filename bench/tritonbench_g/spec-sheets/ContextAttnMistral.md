@@ -354,4 +354,3 @@ noncomputable def ctxKTileG
 
 ## Also present (pinned special-case summaries)
 - `context_attn_mistral_final_store_slice_compute_correct`
-- `context_attn_mistral_genuine_output_summary`

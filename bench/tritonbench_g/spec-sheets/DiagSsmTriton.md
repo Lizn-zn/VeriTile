@@ -140,66 +140,6 @@ noncomputable def diagSsmForwardSpecAt
 
 <details><summary><code>colOffset</code></summary>
 
-```
-/-- Faithful transcription of `diag_ssm_triton.py`'s
-`diag_ssm_backward_kernel_complex`. -/
-def diag_ssm_backward_kernel_complex
-    (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
-      RegionName)
-    (length batch_size dim BLOCK_SIZE : Nat) :
-    ComputeKernel := triton {
-  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
-  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
-  mask = col_offsets < $(batch_size * dim)
-  lambda_real = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2),
-    mask=mask, other=0)
-  lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
-    mask=mask, other=0)
-  grad_s_real = tl.zeros_like(lambda_real)
-  grad_s_imag = tl.zeros_like(lambda_imag)
-  grad_lambda_real = tl.zeros_like(lambda_real)
-  grad_lambda_imag = tl.zeros_like(lambda_imag)
-  for i in range(0, $(length), $(1)) {
-    t = $(length) - $(1) - i
-    offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
-    grad_y_real = tl.load(grad_y_ptr + offsets, mask=mask, other=0)
-    grad_y_imag = -tl.load(grad_y_ptr + offsets + $(1), mask=mask, other=0)
-    if t > 0 {
-      s_real = tl.load(y_ptr + (offsets - $(2 * batch_size * dim)),
-        mask=mask, other=0)
-      s_imag = tl.load(y_ptr + (offsets - $(2 * batch_size * dim) + $(1)),
-        mask=mask, other=0)
-    } else {
-      s_real = tl.load(s_ptr + $(2) * col_offsets, mask=mask, other=0)
-      s_imag = tl.load(s_ptr + $(2) * col_offsets + $(1), mask=mask, other=0)
-    }
-    grad_s_real = grad_y_real + grad_s_real
-    grad_s_imag = grad_y_imag + grad_s_imag
-    grad_x_real = grad_s_real
-    grad_x_imag = grad_s_imag
-    grad_lambda_real += grad_s_real * s_real - grad_s_imag * s_imag
-    grad_lambda_imag += grad_s_real * s_imag + grad_s_imag * s_real
-    grad_s_real = grad_x_real * lambda_real - grad_x_imag * lambda_imag
-    grad_s_imag = grad_x_real * lambda_imag + grad_x_imag * lambda_real
-    tl.store(grad_x_ptr + offsets, grad_x_real, mask=mask)
-    tl.store(grad_x_ptr + offsets + $(1), -grad_x_imag, mask=mask)
-  }
-  tl.store(grad_s_ptr + col_offsets * $(2), grad_s_real, mask=mask)
-  tl.store(grad_s_ptr + col_offsets * $(2) + $(1), -grad_s_imag, mask=mask)
-  tl.store(grad_lambda_ptr + col_offsets * $(2), grad_lambda_real, mask=mask)
-  tl.store(grad_lambda_ptr + col_offsets * $(2) + $(1), -grad_lambda_imag,
-    mask=mask)
-}
-
-/-
-Complex correctness blocker (#119): the complex forward/backward surfaces above
-are faithful transcriptions and pass the port checker, but this file only proves
-`ComputeCorrect.Realizes` for the real-valued kernels. The complex kernels encode
-complex tensors as paired real memory lanes, including conjugated gradient signs;
-their readback theorem should use a paired-lane output map/spec rather than the
-single-real-lane recurrence used below.
--/
-```
 ```lean
 def colOffset (st : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   st.pids 0 * BLOCK_SIZE + i.val

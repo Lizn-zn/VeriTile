@@ -617,18 +617,6 @@ def batched_vecmat_one_row_const_k_accum_slice
 def withKIndex (s : BlockState) (kIdx : Nat) : BlockState :=
   { s with pids := fun ax => if ax = 2 then kIdx else s.pids ax }
 
-@[simp] theorem withKIndex_pids_zero (s : BlockState) (kIdx : Nat) :
-    (withKIndex s kIdx).pids 0 = s.pids 0 := by
-  simp [withKIndex]
-
-@[simp] theorem withKIndex_pids_one (s : BlockState) (kIdx : Nat) :
-    (withKIndex s kIdx).pids 1 = s.pids 1 := by
-  simp [withKIndex]
-
-@[simp] theorem withKIndex_pids_two (s : BlockState) (kIdx : Nat) :
-    (withKIndex s kIdx).pids 2 = kIdx := by
-  simp [withKIndex]
-
 noncomputable def vecmatConstKAccumSpec
     (s : BlockState) (AccPre A B : RegionName)
     (dim_n dim_k N K BLOCK_N BLOCK_K kIdx : Nat)
@@ -890,34 +878,6 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
   intro idx
   exact batched_vecmat_block_output_store_slice_correct VecmatPre output
     dim_n BLOCK_M BLOCK_N s s' hOutInj hExec idx
-
-/-! ## Python test-shape wrappers
-
-`test_vecmat` runs the same mathematical shape twice, varying only launch
-metadata (`num_warps`, `num_stages`).  The checked shape is `M = N = K = 128`
-with `block_m = 16`, `block_n = 32`, and `block_k = 64`, so the Python loop has
-exactly two K-block iterations before the final block output store. -/
-
-theorem batched_vecmat_python_row_output_offset_injective
-    (s : BlockState) :
-    Function.Injective (fun i : Fin 32 => outOffset s 128 32 i) := by
-  intro a b h
-  apply Fin.ext
-  simp [outOffset, nIndex] at h
-  omega
-
-theorem batched_vecmat_python_block_output_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [16, 32] => blockOutOffset s 128 16 32 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩
-    ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ h
-  simp [blockOutOffset, mIndex, nIndex] at h
-  have hm : ma = mb := by omega
-  have hn : na = nb := by omega
-  subst mb
-  subst nb
-  rfl
 
 /-- Python `test_vecmat` full-surface coverage.
 

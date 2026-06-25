@@ -1453,32 +1453,6 @@ theorem layernormVarLoopInvariant_reduceSum_to_fullN
     layernormVarAccumulatorSpec_final_sum_eq_fullN s0 X stride_x_N
       stride_x_hn N BLOCK_SIZE off hB hFinal]
 
-noncomputable def layernormOutChunkValue
-    (s : BlockState) (X W : RegionName)
-    (stride_x_N stride_x_hn stride_w_hn N BLOCK_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (lane : TileIndex [BLOCK_SIZE]) : ℝ :=
-  if h : off + lane.1.val < N then
-    layernormYFullNSpec s X W stride_x_N stride_x_hn stride_w_hn
-      N BLOCK_SIZE eps ⟨off + lane.1.val, h⟩
-  else
-    0
-
-noncomputable def layernormOutChunkStoreState
-    (s0 st : BlockState) (X W Y : RegionName)
-    (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
-      N BLOCK_SIZE : Nat)
-    (eps : ℝ) (off : Nat) : BlockState :=
-  (TileShape.allIndices [BLOCK_SIZE]).foldl
-    (fun acc lane =>
-      if off + lane.1.val < N then
-        acc.writeMem Y
-          (yColOffset s0 stride_y_N stride_y_hn (off + lane.1.val))
-          (layernormOutChunkValue s0 X W stride_x_N stride_x_hn stride_w_hn
-            N BLOCK_SIZE eps off lane)
-      else
-        acc)
-    st
-
 theorem yColOffset_injective
     (s : BlockState) (stride_y_N stride_y_hn N : Nat) :
     Function.Injective
@@ -1487,36 +1461,6 @@ theorem yColOffset_injective
   apply Fin.ext
   unfold yColOffset at h
   exact Nat.add_left_cancel h
-
-theorem layernormOutChunkStore_read_current
-    (s0 st : BlockState) (X W Y : RegionName)
-    (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
-      N BLOCK_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (i : Fin BLOCK_SIZE)
-    (hActive : off + i.val < N)
-    (hNoCollision :
-      ∀ lane : TileIndex [BLOCK_SIZE],
-        off + lane.1.val < N →
-          yColOffset s0 stride_y_N stride_y_hn (off + lane.1.val) =
-            yColOffset s0 stride_y_N stride_y_hn (off + i.val) →
-          lane = ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])) :
-    (layernormOutChunkStoreState s0 st X W Y stride_x_N stride_x_hn
-        stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps off).readMem
-      Y (yColOffset s0 stride_y_N stride_y_hn (off + i.val)) =
-      layernormYFullNSpec s0 X W stride_x_N stride_x_hn stride_w_hn
-        N BLOCK_SIZE eps ⟨off + i.val, hActive⟩ := by
-  unfold layernormOutChunkStoreState
-  rw [BlockState.scatter_readback_prop_masked_nd_of_true
-    (region := Y)
-    (s := st)
-    (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-      yColOffset s0 stride_y_N stride_y_hn (off + lane.1.val))
-    (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-      layernormOutChunkValue s0 X W stride_x_N stride_x_hn stride_w_hn
-        N BLOCK_SIZE eps off lane)
-    (P := fun lane : TileIndex [BLOCK_SIZE] => off + lane.1.val < N)
-    ((i, PUnit.unit) : TileIndex [BLOCK_SIZE]) hActive hNoCollision]
-  simp [layernormOutChunkValue, hActive]
 
 def layernormOutLoopInvariant
     (s0 : BlockState) (X W Y : RegionName)
@@ -1538,86 +1482,6 @@ theorem layernormOutLoopInvariant_zero
       stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps 0 st := by
   intro i hlt
   omega
-
-theorem layernormOutChunkStore_preserve_old
-    (s0 st : BlockState) (X W Y : RegionName)
-    (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
-      N BLOCK_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (i : Fin N)
-    (hOld : i.val < off) :
-    (layernormOutChunkStoreState s0 st X W Y stride_x_N stride_x_hn
-        stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps off).readMem
-      Y (yColOffset s0 stride_y_N stride_y_hn i.val) =
-      st.readMem Y (yColOffset s0 stride_y_N stride_y_hn i.val) := by
-  unfold layernormOutChunkStoreState
-  rw [BlockState.scatter_prop_masked_preserves_other_offset]
-  intro lane hActive hEq
-  have hFinEq :
-      (⟨off + lane.1.val, hActive⟩ : Fin N) = i := by
-    apply yColOffset_injective s0 stride_y_N stride_y_hn N
-    simpa using hEq
-  have hVal : off + lane.1.val = i.val := congrArg Fin.val hFinEq
-  omega
-
-theorem layernormOutChunkStore_noCollision
-    (s0 : BlockState)
-    (stride_y_N stride_y_hn N BLOCK_SIZE off : Nat)
-    (i : Fin BLOCK_SIZE)
-    (hActive : off + i.val < N) :
-    ∀ lane : TileIndex [BLOCK_SIZE],
-      off + lane.1.val < N →
-        yColOffset s0 stride_y_N stride_y_hn (off + lane.1.val) =
-          yColOffset s0 stride_y_N stride_y_hn (off + i.val) →
-        lane = ((i, PUnit.unit) : TileIndex [BLOCK_SIZE]) := by
-  intro lane hLane hEq
-  have hFinEq :
-      (⟨off + lane.1.val, hLane⟩ : Fin N) =
-        ⟨off + i.val, hActive⟩ := by
-    apply yColOffset_injective s0 stride_y_N stride_y_hn N
-    simpa using hEq
-  have hLaneVal : lane.1 = i := by
-    apply Fin.ext
-    have hVal : off + lane.1.val = off + i.val := congrArg Fin.val hFinEq
-    omega
-  cases lane with
-  | mk laneHead laneTail =>
-      cases laneTail
-      cases hLaneVal
-      rfl
-
-theorem layernormOutLoopInvariant_step_of_chunk_store
-    (s0 st : BlockState) (X W Y : RegionName)
-    (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
-      N BLOCK_SIZE off : Nat)
-    (eps : ℝ)
-    (hInv : layernormOutLoopInvariant s0 X W Y stride_x_N stride_x_hn
-      stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps off st) :
-    layernormOutLoopInvariant s0 X W Y stride_x_N stride_x_hn
-      stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps
-      (off + BLOCK_SIZE)
-      (layernormOutChunkStoreState s0 st X W Y stride_x_N stride_x_hn
-        stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps off) := by
-  intro col hWritten
-  by_cases hOld : col.val < off
-  · rw [layernormOutChunkStore_preserve_old s0 st X W Y stride_x_N stride_x_hn
-      stride_y_N stride_y_hn stride_w_hn N BLOCK_SIZE eps off col hOld]
-    exact hInv col hOld
-  · have hOffLe : off ≤ col.val := Nat.le_of_not_gt hOld
-    let lane : Fin BLOCK_SIZE := ⟨col.val - off, by omega⟩
-    have hLaneActive : off + lane.val < N := by
-      have hcol : off + lane.val = col.val := by
-        simp [lane]
-        omega
-      simp [hcol, col.isLt]
-    have hcolEq : off + lane.val = col.val := by
-      simp [lane]
-      omega
-    have hRead := layernormOutChunkStore_read_current s0 st X W Y
-      stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
-      N BLOCK_SIZE eps off lane hLaneActive
-      (layernormOutChunkStore_noCollision s0 stride_y_N stride_y_hn
-        N BLOCK_SIZE off lane hLaneActive)
-    simpa [hcolEq] using hRead
 
 def layernormOutLoopContextInvariant
     (s0 : BlockState) (X W Y : RegionName)

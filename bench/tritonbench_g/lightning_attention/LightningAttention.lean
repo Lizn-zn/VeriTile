@@ -170,12 +170,6 @@ noncomputable def kvClosed (s : BlockState) (K V : RegionName)
   ∑ keyRow ∈ Finset.range (m * BLOCK),
     fwdKVal s K n d a keyRow * fwdVVal s V n e BLOCK_MODEL c keyRow
 
-/-- `kvClosed` at `m = 0` is the zero seed `tl.zeros([d, BLOCK_MODEL])`. -/
-theorem kvClosed_zero (s : BlockState) (K V : RegionName)
-    (n d e BLOCK BLOCK_MODEL : Nat) (a c : Nat) :
-    kvClosed s K V n d e BLOCK BLOCK_MODEL 0 a c = 0 := by
-  simp [kvClosed]
-
 /-- **The `kv` carry-fold recurrence.** Unrolling one block:
 `kv^(m+1) = kv^(m) + Σ_{j < BLOCK} K[m·BLOCK+j, a]·V[m·BLOCK+j, c]`. This is the
 exact closed-form counterpart of the Python loop body `kv += tl.dot(k_trans,

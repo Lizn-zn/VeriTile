@@ -345,9 +345,6 @@ namespace Wb
 def outOff (s : BlockState) (sob som sok : Nat) (k : Nat) : Nat :=
   s.pids 0 * sob + s.pids 1 * som + k * sok
 
-noncomputable def wbSpec (s0 : BlockState) (x w : RegionName) (sxb sxm sxk srw N : Nat) (rstd : ℝ) (k : Nat) : ℝ :=
-  s0.readMem x (ScratchRms.xOff s0 sxb sxm sxk k) * rstd * s0.readMem w (k*srw)
-
 end Wb
 
 namespace VarLoop
@@ -398,10 +395,6 @@ end VarFinal
 
 namespace MathHeart
 open Finset
-
-theorem blockDiv (BLOCK a b : Nat) (hBLOCK : 0 < BLOCK) (hb : b < BLOCK) :
-    (a * BLOCK + b) / BLOCK = a := by
-  rw [Nat.mul_comm, Nat.mul_add_div hBLOCK, Nat.div_eq_of_lt hb, Nat.add_zero]
 
 theorem sum_blocks_lanes (BLOCK c : Nat) (hBLOCK : 0 < BLOCK) (H : Nat → ℝ) :
     (∑ b : Fin c, ∑ j : Fin BLOCK, H (b.val * BLOCK + j.val)) = ∑ k : Fin (c * BLOCK), H k.val := by
@@ -997,10 +990,6 @@ open ScratchRms VarLoop Mean MathHeart Postfix PostStep Prefix WbLoop WbFinal Va
 noncomputable def meanSq (s : BlockState) (x : RegionName) (sxb sxm sxk N : Nat) : ℝ :=
   (∑ k : Fin N, (s.readMem x (xOff s sxb sxm sxk k.val))^2) / (N:ℝ)
 
-noncomputable def rstdVal (s : BlockState) (x : RegionName) (sxb sxm sxk N : Nat) (eps : ℝ) : ℝ :=
-  WithBot.unbotD 0 (WithBot.realRsqrt (some (meanSq s x sxb sxm sxk N + eps)))
-
--- full spec at global lane k
 noncomputable def rmsSpecFull (s : BlockState) (x w : RegionName) (sxb sxm sxk srw N : Nat) (eps : ℝ) (k : Nat) : ℝ :=
   s.readMem x (xOff s sxb sxm sxk k) * (WithBot.unbotD 0 (WithBot.realRsqrt (some (meanSq s x sxb sxm sxk N + eps)))) * s.readMem w (k*srw)
 

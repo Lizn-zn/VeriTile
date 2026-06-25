@@ -198,19 +198,6 @@ def layer_norm_liger_forward
   tl.store(Y + col_offsets, Y_row, mask=mask)
 }
 
-/-- Full Python-signature wrapper for `layer_norm_liger.py`'s
-`_layer_norm_forward_kernel`. The source kernel accepts `W_row_stride` and
-`B_row_stride` but does not use them in pointer arithmetic. -/
-def layer_norm_liger_forward_full
-    (Y X W B Mean RSTD : RegionName)
-    (Y_row_stride X_row_stride _W_row_stride _B_row_stride
-      Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) :
-    ComputeKernel :=
-  layer_norm_liger_forward Y X W B Mean RSTD
-    Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
-    BLOCK_SIZE eps
-
 def xOffset (s : BlockState) (X_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * X_row_stride + i.val
 

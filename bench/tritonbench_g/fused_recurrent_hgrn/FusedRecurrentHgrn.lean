@@ -395,14 +395,6 @@ noncomputable def hgrnStateClosed
       xVal s x T D BD t i *
         (∏ j ∈ Finset.Ico (t + 1) n, gVal s g T D BD j i)
 
-/-- `hgrnStateClosed` at `n = 0` is the seed (the initial `b_h`). -/
-theorem hgrnStateClosed_zero
-    (s : BlockState) (x g h0 : RegionName) (USE_INITIAL_STATE : Bool)
-    (T D BD : Nat) (i : Fin BD) :
-    hgrnStateClosed s x g h0 USE_INITIAL_STATE T D BD 0 i
-      = stateSeed s h0 USE_INITIAL_STATE D BD i := by
-  simp [hgrnStateClosed]
-
 /-- **The forward state carry-fold recurrence.** Unrolling one step:
 `b_h^(n+1) = g_n · b_h^(n) + x_n`. This is the exact closed-form counterpart of
 the Python loop body `b_h = b_g * b_h + b_x`. -/
@@ -496,15 +488,6 @@ theorem fused_recurrent_hgrn_out_offset_injective_general
   intro a b h
   apply Fin.ext
   simp [outOffset, dIndex] at h
-  omega
-
-/-- **Dimension-general** state / `h0` address injectivity, given `0 < BD`. -/
-theorem fused_recurrent_hgrn_bh_offset_injective_general
-    (s : BlockState) (D BD : Nat) (_hBD : 0 < BD) :
-    Function.Injective (fun i : Fin BD => bhOffset s D BD i) := by
-  intro a b h
-  apply Fin.ext
-  simp [bhOffset, dIndex] at h
   omega
 
 /-- Proof-oriented final-state store slice of `fused_recurrent_hgrn.py`'s

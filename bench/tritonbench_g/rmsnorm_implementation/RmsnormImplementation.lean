@@ -191,16 +191,6 @@ noncomputable def rmsVarCarrier
           N_SIZE BLOCK_N_SIZE))).data PUnit.unit)
     ((Tile.scalar N_SIZE).natToReal.data PUnit.unit)
 
-noncomputable def rmsInvCarrier
-    (s : BlockState) (x_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) : WithBot ℝ :=
-  Option.map (fun b => b⁻¹)
-    (WithBot.realSqrt
-      (Option.map (fun a => a + eps)
-        (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
-          N_SIZE BLOCK_N_SIZE)))
-
 noncomputable def rmsStdCarrier
     (s : BlockState) (x_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
@@ -250,33 +240,6 @@ noncomputable def rmsnormWeightedYFullNSpec
       N_SIZE BLOCK_N_SIZE eps i *
     s.readMem rms_w_ptr (i.val * stride_rms_w)
 
-noncomputable def rmsnormOutChunkValue
-    (s : BlockState) (x_ptr rms_w_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (lane : TileIndex [BLOCK_N_SIZE]) : ℝ :=
-  if h : off + lane.1.val < N_SIZE then
-    rmsnormWeightedYFullNSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m
-      stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps ⟨off + lane.1.val, h⟩
-  else
-    0
-
-noncomputable def rmsnormOutChunkStoreState
-    (s0 st : BlockState) (x_ptr rms_w_ptr out_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (off : Nat) : BlockState :=
-  (TileShape.allIndices [BLOCK_N_SIZE]).foldl
-    (fun acc lane =>
-      if off + lane.1.val < N_SIZE then
-        acc.writeMem out_ptr
-          (outColOffset s0 stride_out_batch stride_out_m stride_out_k
-            (off + lane.1.val))
-          (rmsnormOutChunkValue s0 x_ptr rms_w_ptr stride_x_batch stride_x_m
-            stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps off lane)
-      else
-        acc)
-    st
-
 noncomputable def rmsStdFullNSpec
     (s : BlockState) (x_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
@@ -284,41 +247,6 @@ noncomputable def rmsStdFullNSpec
   Real.sqrt
     (rmsVarFullNCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
       N_SIZE BLOCK_N_SIZE / (N_SIZE : ℝ) + eps)
-
-theorem rmsnormOutChunkStore_read_current
-    (s0 st : BlockState) (x_ptr rms_w_ptr out_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (i : Fin BLOCK_N_SIZE)
-    (hActive : off + i.val < N_SIZE)
-    (hNoCollision :
-      ∀ lane : TileIndex [BLOCK_N_SIZE],
-        off + lane.1.val < N_SIZE →
-          outColOffset s0 stride_out_batch stride_out_m stride_out_k
-              (off + lane.1.val) =
-            outColOffset s0 stride_out_batch stride_out_m stride_out_k
-              (off + i.val) →
-          lane = ((i, PUnit.unit) : TileIndex [BLOCK_N_SIZE])) :
-    (rmsnormOutChunkStoreState s0 st x_ptr rms_w_ptr out_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off).readMem
-      out_ptr (outColOffset s0 stride_out_batch stride_out_m stride_out_k
-        (off + i.val)) =
-      rmsnormWeightedYFullNSpec s0 x_ptr rms_w_ptr stride_x_batch stride_x_m
-        stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps ⟨off + i.val, hActive⟩ := by
-  unfold rmsnormOutChunkStoreState
-  rw [BlockState.scatter_readback_prop_masked_nd_of_true
-    (region := out_ptr)
-    (s := st)
-    (offsetFn := fun lane : TileIndex [BLOCK_N_SIZE] =>
-      outColOffset s0 stride_out_batch stride_out_m stride_out_k
-        (off + lane.1.val))
-    (valueFn := fun lane : TileIndex [BLOCK_N_SIZE] =>
-      rmsnormOutChunkValue s0 x_ptr rms_w_ptr stride_x_batch stride_x_m
-      stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps off lane)
-    (P := fun lane : TileIndex [BLOCK_N_SIZE] => off + lane.1.val < N_SIZE)
-    ((i, PUnit.unit) : TileIndex [BLOCK_N_SIZE]) hActive hNoCollision]
-  simp [rmsnormOutChunkValue, hActive]
 
 def rmsnormOutLoopInvariant
     (s0 : BlockState) (x_ptr rms_w_ptr out_ptr : RegionName)
@@ -342,106 +270,6 @@ theorem rmsnormOutLoopInvariant_zero
       stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps 0 st := by
   intro i hlt
   omega
-
-theorem rmsnormOutChunkStore_preserve_old
-    (s0 st : BlockState) (x_ptr rms_w_ptr out_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
-    (eps : ℝ) (off : Nat) (i : Fin N_SIZE)
-    (hOld : i.val < off)
-    (hOutInj : Function.Injective
-      (fun i : Fin N_SIZE =>
-        outColOffset s0 stride_out_batch stride_out_m stride_out_k i.val)) :
-    (rmsnormOutChunkStoreState s0 st x_ptr rms_w_ptr out_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off).readMem
-      out_ptr (outColOffset s0 stride_out_batch stride_out_m stride_out_k i.val) =
-      st.readMem out_ptr
-        (outColOffset s0 stride_out_batch stride_out_m stride_out_k i.val) := by
-  unfold rmsnormOutChunkStoreState
-  rw [BlockState.scatter_prop_masked_preserves_other_offset]
-  intro lane hActive hEq
-  have hFinEq :
-      (⟨off + lane.1.val, hActive⟩ : Fin N_SIZE) = i := by
-    apply hOutInj
-    simpa using hEq
-  have hVal : off + lane.1.val = i.val := by
-    exact congrArg Fin.val hFinEq
-  omega
-
-theorem rmsnormOutChunkStore_noCollision_of_out_injective
-    (s0 : BlockState)
-    (stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE off : Nat)
-    (i : Fin BLOCK_N_SIZE)
-    (hActive : off + i.val < N_SIZE)
-    (hOutInj : Function.Injective
-      (fun i : Fin N_SIZE =>
-        outColOffset s0 stride_out_batch stride_out_m stride_out_k i.val)) :
-    ∀ lane : TileIndex [BLOCK_N_SIZE],
-      off + lane.1.val < N_SIZE →
-        outColOffset s0 stride_out_batch stride_out_m stride_out_k
-            (off + lane.1.val) =
-          outColOffset s0 stride_out_batch stride_out_m stride_out_k
-            (off + i.val) →
-        lane = ((i, PUnit.unit) : TileIndex [BLOCK_N_SIZE]) := by
-  intro lane hLane hEq
-  have hFinEq :
-      (⟨off + lane.1.val, hLane⟩ : Fin N_SIZE) =
-        ⟨off + i.val, hActive⟩ := by
-    apply hOutInj
-    simpa using hEq
-  have hLaneVal : lane.1 = i := by
-    apply Fin.ext
-    have hVal : off + lane.1.val = off + i.val := congrArg Fin.val hFinEq
-    omega
-  cases lane with
-  | mk laneHead laneTail =>
-      cases laneTail
-      cases hLaneVal
-      rfl
-
-theorem rmsnormOutLoopInvariant_step_of_chunk_store
-    (s0 st : BlockState) (x_ptr rms_w_ptr out_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE off : Nat)
-    (eps : ℝ)
-    (hInv : rmsnormOutLoopInvariant s0 x_ptr rms_w_ptr out_ptr
-      stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off st)
-    (hOutInj : Function.Injective
-      (fun i : Fin N_SIZE =>
-        outColOffset s0 stride_out_batch stride_out_m stride_out_k i.val)) :
-    rmsnormOutLoopInvariant s0 x_ptr rms_w_ptr out_ptr
-      stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
-      (off + BLOCK_N_SIZE)
-      (rmsnormOutChunkStoreState s0 st x_ptr rms_w_ptr out_ptr
-        stride_x_batch stride_x_m stride_x_k stride_rms_w
-        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off) := by
-  intro col hWritten
-  by_cases hOld : col.val < off
-  · rw [rmsnormOutChunkStore_preserve_old s0 st x_ptr rms_w_ptr out_ptr
-      stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off
-      col hOld hOutInj]
-    exact hInv col hOld
-  · have hOffLe : off ≤ col.val := Nat.le_of_not_gt hOld
-    let lane : Fin BLOCK_N_SIZE := ⟨col.val - off, by omega⟩
-    have hLaneActive : off + lane.val < N_SIZE := by
-      have hcol : off + lane.val = col.val := by
-        simp [lane]
-        omega
-      simp [hcol, col.isLt]
-    have hcolEq : off + lane.val = col.val := by
-      simp [lane]
-      omega
-    have hRead := rmsnormOutChunkStore_read_current s0 st x_ptr rms_w_ptr out_ptr
-      stride_x_batch stride_x_m stride_x_k stride_rms_w
-      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps off
-      lane hLaneActive
-      (rmsnormOutChunkStore_noCollision_of_out_injective s0 stride_out_batch
-        stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE off lane hLaneActive hOutInj)
-    simpa [hcolEq] using hRead
 
 /-- The output-loop body statements as expanded by the DSL. -/
 def rmsOutLoopBody
@@ -1777,38 +1605,6 @@ theorem rmsVarLoopInvariant_reduceSum_to_fullN
   rw [rmsVarAccumulatorSpec_reduceSum]
   simp [rmsVarAccumulatorSpec_final_sum_eq_fullN s0 x_ptr stride_x_batch
     stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE off hB hFinal]
-
-/-- Executing the first RMSNorm loop computes an accumulator whose lane-sum is
-the full `N_SIZE` sum of squares, including multi-block cases such as
-`N_SIZE = 8192`, `BLOCK_N_SIZE = 4096`. -/
-theorem rmsVarForRange_fullN_sum_of_preloop
-    (s0 stPre stLoop : BlockState) (x_ptr : RegionName)
-    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
-    (hStepPos : 0 < BLOCK_N_SIZE)
-    (hPre :
-      stepStmts (rmsVarPreLoop stride_x_batch stride_x_m BLOCK_N_SIZE) s0
-        = some stPre)
-    (hLoop :
-      stepStmt (.forRange "block_n_strart_ptr" 0 N_SIZE BLOCK_N_SIZE
-        (rmsVarLoopBody x_ptr stride_x_k N_SIZE BLOCK_N_SIZE))
-        stPre = some stLoop) :
-    ∃ final,
-      N_SIZE ≤ final ∧
-        rmsVarLoopContextInvariant s0 x_ptr stride_x_batch stride_x_m
-          stride_x_k N_SIZE BLOCK_N_SIZE final stLoop ∧
-        (∑ j : Fin BLOCK_N_SIZE,
-          WithBot.unbotD 0
-            ((rmsVarAccumulatorSpec s0 x_ptr stride_x_batch stride_x_m
-              stride_x_k N_SIZE BLOCK_N_SIZE final).data (j, PUnit.unit))) =
-          rmsVarFullNCarrier s0 x_ptr stride_x_batch stride_x_m stride_x_k
-            N_SIZE BLOCK_N_SIZE := by
-  have hStepNe : BLOCK_N_SIZE ≠ 0 := Nat.ne_of_gt hStepPos
-  obtain ⟨final, hFinal, hCtx⟩ :=
-    rmsVarForRange_context_of_preloop s0 stPre stLoop x_ptr stride_x_batch
-      stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE hStepNe hPre hLoop
-  refine ⟨final, hFinal, hCtx, ?_⟩
-  exact rmsVarAccumulatorSpec_final_sum_eq_fullN s0 x_ptr stride_x_batch
-    stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE final hStepPos hFinal
 
 def rmsStdPostLoop (N_SIZE BLOCK_N_SIZE : Nat) (eps : ℝ) : List Stmt :=
   [ .assign .real [] "var"

@@ -121,15 +121,6 @@ theorem quantize_global_scaled_store_slice_correct
   · simp [hi, quantizeGlobalScaledSpec, offset]
   · simp [hi]
 
-/-- Surface-level pre-rounding expression: `127.0 * (x * absmax_inv)` at lane
-`i`. The full surface does not currently erase to an algorithm kernel because
-CUDA `llrint` is compute-only. -/
-noncomputable def quantizeGlobalSurfaceSpec
-    (s : BlockState) (x_ptr absmax_inv_ptr : RegionName)
-    (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  127.0 * (s.readMem x_ptr (offset s BLOCK_SIZE i) *
-    s.readMem absmax_inv_ptr 0)
-
 /-- The faithful full surface is intentionally blocked at compute projection:
 the tested Python kernel stores CUDA `llrint`/int8 results, not the real-valued
 pre-rounding expression proved by `quantize_global_scaled_store_slice`. -/

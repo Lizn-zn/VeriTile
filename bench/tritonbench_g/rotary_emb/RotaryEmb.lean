@@ -1213,44 +1213,6 @@ theorem rotary_emb_python_case4_output_summary
       512 64 1 512 64 1 64 1 64 1 64 8 8 4 16 64
   · exact rotary_emb_python_case4_all_outputs_compute_correct Q K Cos Sin s
 
-/-! ## Full-kernel Q first-half (off_q0) scaffolding
-
-The Python test runs the full `_rotary_kernel` which writes 4 stores: Q at
-`off_q0` (even), Q at `off_q1` (odd), K at `off_k0` (even), K at `off_k1` (odd).
-Per #139's audit, the slice proofs above aren't sufficient — a full-kernel proof
-would be needed.
-
-This section provides only scaffolding definitions (`qFullOffset`,
-`cosFullOffset`, `sinFullOffset`, `activeFullQ`, `rotaryKernelQ0Spec`) toward a
-future full-kernel proof; there is no correctness theorem here. -/
-
-/-- Q first-half offset of the full `rotary_kernel_surface`. The tile shape is
-`[BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL/2]`. The even dimension factor is
-`2 * idx.2.2.1.val`. -/
-def qFullOffset
-    (s : BlockState) (stride_qbs stride_qh stride_qd
-      BLOCK_HEAD BLOCK_SEQ BLOCK_HALF : Nat)
-    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_HALF]) : Nat :=
-  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_qbs +
-  (s.pids 0 * BLOCK_HEAD + idx.2.1.val) * stride_qh +
-  (idx.2.2.1.val * 2) * stride_qd
-
-/-- Cosine offset for the full kernel's Q first-half store. -/
-def cosFullOffset
-    (s : BlockState) (stride_cosbs stride_cosd
-      BLOCK_SEQ BLOCK_HALF : Nat)
-    (idx : TileIndex [BLOCK_SEQ, BLOCK_HALF]) : Nat :=
-  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_cosbs +
-  (idx.2.1.val * 2) * stride_cosd
-
-/-- Sine offset for the full kernel's Q first-half store. -/
-def sinFullOffset
-    (s : BlockState) (stride_cosbs stride_cosd
-      BLOCK_SEQ BLOCK_HALF : Nat)
-    (idx : TileIndex [BLOCK_SEQ, BLOCK_HALF]) : Nat :=
-  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_cosbs +
-  (idx.2.1.val * 2) * stride_cosd
-
 /-- Active predicate for the full kernel's Q stores. -/
 def activeFullQ (s : BlockState) (max_total_len HEAD_Q
     BLOCK_HEAD BLOCK_SEQ : Nat)
@@ -1264,21 +1226,5 @@ instance activeFullQDecidable (s : BlockState) (max_total_len HEAD_Q
     Decidable (activeFullQ s max_total_len HEAD_Q BLOCK_HEAD BLOCK_SEQ idx) := by
   unfold activeFullQ
   infer_instance
-
-/-- Specification for the Q first-half output in the full kernel. -/
-noncomputable def rotaryKernelQ0Spec
-    (s : BlockState) (Q Cos Sin : RegionName)
-    (stride_qbs stride_qh stride_qd stride_cosbs stride_cosd : Nat)
-    (BLOCK_SEQ BLOCK_HEAD BLOCK_HALF : Nat)
-    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_HALF]) : ℝ :=
-  s.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
-      BLOCK_HEAD BLOCK_SEQ BLOCK_HALF idx) *
-    s.readMem Cos (cosFullOffset s stride_cosbs stride_cosd
-      BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2)) -
-  s.readMem Q ((s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_qbs +
-      (s.pids 0 * BLOCK_HEAD + idx.2.1.val) * stride_qh +
-      (idx.2.2.1.val * 2 + 1) * stride_qd) *
-    s.readMem Sin (sinFullOffset s stride_cosbs stride_cosd
-      BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2))
 
 end VeriTile.Bench.TritonBenchG.RotaryEmb

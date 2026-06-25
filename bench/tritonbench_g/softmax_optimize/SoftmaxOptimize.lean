@@ -505,13 +505,6 @@ theorem evalOp_load_ptrRef_maskOther {dtype : TileDType} {n : Nat}
           s.readMemValue dtype (ptrTile.data i).1 (ptrTile.data i).2 else otherTile.data i⟩ := by
   simp only [evalOp, hp, hmask, hother, Option.bind_eq_bind, Option.bind_some, if_true]
 
-/-- `tl.where(m > x, m, x) = m ⊔ x` on `WithBot ℝ`: the running-max update. -/
-theorem real_where_gt_eq_sup (a b : WithBot ℝ) : (if a > b then a else b) = a ⊔ b := by
-  rcases lt_trichotomy a b with h|h|h
-  · simp [not_lt.mpr (le_of_lt h), sup_eq_right.mpr (le_of_lt h)]
-  · simp [h]
-  · simp [h, sup_eq_left.mpr (le_of_lt h)]
-
 /-- **Per-lane running-max bridge.** The kernel's `new_m = where(m > inp, m, inp)`
 on lane `ℓ` (`m = m[ℓ] : WithBot ℝ`, `inp = some x`) equals `(soStep (m,z) x).1`. -/
 theorem soStep_fst_match (m : WithBot ℝ) (zr x : ℝ) :
@@ -1551,19 +1544,6 @@ theorem reduction_step (N TILE_N : Nat) (hN : 0 < N) (hT : 0 < TILE_N)
   · rw [hs7]
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
       not_false_eq_true]
-
-/-- **Shift cancellation.** Numerically-stabilized softmax with an arbitrary
-shift `c` equals the plain ratio. -/
-theorem softmax_shift_cancel {N : Nat} (a c : ℝ) (f : Fin N → ℝ) :
-    Real.exp (a - c) / ∑ j : Fin N, Real.exp (f j - c)
-      = Real.exp a / ∑ j : Fin N, Real.exp (f j) := by
-  have hexp : ∀ x : ℝ, Real.exp (x - c) = Real.exp x * Real.exp (-c) := by
-    intro x; rw [← Real.exp_add]; ring_nf
-  simp_rw [hexp]
-  rw [← Finset.sum_mul]
-  by_cases hsum : (∑ j : Fin N, Real.exp (f j)) = 0
-  · rw [hsum]; simp
-  · rw [mul_div_mul_right _ _ (Real.exp_ne_zero _)]
 
 /-! ### Pass-2 store loops: writeback `exp(input[j] - rowMax) / z`
 

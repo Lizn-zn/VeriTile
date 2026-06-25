@@ -280,5 +280,4 @@ noncomputable def alignedBias (s : BlockState) (B0 : RegionName)
 
 ## Also present (pinned special-case summaries)
 - `attention_kernel_aligned_final_store_slice_compute_correct`
-- `aligned_genuine_output_compute_correct`
 - `aligned_genuine_output_compute_correct_general`

@@ -147,13 +147,6 @@ theorem l2BwdDotCarrier_eq_l2NormDot
   intro k _hk
   by_cases h : k.val < N <;> simp [h]
 
-noncomputable def l2BwdRstdCarrier
-    (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) (eps : ℝ) :
-    WithBot ℝ :=
-  Option.map (fun b => b⁻¹)
-    (WithBot.realSqrt (Option.map (fun a => a + eps)
-      (l2BwdVarCarrier s X stride_x_row N BLOCK_N)))
-
 noncomputable def l2BwdSpec
     (s : BlockState) (X DY : RegionName)
     (stride_x_row N BLOCK_N : Nat) (eps : ℝ) (idx : Fin BLOCK_N) : ℝ :=
