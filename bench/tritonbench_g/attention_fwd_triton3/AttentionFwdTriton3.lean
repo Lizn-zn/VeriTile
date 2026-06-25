@@ -6929,6 +6929,80 @@ theorem aft3_init_stepsG (s : BlockState) (BM ND : Nat) :
   rw [stepStmts.nil]
 
 set_option maxHeartbeats 1600000 in
+/-- The 3 general `INIT` ELSE-branch (`INIT=False` resume) statements load
+`m_i = M[…]`, `l_i = L[…]`, `acc = Out[…]` from the input buffers via `m_ptrs`,
+`l_ptrs`, `O_block_ptr`. Case-4 analogue of `aft3_init_stepsG`. -/
+theorem aft3_load_stepsG (s : BlockState) (M Out L : RegionName)
+    (BM ND base som son ROUND_CTX : Nat)
+    (hM : s.regs .ptr [BM] "m_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))))
+    (hL : s.regs .ptr [BM] "l_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))))
+    (hO : s.regs .blockPtr [BM, ND] "O_block_ptr" = some
+      (⟨fun _ : TileIndex [BM, ND] =>
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND],
+          blockShape := [BM, ND], strides := [som, son], offsets := [s.pids 0 * BM, 0] }⟩)) :
+    stepStmts [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none),
+        Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none),
+        Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)] s
+      = some (((s.setReg "m_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩).setReg
+          "l_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩).setReg
+          "acc" .real [BM, ND] ⟨fun idx : TileIndex [BM, ND] =>
+            some (s.readMem Out (base + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))⟩) := by
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none) s
+        = some ⟨fun r : TileIndex [BM] => some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩ from by
+      have hp : evalOp (Op.ref TileDType.ptr [BM] "m_ptrs") s = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+              (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))) := by
+        rw [evalOp_ref]; exact hM
+      simp only [evalOp, hp]
+      refine congrArg some ?_
+      ext r
+      simp [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real,
+        NumericDType.add, Nat.zero_add]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none) _
+        = some ⟨fun r : TileIndex [BM] => some (s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩ from by
+      have hp : evalOp (Op.ref TileDType.ptr [BM] "l_ptrs")
+          (s.setReg "m_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩) = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+              (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))) := by
+        rw [evalOp_ref]
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_pids]
+        exact hL
+      simp only [evalOp, hp, BlockState.setReg_pids]
+      refine congrArg some ?_
+      ext r
+      simp [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real,
+        NumericDType.add, Nat.zero_add, BlockState.setReg_readMem]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none) _
+        = some ⟨fun idx : TileIndex [BM, ND] =>
+            some (s.readMem Out (base + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))⟩ from by
+      refine (aft3_load_v_eval Out base ROUND_CTX ND BM ND som son (s.pids 0 * BM)
+        (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") _ ?_).trans ?_
+      · rw [evalOp_ref]
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hO
+      · refine congrArg some ?_
+        ext idx
+        simp [BlockState.setReg_readMem]))]
+  rw [stepStmts.nil]
+
+set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **General preLoop execution.** Establishes `attnInvariantG … 0` for any case
 `keep`, under the stride-regime equalities and `0 < ND`. -/
