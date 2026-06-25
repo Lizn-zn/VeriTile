@@ -8551,6 +8551,183 @@ theorem aft3PostLoop_eval_KG
     simp only [FloatDType.real_storeValue, miFin, Tile.bop_data, Tile.uop_data,
       Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, hmiTile, hliTile]
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Seeded postLoop evaluation (case 4).** From `attnInvariantSeededG … NC`, the
+END=True finalize stores the normalized resume-seeded fold into `O` and the
+`m + log2 l` finalize into `M`. -/
+theorem aft3PostLoop_eval_seededG
+    (Q K V M Out L : RegionName) (s0 : BlockState) (s : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (hND : 0 < ND) (sc : ℝ)
+    (hMO : M ≠ Out)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + r.1.val)))
+    (hinv : attnInvariantSeededG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc keep seed NC s) :
+    ∃ sP, stepStmts (aft3PostLoopG M Out L BM ND) s = some sP
+      ∧ (∀ idx : TileIndex [BM, ND],
+          sP.readMem Out (base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son)
+            = ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                  (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                  keep seed NC idx.1 idx.2.1).2.2)
+              / ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                  (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                  keep seed NC idx.1 ⟨0, hND⟩).2.1))
+      ∧ (∀ i : Fin BM,
+          sP.readMem M (s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + i.val))
+            = (WithBot.realAdd
+                  (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                    (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                    keep seed NC i ⟨0, hND⟩).1
+                  (WithBot.realLog2 (((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                    (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                    keep seed NC i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+  obtain ⟨hpids, _, _, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ :=
+    hinv
+  set qT := qTile3G s0 Q base BM ND sqm sqk with hqT
+  set kT := kTile3G s0 K base NC ND skn skk with hkT
+  set vT := vTile3G s0 V base NC ND svk svn with hvT
+  set ks := keyScale3G sc NC with hks
+  set miTile : Tile .real [BM] :=
+    ⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks keep seed NC r.1 ⟨0, hND⟩).1⟩ with hmiTile
+  set liTile : Tile .real [BM] :=
+    ⟨fun r : TileIndex [BM] => ((aft3StateSeededG qT kT vT ks keep seed NC r.1 ⟨0, hND⟩).2.1 : ℝ)⟩ with hliTile
+  set accTile : Tile .real [BM, ND] :=
+    ⟨fun idx : TileIndex [BM, ND] => ((aft3StateSeededG qT kT vT ks keep seed NC idx.1 idx.2.1).2.2 : ℝ)⟩ with haccTile
+  unfold aft3PostLoopG
+  set miFin : Tile .real [BM] :=
+    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) miTile
+      (Tile.uop WithBot.realLog2 liTile) with hmiFin
+  set accFin : Tile .real [BM, ND] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil)) accTile
+      (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
+  rw [stepStmts.cons_some
+    (show stepStmt _ s = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true s)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil)
+            (Op.ref TileDType.real [BM] "m_i") (Op.ref TileDType.real [BM] "l_i").log2) s
+            = some miFin from by
+          rw [evalOp_add]
+          simp only [evalOp, evalOp.eq_def, evalOp_ref, hmi, hli, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.div NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref TileDType.real [BM, ND] "acc")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [BM] "l_i"))) _
+            = some accFin from by
+          have hexp : @evalOp TileDType.real [BM, 1]
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [BM] "l_i"))
+                (s.setReg "m_i" .real [BM] miFin)
+              = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+          rw [evalOp_div]
+          simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+            not_false_eq_true, BlockState.setReg_same, hexp, hacc, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.nil])]
+  set s2 := (s.setReg "m_i" .real [BM] miFin).setReg "acc" .real [BM, ND] accFin with hs2
+  have hMptr2 : s2.regs .ptr [BM] "m_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val)))) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
+  have hmi2 : s2.regs .real [BM] "m_i" = some miFin := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  set mOffFn : TileIndex [BM] → Nat :=
+    fun r => s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + r.1.val) with hmOffFn
+  have hmptrEval : evalOp (Op.ref TileDType.ptr [BM] "m_ptrs") s2
+      = some (⟨fun r : TileIndex [BM] => (M.cast, mOffFn r)⟩ : Tile .ptr [BM]) := by
+    rw [evalOp_ref, hMptr2]
+    refine congrArg some ?_; ext r
+    · rfl
+    · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add, hmOffFn]
+  have hstore1 : stepStmt (Stmt.store TileDType.real [BM] (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs"))
+      (Op.ref TileDType.real [BM] "m_i") MaskOpt.none) s2
+      = some ((TileShape.allIndices [BM]).foldl
+          (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2) := by
+    simp only [stepStmt, evalOp_ref, hmi2, hmptrEval, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some, if_true, Region.cast_id]
+  rw [stepStmts.cons_some hstore1]
+  set s3 := (TileShape.allIndices [BM]).foldl
+      (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2 with hs3
+  have hOp3 : s3.regs .blockPtr [BM, ND] "O_block_ptr" = some
+      (⟨fun _ : TileIndex [BM, ND] =>
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+          strides := [som, son], offsets := [s0.pids 0 * BM, 0] }⟩) := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  have hacc3 : s3.regs .real [BM, ND] "acc" = some accFin := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_same]
+  set oOffFn : TileIndex [BM, ND] → Nat :=
+    fun idx => base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son with hoOffFn
+  set oValFn : TileIndex [BM, ND] → WithBot ℝ := fun idx => accFin.data idx with hoValFn
+  have hstore2 : stepStmt (Stmt.store TileDType.real [BM, ND]
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") [])
+      (Op.ref TileDType.real [BM, ND] "acc") MaskOpt.none) s3
+      = some ((TileShape.allIndices [BM, ND]).foldl
+          (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3) := by
+    simp only [stepStmt, evalOp_ref, hacc3, hOp3, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s3 ?_
+    intro acc idx _
+    simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil, Bool.and_true,
+      Bool.true_and, if_true]
+    have haddr : BlockPtr.address
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+          strides := [som, son], offsets := [s0.pids 0 * BM, 0] }
+        [idx.1.val, idx.2.1.val]
+        = oOffFn idx := by
+      show base + ((s0.pids 0 * BM + idx.1.val) * som + (0 + idx.2.1.val) * son) = _
+      rw [Nat.zero_add, hoOffFn]; ring
+    rw [haddr]
+  rw [stepStmts.cons_some hstore2, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx
+    rw [show (base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son) = oOffFn idx from by
+      simp only [hoOffFn]]
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := Out) s3 oOffFn
+      (fun idx => FloatDType.real.storeValue (oValFn idx)) hinjO idx]
+    simp only [FloatDType.real_storeValue, hoValFn, haccFin]
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+      Option.map₂, Option.bind, Option.map, haccTile, hliTile, WithBot.unbotD_coe,
+      WithBot.unbotD_some]
+  · intro i
+    rw [show (s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + i.val)) = mOffFn (i, PUnit.unit) from by
+      simp only [hmOffFn]]
+    rw [show ((TileShape.allIndices [BM, ND]).foldl
+            (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3).readMem M
+              (mOffFn (i, PUnit.unit))
+          = s3.readMem M (mOffFn (i, PUnit.unit)) from by
+      simp only [BlockState.writeMemTyped_real]
+      exact aft3_foldl_writeMem_readMem_other_region M Out hMO oOffFn
+        (fun idx => FloatDType.real.storeValue (oValFn idx)) (mOffFn (i, PUnit.unit))
+        (TileShape.allIndices [BM, ND]) s3]
+    rw [hs3]
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := M) s2 mOffFn
+      (fun r => FloatDType.real.storeValue (miFin.data r)) hinjM (i, PUnit.unit)]
+    simp only [FloatDType.real_storeValue, miFin, Tile.bop_data, Tile.uop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, hmiTile, hliTile]
+
 /-- At the full window `NC` with `noWindowKeep` (running max never `⊥` when
 `0 < NC`), the no-⊥-carry `aft3StateBot1G` equals the ⊥-carry `aft3StateBotKG`. -/
 theorem aft3StateBot1G_full_eq_KG_noWindow {BM ND NC : Nat}
