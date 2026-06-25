@@ -167,35 +167,6 @@ theorem scatter_readback_int_prop_masked_nd {region : RegionName} {shape : TileS
       (offsetFn i) l₁]
     exact h_l1_not_in
 
-/-- A trailing masked `.fp16` store foldl to `OutScale` leaves `readMemValue .int`
-on a different region `Out` unchanged. -/
-theorem foldl_writeMemTyped_fp16_const_region_masked_readMemValue_int_other {α : Type}
-    (region : RegionName) (offsetFn : α → Nat)
-    (valueFn : α → TileCarrier TileDType.fp16)
-    (mask : α → Bool) (l : List α) (s : BlockState)
-    (R : RegionName) (off : Nat) (hRR : R ≠ region) :
-    BlockState.readMemValue ((l.foldl
-        (fun acc k =>
-          if mask k then acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k) else acc) s))
-      .int R off
-      = s.readMemValue .int R off := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-      rw [List.foldl_cons]
-      by_cases hhd : mask hd = Bool.true
-      · simp only [hhd, if_true]
-        rw [ih]
-        unfold BlockState.writeMemTyped BlockState.writeMemAs
-          BlockState.readMemValue BlockState.readMemTyped
-        simp only
-        rw [if_neg]
-        rintro ⟨hR, _⟩
-        exact hRR hR
-      · have : (mask hd) = Bool.false := by cases hP : mask hd <;> simp_all
-        simp only [this, Bool.false_eq_true, if_false]
-        exact ih _
-
 /-- Prop-masked `.fp16` store foldl leaves `readMemValue .int` on a different
 region unchanged. The genuine value readback reads `.int Out`; the trailing
 fp16 scale store to `OutScale` is peeled off with this. -/

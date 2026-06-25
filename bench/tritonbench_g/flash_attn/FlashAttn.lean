@@ -858,13 +858,6 @@ theorem evalOp_log2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
     evalOp (.log2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realLog2 va)) := by
   simp [evalOp]
 
-/-- **`qk = tl.zeros([BLOCK_M, BLOCK_N])` statement eval** (loop body L2): the
-all-`0` tile, matching the neutral pre-mask scores. -/
-theorem flash_qkzeros_op_eval (s : BlockState) (BM BN : Nat) :
-    evalOp (Op.full [BM, BN] (Op.const 0)) s
-      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
-  simp [evalOp_full, evalOp_const, Option.bind]
-
 /-- **Causal `where` statement eval** (loop body L3, inside `ifThen IS_CAUSAL`):
 `qk = tl.where(off_m[:,None] >= start_n + off_n[None,:], qk, -inf)`. Given the
 `off_m`/`off_n` index vectors, `start_n = SN`, and the running `qk` tile, the
@@ -1006,36 +999,6 @@ theorem flash_outbuf_rescale_op_eval (s : BlockState) (BM DIM : Nat) (hax : 1 < 
   have hexp2 : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "out_scale")) s
       = some (Tile.expandDim ⟨1, hax⟩ ostile) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hos
   rw [evalOp_mul]; simp only [evalOp_ref, hob, hexp2, Option.bind_eq_bind, Option.bind_some]; rfl
-
-/-- **`nume = (nume).to(tl.float16)` statement eval** (loop body, `nume` fp16
-round-trip before the value dot). Template `pfp16_op_eval` analogue. -/
-theorem flash_numefp16_op_eval (s : BlockState) (BM BN : Nat) (ntile : Tile .real [BM, BN])
-    (hn : s.regs .real [BM, BN] "nume" = some ntile) :
-    evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM, BN] "nume")) s
-      = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ntile.data i)⟩ : Tile .fp16 [BM, BN]) := by
-  rw [evalOp_castFloat]; simp [hn]
-
-/-- **`out_buffer += tl.dot((nume).to(fp16), v)` statement eval** (loop body L10).
-Template `acc2_op_eval` analogue: the `nume` fp16 round-trip is identity in the
-model, the dot accumulates the value contribution. -/
-theorem flash_outbuf_acc_op_eval (s : BlockState) (BM BN DIM : Nat)
-    (ob1tile : Tile .real [BM, DIM]) (ntile : Tile .real [BM, BN]) (vtile : Tile .real [BN, DIM])
-    (hob : s.regs .real [BM, DIM] "out_buffer" = some ob1tile)
-    (hnf16 : s.regs .fp16 [BM, BN] "nume" = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ntile.data i)⟩ : Tile .fp16 [BM, BN]))
-    (hv : s.regs .real [BN, DIM] "v" = some vtile) :
-    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) (Op.ref .real [BM, DIM] "out_buffer")
-        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v"))) s
-      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) ob1tile
-          (Tile.dot [] ntile vtile)) := by
-  have hcb : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) s = some ntile := by
-    rw [evalOp_castFloat]; simp [hnf16]; ext i; simp [FloatDType.cast]
-  have hcb2 : @evalOp TileDType.real [BM, BN] (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) s = some ntile := hcb
-  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v")) s
-      = some (Tile.dot [] ntile vtile) := by rw [evalOp_dot]; simp [hcb2, hv]
-  have hdotN2 : @evalOp TileDType.real [BM, DIM]
-      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v")) s
-      = some (Tile.dot [] ntile vtile) := hdotN
-  rw [evalOp_add]; simp only [evalOp_ref, hob, hdotN2, Option.bind_eq_bind, Option.bind_some]; rfl
 
 /-- **`denom = denom * alpha + tl.sum(nume, 1)` statement eval** (loop body L11).
 Template `li_op_eval`/`lij_op_eval` shapes composed: the running denominator
@@ -1310,27 +1273,6 @@ theorem flashState_fst_eq
     blockMax_eq_foldl_map, blockMax_eq_foldl_map,
     flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
 
-/-- The running denominator component (`.2.1`) of `flashState` is
-channel-independent. -/
-theorem flashState_snd_fst_eq
-    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
-    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
-    (flashState qT kT vT scale causal qStart hi i d).2.1
-      = (flashState qT kT vT scale causal qStart hi i d').2.1 := by
-  have hcons : ∀ dd : Fin DIM,
-      (flashState qT kT vT scale causal qStart hi i dd).2.1
-        = pow2 (-(flashState qT kT vT scale causal qStart hi i dd).1)
-          * (0 + ((flashKeysUpto qT kT vT scale causal qStart hi i dd).map
-              (fun p => pow2 p.1)).sum) := by
-    intro dd
-    exact (VeriTile.Triton.osStep_foldl_consistent
-      (flashKeysUpto qT kT vT scale causal qStart hi i dd) 0 0 0 0 0 (by simp) (by simp)).1
-  rw [hcons d, hcons d', flashState_fst_eq qT kT vT scale causal qStart hi i d d']
-  congr 2
-  rw [show (fun p : ℝ × ℝ => pow2 p.1) = pow2 ∘ (fun p => p.1) from rfl,
-    ← List.map_map, ← List.map_map,
-    flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
-
 /-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
 `WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block —
 faithful to the kernel's `max` register (`tl.zeros − inf`) and `denom`/`acc`
@@ -1404,127 +1346,6 @@ noncomputable def attnInvariant
   (s.regs .nat [] "off_bs_head" = some (Tile.scalar (s0.pids 1))) ∧
   (s.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s0.pids 1 * stride_q_head))) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
-
-/-! ## exec-side loop-invariant skeleton
-
-The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
-inspection of `(surface …).toAlgKernel.body`) is a 22-statement list:
-
-```
-preLoop (16 stmts, 0–15):
-  0  start_m         = program_id 0
-  1  off_bs_head     = program_id 1
-  2  qkv_base_offset = off_bs_head * stride_q_head
-  3  Q_block_ptr     = make_block_ptr(Q + base, offsets=(start_m*BLOCK_M, 0))
-  4  K_block_ptr     = make_block_ptr(K + base, offsets=(0, 0))
-  5  V_block_ptr     = make_block_ptr(V + base, offsets=(0, 0))
-  6  off_m           = start_m*BLOCK_M + arange BLOCK_M
-  7  off_n           = arange BLOCK_N
-  8  max             = full 0 + (-inf)
-  9  denom           = full 0
-  10 out_buffer      = full 0
-  11 qk_scale        = sm_scale * 1.44269504
-  12 q               = load Q_block_ptr            (no mask)
-  13 q               = (q * qk_scale).to fp16
-  14 lo              = 0
-  15 hi              = (start_m+1)*BLOCK_M  [causal]  /  SEQLEN  [non-causal]
-loop (16):
-  forRangeDyn start_n lo hi BLOCK_N loopBody   (loopBody = 15 stmts)
-postLoop (5 stmts, 17–21):
-  17 out_buffer      = out_buffer / denom[:, None]
-  18 l_ptr           = L + off_bs_head*SEQLEN + off_m
-  19 store L         l_ptr (max + log2 denom)
-  20 O_block_ptr     = make_block_ptr(O + base, offsets=(start_m*BLOCK_M, 0))
-  21 store O         O_block_ptr (out_buffer.to fp16)
-loopBody (15):
-  L0 k = load K_block_ptr ; L1 v = load V_block_ptr ; L2 qk = full 0 ;
-  L3 ifThen IS_CAUSAL { qk = where(off_m[:,None] >= start_n+off_n[None,:], qk, -inf) } ;
-  L4 qk = qk + dot q k ; L5 max_new = maximum(max, reduceMax qk 1) ;
-  L6 alpha = exp2(max - max_new) ; L7 nume = exp2(qk - max_new[:,None]) ;
-  L8 out_scale = denom*0 + alpha ; L9 out_buffer = out_buffer * out_scale[:,None] ;
-  L10 out_buffer = out_buffer + dot (nume.to fp16) v ; L11 denom = denom*alpha + sum nume 1 ;
-  L12 max = max_new ; L13 K_block_ptr = advance(K_block_ptr, [0, BLOCK_N]) ;
-  L14 V_block_ptr = advance(V_block_ptr, [BLOCK_N, 0]).
-```
-
-The body decomposes by `rfl` into `take 16 ++ (forRangeDyn … :: postLoop)`, so the
-loop driver `forRangeDyn_inv` applies with the abstract `loopBody`/postLoop supplied
-at the call site. The full chain is closed sorry-free: the per-statement op-eval
-recipes for the 15-stmt loop body (threading the causal `ifThen`/`where` `-inf`
-mask into the `osBlockStep`/`attnKeyListCausal` fold) and the
-`attnInvariant`/`preLoop`/`attn_step`/`attn_postLoop` skeleton composed via
-`forRangeDyn_inv` and bridged through `flashAttnOValueSpec{,Causal}_eq_streaming`. -/
-
-/-- The compiled body splits as `take 16 ++ drop 16`, with `drop 16` a `forRangeDyn`
-followed by the 5 post-loop statements. Pure `List` identity (`take_append_drop`),
-independent of any transcription. -/
-theorem flash_body_split
-    (Q K V L O : RegionName) (sm_scale : ℝ)
-    (s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15 s16 s17 s18 s19
-      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N : Nat) (IS_CAUSAL : Bool) :
-    (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
-        s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
-        IS_CAUSAL).toAlgKernel.body
-      = (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
-          s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
-          IS_CAUSAL).toAlgKernel.body.take 16
-        ++ (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
-              s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
-              IS_CAUSAL).toAlgKernel.body.drop 16 :=
-  (List.take_append_drop 16 _).symm
-
-/-- The deterministic scalar prefix (statements 0–2: `start_m`, `off_bs_head`,
-`qkv_base_offset`) transcribes exactly to the lowered ops, by `rfl`. The base case
-of the preLoop transcription; later prefix statements (the block-pointer
-constructions 3–5, the index vectors 6–7, the `max`/`denom`/`out_buffer` inits
-8–10, `qk_scale` 11, the `q` load+scale 12–13, and `lo`/`hi` 14–15) extend this
-list and step via the recipes above (`flash_makeBlockPtr*_eval`, `flash_load_Q_eval`,
-…). -/
-theorem flash_prefix_scalars_eq (Q K V L O : RegionName) (sm_scale : ℝ)
-    (sqbs sqh sqsl sqd skbs skh sksl skd svbs svh svsl svd sobs soh sosl sod
-      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N : Nat) (IS_CAUSAL : Bool) :
-    (flash_attn_fwd_kernel_surface Q K V L O sm_scale sqbs sqh sqsl sqd skbs skh sksl skd
-        svbs svh svsl svd sobs soh sosl sod BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL).toAlgKernel.body.take 3
-      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
-          Stmt.assign .nat [] "off_bs_head" (Op.programId 1),
-          Stmt.assign .nat [] "qkv_base_offset"
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat sqh)) ] :=
-  rfl
-
-/-! ## Block-reduction bridges (flashBlock ↔ Fin BLOCK_N masked reductions)
-
-The kernel's loop body reduces a `BLOCK_N`-lane masked score row over `Fin BLOCK_N`
-(lane `jL` ↦ global key `c·BLOCK_N + jL`); the `osBlockStep` math uses the
-`flashBlock` list (a `Fin SEQLEN` causal filterMap of the window
-`[c·BLOCK_N, (c+1)·BLOCK_N)`). These bridges equate the two by reindexing the
-window onto `Fin BLOCK_N`. -/
-
-open VeriTile.Triton (osBlockStep blockMax pow2 osStep)
-
-/-- Sum over `Fin BLOCK_N` reindexes the window `[c·BLOCK_N, (c+1)·BLOCK_N) ⊆
-Fin SEQLEN`: lane `jL` ↦ global key `c·BLOCK_N + jL`. -/
-theorem flash_window_sum_reindex (BLOCK_N c SEQLEN : Nat)
-    (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) (g : Nat → ℝ) :
-    (∑ jL : Fin BLOCK_N, g (c * BLOCK_N + jL.val))
-      = ∑ j : Fin SEQLEN, (if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N then g j.val else 0) := by
-  have hmul : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
-  rw [← Finset.sum_filter]
-  refine Finset.sum_bij
-    (i := fun jL _ => (⟨c * BLOCK_N + jL.val, by
-      have h1 := jL.isLt
-      have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
-      omega⟩ : Fin SEQLEN)) ?_ ?_ ?_ ?_
-  · intro jL _
-    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
-    have := jL.isLt; omega
-  · intro a _ b _ hab
-    apply Fin.ext
-    have : c * BLOCK_N + a.val = c * BLOCK_N + b.val := by simpa using congrArg Fin.val hab
-    omega
-  · intro j hj
-    have hj2 : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N := (Finset.mem_filter.mp hj).2
-    exact ⟨⟨j.val - c * BLOCK_N, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
-  · intro jL _; rfl
 
 /-- filterMap-sum over `Fin n` with a guard collapses into the masked `Finset.sum`. -/
 theorem flash_filterMap_finRange_sum {α : Type*} (n : Nat)
@@ -3727,15 +3548,6 @@ theorem flash_O_blockptr_offset_injective (base p0 : Nat) :
   have hd : da = db := by omega
   subst mb; subst db; rfl
 
-/-- Injectivity of the `L` row store addresses (Python shape). -/
-theorem flash_L_ptr_offset_injective (p0 p1 : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [128] => p1 * 128 + (p0 * 128 + idx.1.val)) := by
-  rintro ⟨⟨a, ha⟩, _⟩ ⟨⟨b, hb⟩, _⟩ h
-  simp only at h
-  have : a = b := by omega
-  subst b; rfl
-
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
 /-- **PostLoop execution + genuine readbacks.** Stepping the 5 post-loop statements
@@ -5417,15 +5229,6 @@ theorem flash_O_blockptr_offset_injectiveG (BLOCK_M DIM base p0 : Nat) :
   have hm : ma = mb := by
     have := Nat.eq_of_mul_eq_mul_right hDIMpos h2; omega
   subst mb; rfl
-
-/-- General `L` row store address injectivity. -/
-theorem flash_L_ptr_offset_injectiveG (BLOCK_M p0 p1 : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [BLOCK_M] => p1 * BLOCK_M + (p0 * BLOCK_M + idx.1.val)) := by
-  rintro ⟨⟨a, ha⟩, _⟩ ⟨⟨b, hb⟩, _⟩ h
-  simp only at h
-  have : a = b := by omega
-  subst b; rfl
 
 /-- The general lowered post-loop statements (17–21). -/
 def flashPostLoopG (L O : RegionName) (SEQLEN BLOCK_M DIM : Nat) : List Stmt :=

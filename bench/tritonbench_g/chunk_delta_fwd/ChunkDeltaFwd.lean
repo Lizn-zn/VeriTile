@@ -141,16 +141,6 @@ theorem makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
     Tile.scalar, List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append,
     List.cons_append]
 
-/-- Evaluation unfolding for the `≥` comparison op. -/
-theorem evalOp_ge_def {dtype : TileDType} {a b shape : TileShape}
-    (h : ComparableDType dtype) (bc : Broadcast a b shape)
-    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.ge h bc x y) s = (do
-      let vx ← evalOp x s
-      let vy ← evalOp y s
-      some (Tile.cop h.ge bc vx vy)) := by
-  simp [evalOp]
-
 /-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
 theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
     @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
@@ -172,44 +162,6 @@ theorem dot2d_elem {M K N : Nat} (a : Tile .real [M, K]) (b : Tile .real [K, N])
       = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fa e * fb e) : WithBot ℝ))
       from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
   exact withBot_sum_some _
-
-/-- **`acc + dot(a, b)` recipe** (matmul accumulation, e.g. `b_h_cumsum += dot`). -/
-theorem accDot_op_eval (s : BlockState) (M K N : Nat) (accName aName bName : RegName)
-    (acctile : Tile .real [M, N]) (atile : Tile .real [M, K]) (btile : Tile .real [K, N])
-    (hacc : s.regs .real [M, N] accName = some acctile)
-    (ha : s.regs .real [M, K] aName = some atile)
-    (hb : s.regs .real [K, N] bName = some btile) :
-    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [M, N] accName)
-        (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName))) s
-      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          acctile (Tile.dot [] atile btile)) := by
-  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
-      = some (Tile.dot [] atile btile) := by rw [evalOp_dot]; simp [ha, hb]
-  have hdot2 : @evalOp TileDType.real [M, N]
-      (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
-      = some (Tile.dot [] atile btile) := hdot
-  rw [evalOp_add]
-  simp only [evalOp_ref, hacc, hdot2, Option.bind_eq_bind, Option.bind_some, Option.bind]
-
-/-- **`acc − dot(a, b)` recipe** (the `b_v ← b_v − dot(b_d, b_h)` correction). -/
-theorem subDot_op_eval (s : BlockState) (M K N : Nat) (accName aName bName : RegName)
-    (acctile : Tile .real [M, N]) (atile : Tile .real [M, K]) (btile : Tile .real [K, N])
-    (hacc : s.regs .real [M, N] accName = some acctile)
-    (ha : s.regs .real [M, K] aName = some atile)
-    (hb : s.regs .real [K, N] bName = some btile) :
-    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [M, N] accName)
-        (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName))) s
-      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          acctile (Tile.dot [] atile btile)) := by
-  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
-      = some (Tile.dot [] atile btile) := by rw [evalOp_dot]; simp [ha, hb]
-  have hdot2 : @evalOp TileDType.real [M, N]
-      (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
-      = some (Tile.dot [] atile btile) := hdot
-  rw [evalOp_sub]
-  simp only [evalOp_ref, hacc, hdot2, Option.bind_eq_bind, Option.bind_some, Option.bind]
 
 /-- Scalar offset op `name * c` evaluates to `scalar (val * c)` given `name = val`. -/
 theorem mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
@@ -420,30 +372,6 @@ def chunkDeltaInnerBody (k v d v_new : RegionName)
       (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
         (Op.ref .real [BK, BV] "b_h_cumsum")
         (Op.dot (batch := []) (Op.ref .real [BK, BC] "b_k") (Op.ref .real [BC, BV] "b_v"))) ]
-
-/-- Loaded `b_k` tile (block ptr `(K,T)` strides `(s_qk_d,s_qk_t)`, offsets
-`(0, i_t·BT)`), as `load_bp_2d_ref` emits it. -/
-noncomputable def bkTile (s : BlockState) (k : RegionName)
-    (s_qk_h s_qk_t s_qk_d T K BT BK BC : Nat) (i_t : Nat) : Tile .real [BK, BC] :=
-  ⟨fun idx => if (0 * BK + idx.1.val < K ∧ i_t * BT + idx.2.1.val < T) then
-      some (s.readMem k (s.pids 2 * s_qk_h + (0 * BK + idx.1.val) * s_qk_d
-        + (i_t * BT + idx.2.1.val) * s_qk_t)) else some 0⟩
-
-/-- Loaded `b_d` tile (block ptr `(T,K)` strides `(s_qk_t,s_qk_d)`, offsets
-`(i_t·BT, 0)`). -/
-noncomputable def bdTile (s : BlockState) (d : RegionName)
-    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat) : Tile .real [BC, BK] :=
-  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ 0 * BK + idx.2.1.val < K) then
-      some (s.readMem d (s.pids 2 * s_qk_h + (i_t * BT + idx.1.val) * s_qk_t
-        + (0 * BK + idx.2.1.val) * s_qk_d)) else some 0⟩
-
-/-- Loaded `b_v` tile (block ptr `(T,V)` strides `(s_vo_t,s_vo_d)`, offsets
-`(i_t·BT, i_v·BV)`). -/
-noncomputable def bvTile (s : BlockState) (v : RegionName)
-    (s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat) (i_t : Nat) : Tile .real [BC, BV] :=
-  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) then
-      some (s.readMem v (s.pids 2 * s_vo_h + (i_t * BT + idx.1.val) * s_vo_t
-        + (s.pids 1 * BV + idx.2.1.val) * s_vo_d)) else some 0⟩
 
 /-! ## Tile-lane index helpers and active region -/
 
@@ -930,32 +858,6 @@ theorem chunk_delta_fwd_final_state_store_slice_realizes_final
   show s'.readMem FinalState (finalStateOffset s K V BK BV idx) = _
   rw [h2, finalStateStoreValue, if_pos hActive, WithBot.unbotD_some]
   exact hBHF idx hActive
-
-/-! ## Cross-chunk exec derivation (concrete Python shape)
-
-The genuine `exec`-driven derivation of the producer hypotheses. We step the
-lowered surface body of the checked Python shape
-(`s_qk_h=8192, s_qk_t=128, s_qk_d=1, s_vo_h=8192, s_vo_t=64, s_vo_d=1,
-s_h_h=16384, s_h_t=64, K=V=64, BT=BC=32, BK=BV=64, NT=4`) through:
-
-* the prologue (`i_k`/`i_v`/`i_bh`, `b_h = 0`, the `USE_INITIAL_STATE` seed);
-* the outer **static** `forRange "i_t" 0 4 1` carrying the `[64,64]` state tile
-  `b_h = cdfCarryTile i_t` (the actual fold the kernel computes), with the chunk-start `h[i_t]`
-  store and the cumulative `v_new[i_t]` store materialized for chunks `< i_t`;
-* the inner **dynamic** `forRangeDyn "i_c" 0 1 1` (single inner chunk, `BC=BT`)
-  loading `b_k`/`b_d`/`b_v`, correcting `b_v ← b_v − dot(b_d,b_h)`, storing
-  `v_new`, and accumulating `b_h_cumsum += dot(b_k,b_v)`;
-* the `STORE_FINAL_STATE` flush of `H_4`.
-
-Everything is at `i_k = 0` (the `NK=1` regime). `pids 0 = i_k`, `pids 1 = i_v`,
-`pids 2 = i_bh`. We keep the `BlockState` symbolic and peel `setReg` chains by
-name inequality. -/
-
-/-- The carried `[64,64]` state tile of chunk `i_t`: data `(e,p) ↦ stateValue`. -/
-noncomputable def cdfStateTile (s : BlockState) (k v d initial_state : RegionName)
-    (USE_INITIAL_STATE : Bool) (i_t : Nat) : Tile .real [64, 64] :=
-  ⟨fun idx => some (stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-    USE_INITIAL_STATE i_t idx.1.val idx.2.1.val)⟩
 
 /-- The loaded `b_k` tile `[64,32]` of chunk `i_t` (inner chunk `i_c=0`, `i_k=0`).
 Cell `(e,c)` reads `k` at `i_bh·8192 + e·1 + (i_t·32+c)·128 = kElem`. -/
@@ -1516,40 +1418,6 @@ theorem chunk_delta_fwd_final_state_python_test_shape_offset_injective
   subst vb
   rfl
 
-/-! ## Producer hypotheses (cross-chunk fold summary)
-
-`producesState`/`producesVNew`/`producesFinal` say the within-kernel
-accumulation materialized the genuine delta-rule closed form into the producer
-buffer at every active lane. They summarize the `NT`/`ceil(BT/BC)` carry fold
-(the two `tl.dot` matmuls, the `b_v ← b_v − b_d·b_h` correction, the
-`b_h_cumsum += b_k·b_v` accumulation, and the `b_h += b_h_cumsum` advance) — the
-analogue of the `chunk_cumsum` carry invariant and the `chunk_gla_simple`
-producer hypothesis. -/
-
-def producesState (s : BlockState) (BH k v d initial_state : RegionName)
-    (i_t s_h_h s_h_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-      K V BT BV BK : Nat) (USE_INITIAL_STATE : Bool) : Prop :=
-  ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-    s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx)
-      = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE i_t idx
-
-def producesVNew (s : BlockState) (BVN k v d initial_state : RegionName)
-    (i_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-      T K V BT BV BK : Nat) (USE_INITIAL_STATE : Bool) : Prop :=
-  ∀ idx : TileIndex [BT, BV], vNewActive s i_t 0 T V BT BT BV idx →
-    s.readMem BVN (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)
-      = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE i_t idx
-
-def producesFinal (s : BlockState) (BHFinal k v d initial_state : RegionName)
-    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-      K V BT BV BK NT : Nat) (USE_INITIAL_STATE : Bool) : Prop :=
-  ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-    s.readMem BHFinal (finalStateOffset s K V BK BV idx)
-      = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE NT idx
-
 /-! ## Cross-chunk exec carry-fold (genuine producer derivation)
 
 We step the lowered (algorithm-layer, float-erased) surface body of the checked
@@ -1790,48 +1658,6 @@ noncomputable def cdfState (s : BlockState) (k v d initial_state : RegionName)
     (USE_INITIAL_STATE : Bool) (i_t e p : Nat) : ℝ :=
   stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
     USE_INITIAL_STATE i_t e p
-
-set_option maxHeartbeats 4000000 in
-/-- **State-advance linchpin.** On the active region (`p` such that
-`s.pids 1 * 64 + p < 64`, i.e. `s.pids 1 = 0`, and `e < 64`) and for a time chunk
-`i_t < 4`, the `cdfCumsumTile` cell built from the chunk-start state
-`fbh = cdfState … i_t` equals exactly the closed-form advance increment
-`stateValue (i_t+1) − stateValue i_t`. Hence
-`stateValue (i_t+1) e p = stateValue i_t e p + cdfCumsumTile cell`. -/
-theorem cdfAdvance_active
-    (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
-    (i_t : Nat) (hit : i_t < 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64) :
-    (cdfCumsumTile s k v d
-        (fun e' p' => cdfState s k v d initial_state USE_INITIAL_STATE i_t e' p') i_t).data
-        (⟨e, by omega⟩, ⟨p, by omega⟩, PUnit.unit)
-      = some (cdfState s k v d initial_state USE_INITIAL_STATE (i_t + 1) e p
-          - cdfState s k v d initial_state USE_INITIAL_STATE i_t e p) := by
-  simp only [cdfCumsumTile, cdfState, stateValue]
-  refine congrArg some ?_
-  -- the (i_t+1) state minus i_t state = Σ_c kElem · (vElem − Σ_e' dElem·state)
-  rw [add_sub_cancel_left]
-  -- both sides are Σ over c : Fin 32; match cell-wise
-  refine Finset.sum_congr rfl (fun c _ => ?_)
-  have hc : i_t * 32 + c.val < 128 := by have := c.isLt; omega
-  -- left guard `e < 64 ∧ i_t*32+c<128` is True
-  rw [if_pos ⟨he, hc⟩]
-  -- expand cdfBvNewCell, collapse its guards
-  simp only [cdfBvNewCell]
-  rw [if_pos ⟨hc, hp⟩]
-  -- the inner d-sum: collapse guard `i_t*32+c<128 ∧ e'<64`
-  have hdsum :
-      (Finset.univ.sum (fun e' : Fin 64 =>
-        (if (i_t * 32 + c.val < 128 ∧ e'.val < 64) then
-            dElem s d 8192 128 1 32 i_t c.val e'.val else 0)
-          * stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-              USE_INITIAL_STATE i_t e'.val p))
-      = Finset.univ.sum (fun e' : Fin 64 =>
-          dElem s d 8192 128 1 32 i_t c.val e'.val
-            * stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                USE_INITIAL_STATE i_t e'.val p) := by
-    refine Finset.sum_congr rfl (fun e' _ => ?_)
-    rw [if_pos ⟨hc, e'.isLt⟩]
-  rw [hdsum]
 
 set_option maxHeartbeats 4000000 in
 /-- **State-advance linchpin (general `fbh`).** The `cdfCumsumTile` cell at active

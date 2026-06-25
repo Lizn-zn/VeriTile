@@ -117,13 +117,6 @@ theorem l2VarCarrier_eq_l2NormSqSum
   intro k _hk
   by_cases h : k.val < N <;> simp [h, BlockState.pid_eq]
 
-noncomputable def l2RstdCarrier
-    (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) (eps : ℝ) :
-    WithBot ℝ :=
-  Option.map (fun b => b⁻¹)
-    (WithBot.realSqrt (Option.map (fun a => a + eps)
-      (l2VarCarrier s X stride_x_row N BLOCK_N)))
-
 noncomputable def l2Spec
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) (eps : ℝ)
     (idx : Fin BLOCK_N) : ℝ :=

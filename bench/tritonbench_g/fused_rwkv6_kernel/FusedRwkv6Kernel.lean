@@ -174,10 +174,6 @@ def finalStateOffset (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BV, BK]) : Nat :=
   s.pids 2 * K * V + kIndex s BK idx.2.1 * V + vIndex s BV idx.1
 
-/-- Output-buffer address for time row `timeOffset`, lane `j_v`. -/
-def outOffset (s : BlockState) (timeOffset B H T V BV : Nat) (jv : Fin BV) : Nat :=
-  (s.pids 2 + s.pids 1 * B * H) * T * V + timeOffset * V + vIndex s BV jv
-
 def finalActive (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BV, BK]) : Prop :=
   vIndex s BV idx.1 < V ∧ kIndex s BK idx.2.1 < K
@@ -242,14 +238,6 @@ noncomputable def stateClosed
     ∑ t ∈ Finset.range m,
       (kVal s k s_k_h K BK t idx.2.1 * vVal s v s_v_h V BV t idx.1) *
         (∏ j ∈ Finset.Ico (t + 1) m, decay s w s_k_h K BK j idx.2.1)
-
-/-- `stateClosed` at `m = 0` is the seed (the initial `b_h`). -/
-theorem stateClosed_zero
-    (s : BlockState) (k v w h0 : RegionName) (USE_INITIAL_STATE : Bool)
-    (s_k_h s_v_h K V BK BV : Nat) (idx : TileIndex [BV, BK]) :
-    stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV 0 idx
-      = stateSeed s h0 USE_INITIAL_STATE K V BK BV idx := by
-  simp [stateClosed]
 
 /-- **The state carry-fold recurrence.** Unrolling one step:
 `b_h^(m+1) = b_h^(m) · exp(w_m) + k_m·v_m`. This is the exact closed-form
@@ -818,11 +806,6 @@ theorem fused_recurrent_rwkv6_final_state_offset_injective_general
     omega
   subst bv; subst bk; rfl
 
-/-- Final-state / `h0` addresses are injective for `K=V=BK=BV=8`. -/
-theorem fused_recurrent_rwkv6_final_state_offset_injective (s : BlockState) :
-    Function.Injective (fun idx : TileIndex [8, 8] => finalStateOffset s 8 8 8 8 idx) :=
-  fused_recurrent_rwkv6_final_state_offset_injective_general s 8 8 8 8 (by omega) (by omega)
-
 /-- **Dimension-general** per-time output address injectivity, given `0 < BV`. -/
 theorem fused_recurrent_rwkv6_out_step_offset_injective_general
     (s : BlockState) (t s_v_h B H V BV : Nat) (hBV : 0 < BV) :
@@ -830,13 +813,6 @@ theorem fused_recurrent_rwkv6_out_step_offset_injective_general
   intro a b h
   simp [outStepOffset] at h
   omega
-
-/-- Output addresses are injective for the per-time output row (`V=BV=8`,
-`s_v_h=32`). -/
-theorem fused_recurrent_rwkv6_out_step_offset_injective
-    (s : BlockState) (t : Fin 4) :
-    Function.Injective (fun jv : Fin 8 => outStepOffset s t.val 32 2 3 8 8 jv) :=
-  fused_recurrent_rwkv6_out_step_offset_injective_general s t.val 32 2 3 8 8 (by omega)
 
 /-! ## Genuine Python test-case summaries
 

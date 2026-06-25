@@ -267,18 +267,6 @@ noncomputable def gemmaRmsLayernormYSpec
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W idx.val)))
 
-noncomputable def rmsBackwardDYTile
-    (s : BlockState) (dY W : RegionName)
-    (dY_row_stride n_cols BLOCK_SIZE : Nat) (GEMMA : Bool) :
-    Tile .real [BLOCK_SIZE] :=
-  { data := fun idx =>
-      Option.map₂ (fun dy w => dy * (w + if GEMMA then 1.0 else 0.0))
-        (if idx.1.val < n_cols then
-          some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
-        else some (0 : ℝ))
-        (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
-        else some (0 : ℝ)) }
-
 noncomputable def rmsBackwardDYTilePlain
     (s : BlockState) (dY W : RegionName)
     (dY_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -314,16 +302,6 @@ noncomputable def rmsBackwardNormedTile
           some (s.readMem X (s.pid * X_row_stride + idx.1.val))
         else some (0 : ℝ)) }
 
-noncomputable def rmsBackwardRowSumCarrier
-    (s : BlockState) (dY X W r : RegionName)
-    (dY_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat) (GEMMA : Bool) :
-    WithBot ℝ :=
-  (Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
-    (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-      (rmsBackwardDYTile s dY W dY_row_stride n_cols BLOCK_SIZE GEMMA)
-      (rmsBackwardNormedTile s X r X_row_stride r_row_stride
-        n_cols BLOCK_SIZE))).data PUnit.unit
-
 noncomputable def rmsBackwardRowSumCarrierPlain
     (s : BlockState) (dY X W r : RegionName)
     (dY_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -343,21 +321,6 @@ noncomputable def rmsBackwardRowSumCarrierGemma
       (rmsBackwardDYTileGemma s dY W dY_row_stride n_cols BLOCK_SIZE)
       (rmsBackwardNormedTile s X r X_row_stride r_row_stride
         n_cols BLOCK_SIZE))).data PUnit.unit
-
-noncomputable def rmsBackwardDYSpec
-    (s : BlockState) (dY X W r : RegionName)
-    (dY_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (GEMMA : Bool) (idx : Fin BLOCK_SIZE) : ℝ :=
-  WithBot.unbotD 0
-    (Option.map₂ (fun dYW rowsum =>
-      s.readMem r (s.pid * r_row_stride) / (n_cols : ℝ) *
-        ((n_cols : ℝ) * dYW -
-          (s.readMem X (s.pid * X_row_stride + idx.val) *
-            s.readMem r (s.pid * r_row_stride)) * rowsum))
-      ((rmsBackwardDYTile s dY W dY_row_stride n_cols BLOCK_SIZE GEMMA).data
-        (idx, PUnit.unit))
-      (rmsBackwardRowSumCarrier s dY X W r dY_row_stride X_row_stride
-        r_row_stride n_cols BLOCK_SIZE GEMMA))
 
 noncomputable def rmsBackwardDYSpecPlain
     (s : BlockState) (dY X W r : RegionName)

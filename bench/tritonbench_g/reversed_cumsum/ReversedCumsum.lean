@@ -492,43 +492,6 @@ theorem reversed_cumsum_single_block_surface_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- **Genuine single-chunk correctness.** The single-`BT` reverse-cumsum surface
-(a faithful single-iteration transcription of the Triton kernel, i.e. the kernel
-specialized to `T ≤ BT` where the reverse loop runs once with carry `b_z = 0`)
-writes into each active output lane `(i, j)` the genuine reversed cumulative sum
-`Σ_{k ≥ i, k < T} x[k, j]` — *not* a read-back of its own output. -/
-theorem reversed_cumsum_single_block_surface_closed_form
-    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BT, BS] =>
-        singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)) :
-    ComputeCorrect.Realizes
-      (kernel := reversed_cumsum_single_block_surface SReg Z s_s_h s_s_t
-        s_s_d T S BT BS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
-        (fun idx : TileIndex [BT, BS] =>
-          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
-      (expected := fun idx : TileIndex [BT, BS] =>
-        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
-  have h := reversed_cumsum_single_block_surface_compute_correct SReg Z
-    s_s_h s_s_t s_s_d T S BT BS s hOutInj
-  have hexp : (fun idx : TileIndex [BT, BS] =>
-        singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)
-      = (fun idx : TileIndex [BT, BS] =>
-        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
-    funext idx
-    exact singleBlockStoreValue_eq_reversedCumsumClosed s SReg
-      s_s_h s_s_t s_s_d T S BT BS idx
-  rwa [hexp] at h
-
-/- Active-lane variant of the genuine single-chunk closed form. For Python
-shapes with `S < BS` the padded feature lanes can alias active addresses, so
-(as with the store/cumsum slices) injectivity is required only among the active
-lanes the store actually observes. The written value is still the genuine
-reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]`. -/
 set_option maxHeartbeats 800000 in
 theorem reversed_cumsum_single_block_surface_active_closed_form
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
@@ -953,16 +916,6 @@ theorem reversed_cumsum_single_block_python_case3_active_no_collision
   have ht : tk = ti := by omega
   have hs : sk = si := by omega
   subst tk; subst sk; rfl
-
-theorem reversed_cumsum_single_block_python_case4_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [16, 32] => singleBlockTileOffset s 1024 32 1 32 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
-  simp [singleBlockTileOffset, sIndex] at h
-  have ht : ta = tb := by omega
-  have hs : sa = sb := by omega
-  subst tb; subst sb; rfl
 
 theorem reversed_cumsum_store_python_case4_compute_correct
     (BC Z : RegionName) (s : BlockState) :

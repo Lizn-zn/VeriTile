@@ -72,10 +72,6 @@ def masked_select_kernel
 def maskedSelectOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * BLOCK_SIZE + i.val
 
-def maskedSelectOutOffset
-    (s : BlockState) (prefix_sum_ptr : RegionName) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.readMemValue .nat prefix_sum_ptr (maskedSelectOffset s BLOCK_SIZE i) - 1
-
 def maskedSelectStoreOffset
     (s : BlockState) (prefix_sum_ptr : RegionName) (n_elements BLOCK_SIZE : Nat)
     (i : Fin BLOCK_SIZE) : Nat :=

@@ -818,55 +818,6 @@ instance activeQFullDecidable (n_qh hd : Nat)
   unfold activeQFull
   infer_instance
 
-/-- Disjointness witness: every Q second-half write offset differs from an
-active Q first-half offset (uses `d < hd / 2` and `hd / 2 + hd / 2 ≤ hd`). -/
-theorem qFirstHalf_ne_qSecondHalf
-    {pad_n_qh pad_hd_half : Nat} (s : BlockState) (q_row_stride hd : Nat)
-    (idx : TileIndex [pad_n_qh, pad_hd_half])
-    (hd_lt : idx.2.1.val < hd / 2)
-    (k : TileIndex [pad_n_qh, pad_hd_half])
-    (hkActive : k.2.1.val < hd / 2) :
-    qFullFirstOffset s q_row_stride hd idx ≠
-      qFullSecondOffset s q_row_stride hd k := by
-  unfold qFullFirstOffset qFullSecondOffset
-  intro heq
-  have hcancel :
-      idx.1.val * hd + idx.2.1.val =
-        k.1.val * hd + k.2.1.val + hd / 2 := by
-    omega
-  rcases lt_trichotomy idx.1.val k.1.val with hlt | heq_n | hgt
-  · have h1 : (idx.1.val + 1) * hd ≤ k.1.val * hd :=
-      Nat.mul_le_mul_right _ hlt
-    have h2 : idx.1.val * hd + hd ≤ k.1.val * hd := by
-      have := h1
-      simpa [Nat.add_mul, Nat.one_mul] using this
-    have hLHS : idx.1.val * hd + idx.2.1.val < idx.1.val * hd + hd := by omega
-    have hRHS : k.1.val * hd ≤ k.1.val * hd + k.2.1.val + hd / 2 := by omega
-    have : idx.1.val * hd + idx.2.1.val < k.1.val * hd + k.2.1.val + hd / 2 := by
-      calc idx.1.val * hd + idx.2.1.val
-          < idx.1.val * hd + hd := hLHS
-        _ ≤ k.1.val * hd := h2
-        _ ≤ k.1.val * hd + k.2.1.val + hd / 2 := hRHS
-    exact absurd hcancel (Nat.ne_of_lt this)
-  · rw [heq_n] at hcancel
-    have : idx.2.1.val ≥ hd / 2 := by omega
-    omega
-  · have h1 : (k.1.val + 1) * hd ≤ idx.1.val * hd :=
-      Nat.mul_le_mul_right _ hgt
-    have h2 : k.1.val * hd + hd ≤ idx.1.val * hd := by
-      have := h1
-      simpa [Nat.add_mul, Nat.one_mul] using this
-    have hsum : k.2.1.val + hd / 2 < hd := by
-      have hh : hd / 2 + hd / 2 ≤ hd := by omega
-      omega
-    have hRHS : k.1.val * hd + k.2.1.val + hd / 2 < k.1.val * hd + hd := by omega
-    have : k.1.val * hd + k.2.1.val + hd / 2 < idx.1.val * hd + idx.2.1.val := by
-      calc k.1.val * hd + k.2.1.val + hd / 2
-          < k.1.val * hd + hd := hRHS
-        _ ≤ idx.1.val * hd := h2
-        _ ≤ idx.1.val * hd + idx.2.1.val := by omega
-    exact absurd hcancel.symm (Nat.ne_of_lt this)
-
 /-- Spec for the Q first-half output under `BACKWARD_PASS = false`:
 `new_q_tile_1 = q_tile_1 * cos - q_tile_2 * sin`. -/
 noncomputable def ropeForwardKernelQ0Spec
@@ -911,55 +862,6 @@ instance activeKFullDecidable (n_kh hd : Nat)
     Decidable (activeKFull n_kh hd idx) := by
   unfold activeKFull
   infer_instance
-
-/-- K-side disjointness witness, structurally identical to
-`qFirstHalf_ne_qSecondHalf`. -/
-theorem kFirstHalf_ne_kSecondHalf
-    {pad_n_kh pad_hd_half : Nat} (s : BlockState) (k_row_stride hd : Nat)
-    (idx : TileIndex [pad_n_kh, pad_hd_half])
-    (hd_lt : idx.2.1.val < hd / 2)
-    (k : TileIndex [pad_n_kh, pad_hd_half])
-    (hkActive : k.2.1.val < hd / 2) :
-    kFullFirstOffset s k_row_stride hd idx ≠
-      kFullSecondOffset s k_row_stride hd k := by
-  unfold kFullFirstOffset kFullSecondOffset
-  intro heq
-  have hcancel :
-      idx.1.val * hd + idx.2.1.val =
-        k.1.val * hd + k.2.1.val + hd / 2 := by
-    omega
-  rcases lt_trichotomy idx.1.val k.1.val with hlt | heq_n | hgt
-  · have h1 : (idx.1.val + 1) * hd ≤ k.1.val * hd :=
-      Nat.mul_le_mul_right _ hlt
-    have h2 : idx.1.val * hd + hd ≤ k.1.val * hd := by
-      have := h1
-      simpa [Nat.add_mul, Nat.one_mul] using this
-    have hLHS : idx.1.val * hd + idx.2.1.val < idx.1.val * hd + hd := by omega
-    have hRHS : k.1.val * hd ≤ k.1.val * hd + k.2.1.val + hd / 2 := by omega
-    have : idx.1.val * hd + idx.2.1.val < k.1.val * hd + k.2.1.val + hd / 2 := by
-      calc idx.1.val * hd + idx.2.1.val
-          < idx.1.val * hd + hd := hLHS
-        _ ≤ k.1.val * hd := h2
-        _ ≤ k.1.val * hd + k.2.1.val + hd / 2 := hRHS
-    exact absurd hcancel (Nat.ne_of_lt this)
-  · rw [heq_n] at hcancel
-    have : idx.2.1.val ≥ hd / 2 := by omega
-    omega
-  · have h1 : (k.1.val + 1) * hd ≤ idx.1.val * hd :=
-      Nat.mul_le_mul_right _ hgt
-    have h2 : k.1.val * hd + hd ≤ idx.1.val * hd := by
-      have := h1
-      simpa [Nat.add_mul, Nat.one_mul] using this
-    have hsum : k.2.1.val + hd / 2 < hd := by
-      have hh : hd / 2 + hd / 2 ≤ hd := by omega
-      omega
-    have hRHS : k.1.val * hd + k.2.1.val + hd / 2 < k.1.val * hd + hd := by omega
-    have : k.1.val * hd + k.2.1.val + hd / 2 < idx.1.val * hd + idx.2.1.val := by
-      calc k.1.val * hd + k.2.1.val + hd / 2
-          < k.1.val * hd + hd := hRHS
-        _ ≤ idx.1.val * hd := h2
-        _ ≤ idx.1.val * hd + idx.2.1.val := by omega
-    exact absurd hcancel.symm (Nat.ne_of_lt this)
 
 /-- Spec for the K first-half output under `BACKWARD_PASS = false`:
 `new_k_tile_1 = k_tile_1 * cos - k_tile_2 * sin`. -/

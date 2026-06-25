@@ -719,10 +719,6 @@ theorem stepStmt_ifThen_true (body : List Stmt) (s : BlockState) :
     stepStmt (.ifThen (Op.constBool Bool.true) body) s = stepStmts body s := by
   unfold stepStmt; rw [evalOp_constBool']; rfl
 
-theorem stepStmt_ifThen_false (body : List Stmt) (s : BlockState) :
-    stepStmt (.ifThen (Op.constBool Bool.false) body) s = some s := by
-  unfold stepStmt; rw [evalOp_constBool']; rfl
-
 theorem stepStmt_ifThenElse_false (thenB elseB : List Stmt) (s : BlockState) :
     stepStmt (.ifThenElse (Op.constBool Bool.false) thenB elseB) s
       = stepStmts elseB s := by
@@ -785,32 +781,6 @@ theorem attention_score_case1_body_split
             2 4 4 128 128 128 0 64 64 64 64 sm_scale
             Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 16 := by
   rw [List.take_append_drop]
-
-/-- The case-1 elaborated body has exactly 21 statements (16 preLoop, 1
-`forRangeDyn` loop, 4 post). Verified by `rfl` on the elaborated/lowered body. -/
-theorem attention_score_case1_body_length
-    (Q K M Out : RegionName) (sm_scale : ℝ) :
-    (attention_score_kernel Q K M Out
-        32768 8192 64 1 32768 8192 64 1 512 128 1
-        2 4 4 128 128 128 0 64 64 64 64 sm_scale
-        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.length = 21 := by
-  rfl
-
-/-- The case-1 loop sits at body index 16: `drop 16` of the lowered body is a
-`forRangeDyn` over `start_m` with step `64` (the `lo`/`hi` register bounds give the
-`[0, 128)` range, i.e. exactly two iterations) followed by the post statements.
-The loop body itself is `attentionScoreCase1LoopBody`. Proved by `rfl` on the
-lowered body. -/
-theorem attention_score_case1_loop_at_16
-    (Q K M Out : RegionName) (sm_scale : ℝ) :
-    ∃ loopBody post,
-      (attention_score_kernel Q K M Out
-        32768 8192 64 1 32768 8192 64 1 512 128 1
-        2 4 4 128 128 128 0 64 64 64 64 sm_scale
-        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 16
-        = Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
-            (Op.constNat 64) loopBody :: post := by
-  exact ⟨_, _, rfl⟩
 
 /-! ### Local `evalOp` reduction helpers (case-1 closed-form exec proof)
 

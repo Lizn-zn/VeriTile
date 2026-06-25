@@ -1063,77 +1063,6 @@ theorem bsaLPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
   exact mul_ne_zero (Real.exp_ne_zero _)
     (ne_of_gt (lFree_final_pos hBk hN qStart gpos Q Kg scale i hVis0))
 
-/-- If the gathered m-free normalizer `lFree` vanishes, so does the m-free output
-`oFree` (no causally-visible key is selected, so every output summand carries a
-zero weight). -/
-theorem oFree_eq_zero_of_lFree_eq_zero {M D Dv Bk N : Nat}
-    (qStart : Nat) (gpos : Fin (Bk * N) → Nat)
-    (Q : TileIndex [M, D] → ℝ) (Kg : TileIndex [Bk * N, D] → ℝ)
-    (Vg : TileIndex [Bk * N, Dv] → ℝ)
-    (scale : ℝ) (k : Nat) (hk : k ≤ N) (idx : TileIndex [M, Dv])
-    (hl : lFree qStart gpos Q Kg scale k hk idx.1 = 0) :
-    oFree qStart gpos Q Kg Vg scale k hk idx = 0 := by
-  -- every summand of `lFree` is nonneg, so the sum is 0 ⟹ each is 0 ⟹ each weight 0
-  unfold lFree at hl
-  unfold oFree
-  rw [Finset.sum_eq_zero]
-  intro n _
-  rw [Finset.sum_eq_zero]
-  intro jL _
-  -- the corresponding `lFree` term is 0; deduce the weight is 0
-  have hterm : (fun jL : Fin Bk =>
-      let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
-      if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) jL = 0 := by
-    have hnonneg_inner : ∀ m : Fin k, (0 : ℝ) ≤ Finset.univ.sum (fun jL : Fin Bk =>
-        let j := StreamingAccumulator.blockIndex Bk N m.val (Nat.lt_of_lt_of_le m.isLt hk) jL
-        if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) := by
-      intro m; apply Finset.sum_nonneg; intro jL _
-      by_cases h : gpos (StreamingAccumulator.blockIndex Bk N m.val (Nat.lt_of_lt_of_le m.isLt hk) jL) ≤ qStart + idx.1.val
-      · simp only [h, if_true]; exact le_of_lt (Real.exp_pos _)
-      · simp only [h, if_false]; exact le_refl 0
-    have houter := (Finset.sum_eq_zero_iff_of_nonneg (fun m _ => hnonneg_inner m)).mp hl n (Finset.mem_univ _)
-    have hinner_nonneg : ∀ jL : Fin Bk, (0 : ℝ) ≤
-        (let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
-         if gpos j ≤ qStart + idx.1.val then Real.exp (gScore Q Kg scale idx.1 j) else 0) := by
-      intro jL
-      by_cases h : gpos (StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL) ≤ qStart + idx.1.val
-      · simp only [h, if_true]; exact le_of_lt (Real.exp_pos _)
-      · simp only [h, if_false]; exact le_refl 0
-    exact (Finset.sum_eq_zero_iff_of_nonneg (fun jL _ => hinner_nonneg jL)).mp houter jL (Finset.mem_univ _)
-  -- so the output summand (weight · V) is 0
-  simp only [] at hterm
-  show (if gpos (StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL) ≤ qStart + idx.1.val
-      then Real.exp (gScore Q Kg scale idx.1 _) else 0) * Vg _ = 0
-  rw [hterm, zero_mul]
-
-/-- The running ratio is well-defined under cancellation: `(O_c / L_c) · L_c = O_c`,
-even when `L_c = 0` (then `O_c = 0` too, by `oFree_eq_zero_of_lFree_eq_zero`). This
-is the load-bearing fact making the FA2 normalized acc-rescale advance the
-`O / L` invariant. -/
-theorem bsaOPartial_div_mul_self {M D Dv Bk : Nat} (hBk : 0 < Bk)
-    (qStart : Nat) (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
-    (gpos : Fin (Bk * numKVBlocks) → Nat)
-    (Q : TileIndex [M, D] → ℝ)
-    (Kg : TileIndex [Bk * numKVBlocks, D] → ℝ)
-    (Vg : TileIndex [Bk * numKVBlocks, Dv] → ℝ) (scale : ℝ)
-    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, Dv])
-    (hVis0 : gpos ⟨0, Nat.mul_pos hBk hN⟩ ≤ qStart + idx.1.val) :
-    bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx /
-        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 *
-        bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1
-      = bsaOPartial Bk qStart numKVBlocks gpos Q Kg Vg scale k idx := by
-  by_cases hL : bsaLPartial Bk qStart numKVBlocks gpos Q Kg scale k idx.1 = 0
-  · rw [hL, div_zero, mul_zero]
-    -- L = 0 ⟹ lFree = 0 (exp(-m) ≠ 0) ⟹ oFree = 0 ⟹ O = 0
-    rw [bsaLPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg scale k hk idx.1 hVis0] at hL
-    have hlFree : lFree qStart gpos Q Kg scale k hk idx.1 = 0 := by
-      rcases mul_eq_zero.mp hL with h | h
-      · exact absurd h (Real.exp_ne_zero _)
-      · exact h
-    rw [bsaOPartial_eq_mShifted hBk qStart numKVBlocks hN gpos Q Kg Vg scale k hk idx hVis0,
-        oFree_eq_zero_of_lFree_eq_zero qStart gpos Q Kg Vg scale k hk idx hlFree, mul_zero]
-  · rw [div_mul_cancel₀ _ hL]
-
 /-- **FA2 normalized acc-rescale step (real arithmetic).** Given the running ratio
 `Rc` with `Rc · Lc = Oc`, the new normalizer `Lnew = α·Lc + Σ w` (nonzero), and the
 new unnormalized output `Onew = α·Oc + Σ w·v`, the kernel's normalized update
@@ -1517,122 +1446,6 @@ theorem block_sparse_attn_python_second_output_compute_correct
     4 16 2048 512 16 1 2048 512 32 16 16 s
     (block_sparse_attn_python_second_output_offset_injective s)
 
-/-! ## Genuine closed-form store recipes (sorry-free)
-
-These bridge the final masked `out` stores to the **genuine closed-form**
-attention value `blockSparseAttnClosedForm` (NOT the kernel's executed value):
-*given* that the accumulator region holds the closed form at each active lane
-(the loop-fill contract, which the trusted online-softmax recurrence
-establishes), the store-slice surface writes the closed-form attention output to
-`Out`. Here `hFill` is the loop-fill contract these store recipes *assume*; it is
-not a remaining gap — the top theorem
-`block_sparse_attn_python_case1_output_closed_form_summary` discharges the
-loop-fill end-to-end via `bsa_exec` ∘ `bsa_streaming_eq_closedForm`.
-
-`hFill` is the per-lane statement that the first/second D-block accumulator
-equals the causal natural-exp softmax attention over the CSR-selected keys, with
-`dBlockBase = 0` for `acc` and `dBlockBase = BLOCK_D` for `acc2`. -/
-
-/-- First D-block store writes the genuine closed-form attention output to `Out`,
-given the accumulator `Acc` holds it (loop-fill contract `hFill`). -/
-theorem block_sparse_attn_first_output_closed_form
-    (Acc Out Q K V : RegionName) (layoutCols : Region .nat)
-    (num_heads num_kv_heads total_seq_len
-      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
-      stride_ob stride_oh stride_om
-      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-      stride_vb stride_vh stride_vn
-      layout_h stride_col start_l numSelBlocks
-      HEAD_DIM BLOCK_M BLOCK_D : Nat)
-    (softmax_scale : ℝ)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx))
-    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
-      active s total_seq_len BLOCK_M idx →
-      s.readMem Acc (accOffset s num_heads stride_acc_b stride_acc_h
-          stride_acc_m stride_acc_d BLOCK_M idx)
-        = blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
-            stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-            stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
-            HEAD_DIM BLOCK_M (stride_kn) 0 softmax_scale idx.1 (dIndex idx)) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attn_output_store_slice Acc Out num_heads
-        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
-        stride_ob stride_oh stride_om BLOCK_M BLOCK_D)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-          active s total_seq_len BLOCK_M idx)
-        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out,
-          outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx)))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
-          stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-          stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
-          HEAD_DIM BLOCK_M (stride_kn) 0 softmax_scale idx.1 (dIndex idx)) := by
-  have hbase := block_sparse_attn_output_store_slice_compute_correct Acc Out
-    num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
-    stride_ob stride_oh stride_om BLOCK_M BLOCK_D s hOutInj
-  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
-  refine ⟨hbase.1, ?_⟩
-  intro s0 s' hExec hs0 idx hActive
-  have h := hbase.2 s0 s' hExec hs0 idx hActive
-  rw [h]
-  rw [accStoreValue, if_pos hActive]
-  simpa using hFill idx hActive
-
-/-- Second D-block store writes the genuine closed-form attention output to
-`Out` at the `+BLOCK_D` channels, given `Acc2` holds it (loop-fill contract). -/
-theorem block_sparse_attn_second_output_closed_form
-    (Acc2 Out Q K V : RegionName) (layoutCols : Region .nat)
-    (num_heads num_kv_heads total_seq_len
-      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
-      stride_ob stride_oh stride_om
-      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-      stride_vb stride_vh stride_vn
-      layout_h stride_col start_l numSelBlocks
-      HEAD_DIM BLOCK_M BLOCK_D : Nat)
-    (softmax_scale : ℝ)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx))
-    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
-      active s total_seq_len BLOCK_M idx →
-      s.readMem Acc2 (accOffset s num_heads stride_acc_b stride_acc_h
-          stride_acc_m stride_acc_d BLOCK_M idx)
-        = blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
-            stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-            stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
-            HEAD_DIM BLOCK_M (stride_kn) BLOCK_D softmax_scale idx.1 (dIndex idx)) :
-    ComputeCorrect.Realizes
-      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads
-        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
-        stride_ob stride_oh stride_om BLOCK_M BLOCK_D)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-          active s total_seq_len BLOCK_M idx)
-        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out,
-          out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx)))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
-          stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
-          stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
-          HEAD_DIM BLOCK_M (stride_kn) BLOCK_D softmax_scale idx.1 (dIndex idx)) := by
-  have hbase := block_sparse_attn_output_store_second_slice_compute_correct Acc2
-    Out num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m
-    stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s hOutInj
-  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
-  refine ⟨hbase.1, ?_⟩
-  intro s0 s' hExec hs0 idx hActive
-  have h := hbase.2 s0 s' hExec hs0 idx hActive
-  rw [h]
-  rw [accStoreValue, if_pos hActive]
-  simpa using hFill idx hActive
-
 /-- Legacy output-pair summary for the checked `(B,H,M,D)=(2,4,16,32)`
 layout. This factors the two observable D-block stores when the sparse
 attention loop's accumulators are supplied as precomputed inputs. -/
@@ -1717,13 +1530,6 @@ theorem bsa_evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
   simp [evalOp]
 
-/-- Local `evalOp` unfolding for `.remap` (mirrors ctx-attn's `ctx_evalOp_remap`). -/
-theorem bsa_evalOp_remap {dtype inShape outShape}
-    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
-    evalOp (.remap outShape map a) s = (do
-      let va ← evalOp a s; some (Tile.remap map va)) := by
-  simp [evalOp]
-
 /-- **`if cond { thenBody } else { elseBody }` step, true branch.** When the
 elaborated condition Op evaluates to the scalar boolean `true`, the runtime
 `ifThenElse` statement steps to running `thenBody`. Used to discharge the
@@ -1736,16 +1542,6 @@ theorem stepStmt_ifThenElse_true {cond : Op .bool []}
     stepStmt (.ifThenElse cond thenBody elseBody) s = some s' := by
   simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_true]
   exact hthen
-
-/-- **`if cond { thenBody } else { elseBody }` step, false branch.** Mirror of
-`stepStmt_ifThenElse_true` for `EVEN_N = false` (masked ptr-arith loads). -/
-theorem stepStmt_ifThenElse_false {cond : Op .bool []}
-    {thenBody elseBody : List Stmt} {s s' : BlockState}
-    (hcond : evalOp cond s = some (Tile.scalar (Bool.false)))
-    (helse : stepStmts elseBody s = some s') :
-    stepStmt (.ifThenElse cond thenBody elseBody) s = some s' := by
-  simp only [stepStmt, hcond, Option.bind_some, Tile.scalar_data, if_false]
-  exact helse
 
 /-- **`if cond { body }` step, true branch.** When the elaborated condition Op
 evaluates to scalar `true`, the runtime `ifThen` statement steps to running
@@ -2322,120 +2118,6 @@ theorem bsa_reg_carry_eval (s : BlockState) (BM : Nat) (name : RegName)
     (t : Tile .real [BM]) (h : s.regs .real [BM] name = some t) :
     evalOp (Op.ref .real [BM] name) s = some t := by
   rw [evalOp_ref, h]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **`off_h_kv = off_h // head_groups` statement eval** (GQA head remap, pre-loop):
-the grouped-query KV-head index `off_h // (num_heads // num_kv_heads)`. With
-`off_h = OH` and `head_groups = HG`, evaluates to `OH // HG`. This is the head map the
-K/V base offsets (`kvBase`) use. -/
-theorem bsa_offhkv_eval (s : BlockState) (OH HG : Nat)
-    (hoh : s.regs .nat [] "off_h" = some (Tile.scalar OH))
-    (hhg : s.regs .nat [] "head_groups" = some (Tile.scalar HG)) :
-    evalOp (Op.floorDiv .nat Broadcast.nil
-        (Op.ref .nat [] "off_h") (Op.ref .nat [] "head_groups")) s
-      = some (Tile.scalar (OH / HG)) := by
-  simp only [evalOp, evalOp_ref, hoh, hhg, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.bop_data, Tile.scalar, Tile.scalar_data_index, Broadcast.leftIndex,
-    Broadcast.rightIndex, IntegralDType.floorDiv]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **Masked first-D-block K load** (CSR loop body L3, `EVEN_N = false` else-branch):
-`k = tl.load(k_ptrs + start_n·stride_kn, mask=offs_n[None,:] + start_n < total_seq_len)`.
-Out-of-`total_seq_len` key columns read the (undefined) carrier rather than crashing;
-since the address is always in-region (`ok = true`), inactive lanes read
-`s.undef`. Lane `(a,b)` is active iff `b + SN < TSL`. -/
-theorem bsa_load_k_masked_eval {BM BN : Nat} (s : BlockState) (SN SKN TSL : Nat)
-    (kpf : TileIndex [BM, BN] → RegionName × Nat)
-    (hk : s.regs .ptr [BM, BN] "k_ptrs" = some ⟨kpf⟩)
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
-    evalOp (Op.load .real
-        (MemAccess.ptr
-          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BN] "k_ptrs")
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SKN))))
-        (MaskOpt.mask
-          (Op.remap [BM, BN] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
-            (Op.lt .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarR
-                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
-              (Op.constNat TSL))))) s
-      = some (⟨fun idx : TileIndex [BM, BN] =>
-          if idx.2.1.val + SN < TSL then
-            s.readMemValue .real (kpf idx).1 ((kpf idx).2 + SN * SKN)
-          else some (s.undef (kpf idx).1 ((kpf idx).2 + SN * SKN))⟩ : Tile .real [BM, BN]) := by
-  have hmask : evalOp
-      (Op.remap [BM, BN] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
-        (Op.lt .nat Broadcast.scalarR
-          (Op.add .nat Broadcast.scalarR
-            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
-          (Op.constNat TSL))) s
-      = some (⟨fun idx : TileIndex [BM, BN] => decide (idx.2.1.val + SN < TSL)⟩
-          : Tile .bool [BM, BN]) := by
-    rw [bsa_evalOp_remap, evalOp_lt, evalOp_add]
-    erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨0, by simp⟩ "offs_n" s _ hon]
-    simp only [evalOp_ref, evalOp_constNat, hsn, Option.bind_eq_bind, Option.bind_some]
-    refine congrArg some ?_; ext idx
-    simp [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.expandDim, Tile.scalar_data_index,
-      Tile.vec, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
-  simp only [evalOp, hmask, evalOp_ref, evalOp_mul, evalOp_constNat, hk, hsn,
-    Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
-    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
-  by_cases h : idx.2.1.val + SN < TSL
-  · simp [h]
-  · simp [h]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **Masked first-D-block V load** (CSR loop body L22, `EVEN_N = false` else-branch):
-`v = tl.load(v_ptrs + start_n·stride_vn, mask=offs_n[:,None] + start_n < total_seq_len)`.
-The V mask puts `offs_n` on the **row** axis (`[:,None]`), so lane `(a,b)` is active iff
-`a + SN < TSL`. -/
-theorem bsa_load_v_masked_eval {BN BD : Nat} (s : BlockState) (SN SVN TSL : Nat)
-    (vpf : TileIndex [BN, BD] → RegionName × Nat)
-    (hv : s.regs .ptr [BN, BD] "v_ptrs" = some ⟨vpf⟩)
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hon : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
-    evalOp (Op.load .real
-        (MemAccess.ptr
-          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN, BD] "v_ptrs")
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat SVN))))
-        (MaskOpt.mask
-          (Op.remap [BN, BD] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
-            (Op.lt .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarR
-                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
-              (Op.constNat TSL))))) s
-      = some (⟨fun idx : TileIndex [BN, BD] =>
-          if idx.1.val + SN < TSL then
-            s.readMemValue .real (vpf idx).1 ((vpf idx).2 + SN * SVN)
-          else some (s.undef (vpf idx).1 ((vpf idx).2 + SN * SVN))⟩ : Tile .real [BN, BD]) := by
-  have hmask : evalOp
-      (Op.remap [BN, BD] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
-        (Op.lt .nat Broadcast.scalarR
-          (Op.add .nat Broadcast.scalarR
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.ref .nat [] "start_n"))
-          (Op.constNat TSL))) s
-      = some (⟨fun idx : TileIndex [BN, BD] => decide (idx.1.val + SN < TSL)⟩
-          : Tile .bool [BN, BD]) := by
-    rw [bsa_evalOp_remap, evalOp_lt, evalOp_add]
-    erw [evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, by simp⟩ "offs_n" s _ hon]
-    simp only [evalOp_ref, evalOp_constNat, hsn, Option.bind_eq_bind, Option.bind_some]
-    refine congrArg some ?_; ext idx
-    simp [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.expandDim, Tile.scalar_data_index,
-      Tile.vec, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
-  simp only [evalOp, hmask, evalOp_ref, evalOp_mul, evalOp_constNat, hv, hsn,
-    Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.scalar_data_index,
-    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, if_true, if_pos]
-  by_cases h : idx.1.val + SN < TSL
-  · simp [h]
-  · simp [h]
 
 end BSARecipes
 
@@ -4002,22 +3684,6 @@ theorem bsa_fused_hScore
   show ((0 : ℝ) + Finset.univ.sum (fun e : Fin 16 => qf i e * kf e jL)
       + Finset.univ.sum (fun e : Fin 16 => q2f i e * k2f e jL)) * 1.0 = _
   rw [zero_add, mul_comm]
-
-/-! ## `bsa_attn_step`: loop-body advances the invariant by one CSR block
-
-Given `bsaInvariant … c`, the lowered `bsaLoopBody` (executed via the banked
-`bsaLoopBody_steps`) advances the live `m_i`/`l_i`/`acc`/`acc2` accumulators to
-`bsaInvariant … (c+1)`. The execution is `bsaLoopBody_steps`; the remainder is the
-WithBot↔ℝ math bridge of the exposed symbolic tiles onto `bsaMPartial`/`bsaLPartial`/
-`bsaOPartial` at `c+1`, mirroring `nopad_attn_step`. -/
-
-open BSAMathCausal in
-/-- `tl.maximum` lowered to `where(m_i > m_ij, m_i, m_ij)` is the WithBot max. -/
-theorem bsa_select_gt_eq_max (a b : WithBot ℝ) :
-    (if (ComparableDType.real.gt a b = Bool.true) then a else b) = max a b := by
-  by_cases h : a > b
-  · rw [if_pos (by simpa using h)]; exact (max_eq_left (le_of_lt h)).symm
-  · rw [if_neg (by simpa using h)]; exact (max_eq_right (le_of_not_gt h)).symm
 
 open BSAMathCausal in
 /-- Per-summand exp telescoping: `β·p0 = exp(score − m_new)` in `WithBot ℝ`,

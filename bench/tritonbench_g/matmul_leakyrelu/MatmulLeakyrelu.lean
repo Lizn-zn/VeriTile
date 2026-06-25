@@ -169,19 +169,6 @@ theorem matmul_leaky_relu_surface_toAlgorithm_supported
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
   simp [evalOp]
 
-theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
-    (x : Op .bool a) (y : Op .bool b) (s : BlockState) :
-    evalOp (.boolAnd bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s;
-      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
-  simp [evalOp]
-
-@[simp] theorem evalOp_remap {dtype inShape outShape}
-    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
-    evalOp (.remap outShape map a) s = (do
-      let v ← evalOp a s; some (Tile.remap map v)) := by
-  simp [evalOp]
-
 @[simp] theorem evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
     @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
       (s.regs .nat [D] name).bind (fun v =>

@@ -453,13 +453,6 @@ theorem aft1_foldl_writeMem_readMem_other {α : Type} (l : List α)
       rintro ⟨_, heq⟩
       exact hoff hd List.mem_cons_self heq.symm
 
-/-- `Q`/`V`/`O` per-chunk accessor: chunk `c` offset `off ↦ base + c·4096 + off`. -/
-def aft1QAddr (s : BlockState) (c off : Nat) : Nat := s.pids 0 * 131072 + c * 4096 + off
-
-/-- `K` per-chunk accessor: `off = 32·d' + tk ↦ base + d' + (c·32 + tk)·128`. -/
-def aft1KAddr (s : BlockState) (c off : Nat) : Nat :=
-  s.pids 0 * 131072 + off / 32 + (c * 32 + off % 32) * 128
-
 /-- General scaled query cell `b_q[t,e] = scale · Q[base + (c·BT+t)·BD + e]`. -/
 noncomputable def aft1QCellG (s : BlockState) (Q : RegionName)
     (s_qh : Nat) (scale : ℝ) (BT BD : Nat) (c t e : Nat) : ℝ :=

@@ -414,13 +414,6 @@ noncomputable def rawScore (s : BlockState) (Q K : RegionName)
     qRow s Q H stride_qz stride_qh stride_qm BLOCK_M i e.val *
       kRow s K H stride_kz stride_kh stride_kn n e.val)
 
-/-- Global key position of the `b`-th visited dense block's `j`-th lane:
-`block_offset[off_hz·NUM_ROWS·NNZ_S + start_m·NNZ_S + b] + j`. -/
-def blockKeyGlobal (s : BlockState) (block_offset : Region .nat)
-    (NUM_ROWS NNZ_S BLOCK_N b j : Nat) : Nat :=
-  s.readMemValue .nat (Region.cast block_offset)
-      ((s.pids 1 * NUM_ROWS + s.pids 0) * NNZ_S + b) + j
-
 /-- Global key position of the `c`-th visited sparse column:
 `column_index[off_hz·NUM_ROWS·NNZ_V + start_m·NNZ_V + c]`. -/
 def colKeyGlobal (s : BlockState) (column_index : Region .nat)
@@ -522,77 +515,6 @@ noncomputable def mixedSparseAttnClosedForm
           (colKeyGlobal s column_index NUM_ROWS NNZ_V c.val) d)
   numer / denom
 
-/-- The faithful exp2 weight equals the natural-exp weight at `effScale`:
-`exp2(qk_scale · raw) = exp(effScale · raw)`, where `qk_scale = sm_scale ·
-1.44269504`. This is the precise numeric bridge the loop-fill proof needs to
-turn the kernel's `tl.math.exp2` updates into `mixedSparseAttnClosedForm`'s
-`Real.exp` weights. -/
-theorem exp2_qkScale_eq_exp_effScale (sm_scale raw : ℝ) :
-    Real.exp ((sm_scale * 1.44269504) * raw * Real.log 2)
-      = Real.exp (effScale sm_scale * raw) := by
-  unfold effScale; ring_nf
-
-/-- **Closed-form output-store bridge.** Given the loop-fill contract `hFill`
-(the streaming accumulator written to `Acc` equals `mixedSparseAttnClosedForm`
-on every active lane), the final `seqlens`-masked store copies the genuine
-closed-form mixed-sparse attention block to `Out` at the correct, injective
-offsets, preserving inactive lanes.
-
-This is the mixed-sparse analogue of `block_sparse_attn`'s
-`block_sparse_attn_first_output_closed_form`: it certifies that the final store
-phase faithfully transports the genuine closed form, isolating the remaining
-gap to the in-loop accumulator computation (`hFill`). -/
-theorem mixed_sparse_attention_output_store_closed_form
-    (Acc Seqlens Out Q K V : RegionName)
-    (block_offset column_index : Region .nat)
-    (H
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_d
-      stride_qz stride_qh stride_om stride_ok
-      stride_qm stride_kz stride_kh stride_kn
-      stride_vz stride_vh stride_vn
-      NUM_ROWS NNZ_S NNZ_V num_blks num_cols
-      BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
-    (sm_scale : ℝ)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx))
-    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
-      active s H Seqlens BLOCK_M idx →
-      s.readMem Acc
-          (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_d
-            BLOCK_M idx)
-        = mixedSparseAttnClosedForm s Q K V block_offset column_index H
-            stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
-            stride_vz stride_vh stride_vn NUM_ROWS NNZ_S NNZ_V num_blks num_cols
-            (seqLen s H Seqlens) BLOCK_DMODEL BLOCK_M BLOCK_N sm_scale idx.1
-            (dIndex idx)) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out H
-        stride_acc_z stride_acc_h stride_acc_m stride_acc_d stride_qz
-        stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s H Seqlens BLOCK_M idx)
-        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx)))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        mixedSparseAttnClosedForm s Q K V block_offset column_index H
-          stride_qz stride_qh stride_qm stride_kz stride_kh stride_kn
-          stride_vz stride_vh stride_vn NUM_ROWS NNZ_S NNZ_V num_blks num_cols
-          (seqLen s H Seqlens) BLOCK_DMODEL BLOCK_M BLOCK_N sm_scale idx.1
-          (dIndex idx)) := by
-  have hbase := mixed_sparse_attention_output_store_slice_compute_correct Acc
-    Seqlens Out H stride_acc_z stride_acc_h stride_acc_m stride_acc_d stride_qz
-    stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL s hOutInj
-  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
-  refine ⟨hbase.1, ?_⟩
-  intro s0 s' hExec hs0 idx hActive
-  have h := hbase.2 s0 s' hExec hs0 idx hActive
-  rw [h, accStoreValue, if_pos hActive]
-  simpa using hFill idx hActive
-
 /-! ## Python test-shape wrappers
 
 The checked Python tests allocate `q/k/v/o` with shape `(2, 4, 128, 64)`,
@@ -625,64 +547,6 @@ theorem mixed_sparse_attention_python_block32_offset_injective
   subst mb
   subst db
   rfl
-
-/-- Python block64 instantiation of the closed-form store bridge: the final
-store transports `mixedSparseAttnClosedForm` to `Out` at the Python test strides
-`(32768, 8192, 64, 1)`, given the loop-fill contract `hFill`. -/
-theorem mixed_sparse_attention_output_store_python_block64_closed_form
-    (Acc Seqlens Out Q K V : RegionName)
-    (block_offset column_index : Region .nat)
-    (num_blks num_cols : Nat) (sm_scale : ℝ) (s : BlockState)
-    (hFill : ∀ idx : TileIndex [64, 64],
-      active s 4 Seqlens 64 idx →
-      s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)
-        = mixedSparseAttnClosedForm s Q K V block_offset column_index 4
-            32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
-            (seqLen s 4 Seqlens) 64 64 64 sm_scale idx.1 (dIndex idx)) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
-        32768 8192 64 1 32768 8192 64 1 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
-        (fun idx : TileIndex [64, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        mixedSparseAttnClosedForm s Q K V block_offset column_index 4
-          32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
-          (seqLen s 4 Seqlens) 64 64 64 sm_scale idx.1 (dIndex idx)) :=
-  mixed_sparse_attention_output_store_closed_form Acc Seqlens Out Q K V
-    block_offset column_index 4 32768 8192 64 1 32768 8192 64 1 64 32768 8192 64
-    32768 8192 64 2 4 8 num_blks num_cols 64 64 64 sm_scale s
-    (mixed_sparse_attention_python_block64_offset_injective s) hFill
-
-/-- Python block32 instantiation of the closed-form store bridge. -/
-theorem mixed_sparse_attention_output_store_python_block32_closed_form
-    (Acc Seqlens Out Q K V : RegionName)
-    (block_offset column_index : Region .nat)
-    (num_blks num_cols : Nat) (sm_scale : ℝ) (s : BlockState)
-    (hFill : ∀ idx : TileIndex [32, 64],
-      active s 4 Seqlens 32 idx →
-      s.readMem Acc (accOffset s 4 32768 8192 64 1 32 idx)
-        = mixedSparseAttnClosedForm s Q K V block_offset column_index 4
-            32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
-            (seqLen s 4 Seqlens) 64 32 32 sm_scale idx.1 (dIndex idx)) :
-    ComputeCorrect.Realizes
-      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
-        32768 8192 64 1 32768 8192 64 1 32 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
-        (fun idx : TileIndex [32, 64] =>
-          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        mixedSparseAttnClosedForm s Q K V block_offset column_index 4
-          32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
-          (seqLen s 4 Seqlens) 64 32 32 sm_scale idx.1 (dIndex idx)) :=
-  mixed_sparse_attention_output_store_closed_form Acc Seqlens Out Q K V
-    block_offset column_index 4 32768 8192 64 1 32768 8192 64 1 64 32768 8192 64
-    32768 8192 64 2 4 8 num_blks num_cols 32 64 32 sm_scale s
-    (mixed_sparse_attention_python_block32_offset_injective s) hFill
 
 theorem mixed_sparse_attention_output_store_python_block64_compute_correct
     (Acc Seqlens Out : RegionName) (s : BlockState) :
@@ -3662,9 +3526,6 @@ noncomputable def msaScoreLaneB (Blocks ColCounts : Region .nat) (Seqlens : Regi
           (FloatDType.real.cast FloatDType.fp16 (qF (i, e, PUnit.unit))))
         (msaKLaneB Blocks ColCounts kpF s0 sv gcol e j)))
 
-@[simp] theorem msaSeedMax_zero (BM BN : Nat) (mA score) (i : Fin BM) :
-    msaSeedMax BM BN mA score 0 i = mA i := rfl
-
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **One Loop-B body step advances `msaInvariantB` by one column block.**
@@ -4832,13 +4693,6 @@ noncomputable abbrev msaCatScore0
   msaCatScore 64 64 8
     (msaScoreA0 Q K Seqlens Blocks BlockOffsets (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
     (msaScoreB0 Q K Seqlens Blocks BlockOffsets ColCounts Cols (msaQVal Q s0 sm_scale) (msaKPtr K s0) s0)
-
-noncomputable abbrev msaCatVblk0
-    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
-    (s0 : BlockState) : Nat → Fin 64 → Fin 64 → ℝ :=
-  msaCatVblk 64 64 8
-    (msaVblkA0 V Seqlens Blocks BlockOffsets (msaVPtr V s0) s0)
-    (msaVblkB0 V Seqlens Blocks BlockOffsets ColCounts Cols (msaVPtr V s0) s0)
 
 /-- **Seeded-ratio bridge.** The two-phase seeded online-softmax ratio at the
 Loop-B end (`c = 1`, seeded by Loop-A's `bF = 8` finals) equals

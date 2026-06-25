@@ -833,39 +833,6 @@ instance cumSurfaceActiveDecidable (s : BlockState) (T S BT BS : Nat)
   unfold cumSurfaceActive
   infer_instance
 
-def cumSurfaceOffset (s : BlockState) (s_s_h s_s_t s_s_d BT BS : Nat)
-    (idx : TileIndex [BT, BS]) : Nat :=
-  s.pids 2 * s_s_h + cumSurfaceTIndex s BT idx.1 * s_s_t +
-    cumSurfaceSIndex s BS idx.2.1 * s_s_d
-
-/-- Surface source tile for the cum kernel: the loaded `[BT, BS]` `b_s` block,
-masked to `0` outside the `(T, S)` boundary. This reads the *input* region
-`SReg`, never the kernel's own output. -/
-noncomputable def cumSurfaceSourceTile
-    (s : BlockState) (SReg : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) :
-    Tile .real [BT, BS] :=
-  { data := fun idx =>
-      if cumSurfaceActive s T S BT BS idx then
-        some (s.readMem SReg (cumSurfaceOffset s s_s_h s_s_t s_s_d BT BS idx))
-      else some (0.0 : ℝ) }
-
-/-- **Genuine closed form** for the cum surface store value: the causal
-(lower-triangular) intra-chunk cumulative sum `b_o = m_s @ b_s`, i.e.
-`b_o[i,j] = Σ_{i' ≤ i} b_s[i',j]`. This is the matrix product of the
-lower-triangular ones-mask `lowerTriTile` with the loaded source tile — a
-standalone specification over the input region `SReg`, **not** a read-back of
-the kernel's own output. -/
-noncomputable def producedChunkGatedAttentionCumValue
-    (s : BlockState) (SReg _Z : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat)
-    (idx : TileIndex [BT, BS]) : ℝ :=
-  WithBot.unbotD 0
-    ((Tile.dot [] (lowerTriTile BT)
-      (cumSurfaceSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
-        (idx.1, idx.2.1, PUnit.unit))
-
-
 /-! ## Genuine closed form for the gated chunk-recurrence state `b_h`
 
 The `chunk_gated_abc_fwd_kernel_h` loop carries a `[BK, BV]` state `b_h` across
@@ -1053,70 +1020,6 @@ theorem realizes_writeIf_expected_congr {ι : Type} {α : Type}
       intro s0 s' hExec hs0 i hi
       rw [← hAgree i hi]
       exact hp s0 s' hExec hs0 i hi
-
-/-! ## Closed-form state-store faces (genuine `hClosed`)
-
-These tie the materialized state-store slices to the genuine gated carry-fold
-closed form `hClosed`. The cross-chunk loop scheduling that threads the carried
-`b_h` register from chunk `m` to `m+1` (the body's gate `⊙ G_m` and matmul
-`+ S_m`, captured algebraically by `hClosed_succ`/`hClosed_zero`) is the trusted
-runtime boundary, exactly as in `chunk_gate_recurrence` (#290). Given that the
-previous-chunk state buffer `BH` holds `hClosed i_t`, the loop-row store
-realizes the genuine `hClosed i_t`; given that the post-loop buffer `BHFinal`
-holds `hClosed 4`, the final store realizes `hClosed 4`. -/
-
-/-- The `h` loop-row store at chunk `i_t` realizes the genuine folded state
-`hClosed i_t`, when the materialized state buffer `BH` carries `hClosed i_t`. -/
-theorem chunk_gated_attention_h_state_store_slice_closed_form
-    (BH H K V G H0 : RegionName) (GATEK USE_INITIAL_STATE : Bool)
-    (i_t : Fin 4) (s : BlockState)
-    (hBuf : ∀ idx : TileIndex [16, 16],
-      s.readMem BH (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
-        = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx) := by
-  refine realizes_writeIf_expected_congr _ _ _ _ _ _ ?_
-    (chunk_gated_attention_h_state_python_test_shape_compute_correct BH H i_t s)
-  intro idx hActive
-  simp only [hStateStoreValue, hActive, if_true]
-  rw [hBuf idx]
-  simp
-
-/-- The final `ht` store realizes the genuine fully-folded state `hClosed 4`,
-when the post-loop buffer `BHFinal` carries `hClosed 4`. -/
-theorem chunk_gated_attention_final_state_store_slice_closed_form
-    (BHFinal Ht K V G H0 : RegionName) (GATEK USE_INITIAL_STATE : Bool)
-    (s : BlockState)
-    (hBuf : ∀ idx : TileIndex [16, 16],
-      s.readMem BHFinal (finalStateOffset s 32 32 16 16 idx)
-        = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            4096 1 128 4096 32 1 32 32 32 16 16 4 idx) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          4096 1 128 4096 32 1 32 32 32 16 16 4 idx) := by
-  refine realizes_writeIf_expected_congr _ _ _ _ _ _ ?_
-    (chunk_gated_attention_final_state_python_test_shape_compute_correct BHFinal Ht s)
-  intro idx hActive
-  simp only [finalStateStoreValue, hActive, if_true]
-  rw [hBuf idx]
-  simp
 
 /-! ## ════════ Dimension-general closed-form faces (genuine `hClosed`) ════════
 

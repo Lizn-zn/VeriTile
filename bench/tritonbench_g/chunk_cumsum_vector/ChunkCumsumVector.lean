@@ -396,18 +396,6 @@ theorem dotLowerTri_sum_if_some (BT BS : Nat) (f : Fin BT → Fin BS → ℝ)
     push Not at hc
     by_cases hki : k.val ≤ i.val <;> simp_all
 
-/-- The `unbotD`-demoted form of `dotLowerTri_sum_if_some`. -/
-theorem dotLowerTri_sum_if (BT BS : Nat) (f : Fin BT → Fin BS → ℝ)
-    (P : Fin BT → Fin BS → Prop) [∀ k j, Decidable (P k j)]
-    (i : Fin BT) (j : Fin BS) :
-    WithBot.unbotD 0
-      ((Tile.dot [] (lowerTriTile BT)
-        (⟨fun idx => some (if P idx.1 idx.2.1 then f idx.1 idx.2.1 else 0)⟩ :
-          Tile .real [BT, BS])).data (i, j, PUnit.unit))
-      = ∑ k ∈ (Finset.univ.filter
-          (fun k : Fin BT => k.val ≤ i.val ∧ P k j)), f k j := by
-  rw [dotLowerTri_sum_if_some]; rfl
-
 /-! ## Genuine chunked-cumsum closed form (vector / per-column)
 
 `globalCumsumVectorClosed` is the genuine mathematical specification — for each

@@ -2775,17 +2775,6 @@ section BwdRecipes
 
 variable {BK : Nat} (s : BlockState)
 
-/-- **Prologue / loop pointer-arithmetic recipe (add).** A nat-scalar `add`
-assign — `p_x = base + offs`, `p_x += DK`, or the loop-body offset folds —
-reduces to a `setReg` of the summed scalar, given the two operand evaluations. -/
-theorem bwdEval_assign_addNat (name : RegName) (a b : Op .nat []) (va vb : Nat)
-    (ha : evalOp a s = some (Tile.scalar va))
-    (hb : evalOp b s = some (Tile.scalar vb)) :
-    stepStmt (.assign .nat [] name (.add NumericDType.nat Broadcast.nil a b)) s
-      = some (s.setReg name .nat [] (Tile.scalar (va + vb))) := by
-  simp [stepStmt, evalOp, ha, hb]
-  rfl
-
 /-- **Loop index recipe (`t := 1 - __rev_t`, nat sub).** The first body
 statement of the lowered forward `forRangeDyn "__rev_t" 0 2 1` re-derives the
 reverse time index `t`. A nat-scalar `sub` assign reduces to a `setReg` of the
@@ -2797,46 +2786,6 @@ theorem bwdEval_assign_subNat (name : RegName) (a b : Op .nat []) (va vb : Nat)
       = some (s.setReg name .nat [] (Tile.scalar (va - vb))) := by
   simp [stepStmt, evalOp, ha, hb]
   rfl
-
-/-- **`cum_grad_dg = tl.zeros([BK])` init recipe.** The reverse-scan accumulator
-(and `last_g`) initializer assigns the all-zero `[BK]` real tile. -/
-theorem bwdEval_assign_zeros (name : RegName) :
-    stepStmt (.assign .real [BK] name (.full [BK] (.const 0))) s
-      = some (s.setReg name .real [BK] ⟨fun _ => some 0⟩) := by
-  simp [stepStmt, evalOp]
-
-/-- **Masked-region load recipe (`tl.load(p_x, mask=mask, other=0)`).** Every
-prologue/body input load (`g`, `q`, `k`, `dq_inner`, `dk_inner`, `dq_inter_in`,
-`dk_inter_in`) is a `MaskOpt.maskOther` region load over `[BK]`. Given the
-offset/mask/other evaluations, it reduces to the per-lane masked readback:
-active lanes read memory, inactive lanes take the `other` fill. -/
-theorem bwdEval_load_maskOther (region : Region .real)
-    (offs : Op .nat [BK]) (mask : Op .bool [BK]) (other : Op .real [BK])
-    (offsT : Tile .nat [BK]) (maskT : Tile .bool [BK]) (otherT : Tile .real [BK])
-    (hoff : evalOp offs s = some offsT)
-    (hmask : evalOp mask s = some maskT)
-    (hother : evalOp other s = some otherT) :
-    evalOp (.load .real (MemAccess.region region offs) (MaskOpt.maskOther mask other)) s
-      = some ⟨fun i => if maskT.data i then
-                some (s.readMem region (offsT.data i))
-              else otherT.data i⟩ := by
-  simp [evalOp, hoff, hmask, hother]
-
-/-- **Masked-region load assign recipe.** The load wrapped in its `assign`
-target register (`g_val = …`, `dq1 = …`, etc.), reducing to a single `setReg`. -/
-theorem bwdEval_assign_load_maskOther (name : RegName) (region : Region .real)
-    (offs : Op .nat [BK]) (mask : Op .bool [BK]) (other : Op .real [BK])
-    (offsT : Tile .nat [BK]) (maskT : Tile .bool [BK]) (otherT : Tile .real [BK])
-    (hoff : evalOp offs s = some offsT)
-    (hmask : evalOp mask s = some maskT)
-    (hother : evalOp other s = some otherT) :
-    stepStmt (.assign .real [BK] name
-        (.load .real (MemAccess.region region offs) (MaskOpt.maskOther mask other))) s
-      = some (s.setReg name .real [BK]
-          ⟨fun i => if maskT.data i then
-                some (s.readMem region (offsT.data i))
-              else otherT.data i⟩) := by
-  simp [stepStmt, evalOp, hoff, hmask, hother]
 
 /-- **Pointer masked-load assign recipe (`tl.load(p_x, mask=mask, other=0)`).**
 The backward body uses *pointer*-based loads (`MemAccess.ptr (Op.ref .ptr [BK]
@@ -2949,28 +2898,6 @@ theorem bwdEval_exp2 (x : Op .real [BK]) (xT : Tile .real [BK])
     (hx : evalOp x s = some xT) :
     evalOp (.exp2 x) s = some (Tile.uop WithBot.realExp2 xT) := by
   simp [evalOp, hx]
-
-/-- **Masked-region store recipe (`tl.store(p_out, val, mask=mask)`).** Each of
-the three per-iteration stores (`DQInter`, `DKInter`, `DG`) reduces to the
-`writeMemTyped` masked scatter fold over the `[BK]` lanes. Region distinctness
-(`DQInter ≠ DKInter ≠ DG`) is *not* needed here — it is needed only at the
-readback stage (`scatter_readback_prop_masked_nd` /
-`scatter_prop_masked_preserves_other_{offset,region}`, already in this file) so
-a later store does not clobber an earlier readback. -/
-theorem bwdEval_store_masked (region : RegionName)
-    (off : Op .nat [BK]) (val : Op .real [BK]) (mask : Op .bool [BK])
-    (offsT : Tile .nat [BK]) (valT : Tile .real [BK]) (maskT : Tile .bool [BK])
-    (hoff : evalOp off s = some offsT)
-    (hval : evalOp val s = some valT)
-    (hmask : evalOp mask s = some maskT) :
-    stepStmt (.store .real [BK] (MemAccess.region region off)
-        val (MaskOpt.mask mask)) s
-      = some ((TileShape.allIndices [BK]).foldl
-          (fun acc i =>
-            if maskT.data i then
-              acc.writeMemTyped .real (Region.cast region) (offsT.data i) (valT.data i)
-            else acc) s) := by
-  simp [stepStmt, evalOp, hoff, hval, hmask]
 
 end BwdComputeRecipes
 
@@ -5140,19 +5067,6 @@ theorem bwdPtrDecTileG_row (s : BlockState) (region : RegionName)
     rw [hsplit, Nat.add_mul]
   rw [key]; omega
 
-/-- One reverse iteration's `-= DK` decrement advances `bwdPtrDecTileG` by one. -/
-theorem bwdPtrDecTileG_succ (s : BlockState) (region : RegionName)
-    (s_qk_h DK BT BK m : Nat) :
-    (⟨fun idx => (((bwdPtrDecTileG s region s_qk_h DK BT BK m).data idx).1,
-        ((bwdPtrDecTileG s region s_qk_h DK BT BK m).data idx).2 - DK)⟩ : Tile .ptr [BK])
-      = bwdPtrDecTileG s region s_qk_h DK BT BK (m + 1) := by
-  apply Tile.ext; intro idx
-  simp only [bwdPtrDecTileG]
-  refine Prod.ext rfl ?_
-  rw [Nat.sub_sub]
-  congr 1
-  ring
-
 /-- The row-`BT-1-m` pointer tile decremented by `DK` is the `(m+1)`-fold
 decremented tile (for `m < BT`). Combines `bwdPtrDecTileG_row` and `_succ`. -/
 theorem bwdPtrTileG_dec_succ (s : BlockState) (region : RegionName)
@@ -5595,13 +5509,6 @@ theorem bwd_prologue_eval_general
         BlockState.setReg_ne_name (h := by decide), hc9,
         BlockState.setReg_ne_name (h := by decide), hc8]
       exact BlockState.setReg_same _ _ _ _ _
-
-/-- `bwdGatedG` of the zero function is the all-`some 0` tile. -/
-theorem bwdGatedG_zero (s : BlockState) (DK BK : Nat) :
-    bwdGatedG s DK BK (fun _ => 0) = (⟨fun _ => some 0⟩ : Tile .real [BK]) := by
-  apply Tile.ext; intro idx
-  simp only [bwdGatedG]
-  by_cases ha : active s DK BK idx.1 <;> simp [ha]
 
 /-- The empty reverse partial sum is `0`. -/
 theorem bwdCumPartialG_zero (s : BlockState)

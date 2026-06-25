@@ -389,23 +389,6 @@ theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
     have ihc := ih (by omega)
     simp only [lPgK, lPg, dif_pos hc, ihc]
 
-/-! ### Generic streaming-softmax register bridges
-
-The per-cell facts that the loop body's tile arithmetic (over the generic per-key
-`score`) realizes the `mPg`/`lPgK`/`oPg` `_succ` recurrence. Mirrors the
-`mij_eq`/`alpha_eq`/`li_eq`/`acc_eq` bridges of
-`VeriTile.Examples.AttentionForwardClosedForm`, generic over `score` (the kernel's
-`fscore`), so they apply unchanged to the banked invariant. -/
-
-/-- `WithBot.realExp2` is total: never `⊥`. -/
-theorem realExp2_eq_some_unbotD (z : WithBot ℝ) :
-    WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
-  cases z <;> rfl
-
-theorem realExp2_unbotD_coe (r : ℝ) :
-    (WithBot.realExp2 ((r : ℝ) : WithBot ℝ)).unbotD 0 = pow2 r := by
-  simp [pow2, mul_comm]
-
 /-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
 theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
     @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
@@ -939,19 +922,6 @@ def attnLoopBodyG (B0 : RegionName)
     Stmt.assign .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr"
       (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr") [BLOCK_N, (0:Nat)]) ]
 
-/-- The Python-shape lowered body `drop 19` is the `forRangeDyn` loop over
-`attnLoopBody`, then the 3 post-loop statements. By `rfl`. -/
-theorem attnLoopBody_check (Q K V B0 Out : RegionName) :
-    (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.drop 19
-      = Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
-          (Op.constNat 64) (attnLoopBody B0)
-        :: (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-            16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-            FloatDType.fp16).toAlgKernel.body.drop 20 := by
-  rfl
-
 /-- `ComputeOp.toAlgorithm?` of an `.alg` op (the structural erase). -/
 @[simp] theorem computeOp_toAlgorithm?_alg {dtype : ComputeDType} {shape : TileShape}
     (e : Op dtype.eraseDType shape) :
@@ -1004,13 +974,6 @@ def attnPostLoop (Out : RegionName) : List Stmt :=
         [128, 1] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64), Op.constNat 0]),
     Stmt.store .fp16 [64, 128] (.blockPtr (Op.ref .blockPtr [64, 128] "O_block_ptr") [])
       (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) .none ]
-
-/-- The Python-shape lowered body `drop 20` is exactly `attnPostLoop`. By `rfl`. -/
-theorem attnPostLoop_check (Q K V B0 Out : RegionName) :
-    (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.drop 20 = attnPostLoop Out := by
-  rfl
 
 /-- The lowered 3-statement post-loop, dimension-parameterized over
 `BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on`. Specializes to `attnPostLoop`
@@ -1151,13 +1114,6 @@ theorem qk_bias_op_evalG (s : BlockState) (BM BN : Nat) (qktile : Tile .real [BM
   rw [evalOp_add]
   simp only [evalOp_mul, evalOp_add, evalOp_const, evalOp_ref, hqk, hb0, hb1,
     Option.bind_eq_bind, Option.bind_some]
-
-/-- `evalOp` helper for `Op.floorDiv` (no dedicated `@[simp]` form). -/
-theorem evalOp_floorDiv' {dtype a b shape} (h : IntegralDType dtype)
-    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
-    evalOp (.floorDiv h bc x y) s = (do
-      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
 
 /-- **`b0` per-block bias load** (L4): resolves the `B0 + b_offset + (...)[:, None]
 + start_n // BLOCK_N` pointer to the per-row read at `b_offset + (start_m·BLOCK_M
@@ -2960,66 +2916,6 @@ theorem attn_postLoopG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale :
     q_offset kv_offset b_offset
     BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB (s0.pids 0) hKN hnB idx.1 idx.2.1
 
-/-! ## M4 — top theorem: genuine streaming-softmax closed-form correctness
-
-The whole-kernel `Out` store realizes the genuine base-2 streaming-softmax closed
-form `attentionKernelSpec` (= `attnGenScore fscore vFlat` of the loaded Q/K/V/B0
-tiles, with the kernel's actual per-key score `fscore` — scaled dot + additive
-relative-position bias), NOT the kernel's own executed value. Composed from
-`preLoop` (`P 0`) + `forRangeDyn_inv` over `attn_step` + `attn_postLoop`. -/
-
-set_option maxHeartbeats 1000000 in
-/-- **`attention_kernel.py` whole-kernel exec assembly.** Steps the entire faithful
-surface (prologue + `forRangeDyn` loop + epilogue) and reads off the genuine
-closed form at every `Out` lane. The loop runs exactly `nB = 2` blocks at the
-Python test shape (`N_CTX = 128 = 64·2`). -/
-theorem attention_kernel_exec (Q K V B0 Out : RegionName) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ sF, stepStmts (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body s = some sF
-      ∧ ∀ idx : TileIndex [64, 128],
-          sF.mem Out (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
-            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-                (some (attentionKernelSpec s Q K V B0 0.1
-                  (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
-                  64 64 128 (64 * 2) 64 128 (s.pids 0) idx))) := by
-  -- decompose body = take 19 ++ drop 19, with take 19 = preLoop prologue
-  rw [← List.take_append_drop 19 (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body]
-  -- preLoop
-  obtain ⟨s0, hpre, hlo, hhi, hinv0⟩ := preLoop Q K V B0 Out s hundef
-  rw [stepStmts.append_some hpre]
-  -- drop 19 = forRangeDyn :: drop 20 (= attnPostLoop)
-  rw [attnLoopBody_check Q K V B0 Out, show (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.drop 20 = attnPostLoop Out from attnPostLoop_check Q K V B0 Out]
-  -- run the forRangeDyn loop via forRangeDyn_inv with P = attnKernelInvariant
-  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
-    forRangeDyn_inv (idx := "start_n")
-      (startOp := Op.ref .nat [] "lo") (stopOp := Op.ref .nat [] "hi")
-      (stepOp := Op.constNat 64)
-      (P := fun i st => attnKernelInvariant s Q K V B0 Out 0.1
-        (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
-        64 64 128 0 64 128 1 128 128 1 2 (s.pids 0) i st)
-      (s_init := s0)
-      (by rw [evalOp_ref, hlo])
-      (by rw [evalOp_ref, hhi])
-      (by rw [evalOp_constNat])
-      (by norm_num)
-      hinv0
-      (fun i st hi hP => attn_step Q K V B0 Out s 2 i st (by omega) hP)
-  rw [stepStmts.cons_some hloop]
-  -- at loop exit, counter `final` is the first multiple of 64 ≥ 128, i.e. 128 = 64*2
-  have hfinal : final = 64 * 2 := by
-    obtain ⟨_, hmod, hle, _⟩ := hinvL
-    omega
-  subst hfinal
-  -- postLoop
-  obtain ⟨sF, hpostStep, hO⟩ := attn_postLoop Q K V B0 Out s 2 (by norm_num) sL hinvL
-  exact ⟨sF, hpostStep, hO⟩
-
 set_option maxHeartbeats 1000000 in
 /-- **General** whole-kernel exec assembly (dimension-parameterized). Steps the
 entire faithful surface and reads off the genuine closed form at every `Out` lane.
@@ -3087,42 +2983,6 @@ theorem attention_kernel_exec_general (Q K V B0 Out : RegionName) (s : BlockStat
   obtain ⟨sF, hpostStep, hO⟩ := attn_postLoopG Q K V B0 Out s sm_scale BLOCK_M BLOCK_N HEAD 0 BIAS_LAST_SIZE stride_b0m
     (s.pids 1 * stride_qh) (s.pids 1 * stride_kh) (s.pids 1 * stride_b0h) hBM hKN hHD nB hnB sL hinvL
   exact ⟨sF, hpostStep, hO⟩
-
-set_option maxHeartbeats 1000000 in
-/-- **Genuine closed-form `Out`-store correctness for `attention_kernel.py`.**
-Every output lane of `_fwd_kernel_aligned` holds the closed-form base-2
-streaming-softmax attention `attentionKernelSpec` (= `attnGenScore fscore vFlat`)
-of the loaded Q/K/V tiles under the kernel's genuine bias-augmented per-key score
-`fscore` — NOT the kernel's own executed output. At the checked Python test shape. -/
-theorem attention_kernel_genuine_output_compute_correct
-    (Q K V B0 Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
-        16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 128] =>
-        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
-      (expected := fun idx : TileIndex [64, 128] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-          (some (attentionKernelSpec s Q K V B0 0.1
-            (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
-            64 64 128 (64 * 2) 64 128 (s.pids 0) idx)))) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_kernel_fwd_kernel_aligned_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  obtain ⟨sF, hstep, hO⟩ := attention_kernel_exec Q K V B0 Out s hundef
-  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
-  obtain rfl : sF = s' := Option.some.inj hExec
-  simp only [ComputeCorrect.OutputReadable.read_memcell]
-  rw [show surfaceOutOffset s 16384 128 1 64 idx
-        = s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 from by
-    simp [surfaceOutOffset, mIndex, kIndex]]
-  exact hO idx
 
 set_option maxHeartbeats 1000000 in
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/

@@ -96,12 +96,6 @@ def gradOutputAddr (s : BlockState)
   outputIndex s BLOCK_SIZE_INDEX idx.1 * stride0 +
     colIndex s BLOCK_SIZE_COL idx.2.1 * stride1
 
-def gradSourceAddr (s : BlockState) (index_ptr : RegionName)
-    (stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
-    (idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL]) : Nat :=
-  s.readMemValue .nat index_ptr (outputIndex s BLOCK_SIZE_INDEX idx.1) * stride0 +
-    colIndex s BLOCK_SIZE_COL idx.2.1 * stride1
-
 def gradSourceStoreAddr (s : BlockState) (index_ptr : RegionName)
     (num_indices stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL]) : Nat :=
