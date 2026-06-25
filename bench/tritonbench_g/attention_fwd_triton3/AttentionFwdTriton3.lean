@@ -33,34 +33,30 @@ covers every program of the grid.
 
 The four `output_summary` theorems mirror the four Python test cases
 (case1: sliding window, non-complement; case2: complement sliding window;
-case3: no sliding window; case4: `init=False` resume). Cases 1/2/3 are stated
-against genuine faithful closed forms (see "Genuine closed forms" below); case 4
-is a documented trusted host boundary. They share the structure:
+case3: no sliding window; case4: `init=False` resume). **All four** cases are
+stated against genuine faithful closed forms (see "Genuine closed forms" below);
+case 4 is the `INIT=False` cross-launch resume, seeded from the prior
+`m_i`/`l_i`/`acc` read from the input `M`/`L`/`Out` buffers. They share the
+structure (`aft3_attn_exec{G,4G}` whole-kernel execution → `Realizes`):
 
 ```
-attention_fwd_triton3_python_caseN_output_summary            ← TOP THEOREMS (N = 1..4)
-  ├─ attention_fwd_triton3_python_caseN_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  ├─ attention_fwd_triton3_caseN_surface_out_compute_correct   masked Out store (END finalize)
-  └─ attention_fwd_triton3_caseN_surface_m_compute_correct     M-row store
-
-(supporting per-store slice lemmas, factored out:
-   attention_fwd_triton3_end_output_formula_store_slice_compute_correct
-   attention_fwd_triton3_end_m_formula_store_slice_compute_correct)
+attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general   ← TOP THEOREMS
+  ├─ attention_fwd_triton3_surface_toAlgorithm_supported   surface lowers to algorithm layer
+  └─ aft3_attn_exec{G,4G}   whole-kernel exec → genuine Out / M closed forms
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
 the identity post-erasure; `@triton.autotune`/`@triton.heuristics` and
-`num_warps`/`num_stages` are not modeled. The case 1/2/3 main summaries are
-dimension-general (`attention_fwd_triton3_python_case{1,2,3}_output_summary_general`,
+`num_warps`/`num_stages` are not modeled. **All four** main summaries are
+dimension-general (`attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general`,
 symbolic shape/strides); the Python test shape
 (`B=2, H=4, N_CTX=128, HEAD_DIM=64, BLOCK_M=BLOCK_N=64`,
 `sm_scale = 1/8`, contiguous strides, 64 active lanes) is the special case
-(recovered by the pinned `..._python_case{1,2,3}_output_summary` corollaries).
-Only case 4 remains pinned at the test shape. The case-specific
-`SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked into the launch
-arguments.
+(recovered by the pinned `..._python_case{1,2,3}_output_summary` corollaries). The
+case-specific `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked
+into the launch arguments.
 
 ## Genuine closed forms (cases 1/2/3)
 
@@ -91,22 +87,25 @@ These three summaries take `M ≠ Out` (so the `O` store does not clobber the `M
 row) and clean input (`undef = 0`), the genuine preconditions of single-program
 correctness.
 
-## Trusted boundary (case 4)
+## Genuine resume closed form (case 4)
 
-**Case 4** (`INIT=False` cross-launch resume) is NOT closeable to a self-contained
-`Q`/`K`/`V` closed form: the `INIT=False` preLoop branch *reads* the prior
-`m_i`/`l_i`/`acc` from the `M`/`L`/`Out` buffers (`tl.load(m_ptrs)`, etc.), which
-are the running results of *earlier* kernel launches over previous key chunks.
-Expressing case-4's output therefore requires the host's cross-launch chunked
-accumulation state, which is outside the single-program scope — exactly like the
-cross-chunk host boundaries documented for the flash-attention chunked kernels.
-Case 4 is consequently left at its self-referential
-`producedAttentionFwdTriton3Case4{Out,M}Value` carrier (the single-program
-executed surface value at each offset), a **documented trusted host boundary**,
-not a provability gap in the kernel model.
+**Case 4** (`INIT=False` cross-launch resume + sliding window) is stated against a
+**genuine input-only closed form**, NOT a self-referential carrier. The
+`INIT=False` preLoop reads the prior `m_i`/`l_i`/`acc` from the `M`/`L`/`Out`
+buffers (`tl.load(m_ptrs)`, etc.); at this program's **initial** state those are
+ordinary INPUT memory (they happen to be the running results of earlier launches,
+but to this single kernel they are just input buffers — read via `s.readMem`, never
+`exec(...).readMem`). `attentionFwdTriton3Case4OutSpecG` is the normalized
+resume-**seeded** sliding-window online softmax: `aft3StateSeededG` folds the kept
+keys onto the loaded seed `aft3Case4Seed` (= `(M[row], L[row], Out[idx])`), read off
+as `acc / denom`. The seeded streaming stack (`aft3StateSeededG`,
+`attnInvariantSeededG`, `aft3_attn_step1_seededG`, `aft3PostLoop_eval_seededG`,
+`aft3_attn_exec4G`) mirrors the ⊥-seeded cases 1/2/3 with the resume seed in place
+of `(⊥, 1, 0)`. The genuine seeded reconciliations (`aft3_{mij,denom,acc}_reg_eq_seededG`)
+reuse case 1's masked-block machinery via the generic-normalizer sum lemmas.
 
-Arithmetic is over `ℝ`; cross-program composition into the full output is the
-trusted host boundary in all cases.
+Arithmetic is over `ℝ`. There is no remaining trusted host boundary in case 4 — the
+resume state is read as genuine input memory.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
@@ -115,7 +114,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `attention_fwd_triton3_python_case1_output_summary_general`, `attention_fwd_triton3_python_case2_output_summary_general`, `attention_fwd_triton3_python_case3_output_summary_general` -/
+/-! **★ Main theorems:** `attention_fwd_triton3_python_case1_output_summary_general`, `attention_fwd_triton3_python_case2_output_summary_general`, `attention_fwd_triton3_python_case3_output_summary_general`, `attention_fwd_triton3_python_case4_output_summary_general` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -550,132 +549,6 @@ theorem attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
   exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
     (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
     32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
-
-theorem attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
-    (Q K V M Out L : RegionName) :
-    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0).toAlgorithm? =
-        Except.ok alg := by
-  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
-    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
-
-
-noncomputable def producedAttentionFwdTriton3Case4OutValue
-    (s : BlockState) (Q K V M Out L : RegionName)
-    (idx : TileIndex [64, 64]) : ℝ :=
-  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
-  | none => 0.0
-
-noncomputable def producedAttentionFwdTriton3Case4MValue
-    (s : BlockState) (Q K V M Out L : RegionName) (i : Fin 64) : ℝ :=
-  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0).toAlgKernel s with
-  | some s' => s'.readMem M (lRowOffset s (s.pids 1) 128 64 i)
-  | none => 0.0
-
-theorem attention_fwd_triton3_case4_surface_out_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        producedAttentionFwdTriton3Case4OutValue s Q K V M Out L idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedAttentionFwdTriton3Case4OutValue]
-  rw [inv_eq_one_div, hExec]
-
-theorem attention_fwd_triton3_case4_surface_m_compute_correct
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        producedAttentionFwdTriton3Case4MValue s Q K V M Out L i) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [producedAttentionFwdTriton3Case4MValue]
-  rw [inv_eq_one_div, hExec]
-
-theorem attention_fwd_triton3_python_case4_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        producedAttentionFwdTriton3Case4OutValue s Q K V M Out L idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        producedAttentionFwdTriton3Case4MValue s Q K V M Out L i) := by
-  constructor
-  · exact attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
-      Q K V M Out L
-  constructor
-  · exact attention_fwd_triton3_case4_surface_out_compute_correct Q K V M Out
-      L s
-  · exact attention_fwd_triton3_case4_surface_m_compute_correct Q K V M Out
-      L s
 
 /-- Strengthened checked-shape END epilogue summary: in addition to the
 existing case summaries, expose the compute-correct `acc / l_i[:, None]`
@@ -3908,6 +3781,64 @@ noncomputable def aft3BlockG {BM ND NC : Nat}
             vT (j, d, PUnit.unit))
     else none)
 
+/-- General resume-**SEEDED** running `(max, denom, acc)` after the windowed prefix
+`[0, hi)`: the online-softmax `aft3OsStepBot` fold from an arbitrary initial state
+`init i d`, rather than the `(⊥, 0, 0)` of `aft3StateBotG`. This is the case-4
+(`INIT=False` cross-launch resume) analogue, where `init` is the prior
+`(m_i, l_i, acc)` loaded from the input `M`/`L`/`Out` buffers. -/
+noncomputable def aft3StateSeededG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (init : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (hi : Nat) (i : Fin BM) (d : Fin ND) : WithBot ℝ × ℝ × ℝ :=
+  (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (init i d)
+
+/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
+`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
+`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
+state `s` (these are the running results of prior chunk launches, i.e. genuine
+INPUT memory to this program, not this program's own executed output). -/
+noncomputable def aft3Case4Seed
+    (s : BlockState) (M Out L : RegionName)
+    (base BM ND som son ROUND_CTX : Nat) :
+    Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
+  fun i d =>
+    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
+     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
+     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
+
+/-- **Genuine closed form, case 4** (`INIT=False` cross-launch resume, sliding
+window). The output lane `(i,d)` is the normalized resume-seeded online softmax:
+the `aft3StateSeededG` fold of the sliding-window-kept keys onto the loaded
+`aft3Case4Seed`, read off as `acc / denom`. Genuinely over INPUT memory
+(`Q`/`K`/`V` for the keys, `M`/`L`/`Out` for the resume seed) — **no
+self-reference** to this program's executed output. -/
+noncomputable def attentionFwdTriton3Case4OutSpecG
+    (s : BlockState) (Q K V M Out L : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (sc : ℝ)
+    (BN off size : Nat) (hND : 0 < ND) (idx : TileIndex [BM, ND]) : ℝ :=
+  let seed := aft3Case4Seed s M Out L base BM ND som son ROUND_CTX
+  let kp := fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j
+  (aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC idx.1 idx.2.1).2.2
+    / (aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
+      (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC idx.1 ⟨0, hND⟩).2.1
+
+/-- The resume-seeded running max decomposes as `seed.1 ⊔ ⊥-seeded running max` —
+the online-softmax `max` ignores the carried denom/acc, so the seed only adds its
+own max component. The key bridge for the seeded reconciliations. -/
+theorem aft3StateSeededG_fst {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).1
+      = (seed i d).1 ⊔ aft3RunningMaxG qT kT vT keyScale keep hi i d := by
+  unfold aft3StateSeededG aft3RunningMaxG
+  rw [aft3OsStepBot_block_fst]
+
+
 theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
     (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
@@ -3967,6 +3898,42 @@ theorem aft3StateBotG_succ {BM ND NC : Nat}
           (aft3StateBotG qT kT vT keyScale keep (c * BN) i d) := by
   unfold aft3StateBotG
   rw [aft3KeysUptoG_succ, List.foldl_append]
+
+/-- Seeded block-advance: the seeded fold over `[0,(c+1)·BN)` is the block-`c`
+fold onto the seeded fold over `[0,c·BN)` (pure `List.foldl_append`). -/
+theorem aft3StateSeededG_succ {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (BN c : Nat) (i : Fin BM) (d : Fin ND) :
+    aft3StateSeededG qT kT vT keyScale keep seed ((c + 1) * BN) i d
+      = (aft3BlockG qT kT vT keyScale keep BN c i d).foldl aft3OsStepBot
+          (aft3StateSeededG qT kT vT keyScale keep seed (c * BN) i d) := by
+  unfold aft3StateSeededG
+  rw [aft3KeysUptoG_succ, List.foldl_append]
+
+/-- Seeded denom/acc consistency (online-softmax invariant carried from a seed
+satisfying it): the seeded fold's `(denom, acc)` decompose as
+`pow2(-max)·(Lseed + Σ pow2 p.1)` and `pow2(-max)·(Tseed + Σ pow2 p.1·p.2)`.
+Direct from `aft3OsStepBot_foldl_consistent`. -/
+theorem aft3StateSeededG_consistent {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (Lseed Tseed : ℝ)
+    (hi : Nat) (i : Fin BM) (d : Fin ND)
+    (hseedL : (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Lseed)
+    (hseedT : (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Tseed)
+    (hseedmL : (seed i d).1 = ⊥ → Lseed = 0) (hseedmT : (seed i d).1 = ⊥ → Tseed = 0) :
+    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).2.1
+        = ((aft3StateSeededG qT kT vT keyScale keep seed hi i d).1.elim 0 (fun r => pow2 (-r)))
+          * (Lseed + ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1)).sum)
+      ∧ (aft3StateSeededG qT kT vT keyScale keep seed hi i d).2.2
+        = ((aft3StateSeededG qT kT vT keyScale keep seed hi i d).1.elim 0 (fun r => pow2 (-r)))
+          * (Tseed + ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  unfold aft3StateSeededG
+  exact aft3OsStepBot_foldl_consistent (aft3KeysUptoG qT kT vT keyScale keep hi i d)
+    (seed i d).1 (seed i d).2.1 (seed i d).2.2 Tseed Lseed hseedL hseedT hseedmL hseedmT
 
 theorem aft3KeysUptoG_full {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
@@ -4449,6 +4416,33 @@ noncomputable def aft3PreLoopG (Q K V M Out L : RegionName) (sm_scale : ℝ)
     Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
     Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ]
 
+/-- Case-4 (`INIT=False` resume) preLoop: identical to `aft3PreLoopG` except the
+`INIT` `ifThenElse` condition is `0 ≠ 0` (false), so it takes the load branch
+(`m_i/l_i/acc = load(m_ptrs/l_ptrs/O_block_ptr)`) instead of the fresh ⊥/1/0 init. -/
+noncomputable def aft3PreLoopG_init0 (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) : List Stmt :=
+  [ Stmt.assign TileDType.nat [] "start_m" (Op.programId 0),
+    Stmt.assign TileDType.nat [] "off_hz" (Op.programId 1),
+    Stmt.assign TileDType.nat [] "off_z" (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign TileDType.nat [] "off_h" (Op.mod IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign TileDType.nat [] "off_hkv" (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat H) (Op.constNat H_KV))),
+    Stmt.assign TileDType.nat [] "q_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat sqz)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat sqh))),
+    Stmt.assign TileDType.nat [] "k_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat skz)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat skh))),
+    Stmt.assign TileDType.nat [] "v_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat svz)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat svh))),
+    Stmt.assign TileDType.nat [] "o_offset" (Op.add NumericDType.nat Broadcast.nil (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat soz)) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat soh))),
+    Stmt.assign TileDType.blockPtr [BM, ND] "Q_block_ptr" (Op.makeBlockPtrDynOffsets Q (Op.ref TileDType.nat [] "q_offset") [N_CTX, ND] [BM, ND] [sqm, sqk] [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM), Op.constNat 0]),
+    Stmt.assign TileDType.blockPtr [BN, ND] "V_block_ptr" (Op.makeBlockPtrDyn V (Op.ref TileDType.nat [] "v_offset") [NKV_CTX, ND] [BN, ND] [svk, svn] [0, 0]),
+    Stmt.assign TileDType.blockPtr [ND, BN] "K_block_ptr" (Op.makeBlockPtrDyn K (Op.ref TileDType.nat [] "k_offset") [ND, NKV_CTX] [ND, BN] [skk, skn] [0, 0]),
+    Stmt.assign TileDType.blockPtr [BM, ND] "O_block_ptr" (Op.makeBlockPtrDynOffsets Out (Op.ref TileDType.nat [] "o_offset") [ROUND_CTX, ND] [BM, ND] [som, son] [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM), Op.constNat 0]),
+    Stmt.assign TileDType.nat [BM] "offs_m" (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM)) (Op.arange BM)),
+    Stmt.assign TileDType.ptr [BM] "m_ptrs" (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat ROUND_CTX)) (Op.ref TileDType.nat [BM] "offs_m"))),
+    Stmt.assign TileDType.ptr [BM] "l_ptrs" (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L) (Op.add NumericDType.nat Broadcast.scalarL (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat ROUND_CTX)) (Op.ref TileDType.nat [BM] "offs_m"))),
+    Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+    Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+    Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+    Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ]
+
 /-- General lowered loop body (case 1, sliding window). -/
 def aft3LoopBodyG (sm_scale : ℝ) (off size BM ND BN : Nat) : List Stmt :=
   [ Stmt.assign TileDType.real [ND, BN] "k" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") []) MaskOpt.none),
@@ -4533,6 +4527,18 @@ theorem aft3_body_splitG (Q K V M Out L : RegionName) (sm_scale : ℝ)
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgKernel.body
       = aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        ++ Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN) :: aft3PostLoopG M Out L BM ND := by
+  rfl
+
+/-- Case-4 surface body split: the `INIT=0, SLIDING=1` surface lowers to
+`aft3PreLoopG_init0 ++ forRange(loop body) :: postLoop`. -/
+theorem aft3_body_splitG4 (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    (attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgKernel.body
+      = aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
         ++ Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN) :: aft3PostLoopG M Out L BM ND := by
   rfl
 
@@ -6122,6 +6128,65 @@ theorem aft3_mij_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
   · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
   · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
 
+/-- **Seeded masked `mij` reconciliation (case 4).** Same as `aft3_mij_reg_eq_maskedG`
+but the old/new running max carry the resume-seeded fold `aft3StateSeededG`. -/
+theorem aft3_mij_reg_eq_seededG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mtile rmaxT : Tile .real [BM])
+    (qkT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).1)
+    (hrmax : Tile.reduceMaxDrop (aft3Ax1G BM BN) qkT = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
+      = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).1 := by
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [aft3_reduceMaxDrop_rowG BM BN hBN qkT rmaxT hrmax i
+      (fun jL => if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ))
+      ?_]
+    · exact aft3Block_masked_blockSupG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep mc hmc
+    · intro jL
+      rw [hqkT jL]
+      exact aft3_score_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile hq hk
+  rw [aft3StateSeededG_fst, aft3RunningMaxG_succ (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d]
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell,
+    aft3StateSeededG_fst]
+  rw [← sup_assoc]
+  set M := (seed i d).1 ⊔ aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep (c * BN) i d with hM
+  set S := ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ with hS
+  by_cases h : M ≤ S
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
 /-- **General masked `pmT` cell (cases 1/2).** -/
 theorem aft3_pmT_cell_maskedG (s0 : BlockState) (Q K : RegionName)
     (base BM ND NC sqm sqk skn skk : Nat) (sc : ℝ) (BN c : Nat)
@@ -6357,6 +6422,150 @@ theorem aft3_acc_dot_block_maskedG (s0 : BlockState) (Q K V : RegionName)
   · rw [if_neg hkp, if_neg hkp]
 
 set_option maxHeartbeats 1600000 in
+/-- **Generic-normalizer denom block sum (case 4 / any seed).** Like
+`aft3_nume_row_sum_maskedG` but with an arbitrary normalizer `M` (the seeded fold's
+running max), with `M ≠ ⊥` on kept lanes supplied as a hypothesis. -/
+theorem aft3_nume_row_sum_masked_genG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mijT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN])
+    (qkT : Tile .real [BM, BN]) (M : WithBot ℝ)
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = M)
+    (hMnebot : ∀ jL : Fin BN, mc jL = Bool.true → M ≠ ⊥)
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.reduceSumDrop (aft3Ax1G BM BN) pmT).data (i, PUnit.unit)
+      = some ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map (fun p =>
+            pow2 (p.1 - M.unbotD 0))).sum := by
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ jL : Fin BN,
+      pmT.data (TileShape.insertAxisIndex [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) (i, PUnit.unit) jL)
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+            else 0) := by
+    intro jL
+    rw [show (TileShape.insertAxisIndex [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
+    rw [hpmT jL]
+    rw [aft3_pmT_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+      (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile mijT M qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
+    · rw [hmc jL]
+      by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+      · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
+      · rw [if_neg hkp, if_neg (by simp [hkp])]
+    · intro hmcj; exact hMnebot jL hmcj
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3BlockG_map_sum (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d hc1 (fun p => pow2 (p.1 - M.unbotD 0))]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+  · rw [if_pos hkp, if_pos hkp]; simp only [keyScale3G]
+  · rw [if_neg hkp, if_neg hkp]
+
+set_option maxHeartbeats 1600000 in
+/-- **Generic-normalizer acc block dot sum (case 4 / any seed).** Like
+`aft3_acc_dot_block_maskedG` but with an arbitrary normalizer `M`. -/
+theorem aft3_acc_dot_block_masked_genG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND])
+    (mijT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN]) (qkT : Tile .real [BM, BN]) (M : WithBot ℝ)
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hv : ∀ idx : TileIndex [BN, ND],
+        vtile.data idx = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = M)
+    (hMnebot : ∀ jL : Fin BN, mc jL = Bool.true → M ≠ ⊥)
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.dot [] pmT vtile).data (i, d, PUnit.unit)
+      = some ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map (fun p =>
+            pow2 (p.1 - M.unbotD 0) * p.2)).sum := by
+  rw [Tile.dot_nil_data]
+  have hcell : ∀ jL : Fin BN,
+      Option.map₂ (· * ·) (pmT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+              * vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit)
+            else 0) := by
+    intro jL
+    have hpmcell : pmT.data (i, jL, PUnit.unit)
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+            else 0) := by
+      rw [hpmT jL]
+      rw [aft3_pmT_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile mijT M qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
+      · rw [hmc jL]
+        by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+        · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
+        · rw [if_neg hkp, if_neg (by simp [hkp])]
+      · intro hmcj; exact hMnebot jL hmcj
+    rw [hpmcell, hv (jL, d, PUnit.unit)]
+    rw [show s0.readMem V (base + (c * BN + jL.val) * svk + d.val * svn)
+          = vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit) from by
+      simp only [vTile3G]]
+    by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+    · rw [if_pos hkp, if_pos hkp]; rfl
+    · rw [if_neg hkp, if_neg hkp]
+      simp only [Option.map₂, Option.bind, Option.map]; rw [zero_mul]
+  rw [show (@Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (pmT.data (i, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+              pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+                qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                  kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+                * vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit)
+              else 0) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hcell jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3BlockG_map_sum (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d hc1 (fun p => pow2 (p.1 - M.unbotD 0) * p.2)]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+  · rw [if_pos hkp, if_pos hkp]; simp only [keyScale3G]
+  · rw [if_neg hkp, if_neg hkp]
+
+set_option maxHeartbeats 1600000 in
 /-- **General masked `l_i' = aft3StateBotG((c+1)·BN).2.1` (cases 1/2).** -/
 theorem aft3_denom_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
     (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
@@ -6450,6 +6659,113 @@ theorem aft3_denom_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
   refine congrArg some ?_
   rw [show (aft3StateBotKG qT kT vT ks keep (c * BN) i d).2.1 * α
         = (aft3StateBotG qT kT vT ks keep (c * BN) i d).2.1 * α from hcancel]
+
+set_option maxHeartbeats 1600000 in
+/-- **Seeded masked denom reconciliation (case 4).** `l_i' = (seededfold((c+1)·BN)).2.1`. -/
+theorem aft3_denom_reg_eq_seededG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (Lseed Tseed : ℝ)
+    (hseedL : (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Lseed)
+    (hseedT : (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Tseed)
+    (hseedmL : (seed i d).1 = ⊥ → Lseed = 0) (hseedmT : (seed i d).1 = ⊥ → Tseed = 0)
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (qkT : Tile .real [BM, BN])
+    (ltile mtile mijT alphaT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hltile : ltile.data (i, PUnit.unit) = some
+        ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).2.1))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).1)
+    (hmij : mijT.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).1)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT)
+        (Tile.reduceSumDrop (aft3Ax1G BM BN) pmT)).data (i, PUnit.unit)
+      = some ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).2.1) := by
+  set qT := qTile3G s0 Q base BM ND sqm sqk
+  set kT := kTile3G s0 K base NC ND skn skk
+  set vT := vTile3G s0 V base NC ND svk svn
+  set ks := keyScale3G sc NC
+  set m := (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).1 with hm_def
+  set Mc1 := (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).1 with hMc1
+  have hMsucc : Mc1 = m ⊔ ((aft3BlockG qT kT vT ks keep BN c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, aft3StateSeededG_succ, aft3OsStepBot_block_fst m
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)]
+  have hMc1bot : ∀ jL : Fin BN, mc jL = Bool.true → Mc1 ≠ ⊥ := by
+    intro jL hmcj
+    have hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ :=
+      of_decide_eq_true ((hmc jL).symm.trans hmcj)
+    have hne := aft3_kept_lane_ne_botG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep jL hkp
+    intro hMbot
+    rw [hMc1, aft3StateSeededG_fst] at hMbot
+    exact hne (le_bot_iff.mp (le_sup_right.trans (le_of_eq hMbot)))
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub]
+  have hsum := aft3_nume_row_sum_masked_genG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 i d
+    keep mc hmc qtile ktile mijT pT pmT qkT Mc1 hq hk hqkT hmij hMc1bot hpT hpmT
+  have hcons := aft3StateSeededG_consistent qT kT vT ks keep seed Lseed Tseed (c * BN) i d
+    hseedL hseedT hseedmL hseedmT
+  have hblockEq := aft3OsStepBot_block_eq m
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)
+    (Tseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1 * p.2)).sum)
+    (Lseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1)).sum)
+    (aft3BlockG qT kT vT ks keep BN c i d)
+    hcons.1 hcons.2
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmL (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1)]; ring)
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmT (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1 * p.2)]; ring)
+  rw [← hMsucc] at hblockEq
+  rw [show (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).2.1
+        = (Mc1, (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((aft3BlockG qT kT vT ks keep BN c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0))).sum,
+            _).2.1 from by
+    rw [aft3StateSeededG_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hsum]
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    hltile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  rfl
 
 set_option maxHeartbeats 1600000 in
 /-- **General masked `acc' = aft3StateBotG((c+1)·BN).2.2` (cases 1/2).** -/
@@ -6549,6 +6865,116 @@ theorem aft3_acc_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
   rw [show (aft3StateBotKG qT kT vT ks keep (c * BN) i d).2.2 * α
         = (aft3StateBotG qT kT vT ks keep (c * BN) i d).2.2 * α from hcancel]
 
+set_option maxHeartbeats 1600000 in
+/-- **Seeded masked acc reconciliation (case 4).** `acc' = (seededfold((c+1)·BN)).2.2`. -/
+theorem aft3_acc_reg_eq_seededG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (Lseed Tseed : ℝ)
+    (hseedL : (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Lseed)
+    (hseedT : (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Tseed)
+    (hseedmL : (seed i d).1 = ⊥ → Lseed = 0) (hseedmT : (seed i d).1 = ⊥ → Tseed = 0)
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND])
+    (qkT pT pmT : Tile .real [BM, BN]) (acctile acc1T : Tile .real [BM, ND])
+    (mtile mijT alphaT : Tile .real [BM])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hv : ∀ idx : TileIndex [BN, ND],
+        vtile.data idx = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hacctile : acctile.data (i, d, PUnit.unit) = some
+        ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).2.2))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).1)
+    (hmij : mijT.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).1)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hacc1 : acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        acc1T (Tile.dot [] pmT vtile)).data (i, d, PUnit.unit)
+      = some ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).2.2) := by
+  set qT := qTile3G s0 Q base BM ND sqm sqk
+  set kT := kTile3G s0 K base NC ND skn skk
+  set vT := vTile3G s0 V base NC ND svk svn
+  set ks := keyScale3G sc NC
+  set m := (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).1 with hm_def
+  set Mc1 := (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).1 with hMc1
+  have hMsucc : Mc1 = m ⊔ ((aft3BlockG qT kT vT ks keep BN c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, aft3StateSeededG_succ, aft3OsStepBot_block_fst m
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)]
+  have hMc1bot : ∀ jL : Fin BN, mc jL = Bool.true → Mc1 ≠ ⊥ := by
+    intro jL hmcj
+    have hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ :=
+      of_decide_eq_true ((hmc jL).symm.trans hmcj)
+    have hne := aft3_kept_lane_ne_botG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep jL hkp
+    intro hMbot
+    rw [hMc1, aft3StateSeededG_fst] at hMbot
+    exact hne (le_bot_iff.mp (le_sup_right.trans (le_of_eq hMbot)))
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub]
+  have hdot := aft3_acc_dot_block_masked_genG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 i d
+    keep mc hmc qtile ktile vtile mijT pT pmT qkT Mc1 hq hk hv hqkT hmij hMc1bot hpT hpmT
+  have hcons := aft3StateSeededG_consistent qT kT vT ks keep seed Lseed Tseed (c * BN) i d
+    hseedL hseedT hseedmL hseedmT
+  have hblockEq := aft3OsStepBot_block_eq m
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)
+    (Tseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1 * p.2)).sum)
+    (Lseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1)).sum)
+    (aft3BlockG qT kT vT ks keep BN c i d)
+    hcons.1 hcons.2
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmL (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1)]; ring)
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmT (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1 * p.2)]; ring)
+  rw [← hMsucc] at hblockEq
+  rw [show (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).2.2
+        = (Mc1, _,
+            (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((aft3BlockG qT kT vT ks keep BN c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
+        from by rw [aft3StateSeededG_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hdot]
+  rw [hacc1, Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, hacctile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  rfl
+
 /-! ## Dimension-general invariant + preLoop (cases 1/2/3)
 
 The general loop invariant `attnInvariantKG` carries the faithful kernel state
@@ -6573,6 +6999,68 @@ noncomputable def attnInvariantKG
       ((aft3StateBotKG qT kT vT (keyScale3G sc NC) keep i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [BM, ND] "acc" = some ⟨fun idx : TileIndex [BM, ND] =>
       ((aft3StateBotKG qT kT vT (keyScale3G sc NC) keep i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .real [BM, ND] "q" = some ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩) ∧
+  (s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .blockPtr [ND, BN] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [ND, BN] =>
+      { region := K, baseOffset := base, parentShape := [ND, NC], blockShape := [ND, BN],
+        strides := [skk, skn], offsets := [0, i] }⟩)) ∧
+  (s.regs .blockPtr [BN, ND] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [BN, ND] =>
+      { region := V, baseOffset := base, parentShape := [NC, ND], blockShape := [BN, ND],
+        strides := [svk, svn], offsets := [i, 0] }⟩)) ∧
+  (s.regs .ptr [BM] "m_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+        (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val))))) ∧
+  (s.regs .ptr [BM] "l_ptrs" = some
+    (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+      (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+        (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val))))) ∧
+  (s.regs .blockPtr [BM, ND] "O_block_ptr" = some
+    (⟨fun _ : TileIndex [BM, ND] =>
+      { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+        strides := [som, son], offsets := [s0.pids 0 * BM, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+/-- The resume-seeded fold at the empty window `hi = 0` is just the seed. -/
+theorem aft3StateSeededG_zero {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (i : Fin BM) (d : Fin ND) :
+    aft3StateSeededG qT kT vT keyScale keep seed 0 i d = seed i d := by
+  unfold aft3StateSeededG aft3KeysUptoG
+  rw [show (List.finRange NC).filterMap
+        (fun j : Fin NC => if j.val < 0 ∧ keep i j
+          then some (keyScale j * Finset.univ.sum (fun e : Fin ND =>
+                qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)), vT (j, d, PUnit.unit))
+          else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
+/-- **Seeded loop invariant (case 4, `INIT=False` resume).** Like `attnInvariantKG`
+but `m_i`/`l_i`/`acc` carry the resume-seeded fold `aft3StateSeededG` from `seed`
+(the loaded prior `(m_i, l_i, acc)`), rather than the ⊥-seeded `aft3StateBotKG`.
+No `hi=0` special case is needed — the seed IS the loop-entry state. -/
+noncomputable def attnInvariantSeededG
+    (Q K V M Out L : RegionName) (s0 : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (hND : 0 < ND) (sc : ℝ)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (i : Nat) (s : BlockState) : Prop :=
+  let qT := qTile3G s0 Q base BM ND sqm sqk
+  let kT := kTile3G s0 K base NC ND skn skk
+  let vT := vTile3G s0 V base NC ND svk svn
+  s.pids = s0.pids ∧ i % BN = 0 ∧ i ≤ NC ∧
+  (s.regs .real [BM] "m_i" = some ⟨fun r : TileIndex [BM] =>
+      (aft3StateSeededG qT kT vT (keyScale3G sc NC) keep seed i r.1 ⟨0, hND⟩).1⟩) ∧
+  (s.regs .real [BM] "l_i" = some ⟨fun r : TileIndex [BM] =>
+      ((aft3StateSeededG qT kT vT (keyScale3G sc NC) keep seed i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [BM, ND] "acc" = some ⟨fun idx : TileIndex [BM, ND] =>
+      ((aft3StateSeededG qT kT vT (keyScale3G sc NC) keep seed i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .real [BM, ND] "q" = some ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩) ∧
   (s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) ∧
   (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
@@ -6886,6 +7374,80 @@ theorem aft3_init_stepsG (s : BlockState) (BM ND : Nat) :
   rw [stepStmts.nil]
 
 set_option maxHeartbeats 1600000 in
+/-- The 3 general `INIT` ELSE-branch (`INIT=False` resume) statements load
+`m_i = M[…]`, `l_i = L[…]`, `acc = Out[…]` from the input buffers via `m_ptrs`,
+`l_ptrs`, `O_block_ptr`. Case-4 analogue of `aft3_init_stepsG`. -/
+theorem aft3_load_stepsG (s : BlockState) (M Out L : RegionName)
+    (BM ND base som son ROUND_CTX : Nat)
+    (hM : s.regs .ptr [BM] "m_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))))
+    (hL : s.regs .ptr [BM] "l_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))))
+    (hO : s.regs .blockPtr [BM, ND] "O_block_ptr" = some
+      (⟨fun _ : TileIndex [BM, ND] =>
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND],
+          blockShape := [BM, ND], strides := [som, son], offsets := [s.pids 0 * BM, 0] }⟩)) :
+    stepStmts [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none),
+        Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none),
+        Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)] s
+      = some (((s.setReg "m_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩).setReg
+          "l_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩).setReg
+          "acc" .real [BM, ND] ⟨fun idx : TileIndex [BM, ND] =>
+            some (s.readMem Out (base + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))⟩) := by
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none) s
+        = some ⟨fun r : TileIndex [BM] => some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩ from by
+      have hp : evalOp (Op.ref TileDType.ptr [BM] "m_ptrs") s = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+              (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))) := by
+        rw [evalOp_ref]; exact hM
+      simp only [evalOp, hp]
+      refine congrArg some ?_
+      ext r
+      simp [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real,
+        NumericDType.add, Nat.zero_add]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none) _
+        = some ⟨fun r : TileIndex [BM] => some (s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩ from by
+      have hp : evalOp (Op.ref TileDType.ptr [BM] "l_ptrs")
+          (s.setReg "m_i" .real [BM] ⟨fun r : TileIndex [BM] =>
+            some (s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)))⟩) = some
+          (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (L.cast, (0 : Nat)))
+            (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s.pids 1 * ROUND_CTX))
+              (Tile.vec (fun r : Fin BM => s.pids 0 * BM + r.val)))) := by
+        rw [evalOp_ref]
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_pids]
+        exact hL
+      simp only [evalOp, hp, BlockState.setReg_pids]
+      refine congrArg some ?_
+      ext r
+      simp [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex, Broadcast.rightIndex, BlockState.readMemValue_real,
+        NumericDType.add, Nat.zero_add, BlockState.setReg_readMem]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none) _
+        = some ⟨fun idx : TileIndex [BM, ND] =>
+            some (s.readMem Out (base + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))⟩ from by
+      refine (aft3_load_v_eval Out base ROUND_CTX ND BM ND som son (s.pids 0 * BM)
+        (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") _ ?_).trans ?_
+      · rw [evalOp_ref]
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hO
+      · refine congrArg some ?_
+        ext idx
+        simp [BlockState.setReg_readMem]))]
+  rw [stepStmts.nil]
+
+set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **General preLoop execution.** Establishes `attnInvariantG … 0` for any case
 `keep`, under the stride-regime equalities and `0 < ND`. -/
@@ -6983,6 +7545,133 @@ theorem aft3PreLoop_evalG
         apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
       rfl
     simp only [hz]; rfl
+  · simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [qTile3G, BlockState.setReg_readMem]
+    refine congrArg some ?_
+    rw [show s11.readMem Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh + (s.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk)
+          = s.readMem Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh + (s.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk) from by
+      unfold BlockState.readMem; rw [hmem]]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hstart]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hoffhz]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hKp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hVp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hMptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hLptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hOp]
+  · intro rg o
+    simp only [BlockState.setReg_undef]
+    rw [huf]; exact hundef rg o
+  · funext rg o
+    simp only [BlockState.setReg_mem]
+    rw [show s11.mem rg o = s.mem rg o from by rw [hmem]]
+
+set_option maxHeartbeats 1600000 in
+/-- **Case-4 (`INIT=False` resume) preLoop execution.** Establishes
+`attnInvariantSeededG … (aft3Case4Seed …) 0` for any `keep`: the `INIT=0` else
+branch loads the prior `m_i/l_i/acc` from `M/L/Out` (the resume seed), so the
+loop-entry state is the seed. -/
+theorem aft3PreLoop_evalG_init0
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (keep : Fin BM → Fin NKV_CTX → Prop) [∀ i j, Decidable (keep i j)]
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) s = some s'
+      ∧ attnInvariantSeededG Q K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND (sm_scale * 1.4426950408889634) keep
+          (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) 0 s' := by
+  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+    aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+  have hrm : ∀ (R : RegionName) (o : Nat), s11.readMem R o = s.readMem R o := by
+    intro R o; unfold BlockState.readMem; rw [hmem]
+  rw [show aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+      = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+    rw [show aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).take 16 from rfl]
+    rw [List.take_append_drop]]
+  rw [stepStmts.append_some h11]
+  rw [show (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+      = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+          Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+  rw [stepStmts.cons_some
+    (show stepStmt _ s11 = some _ from by
+      rw [aft3_ifThenElse_false (aft3_ne_zero_zero_false s11),
+        aft3_load_stepsG s11 M Out L BM ND (s.pids 1 / H * sqz + s.pids 1 % H * sqh) som son ROUND_CTX
+          (by rw [hpids]; exact hMptr) (by rw [hpids]; exact hLptr) (by rw [hpids]; exact hOp)])]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)) _
+        = some (Tile.scalar (some (sm_scale * 1.0))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some (sm_scale * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+      refine congrArg some ?_; norm_num))]
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_load_v_eval Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) N_CTX ND BM ND sqm sqk (s.pids 0 * BM)
+          (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") _
+          (by rw [evalOp_ref]
+              simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same]
+              exact hQp)))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  simp only [attnInvariantSeededG]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]; exact hpids
+  · trivial
+  · exact Nat.zero_le _
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
   · simp only [BlockState.setReg_same]
     refine congrArg some ?_
     refine Tile.ext (fun idx => ?_)
@@ -7221,6 +7910,183 @@ theorem aft3_attn_step1G (Q K V M Out L : RegionName) (s0 : BlockState)
   · exact hundefF
   · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
 
+/-- A resume seed with non-⊥ max is online-softmax-consistent: its `(denom, acc)`
+factor as `pow2(-max)·L` / `pow2(-max)·T` with `L = denom·pow2(max)`, `T = acc·pow2(max)`. -/
+theorem aft3_seed_consist {BM ND : Nat} (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (i : Fin BM) (d : Fin ND) (hne : (seed i d).1 ≠ ⊥) :
+    (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * ((seed i d).2.1 * pow2 ((seed i d).1.unbotD 0))
+  ∧ (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * ((seed i d).2.2 * pow2 ((seed i d).1.unbotD 0)) := by
+  obtain ⟨r, hr⟩ : ∃ r, (seed i d).1 = some r := Option.ne_none_iff_exists'.mp hne
+  have hpp : pow2 (-r) * pow2 r = 1 := by rw [← pow2_add, neg_add_cancel, pow2_zero]
+  refine ⟨?_, ?_⟩ <;>
+  · rw [hr]
+    show _ = pow2 (-r) * (_ * pow2 r)
+    rw [mul_left_comm, hpp, mul_one]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Seeded step lemma (case 4, INIT=False resume + sliding window).** Advances
+`attnInvariantSeededG` by one key block. Mirrors `aft3_attn_step1G`. -/
+theorem aft3_attn_step1_seededG (Q K V M Out L : RegionName) (s0 : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX off size : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hBNdvd : BN ∣ NC) (sc : ℝ)
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (hseednebot : ∀ i d, (seed i d).1 ≠ ⊥)
+    (hseedfst : ∀ (r : Fin BM) (d d' : Fin ND), (seed r d).1 = (seed r d').1)
+    (i : Nat) (s : BlockState) (hilt : i < NC) (himod : i % BN = 0)
+    (hinv : attnInvariantSeededG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+      (fun i j => natSlidingWindowKeepG (s0.pids 0) BM BN off size i j) seed i s) :
+    ∃ s', stepStmts (aft3LoopBodyG sc off size BM ND BN) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnInvariantSeededG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc
+          (fun i j => natSlidingWindowKeepG (s0.pids 0) BM BN off size i j) seed (i + BN) s' := by
+  obtain ⟨hpids, hmod, hile, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ := hinv
+  have hBNi : BN ∣ i := Nat.dvd_of_mod_eq_zero himod
+  set c := i / BN with hc_def
+  have hi : i = c * BN := by rw [hc_def, Nat.div_mul_cancel hBNi]
+  have hcBN_succ : (c + 1) * BN = i + BN := by rw [Nat.succ_mul, ← hi]
+  have hc1 : (c + 1) * BN ≤ NC := by
+    rw [hcBN_succ]
+    obtain ⟨k, hk⟩ := hBNdvd
+    have hck : c < k := by
+      have hlt : c * BN < k * BN := by
+        rw [← hi]; calc i < NC := hilt
+          _ = k * BN := by rw [hk, Nat.mul_comm]
+      exact lt_of_mul_lt_mul_right hlt (Nat.zero_le BN)
+    have hle : i + BN ≤ k * BN := by
+      rw [hi, ← Nat.succ_mul]; exact Nat.mul_le_mul_right BN hck
+    rw [hk, Nat.mul_comm]; exact hle
+  set qT := qTile3G s0 Q base BM ND sqm sqk with hqT
+  set kT := kTile3G s0 K base NC ND skn skk with hkT
+  set vT := vTile3G s0 V base NC ND svk svn with hvT
+  set ks := keyScale3G sc NC with hks
+  set kp : Fin BM → Fin NC → Prop := fun i j => natSlidingWindowKeepG (s0.pids 0) BM BN off size i j with hkp
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hqsF, hsmF, hKpF, hVpF, hoffF, hMptrF, hLptrF, hOpF,
+      qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
+      hqkData, hrm, hmijd, halphad, hpTd, hpmTd, hlijd, hacc1d, hmiF, hliF, haccF⟩ :=
+    aft3LoopBodyG_steps (s.setReg "start_n" .nat [] (Tile.scalar i)) (s0.pids 0) i off size
+      K V base base i i skk skn svk svn ND NC BM BN hBN
+      (⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩)
+      (⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).1⟩)
+      (⟨fun r : TileIndex [BM] => ((aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateSeededG qT kT vT ks kp seed i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      sc
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
+      (by simp [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqs)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hKp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hVp)
+      (fun idx => rfl)
+      (fun idx => rfl)
+      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
+  refine ⟨sF, hchain, ?_⟩
+  have hrmemK : ∀ idx : TileIndex [ND, BN],
+      (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩ : Tile .real [ND, BN]).data idx
+        = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  have hrmemV : ∀ idx : TileIndex [BN, ND],
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩ : Tile .real [BN, ND]).data idx
+        = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem, hi]
+  set qtileF : Tile .real [BM, ND] := ⟨fun idx : TileIndex [BM, ND] => some (qT idx)⟩ with hqtileF
+  have hmc_row : ∀ (r : Fin BM) (jL : Fin BN), aft3MaskCell1G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)
+      = decide (kp r ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩) := by
+    intro r jL
+    have heq : aft3MaskCell1G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)
+        = aft3MaskCell1G (s0.pids 0) (c * BN) off size BM BN (r, jL, PUnit.unit) := by rw [hi]
+    rw [heq, aft3MaskCell1G_eq_keep (s0.pids 0) off size BM BN c r jL
+      (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1)]
+  have hmicell : ∀ r : Fin BM,
+      (⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).1⟩ : Tile .real [BM]).data (r, PUnit.unit)
+        = (aft3StateSeededG qT kT vT ks kp seed (c * BN) r ⟨0, hND⟩).1 := by
+    intro r; simp only; rw [hi]
+  have hmijcell : ∀ r : Fin BM, mijT.data (r, PUnit.unit)
+      = (aft3StateSeededG qT kT vT ks kp seed ((c + 1) * BN) r ⟨0, hND⟩).1 := by
+    intro r
+    rw [hmijd]
+    refine aft3_mij_reg_eq_seededG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 r ⟨0, hND⟩ kp seed
+      (fun jL => aft3MaskCell1G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit))
+      (fun jL => hmc_row r jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).1⟩) rmaxT qkT
+      hqtileF hrmemK ?_ ?_ ?_
+    · intro jL; rw [hqkData]
+    · rw [hmicell r]
+    · exact hrm
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids, hpids]
+  · simp [Nat.add_mod, himod, Nat.mod_self]
+  · rw [← hcBN_succ]; exact hc1
+  · rw [hmiF]; refine congrArg some ?_; ext r
+    rw [hmijcell r.1, hcBN_succ]
+  · rw [hliF]; refine congrArg some ?_; refine Tile.ext (fun r => ?_)
+    obtain ⟨r, ⟨⟩⟩ := r
+    have hbr := aft3_denom_reg_eq_seededG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 r ⟨0, hND⟩ kp seed
+      ((seed r ⟨0, hND⟩).2.1 * pow2 ((seed r ⟨0, hND⟩).1.unbotD 0))
+      ((seed r ⟨0, hND⟩).2.2 * pow2 ((seed r ⟨0, hND⟩).1.unbotD 0))
+      (aft3_seed_consist seed r ⟨0, hND⟩ (hseednebot r ⟨0, hND⟩)).1
+      (aft3_seed_consist seed r ⟨0, hND⟩ (hseednebot r ⟨0, hND⟩)).2
+      (fun h => absurd h (hseednebot r ⟨0, hND⟩)) (fun h => absurd h (hseednebot r ⟨0, hND⟩))
+      (fun jL => aft3MaskCell1G (s0.pids 0) i off size BM BN (r, jL, PUnit.unit)) (fun jL => hmc_row r jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩) qkT
+      (⟨fun r : TileIndex [BM] => ((aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).2.1 : ℝ)⟩)
+      (⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).1⟩)
+      mijT alphaT pT pmT hqtileF hrmemK
+      (fun jL => by rw [hqkData])
+      (by simp only [hi]; rfl) (by simp only [hi]; rfl)
+      (by rw [hmijcell r]) halphad hpTd
+      (fun jL => by rw [hpmTd])
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hlijd, hbr, hcBN_succ]
+    rfl
+  · rw [haccF]; refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    have hbr := aft3_acc_reg_eq_seededG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 ir id kp seed
+      ((seed ir id).2.1 * pow2 ((seed ir id).1.unbotD 0))
+      ((seed ir id).2.2 * pow2 ((seed ir id).1.unbotD 0))
+      (aft3_seed_consist seed ir id (hseednebot ir id)).1
+      (aft3_seed_consist seed ir id (hseednebot ir id)).2
+      (fun h => absurd h (hseednebot ir id)) (fun h => absurd h (hseednebot ir id))
+      (fun jL => aft3MaskCell1G (s0.pids 0) i off size BM BN (ir, jL, PUnit.unit)) (fun jL => hmc_row ir jL)
+      qtileF (⟨fun idx : TileIndex [ND, BN] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * skk + (i + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      qkT pT pmT
+      (⟨fun idx : TileIndex [BM, ND] => ((aft3StateSeededG qT kT vT ks kp seed i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      acc1T
+      (⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks kp seed i r.1 ⟨0, hND⟩).1⟩)
+      mijT alphaT hqtileF hrmemK hrmemV
+      (fun jL => by rw [hqkData])
+      (by simp only [hi]; rfl)
+      (by simp only [hi]
+          rw [aft3StateSeededG_fst, aft3StateSeededG_fst,
+            aft3RunningMaxG_eq qT kT vT ks kp (c * BN) ir ⟨0, hND⟩ id, hseedfst ir ⟨0, hND⟩ id])
+      (by rw [hmijcell ir, aft3StateSeededG_fst, aft3StateSeededG_fst,
+            aft3RunningMaxG_eq qT kT vT ks kp ((c + 1) * BN) ir ⟨0, hND⟩ id, hseedfst ir ⟨0, hND⟩ id])
+      halphad hacc1d hpTd
+      (fun jL => by rw [hpmTd])
+    show (Tile.bop NumericDType.real.add _ _ _).data _ = _
+    rw [hbr, hcBN_succ]
+    rfl
+  · rw [hqF]
+  · rw [hqsF]
+  · rw [hsmF]
+  · rw [hoffF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoff
+  · rw [hKpF, show ((i + BN) : Nat) = i + BN from rfl]
+  · rw [hVpF]
+  · rw [hMptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
+  · rw [hLptrF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hLptr
+  · rw [hOpF, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  · exact hundefF
+  · rw [hmemF]; funext rg o; rw [BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+
 theorem aft3_attn_step2G (Q K V M Out L : RegionName) (s0 : BlockState)
     (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX off size : Nat)
     (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hBNdvd : BN ∣ NC) (sc : ℝ)
@@ -7428,6 +8294,183 @@ theorem aft3PostLoop_eval_KG
     ⟨fun r : TileIndex [BM] => ((aft3StateBotKG qT kT vT ks keep NC r.1 ⟨0, hND⟩).2.1 : ℝ)⟩ with hliTile
   set accTile : Tile .real [BM, ND] :=
     ⟨fun idx : TileIndex [BM, ND] => ((aft3StateBotKG qT kT vT ks keep NC idx.1 idx.2.1).2.2 : ℝ)⟩ with haccTile
+  unfold aft3PostLoopG
+  set miFin : Tile .real [BM] :=
+    Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) miTile
+      (Tile.uop WithBot.realLog2 liTile) with hmiFin
+  set accFin : Tile .real [BM, ND] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil)) accTile
+      (Tile.expandDim ⟨1, by simp⟩ liTile) with haccFin
+  rw [stepStmts.cons_some
+    (show stepStmt _ s = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true s)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil)
+            (Op.ref TileDType.real [BM] "m_i") (Op.ref TileDType.real [BM] "l_i").log2) s
+            = some miFin from by
+          rw [evalOp_add]
+          simp only [evalOp, evalOp.eq_def, evalOp_ref, hmi, hli, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.div NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref TileDType.real [BM, ND] "acc")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [BM] "l_i"))) _
+            = some accFin from by
+          have hexp : @evalOp TileDType.real [BM, 1]
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [BM] "l_i"))
+                (s.setReg "m_i" .real [BM] miFin)
+              = some (Tile.expandDim ⟨1, by simp⟩ liTile) :=
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+          rw [evalOp_div]
+          simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+            not_false_eq_true, BlockState.setReg_same, hexp, hacc, Option.bind_eq_bind,
+            Option.bind_some]
+          rfl))]
+      rw [stepStmts.nil])]
+  set s2 := (s.setReg "m_i" .real [BM] miFin).setReg "acc" .real [BM, ND] accFin with hs2
+  have hMptr2 : s2.regs .ptr [BM] "m_ptrs" = some
+      (Tile.ptrAdd Broadcast.scalarL (Tile.scalar (M.cast, (0 : Nat)))
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar (s0.pids 1 * ROUND_CTX))
+          (Tile.vec (fun r : Fin BM => s0.pids 0 * BM + r.val)))) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hMptr
+  have hmi2 : s2.regs .real [BM] "m_i" = some miFin := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  set mOffFn : TileIndex [BM] → Nat :=
+    fun r => s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + r.1.val) with hmOffFn
+  have hmptrEval : evalOp (Op.ref TileDType.ptr [BM] "m_ptrs") s2
+      = some (⟨fun r : TileIndex [BM] => (M.cast, mOffFn r)⟩ : Tile .ptr [BM]) := by
+    rw [evalOp_ref, hMptr2]
+    refine congrArg some ?_; ext r
+    · rfl
+    · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+        Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add, hmOffFn]
+  have hstore1 : stepStmt (Stmt.store TileDType.real [BM] (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs"))
+      (Op.ref TileDType.real [BM] "m_i") MaskOpt.none) s2
+      = some ((TileShape.allIndices [BM]).foldl
+          (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2) := by
+    simp only [stepStmt, evalOp_ref, hmi2, hmptrEval, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some, if_true, Region.cast_id]
+  rw [stepStmts.cons_some hstore1]
+  set s3 := (TileShape.allIndices [BM]).foldl
+      (fun acc r => acc.writeMemTyped .real M (mOffFn r) (miFin.data r)) s2 with hs3
+  have hOp3 : s3.regs .blockPtr [BM, ND] "O_block_ptr" = some
+      (⟨fun _ : TileIndex [BM, ND] =>
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+          strides := [som, son], offsets := [s0.pids 0 * BM, 0] }⟩) := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hOp
+  have hacc3 : s3.regs .real [BM, ND] "acc" = some accFin := by
+    rw [hs3]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs2, BlockState.setReg_same]
+  set oOffFn : TileIndex [BM, ND] → Nat :=
+    fun idx => base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son with hoOffFn
+  set oValFn : TileIndex [BM, ND] → WithBot ℝ := fun idx => accFin.data idx with hoValFn
+  have hstore2 : stepStmt (Stmt.store TileDType.real [BM, ND]
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") [])
+      (Op.ref TileDType.real [BM, ND] "acc") MaskOpt.none) s3
+      = some ((TileShape.allIndices [BM, ND]).foldl
+          (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3) := by
+    simp only [stepStmt, evalOp_ref, hacc3, hOp3, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s3 ?_
+    intro acc idx _
+    simp only [TileShape.indexToList, BlockPtr.inBounds, List.all_nil, Bool.and_true,
+      Bool.true_and, if_true]
+    have haddr : BlockPtr.address
+        { region := Out, baseOffset := base, parentShape := [ROUND_CTX, ND], blockShape := [BM, ND],
+          strides := [som, son], offsets := [s0.pids 0 * BM, 0] }
+        [idx.1.val, idx.2.1.val]
+        = oOffFn idx := by
+      show base + ((s0.pids 0 * BM + idx.1.val) * som + (0 + idx.2.1.val) * son) = _
+      rw [Nat.zero_add, hoOffFn]; ring
+    rw [haddr]
+  rw [stepStmts.cons_some hstore2, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx
+    rw [show (base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son) = oOffFn idx from by
+      simp only [hoOffFn]]
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := Out) s3 oOffFn
+      (fun idx => FloatDType.real.storeValue (oValFn idx)) hinjO idx]
+    simp only [FloatDType.real_storeValue, hoValFn, haccFin]
+    obtain ⟨ir, id, ⟨⟩⟩ := idx
+    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+      Option.map₂, Option.bind, Option.map, haccTile, hliTile, WithBot.unbotD_coe,
+      WithBot.unbotD_some]
+  · intro i
+    rw [show (s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + i.val)) = mOffFn (i, PUnit.unit) from by
+      simp only [hmOffFn]]
+    rw [show ((TileShape.allIndices [BM, ND]).foldl
+            (fun acc idx => acc.writeMemTyped .real Out (oOffFn idx) (oValFn idx)) s3).readMem M
+              (mOffFn (i, PUnit.unit))
+          = s3.readMem M (mOffFn (i, PUnit.unit)) from by
+      simp only [BlockState.writeMemTyped_real]
+      exact aft3_foldl_writeMem_readMem_other_region M Out hMO oOffFn
+        (fun idx => FloatDType.real.storeValue (oValFn idx)) (mOffFn (i, PUnit.unit))
+        (TileShape.allIndices [BM, ND]) s3]
+    rw [hs3]
+    simp only [BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd (region := M) s2 mOffFn
+      (fun r => FloatDType.real.storeValue (miFin.data r)) hinjM (i, PUnit.unit)]
+    simp only [FloatDType.real_storeValue, miFin, Tile.bop_data, Tile.uop_data,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, hmiTile, hliTile]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Seeded postLoop evaluation (case 4).** From `attnInvariantSeededG … NC`, the
+END=True finalize stores the normalized resume-seeded fold into `O` and the
+`m + log2 l` finalize into `M`. -/
+theorem aft3PostLoop_eval_seededG
+    (Q K V M Out L : RegionName) (s0 : BlockState) (s : BlockState)
+    (base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (hND : 0 < ND) (sc : ℝ)
+    (hMO : M ≠ Out)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + r.1.val)))
+    (hinv : attnInvariantSeededG Q K V M Out L s0 base BM ND NC BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc keep seed NC s) :
+    ∃ sP, stepStmts (aft3PostLoopG M Out L BM ND) s = some sP
+      ∧ (∀ idx : TileIndex [BM, ND],
+          sP.readMem Out (base + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son)
+            = ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                  (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                  keep seed NC idx.1 idx.2.1).2.2)
+              / ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                  (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                  keep seed NC idx.1 ⟨0, hND⟩).2.1))
+      ∧ (∀ i : Fin BM,
+          sP.readMem M (s0.pids 1 * ROUND_CTX + (s0.pids 0 * BM + i.val))
+            = (WithBot.realAdd
+                  (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                    (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                    keep seed NC i ⟨0, hND⟩).1
+                  (WithBot.realLog2 (((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+                    (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC)
+                    keep seed NC i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+  obtain ⟨hpids, _, _, hmi, hli, hacc, hq, hqs, hsm, hoff, hKp, hVp, hMptr, hLptr, hOp, hundef, hmem⟩ :=
+    hinv
+  set qT := qTile3G s0 Q base BM ND sqm sqk with hqT
+  set kT := kTile3G s0 K base NC ND skn skk with hkT
+  set vT := vTile3G s0 V base NC ND svk svn with hvT
+  set ks := keyScale3G sc NC with hks
+  set miTile : Tile .real [BM] :=
+    ⟨fun r : TileIndex [BM] => (aft3StateSeededG qT kT vT ks keep seed NC r.1 ⟨0, hND⟩).1⟩ with hmiTile
+  set liTile : Tile .real [BM] :=
+    ⟨fun r : TileIndex [BM] => ((aft3StateSeededG qT kT vT ks keep seed NC r.1 ⟨0, hND⟩).2.1 : ℝ)⟩ with hliTile
+  set accTile : Tile .real [BM, ND] :=
+    ⟨fun idx : TileIndex [BM, ND] => ((aft3StateSeededG qT kT vT ks keep seed NC idx.1 idx.2.1).2.2 : ℝ)⟩ with haccTile
   unfold aft3PostLoopG
   set miFin : Tile .real [BM] :=
     Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) miTile
@@ -7869,6 +8912,68 @@ theorem aft3_attn_exec1G
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
+/-- **General full kernel execution (case 4, INIT=False resume + sliding window).**
+The genuine, non-self-referential output: every `Out` lane holds the normalized
+resume-seeded sliding-window online softmax `attentionFwdTriton3Case4OutSpecG`. -/
+theorem aft3_attn_exec4G
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    ∃ sF, stepStmts (attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgKernel.body s = some sF
+      ∧ (∀ idx : TileIndex [BM, ND],
+          sF.readMem Out ((s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son)
+            = attentionFwdTriton3Case4OutSpecG s Q K V M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn som son ROUND_CTX (sm_scale * 1.4426950408889634) BN off size hND idx)
+      ∧ (∀ i : Fin BM,
+          sF.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))
+            = (WithBot.realAdd
+                (aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).1
+                (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+  set base := s.pids 1 / H * sqz + s.pids 1 % H * sqh with hbase
+  set sc := sm_scale * 1.4426950408889634 with hsc
+  set kp : Fin BM → Fin NKV_CTX → Prop := fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j with hkp
+  set seed := aft3Case4Seed s M Out L base BM ND som son ROUND_CTX with hseed
+  have hseednebot : ∀ i d, (seed i d).1 ≠ ⊥ := fun i d => WithBot.coe_ne_bot
+  have hseedfst : ∀ (r : Fin BM) (d d' : Fin ND), (seed r d).1 = (seed r d').1 := fun r d d' => rfl
+  rw [aft3_body_splitG4]
+  obtain ⟨sp, hpre, hinv0⟩ :=
+    aft3PreLoop_evalG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hH hHKV hskz hskh hsvz hsvh hsoz hsoh kp hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+      (body := aft3LoopBodyG sm_scale off size BM ND BN)
+      (P := fun i st => attnInvariantSeededG Q K V M Out L s base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc kp seed i st)
+      (s_init := sp)
+      hBN.ne'
+      hinv0
+      (fun i st hi hP => aft3_attn_step1_seededG Q K V M Out L s base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX off size hND hBM hBN hBNdvd sc seed hseednebot hseedfst i st hi
+        (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+  rw [stepStmts.cons_some hloop]
+  have hfinal : final = NKV_CTX := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    rcases Nat.lt_or_ge final NKV_CTX with h | h
+    · exact absurd h (by simpa using hfin)
+    · exact Nat.le_antisymm hle h
+  subst final
+  obtain ⟨sF, hpost, hO, hM⟩ :=
+    aft3PostLoop_eval_seededG Q K V M Out L s sL base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc hMO kp seed hinjO hinjM hinvL
+  refine ⟨sF, hpost, ?_, hM⟩
+  intro idx
+  rw [hO idx]
+  simp only [attentionFwdTriton3Case4OutSpecG, hseed, hkp]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
 /-- **General full kernel execution (case 2, complement sliding window).** -/
 theorem aft3_attn_exec2G
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
@@ -8242,6 +9347,89 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
     simp only [hlRow i]
     show sF.readMem M _ = _
     rw [hM i, attentionFwdTriton3Case3MSpecG]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Dimension-general genuine `output_summary`, case 4** (`INIT=False` cross-launch
+resume + sliding window). The executed surface writes the GENUINE
+`attentionFwdTriton3Case4OutSpecG` (normalized resume-seeded sliding-window online
+softmax, read over INPUT `Q`/`K`/`V` and the resume buffers `M`/`L`/`Out` — **no
+self-reference** to this program's own executed output) into `O`, and the `m+log2 l`
+finalize into `M`. The resume seed is read from `M`/`L`/`Out` at the initial state. -/
+theorem attention_fwd_triton3_python_case4_output_summary_general
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hinjO : Function.Injective
+      (fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : Function.Injective
+      (fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val))) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx)
+        (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
+      (expected := fun idx : TileIndex [BM, ND] =>
+        attentionFwdTriton3Case4OutSpecG s Q K V M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn som son ROUND_CTX (sm_scale * 1.4426950408889634) BN off size hND idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0)
+      (initialState := s)
+      (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
+      (expected := fun i : Fin BM =>
+        (WithBot.realAdd
+          (aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).1
+          (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+  have houtOff : ∀ idx : TileIndex [BM, ND],
+      outOffset s H sqz sqh som son BM idx
+        = (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son := by
+    intro idx; simp only [outOffset, offZ, offH, mIndex, kIndex]
+  have hlRow : ∀ i : Fin BM,
+      lRowOffset s (s.pids 1) ROUND_CTX BM i = s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val) := by
+    intro i; simp only [lRowOffset]
+  refine ⟨by apply attention_fwd_triton3_surface_toAlgorithm_supported, ?_, ?_⟩
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx _hActive
+    obtain ⟨sF, hstep, hO, _⟩ := aft3_attn_exec4G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    rw [houtOff idx]; exact hO idx
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro i
+    obtain ⟨sF, hstep, _, hM⟩ := aft3_attn_exec4G Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hND hBM hBN hNC hBNdvd hH hHKV
+      hskz hskh hsvz hsvh hsoz hsoh hMO hundef hinjO hinjM
+    rw [exec] at hExec
+    rw [hstep] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [hlRow i]
+    show sF.readMem M _ = _
+    exact hM i
 
 
 /-! ## Test-shape genuine output summaries (cases 1/2/3) as corollaries of the

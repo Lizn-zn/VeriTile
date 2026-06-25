@@ -1,18 +1,18 @@
 # Spec-sheet index
 
-- 141 kernels, 327 headline theorems, 1 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 328 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
 | 328 | [MixedSparseAttention.md](MixedSparseAttention.md) | 45 | 3 | 168 | 22 |  |
+| 305 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 29 | 4 | 138 | 76 |  |
 | 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 |  |
 | 267 | [ContextAttnLlama.md](ContextAttnLlama.md) | 43 | 4 | 115 | 19 |  |
 | 264 | [ContextAttnBloom.md](ContextAttnBloom.md) | 42 | 4 | 115 | 19 |  |
 | 261 | [ContextAttnFwd.md](ContextAttnFwd.md) | 41 | 4 | 115 | 19 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
-| 239 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 26 | 2 | 102 | 57 | ⚠producedAttentionFwdTriton3Case4MValue:readMem(executed-state),producedAttentionFwdTriton3Case4OutValue:readMem(executed-state) |
 | 227 | [RopeEmbedding.md](RopeEmbedding.md) | 17 | 0 | 160 | 16 |  |
 | 226 | [KvCacheFilling.md](KvCacheFilling.md) | 17 | 0 | 159 | 16 |  |
 | 208 | [ReversedCumsum.md](ReversedCumsum.md) | 18 | 1 | 134 | 19 |  |
