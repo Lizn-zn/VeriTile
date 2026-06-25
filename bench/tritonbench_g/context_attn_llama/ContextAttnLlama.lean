@@ -310,35 +310,6 @@ noncomputable def ctxVTile
     s.readMem V (ctxKvLoc s Req_to_tokens B_req_idx j.val * 2048
       + curHead s 16 * 128 + d.val)
 
-/-- Per-key `(score, value)` stream the loop folds, with the kernel's genuine
-`-1e8` sentinel kept. Active key `j ≤ gi+plen`: score `sm_scale·rawᵢⱼ`; future
-key: sentinel (so `exp2` → `exp(-1e8)`). Value is the gathered `ctxVTile`. -/
-noncomputable def ctxExactKeyList
-    (s : BlockState) (Q K V B_Start_Loc Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    List (ℝ × ℝ) :=
-  let plen := promptLen s 16 B_Prompt_Cache_Len
-  let gi := s.pids 0 * BLOCK_M + i.val
-  List.ofFn (fun j : Fin S =>
-    (if j.val ≤ gi + plen then
-        sm_scale *
-          Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-              * ctxKTile s K Req_to_tokens B_req_idx S (j, e, PUnit.unit))
-      else (0.0 - 10e7 : ℝ),
-      ctxVTile s V Req_to_tokens B_req_idx S (j, d, PUnit.unit)))
-
-/-- The kernel's per-key `(score, value)` pair for output `(i, d)` at global key `j`
-over `S` keys, with the genuine `-1e8` sentinel kept (matching `ctxExactKeyList`). -/
-noncomputable def ctxKV
-    (s : BlockState) (Q K V B_Start_Loc Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) (j : Fin S) : ℝ × ℝ :=
-  (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
-      sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K Req_to_tokens B_req_idx S (j, e, PUnit.unit))
-    else (0.0 - 10e7 : ℝ),
-    ctxVTile s V Req_to_tokens B_req_idx S (j, d, PUnit.unit))
-
 /-- One ⊥-seeded online-softmax step: running max in `WithBot ℝ` (seeded `⊥`), so
 `α = realExp2(m ⊖ m')` is `0` on the first block — faithful to the kernel's
 `m_i = tl.zeros − inf` and `l_i`/`acc = 0`. -/
@@ -1026,30 +997,6 @@ noncomputable def contextAttnExactFoldMG
       stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val)
   st.2.2 / st.2.1
 
-/-- **Pin bridge (tiles).** At `H = 16`, `BLOCK_DMODEL = 128`, gather strides
-`9048`/`1` and the test K/V/Q strides, the general tiles coincide with the pinned ones. -/
-theorem ctxKVMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxKVMG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 9048 1 2048 128 1 2048 128 1 128 BLOCK_M S bel i d.val
-      = ctxKVM s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale BLOCK_M S bel i d := by
-  unfold ctxKVMG ctxKVM ctxKTileMG ctxVTileMG ctxQTileMG ctxKTileG ctxVTileG ctxQTileG
-    ctxKvLocG ctxKTileM ctxVTileM ctxQTileM ctxKTile ctxVTile ctxQTile ctxKvLoc
-  funext j
-  simp only [Nat.mul_one, Nat.one_mul]
-
-/-- **Pin bridge (fold).** The general exact fold instantiates to the pinned
-`contextAttnExactFoldM` at `H = 16`, `BLOCK_DMODEL = 128`, test strides. -/
-theorem contextAttnExactFoldMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnExactFoldMG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 9048 1 2048 128 1 2048 128 1 128 BLOCK_M S bel idx
-      = contextAttnExactFoldM s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale BLOCK_M S bel idx := by
-  unfold contextAttnExactFoldMG contextAttnExactFoldM
-  rw [ctxKVMG_pin]
-
 /-- **Streaming-loop invariant** for the Python-shape context kernel. After `c`
 blocks (loop counter `c·128`), the `m_i`/`l_i`/`acc` registers carry the ⊥-seeded
 online-softmax fold `gStateBot (c·128)` over the kernel-loaded per-key data
@@ -1153,19 +1100,6 @@ noncomputable def ctxInvariantG
   (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
       some (gStateBot S (c * BLOCK_N) (g idx.1 idx.2.1.val)).2.2⟩) ∧
   (c * BLOCK_N ≤ S)
-
-/-- **Pin bridge (per-key data).** At `H=16`, `BLOCK_DMODEL=128`, gather strides
-`9048`/`1`, test strides, the general `ctxGG` coincides with the pinned `ctxG`
-(`BLOCK_M=128`). -/
-theorem ctxGG_pin
-    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (S bel : Nat) (i d : Fin 128) :
-    ctxGG s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 9048 1 2048 128 1 2048 128 1 128 128 S bel i d.val
-      = ctxG s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale S bel i d := by
-  unfold ctxGG ctxG
-  funext j
-  rw [ctxKVMG_pin]
 
 /-! ### generic tile-arithmetic bridges (kernel-agnostic; reused in `ctx_attn_step`) -/
 
@@ -4059,19 +3993,6 @@ noncomputable def ctxInvariant64
       some (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2⟩) ∧
   (c * 128 ≤ S)
 
-
-/-- **Pin bridge (per-key data, Tesla).** At `H=16`, `BLOCK_DMODEL=128`, gather
-strides `9048`/`1`, test strides, `BLOCK_M=64`, the general `ctxGG` coincides with
-the pinned `ctxG64`. -/
-theorem ctxGG_pin64
-    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (S bel : Nat) (i : Fin 64) (d : Fin 128) :
-    ctxGG s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 9048 1 2048 128 1 2048 128 1 128 64 S bel i d.val
-      = ctxG64 s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale S bel i d := by
-  unfold ctxGG ctxG64
-  funext j
-  rw [ctxKVMG_pin]
 
 /-- The block-`c` score sup over `Fin 128` (`BLOCK_N` lanes) read off the Tesla
 qk row `[64,128]`, matching `gRunningMax_succ`'s block term. -/

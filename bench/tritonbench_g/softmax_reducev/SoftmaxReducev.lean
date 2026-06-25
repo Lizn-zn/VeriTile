@@ -878,25 +878,6 @@ def srSeqLen (s : BlockState) (BSeqLen : RegionName) : Nat :=
 def srStartLoc (s : BlockState) (BStartLoc : RegionName) : Nat :=
   s.readMemValue .nat BStartLoc (s.pids 0)
 
-/-- `off_b_loc = cur_batch·128 + (128 − cur_batch_seq_len)·1`. -/
-def srOffBLoc (s : BlockState) (BSeqLen : RegionName) : Nat :=
-  s.pids 0 * 128 + (128 - srSeqLen s BSeqLen) * 1
-
-/-- The paged-KV index for token `n`: `BLoc[off_b_loc + (n)·1]` (`.int`). -/
-def srVIndex (s : BlockState) (BLoc : Region .int) (BSeqLen : RegionName) (n : Nat) : Int :=
-  s.readMemValue .int (Region.cast BLoc) (srOffBLoc s BSeqLen + n * 1)
-
-/-- The attention logit for token `n`:
-`Logics[cur_head·256 + (cur_batch_start_loc + n)·1]`. -/
-def srQk (s : BlockState) (Logics BStartLoc : RegionName) (n : Nat) : ℝ :=
-  s.readMem Logics (s.pids 1 * 256 + (srStartLoc s BStartLoc + n) * 1)
-
-/-- The gathered V-row entry for token `n`, head-dim `d`:
-`V[v_index[n]·8192 + cur_head·64 + d·1]` (`v_index` cast to `Nat`). -/
-def srV (s : BlockState) (V : RegionName) (BLoc : Region .int) (BSeqLen : RegionName)
-    (n d : Nat) : ℝ :=
-  s.readMem V ((srVIndex s BLoc BSeqLen n * 8192).toNat + s.pids 1 * 64 + d)
-
 set_option maxHeartbeats 1600000 in
 /-- `castIntToNat` eval helper (pointwise `Int.toNat`). -/
 theorem sr_evalOp_castIntToNat {shape : TileShape} (a : Op .int shape) (s : BlockState) :

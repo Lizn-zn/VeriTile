@@ -155,12 +155,6 @@ noncomputable def fwdVVal (s : BlockState) (V : RegionName)
     (n e BLOCK_MODEL : Nat) (c : Nat) (keyRow : Nat) : ℝ :=
   s.readMem V (s.pids 0 * n * e + keyRow * e + s.pids 1 * BLOCK_MODEL + c)
 
-/-- `Q[qk_offset + t·d + a]`: the query entry at global row `t`, head channel
-`a`, for the program. -/
-noncomputable def fwdQVal (s : BlockState) (Q : RegionName)
-    (n d : Nat) (a : Nat) (row : Nat) : ℝ :=
-  s.readMem Q (s.pids 0 * n * d + row * d + a)
-
 /-- **Genuine closed form for the `kv` state entering block `m`**, element
 `(a, c)`: `Σ_{s < m·BLOCK} K[s,a]·V[s,c]`, the running sum of `kᵀ·v` over the
 first `m` key blocks. This is the carry state the Python loop accumulates with
@@ -184,16 +178,6 @@ theorem kvClosed_succ (s : BlockState) (K V : RegionName)
   unfold kvClosed
   rw [show (m + 1) * BLOCK = m * BLOCK + BLOCK by ring]
   rw [Finset.sum_range_add]
-
-/-- **Genuine closed form for the linear-attention output row** `t` (global
-position), value channel `c`: the full causal sum `Σ_{s ≤ t} (Σ_a
-q[t,a]·k[s,a])·v[s,c]`. This is what `o = o_intra + o_inter` computes for the
-row sitting in block `m` once `kv` holds `kvClosed m`. -/
-noncomputable def oRowClosed (s : BlockState) (Q K V : RegionName)
-    (n d e BLOCK_MODEL : Nat) (row c : Nat) : ℝ :=
-  ∑ keyRow ∈ Finset.range (row + 1),
-    (∑ a ∈ Finset.range d, fwdQVal s Q n d a row * fwdKVal s K n d a keyRow) *
-      fwdVVal s V n e BLOCK_MODEL c keyRow
 
 /-! ### `kv`-update step slice (the per-block `kv += tl.dot(k_trans, v)` body)
 

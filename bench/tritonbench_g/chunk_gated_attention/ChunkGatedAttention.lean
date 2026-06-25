@@ -925,56 +925,6 @@ noncomputable def hClosed
         (∏ j ∈ Finset.Ico (t + 1) m,
           hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
 
-/-- `hClosed` at `m = 0` is the seed `b_h^(0)` (the very first state store). -/
-theorem hClosed_zero
-    (s : BlockState) (K V G H0 : RegionName)
-    (GATEK USE_INITIAL_STATE : Bool)
-    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
-    (idx : TileIndex [BK, BV]) :
-    hClosed s K V G H0 GATEK USE_INITIAL_STATE
-        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV 0 idx
-      = hSeed s H0 USE_INITIAL_STATE KSize VSize BK BV idx := by
-  simp [hClosed]
-
-/-- **The gated chunk carry-fold recurrence.** Unrolling one chunk:
-`b_h^(m+1) = b_h^(m) ⊙ G_m + S_m`. This is the exact closed-form counterpart of
-the Python loop body `b_h = b_h * exp(b_gn) [+ gate] ; b_h += b_k @ b_v`. -/
-theorem hClosed_succ
-    (s : BlockState) (K V G H0 : RegionName)
-    (GATEK USE_INITIAL_STATE : Bool)
-    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
-    (idx : TileIndex [BK, BV]) :
-    hClosed s K V G H0 GATEK USE_INITIAL_STATE
-        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx
-      = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx *
-          hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV m idx
-        + hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-            KSize VSize BT BK BV m idx := by
-  unfold hClosed
-  rw [Finset.prod_range_succ, Finset.sum_range_succ]
-  rw [show Finset.Ico (m + 1) (m + 1) = (∅ : Finset Nat) from by simp,
-      Finset.prod_empty, mul_one]
-  have hsum :
-      (∑ t ∈ Finset.range m,
-          hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-              KSize VSize BT BK BV t idx *
-            ∏ j ∈ Finset.Ico (t + 1) (m + 1),
-              hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
-        = (∑ t ∈ Finset.range m,
-            hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-                KSize VSize BT BK BV t idx *
-              ∏ j ∈ Finset.Ico (t + 1) m,
-                hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
-          * hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV m idx := by
-    rw [Finset.sum_mul]
-    apply Finset.sum_congr rfl
-    intro t ht
-    simp only [Finset.mem_range] at ht
-    rw [Finset.prod_Ico_succ_top (by omega : t + 1 ≤ m)]
-    ring
-  rw [hsum]; ring
-
 /-- **Genuine closed form** for the `h` loop-row state store at chunk `i_t`:
 the folded gated state `hClosed i_t`, over the input regions `K`, `V`, `G`, `H0`
 at the bench shape. **Not** a read-back of the kernel's own output. -/

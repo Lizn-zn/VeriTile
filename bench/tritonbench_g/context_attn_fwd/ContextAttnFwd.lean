@@ -250,43 +250,6 @@ noncomputable def accStoreValue
           BLOCK_M idx))
     else some (0.0 : ℝ))
 
-/-! ## Genuine closed-form context-attention spec
-
-The streaming-softmax loop in `_fwd_kernel_int8kv` is *not* a self-referential
-black box: it computes, for every active query lane, the prompt-cache-offset
-**causal softmax attention** value. This section makes that closed form explicit
-and proves the kernel's exact base-2 / `sm_scale` streaming weights collapse to
-it — independent of the kernel `exec`.
-
-### Score / scale / mask of this kernel (decoded lane-by-lane from the body)
-
-For program `(start_m, cur_bh)`, query lane `i` (global row
-`gi = start_m·BLOCK_M + i`), key `j`, head channel `e`:
-
-* **raw score** `raw i j = Σ_e Q[gi,e]·K[j,e]`  (`tl.dot q k`, line 85/107);
-* **scale**     `qk·sm_scale` with
-  `sm_scale = (1/√D)·1.4426950408889634` (`= (1/√D)·log₂ e`, line 87/109);
-* **softmax**   base-2 `tl.math.exp2` (lines 90/112, 94/115);
-* **mask**      `(gi + prompt_cache_len) ≥ j`  (`mask`, line 86/108): future keys
-  get score `-1e8` (≈ `exp2 → 0`), i.e. a causal mask shifted by `prompt_cache_len`.
-
-Because `exp2(x) = exp(log 2 · x)` and `exp2(qk·sm_scale) = exp((log 2 · sm_scale)·qk)`,
-the kernel realizes the **natural-exp** causal softmax with effective scale
-`effScale = log 2 · sm_scale`. With the kernel's `sm_scale = (√D)⁻¹·1.4426950408889634`
-and `log 2 · 1.4426950408889634 ≈ 1`, `effScale ≈ (√D)⁻¹` — standard scaled-dot
-attention. We keep the *exact* `effScale` so the closed form is bit-faithful to the
-kernel's chosen constant. -/
-
-/-- Effective natural-exp score scale of this kernel: `log 2 · sm_scale`. -/
-noncomputable def contextEffScale (sm_scale : ℝ) : ℝ := Real.log 2 * sm_scale
-
-/-- `pow2 (sm_scale · x) = exp (effScale · x)`: the kernel's `exp2`-with-`sm_scale`
-weight is the natural-exp weight at the effective scale. This is the algebraic
-identity that turns the kernel's base-2 softmax into ordinary `attentionReal`. -/
-theorem pow2_smScale_eq_exp_effScale (sm_scale x : ℝ) :
-    pow2 (sm_scale * x) = Real.exp (contextEffScale sm_scale * x) := by
-  simp [pow2, contextEffScale, mul_assoc]
-
 /-- Coordinate-faithful query tile of this kernel at `(start_m, cur_bh)` for the
 checked Python layout (strides `stride_qbs=2048, stride_qh=128, stride_qd=1`,
 `H=16`, head decode `cur_batch=cur_bh/16`, `cur_head=cur_bh%16`). Row `i` is the
@@ -312,91 +275,6 @@ noncomputable def ctxVTile (s : BlockState) (V : RegionName) (S : Nat) :
     TileIndex [S, 128] → ℝ :=
   fun (j, d, _) =>
     s.readMem V (curBatch s 16 * 8388608 + j.val * 128 + curHead s 16 * 262144 + d.val)
-
-/-- **Genuine closed-form output** of `context_attn_fwd` at query lane `i`,
-channel `d`, over the first `S` keys.
-
-`out[i,d] = (Σ_{j ≤ gi+plen} exp(effScale·rawᵢⱼ)·V[j,d]) / (Σ_{j ≤ gi+plen} exp(effScale·rawᵢⱼ))`
-
-where `gi = start_m·BLOCK_M + i`, `plen = prompt_cache_len`, and `rawᵢⱼ = Σ_e Q[gi,e]·K[j,e]`.
-This is exactly `attentionRealCausalBlock` (the library's prompt-offset causal
-softmax) instantiated with this kernel's tiles, effective scale, and a causal
-boundary shifted by `prompt_cache_len`. No self-reference: it is a pure function
-of `Q`/`K`/`V` memory. -/
-noncomputable def contextAttnClosedForm
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat)
-    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
-  let i := idx.1
-  let d := idx.2.1
-  let plen := promptLen s 16 B_Prompt_Cache_Len
-  let gi := s.pids 0 * BLOCK_M + i.val
-  let raw := fun j : Fin S =>
-    Finset.univ.sum (fun e : Fin 128 =>
-      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-        * ctxKTile s K S (j, e, PUnit.unit))
-  let weight := fun j : Fin S =>
-    if j.val ≤ gi + plen then Real.exp (contextEffScale sm_scale * raw j) else 0
-  let denom := Finset.univ.sum (fun j : Fin S => weight j)
-  let numer := Finset.univ.sum (fun j : Fin S =>
-    weight j * ctxVTile s V S (j, d, PUnit.unit))
-  numer / denom
-
-/-! ### Exact (sentinel-faithful) streaming closed form
-
-`contextAttnClosedForm` *idealizes* future keys to softmax weight `0`. The kernel's
-`tl.where(mask, qk·sm_scale, -1e8)` instead assigns future keys the *finite*
-sentinel score `-1e8`, so over exact ℝ they carry weight `exp(-1e8)` — negligible,
-but nonzero. The value the streaming loop computes *exactly* is therefore the
-fold below (`acc/l` of the online-softmax step `osStep` over the genuinely-masked
-key stream with the `-1e8` sentinel kept); it coincides with
-`contextAttnClosedForm` only in the `exp(-1e8) → 0` limit.
-
-Crucially `contextAttnExactFold` is a pure function of `Q`/`K`/`V` memory (no
-`exec` self-reference): the FA-1 exec-assembly obligation is to show the kernel's
-`m_i`/`l_i`/`acc` loop realizes this fold (see roadmap in
-`ctxExactKeyList`). The score `sm_scale·raw` (not `effScale·raw`) is the value the
-kernel feeds to `exp2`, so `exp2(sm_scale·raw) = exp(effScale·raw)` is the genuine
-softmax weight (`pow2_smScale_eq_exp_effScale`). -/
-
-/-- Per-key `(score, value)` stream the loop folds, with the kernel's genuine
-`-1e8` sentinel kept. Active key `j ≤ gi+plen`: score `sm_scale·rawᵢⱼ`; future
-key: sentinel `(log 2)⁻¹·(-1e8)` (so `exp2` → `exp(-1e8)`). -/
-noncomputable def ctxExactKeyList
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    List (ℝ × ℝ) :=
-  let plen := promptLen s 16 B_Prompt_Cache_Len
-  let gi := s.pids 0 * BLOCK_M + i.val
-  List.ofFn (fun j : Fin S =>
-    (if j.val ≤ gi + plen then
-        sm_scale *
-          Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-              * ctxKTile s K S (j, e, PUnit.unit))
-      else (0.0 - 10e7 : ℝ),
-      ctxVTile s V S (j, d, PUnit.unit)))
-
-/-- Exact streaming-loop output value for lane `(i,d)`: `acc/l` of folding the
-online-softmax step `osStep` over `ctxExactKeyList`. A pure function of
-`Q`/`K`/`V` memory; exactly what the kernel's `m_i`/`l_i`/`acc` loop produces. -/
-noncomputable def contextAttnExactFold
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
-  let st := (ctxExactKeyList s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale
-      BLOCK_M S idx.1 idx.2.1).foldl osStep (0, 0, 0)
-  st.2.2 / st.2.1
-
-/-- The kernel's per-key `(score, value)` pair for output `(i, d)` at global key `j`
-over `S` keys, with the genuine `-1e8` sentinel kept (matching `ctxExactKeyList`). -/
-noncomputable def ctxKV
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) (j : Fin S) : ℝ × ℝ :=
-  (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
-      sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
-    else (0.0 - 10e7 : ℝ),
-    ctxVTile s V S (j, d, PUnit.unit))
 
 /-- One ⊥-seeded online-softmax step: running max in `WithBot ℝ` (seeded `⊥`), so
 `α = realExp2(m ⊖ m')` is `0` on the first block — faithful to the kernel's
@@ -833,16 +711,6 @@ def ctxPreLoop (Q : RegionName) (B_Start_Loc B_Seqlen b_prompt_cache_len : Regio
           (Op.ref .nat [] "prompt_cache_len"))
         (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
           (Op.ref .nat [] "prompt_cache_len"))) ]
-
-/-- The lowered Python-shape context body `take 19` is exactly `ctxPreLoop`. -/
-theorem ctxPreLoop_take (Q K V Out : RegionName)
-    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) (sm_scale : ℝ) :
-    (context_attn_fwd_kernel_int8kv_surface Q K V sm_scale Out
-        B_Start_Loc B_Seqlen b_prompt_cache_len
-        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
-        2048 128 1 1 16 128 128 128).toAlgKernel.body.take 19
-      = ctxPreLoop Q B_Start_Loc B_Seqlen b_prompt_cache_len := by
-  rfl
 
 /-- **q/store-mask eval** (`(offs_m[:, None] < cur_batch_seq_len)` broadcast over
 the `[128, 128]` tile via `remap`): `mask[r, c] = (offs_m_r < seqLen)`. The row
@@ -2189,30 +2057,6 @@ noncomputable def contextAttnExactFoldMG
       stride_vb stride_vs stride_vh stride_vd BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val)
   st.2.2 / st.2.1
 
-/-- **Pin bridge (tiles).** At `H = 16`, `BLOCK_DMODEL = 128` and the test strides,
-the general key/value/query tiles coincide with the pinned ones. -/
-theorem ctxKVMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxKVMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 8388608 128 262144 1 8388608 128 262144 1 128 BLOCK_M S bel i d.val
-      = ctxKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale BLOCK_M S bel i d := by
-  unfold ctxKVMG ctxKVM ctxKTileMG ctxVTileMG ctxQTileMG ctxKTileG ctxVTileG ctxQTileG
-    ctxKTileM ctxVTileM ctxQTileM ctxKTile ctxVTile ctxQTile
-  funext j
-  simp only [Nat.mul_one]
-
-/-- **Pin bridge (fold).** The general exact fold instantiates to the pinned
-`contextAttnExactFoldM` at `H = 16`, `BLOCK_DMODEL = 128`, test strides. -/
-theorem contextAttnExactFoldMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnExactFoldMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 8388608 128 262144 1 8388608 128 262144 1 128 BLOCK_M S bel idx
-      = contextAttnExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale BLOCK_M S bel idx := by
-  unfold contextAttnExactFoldMG contextAttnExactFoldM
-  rw [ctxKVMG_pin]
-
 /-- The kernel-loaded per-key `(score, value)` carried by the loop registers at
 output lane `(i, d)`, over `S` keys with `block_end_loc = bel`. This is `ctxKVM`
 specialized to the Python shape (`BLOCK_M = 128`); the invariant tracks the
@@ -2319,18 +2163,6 @@ noncomputable def ctxInvariantG
   (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
       some (gStateBot S (c * BLOCK_N) (g idx.1 idx.2.1.val)).2.2⟩) ∧
   (c * BLOCK_N ≤ S)
-
-/-- **Pin bridge (per-key data).** At `H=16`, `BLOCK_DMODEL=128`, test strides, the
-general `ctxGG` coincides with the pinned `ctxG` (`BLOCK_M=128`). -/
-theorem ctxGG_pin
-    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (S bel : Nat) (i d : Fin 128) :
-    ctxGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 8388608 128 262144 1 8388608 128 262144 1 128 128 S bel i d.val
-      = ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale S bel i d := by
-  unfold ctxGG ctxG
-  funext j
-  rw [ctxKVMG_pin]
 
 /-! ### generic tile-arithmetic bridges (kernel-agnostic; reused in `ctx_attn_step`) -/
 
@@ -3938,18 +3770,6 @@ noncomputable def ctxG64
     (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
     (sm_scale : ℝ) (S bel : Nat) (i : Fin 64) (d : Fin 128) : Fin S → ℝ × ℝ :=
   ctxKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale 64 S bel i d
-
-/-- **Pin bridge (per-key data, Tesla).** At `H=16`, `BLOCK_DMODEL=128`, test
-strides, `BLOCK_M=64`, the general `ctxGG` coincides with the pinned `ctxG64`. -/
-theorem ctxGG_pin64
-    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (S bel : Nat) (i : Fin 64) (d : Fin 128) :
-    ctxGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale
-        16 2048 128 1 8388608 128 262144 1 8388608 128 262144 1 128 64 S bel i d.val
-      = ctxG64 s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale S bel i d := by
-  unfold ctxGG ctxG64
-  funext j
-  rw [ctxKVMG_pin]
 
 /-- **Streaming-loop invariant** for the Tesla-shape (`BLOCK_M = 64`) context kernel.
 After `c` blocks (loop counter `c·128`, `BLOCK_N = 128`), the `m_i`/`l_i`/`acc`

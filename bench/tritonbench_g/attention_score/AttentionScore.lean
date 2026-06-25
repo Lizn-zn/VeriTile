@@ -2812,33 +2812,6 @@ theorem attention_score_case1_genuine_compute_correct
   simp only [ComputeCorrect.OutputReadable.read_real]
   rw [h2, if_pos hActive]
 
-/-- **Public Python case-1 output summary (genuine closed form).** The full
-attention-score surface lowers to the algorithm layer, and the kernel writes the
-genuine closed-form score `case1OutClosedForm` (the masked-`exp2` query-row column
-sum over the input buffers `Q`/`K`/`M`) to every active output column. This
-replaces the former self-referential summary: `expected` is now an honest closed
-form, NOT the kernel's own executed value. -/
-theorem attention_score_python_case1_output_summary
-    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_score_kernel Q K M Out
-      32768 8192 64 1 32768 8192 64 1 512 128 1
-      2 4 4 128 128 128 0 64 64 64 64 sm_scale
-      Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_score_kernel Q K M Out
-        32768 8192 64 1 32768 8192 64 1 512 128 1
-        2 4 4 128 128 128 0 64 64 64 64 sm_scale
-        Bool.true Bool.false Bool.true Bool.true rfl)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => case1OutActive s i)
-        (fun i => (Out, case1OutStoreOffset s i)))
-      (expected := fun i : Fin 64 =>
-        case1OutClosedForm s Q K M sm_scale i) := by
-  refine ⟨attention_score_python_case1_surface_toAlgorithm_supported Q K M Out sm_scale, ?_⟩
-  exact attention_score_case1_genuine_compute_correct Q K M Out sm_scale s hundef
-
 /-! ### General elaborated-body decomposition checks (`rfl`)
 
 The general case-1 elaborated body splits exactly as the pinned one: 16 preLoop

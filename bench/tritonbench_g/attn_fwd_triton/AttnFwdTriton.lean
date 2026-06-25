@@ -382,78 +382,6 @@ This routes to **base-2** (NOT FlashAttention1's natural-exp
 open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
   causalKeep)
 
-/-- Base address of the `(off_z, off_h)` plane for the Python test shape
-(`stride_qz = 65536`, `stride_qh = 16384`, `H = 4`). Q, K, V, Out share it
-(`stride_qm = 128`, `stride_qk = 1`). -/
-def baseOffsetAFT (s : BlockState) : Nat :=
-  s.pids 1 / 4 * 65536 + s.pids 1 % 4 * 16384
-
-/-- Query tile: row `i` = global query `start_m·128 + i`, head lane `e`
-(`stride_qm = 128`, `stride_qk = 1`). -/
-noncomputable def qTileAFT (s : BlockState) (Q : RegionName) :
-    TileIndex [128, 128] → ℝ :=
-  fun (i, e, _) => s.readMem Q (baseOffsetAFT s + (s.pids 0 * 128 + i.val) * 128 + e.val)
-
-/-- **Masked query tile** (HEAD_ACTIVE faithful): the kernel loads `q` through the
-`(offs_m < 128) & (arange < 96)` mask, so the genuine score only sees head lanes
-`e < 96` (and only rows `qStart + i < 128`). This is the q the kernel's `tl.dot`
-actually contracts — `qMaskedAFT i e = if (qStart + i < 128 ∧ e < 96) then
-qTileAFT i e else 0`. The closed-form spec is stated over this masked q (faithful
-to `qLoadedAFT`), so the score `Σ_{e<128} qMasked·k = Σ_{e<96} qTile·k`. -/
-noncomputable def qMaskedAFT (s : BlockState) (Q : RegionName) :
-    TileIndex [128, 128] → ℝ :=
-  fun (i, e, _) =>
-    if (s.pids 0 * 128 + i.val < 128 ∧ e.val < 96) then
-      s.readMem Q (baseOffsetAFT s + (s.pids 0 * 128 + i.val) * 128 + e.val)
-    else 0
-
-/-- Key tile: row `j` (global key), head lane `e`. -/
-noncomputable def kTileAFT (s : BlockState) (K : RegionName) :
-    TileIndex [128, 128] → ℝ :=
-  fun (j, e, _) => s.readMem K (baseOffsetAFT s + j.val * 128 + e.val)
-
-/-- Global query row for output tile-row `i` in this program. -/
-def qStartAFT (s : BlockState) : Nat := s.pids 0 * 128
-
-/-- The `(score, value)` pair the kernel streams for output `(i, d)` at global
-key `j`: score `keyScale j · (q row i · k row j)`, value `V[j, d]`. The per-key
-score scale `keyScale j` carries the scalar `q_scale · k_scale` quantization. -/
-noncomputable def aftKV
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (i : Fin 128) (d : Fin 128) (j : Fin 128) : ℝ × ℝ :=
-  (keyScale j * Finset.univ.sum (fun e : Fin 128 => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)),
-   vT (j, d, PUnit.unit))
-
-/-- Causal per-row key list over the window `[0, hi)`: keys `j < hi` with
-`j ≤ qStart + i` (the `offs_m ≥ start_n + offs_n` causal mask), in index order.
-After `c` blocks `hi = c · 64`, this is the prefix the kernel has streamed. -/
-noncomputable def aftKeysUpto
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : List (ℝ × ℝ) :=
-  (List.finRange 128).filterMap (fun j : Fin 128 =>
-    if j.val < hi ∧ j.val ≤ qStart + i.val then
-      some (aftKV qT kT vT keyScale i d j)
-    else none)
-
-/-- Block-`c` per-row key list: keys with `c·64 ≤ j < (c+1)·64` passing the
-causal filter — the keys the loop's `c`-th iteration streams. -/
-noncomputable def aftBlock
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart c : Nat) (i : Fin 128) (d : Fin 128) : List (ℝ × ℝ) :=
-  (List.finRange 128).filterMap (fun j : Fin 128 =>
-    if c * 64 ≤ j.val ∧ j.val < (c + 1) * 64 ∧ j.val ≤ qStart + i.val then
-      some (aftKV qT kT vT keyScale i d j)
-    else none)
-
-/-- **⊥-seeded running max** of the streamed key prefix `[0, hi)`: the value the
-kernel carries in `m_i` (`tl.zeros − inf` seeds at `⊥`). The `WithBot ⊔`-fold of
-the coerced per-key scores; `⊥` on the empty / `hi = 0` window. -/
-noncomputable def aftRunningMax
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ :=
-  ((aftKeysUpto qT kT vT keyScale qStart hi i d).map
-    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
-
 /-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
 `WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block —
 faithful to the kernel's `m_i` register (`tl.zeros − inf`) and `l_i`/`acc`
@@ -465,14 +393,6 @@ noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) :
   let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
   let p := pow2 (s - m'.unbotD 0)
   (m', l * α + p, acc * α + p * v)
-
-/-- `aftStateBot` — the ⊥-seeded running `(max, denom, acc)` after streaming the
-window `[0, hi)`. Faithful to the kernel's register recurrence (`m_i` seeded `⊥`,
-`l_i`/`acc` seeded `0`). -/
-noncomputable def aftStateBot
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
-  (aftKeysUpto qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 0, 0)
 
 /-- The running `max` component of an `osStepBot` fold is the `WithBot ⊔`-fold. -/
 theorem aftStateBot_fst
@@ -634,20 +554,6 @@ theorem osStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (�
     · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
     · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
 
-/-! ## StateBot1 / StateBotK — kernel `l_i = 1` seed reconciliation
-
-The kernel seeds `l_i = 1` (`tl.zeros + 1.0`) at preLoop (window `[0,0)`). On a
-fully-masked block the kernel still *executes* the block (the masked `α =
-exp2(⊥ − ⊥) = 0` annihilates the seed-`1`), so the faithful running state is the
-seed-`1` `(⊥,1,0)` at window `0` and the seed-`0` ⊥-state for every later window.
-`aftStateBotK` carries this; `aftStateBot1` (a pure `(⊥,1,0)`-seed fold) bridges. -/
-
-/-- ⊥-seeded online-softmax fold from the kernel's `l_i = 1` seed. -/
-noncomputable def aftStateBot1
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
-  (aftKeysUpto qT kT vT keyScale qStart hi i d).foldl osStepBot (⊥, 1, 0)
-
 /-- From a `⊥` running-max seed, the first `osStepBot` step wipes the `l`/`acc`
 seed (`α = exp2(⊥ − s) = 0`), so a nonempty fold is seed-independent. -/
 theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
@@ -664,14 +570,6 @@ theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
     have hub : (((sv : ℝ) : WithBot ℝ)).unbotD 0 = sv := by rfl
     rw [hα, hub]; simp
   simp only [List.foldl_cons, hstep]
-
-/-- **Faithful kernel running state** (`l_i = 1` seed): `(⊥,1,0)` at window `0`,
-the seed-`0` ⊥-state for later windows. -/
-noncomputable def aftStateBotK
-    (qT kT vT : TileIndex [128, 128] → ℝ) (keyScale : Fin 128 → ℝ)
-    (qStart hi : Nat) (i : Fin 128) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
-  if hi = 0 then (⊥, 1, 0)
-  else aftStateBot qT kT vT keyScale qStart hi i d
 
 end Correct
 
@@ -693,114 +591,6 @@ namespace AftFoundation
 
 open VeriTile.Triton
 
-/-- The 22 lowered loop-body statements (statements 0–21 of the `forRange` body),
-matching the recipe op-eval lemmas `aft_*`. -/
-def aftLoopBody : List Stmt :=
-  [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
-    Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
-    -- 1: k_mask
-    Stmt.assign .bool [128, 64] "k_mask"
-      (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
-        (Op.lt ComparableDType.nat Broadcast.scalarR
-          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n"))
-          (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
-        (Op.expandDim ⟨1, by simp⟩
-          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))),
-    -- 2: k = tl.load(K_ptrs, mask=k_mask)
-    Stmt.assign .real [128, 64] "k"
-      (Op.load .real (.ptr (.ref .ptr [128, 64] "K_ptrs")) (.mask (.ref .bool [128, 64] "k_mask"))),
-    -- 3: k_scale = tl.load(K_scale_ptr)
-    Stmt.assign .real [] "k_scale"
-      (Op.load .real (.ptr (.ref .ptr [] "K_scale_ptr")) .none),
-    -- 4: qk = castFloat(q·k) * q_scale * k_scale
-    Stmt.assign .real [128, 64] "qk"
-      (Op.mul .real Broadcast.scalarR
-        (Op.mul .real Broadcast.scalarR
-          (Op.castFloat FloatDType.real FloatDType.real
-            (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 64] "k")))
-          (Op.ref .real [] "q_scale"))
-        (Op.ref .real [] "k_scale")),
-    -- 5: mask = offs_m[:,None] >= start_n + offs_n[None,:]
-    Stmt.assign .bool [128, 64] "mask"
-      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
-        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
-          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n")))),
-    -- 6: qk = tl.where(mask, qk, -1000000.0)  (unary minus → sub (const 0.0) (const 1e6))
-    Stmt.assign .real [128, 64] "qk"
-      (Op.where (Op.ref .bool [128, 64] "mask")
-        (Op.ref .real [128, 64] "qk")
-        (Op.broadcast (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 1000000.0)) [128, 64])),
-    -- 7: m_ij = maximum(m_i, max(qk,1))
-    Stmt.assign .real [128] "m_ij"
-      (Op.where
-        (Op.gt .real (Broadcast.consSame Broadcast.nil)
-          (Op.ref .real [128] "m_i")
-          (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false
-            (Op.ref .real [128, 64] "qk")))
-        (Op.ref .real [128] "m_i")
-        (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false
-          (Op.ref .real [128, 64] "qk"))),
-    -- 8: qk = qk - m_ij[:, None]
-    Stmt.assign .real [128, 64] "qk"
-      (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [128, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))),
-    -- 9: p = exp2(qk)
-    Stmt.assign .real [128, 64] "p" (Op.exp2 (Op.ref .real [128, 64] "qk")),
-    -- 10: p = tl.where(mask, p, 0)
-    Stmt.assign .real [128, 64] "p"
-      (Op.where (Op.ref .bool [128, 64] "mask")
-        (Op.ref .real [128, 64] "p") (Op.broadcast (Op.const 0.0) [128, 64])),
-    -- 11: l_ij = sum(p, 1)
-    Stmt.assign .real [128] "l_ij"
-      (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "p")),
-    -- 12: alpha = exp2(m_i - m_ij)
-    Stmt.assign .real [128] "alpha"
-      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
-        (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij"))),
-    -- 13: l_i = l_i * alpha + l_ij
-    Stmt.assign .real [128] "l_i"
-      (Op.add .real (Broadcast.consSame Broadcast.nil)
-        (Op.mul .real (Broadcast.consSame Broadcast.nil)
-          (Op.ref .real [128] "l_i") (Op.ref .real [128] "alpha"))
-        (Op.ref .real [128] "l_ij")),
-    -- 14: acc = acc * alpha[:, None]
-    Stmt.assign .real [128, 128] "acc"
-      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [128, 128] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "alpha"))),
-    -- 15: v = tl.load(V_ptrs, mask=...)  (v is [64,128]: rows=keys, cols=head)
-    Stmt.assign .real [64, 128] "v"
-      (Op.load .real (.ptr (.ref .ptr [64, 128] "V_ptrs"))
-        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.lt ComparableDType.nat Broadcast.scalarR
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n"))
-            (Op.sub .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_n")))
-          (Op.expandDim ⟨0, by simp⟩
-            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))),
-    -- 16: p = p.to(fp16)
-    Stmt.assign .fp16 [128, 64] "p"
-      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [128, 64] "p")),
-    -- 17: acc += dot(p.to(real), v)
-    Stmt.assign .real [128, 128] "acc"
-      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [128, 128] "acc")
-        (Op.dot (batch := [])
-          (Op.castFloat FloatDType.fp16 FloatDType.real (Op.ref .fp16 [128, 64] "p"))
-          (Op.ref .real [64, 128] "v"))),
-    -- 18: m_i = m_ij
-    Stmt.assign .real [128] "m_i" (Op.ref .real [128] "m_ij"),
-    -- 19: K_ptrs += BLOCK_N * HEAD_DIM
-    Stmt.assign .ptr [128, 64] "K_ptrs"
-      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [128, 64] "K_ptrs")
-        (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.constNat 128))),
-    -- 20: K_scale_ptr += 1
-    Stmt.assign .ptr [] "K_scale_ptr"
-      (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "K_scale_ptr") (Op.constNat 1)),
-    -- 21: V_ptrs += BLOCK_N * HEAD_DIM
-    Stmt.assign .ptr [64, 128] "V_ptrs"
-      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [64, 128] "V_ptrs")
-        (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.constNat 128))) ]
-
 end AftFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
@@ -811,96 +601,11 @@ namespace AftFoundation
 
 open VeriTile.Triton
 
-/-- The 22 lowered preLoop statements of the Python-shape AFT kernel (`= body.take 22`). -/
-def aftPreLoop (Q K V QScale KScale Out : RegionName) : List Stmt :=
-  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
-    Stmt.assign .nat [] "off_hz" (Op.programId 1),
-    Stmt.assign .nat [] "off_z"
-      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)),
-    Stmt.assign .nat [] "off_h"
-      (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)),
-    Stmt.assign .nat [] "qvk_offset"
-      (Op.add .nat Broadcast.nil
-        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat 65536))
-        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 16384))),
-    Stmt.assign .nat [] "vk_offset"
-      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat 128)),
-    Stmt.assign .nat [] "q_scale_offset"
-      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
-        (Op.div .nat Broadcast.nil
-          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat 128) (Op.constNat 128)) (Op.constNat 1))
-          (Op.constNat 128))),
-    Stmt.assign .nat [] "k_scale_offset"
-      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
-        (Op.div .nat Broadcast.nil
-          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat 128) (Op.constNat 64)) (Op.constNat 1))
-          (Op.constNat 64))),
-    Stmt.assign .nat [128] "offs_m"
-      (Op.add .nat Broadcast.scalarL
-        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
-    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
-    Stmt.assign .nat [128] "offs_k" (Op.arange 128),
-    Stmt.assign .ptr [128, 128] "Q_ptrs"
-      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
-            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128)))
-          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
-    Stmt.assign .ptr [] "Q_scale_ptr"
-      (Op.ptrAdd Broadcast.nil (Op.ptrBase QScale)
-        (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))),
-    Stmt.assign .ptr [128, 64] "K_ptrs"
-      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_k")))
-          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "offs_n")) (Op.constNat 128)))),
-    Stmt.assign .ptr [] "K_scale_ptr"
-      (Op.ptrAdd Broadcast.nil (Op.ptrBase KScale) (Op.ref .nat [] "k_scale_offset")),
-    Stmt.assign .ptr [64, 128] "V_ptrs"
-      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
-            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_n")) (Op.constNat 128)))
-          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
-    Stmt.assign .ptr [128, 128] "O_block_ptr"
-      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
-            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128)))
-          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_k")) (Op.constNat 1)))),
-    Stmt.assign .real [128] "m_i"
-      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
-    Stmt.assign .real [128] "l_i"
-      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) (Op.const 1.0)),
-    Stmt.assign .real [128, 128] "acc" (Op.full [128, 128] (Op.const 0)),
-    Stmt.assign .real [128, 128] "q"
-      (Op.load .real (.ptr (.ref .ptr [128, 128] "Q_ptrs"))
-        (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.lt ComparableDType.nat Broadcast.scalarR
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")) (Op.constNat 128))
-          (Op.expandDim ⟨0, by simp⟩
-            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange 128) (Op.constNat 96)))))),
-    Stmt.assign .real [] "q_scale"
-      (Op.load .real (.ptr (.ref .ptr [] "Q_scale_ptr")) .none) ]
-
 end AftFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
 open VeriTile.Triton
-
-/-- The loaded (masked) query tile the preLoop binds to `q`: lane `(i, e)` reads
-`Q[baseOffset + (qStart + i)·128 + e]` when `qStart + i < 128 ∧ e < 96`, else the
-zero `undef` cell. Carried by the invariant so the step lemma threads it through
-the per-block `q·k` dot. -/
-noncomputable def qLoadedAFT (s0 : BlockState) (Q : RegionName) :
-    Tile .real [128, 128] :=
-  ⟨fun idx : TileIndex [128, 128] =>
-    if (ComparableDType.nat.lt (s0.pids 0 * 128 + idx.1.val) 128
-        && ComparableDType.nat.lt idx.2.1.val 96) then
-      some (s0.readMem Q (baseOffsetAFT s0 + (s0.pids 0 * 128 + idx.1.val) * 128 + idx.2.1.val))
-    else some (0 : ℝ)⟩
 
 /-- Lift a base-state register readback through a `setReg` to a different name —
 used to thread the `s1` head readbacks (`offs_*`/`qvk_offset`) through the
@@ -911,23 +616,6 @@ theorem regs_setReg_chain {d d' : TileDType} {sh sh' : TileShape}
     (hne : n ≠ n') (h : s.regs d sh n = some v) :
     (s.setReg n' d' sh' w).regs d sh n = some v := by
   simp only [BlockState.setReg_ne_name, ne_eq, hne, not_false_eq_true, h]
-
-/-- The per-key causal score `keyScale j · (qMasked row i · k row j)` — `aftKV`'s
-`.1` for the masked-q tiles. The program's per-key `keyScale` carries `q_scale`
-times the per-block `k_scale` (`keyScale j = q_scale · k_scale[j/64]`), so it
-varies across key blocks. -/
-noncomputable def aftBlockScore (s0 : BlockState) (Q K : RegionName) (keyScale : Fin 128 → ℝ)
-    (i : Fin 128) (j : Fin 128) : ℝ :=
-  keyScale j * Finset.univ.sum (fun e : Fin 128 =>
-    qMaskedAFT s0 Q (i, e, PUnit.unit) * kTileAFT s0 K (j, e, PUnit.unit))
-
-/-- **Score bound precondition.** The kernel's `-1e6` mask sentinel never raises a
-row's running max above the genuine `aftRunningMax`, provided every kept score is
-`≥ -1e6` (`= 0 - 1000000`). With the causal mask (key `0` always kept) this makes
-the floor inert from block `0` on. -/
-def aftScoreBound (s0 : BlockState) (Q K : RegionName) (keyScale : Fin 128 → ℝ) : Prop :=
-  ∀ (i j : Fin 128), j.val ≤ qStartAFT s0 + i.val →
-    (0.0 : ℝ) - (1000000.0 : ℝ) ≤ aftBlockScore s0 Q K keyScale i j
 
 /-! ## FINAL Part 4 (top) — genuine closed-form exec correctness + summary -/
 
@@ -1084,25 +772,6 @@ theorem aftg_load_kscale_eval
       = some ⟨fun _ : TileIndex [] =>
           some (s.readMem (ptr.data PUnit.unit).1 (ptr.data PUnit.unit).2)⟩ := by
   simp only [evalOp, evalOp_ref, hptr, Option.bind]
-  refine congrArg some ?_
-  ext i
-  simp only [BlockState.readMemValue_real, if_true]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **L16: `v = tl.load(V_ptrs, mask=...)`** — elementwise masked pointer load,
-same shape as L3 with the V boundary/head-active mask supplied as a register. -/
-theorem aftg_load_v_eval
-    (s : BlockState) (BN BD : Nat) (name maskName : RegName)
-    (ptrs : Tile .ptr [BN, BD]) (masks : Tile .bool [BN, BD])
-    (hptr : s.regs .ptr [BN, BD] name = some ptrs)
-    (hmask : s.regs .bool [BN, BD] maskName = some masks) :
-    evalOp (.load .real (.ptr (.ref .ptr [BN, BD] name))
-        (.mask (.ref .bool [BN, BD] maskName))) s
-      = some ⟨fun i : TileIndex [BN, BD] =>
-          if masks.data i then some (s.readMem (ptrs.data i).1 (ptrs.data i).2)
-          else some (s.undef (ptrs.data i).1 (ptrs.data i).2)⟩ := by
-  simp only [evalOp, evalOp_ref, hptr, hmask, Option.bind]
   refine congrArg some ?_
   ext i
   simp only [BlockState.readMemValue_real, if_true]
