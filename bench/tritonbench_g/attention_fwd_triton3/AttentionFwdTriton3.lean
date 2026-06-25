@@ -50,39 +50,36 @@ attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general   ← TOP THEO
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
 the identity post-erasure; `@triton.autotune`/`@triton.heuristics` and
 `num_warps`/`num_stages` are not modeled. **All four** main summaries are
-dimension-general (`attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general`,
-symbolic shape/strides); the Python test shape
-(`B=2, H=4, N_CTX=128, HEAD_DIM=64, BLOCK_M=BLOCK_N=64`,
-`sm_scale = 1/8`, contiguous strides, 64 active lanes) is the special case
-(recovered by the pinned `..._python_case{1,2,3,4}_output_summary` corollaries, each
-stated against the clean test-shape specs `attentionFwdTriton3Case{1,2,3,4}{Out,M}Spec`).
-The case-specific `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked
-into the launch arguments.
+**dimension-general** (`attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general`,
+fully symbolic shape/strides — there is **no** test-shape-pinned variant; the Python
+launch shape `B=2, H=4, N_CTX=128, HEAD_DIM=64, BLOCK_M=BLOCK_N=64`, `sm_scale = 1/8`
+is just one instantiation, obtained by supplying those literals + discharging the
+side-conditions). The case-specific `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT`
+flags are passed as launch arguments.
 
 ## Genuine closed forms (cases 1/2/3)
 
 Cases 1, 2 and 3 (`INIT=True`) are stated against **genuine faithful closed
 forms**, not self-referential executed-output carriers:
 
-* **Case 3** (no window): `attentionFwdTriton3Case3OutSpec` = plain base-2
+* **Case 3** (no window): `attentionFwdTriton3Case3OutSpecG` = plain base-2
   per-key-scale softmax.
-* **Case 1** (sliding window): `attentionFwdTriton3Case1OutSpec` = base-2
-  softmax masked by `natSlidingWindowKeep` — the *faithful* nat-truncated
-  distance predicate the kernel actually computes (`dist = (i−jL)+start_m·64 −
+* **Case 1** (sliding window): `attentionFwdTriton3Case1OutSpecG` = base-2
+  softmax masked by `natSlidingWindowKeepG` — the *faithful* nat-truncated
+  distance predicate the kernel actually computes (`dist = (i−jL)+start_m·BM −
   start_n` with **natural** subtraction; the `dist ≥ 0` clause is vacuous on ℕ).
-* **Case 2** (complement window): `...Case2OutSpec` masked by
-  `natComplementSlidingWindowKeep` (`dist ≥ 64`).
+* **Case 2** (complement window): `...Case2OutSpecG` masked by
+  `natComplementSlidingWindowKeepG` (`dist ≥ window_size`).
 
-The kernel mask reconciliations `aft3MaskCell{1,2} ↔ natSliding…Keep` are TRUE by
-construction (`aft3MaskCell{1,2}_eq_keep`). At the test shape some windows are
-**fully masked** (case 1 `start_m=1` block 0; case 2 `start_m=0` every row); on an
-all-masked block the kernel registers go to `⊥` (`m_i=⊥, α=exp2(⊥−⊥)=0, l_i=0,
-acc=0`). The `⊥`-carrying running state `aft3StateBotK` (seed `(⊥,1,0)` at window
-`0`, then the seed-`0` `aft3StateBot`) tracks this faithfully through the loop
-invariant `attnInvariantKG`, and the empty-window output is reconciled by `0/0 = 0`
-(`aft3StateBotKG_full_eq_streaming`). The `M` writeback is the raw finalize
-`attentionFwdTriton3KMSpec = (m_i + log2 l_i).unbotD 0` (well-defined at empty
-rows: `(⊥ + log2 0).unbotD 0 = 0`).
+The kernel mask reconciliations `aft3MaskCell{1,2}G ↔ natSliding…KeepG` are TRUE by
+construction (`aft3MaskCell{1,2}G_eq_keep`). For some `start_m` a window block is
+**fully masked**; on an all-masked block the kernel registers go to `⊥` (`m_i=⊥,
+α=exp2(⊥−⊥)=0, l_i=0, acc=0`). The `⊥`-carrying running state `aft3StateBotKG` (seed
+`(⊥,1,0)` at window `0`, then the seed-`0` `aft3StateBotG`) tracks this faithfully
+through the loop invariant `attnInvariantKG`, and the empty-window output is
+reconciled by `0/0 = 0` (`aft3StateBotKG_full_eq_streaming`). The `M` writeback is
+the raw finalize `attentionFwdTriton3KMSpecG = (m_i + log2 l_i).unbotD 0`
+(well-defined at empty rows: `(⊥ + log2 0).unbotD 0 = 0`).
 
 These three summaries take `M ≠ Out` (so the `O` store does not clobber the `M`
 row) and clean input (`undef = 0`), the genuine preconditions of single-program
@@ -376,28 +373,6 @@ def natComplementSlidingWindowKeep (SM : Nat) (i : Fin 64) (j : Fin 128) : Prop 
 instance natComplementSlidingWindowKeepDecidable (SM : Nat) (i : Fin 64) (j : Fin 128) :
     Decidable (natComplementSlidingWindowKeep SM i j) := by
   unfold natComplementSlidingWindowKeep; infer_instance
-
-/-- **Genuine closed form, case 1** (sliding window, non-complement): the
-normalized `END` output is predicate-masked base-2 attention with the *faithful*
-nat-truncated `natSlidingWindowKeep` mask (the exact condition the kernel computes,
-not the signed-ℤ `slidingWindowKeep`). -/
-noncomputable def attentionFwdTriton3Case1OutSpec
-    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
-  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-    keyScale3 (fun i j => natSlidingWindowKeep (s.pids 0) i j) idx
-
-/-- **Genuine closed form, case 2** (complement sliding window) — faithful
-nat-truncated `natComplementSlidingWindowKeep` mask. -/
-noncomputable def attentionFwdTriton3Case2OutSpec
-    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
-  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-    keyScale3 (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) idx
-
-/-- **Genuine closed form, case 3** (no sliding window) — plain base-2 softmax. -/
-noncomputable def attentionFwdTriton3Case3OutSpec
-    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
-  attentionRealBase2PerKeyScalePred (qTile3 s Q) (kTile3 s K) (vTile3 s V)
-    keyScale3 (fun i j => noWindowKeep i j) idx
 
 /-- Case 3's masked closed form is the plain unmasked base-2 per-key-scale
 softmax (`attentionRealBase2PerKeyScale`). -/
@@ -1967,16 +1942,6 @@ false) is now genuinely reachable, so — unlike case 3 — no `ne_bot` assumpti
 made: the ⊥-carry (`m_ij = ⊥`, `α = 0`) is handled by the seed-cancellation in
 `aft3OsStepBot`. -/
 
-/-- **The masked `q·k` score cell (cases 1/2).** On a kept lane the cell is the
-score `some (sc · Σ q·k)`; on a masked lane it is `⊥`. -/
-noncomputable def aft3StateBotK
-    (qT : TileIndex [64, 64] → ℝ) (kT vT : TileIndex [128, 64] → ℝ)
-    (keyScale : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i : Fin 64) (d : Fin 64) :
-    WithBot ℝ × ℝ × ℝ :=
-  if hi = 0 then (⊥, 1, 0)
-  else aft3StateBot qT kT vT keyScale keep hi i d
-
 /-- A `foldl` of `writeMem`s into region `R'` preserves `readMem R o` whenever the
 read region `R` differs from the written region `R'`. -/
 theorem aft3_foldl_writeMem_readMem_other_region {α : Type} (R R' : RegionName)
@@ -1990,52 +1955,6 @@ theorem aft3_foldl_writeMem_readMem_other_region {α : Type} (R R' : RegionName)
     rw [List.foldl_cons, ih]
     exact BlockState.writeMem_readMem_of_ne_region s R' (offsetFn hd) (valueFn hd) R o hRR'
 
-/-- Injectivity of the case-3 `O` block-pointer store addresses (Python shape). -/
-theorem aft3_O_blockptr_offset_injective (base p0 : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [64, 64] => base + (p0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp only at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb; subst db; rfl
-
-/-- Injectivity of the case-3 `M` row store addresses (Python shape). -/
-theorem aft3_M_ptr_offset_injective (p0 p1 : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [64] => p1 * 128 + (p0 * 64 + idx.1.val)) := by
-  rintro ⟨⟨a, ha⟩, _⟩ ⟨⟨b, hb⟩, _⟩ h
-  simp only at h
-  have : a = b := by omega
-  subst b; rfl
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- Genuine `M`-row spec (cases 1/2): the raw `(M ⊔ … + log2 l).unbotD` finalize
-(over the faithful `keep` predicate), well-defined at empty-window rows too. -/
-noncomputable def attentionFwdTriton3KMSpec
-    (s : BlockState) (Q K V : RegionName) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (i : Fin 64) : ℝ :=
-  (WithBot.realAdd
-      (aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3 keep 128 i ⟨0, by norm_num⟩)
-      (WithBot.realLog2 (((aft3StateBotK (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-        keep 128 i ⟨0, by norm_num⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Case-3 `M`-row spec (no sliding window).** The raw finalize value the `M`
-writeback realizes: the running max plus `log2(l_i)`, over the `noWindowKeep`
-(every-key) predicate, evaluated at each row of the query tile. -/
-noncomputable def attentionFwdTriton3Case3MSpec
-    (s : BlockState) (Q K V : RegionName) (i : Fin 64) : ℝ :=
-  (aft3RunningMax (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-      (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).unbotD 0
-    + Real.log
-      ((aft3StateBot1 (qTile3 s Q) (kTile3 s K) (vTile3 s V) keyScale3
-          (fun i j => noWindowKeep i j) 128 i ⟨0, by norm_num⟩).2.1) / Real.log 2
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
 /-- General query tile: query row `i`, head lane `e`, at
 `base + (pid0·BM + i)·sqm + e·sqk`. -/
 noncomputable def qTile3G (s : BlockState) (Q : RegionName)
@@ -7876,404 +7795,6 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
     simp only [hlRow i]
     show sF.readMem M _ = _
     exact hM i
-
-
-/-! ## Test-shape genuine output summaries (cases 1/2/3) as corollaries of the
-dimension-general theorems.
-
-Each pinned test-shape summary is now an instantiation of the corresponding
-`…_output_summary_general` theorem at the Python test-shape concrete dimensions
-(`BM = ND = BN = 64`, `NKV_CTX = N_CTX = ROUND_CTX = 128`, `Z = 2`, `H = H_KV = 4`,
-all strides as in the surface call, `sm_scale = 1/8`), bridged through the
-test-shape ⟷ general tile/spec equalities (`qTile3 = qTile3G …` etc., immediate by
-`Nat.mul_one`; the general running-max / state folds are structurally identical to
-the test-shape ones once the tiles, scale and keep predicates coincide). -/
-
-/-- Test-shape ⟷ general query-tile bridge. -/
-private theorem aft3_qTile3_eq_G (s : BlockState) (Q : RegionName) :
-    qTile3 s Q = qTile3G s Q (baseOffset3 s) 64 64 64 1 := by
-  funext idx; obtain ⟨i, e, u⟩ := idx; simp [qTile3, qTile3G, Nat.mul_one]
-
-/-- Test-shape ⟷ general key-tile bridge. -/
-private theorem aft3_kTile3_eq_G (s : BlockState) (K : RegionName) :
-    kTile3 s K = kTile3G s K (baseOffset3 s) 128 64 64 1 := by
-  funext idx; obtain ⟨j, e, u⟩ := idx; simp [kTile3, kTile3G, Nat.mul_one]
-
-/-- Test-shape ⟷ general value-tile bridge. -/
-private theorem aft3_vTile3_eq_G (s : BlockState) (V : RegionName) :
-    vTile3 s V = vTile3G s V (baseOffset3 s) 128 64 64 1 := by
-  funext idx; obtain ⟨j, d, u⟩ := idx; simp [vTile3, vTile3G, Nat.mul_one]
-
-/-- Test-shape ⟷ general keyScale bridge (both constant). -/
-private theorem aft3_keyScale3_eq_G :
-    keyScale3 = keyScale3G ((1 / 8 : ℝ) * 1.4426950408889634) 128 := rfl
-
-/-- Test-shape ⟷ general case-1 keep-predicate bridge. -/
-private theorem aft3_keep1_eq_G (s : BlockState) :
-    (fun i j => natSlidingWindowKeep (s.pids 0) i j)
-      = (fun (i : Fin 64) (j : Fin 128) => natSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) := by
-  funext i j; simp [natSlidingWindowKeep, natSlidingWindowKeepG, natDist3, natDist3G]
-
-/-- Test-shape ⟷ general case-2 keep-predicate bridge. -/
-private theorem aft3_keep2_eq_G (s : BlockState) :
-    (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j)
-      = (fun (i : Fin 64) (j : Fin 128) => natComplementSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) := by
-  funext i j; simp [natComplementSlidingWindowKeep, natComplementSlidingWindowKeepG, natDist3, natDist3G]
-
-/-- Case-1 OutSpec bridge: test-shape = general at the test-shape concrete args. -/
-private theorem aft3_case1OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
-    (idx : TileIndex [64, 64]) :
-    attentionFwdTriton3Case1OutSpec s Q K V idx
-      = attentionFwdTriton3Case1OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 idx := by
-  unfold attentionFwdTriton3Case1OutSpec attentionFwdTriton3Case1OutSpecG
-  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
-  simp only [aft3_keep1_eq_G]
-
-/-- Case-2 OutSpec bridge. -/
-private theorem aft3_case2OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
-    (idx : TileIndex [64, 64]) :
-    attentionFwdTriton3Case2OutSpec s Q K V idx
-      = attentionFwdTriton3Case2OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 idx := by
-  unfold attentionFwdTriton3Case2OutSpec attentionFwdTriton3Case2OutSpecG
-  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
-  simp only [aft3_keep2_eq_G]
-
-/-- Case-3 OutSpec bridge. -/
-private theorem aft3_case3OutSpec_eq_G (s : BlockState) (Q K V : RegionName)
-    (idx : TileIndex [64, 64]) :
-    attentionFwdTriton3Case3OutSpec s Q K V idx
-      = attentionFwdTriton3Case3OutSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-          ((1 / 8 : ℝ) * 1.4426950408889634) idx := by
-  unfold attentionFwdTriton3Case3OutSpec attentionFwdTriton3Case3OutSpecG
-  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G]
-
-/-- Test-shape ⟷ general running-max fold bridge (structurally identical). -/
-private theorem aft3_runningMax_eq_G (qT : TileIndex [64, 64] → ℝ)
-    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
-    aft3RunningMax qT kT vT ks keep hi i d = aft3RunningMaxG qT kT vT ks keep hi i d := rfl
-
-/-- Test-shape ⟷ general seed-`1` state fold bridge. -/
-private theorem aft3_stateBot1_eq_G (qT : TileIndex [64, 64] → ℝ)
-    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
-    aft3StateBot1 qT kT vT ks keep hi i d = aft3StateBot1G qT kT vT ks keep hi i d := rfl
-
-/-- Test-shape ⟷ general seed-`K` state fold bridge. -/
-private theorem aft3_stateBotK_eq_G (qT : TileIndex [64, 64] → ℝ)
-    (kT vT : TileIndex [128, 64] → ℝ) (ks : Fin 128 → ℝ) (keep : Fin 64 → Fin 128 → Prop)
-    [∀ i j, Decidable (keep i j)] (hi : Nat) (i d : Fin 64) :
-    aft3StateBotK qT kT vT ks keep hi i d = aft3StateBotKG qT kT vT ks keep hi i d := rfl
-
-/-- Case-1/2 M-spec bridge. -/
-private theorem aft3_KMSpec_eq_G (s : BlockState) (Q K V : RegionName)
-    (keep : Fin 64 → Fin 128 → Prop) [∀ i j, Decidable (keep i j)] (i : Fin 64) :
-    attentionFwdTriton3KMSpec s Q K V keep i
-      = attentionFwdTriton3KMSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-          ((1 / 8 : ℝ) * 1.4426950408889634) keep i (by norm_num) := by
-  unfold attentionFwdTriton3KMSpec attentionFwdTriton3KMSpecG
-  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G,
-    aft3_runningMax_eq_G, aft3_stateBotK_eq_G]
-
-/-- Case-3 M-spec bridge. -/
-private theorem aft3_case3MSpec_eq_G (s : BlockState) (Q K V : RegionName)
-    (i : Fin 64) :
-    attentionFwdTriton3Case3MSpec s Q K V i
-      = attentionFwdTriton3Case3MSpecG s Q K V (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-          ((1 / 8 : ℝ) * 1.4426950408889634) i (by norm_num) := by
-  unfold attentionFwdTriton3Case3MSpec attentionFwdTriton3Case3MSpecG
-  rw [aft3_qTile3_eq_G, aft3_kTile3_eq_G, aft3_vTile3_eq_G, aft3_keyScale3_eq_G,
-    aft3_runningMax_eq_G, aft3_stateBot1_eq_G]
-
-/-- Concrete output-store injectivity at the Python test shape. -/
-private theorem aft3_hinjO_concrete (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [64, 64] =>
-        (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192)
-          + (s.pids 0 * 64 + idx.1.val) * 64 + idx.2.1.val * 1) :=
-  aft3_O_blockptr_offset_injective (s.pids 1 / 4 * 32768 + s.pids 1 % 4 * 8192) (s.pids 0)
-
-/-- Concrete M-row-store injectivity at the Python test shape. -/
-private theorem aft3_hinjM_concrete (s : BlockState) :
-    Function.Injective
-      (fun r : TileIndex [64] => s.pids 1 * 128 + (s.pids 0 * 64 + r.1.val)) :=
-  aft3_M_ptr_offset_injective (s.pids 0) (s.pids 1)
-
-/-- **Case 3 genuine output summary.** The case-3 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine closed forms
-(`attentionFwdTriton3Case3OutSpec` / `attentionFwdTriton3Case3MSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case3_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case3OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3Case3MSpec s Q K V i) := by
-  have H := attention_fwd_triton3_python_case3_output_summary_general
-    Q K V M Out L (1 / 8 : ℝ)
-    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    2 4 4 128 128 128 0 64 64 64 s
-    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
-    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
-  obtain ⟨hAlg, hO, hM⟩ := H
-  refine ⟨hAlg, ?_, ?_⟩
-  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case3OutSpec s Q K V idx)
-        = (fun idx : TileIndex [64, 64] =>
-            attentionFwdTriton3Case3OutSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634) idx) := by
-      funext idx; rw [aft3_case3OutSpec_eq_G]
-    rw [hexp]; exact hO
-  · have hexp : (fun i : Fin 64 => attentionFwdTriton3Case3MSpec s Q K V i)
-        = (fun i : Fin 64 =>
-            attentionFwdTriton3Case3MSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634) i (by norm_num)) := by
-      funext i; rw [aft3_case3MSpec_eq_G]
-    rw [hexp]; exact hM
-
-/-- **Case 1 genuine output summary.** The case-1 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
-(`attentionFwdTriton3Case1OutSpec` / `attentionFwdTriton3KMSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case1_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case1OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i) := by
-  have H := attention_fwd_triton3_python_case1_output_summary_general
-    Q K V M Out L (1 / 8 : ℝ)
-    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    2 4 4 128 128 128 0 64 64 64 64 s
-    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
-    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
-  obtain ⟨hAlg, hO, hM⟩ := H
-  refine ⟨hAlg, ?_, ?_⟩
-  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case1OutSpec s Q K V idx)
-        = (fun idx : TileIndex [64, 64] =>
-            attentionFwdTriton3Case1OutSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634) 64 0 64 idx) := by
-      funext idx; rw [aft3_case1OutSpec_eq_G]
-    rw [hexp]; exact hO
-  · have hexp : (fun i : Fin 64 =>
-          attentionFwdTriton3KMSpec s Q K V (fun i j => natSlidingWindowKeep (s.pids 0) i j) i)
-        = (fun i : Fin 64 =>
-            attentionFwdTriton3KMSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634)
-              (fun i j => natSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) i (by norm_num)) := by
-      funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep1_eq_G]
-    rw [hexp]; exact hM
-
-/-- **Case 2 genuine output summary.** The case-2 surface lowers to the algorithm
-layer, and its `Out`/`M` writebacks realize the genuine faithful closed forms
-(`attentionFwdTriton3Case2OutSpec` / `attentionFwdTriton3KMSpec`) on clean
-(`undef = 0`) input with `M ≠ Out`. -/
-theorem attention_fwd_triton3_python_case2_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case2OutSpec s Q K V idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i) := by
-  have H := attention_fwd_triton3_python_case2_output_summary_general
-    Q K V M Out L (1 / 8 : ℝ)
-    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    2 4 4 128 128 128 0 64 64 64 64 s
-    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
-    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
-  obtain ⟨hAlg, hO, hM⟩ := H
-  refine ⟨hAlg, ?_, ?_⟩
-  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case2OutSpec s Q K V idx)
-        = (fun idx : TileIndex [64, 64] =>
-            attentionFwdTriton3Case2OutSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634) 64 0 64 idx) := by
-      funext idx; rw [aft3_case2OutSpec_eq_G]
-    rw [hexp]; exact hO
-  · have hexp : (fun i : Fin 64 =>
-          attentionFwdTriton3KMSpec s Q K V (fun i j => natComplementSlidingWindowKeep (s.pids 0) i j) i)
-        = (fun i : Fin 64 =>
-            attentionFwdTriton3KMSpecG s Q K V
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1
-              (1 / 8 * 1.4426950408889634)
-              (fun i j => natComplementSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) i (by norm_num)) := by
-      funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep2_eq_G]
-    rw [hexp]; exact hM
-
-/-- **Case-4 test-shape `Out` closed form** (`INIT=False` resume + sliding window),
-the Python launch shape baked in: the general `attentionFwdTriton3Case4OutSpecG` at
-`base=baseOffset3 s, BM=ND=BN=64, N_KV=ROUND=128, sw=[0,64), sm_scale=1/8`,
-contiguous strides. Mirror of `attentionFwdTriton3Case{1,2,3}OutSpec`. -/
-noncomputable def attentionFwdTriton3Case4OutSpec
-    (s : BlockState) (Q K V M Out L : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
-  attentionFwdTriton3Case4OutSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-    ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 (by norm_num) idx
-
-/-- **Case-4 test-shape `M` finalize** (`m + log2 l`), the Python launch shape baked
-into `attentionFwdTriton3Case4MSpecG`. Mirror of `attentionFwdTriton3Case3MSpec`. -/
-noncomputable def attentionFwdTriton3Case4MSpec
-    (s : BlockState) (Q K V M Out L : RegionName) (i : Fin 64) : ℝ :=
-  attentionFwdTriton3Case4MSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-    ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 i (by norm_num)
-
-private theorem aft3_case4OutSpec_eq_G (s : BlockState) (Q K V M Out L : RegionName)
-    (idx : TileIndex [64, 64]) :
-    attentionFwdTriton3Case4OutSpec s Q K V M Out L idx
-      = attentionFwdTriton3Case4OutSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 (by norm_num) idx := rfl
-
-private theorem aft3_case4MSpec_eq_G (s : BlockState) (Q K V M Out L : RegionName)
-    (i : Fin 64) :
-    attentionFwdTriton3Case4MSpec s Q K V M Out L i
-      = attentionFwdTriton3Case4MSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 i (by norm_num) := rfl
-
-set_option maxHeartbeats 4000000 in
-set_option maxRecDepth 8000 in
-/-- **Case 4 genuine output summary** (Python test shape, `INIT=False` resume +
-sliding window). Clean-signature corollary of
-`attention_fwd_triton3_python_case4_output_summary_general` at the launch shape: the
-surface lowers to the algorithm layer, and its `Out`/`M` writebacks realize the
-genuine resume-seeded closed forms (`attentionFwdTriton3Case4{Out,M}Spec`, read over
-INPUT `Q`/`K`/`V` and the resume buffers `M`/`L`/`Out` — **no self-reference**) on
-clean (`undef = 0`) input with `M ≠ Out`. Mirror of
-`attention_fwd_triton3_python_case{1,2,3}_output_summary`. -/
-theorem attention_fwd_triton3_python_case4_output_summary
-    (Q K V M Out L : RegionName) (s : BlockState)
-    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
-      ).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (Out,
-          outOffset s 4 32768 8192 64 1 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        attentionFwdTriton3Case4OutSpec s Q K V M Out L idx) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        32768 8192 64 1
-        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
-      (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
-      (expected := fun i : Fin 64 =>
-        attentionFwdTriton3Case4MSpec s Q K V M Out L i) := by
-  have H := attention_fwd_triton3_python_case4_output_summary_general
-    Q K V M Out L (1 / 8 : ℝ)
-    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    2 4 4 128 128 128 0 64 64 64 64 s
-    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
-    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
-  obtain ⟨hAlg, hO, hM⟩ := H
-  refine ⟨hAlg, ?_, ?_⟩
-  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case4OutSpec s Q K V M Out L idx)
-        = (fun idx : TileIndex [64, 64] =>
-            attentionFwdTriton3Case4OutSpecG s Q K V M Out L
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-              (1 / 8 * 1.4426950408889634) 64 0 64 (by norm_num) idx) := by
-      funext idx; rw [aft3_case4OutSpec_eq_G]
-    rw [hexp]; exact hO
-  · have hexp : (fun i : Fin 64 => attentionFwdTriton3Case4MSpec s Q K V M Out L i)
-        = (fun i : Fin 64 =>
-            attentionFwdTriton3Case4MSpecG s Q K V M Out L
-              (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
-              (1 / 8 * 1.4426950408889634) 64 0 64 i (by norm_num)) := by
-      funext i; rw [aft3_case4MSpec_eq_G]
-    rw [hexp]; exact hM
 
 
 end Correct

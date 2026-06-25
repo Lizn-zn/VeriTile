@@ -1738,9 +1738,3 @@ noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × �
   (m', l * α + p, acc * α + p * v)
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `attention_fwd_triton3_python_case3_output_summary`
-- `attention_fwd_triton3_python_case1_output_summary`
-- `attention_fwd_triton3_python_case2_output_summary`
-- `attention_fwd_triton3_python_case4_output_summary`
