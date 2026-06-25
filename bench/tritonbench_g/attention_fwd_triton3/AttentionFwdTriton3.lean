@@ -3951,6 +3951,19 @@ noncomputable def attentionFwdTriton3Case4OutSpecG
     (aft3Case4Seed s M Out L base BM ND som son ROUND_CTX) NC idx.1 idx.2.1
   st.2.2 / st.2.1
 
+/-- The resume-seeded running max decomposes as `seed.1 ⊔ ⊥-seeded running max` —
+the online-softmax `max` ignores the carried denom/acc, so the seed only adds its
+own max component. The key bridge for the seeded reconciliations. -/
+theorem aft3StateSeededG_fst {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).1
+      = (seed i d).1 ⊔ aft3RunningMaxG qT kT vT keyScale keep hi i d := by
+  unfold aft3StateSeededG aft3RunningMaxG
+  rw [aft3OsStepBot_block_fst]
+
 theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
     (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
@@ -6204,6 +6217,65 @@ theorem aft3_mij_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
   · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
   · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
 
+/-- **Seeded masked `mij` reconciliation (case 4).** Same as `aft3_mij_reg_eq_maskedG`
+but the old/new running max carry the resume-seeded fold `aft3StateSeededG`. -/
+theorem aft3_mij_reg_eq_seededG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mtile rmaxT : Tile .real [BM])
+    (qkT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).1)
+    (hrmax : Tile.reduceMaxDrop (aft3Ax1G BM BN) qkT = some rmaxT) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT).data (i, PUnit.unit)
+      = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).1 := by
+  have hrmaxcell : rmaxT.data (i, PUnit.unit)
+      = ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [aft3_reduceMaxDrop_rowG BM BN hBN qkT rmaxT hrmax i
+      (fun jL => if mc jL then
+          ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else (⊥ : WithBot ℝ))
+      ?_]
+    · exact aft3Block_masked_blockSupG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep mc hmc
+    · intro jL
+      rw [hqkT jL]
+      exact aft3_score_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile hq hk
+  rw [aft3StateSeededG_fst, aft3RunningMaxG_succ (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d]
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmtile, hrmaxcell,
+    aft3StateSeededG_fst]
+  rw [← sup_assoc]
+  set M := (seed i d).1 ⊔ aft3RunningMaxG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep (c * BN) i d with hM
+  set S := ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map
+      (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ with hS
+  by_cases h : M ≤ S
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
 /-- **General masked `pmT` cell (cases 1/2).** -/
 theorem aft3_pmT_cell_maskedG (s0 : BlockState) (Q K : RegionName)
     (base BM ND NC sqm sqk skn skk : Nat) (sc : ℝ) (BN c : Nat)
@@ -6696,19 +6768,6 @@ theorem aft3StateSeededG_zero {BM ND NC : Nat}
           else none) = [] from by
     apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
   rfl
-
-/-- The resume-seeded running max decomposes as `seed.1 ⊔ ⊥-seeded running max` —
-the online-softmax `max` ignores the carried denom/acc, so the seed only adds its
-own max component. The key bridge for the seeded reconciliations. -/
-theorem aft3StateSeededG_fst {BM ND NC : Nat}
-    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
-    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
-    [∀ i j, Decidable (keep i j)]
-    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (hi : Nat) (i : Fin BM) (d : Fin ND) :
-    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).1
-      = (seed i d).1 ⊔ aft3RunningMaxG qT kT vT keyScale keep hi i d := by
-  unfold aft3StateSeededG aft3RunningMaxG
-  rw [aft3OsStepBot_block_fst]
 
 /-- **Seeded loop invariant (case 4, `INIT=False` resume).** Like `attnInvariantKG`
 but `m_i`/`l_i`/`acc` carry the resume-seeded fold `aft3StateSeededG` from `seed`
