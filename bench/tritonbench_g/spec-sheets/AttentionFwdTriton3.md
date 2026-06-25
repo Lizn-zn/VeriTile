@@ -1335,9 +1335,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
       (initialState := s)
       (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
       (expected := fun i : Fin BM =>
-        (WithBot.realAdd
-          (aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).1
-          (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0)
+        attentionFwdTriton3Case4MSpecG s Q K V M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn som son ROUND_CTX (sm_scale * 1.4426950408889634) BN off size i hND)
 ```
 
 **Assumptions / layout contracts:**
@@ -1361,7 +1359,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
 - `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
 - `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
-**Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case4OutSpecG`, `lRowOffset`, `aft3StateSeededG`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `natSlidingWindowKeepG`, `aft3Case4Seed`, `mIndex`, `kIndex`, `offZ`, `offH`, `aft3KeysUptoG`, `aft3OsStepBot`, `natDist3G`
+**Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case4OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case4MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `aft3Case4Seed`, `natSlidingWindowKeepG`, `aft3StateSeededG`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `natDist3G`, `aft3KeysUptoG`, `aft3OsStepBot`
 
 <details><summary><code>attention_fwd_triton3_surface</code></summary>
 
@@ -1525,6 +1523,104 @@ def lRowOffset (s : BlockState) (off_hz ROUND_CTX BLOCK_M : Nat)
 ```
 </details>
 
+<details><summary><code>attentionFwdTriton3Case4MSpecG</code></summary>
+
+```
+/-- **Case-4 finalize M closed form (general).** The `m + log2 l` finalize of the
+resume-seeded sliding-window online-softmax fold (`aft3StateSeededG` over the seed
+`aft3Case4Seed`, read off at column `0`), as written to `M[row]`. Named wrapper so
+the `output_summary_general` statement stays a one-liner (mirrors
+`attentionFwdTriton3Case3MSpecG`). -/
+```
+```lean
+noncomputable def attentionFwdTriton3Case4MSpecG
+    (s : BlockState) (Q K V M Out L : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (sc : ℝ)
+    (BN off size : Nat) (i : Fin BM) (hND : 0 < ND) : ℝ :=
+  let seed := aft3Case4Seed s M Out L base BM ND som son ROUND_CTX
+  let kp := fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j
+  (WithBot.realAdd
+    (aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC i ⟨0, hND⟩).1
+    (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0
+```
+</details>
+
+<details><summary><code>mIndex</code></summary>
+
+```lean
+def mIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 0 * BLOCK_M + i.val
+```
+</details>
+
+<details><summary><code>kIndex</code></summary>
+
+```lean
+def kIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
+  idx.2.1.val
+```
+</details>
+
+<details><summary><code>offZ</code></summary>
+
+```
+/-- Surface transcription/proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
+`_attn_fwd`.
+
+The full kernel runs separate streaming attention stages, including the causal
+stage when requested. This slice starts after those stages have produced a
+precomputed normalized `Acc` tile and proves the final masked writeback into
+`Out`, preserving the source store address and mask
+`(offs_m < N_CTX) & (offs_k < HEAD_ACTIVE)`. The inner `tl.float32` accumulator is
+outside this slice. -/
+```
+```lean
+def offZ (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 / H
+```
+</details>
+
+<details><summary><code>offH</code></summary>
+
+```lean
+def offH (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 % H
+```
+</details>
+
+<details><summary><code>aft3Case4Seed</code></summary>
+
+```
+/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
+`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
+`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
+state `s` (these are the running results of prior chunk launches, i.e. genuine
+INPUT memory to this program, not this program's own executed output). -/
+```
+```lean
+noncomputable def aft3Case4Seed
+    (s : BlockState) (M Out L : RegionName)
+    (base BM ND som son ROUND_CTX : Nat) :
+    Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
+  fun i d =>
+    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
+     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
+     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
+```
+</details>
+
+<details><summary><code>natSlidingWindowKeepG</code></summary>
+
+```
+/-- General case-1 keep predicate: `dist < size`. -/
+```
+```lean
+def natSlidingWindowKeepG (SM BM BN off size : Nat) {NC : Nat}
+    (i : Fin BM) (j : Fin NC) : Prop :=
+  natDist3G SM BM BN off i j < size
+```
+</details>
+
 <details><summary><code>aft3StateSeededG</code></summary>
 
 ```
@@ -1592,79 +1688,16 @@ noncomputable def keyScale3G (sc : ℝ) (NC : Nat) : Fin NC → ℝ := fun _ => 
 ```
 </details>
 
-<details><summary><code>natSlidingWindowKeepG</code></summary>
+<details><summary><code>natDist3G</code></summary>
 
 ```
-/-- General case-1 keep predicate: `dist < size`. -/
-```
-```lean
-def natSlidingWindowKeepG (SM BM BN off size : Nat) {NC : Nat}
-    (i : Fin BM) (j : Fin NC) : Prop :=
-  natDist3G SM BM BN off i j < size
-```
-</details>
-
-<details><summary><code>aft3Case4Seed</code></summary>
-
-```
-/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
-`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
-`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
-state `s` (these are the running results of prior chunk launches, i.e. genuine
-INPUT memory to this program, not this program's own executed output). -/
+/-- General faithful nat-truncated sliding-window distance, block-local key
+`jL = j mod BN`, block start `start_n = (j / BN)·BN`:
+`dist = (i − jL : ℕ) + SM·BM − start_n + offset`. -/
 ```
 ```lean
-noncomputable def aft3Case4Seed
-    (s : BlockState) (M Out L : RegionName)
-    (base BM ND som son ROUND_CTX : Nat) :
-    Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
-  fun i d =>
-    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
-     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
-     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
-```
-</details>
-
-<details><summary><code>mIndex</code></summary>
-
-```lean
-def mIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
-  s.pids 0 * BLOCK_M + i.val
-```
-</details>
-
-<details><summary><code>kIndex</code></summary>
-
-```lean
-def kIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
-  idx.2.1.val
-```
-</details>
-
-<details><summary><code>offZ</code></summary>
-
-```
-/-- Surface transcription/proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
-`_attn_fwd`.
-
-The full kernel runs separate streaming attention stages, including the causal
-stage when requested. This slice starts after those stages have produced a
-precomputed normalized `Acc` tile and proves the final masked writeback into
-`Out`, preserving the source store address and mask
-`(offs_m < N_CTX) & (offs_k < HEAD_ACTIVE)`. The inner `tl.float32` accumulator is
-outside this slice. -/
-```
-```lean
-def offZ (s : BlockState) (H : Nat) : Nat :=
-  s.pids 1 / H
-```
-</details>
-
-<details><summary><code>offH</code></summary>
-
-```lean
-def offH (s : BlockState) (H : Nat) : Nat :=
-  s.pids 1 % H
+def natDist3G (SM BM BN off : Nat) {NC : Nat} (i : Fin BM) (j : Fin NC) : Nat :=
+  (i.val - j.val % BN) + SM * BM - (j.val / BN) * BN + off
 ```
 </details>
 
@@ -1706,19 +1739,6 @@ noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × �
 ```
 </details>
 
-<details><summary><code>natDist3G</code></summary>
-
-```
-/-- General faithful nat-truncated sliding-window distance, block-local key
-`jL = j mod BN`, block start `start_n = (j / BN)·BN`:
-`dist = (i − jL : ℕ) + SM·BM − start_n + offset`. -/
-```
-```lean
-def natDist3G (SM BM BN off : Nat) {NC : Nat} (i : Fin BM) (j : Fin NC) : Nat :=
-  (i.val - j.val % BN) + SM * BM - (j.val / BN) * BN + off
-```
-</details>
-
 ## Also present (pinned special-case summaries)
 - `attention_fwd_triton3_end_output_formula_store_slice_compute_correct`
 - `attention_fwd_triton3_end_m_formula_store_slice_compute_correct`
@@ -1727,3 +1747,4 @@ def natDist3G (SM BM BN off : Nat) {NC : Nat} (i : Fin BM) (j : Fin NC) : Nat :=
 - `attention_fwd_triton3_python_case3_output_summary`
 - `attention_fwd_triton3_python_case1_output_summary`
 - `attention_fwd_triton3_python_case2_output_summary`
+- `attention_fwd_triton3_python_case4_output_summary`

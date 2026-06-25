@@ -54,8 +54,9 @@ dimension-general (`attention_fwd_triton3_python_case{1,2,3,4}_output_summary_ge
 symbolic shape/strides); the Python test shape
 (`B=2, H=4, N_CTX=128, HEAD_DIM=64, BLOCK_M=BLOCK_N=64`,
 `sm_scale = 1/8`, contiguous strides, 64 active lanes) is the special case
-(recovered by the pinned `..._python_case{1,2,3}_output_summary` corollaries). The
-case-specific `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked
+(recovered by the pinned `..._python_case{1,2,3,4}_output_summary` corollaries, each
+stated against the clean test-shape specs `attentionFwdTriton3Case{1,2,3,4}{Out,M}Spec`).
+The case-specific `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags are baked
 into the launch arguments.
 
 ## Genuine closed forms (cases 1/2/3)
@@ -9113,6 +9114,21 @@ noncomputable def attentionFwdTriton3Case3MSpecG
       ((aft3StateBot1G (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
           (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) (fun i j => noWindowKeep i j) NC i ⟨0, hND⟩).2.1) / Real.log 2
 
+/-- **Case-4 finalize M closed form (general).** The `m + log2 l` finalize of the
+resume-seeded sliding-window online-softmax fold (`aft3StateSeededG` over the seed
+`aft3Case4Seed`, read off at column `0`), as written to `M[row]`. Named wrapper so
+the `output_summary_general` statement stays a one-liner (mirrors
+`attentionFwdTriton3Case3MSpecG`). -/
+noncomputable def attentionFwdTriton3Case4MSpecG
+    (s : BlockState) (Q K V M Out L : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (sc : ℝ)
+    (BN off size : Nat) (i : Fin BM) (hND : 0 < ND) : ℝ :=
+  let seed := aft3Case4Seed s M Out L base BM ND som son ROUND_CTX
+  let kp := fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j
+  (WithBot.realAdd
+    (aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC i ⟨0, hND⟩).1
+    (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn) (keyScale3G sc NC) kp seed NC i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0
+
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 4000000 in
@@ -9389,9 +9405,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
       (initialState := s)
       (write := fun i : Fin BM => some (M, lRowOffset s (s.pids 1) ROUND_CTX BM i))
       (expected := fun i : Fin BM =>
-        (WithBot.realAdd
-          (aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).1
-          (WithBot.realLog2 (((aft3StateSeededG (qTile3G s Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND sqm sqk) (kTile3G s K (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND skn skk) (vTile3G s V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) NKV_CTX ND svk svn) (keyScale3G (sm_scale * 1.4426950408889634) NKV_CTX) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) NKV_CTX i ⟨0, hND⟩).2.1 : ℝ) : WithBot ℝ))).unbotD 0) := by
+        attentionFwdTriton3Case4MSpecG s Q K V M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn som son ROUND_CTX (sm_scale * 1.4426950408889634) BN off size i hND) := by
   have houtOff : ∀ idx : TileIndex [BM, ND],
       outOffset s H sqz sqh som son BM idx
         = (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son := by
@@ -9734,6 +9748,99 @@ theorem attention_fwd_triton3_python_case2_output_summary
               (1 / 8 * 1.4426950408889634)
               (fun i j => natComplementSlidingWindowKeepG (s.pids 0) 64 64 0 64 i j) i (by norm_num)) := by
       funext i; rw [aft3_KMSpec_eq_G]; simp only [aft3_keep2_eq_G]
+    rw [hexp]; exact hM
+
+/-- **Case-4 test-shape `Out` closed form** (`INIT=False` resume + sliding window),
+the Python launch shape baked in: the general `attentionFwdTriton3Case4OutSpecG` at
+`base=baseOffset3 s, BM=ND=BN=64, N_KV=ROUND=128, sw=[0,64), sm_scale=1/8`,
+contiguous strides. Mirror of `attentionFwdTriton3Case{1,2,3}OutSpec`. -/
+noncomputable def attentionFwdTriton3Case4OutSpec
+    (s : BlockState) (Q K V M Out L : RegionName) (idx : TileIndex [64, 64]) : ℝ :=
+  attentionFwdTriton3Case4OutSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+    ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 (by norm_num) idx
+
+/-- **Case-4 test-shape `M` finalize** (`m + log2 l`), the Python launch shape baked
+into `attentionFwdTriton3Case4MSpecG`. Mirror of `attentionFwdTriton3Case3MSpec`. -/
+noncomputable def attentionFwdTriton3Case4MSpec
+    (s : BlockState) (Q K V M Out L : RegionName) (i : Fin 64) : ℝ :=
+  attentionFwdTriton3Case4MSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+    ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 i (by norm_num)
+
+private theorem aft3_case4OutSpec_eq_G (s : BlockState) (Q K V M Out L : RegionName)
+    (idx : TileIndex [64, 64]) :
+    attentionFwdTriton3Case4OutSpec s Q K V M Out L idx
+      = attentionFwdTriton3Case4OutSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 (by norm_num) idx := rfl
+
+private theorem aft3_case4MSpec_eq_G (s : BlockState) (Q K V M Out L : RegionName)
+    (i : Fin 64) :
+    attentionFwdTriton3Case4MSpec s Q K V M Out L i
+      = attentionFwdTriton3Case4MSpecG s Q K V M Out L (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+          ((1 / 8 : ℝ) * 1.4426950408889634) 64 0 64 i (by norm_num) := rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Case 4 genuine output summary** (Python test shape, `INIT=False` resume +
+sliding window). Clean-signature corollary of
+`attention_fwd_triton3_python_case4_output_summary_general` at the launch shape: the
+surface lowers to the algorithm layer, and its `Out`/`M` writebacks realize the
+genuine resume-seeded closed forms (`attentionFwdTriton3Case4{Out,M}Spec`, read over
+INPUT `Q`/`K`/`V` and the resume buffers `M`/`L`/`Out` — **no self-reference**) on
+clean (`undef = 0`) input with `M ≠ Out`. Mirror of
+`attention_fwd_triton3_python_case{1,2,3}_output_summary`. -/
+theorem attention_fwd_triton3_python_case4_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState)
+    (hMO : M ≠ Out) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        attentionFwdTriton3Case4OutSpec s Q K V M Out L idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        attentionFwdTriton3Case4MSpec s Q K V M Out L i) := by
+  have H := attention_fwd_triton3_python_case4_output_summary_general
+    Q K V M Out L (1 / 8 : ℝ)
+    32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    2 4 4 128 128 128 0 64 64 64 64 s
+    (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) rfl
+    rfl rfl rfl rfl rfl rfl hMO hundef (aft3_hinjO_concrete s) (aft3_hinjM_concrete s)
+  obtain ⟨hAlg, hO, hM⟩ := H
+  refine ⟨hAlg, ?_, ?_⟩
+  · have hexp : (fun idx : TileIndex [64, 64] => attentionFwdTriton3Case4OutSpec s Q K V M Out L idx)
+        = (fun idx : TileIndex [64, 64] =>
+            attentionFwdTriton3Case4OutSpecG s Q K V M Out L
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+              (1 / 8 * 1.4426950408889634) 64 0 64 (by norm_num) idx) := by
+      funext idx; rw [aft3_case4OutSpec_eq_G]
+    rw [hexp]; exact hO
+  · have hexp : (fun i : Fin 64 => attentionFwdTriton3Case4MSpec s Q K V M Out L i)
+        = (fun i : Fin 64 =>
+            attentionFwdTriton3Case4MSpecG s Q K V M Out L
+              (baseOffset3 s) 64 64 128 64 1 64 1 64 1 64 1 128
+              (1 / 8 * 1.4426950408889634) 64 0 64 i (by norm_num)) := by
+      funext i; rw [aft3_case4MSpec_eq_G]
     rw [hexp]; exact hM
 
 
