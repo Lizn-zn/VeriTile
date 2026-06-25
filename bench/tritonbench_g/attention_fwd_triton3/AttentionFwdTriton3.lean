@@ -7239,6 +7239,133 @@ theorem aft3PreLoop_evalG
     simp only [BlockState.setReg_mem]
     rw [show s11.mem rg o = s.mem rg o from by rw [hmem]]
 
+set_option maxHeartbeats 1600000 in
+/-- **Case-4 (`INIT=False` resume) preLoop execution.** Establishes
+`attnInvariantSeededG … (aft3Case4Seed …) 0` for any `keep`: the `INIT=0` else
+branch loads the prior `m_i/l_i/acc` from `M/L/Out` (the resume seed), so the
+loop-entry state is the seed. -/
+theorem aft3PreLoop_evalG_init0
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hND : 0 < ND) (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (keep : Fin BM → Fin NKV_CTX → Prop) [∀ i j, Decidable (keep i j)]
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) s = some s'
+      ∧ attnInvariantSeededG Q K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND (sm_scale * 1.4426950408889634) keep
+          (aft3Case4Seed s M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND som son ROUND_CTX) 0 s' := by
+  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+    aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+  have hrm : ∀ (R : RegionName) (o : Nat), s11.readMem R o = s.readMem R o := by
+    intro R o; unfold BlockState.readMem; rw [hmem]
+  rw [show aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+      = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+    rw [show aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).take 16 from rfl]
+    rw [List.take_append_drop]]
+  rw [stepStmts.append_some h11]
+  rw [show (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+      = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+          Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+  rw [stepStmts.cons_some
+    (show stepStmt _ s11 = some _ from by
+      rw [aft3_ifThenElse_false (aft3_ne_zero_zero_false s11),
+        aft3_load_stepsG s11 M Out L BM ND (s.pids 1 / H * sqz + s.pids 1 % H * sqh) som son ROUND_CTX
+          (by rw [hpids]; exact hMptr) (by rw [hpids]; exact hLptr) (by rw [hpids]; exact hOp)])]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)) _
+        = some (Tile.scalar (some (sm_scale * 1.0))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some (sm_scale * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+      refine congrArg some ?_; norm_num))]
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_load_v_eval Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) N_CTX ND BM ND sqm sqk (s.pids 0 * BM)
+          (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") _
+          (by rw [evalOp_ref]
+              simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same]
+              exact hQp)))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  simp only [attnInvariantSeededG]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]; exact hpids
+  · trivial
+  · exact Nat.zero_le _
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun r => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    rfl
+  · simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [qTile3G, BlockState.setReg_readMem]
+    refine congrArg some ?_
+    rw [show s11.readMem Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh + (s.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk)
+          = s.readMem Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh + (s.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk) from by
+      unfold BlockState.readMem; rw [hmem]]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hstart]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hoffhz]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hKp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hVp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hMptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hLptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hOp]
+  · intro rg o
+    simp only [BlockState.setReg_undef]
+    rw [huf]; exact hundef rg o
+  · funext rg o
+    simp only [BlockState.setReg_mem]
+    rw [show s11.mem rg o = s.mem rg o from by rw [hmem]]
+
 /-! ## General mask reconciliation (cases 1/2) -/
 
 /-- **General case-1 mask reconciliation.** At `SN = c·BN`, the lowered nat-mask
