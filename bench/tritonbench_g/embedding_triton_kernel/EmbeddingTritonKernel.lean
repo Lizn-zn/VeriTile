@@ -105,21 +105,6 @@ def tokenRaw
     (s : BlockState) (input_ids : RegionName) (BLOCK_N start_nn : Nat) : Nat :=
   s.readMemValue .nat input_ids (seqIndex s BLOCK_N start_nn)
 
-def tokenIndex
-    (s : BlockState) (input_ids : RegionName)
-    (vob_start_id BLOCK_N start_nn : Nat) : Nat :=
-  tokenRaw s input_ids BLOCK_N start_nn - vob_start_id
-
-def outOffset (s : BlockState) (stride_out_seq BLOCK_N start_nn : Nat)
-    (i : Fin BLOCK_DMODEL) : Nat :=
-  seqIndex s BLOCK_N start_nn * stride_out_seq + dimIndex i
-
-def weightOffset
-    (s : BlockState) (input_ids : RegionName)
-    (vob_start_id stride_weight_seq BLOCK_N start_nn : Nat)
-    (i : Fin BLOCK_DMODEL) : Nat :=
-  tokenIndex s input_ids vob_start_id BLOCK_N start_nn * stride_weight_seq + dimIndex i
-
 def active
     (s : BlockState) (input_ids : RegionName)
     (vob_start_id vob_end_id n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL : Nat)
@@ -149,18 +134,6 @@ instance storeActiveDecidable
     Decidable (storeActive s n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL i) := by
   unfold storeActive
   infer_instance
-
-noncomputable def embeddingSpec
-    (s : BlockState) (weight input_ids : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq BLOCK_N start_nn BLOCK_DMODEL : Nat)
-    (i : Fin BLOCK_DMODEL) : ℝ :=
-  WithBot.unbotD 0
-    (if vob_start_id ≤ tokenRaw s input_ids BLOCK_N start_nn ∧
-        tokenRaw s input_ids BLOCK_N start_nn < vob_end_id then
-      some (s.readMem weight
-        (weightOffset s input_ids vob_start_id stride_weight_seq BLOCK_N start_nn i))
-    else
-      some (0.0 : ℝ))
 
 def seqLaneIndex
     (s : BlockState) (BLOCK_N start_nn : Nat) (lane : Fin BLOCK_NN) : Nat :=
@@ -456,13 +429,6 @@ instance embeddingPrefixWrittenDecidable
   unfold embeddingPrefixWritten
   infer_instance
 
-theorem not_embeddingChunkToFullIndex_written_before
-    (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
-    (h : start_nn + idx.1.val < BLOCK_N) :
-    ¬ embeddingPrefixWritten start_nn
-      (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  simp [embeddingPrefixWritten, embeddingChunkToFullIndex]
-
 theorem embeddingPrefixIndex_ne_currentChunk
     (start_nn BLOCK_NN : Nat)
     (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
@@ -542,47 +508,6 @@ theorem embeddingCurrentChunkNoCollision_of_full_injective
       (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => idx.2) hFullEq
     simpa [embeddingChunkToFullIndex] using htail
 
-theorem embeddingChunkLane_lt_of_aligned_start
-    (BLOCK_N BLOCK_NN chunks k start_nn : Nat)
-    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
-    (hStep : 0 < BLOCK_NN)
-    (hBlock : BLOCK_N = chunks * BLOCK_NN)
-    (hStartEq : start_nn = k * BLOCK_NN)
-    (hStartLt : start_nn < BLOCK_N) :
-    start_nn + idx.1.val < BLOCK_N := by
-  have hklt : k < chunks := by
-    apply (Nat.mul_lt_mul_right hStep).mp
-    simpa [hStartEq, hBlock] using hStartLt
-  calc
-    start_nn + idx.1.val = k * BLOCK_NN + idx.1.val := by rw [hStartEq]
-    _ < k * BLOCK_NN + BLOCK_NN := Nat.add_lt_add_left idx.1.isLt _
-    _ = (k + 1) * BLOCK_NN := by rw [Nat.succ_mul]
-    _ ≤ chunks * BLOCK_NN := Nat.mul_le_mul_right BLOCK_NN (Nat.succ_le_of_lt hklt)
-    _ = BLOCK_N := by rw [hBlock]
-
-theorem embeddingChunkLaneBound_of_aligned_start
-    (s : BlockState)
-    (BLOCK_N BLOCK_NN chunks k start_nn n_ctx hiden_size BLOCK_DMODEL : Nat)
-    (hStep : 0 < BLOCK_NN)
-    (hBlock : BLOCK_N = chunks * BLOCK_NN)
-    (hStartEq : start_nn = k * BLOCK_NN)
-    (hStartLt : start_nn < BLOCK_N) :
-    ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
-      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-        BLOCK_DMODEL lane →
-        start_nn + lane.1.val < BLOCK_N := by
-  intro lane _hactive
-  exact embeddingChunkLane_lt_of_aligned_start
-    (BLOCK_DMODEL := BLOCK_DMODEL) BLOCK_N BLOCK_NN chunks k start_nn lane
-    hStep hBlock hStartEq hStartLt
-
-theorem embeddingChunkToFullIndex_written_after
-    (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
-    (h : start_nn + idx.1.val < BLOCK_N) :
-    embeddingPrefixWritten (start_nn + BLOCK_NN)
-      (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  simp [embeddingPrefixWritten, embeddingChunkToFullIndex]
-
 def embeddingPrefixActive
     (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL off : Nat)
     (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
@@ -628,13 +553,6 @@ theorem embeddingLoopInvariant_zero
   intro idx hidx
   exact False.elim ((not_embeddingPrefixActive_zero s0 n_ctx hiden_size
     BLOCK_N BLOCK_DMODEL idx) hidx)
-
-theorem embeddingPrefixActive_final_of_storeActive
-    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL : Nat)
-    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL])
-    (hidx : storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx) :
-    embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N idx := by
-  exact ⟨by simp [embeddingPrefixWritten], hidx⟩
 
 theorem embeddingPrefixActive_of_storeActive_of_final
     (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL final : Nat)
@@ -721,135 +639,6 @@ theorem embeddingLoopInvariant_step_of_chunk_write
           stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL chunkIdx hBound
     rw [← hOut, hWrite chunkIdx hStore2D, hSpec]
 
-theorem embeddingCurrentChunkScatter_write
-    (s0 st : BlockState) (weight input_ids out : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
-    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
-    (hactive :
-      storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-        BLOCK_DMODEL idx)
-    (hNoCollision :
-      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
-        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-          BLOCK_DMODEL lane →
-          outOffset2D s0 stride_out_seq BLOCK_N start_nn lane =
-            outOffset2D s0 stride_out_seq BLOCK_N start_nn idx →
-          lane = idx) :
-    ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
-        (fun acc lane =>
-          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-              BLOCK_DMODEL lane then
-            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
-              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
-          else
-            acc)
-        st).readMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn idx) =
-      embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-        stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
-  exact
-    BlockState.scatter_readback_prop_masked_nd_of_true
-      (region := out)
-      (s := st)
-      (offsetFn := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
-      (valueFn := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
-      (P := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-          BLOCK_DMODEL lane)
-      idx hactive
-      (fun lane hlane heq => hNoCollision lane hlane heq)
-
-theorem embeddingCurrentChunkScatter_preserve_old
-    (s0 st : BlockState) (weight input_ids out : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
-    (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-        outOffsetFull s0 stride_out_seq BLOCK_N idx))
-    (hOld : embeddingPrefixWritten start_nn oldIdx)
-    (hLaneBound :
-      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
-        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-          BLOCK_DMODEL lane →
-          start_nn + lane.1.val < BLOCK_N) :
-    ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
-        (fun acc lane =>
-          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-              BLOCK_DMODEL lane then
-            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
-              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
-          else
-            acc)
-        st).readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) =
-      st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) := by
-  exact
-    BlockState.scatter_prop_masked_preserves_other_offset
-      out
-      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
-      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
-      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-          BLOCK_DMODEL lane)
-      (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx)
-      (fun lane hlane heq =>
-        embeddingOldPrefix_outOffset_ne_currentChunk s0 stride_out_seq BLOCK_N
-          start_nn BLOCK_NN BLOCK_DMODEL oldIdx lane hOutInj
-          (hLaneBound lane hlane) hOld heq.symm)
-      (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) st
-
-theorem embeddingLoopInvariant_step_of_current_chunk_scatter
-    (s0 st : BlockState) (weight input_ids out : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
-    (hPrev :
-      embeddingLoopInvariant s0 weight input_ids out
-        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-        hiden_size BLOCK_N BLOCK_DMODEL start_nn st)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-        outOffsetFull s0 stride_out_seq BLOCK_N idx))
-    (hLaneBound :
-      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
-        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-          BLOCK_DMODEL lane →
-          start_nn + lane.1.val < BLOCK_N) :
-    embeddingLoopInvariant s0 weight input_ids out
-      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_N BLOCK_DMODEL (start_nn + BLOCK_NN)
-      ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
-        (fun acc lane =>
-          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
-              BLOCK_DMODEL lane then
-            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
-              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
-                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
-          else
-            acc)
-        st) := by
-  apply embeddingLoopInvariant_step_of_chunk_write s0 st
-  · exact hPrev
-  · intro oldIdx hOldActive
-    exact embeddingCurrentChunkScatter_preserve_old s0 st weight input_ids out
-      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
-      BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn oldIdx hOutInj hOldActive.1
-      hLaneBound
-  · intro idx hStore
-    exact embeddingCurrentChunkScatter_write s0 st weight input_ids out
-      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
-      BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn idx hStore
-      (embeddingCurrentChunkNoCollision_of_full_injective s0 stride_out_seq n_ctx
-        hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx hOutInj
-        (hLaneBound idx hStore) hLaneBound)
-
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
@@ -877,22 +666,6 @@ def embedding_kernel_alg_post
     s'.readMem out (outOffsetFull s stride_out_seq BLOCK_N idx) =
       embeddingSpecFull s weight input_ids vob_start_id vob_end_id
         stride_weight_seq BLOCK_N BLOCK_DMODEL idx
-
-theorem embeddingLoopInvariant_to_alg_post
-    (s0 st : BlockState) (weight input_ids out : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
-    (hInv :
-      embeddingLoopInvariant s0 weight input_ids out
-        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N st) :
-    embedding_kernel_alg_post weight input_ids out
-      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s0 st := by
-  intro idx hidx
-  exact hInv idx
-    (embeddingPrefixActive_final_of_storeActive s0 n_ctx hiden_size
-      BLOCK_N BLOCK_DMODEL idx hidx)
 
 theorem embeddingLoopInvariant_to_alg_post_of_final
     (s0 st : BlockState) (weight input_ids out : RegionName)

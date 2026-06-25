@@ -122,95 +122,6 @@ def diag_ssm_backward_kernel
   tl.store(grad_lambda_ptr + col_offsets, grad_Lambda, mask=mask)
 }
 
-/-- Faithful transcription of `diag_ssm_triton.py`'s
-`diag_ssm_forward_kernel_complex`.
-
-The Python tuple assignment `s_real, s_imag = new_s_real, new_s_imag` is
-preserved with the DSL multiple-assignment surface. -/
-def diag_ssm_forward_kernel_complex
-    (s_ptr x_ptr y_ptr lambda_ptr : RegionName)
-    (length batch_size dim BLOCK_SIZE : Nat) :
-    ComputeKernel := triton {
-  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
-  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
-  mask = col_offsets < $(batch_size * dim)
-  s_real = tl.load(s_ptr + col_offsets * $(2), mask=mask, other=0)
-  s_imag = tl.load(s_ptr + col_offsets * $(2) + $(1), mask=mask, other=0)
-  lambda_real = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2),
-    mask=mask, other=0)
-  lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
-    mask=mask, other=0)
-  for t in range(0, $(length), $(1)) {
-    offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
-    x_real = tl.load(x_ptr + offsets, mask=mask, other=0)
-    x_imag = tl.load(x_ptr + offsets + $(1), mask=mask, other=0)
-    new_s_real = s_real * lambda_real - s_imag * lambda_imag + x_real
-    new_s_imag = s_real * lambda_imag + s_imag * lambda_real + x_imag
-    tl.store(y_ptr + offsets, new_s_real, mask=mask)
-    tl.store(y_ptr + offsets + $(1), new_s_imag, mask=mask)
-    s_real, s_imag = new_s_real, new_s_imag
-  }
-}
-
-/-- Faithful transcription of `diag_ssm_triton.py`'s
-`diag_ssm_backward_kernel_complex`. -/
-def diag_ssm_backward_kernel_complex
-    (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
-      RegionName)
-    (length batch_size dim BLOCK_SIZE : Nat) :
-    ComputeKernel := triton {
-  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
-  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
-  mask = col_offsets < $(batch_size * dim)
-  lambda_real = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2),
-    mask=mask, other=0)
-  lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
-    mask=mask, other=0)
-  grad_s_real = tl.zeros_like(lambda_real)
-  grad_s_imag = tl.zeros_like(lambda_imag)
-  grad_lambda_real = tl.zeros_like(lambda_real)
-  grad_lambda_imag = tl.zeros_like(lambda_imag)
-  for i in range(0, $(length), $(1)) {
-    t = $(length) - $(1) - i
-    offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
-    grad_y_real = tl.load(grad_y_ptr + offsets, mask=mask, other=0)
-    grad_y_imag = -tl.load(grad_y_ptr + offsets + $(1), mask=mask, other=0)
-    if t > 0 {
-      s_real = tl.load(y_ptr + (offsets - $(2 * batch_size * dim)),
-        mask=mask, other=0)
-      s_imag = tl.load(y_ptr + (offsets - $(2 * batch_size * dim) + $(1)),
-        mask=mask, other=0)
-    } else {
-      s_real = tl.load(s_ptr + $(2) * col_offsets, mask=mask, other=0)
-      s_imag = tl.load(s_ptr + $(2) * col_offsets + $(1), mask=mask, other=0)
-    }
-    grad_s_real = grad_y_real + grad_s_real
-    grad_s_imag = grad_y_imag + grad_s_imag
-    grad_x_real = grad_s_real
-    grad_x_imag = grad_s_imag
-    grad_lambda_real += grad_s_real * s_real - grad_s_imag * s_imag
-    grad_lambda_imag += grad_s_real * s_imag + grad_s_imag * s_real
-    grad_s_real = grad_x_real * lambda_real - grad_x_imag * lambda_imag
-    grad_s_imag = grad_x_real * lambda_imag + grad_x_imag * lambda_real
-    tl.store(grad_x_ptr + offsets, grad_x_real, mask=mask)
-    tl.store(grad_x_ptr + offsets + $(1), -grad_x_imag, mask=mask)
-  }
-  tl.store(grad_s_ptr + col_offsets * $(2), grad_s_real, mask=mask)
-  tl.store(grad_s_ptr + col_offsets * $(2) + $(1), -grad_s_imag, mask=mask)
-  tl.store(grad_lambda_ptr + col_offsets * $(2), grad_lambda_real, mask=mask)
-  tl.store(grad_lambda_ptr + col_offsets * $(2) + $(1), -grad_lambda_imag,
-    mask=mask)
-}
-
-/-
-Complex correctness blocker (#119): the complex forward/backward surfaces above
-are faithful transcriptions and pass the port checker, but this file only proves
-`ComputeCorrect.Realizes` for the real-valued kernels. The complex kernels encode
-complex tensors as paired real memory lanes, including conjugated gradient signs;
-their readback theorem should use a paired-lane output map/spec rather than the
-single-real-lane recurrence used below.
--/
-
 def colOffset (st : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   st.pids 0 * BLOCK_SIZE + i.val
 
@@ -229,13 +140,6 @@ instance activeDecidable (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     Decidable (active st batch_size dim BLOCK_SIZE i) := by
   unfold active
   infer_instance
-
-noncomputable def diagSsmSpec
-    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
-    (dim BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  let off := colOffset st BLOCK_SIZE i
-  st.readMem s_ptr off * st.readMem lambda_ptr (IntegralDType.nat.mod off dim) +
-    st.readMem x_ptr off
 
 def timeOffset
     (st : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
@@ -460,13 +364,6 @@ theorem diagSsmBackwardGradLambdaTile_succ
   · simp [diagSsmBackwardGradLambdaTile, diagSsmBackwardGradLambdaAfter,
       hactive]
 
-noncomputable def diagSsmStateTile
-    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE t : Nat) : Tile .real [BLOCK_SIZE] :=
-  { data := fun idx =>
-      some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
-        BLOCK_SIZE idx.1 t) }
-
 noncomputable def diagSsmMaskedStateTile
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
     (batch_size dim BLOCK_SIZE t : Nat) : Tile .real [BLOCK_SIZE] :=
@@ -476,16 +373,6 @@ noncomputable def diagSsmMaskedStateTile
           BLOCK_SIZE idx.1 t)
       else
         some (0.0 : ℝ) }
-
-theorem diagSsmMaskedStateTile_active
-    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE t : Nat) (i : Fin BLOCK_SIZE)
-    (hi : active st batch_size dim BLOCK_SIZE i) :
-    (diagSsmMaskedStateTile st s_ptr x_ptr lambda_ptr batch_size dim
-      BLOCK_SIZE t).data (i, PUnit.unit) =
-      some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
-        BLOCK_SIZE i t) := by
-  simp [diagSsmMaskedStateTile, hi]
 
 @[simp] theorem diagSsmStateAfter_zero
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
@@ -502,21 +389,6 @@ theorem diagSsmMaskedStateTile_active
           st.readMem lambda_ptr (IntegralDType.nat.mod (colOffset st BLOCK_SIZE i) dim) +
         st.readMem x_ptr (timeOffset st batch_size dim BLOCK_SIZE t i) := by
   rfl
-
-theorem diagSsmStateTile_succ
-    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE t : Nat) :
-    diagSsmStateTile st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE (t + 1) =
-      { data := fun idx =>
-          some
-            (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
-                BLOCK_SIZE idx.1 t *
-              st.readMem lambda_ptr
-                (IntegralDType.nat.mod (colOffset st BLOCK_SIZE idx.1) dim) +
-              st.readMem x_ptr
-                (timeOffset st batch_size dim BLOCK_SIZE t idx.1)) } := by
-  ext idx
-  simp [diagSsmStateTile]
 
 theorem diagSsmMaskedStateTile_succ
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
@@ -627,17 +499,6 @@ noncomputable def diagSsmForwardSpecAt
     (idx : TileIndex [length, BLOCK_SIZE]) : ℝ :=
   diagSsmForwardSpec st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
     idx.1.val idx.2.1
-
-theorem diagSsmForwardSpecAt_eq_stateTile
-    {length : Nat}
-    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE : Nat)
-    (idx : TileIndex [length, BLOCK_SIZE]) :
-    diagSsmForwardSpecAt st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx =
-      WithBot.unbotD 0
-        ((diagSsmStateTile st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
-          (idx.1.val + 1)).data (idx.2.1, PUnit.unit)) := by
-  simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
 @[simp] theorem diagSsmForwardOutOffset_currentTime
     {length : Nat}
@@ -1227,50 +1088,6 @@ theorem diagSsmBackwardLoopInvariant_zero
     · intro idx hlt _
       omega
 
-theorem diagSsmBackwardCurrentIterationScatter_write
-    {length : Nat}
-    (st0 st : BlockState)
-    (lambda_ptr grad_x_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE k : Nat)
-    (i : Fin BLOCK_SIZE)
-    (hactive : active st0 batch_size dim BLOCK_SIZE i)
-    (hNoCollision :
-      ∀ lane : TileIndex [BLOCK_SIZE],
-        active st0 batch_size dim BLOCK_SIZE lane.1 →
-          timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k)
-              lane.1 =
-            timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k) i →
-          lane = ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_x_ptr
-              (timeOffset st0 batch_size dim BLOCK_SIZE
-                (reverseTime length k) lane.1)
-              (diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length (reverseTime length k) lane.1)
-          else
-            acc)
-        st).readMem grad_x_ptr
-          (timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k) i) =
-      diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size dim
-        BLOCK_SIZE length (reverseTime length k) i := by
-  exact
-    BlockState.scatter_readback_prop_masked_nd_of_true
-      (region := grad_x_ptr)
-      (s := st)
-      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k)
-          lane.1)
-      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size dim
-          BLOCK_SIZE length (reverseTime length k) lane.1)
-      (P := fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])
-      hactive
-      (fun lane hlane heq => hNoCollision lane hlane heq)
-
 theorem diagSsmBackwardCurrentIterationNoCollision_of_out_injective
     {length : Nat}
     (st0 : BlockState) (batch_size dim BLOCK_SIZE k : Nat)
@@ -1299,80 +1116,6 @@ theorem diagSsmBackwardCurrentIterationNoCollision_of_out_injective
       cases laneTail
       cases hLane
       rfl
-
-theorem diagSsmBackwardCurrentIterationScatter_preserve_old
-    {length : Nat}
-    (st0 st : BlockState)
-    (lambda_ptr grad_x_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE k : Nat)
-    (idx : TileIndex [length, BLOCK_SIZE])
-    (hk : k < length) (hOld : idx.1.val < k)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [length, BLOCK_SIZE] =>
-        diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx)) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_x_ptr
-              (timeOffset st0 batch_size dim BLOCK_SIZE
-                (reverseTime length k) lane.1)
-              (diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length (reverseTime length k) lane.1)
-          else
-            acc)
-        st).readMem grad_x_ptr
-          (diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx) =
-      st.readMem grad_x_ptr
-        (diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx) := by
-  exact
-    BlockState.scatter_prop_masked_preserves_other_offset
-      grad_x_ptr
-      (fun lane : TileIndex [BLOCK_SIZE] =>
-        timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k)
-          lane.1)
-      (fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size dim
-          BLOCK_SIZE length (reverseTime length k) lane.1)
-      (fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      (diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx)
-      (fun lane _hactive heq =>
-        diagSsmBackwardGradXOffset_ne_currentIteration st0 batch_size dim
-          BLOCK_SIZE k idx lane.1 hOutInj hk hOld heq.symm)
-      (TileShape.allIndices [BLOCK_SIZE]) st
-
-theorem diagSsmBackwardCurrentIterationScatter_preserve_region
-    {length : Nat}
-    (st0 st : BlockState)
-    (lambda_ptr grad_x_ptr grad_y_ptr region : RegionName)
-    (batch_size dim BLOCK_SIZE k offset : Nat)
-    (hRegion : grad_x_ptr ≠ region) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_x_ptr
-              (timeOffset st0 batch_size dim BLOCK_SIZE
-                (reverseTime length k) lane.1)
-              (diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length (reverseTime length k) lane.1)
-          else
-            acc)
-        st).readMem region offset =
-      st.readMem region offset := by
-  have hRegion' : region ≠ grad_x_ptr := by
-    exact fun h => hRegion h.symm
-  simpa using
-    BlockState.scatter_prop_masked_preserves_other_region
-      (region := grad_x_ptr)
-      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        timeOffset st0 batch_size dim BLOCK_SIZE (reverseTime length k)
-          lane.1)
-      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size dim
-          BLOCK_SIZE length (reverseTime length k) lane.1)
-      (P := fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      (R := region) hRegion' offset (TileShape.allIndices [BLOCK_SIZE]) st
 
 theorem diagSsmBackwardCurrentIterationScatter_preserve_region_of_value
     {length : Nat}
@@ -1404,46 +1147,6 @@ theorem diagSsmBackwardCurrentIterationScatter_preserve_region_of_value
       (P := fun lane : TileIndex [BLOCK_SIZE] =>
         active st0 batch_size dim BLOCK_SIZE lane.1)
       (R := region) hRegion' offset (TileShape.allIndices [BLOCK_SIZE]) st
-
-theorem diagSsmBackwardFinalGradSScatter_write
-    (st0 st : BlockState)
-    (lambda_ptr grad_s_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE length : Nat)
-    (i : Fin BLOCK_SIZE)
-    (hactive : active st0 batch_size dim BLOCK_SIZE i) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_s_ptr
-              (colOffset st0 BLOCK_SIZE lane.1)
-              (diagSsmBackwardGradSAfter st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length lane.1 length)
-          else
-            acc)
-        st).readMem grad_s_ptr (colOffset st0 BLOCK_SIZE i) =
-      diagSsmBackwardGradSAfter st0 lambda_ptr grad_y_ptr batch_size dim
-        BLOCK_SIZE length i length := by
-  exact
-    BlockState.scatter_readback_prop_masked_nd_of_true
-      (region := grad_s_ptr)
-      (s := st)
-      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        colOffset st0 BLOCK_SIZE lane.1)
-      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradSAfter st0 lambda_ptr grad_y_ptr batch_size dim
-          BLOCK_SIZE length lane.1 length)
-      (P := fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])
-      hactive
-      (by
-        intro lane _hactive heq
-        have hlane : lane.1 = i := colOffset_injective st0 BLOCK_SIZE heq
-        cases lane with
-        | mk laneHead laneTail =>
-            cases laneTail
-            cases hlane
-            rfl)
 
 theorem diagSsmBackwardFinalGradSScatter_write_tile
     (st0 st : BlockState)
@@ -1520,46 +1223,6 @@ theorem diagSsmBackwardFinalGradSScatter_preserve_region_tile
         active st0 batch_size dim BLOCK_SIZE lane.1)
       (R := region) hRegion' offset (TileShape.allIndices [BLOCK_SIZE]) st
 
-theorem diagSsmBackwardFinalGradLambdaScatter_write
-    (st0 st : BlockState)
-    (s_ptr lambda_ptr y_ptr grad_lambda_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE length : Nat)
-    (i : Fin BLOCK_SIZE)
-    (hactive : active st0 batch_size dim BLOCK_SIZE i) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_lambda_ptr
-              (colOffset st0 BLOCK_SIZE lane.1)
-              (diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr
-                grad_y_ptr batch_size dim BLOCK_SIZE length lane.1 length)
-          else
-            acc)
-        st).readMem grad_lambda_ptr (colOffset st0 BLOCK_SIZE i) =
-      diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr grad_y_ptr
-        batch_size dim BLOCK_SIZE length i length := by
-  exact
-    BlockState.scatter_readback_prop_masked_nd_of_true
-      (region := grad_lambda_ptr)
-      (s := st)
-      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        colOffset st0 BLOCK_SIZE lane.1)
-      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr grad_y_ptr
-          batch_size dim BLOCK_SIZE length lane.1 length)
-      (P := fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])
-      hactive
-      (by
-        intro lane _hactive heq
-        have hlane : lane.1 = i := colOffset_injective st0 BLOCK_SIZE heq
-        cases lane with
-        | mk laneHead laneTail =>
-            cases laneTail
-            cases hlane
-            rfl)
-
 theorem diagSsmBackwardFinalGradLambdaScatter_write_tile
     (st0 st : BlockState)
     (s_ptr lambda_ptr y_ptr grad_lambda_ptr grad_y_ptr : RegionName)
@@ -1603,36 +1266,6 @@ theorem diagSsmBackwardFinalGradLambdaScatter_write_tile
             cases hlane
             rfl)
   simpa [diagSsmBackwardGradLambdaTile, hactive] using hRead
-
-theorem diagSsmBackwardFinalGradLambdaScatter_preserve_region
-    (st0 st : BlockState)
-    (s_ptr lambda_ptr y_ptr grad_lambda_ptr grad_y_ptr region : RegionName)
-    (batch_size dim BLOCK_SIZE length offset : Nat)
-    (hRegion : grad_lambda_ptr ≠ region) :
-    ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_lambda_ptr
-              (colOffset st0 BLOCK_SIZE lane.1)
-              (diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr
-                grad_y_ptr batch_size dim BLOCK_SIZE length lane.1 length)
-          else
-            acc)
-        st).readMem region offset =
-      st.readMem region offset := by
-  have hRegion' : region ≠ grad_lambda_ptr := by
-    exact fun h => hRegion h.symm
-  simpa using
-    BlockState.scatter_prop_masked_preserves_other_region
-      (region := grad_lambda_ptr)
-      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        colOffset st0 BLOCK_SIZE lane.1)
-      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
-        diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr grad_y_ptr
-          batch_size dim BLOCK_SIZE length lane.1 length)
-      (P := fun lane : TileIndex [BLOCK_SIZE] =>
-        active st0 batch_size dim BLOCK_SIZE lane.1)
-      (R := region) hRegion' offset (TileShape.allIndices [BLOCK_SIZE]) st
 
 theorem diagSsmBackwardFinalGradLambdaScatter_preserve_region_tile
     (st0 st : BlockState)
@@ -1870,57 +1503,6 @@ theorem diagSsmBackwardLoopInvariant_step_of_iteration_write
       · have hk : idx.1.val = k := by omega
         simpa [diagSsmBackwardGradXOffset, hk] using hWrite idx.2.1 hactive
 
-theorem diagSsmBackwardLoopInvariant_step_of_current_iteration_scatter
-    {length : Nat}
-    (st0 stPrev stReg : BlockState)
-    (s_ptr lambda_ptr y_ptr grad_x_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE k : Nat)
-    (hk : k < length)
-    (hPrev :
-      diagSsmBackwardLoopInvariant st0 s_ptr lambda_ptr y_ptr grad_x_ptr
-        grad_y_ptr length batch_size dim BLOCK_SIZE k stPrev)
-    (hGradS :
-      stReg.regs .real [BLOCK_SIZE] "grad_s" =
-        some (diagSsmBackwardGradSTile st0 lambda_ptr grad_y_ptr batch_size
-          dim BLOCK_SIZE length (k + 1)))
-    (hGradLambda :
-      stReg.regs .real [BLOCK_SIZE] "grad_Lambda" =
-        some (diagSsmBackwardGradLambdaTile st0 s_ptr lambda_ptr y_ptr
-          grad_y_ptr batch_size dim BLOCK_SIZE length (k + 1)))
-    (hMem :
-      ∀ offset, stReg.readMem grad_x_ptr offset =
-        stPrev.readMem grad_x_ptr offset)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [length, BLOCK_SIZE] =>
-        diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx)) :
-    diagSsmBackwardLoopInvariant st0 s_ptr lambda_ptr y_ptr grad_x_ptr
-      grad_y_ptr length batch_size dim BLOCK_SIZE (k + 1)
-      ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_x_ptr
-              (timeOffset st0 batch_size dim BLOCK_SIZE
-                (reverseTime length k) lane.1)
-              (diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length (reverseTime length k) lane.1)
-          else
-            acc)
-        stReg) := by
-  apply diagSsmBackwardLoopInvariant_step_of_iteration_write st0 stPrev
-  · exact hPrev
-  · simpa using hGradS
-  · simpa using hGradLambda
-  · intro idx hOld _hactive
-    rw [diagSsmBackwardCurrentIterationScatter_preserve_old st0 stReg
-      lambda_ptr grad_x_ptr grad_y_ptr batch_size dim BLOCK_SIZE k idx hk
-      hOld hOutInj]
-    exact hMem (diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx)
-  · intro i hactive
-    exact diagSsmBackwardCurrentIterationScatter_write st0 stReg lambda_ptr
-      grad_x_ptr grad_y_ptr batch_size dim BLOCK_SIZE k i hactive
-      (diagSsmBackwardCurrentIterationNoCollision_of_out_injective st0
-        batch_size dim BLOCK_SIZE k i hk hOutInj)
-
 def diagSsmBackwardLoopContextInvariant
     (st0 : BlockState)
     (s_ptr lambda_ptr y_ptr grad_x_ptr grad_y_ptr : RegionName)
@@ -1945,96 +1527,6 @@ def diagSsmBackwardLoopContextInvariant
     (∀ offset, st.readMem y_ptr offset = st0.readMem y_ptr offset) ∧
     (∀ offset, st.readMem grad_y_ptr offset = st0.readMem grad_y_ptr offset) ∧
     (∀ offset, st.readMem lambda_ptr offset = st0.readMem lambda_ptr offset)
-
-theorem diagSsmBackwardLoopContextInvariant_of_current_iteration_scatter
-    {length : Nat}
-    (st0 stPrev stReg : BlockState)
-    (s_ptr lambda_ptr y_ptr grad_x_ptr grad_y_ptr : RegionName)
-    (batch_size dim BLOCK_SIZE k : Nat)
-    (hk : k < length)
-    (hPrev :
-      diagSsmBackwardLoopInvariant st0 s_ptr lambda_ptr y_ptr grad_x_ptr
-        grad_y_ptr length batch_size dim BLOCK_SIZE k stPrev)
-    (hGradS :
-      stReg.regs .real [BLOCK_SIZE] "grad_s" =
-        some (diagSsmBackwardGradSTile st0 lambda_ptr grad_y_ptr batch_size
-          dim BLOCK_SIZE length (k + 1)))
-    (hGradLambda :
-      stReg.regs .real [BLOCK_SIZE] "grad_Lambda" =
-        some (diagSsmBackwardGradLambdaTile st0 s_ptr lambda_ptr y_ptr
-          grad_y_ptr batch_size dim BLOCK_SIZE length (k + 1)))
-    (hLambda :
-      stReg.regs .real [BLOCK_SIZE] "Lambda" =
-        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
-          if active st0 batch_size dim BLOCK_SIZE idx.1 then
-            some (st0.readMem lambda_ptr
-              (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
-          else
-            some 0 })
-    (hCol :
-      stReg.regs .nat [BLOCK_SIZE] "col_offsets" =
-        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
-          colOffset st0 BLOCK_SIZE idx.1 })
-    (hMask :
-      stReg.regs .bool [BLOCK_SIZE] "mask" =
-        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
-          active st0 batch_size dim BLOCK_SIZE idx.1 })
-    (hMemGradX :
-      ∀ offset, stReg.readMem grad_x_ptr offset =
-        stPrev.readMem grad_x_ptr offset)
-    (hSRead : ∀ offset, stReg.readMem s_ptr offset = st0.readMem s_ptr offset)
-    (hYRead : ∀ offset, stReg.readMem y_ptr offset = st0.readMem y_ptr offset)
-    (hGradYRead :
-      ∀ offset, stReg.readMem grad_y_ptr offset = st0.readMem grad_y_ptr offset)
-    (hLambdaRead :
-      ∀ offset, stReg.readMem lambda_ptr offset = st0.readMem lambda_ptr offset)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [length, BLOCK_SIZE] =>
-        diagSsmBackwardGradXOffset st0 batch_size dim BLOCK_SIZE idx))
-    (hGradXSNe : grad_x_ptr ≠ s_ptr)
-    (hGradXYNe : grad_x_ptr ≠ y_ptr)
-    (hGradXGradYNe : grad_x_ptr ≠ grad_y_ptr)
-    (hGradXLambdaNe : grad_x_ptr ≠ lambda_ptr) :
-    diagSsmBackwardLoopContextInvariant st0 s_ptr lambda_ptr y_ptr grad_x_ptr
-      grad_y_ptr length batch_size dim BLOCK_SIZE (k + 1)
-      ((TileShape.allIndices [BLOCK_SIZE]).foldl
-        (fun acc lane =>
-          if active st0 batch_size dim BLOCK_SIZE lane.1 then
-            acc.writeMem grad_x_ptr
-              (timeOffset st0 batch_size dim BLOCK_SIZE
-                (reverseTime length k) lane.1)
-              (diagSsmBackwardGradXSpec st0 lambda_ptr grad_y_ptr batch_size
-                dim BLOCK_SIZE length (reverseTime length k) lane.1)
-          else
-            acc)
-        stReg) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · exact diagSsmBackwardLoopInvariant_step_of_current_iteration_scatter st0
-      stPrev stReg s_ptr lambda_ptr y_ptr grad_x_ptr grad_y_ptr batch_size dim
-      BLOCK_SIZE k hk hPrev hGradS hGradLambda hMemGradX hOutInj
-  · simpa using hLambda
-  · simpa using hCol
-  · simpa using hMask
-  · intro offset
-    rw [diagSsmBackwardCurrentIterationScatter_preserve_region st0 stReg
-      lambda_ptr grad_x_ptr grad_y_ptr s_ptr batch_size dim BLOCK_SIZE k
-      offset hGradXSNe]
-    exact hSRead offset
-  · intro offset
-    rw [diagSsmBackwardCurrentIterationScatter_preserve_region st0 stReg
-      lambda_ptr grad_x_ptr grad_y_ptr y_ptr batch_size dim BLOCK_SIZE k
-      offset hGradXYNe]
-    exact hYRead offset
-  · intro offset
-    rw [diagSsmBackwardCurrentIterationScatter_preserve_region st0 stReg
-      lambda_ptr grad_x_ptr grad_y_ptr grad_y_ptr batch_size dim BLOCK_SIZE k
-      offset hGradXGradYNe]
-    exact hGradYRead offset
-  · intro offset
-    rw [diagSsmBackwardCurrentIterationScatter_preserve_region st0 stReg
-      lambda_ptr grad_x_ptr grad_y_ptr lambda_ptr batch_size dim BLOCK_SIZE k
-      offset hGradXLambdaNe]
-    exact hLambdaRead offset
 
 theorem diagSsmBackwardLoopContextInvariant_init_of_preloop
     (st0 st : BlockState)
@@ -3263,17 +2755,6 @@ theorem diag_ssm_backward_kernel_compute_correct
     grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr length batch_size dim
     BLOCK_SIZE s hOutInj hGradXSNe hGradXYNe hGradXGradYNe hGradXLambdaNe
     hGradSGradXNe hGradLambdaGradXNe hGradLambdaGradSNe
-
-theorem diagSsmForwardLoopInvariant_to_alg_post
-    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
-    (length batch_size dim BLOCK_SIZE : Nat)
-    (hInv :
-      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
-        batch_size dim BLOCK_SIZE length st) :
-    diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr length
-      batch_size dim BLOCK_SIZE st0 st := by
-  intro idx hidx
-  exact hInv.2 idx idx.1.isLt hidx
 
 theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)

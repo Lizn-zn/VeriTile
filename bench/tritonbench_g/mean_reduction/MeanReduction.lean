@@ -93,10 +93,6 @@ instance meanRowActiveDecidable
   unfold meanRowActive
   infer_instance
 
-noncomputable def meanOneColSpec
-    (s : BlockState) (X : RegionName) (N BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
-  s.readMem X (meanOutOffset s BLOCK_M i * N) / (N : ℝ)
-
 noncomputable def meanSpec
     (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
     (i : Fin BLOCK_M) : ℝ :=
@@ -108,12 +104,6 @@ noncomputable def meanLanePrefix
     (i : Fin BLOCK_M) (j : Fin BLOCK_N) : ℝ :=
   ((Finset.range off).filter fun col => col < N ∧ col % BLOCK_N = j.val).sum
     fun col => s.readMem X (meanOutOffset s BLOCK_M i * N + col)
-
-noncomputable def meanAccumulatorSpec
-    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat) :
-    Tile .real [BLOCK_M, BLOCK_N] :=
-  { data := fun idx =>
-      some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) }
 
 noncomputable def meanMaskedAccumulatorSpec
     (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat) :
@@ -157,13 +147,6 @@ noncomputable def meanFromMaskedAccumulatorSpec
     meanLanePrefix s X N BLOCK_M BLOCK_N 0 i j = 0 := by
   simp [meanLanePrefix]
 
-theorem meanAccumulatorSpec_zero
-    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N : Nat) :
-    meanAccumulatorSpec s X N BLOCK_M BLOCK_N 0 =
-      { data := fun _ : TileIndex [BLOCK_M, BLOCK_N] => some 0 } := by
-  ext idx
-  simp [meanAccumulatorSpec]
-
 theorem meanMaskedAccumulatorSpec_zero
     (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat) :
     meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N 0 =
@@ -183,14 +166,6 @@ theorem meanLoopOffset_mod_step
     (off + BLOCK_N) % BLOCK_N = 0 := by
   rw [Nat.add_mod, hOff]
   simp
-
-theorem meanChunkLane_mem_next
-    (N off BLOCK_N : Nat) (j : Fin BLOCK_N)
-    (hOff : off % BLOCK_N = 0) (hjN : off + j.val < N) :
-    off + j.val ∈ (Finset.range (off + BLOCK_N)).filter
-      (fun col => col < N ∧ col % BLOCK_N = j.val) := by
-  simp [hjN]
-  exact meanChunkLane_mod off BLOCK_N j hOff
 
 theorem meanChunkLane_not_mem_current
     (N off BLOCK_N : Nat) (j : Fin BLOCK_N) :
@@ -265,69 +240,6 @@ theorem meanLanePrefix_step
     change ((Finset.range (off + BLOCK_N)).filter pred).sum f =
       ((Finset.range off).filter pred).sum f
     rw [hset]
-
-theorem meanAccumulatorSpec_step
-    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
-    (hOff : off % BLOCK_N = 0) :
-    meanAccumulatorSpec s X N BLOCK_M BLOCK_N (off + BLOCK_N) =
-      { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-          some
-            (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 +
-              if off + idx.2.1.val < N then
-                s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
-                  (off + idx.2.1.val))
-              else
-                0) } := by
-  ext idx
-  simp [meanAccumulatorSpec, meanLanePrefix_step s X N BLOCK_M BLOCK_N off
-    idx.1 idx.2.1 hOff]
-
-theorem meanMaskedAccumulatorSpec_step
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (hOff : off % BLOCK_N = 0) :
-    meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N (off + BLOCK_N) =
-      { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-          some
-            (if meanRowActive s M BLOCK_M idx.1 then
-              meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 +
-                if off + idx.2.1.val < N then
-                  s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
-                    (off + idx.2.1.val))
-                else
-                  0
-            else
-              0) } := by
-  ext idx
-  by_cases hrow : meanRowActive s M BLOCK_M idx.1
-  · simp [meanMaskedAccumulatorSpec, hrow,
-      meanLanePrefix_step s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 hOff]
-  · simp [meanMaskedAccumulatorSpec, hrow]
-
-theorem meanMaskedAccumulatorSpec_active
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_N])
-    (hrow : meanRowActive s M BLOCK_M idx.1) :
-    (meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off).data idx =
-      some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) := by
-  simp [meanMaskedAccumulatorSpec, hrow]
-
-theorem meanChunkLoadSpec_active
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_N])
-    (hrow : meanRowActive s M BLOCK_M idx.1)
-    (hcol : off + idx.2.1.val < N) :
-    (meanChunkLoadSpec s X M N BLOCK_M BLOCK_N off).data idx =
-      some (s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
-        (off + idx.2.1.val))) := by
-  simp [meanChunkLoadSpec, hrow, hcol]
-
-theorem meanChunkLoadSpec_inactive
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_N])
-    (hmask : ¬(meanRowActive s M BLOCK_M idx.1 ∧ off + idx.2.1.val < N)) :
-    (meanChunkLoadSpec s X M N BLOCK_M BLOCK_N off).data idx =
-      some 0 := by
-  simp [meanChunkLoadSpec, hmask]
 
 def meanLoopInvariant
     (s0 : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
@@ -446,39 +358,6 @@ theorem meanFromMaskedAccumulatorSpec_eq_meanSpec
   simpa [meanFromMaskedAccumulatorSpec, hrow, meanFromAccumulatorSpec] using
     meanFromAccumulatorSpec_eq_meanSpec s X N BLOCK_M BLOCK_N off i hBLOCK_N hoff
 
-theorem meanMaskedAccumulatorSpec_reduceSum_axis1
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (i : Fin BLOCK_M) :
-    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
-      (meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off)).data
-        ((i, PUnit.unit) : TileIndex [BLOCK_M]) =
-      some ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
-        if meanRowActive s M BLOCK_M i then
-          meanLanePrefix s X N BLOCK_M BLOCK_N off i j
-        else
-          0) := by
-  simp [Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
-    TileShape.insertAxisIndex, meanMaskedAccumulatorSpec]
-  rfl
-
-theorem meanLoopInvariant_register_reduceSum_to_meanSpec
-    (s0 st : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
-    (i : Fin BLOCK_M)
-    (hInv : meanLoopInvariant s0 X M N BLOCK_M BLOCK_N off st)
-    (hrow : meanRowActive s0 M BLOCK_M i)
-    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
-    ∃ acc : Tile .real [BLOCK_M, BLOCK_N],
-      st.regs .real [BLOCK_M, BLOCK_N] "_mean" = some acc ∧
-        WithBot.unbotD 0
-            ((Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
-              acc).data ((i, PUnit.unit) : TileIndex [BLOCK_M])) / (N : ℝ) =
-          meanSpec s0 X N BLOCK_M i := by
-  refine ⟨meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off, hInv.2, ?_⟩
-  rw [meanMaskedAccumulatorSpec_reduceSum_axis1]
-  simpa [meanFromMaskedAccumulatorSpec, hrow] using
-    meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
-      hrow hBLOCK_N hoff
-
 def mean_dim_kernel_correct_target
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) : Prop :=
@@ -498,18 +377,6 @@ def mean_dim_kernel_alg_post
     s'.readMem Mean (meanOutOffset s BLOCK_M i) =
       meanSpec s X N BLOCK_M i
 
-theorem meanOutOffset_injective
-    (s : BlockState) (BLOCK_M : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [BLOCK_M] => meanOutOffset s BLOCK_M idx.1) := by
-  intro a b h
-  apply Prod.ext
-  · apply Fin.ext
-    simpa [meanOutOffset] using Nat.add_left_cancel h
-  · cases a.2
-    cases b.2
-    rfl
-
 theorem meanOutOffset_injective_col1
     (s : BlockState) (BLOCK_M : Nat) :
     Function.Injective
@@ -524,76 +391,6 @@ theorem meanOutOffset_injective_col1
     · cases a.2.2
       cases b.2.2
       rfl
-
-theorem meanStoreFromMaskedAccumulator_alg_post
-    (s0 stBase : BlockState) (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N off : Nat)
-    (hOffsetInj :
-      Function.Injective
-        (fun idx : TileIndex [BLOCK_M] => meanOutOffset s0 BLOCK_M idx.1))
-    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
-    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0
-      ((TileShape.allIndices [BLOCK_M]).foldl
-        (fun acc idx =>
-          if meanRowActive s0 M BLOCK_M idx.1 then
-            acc.writeMem Mean (meanOutOffset s0 BLOCK_M idx.1)
-              (WithBot.unbotD 0
-                ((Tile.reduceSumDrop
-                  (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
-                  (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)).data
-                    idx) / (N : ℝ))
-          else
-            acc)
-        stBase) := by
-  intro i hi
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj
-    ((i, PUnit.unit) : TileIndex [BLOCK_M])]
-  simp [meanRowActive, hi]
-  simpa [TileShape.axisDim, TileShape.insertAxisIndex,
-    meanMaskedAccumulatorSpec, meanFromMaskedAccumulatorSpec, meanRowActive, hi] using
-    meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
-      (by simpa [meanRowActive] using hi) hBLOCK_N hoff
-
-theorem meanStoreFromMaskedAccumulator_alg_post_default
-    (s0 stBase : BlockState) (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N off : Nat)
-    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
-    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0
-      ((TileShape.allIndices [BLOCK_M]).foldl
-        (fun acc idx =>
-          if meanRowActive s0 M BLOCK_M idx.1 then
-            acc.writeMem Mean (meanOutOffset s0 BLOCK_M idx.1)
-              (WithBot.unbotD 0
-                ((Tile.reduceSumDrop
-                  (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
-                  (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)).data
-                    idx) / (N : ℝ))
-          else
-            acc)
-        stBase) :=
-  meanStoreFromMaskedAccumulator_alg_post s0 stBase X Mean M N BLOCK_M BLOCK_N
-    off (meanOutOffset_injective s0 BLOCK_M) hBLOCK_N hoff
-
-theorem meanLoopInvariant_to_scatter_alg_post
-    (s0 st stBase : BlockState) (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N off : Nat)
-    (_hInv : meanLoopInvariant s0 X M N BLOCK_M BLOCK_N off st)
-    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
-    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0
-      ((TileShape.allIndices [BLOCK_M]).foldl
-        (fun acc idx =>
-          if meanRowActive s0 M BLOCK_M idx.1 then
-            acc.writeMem Mean (meanOutOffset s0 BLOCK_M idx.1)
-              (WithBot.unbotD 0
-                ((Tile.reduceSumDrop
-                  (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
-                  (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)).data
-                    idx) / (N : ℝ))
-          else
-            acc)
-        stBase) :=
-  meanStoreFromMaskedAccumulator_alg_post_default s0 stBase X Mean M N
-    BLOCK_M BLOCK_N off hBLOCK_N hoff
 
 theorem meanStoreFromExpandedMaskedAccumulator_alg_post
     (s0 stBase : BlockState) (X Mean : RegionName)

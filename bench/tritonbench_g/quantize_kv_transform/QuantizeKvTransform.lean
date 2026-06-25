@@ -1351,12 +1351,6 @@ theorem destindex_copy_quantize_kv_transform_python_h1_d1_summary
       destindex_copy_quantize_kv_transform_python_h1_d1_all_outputs_compute_correct
         K Scale DestLoc Out OutScale s
 
-/-- Python `H = 12, D = 96` transform case. -/
-abbrev destindex_copy_quantize_kv_transform_python_h12_d96_internal_output
-    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
-  destindex_copy_quantize_kv_transform_python_h12_d96_summary K Scale DestLoc
-    Out OutScale s
-
 /-- `output_summary` alias for the Python `H = 8, D = 64` transform case. -/
 abbrev destindex_copy_quantize_kv_transform_python_h8_d64_output_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
