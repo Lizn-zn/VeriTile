@@ -2748,15 +2748,6 @@ noncomputable def bwdRmsWdyTile
     (bwdRmsWTile s W N BLOCK_N)
     (bwdRmsDYTile s DY stride_dy_row N BLOCK_N)
 
-noncomputable def bwdRmsC1Carrier
-    (s : BlockState) (X W DY Rstd : RegionName)
-    (stride_x_row stride_dy_row N BLOCK_N : Nat) : WithBot ℝ :=
-  Option.map (fun a => a / (N : ℝ))
-    ((Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
-      (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-        (bwdRmsXhatTile s X Rstd stride_x_row N BLOCK_N)
-        (bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N))).data PUnit.unit)
-
 noncomputable def bwdRmsDWSpec
     (s : BlockState) (X DY Rstd : RegionName)
     (stride_x_row stride_dy_row N BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
@@ -2982,47 +2973,6 @@ noncomputable def bwdPlainBiasDWSpec
       ((bwdRmsDYTile s DY stride_dy_row N BLOCK_N).data (i, PUnit.unit))
       ((bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N).data
         (i, PUnit.unit)))
-
-noncomputable def bwdPlainBiasC1Carrier
-    (s : BlockState) (X W DY Mean Rstd : RegionName)
-    (stride_x_row stride_dy_row N BLOCK_N : Nat) : WithBot ℝ :=
-  match
-    (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
-      (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-        (bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N)
-        (bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N))).data PUnit.unit
-  with
-  | some x => some (x / (N : ℝ))
-  | none => none
-
-noncomputable def bwdPlainBiasC2Carrier
-    (s : BlockState) (W DY : RegionName)
-    (stride_dy_row N BLOCK_N : Nat) : WithBot ℝ :=
-  match
-    (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
-      (bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N)).data PUnit.unit
-  with
-  | some x => some (x / (N : ℝ))
-  | none => none
-
-noncomputable def bwdPlainBiasDXSpec
-    (s : BlockState) (X W DY Mean Rstd : RegionName)
-    (stride_x_row stride_dy_row N BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
-  WithBot.unbotD 0
-    (match
-      Option.map₂ (fun wdy corr => wdy - corr)
-        ((bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N).data
-          (i, PUnit.unit))
-        (Option.map₂ (fun xhatc1 c2 => xhatc1 + c2)
-          (Option.map₂ (fun xhat c1 => xhat * c1)
-            ((bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N).data
-              (i, PUnit.unit))
-            (bwdPlainBiasC1Carrier s X W DY Mean Rstd stride_x_row
-              stride_dy_row N BLOCK_N))
-          (bwdPlainBiasC2Carrier s W DY stride_dy_row N BLOCK_N))
-    with
-    | some x => some (x * s.readMem Rstd s.pid)
-    | none => none)
 
 theorem layer_norm_ops_bwd_plain_bias_one_row_dw_correct
     (X W DY DX DW DB Mean Rstd : RegionName)
@@ -3898,24 +3848,6 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
     Rstd C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N s s'
     hOutInj hExec i
   simpa [hActive] using h
-
-/-! ## Dimension-general offset injectivity + headline theorems
-
-The `*_offset_general_injective` helpers below establish injectivity of the
-forward/backward store offsets for arbitrary stride and tile width. The
-`*_compute_correct_general` headline theorems then compose the per-slice results
-at symbolic shapes, covering plain+bias, RMS+bias, and residual+plain+bias
-forward branches plus the backward core/residual-add outputs. -/
-
-/-- General injectivity for a `s.pid * stride + i.val` row-vector store offset,
-for any stride and tile width.  -/
-theorem layer_norm_ops_row_vector_offset_general_injective
-    (s : BlockState) (stride BLOCK_N : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride i) := by
-  intro a b h
-  simp only [bwdRowVectorOffset] at h
-  exact Fin.ext (by omega)
 
 theorem layer_norm_ops_rms_dx_offset_general_injective
     (s : BlockState) (stride BLOCK_N : Nat) :
@@ -5335,190 +5267,6 @@ theorem layer_norm_bwd_surface_zero_rows_db_zero_compute_correct
     stride_dx_row stride_dres_row stride_dres_in_row M N BLOCK_N eps s s'
     hDBDW hExec i
   simpa [hActive] using h
-
-/-- End-to-end backward correctness for the `DW` output with positive
-`rows_per_program = 1` but `M = 0`. The `for row in range(row_start, row_end)`
-loop body never executes because `row_end = min(pid+1, 0) = 0 ≤ pid = row_start`.
-This is the first surface-level backward proof at positive
-`rows_per_program`; the loop's empty-execution semantics is the same as the
-`rows_per_program = 0` case, while the loop-bound arithmetic is still checked. -/
-theorem layer_norm_bwd_surface_one_row_zero_M_dw_zero
-    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
-    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
-      stride_dres_in_row N BLOCK_N : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
-        Bool.true Bool.false Bool.false Bool.false Bool.false) s = some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem DW (s.pid * N + i.val) =
-        if i.val < N then 0.0
-        else s.readMem DW (s.pid * N + i.val) := by
-  intro i
-  by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
-          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
-          NumericDType.mul, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
-          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
-    subst s'
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
-          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
-    by_cases hi : i.val < N
-    · simp [hi]; norm_num
-    · simp [hi, BlockState.writeMem_readMem]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- End-to-end backward correctness for the `DW` output with arbitrary
-positive `rows_per_program` and `M = 0` (loop empty regardless of
-`rows_per_program`). Demonstrates the proof technique scales to multi-row
-configurations as long as the loop range is empty. -/
-theorem layer_norm_bwd_surface_arb_rows_zero_M_dw_zero
-    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
-    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
-      stride_dres_in_row N rows_per_program BLOCK_N : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hRpp : 0 < rows_per_program)
-    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row 0 N
-        rows_per_program BLOCK_N eps
-        Bool.true Bool.false Bool.false Bool.false Bool.false) s = some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem DW (s.pid * N + i.val) =
-        if i.val < N then 0.0
-        else s.readMem DW (s.pid * N + i.val) := by
-  intro i
-  by_cases hB : 0 < BLOCK_N
-  · have hStop : (s.pid + 1) * rows_per_program ≥ 0 := Nat.zero_le _
-    simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
-          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
-          NumericDType.mul, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          Nat.min_zero, Nat.zero_min,
-          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
-    subst s'
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
-          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
-    by_cases hi : i.val < N
-    · simp [hi]; norm_num
-    · simp [hi, BlockState.writeMem_readMem]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- End-to-end backward correctness for the `DW` output with arbitrary
-positive `rows_per_program`, `M = 0`, and HAS_DRESIDUAL=true. -/
-theorem layer_norm_bwd_surface_dresidual_arb_rows_zero_M_dw_zero
-    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
-    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
-      stride_dres_in_row N rows_per_program BLOCK_N : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hRpp : 0 < rows_per_program)
-    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row 0 N
-        rows_per_program BLOCK_N eps
-        Bool.true Bool.true Bool.false Bool.false Bool.false) s = some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem DW (s.pid * N + i.val) =
-        if i.val < N then 0.0
-        else s.readMem DW (s.pid * N + i.val) := by
-  intro i
-  by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
-          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
-          NumericDType.mul, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          Nat.min_zero, Nat.zero_min,
-          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
-    subst s'
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
-          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
-    by_cases hi : i.val < N
-    · simp [hi]; norm_num
-    · simp [hi, BlockState.writeMem_readMem]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- End-to-end backward correctness for the `DW` output with positive
-`rows_per_program = 1`, `M = 0`, IS_RMS_NORM=false (non-RMS branch). -/
-theorem layer_norm_bwd_surface_plain_one_row_zero_M_dw_zero
-    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
-    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
-      stride_dres_in_row N BLOCK_N : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
-        Bool.false Bool.false Bool.false Bool.false Bool.false) s = some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem DW (s.pid * N + i.val) =
-        if i.val < N then 0.0
-        else s.readMem DW (s.pid * N + i.val) := by
-  intro i
-  by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
-          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
-          NumericDType.mul, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
-          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
-    subst s'
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
-          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
-    by_cases hi : i.val < N
-    · simp [hi]; norm_num
-    · simp [hi, BlockState.writeMem_readMem]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- End-to-end backward correctness for the `DB` output with positive
-`rows_per_program = 1` and `M = 0` (loop empty), HAS_BIAS=true branch. -/
-theorem layer_norm_bwd_surface_one_row_zero_M_db_zero
-    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
-    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
-      stride_dres_in_row N BLOCK_N : Nat)
-    (eps : ℝ) (s s' : BlockState)
-    (hDBDW : DB ≠ DW)
-    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
-        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
-        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
-        Bool.true Bool.false Bool.false Bool.true Bool.false) s = some s') :
-    ∀ i : Fin BLOCK_N,
-      s'.readMem DB (s.pid * N + i.val) =
-        if i.val < N then 0.0
-        else s.readMem DB (s.pid * N + i.val) := by
-  intro i
-  by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
-          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
-          NumericDType.mul, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
-          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
-    subst s'
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
-          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
-    by_cases hi : i.val < N
-    · simp [hi]; norm_num
-    · simp [hi, BlockState.writeMem_readMem,
-            BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              DW _ _ _ _ _ _ _ hDBDW]
-  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
 /-! ## End-to-end backward surface correctness (degenerate row-block)
 

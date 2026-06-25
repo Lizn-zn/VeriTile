@@ -342,54 +342,6 @@ noncomputable def contextAttnClosedForm
     weight j * ctxVTile s V S (j, d, PUnit.unit))
   numer / denom
 
-/-- **Bridge to the library's `attentionRealCausalBlock`.** The genuine closed
-form above coincides with `attentionRealCausalBlock` (from
-`VeriTile.Triton.Math.Attention`) at query-start `gi₀ = start_m·BLOCK_M + plen`,
-with this kernel's Q/K/V tiles and effective scale `effScale = log 2 · sm_scale`.
-This certifies `contextAttnClosedForm` is the standard prompt-offset causal
-softmax-attention reference, not an ad-hoc definition. -/
-theorem contextAttnClosedForm_eq_attentionRealCausalBlock
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnClosedForm s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S idx
-      = attentionRealCausalBlock
-          (s.pids 0 * BLOCK_M + promptLen s 16 B_Prompt_Cache_Len)
-          (ctxQTile s Q B_Start_Loc BLOCK_M)
-          (ctxKTile s K S) (ctxVTile s V S)
-          (contextEffScale sm_scale)
-          (idx.1, idx.2.1, PUnit.unit) := by
-  obtain ⟨i, d, u⟩ := idx
-  -- The two sides agree key-by-key once the causal boundary
-  -- `start_m·BM + i + plen = start_m·BM + plen + i` is reassociated and the scale
-  -- is pulled into the dot via `Finset.mul_sum`.
-  have hbound : s.pids 0 * BLOCK_M + promptLen s 16 B_Prompt_Cache_Len + i.val
-      = s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len := by omega
-  simp only [contextAttnClosedForm, attentionRealCausalBlock, scaledScore, hbound,
-    Finset.mul_sum]
-
-/-- **The genuine closed form is the kernel's streaming-loop result (math layer).**
-For each output lane, `contextAttnClosedForm` equals `acc/l` of folding the
-online-softmax block step `osBlockStep` over the per-key `(score, value)` list
-built from this kernel's *masked* scores — score `effScale·rawᵢⱼ` for active
-(`j ≤ gi+plen`) keys and the kernel's masked `-∞` sentinel (weight `0`) for
-future keys. This is the form the kernel's `m_i`/`l_i`/`acc` loop carries; it
-reduces the eventual `exec` obligation to matching the loop to this fold (the
-remaining, FA-1-style, multi-thousand-line grind). -/
-noncomputable def ctxMaskedKeyList
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    List (ℝ × ℝ) :=
-  let plen := promptLen s 16 B_Prompt_Cache_Len
-  let gi := s.pids 0 * BLOCK_M + i.val
-  List.ofFn (fun j : Fin S =>
-    (if j.val ≤ gi + plen then
-        contextEffScale sm_scale *
-          Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-              * ctxKTile s K S (j, e, PUnit.unit))
-      else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),       -- kernel's `-1e8` sentinel score (pre-`m` shift)
-      ctxVTile s V S (j, d, PUnit.unit)))
-
 /-! ### Exact (sentinel-faithful) streaming closed form
 
 `contextAttnClosedForm` *idealizes* future keys to softmax weight `0`. The kernel's
@@ -435,59 +387,6 @@ noncomputable def contextAttnExactFold
       BLOCK_M S idx.1 idx.2.1).foldl osStep (0, 0, 0)
   st.2.2 / st.2.1
 
-/-- **Closed form of the exact fold.** The `osStep` fold over `ctxExactKeyList`
-collapses to the genuine causal softmax with `exp(effScale·raw)` weights on active
-keys and `exp(-1e8)` on future keys — explicitly, no self-reference, no `exec`.
-Proven via the banked `osStep_foldl_eq_batch` and `pow2_smScale_eq_exp_effScale`. -/
-theorem contextAttnExactFold_eq
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S idx
-      = (let i := idx.1; let d := idx.2.1
-         let plen := promptLen s 16 B_Prompt_Cache_Len
-         let gi := s.pids 0 * BLOCK_M + i.val
-         let raw := fun j : Fin S =>
-           Finset.univ.sum (fun e : Fin 128 =>
-             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-               * ctxKTile s K S (j, e, PUnit.unit))
-         let weight := fun j : Fin S =>
-           if j.val ≤ gi + plen then Real.exp (contextEffScale sm_scale * raw j)
-           else pow2 (0.0 - 10e7)
-         (Finset.univ.sum (fun j : Fin S => weight j * ctxVTile s V S (j, d, PUnit.unit)))
-           / (Finset.univ.sum (fun j : Fin S => weight j))) := by
-  obtain ⟨i, d, u⟩ := idx
-  rw [contextAttnExactFold, ctxExactKeyList, osStep_foldl_eq_batch]
-  simp only [List.map_ofFn, List.sum_ofFn, Function.comp, contextEffScale]
-  have hw : ∀ j : Fin S,
-      pow2 (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
-          sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
-        else (0.0 - 10e7 : ℝ))
-      = if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
-          Real.exp (Real.log 2 * sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit)))
-        else pow2 (0.0 - 10e7) := by
-    intro j
-    by_cases h : j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len
-    · simp only [h, if_true, pow2]; ring_nf
-    · simp only [h, if_false]
-  congr 1
-  · apply Finset.sum_congr rfl; intro j _; rw [hw j]
-  · apply Finset.sum_congr rfl; intro j _; rw [hw j]
-
-/-! ## ⊥-seeded online-softmax running-state recurrence (the loop invariant's math)
-
-The kernel seeds its running max `m_i = tl.zeros − inf` at `⊥` and `l_i`/`acc` at
-real `0`; each block it rescales by `α = exp2(m_i − m_ij)` (with `m_i = ⊥` on block 0
-the rescale is `realExp2 ⊥ = 0`, killing the seed). This section is the
-context-kernel analogue of `flash_attn`'s `osStepBot`/`flashStateBot`/`flashRunningMax`
-family: the ⊥-seeded recurrence the streaming loop carries, with this kernel's
-per-key score (`sm_scale·raw` on active keys `j ≤ gi+plen`, the genuine `-1e8`
-sentinel `(log 2)⁻¹·(−1e8)` on future keys) and value `ctxVTile`. Its final
-`acc/l` ratio over the full window reads off the banked `contextAttnExactFold`. -/
-
-open VeriTile.Triton (osStep pow2)
-
 /-- The kernel's per-key `(score, value)` pair for output `(i, d)` at global key `j`
 over `S` keys, with the genuine `-1e8` sentinel kept (matching `ctxExactKeyList`). -/
 noncomputable def ctxKV
@@ -499,14 +398,6 @@ noncomputable def ctxKV
     else (0.0 - 10e7 : ℝ),
     ctxVTile s V S (j, d, PUnit.unit))
 
-/-- Per-row key list over the streamed window `[0, hi)`: keys `j < hi`, index order. -/
-noncomputable def ctxKeysUpto
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
-  (List.finRange S).filterMap (fun j : Fin S =>
-    if j.val < hi then some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
-    else none)
-
 /-- One ⊥-seeded online-softmax step: running max in `WithBot ℝ` (seeded `⊥`), so
 `α = realExp2(m ⊖ m')` is `0` on the first block — faithful to the kernel's
 `m_i = tl.zeros − inf` and `l_i`/`acc = 0`. -/
@@ -517,21 +408,6 @@ noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) :
   let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
   let p := pow2 (sc - m'.unbotD 0)
   (m', l * α + p, acc * α + p * v)
-
-/-- ⊥-seeded running max of the streamed window `[0, hi)` — the value the kernel
-carries in `m_i` (seeded `⊥`, the `WithBot ⊔`-fold of the per-key scores). -/
-noncomputable def ctxRunningMax
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : WithBot ℝ :=
-  ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
-    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
-
-/-- The ⊥-seeded running `(max, l, acc)` after streaming the window `[0, hi)`. -/
-noncomputable def ctxStateBot
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
-  (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
-    osStepBot (⊥, 0, 0)
 
 /-- The running `max` component of an `osStepBot` fold is the `WithBot ⊔`-fold. -/
 theorem osStepBot_foldl_fst
@@ -621,48 +497,6 @@ theorem foldl_sup_bot_eq_foldr (L : List (WithBot ℝ)) :
       rw [max_assoc]
   rw [gen ⊥, bot_sup_eq]
 
-/-- The ⊥-seeded denominator equals `κ(ctxRunningMax)·Σpow2 score`. -/
-theorem ctxStateBot_snd_fst
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.1
-      = ((ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).elim 0
-            (fun r => pow2 (-r)))
-        * ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
-            (fun p => pow2 p.1)).sum := by
-  have h := (osStepBot_foldl_consistent
-    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
-    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).1
-  rw [ctxStateBot]
-  rw [show (List.foldl osStepBot (⊥, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.1 = _ from h]
-  rw [show (List.foldl osStepBot (⊥, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).1
-        = ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d from by
-    rw [ctxRunningMax, osStepBot_foldl_fst, foldl_sup_bot_eq_foldr]]
-  rw [zero_add]
-
-/-- The ⊥-seeded accumulator equals `κ(ctxRunningMax)·Σpow2 score·v`. -/
-theorem ctxStateBot_snd_snd
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.2
-      = ((ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).elim 0
-            (fun r => pow2 (-r)))
-        * ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
-            (fun p => pow2 p.1 * p.2)).sum := by
-  have h := (osStepBot_foldl_consistent
-    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
-    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).2
-  rw [ctxStateBot]
-  rw [show (List.foldl osStepBot (⊥, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.2 = _ from h]
-  rw [show (List.foldl osStepBot (⊥, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).1
-        = ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d from by
-    rw [ctxRunningMax, osStepBot_foldl_fst, foldl_sup_bot_eq_foldr]]
-  rw [zero_add]
-
 /-- Any list member is `≤` the `foldr ⊔ ⊥`. -/
 theorem mem_le_foldr_sup (a : WithBot ℝ) :
     ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
@@ -675,106 +509,6 @@ theorem mem_le_foldr_sup (a : WithBot ℝ) :
     rcases List.mem_cons.mp h with h | h
     · rw [h]; exact le_sup_left
     · exact le_trans (ih h) le_sup_right
-
-/-- The ⊥-seeded running max over a nonempty window (`0 < hi`, `0 < S`) is `≠ ⊥`:
-key `0` is always streamed, so the coerced score list is nonempty. -/
-theorem ctxRunningMax_ne_bot
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) (hhi : 0 < hi) (hS : 0 < S) :
-    ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d ≠ ⊥ := by
-  unfold ctxRunningMax ctxKeysUpto
-  have hmem : (⟨0, hS⟩ : Fin S) ∈ List.finRange S := List.mem_finRange _
-  set L := ((List.finRange S).filterMap (fun j : Fin S =>
-      if j.val < hi then some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
-      else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) with hL
-  have hmemL : ((ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩).1
-      : WithBot ℝ) ∈ L := by
-    rw [hL, List.mem_map]
-    refine ⟨ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩, ?_, rfl⟩
-    rw [List.mem_filterMap]
-    exact ⟨⟨0, hS⟩, hmem, by rw [if_pos (show (⟨0, hS⟩ : Fin S).val < hi from hhi)]⟩
-  have hle : ((ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩).1
-      : WithBot ℝ) ≤ L.foldr (· ⊔ ·) ⊥ := mem_le_foldr_sup _ L hmemL
-  intro hbot
-  exact absurd (le_bot_iff.mp (hbot ▸ hle)) (WithBot.coe_ne_bot)
-
-/-- **Full window = the banked `ctxExactKeyList`.** At `hi = S` every key is
-streamed, so the windowed key list coincides with the exact-fold key list. -/
-theorem ctxKeysUpto_full
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d
-      = ctxExactKeyList s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d := by
-  unfold ctxKeysUpto ctxExactKeyList ctxKV
-  rw [List.ofFn_eq_map]
-  refine List.filterMap_eq_map_iff_forall_eq_some.mpr (fun j _ => ?_)
-  simp only [j.isLt, if_true, Nat.add_assoc]
-
-/-- ⊥-seeded ratio = 0-seeded `osStep` ratio whenever the running max `≠ ⊥`
-(the `pow2(−m)` common factor cancels). -/
-theorem ctxStateBot_ratio_eq
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128)
-    (hne : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d ≠ ⊥) :
-    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.2
-        / (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.1
-      = ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
-            osStep (0, 0, 0)).2.2
-        / ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
-            osStep (0, 0, 0)).2.1 := by
-  rw [ctxStateBot_snd_fst, ctxStateBot_snd_snd]
-  have hcL := (VeriTile.Triton.osStep_foldl_consistent
-    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
-    0 0 0 0 0 (by simp) (by simp)).1
-  have hcT := (VeriTile.Triton.osStep_foldl_consistent
-    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
-    0 0 0 0 0 (by simp) (by simp)).2
-  rw [show (List.foldl osStep (0, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.1
-        = _ from hcL,
-      show (List.foldl osStep (0, 0, 0)
-        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.2
-        = _ from hcT]
-  cases hM : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d with
-  | bot => exact absurd hM hne
-  | coe r =>
-    rw [show ((↑r : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-r) from rfl]
-    simp only [zero_add]
-    rw [mul_div_mul_left _ _ (ne_of_gt (pow2_pos _)),
-        mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
-
-/-- **The full-window ⊥-seeded final state reads off `contextAttnExactFold`.**
-`ctxStateBot.acc / ctxStateBot.l` over the full window (`hi = S`) equals the
-banked genuine closed form — the value the kernel's `m_i`/`l_i`/`acc` loop
-produces. Requires the window nonempty (`ctxRunningMax ≠ ⊥`). -/
-theorem ctxStateBot_full_eq_exactFold
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128)
-    (hne : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d ≠ ⊥) :
-    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d).2.2
-        / (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d).2.1
-      = contextAttnExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S
-          (i, d, PUnit.unit) := by
-  rw [ctxStateBot_ratio_eq _ _ _ _ _ _ _ _ _ _ _ _ hne, ctxKeysUpto_full]
-  rfl
-
-/-! ### one-block advance of the ⊥-seeded state (the step lemma's math)
-
-Per-block decomposition of the ⊥-seeded recurrence: the loop's `c`-th iteration
-streams block `c` (keys `c·128 ≤ j < (c+1)·128`), advancing `ctxStateBot(c·128)`
-to `ctxStateBot((c+1)·128)` by one `osStepBot` fold over that block. The
-context kernel keeps ALL keys `j < hi` (no causal drop — future keys carry the
-`-1e8` sentinel score in `ctxKV`), so the window split is a pure threshold split. -/
-
-/-- Block-`c` per-row key list: keys `c·BN ≤ j < (c+1)·BN`, the keys the loop's
-`c`-th iteration streams (the `-1e8` sentinel kept on future keys). -/
-noncomputable def ctxBlock
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
-  (List.finRange S).filterMap (fun j : Fin S =>
-    if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then
-      some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
-    else none)
 
 /-- Threshold-split for a `.val`-ascending `Fin` list: the `j.val < hi₂` filterMap
 splits into the `j.val < t` prefix and the `t ≤ j.val < hi₂` block (`t ≤ hi₂`). -/
@@ -805,30 +539,6 @@ private theorem ctx_filterMap_window_split {n : Nat} (l : List (Fin n))
       by_cases h2 : a.val < hi₂
       · rw [if_pos h2, if_pos (And.intro hge h2 : t ≤ a.val ∧ a.val < hi₂)]; rfl
       · rw [if_neg h2, if_neg (fun h : t ≤ a.val ∧ a.val < hi₂ => h2 h.2)]
-
-/-- **Window split** (`hi = c·BN`): keys streamed through `c+1` blocks are those
-through `c` blocks followed by block `c`. -/
-theorem ctxKeysUpto_succ
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S ((c + 1) * BN) i d
-      = ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S (c * BN) i d
-        ++ ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d := by
-  unfold ctxKeysUpto ctxBlock
-  rw [ctx_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
-    (c * BN) ((c + 1) * BN) (fun j => ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
-    (by nlinarith [Nat.zero_le BN])]
-
-/-- **One-block advance** of the ⊥-seeded state: streaming block `c` folds that
-block's keys (via `osStepBot`) onto the state after `c` blocks. -/
-theorem ctxStateBot_succ
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S ((c + 1) * BN) i d
-      = (ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d).foldl
-          osStepBot (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S (c * BN) i d) := by
-  unfold ctxStateBot
-  rw [ctxKeysUpto_succ, List.foldl_append]
 
 /-- The running max of an `osStepBot` fold over `block` from `(m, l, acc)` is
 `m ⊔ (block max)`. -/
@@ -2065,30 +1775,6 @@ noncomputable def gStateBot (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot �
 /-- Generic ⊥-seeded running max after streaming `[0, hi)`. -/
 noncomputable def gRunningMax (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot ℝ :=
   ((gKeysUpto S hi g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
-
-theorem ctxKeysUpto_eq_g
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
-      = gKeysUpto S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
-
-theorem ctxBlock_eq_g
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d
-      = gBlock S BN c (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
-
-theorem ctxStateBot_eq_g
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
-      = gStateBot S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
-
-theorem ctxRunningMax_eq_g
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
-      = gRunningMax S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
 
 /-- The running max component of `gStateBot` is the `WithBot ⊔`-fold `gRunningMax`. -/
 theorem gStateBot_fst_eq_runningMax (S hi : Nat) (g : Fin S → ℝ × ℝ) :
@@ -5262,20 +4948,6 @@ def ctxPreLoopG (Q : RegionName) (B_Start_Loc B_Seqlen b_prompt_cache_len : Regi
           (Op.ref .nat [] "prompt_cache_len"))
         (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
           (Op.ref .nat [] "prompt_cache_len"))) ]
-
-theorem ctxPreLoopG_take (Q K V Out : RegionName)
-    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
-    (stride_qbs stride_qh stride_qd stride_kb stride_kh stride_ks stride_kd
-      stride_vb stride_vh stride_vs stride_vd stride_obs stride_oh stride_od
-      kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
-    (context_attn_fwd_kernel_int8kv_surface Q K V sm_scale Out
-        B_Start_Loc B_Seqlen b_prompt_cache_len
-        stride_qbs stride_qh stride_qd stride_kb stride_kh stride_ks stride_kd
-        stride_vb stride_vh stride_vs stride_vd stride_obs stride_oh stride_od
-        kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel.body.take 19
-      = ctxPreLoopG Q B_Start_Loc B_Seqlen b_prompt_cache_len
-          stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N := by
-  rfl
 
 /-- General loop body (18 lowered statements), parameterized over strides/dims. -/
 noncomputable def ctxLoopBodyG (Q K V : RegionName) (sm_scale : ℝ)

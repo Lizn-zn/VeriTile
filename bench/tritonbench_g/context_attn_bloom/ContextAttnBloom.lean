@@ -377,32 +377,6 @@ noncomputable def contextAttnBloomClosedForm
       (j, d, PUnit.unit))
   numer / denom
 
-/-- **Bridge to the library's `attentionRealCausalBlock`.** The genuine closed
-form above coincides with `attentionRealCausalBlock` (from
-`VeriTile.Triton.Math.Attention`) at query-start `gi₀ = start_m·BLOCK_M + plen`,
-with this kernel's Q/K/V tiles and scale `sm_scale`. This certifies
-`contextAttnBloomClosedForm` is the standard prompt-offset causal scaled-dot
-softmax-attention reference, not an ad-hoc definition. -/
-theorem contextAttnBloomClosedForm_eq_attentionRealCausalBlock
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
-      B_req_idx : RegionName)
-    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
-    (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnBloomClosedForm s Q K V B_Start_Loc B_Prompt_Cache_Len
-        Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx
-      = attentionRealCausalBlock
-          (s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len)
-          (ctxQTile s Q B_Start_Loc BLOCK_M)
-          (ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S)
-          (ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S)
-          sm_scale
-          (idx.1, idx.2.1, PUnit.unit) := by
-  obtain ⟨i, d, u⟩ := idx
-  have hbound : s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len + i.val
-      = s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len := by omega
-  simp only [contextAttnBloomClosedForm, attentionRealCausalBlock, scaledScore,
-    hbound, Finset.mul_sum]
-
 /-! ### Exact (sentinel-faithful) streaming closed form
 
 `contextAttnBloomClosedForm` *idealizes* future keys to softmax weight `0`. The
@@ -459,68 +433,6 @@ noncomputable def contextAttnBloomExactFold
       B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx.1 idx.2.1).foldl
       osStep (0, 0, 0)
   st.2.2 / st.2.1
-
-/-- **Closed form of the exact fold.** The `osStep` fold over `ctxBloomKeyList`
-collapses to the genuine causal softmax with `exp(sm·raw)` weights on active keys
-and `exp(-1e8)` on future keys — explicitly, no self-reference, no `exec`. Proven
-via the banked `osStep_foldl_eq_batch` and `pow2 (x / log 2) = exp x`. -/
-theorem contextAttnBloomExactFold_eq
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
-      B_req_idx : RegionName)
-    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
-    (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnBloomExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len
-        Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx
-      = (let i := idx.1; let d := idx.2.1
-         let plen := promptLen s B_Prompt_Cache_Len
-         let gi := s.pids 2 * BLOCK_M + i.val
-         let raw := fun j : Fin S =>
-           Finset.univ.sum (fun e : Fin 128 =>
-             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-               * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
-                   (j, e, PUnit.unit))
-         let weight := fun j : Fin S =>
-           if j.val ≤ gi + plen then Real.exp (sm_scale * raw j)
-           else Real.exp (0.0 - 10e7)
-         (Finset.univ.sum (fun j : Fin S =>
-            weight j * ctxVTile s V Req_to_tokens B_req_idx stride_req_b
-              stride_req_s S (j, d, PUnit.unit)))
-           / (Finset.univ.sum (fun j : Fin S => weight j))) := by
-  obtain ⟨i, d, u⟩ := idx
-  rw [contextAttnBloomExactFold, ctxBloomKeyList, osStep_foldl_eq_batch]
-  simp only [List.map_ofFn, List.sum_ofFn, Function.comp]
-  have hlog2 : Real.log 2 ≠ 0 := ne_of_gt (Real.log_pos (by norm_num))
-  have hpow : ∀ x : ℝ, pow2 (x / Real.log 2) = Real.exp x := by
-    intro x
-    rw [pow2, mul_div_cancel₀ x hlog2]
-  have hw : ∀ j : Fin S,
-      pow2 (ctxBloomScore s Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
-          B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S i j / Real.log 2)
-      = if j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len then
-          Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-              * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
-                  (j, e, PUnit.unit)))
-        else Real.exp (0.0 - 10e7) := by
-    intro j
-    rw [hpow, ctxBloomScore]
-    by_cases h : j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len
-    · simp only [h, if_true]
-    · simp only [h, if_false]
-  have hbound : s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len
-      = s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len + i.val := by omega
-  congr 1
-  · apply Finset.sum_congr rfl; intro j _; rw [hw j, hbound]
-  · apply Finset.sum_congr rfl; intro j _; rw [hw j, hbound]
-
-/-! ## Generic ⊥-seeded online-softmax running-state machinery (exec-assembly layer)
-
-Kernel-agnostic base-2 online-softmax fold over an abstract per-key
-`g : Fin S → ℝ × ℝ` (score, value). The bloom kernel feeds it base-2 scores
-`ctxBloomScore / log 2` so that `pow2 score = exp (natural kernel score)`. Ported
-from the closed `context_attn_llama` template (#306). -/
-
-open VeriTile.Triton (osStep pow2)
 
 /-- One ⊥-seeded online-softmax step: running max in `WithBot ℝ` (seeded `⊥`), so
 `α = realExp2(m ⊖ m')` is `0` on the first block. -/
@@ -1147,13 +1059,6 @@ theorem ctxg_reduceMaxDrop_data_row {M N : Nat} (hN : 0 < N) (qk : Tile .real [M
   simp only [Finset.sup'_eq_sup]
   exact Finset.sup_congr rfl (fun jL _ => hqk jL)
 
-/-- `WithBot.realExp2` of a `some`-cell is `some (pow2 …)`. -/
-theorem ctxg_exp2_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N])
-    (r : Fin M) (jL : Fin N) (hx : x.data (r, jL, PUnit.unit) = some (h r jL)) :
-    (Tile.uop WithBot.realExp2 x).data (r, jL, PUnit.unit) = some (pow2 (h r jL)) := by
-  show WithBot.realExp2 (x.data (r, jL, PUnit.unit)) = _
-  rw [hx]; simp [WithBot.realExp2, pow2, mul_comm]
-
 /-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
 theorem ctxg_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
     @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
@@ -1200,30 +1105,6 @@ theorem ctx_qk_sub_mij_cell {BM BN : Nat} (qkT : Tile .real [BM, BN]) (mijT : Ti
   simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
     TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk, hmij,
     NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
-
-/-! ### Bloom natural-exp cell bridges (analogues with `WithBot.realExp`)
-
-The bloom loop body uses **natural** `tl.exp` (`WithBot.realExp`), feeding the
-base-2 `osStep` fold via the invariant's log2-scaling (`m_i = log2·(running max)`,
-so `realExp((Mc − Mc₊₁)·log2) = realExp2(Mc − Mc₊₁) = pow2(Mc − Mc₊₁)`). -/
-
-/-- `realExp (x · log 2) = realExp2 x` on the carrier: natural `exp` of a
-log2-scaled value is the base-2 `realExp2`. -/
-theorem ctxg_realExp_log2 (x : ℝ) :
-    WithBot.realExp (((x * Real.log 2 : ℝ) : WithBot ℝ)) = WithBot.realExp2 ((x : ℝ) : WithBot ℝ) := by
-  rfl
-
-/-- `WithBot.realExp` of a `some`-cell is `some (Real.exp …)` (shape-generic). -/
-theorem ctxg_exp_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N])
-    (r : Fin M) (jL : Fin N) (hx : x.data (r, jL, PUnit.unit) = some (h r jL)) :
-    (Tile.uop WithBot.realExp x).data (r, jL, PUnit.unit) = some (Real.exp (h r jL)) := by
-  show WithBot.realExp (x.data (r, jL, PUnit.unit)) = _
-  rw [hx]; rfl
-
-/-- `realExp` is total (never `⊥`). -/
-theorem ctxg_realExp_eq_some_unbotD (z : WithBot ℝ) :
-    WithBot.realExp z = some ((WithBot.realExp z).unbotD 0) := by
-  cases z <;> rfl
 
 /-- The `q·k` dot cell is the (unscaled) score (shape-generic `[BM,D]·[D,BN]`). -/
 theorem ctx_dot_score_cell {BM BN D : Nat}
@@ -1329,13 +1210,6 @@ theorem ctx_evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
     (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
     evalOp (.floorDiv h bc x y) s = (do
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
-  simp [evalOp]
-
-/-- Eval helper for `remap` (column/row broadcast of load/store masks). -/
-theorem ctx_evalOp_remap {dtype outShape inShape}
-    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
-    evalOp (.remap outShape map a) s = (do
-      let v ← evalOp a s; some (Tile.remap map v)) := by
   simp [evalOp]
 
 /-- Scalar `nat` region load (`tl.load(b_prompt_cache_len + cur_batch)` etc.). -/
@@ -5404,31 +5278,6 @@ noncomputable def contextAttnBloomExactFoldMG
       stride_vbs stride_vh stride_vd head_dim BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val)
     (S / BLOCK_N)
 
-/-- **Pin bridge (tiles).** At the test shape the general per-key data coincides
-with the pinned `bloomKVM`. -/
-theorem bloomKVMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
-    bloomKVMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
-        576 96 1 7500 1 576 96 1 576 96 1 96 128 BLOCK_M S bel i d.val
-      = bloomKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale 7500 1 BLOCK_M S bel i d := by
-  unfold bloomKVMG bloomKVM bloomKTileMG bloomVTileMG bloomQTileMG bloomKTileG bloomVTileG bloomQTileG
-    bloomKvLocG bloomKTileM bloomVTileM bloomQTileM ctxKTile ctxVTile ctxQTile kvLoc
-  funext j
-  simp only [Nat.mul_one, Nat.one_mul, curHead]
-
-/-- **Pin bridge (fold).** The general exact fold instantiates to the pinned
-`contextAttnBloomExactFoldM` at the test shape. -/
-theorem contextAttnBloomExactFoldMG_pin
-    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) :
-    contextAttnBloomExactFoldMG s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
-        576 96 1 7500 1 576 96 1 576 96 1 96 128 128 BLOCK_M S bel idx
-      = contextAttnBloomExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale 7500 1 BLOCK_M S bel idx := by
-  unfold contextAttnBloomExactFoldMG contextAttnBloomExactFoldM
-  rw [bloomKVMG_pin]
-
-
 /-! ### General op-eval gather/mask helpers (strides + head_dim free) -/
 
 /-- General masked `kv_loc` gather eval (gather strides free). -/
@@ -5821,22 +5670,6 @@ theorem bloomBody_splitG (Q K V Out : RegionName)
             :: bloomPostLoopG Out stride_obs stride_oh stride_od head_dim BLOCK_DMODEL BLOCK_M) := by
   rfl
 
-/-- General preLoop take: surface body `take 19 = bloomPreLoopG`. -/
-theorem bloomPreLoopG_take (Q K V Out : RegionName)
-    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
-    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-      stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
-    (context_attn_bloom_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
-        Req_to_tokens B_req_idx b_prompt_cache_len
-        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
-        stride_req_b stride_req_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgKernel.body.take 19
-      = bloomPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
-          stride_qbs stride_qh stride_qd head_dim kv_group_num BLOCK_DMODEL BLOCK_M BLOCK_N := by
-  rfl
-
-
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **General LoopBody execution.** Mirror of `bloomLoopBody_steps` over symbolic
@@ -6181,18 +6014,6 @@ noncomputable def bloomInvariantG
   (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
       some (gAccN S BLOCK_N (s0.pids 2 * BLOCK_M + idx.1.val + plen) (g idx.1 idx.2.1.val) c)⟩) ∧
   (c * BLOCK_N ≤ S)
-
-/-- **Pin bridge (per-key data).** At the test shape, `bloomGG` coincides with the
-pinned `bloomG` (BLOCK_M=128). -/
-theorem bloomGG_pin
-    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
-    (sm_scale : ℝ) (S bel : Nat) (i d : Fin 128) :
-    bloomGG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale
-        576 96 1 7500 1 576 96 1 576 96 1 96 128 128 S bel i d.val
-      = bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale S bel i d := by
-  unfold bloomGG bloomG
-  rw [bloomKVMG_pin]
-
 
 /-! ### General preLoop eval (→ `bloomInvariantG 0`) -/
 
