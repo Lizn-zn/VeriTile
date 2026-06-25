@@ -3908,6 +3908,49 @@ noncomputable def aft3BlockG {BM ND NC : Nat}
             vT (j, d, PUnit.unit))
     else none)
 
+/-- General resume-**SEEDED** running `(max, denom, acc)` after the windowed prefix
+`[0, hi)`: the online-softmax `aft3OsStepBot` fold from an arbitrary initial state
+`init i d`, rather than the `(⊥, 0, 0)` of `aft3StateBotG`. This is the case-4
+(`INIT=False` cross-launch resume) analogue, where `init` is the prior
+`(m_i, l_i, acc)` loaded from the input `M`/`L`/`Out` buffers. -/
+noncomputable def aft3StateSeededG {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (init : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ)
+    (hi : Nat) (i : Fin BM) (d : Fin ND) : WithBot ℝ × ℝ × ℝ :=
+  (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (init i d)
+
+/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
+`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
+`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
+state `s` (these are the running results of prior chunk launches, i.e. genuine
+INPUT memory to this program, not this program's own executed output). -/
+noncomputable def aft3Case4Seed
+    (s : BlockState) (M Out L : RegionName)
+    (base BM ND som son ROUND_CTX : Nat) :
+    Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
+  fun i d =>
+    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
+     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
+     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
+
+/-- **Genuine closed form, case 4** (`INIT=False` cross-launch resume, sliding
+window). The output lane `(i,d)` is the normalized resume-seeded online softmax:
+the `aft3StateSeededG` fold of the sliding-window-kept keys onto the loaded
+`aft3Case4Seed`, read off as `acc / denom`. Genuinely over INPUT memory
+(`Q`/`K`/`V` for the keys, `M`/`L`/`Out` for the resume seed) — **no
+self-reference** to this program's executed output. -/
+noncomputable def attentionFwdTriton3Case4OutSpecG
+    (s : BlockState) (Q K V M Out L : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn som son ROUND_CTX : Nat) (sc : ℝ)
+    (BN off size : Nat) (idx : TileIndex [BM, ND]) : ℝ :=
+  let st := aft3StateSeededG (qTile3G s Q base BM ND sqm sqk)
+    (kTile3G s K base NC ND skn skk) (vTile3G s V base NC ND svk svn)
+    (keyScale3G sc NC) (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j)
+    (aft3Case4Seed s M Out L base BM ND som son ROUND_CTX) NC idx.1 idx.2.1
+  st.2.2 / st.2.1
+
 theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
     (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
