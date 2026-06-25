@@ -3964,6 +3964,7 @@ theorem aft3StateSeededG_fst {BM ND NC : Nat}
   unfold aft3StateSeededG aft3RunningMaxG
   rw [aft3OsStepBot_block_fst]
 
+
 theorem aft3StateBotG_fst_eq_runningMax {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
     (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
@@ -4023,6 +4024,42 @@ theorem aft3StateBotG_succ {BM ND NC : Nat}
           (aft3StateBotG qT kT vT keyScale keep (c * BN) i d) := by
   unfold aft3StateBotG
   rw [aft3KeysUptoG_succ, List.foldl_append]
+
+/-- Seeded block-advance: the seeded fold over `[0,(c+1)·BN)` is the block-`c`
+fold onto the seeded fold over `[0,c·BN)` (pure `List.foldl_append`). -/
+theorem aft3StateSeededG_succ {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (BN c : Nat) (i : Fin BM) (d : Fin ND) :
+    aft3StateSeededG qT kT vT keyScale keep seed ((c + 1) * BN) i d
+      = (aft3BlockG qT kT vT keyScale keep BN c i d).foldl aft3OsStepBot
+          (aft3StateSeededG qT kT vT keyScale keep seed (c * BN) i d) := by
+  unfold aft3StateSeededG
+  rw [aft3KeysUptoG_succ, List.foldl_append]
+
+/-- Seeded denom/acc consistency (online-softmax invariant carried from a seed
+satisfying it): the seeded fold's `(denom, acc)` decompose as
+`pow2(-max)·(Lseed + Σ pow2 p.1)` and `pow2(-max)·(Tseed + Σ pow2 p.1·p.2)`.
+Direct from `aft3OsStepBot_foldl_consistent`. -/
+theorem aft3StateSeededG_consistent {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (Lseed Tseed : ℝ)
+    (hi : Nat) (i : Fin BM) (d : Fin ND)
+    (hseedL : (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Lseed)
+    (hseedT : (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Tseed)
+    (hseedmL : (seed i d).1 = ⊥ → Lseed = 0) (hseedmT : (seed i d).1 = ⊥ → Tseed = 0) :
+    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).2.1
+        = ((aft3StateSeededG qT kT vT keyScale keep seed hi i d).1.elim 0 (fun r => pow2 (-r)))
+          * (Lseed + ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1)).sum)
+      ∧ (aft3StateSeededG qT kT vT keyScale keep seed hi i d).2.2
+        = ((aft3StateSeededG qT kT vT keyScale keep seed hi i d).1.elim 0 (fun r => pow2 (-r)))
+          * (Tseed + ((aft3KeysUptoG qT kT vT keyScale keep hi i d).map (fun p => pow2 p.1 * p.2)).sum) := by
+  unfold aft3StateSeededG
+  exact aft3OsStepBot_foldl_consistent (aft3KeysUptoG qT kT vT keyScale keep hi i d)
+    (seed i d).1 (seed i d).2.1 (seed i d).2.2 Tseed Lseed hseedL hseedT hseedmL hseedmT
 
 theorem aft3KeysUptoG_full {BM ND NC : Nat}
     (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
