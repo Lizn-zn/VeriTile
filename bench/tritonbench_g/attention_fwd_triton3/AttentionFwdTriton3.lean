@@ -6548,6 +6548,150 @@ theorem aft3_acc_dot_block_maskedG (s0 : BlockState) (Q K V : RegionName)
   · rw [if_neg hkp, if_neg hkp]
 
 set_option maxHeartbeats 1600000 in
+/-- **Generic-normalizer denom block sum (case 4 / any seed).** Like
+`aft3_nume_row_sum_maskedG` but with an arbitrary normalizer `M` (the seeded fold's
+running max), with `M ≠ ⊥` on kept lanes supplied as a hypothesis. -/
+theorem aft3_nume_row_sum_masked_genG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (mijT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN])
+    (qkT : Tile .real [BM, BN]) (M : WithBot ℝ)
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = M)
+    (hMnebot : ∀ jL : Fin BN, mc jL = Bool.true → M ≠ ⊥)
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.reduceSumDrop (aft3Ax1G BM BN) pmT).data (i, PUnit.unit)
+      = some ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map (fun p =>
+            pow2 (p.1 - M.unbotD 0))).sum := by
+  rw [Tile.reduceSumDrop_data]
+  have hcell : ∀ jL : Fin BN,
+      pmT.data (TileShape.insertAxisIndex [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) (i, PUnit.unit) jL)
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+            else 0) := by
+    intro jL
+    rw [show (TileShape.insertAxisIndex [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) (i, PUnit.unit) jL) = (i, jL, PUnit.unit) from rfl]
+    rw [hpmT jL]
+    rw [aft3_pmT_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+      (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile mijT M qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
+    · rw [hmc jL]
+      by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+      · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
+      · rw [if_neg hkp, if_neg (by simp [hkp])]
+    · intro hmcj; exact hMnebot jL hmcj
+  simp only [hcell]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3BlockG_map_sum (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d hc1 (fun p => pow2 (p.1 - M.unbotD 0))]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+  · rw [if_pos hkp, if_pos hkp]; simp only [keyScale3G]
+  · rw [if_neg hkp, if_neg hkp]
+
+set_option maxHeartbeats 1600000 in
+/-- **Generic-normalizer acc block dot sum (case 4 / any seed).** Like
+`aft3_acc_dot_block_maskedG` but with an arbitrary normalizer `M`. -/
+theorem aft3_acc_dot_block_masked_genG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND])
+    (mijT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN]) (qkT : Tile .real [BM, BN]) (M : WithBot ℝ)
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hv : ∀ idx : TileIndex [BN, ND],
+        vtile.data idx = some (s0.readMem V (base + (c * BN + idx.1.val) * svk + idx.2.1.val * svn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hmij : mijT.data (i, PUnit.unit) = M)
+    (hMnebot : ∀ jL : Fin BN, mc jL = Bool.true → M ≠ ⊥)
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.dot [] pmT vtile).data (i, d, PUnit.unit)
+      = some ((aft3BlockG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d).map (fun p =>
+            pow2 (p.1 - M.unbotD 0) * p.2)).sum := by
+  rw [Tile.dot_nil_data]
+  have hcell : ∀ jL : Fin BN,
+      Option.map₂ (· * ·) (pmT.data (i, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+              * vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit)
+            else 0) := by
+    intro jL
+    have hpmcell : pmT.data (i, jL, PUnit.unit)
+        = some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+            pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+              qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+            else 0) := by
+      rw [hpmT jL]
+      rw [aft3_pmT_cell_maskedG s0 Q K base BM ND NC sqm sqk skn skk sc BN c i jL
+        (aft3_block_idx_lt BN c NC jL.val jL.isLt hc1) (mc jL) qtile ktile mijT M qkT pT hq hk (hqkT jL) (by rw [hmij]) ?_ hpT]
+      · rw [hmc jL]
+        by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+        · rw [if_pos hkp, if_pos (decide_eq_true hkp)]
+        · rw [if_neg hkp, if_neg (by simp [hkp])]
+      · intro hmcj; exact hMnebot jL hmcj
+    rw [hpmcell, hv (jL, d, PUnit.unit)]
+    rw [show s0.readMem V (base + (c * BN + jL.val) * svk + d.val * svn)
+          = vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit) from by
+      simp only [vTile3G]]
+    by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+    · rw [if_pos hkp, if_pos hkp]; rfl
+    · rw [if_neg hkp, if_neg hkp]
+      simp only [Option.map₂, Option.bind, Option.map]; rw [zero_mul]
+  rw [show (@Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (pmT.data (i, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (if keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ then
+              pow2 ((sc * Finset.univ.sum (fun e : Fin ND =>
+                qTile3G s0 Q base BM ND sqm sqk (i, e, PUnit.unit) *
+                  kTile3G s0 K base NC ND skn skk (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, e, PUnit.unit))) - M.unbotD 0)
+                * vTile3G s0 V base NC ND svk svn (⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩, d, PUnit.unit)
+              else 0) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hcell jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [aft3BlockG_map_sum (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+      (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep BN c i d hc1 (fun p => pow2 (p.1 - M.unbotD 0) * p.2)]
+  refine Finset.sum_congr rfl (fun jL _ => ?_)
+  by_cases hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩
+  · rw [if_pos hkp, if_pos hkp]; simp only [keyScale3G]
+  · rw [if_neg hkp, if_neg hkp]
+
+set_option maxHeartbeats 1600000 in
 /-- **General masked `l_i' = aft3StateBotG((c+1)·BN).2.1` (cases 1/2).** -/
 theorem aft3_denom_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
     (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
