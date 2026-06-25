@@ -6697,6 +6697,19 @@ theorem aft3StateSeededG_zero {BM ND NC : Nat}
     apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
   rfl
 
+/-- The resume-seeded running max decomposes as `seed.1 ⊔ ⊥-seeded running max` —
+the online-softmax `max` ignores the carried denom/acc, so the seed only adds its
+own max component. The key bridge for the seeded reconciliations. -/
+theorem aft3StateSeededG_fst {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (keyScale : Fin NC → ℝ) (keep : Fin BM → Fin NC → Prop)
+    [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (hi : Nat) (i : Fin BM) (d : Fin ND) :
+    (aft3StateSeededG qT kT vT keyScale keep seed hi i d).1
+      = (seed i d).1 ⊔ aft3RunningMaxG qT kT vT keyScale keep hi i d := by
+  unfold aft3StateSeededG aft3RunningMaxG
+  rw [aft3OsStepBot_block_fst]
+
 /-- **Seeded loop invariant (case 4, `INIT=False` resume).** Like `attnInvariantKG`
 but `m_i`/`l_i`/`acc` carry the resume-seeded fold `aft3StateSeededG` from `seed`
 (the loaded prior `(m_i, l_i, acc)`), rather than the ⊥-seeded `aft3StateBotKG`.
