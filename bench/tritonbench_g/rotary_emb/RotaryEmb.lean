@@ -40,7 +40,7 @@ by `rotary_emb_python_q_even/odd_offset_injective` and
 `rotary_emb_python_k_even/odd_offset_injective` (these prove within-family
 injectivity, not even-vs-odd disjointness). There are also
 `rotary_emb_q_surface_toAlgorithm_supported` / `rotary_emb_k_surface_toAlgorithm_supported`
-splits and `qFullOffset`/`activeFullQ` full-tile scaffolding.
+splits and `activeFullQ` full-tile scaffolding.
 
 ## Modeling boundary
 

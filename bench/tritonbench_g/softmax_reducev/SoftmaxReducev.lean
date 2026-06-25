@@ -44,7 +44,7 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init,
 `num_warps` / `num_stages` are not modeled. The verified
 statement is scoped to the **final normalized store** to `Out`: the expected
 value is `acc / e_sum` (`softmaxReducevFinalSpec`), and — discharging the loop —
-the genuine input-side `softmaxReducevWeightedSum` (`sr_exec`),
+the genuine input-side `softmaxReducevWeightedSum` (`sr_execG`),
 read off at each `outOffset`, over a one-block output footprint with the program
 ids universally quantified. The streaming online-softmax loop (running max,
 rescale-and-accumulate, paged-V gather) feeds those `Acc`/`ESum` values; the side
@@ -55,15 +55,15 @@ condition is the offset-injectivity of the `Out` slice (symbolic-`BLOCK_DMODEL`)
 `softmaxReducevWeightedSum` states the mathematical result over the *input*
 logits and gathered value rows:
 `out[d] = Σ_n softmax(qk)[n] · V[v_index[n], d]`
-`= (Σ_n exp(qk[n] - M)·V[v_index[n], d]) / (Σ_n exp(qk[n] - M))`.
-`softmaxReducevWeightedSum_shift_invariant` proves this is the genuine softmax
-(independent of the running max `M`). `softmaxReducevFinalSpec_eq_weightedSum`
+`= (Σ_n exp(qk[n] - M)·V[v_index[n], d]) / (Σ_n exp(qk[n] - M))`
+(the genuine softmax, independent of the running max `M`).
+`softmaxReducevFinalSpec_eq_weightedSum`
 bridges the verified `acc / e_sum` store spec to this closed form, and
 `softmax_reducev_final_store_slice_weighted_sum_correct` proves the verified
 final-store slice *realizes* it under the loop-output contract (`Acc` / `ESum`
 hold the closed-form numerator / denominator — exact over `ℝ`). The `exec`-side
 unfold of the dynamic (`forRangeDyn`) online-softmax loop with the paged-V gather
-is now discharged sorry-free by `sr_exec` and the dimension-general `sr_execG`,
+is now discharged sorry-free by the dimension-general `sr_execG`,
 so the top theorem `softmax_reducev_genuine_output_compute_correct_general`
 realizes the genuine input-side closed form directly.
 -/

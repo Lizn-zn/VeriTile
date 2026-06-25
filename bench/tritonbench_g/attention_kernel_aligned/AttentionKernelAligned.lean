@@ -40,9 +40,9 @@ attention_kernel_aligned_python_test_shape_output_summary_general    ← GENERAL
 
 genuine producer closed form (sorry-free; exec assembly now connected):
   alignedClosedForm  := attentionRealBase2ScalarScaleBias (loaded Q/K/V) (sm_scale·log2e) (rel_h+rel_w bias)
-  alignedClosedForm_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
-  aligned_exec : preLoop (→ invariant 0) + forRangeDyn_inv over attn_step + attn_postLoop;
-    attnGenScore_eq_alignedClosedForm bridges the genuine `fscore` softmax to `alignedClosedForm`
+  attentionRealBase2ScalarScaleBias_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
+  aligned_exec_general : preLoop (→ invariant 0) + forRangeDyn_inv over attn_step + attn_postLoop;
+    attnGenScore_eq_alignedClosedForm_general bridges the genuine `fscore` softmax to `alignedClosedForm`
     (with `log2e = 1.44269504`, the kernel's literal `qk_scale` constant).
 ```
 
@@ -58,12 +58,12 @@ is the special case.
 The public summary asserts the **genuine** closed form: every observable `Out`
 lane equals the base-2 streaming-softmax `alignedClosedForm` of the loaded Q/K/V
 tiles under the scalar score scale `sm_scale·log2(e)` and the fused `rel_h+rel_w`
-bias — discharged whole-kernel by `ClosedForm.aligned_exec`, NOT a self-referential
+bias — discharged whole-kernel by `ClosedForm.aligned_exec_general`, NOT a self-referential
 readback. (The `producedOutputValue` definition below is retained only as a
 documented *execution observation*; it is referenced by no public summary.) The genuine
 producer closed form is `alignedClosedForm`, with the streaming bridge
-`alignedClosedForm_eq_streaming` and the exec-side assembly
-`ClosedForm.aligned_exec` both proved sorry-free. This is a
+`attentionRealBase2ScalarScaleBias_eq_streaming` and the exec-side assembly
+`ClosedForm.aligned_exec_general` both proved sorry-free. This is a
 single-program scope (the store is unmasked at this shape since `N_CTX` is a
 multiple of `BLOCK_M`); cross-program composition into the full output is the
 trusted host boundary.

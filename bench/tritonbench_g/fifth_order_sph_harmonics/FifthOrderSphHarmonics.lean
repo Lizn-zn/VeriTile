@@ -44,12 +44,13 @@ erase to the identity. The kernel is purely elementwise (no recurrence): each
 output is a polynomial in the loaded `(x, y, z)` lane values, modeled with
 `Option.map₂` over the loaded coordinates so out-of-range loads propagate.
 The eleven forward channels `Y00..Y10` are each verified; the backward kernel
-`fifth_order_bwd` is transcribed and its disjointness infrastructure
-(`coord_dim_offset_disjoint`) is provided, but the ~30-constant-per-dimension
+`fifth_order_bwd` is transcribed, but the ~30-constant-per-dimension
 gradient polynomials are **not** verified (left for future work, stated
 honestly in the backward-section doc). Side conditions: per-channel
 output-store-offset injectivity (`hOutInj`) and a stride bound (`hStride :
-10 < output_stride`) so the eleven channel columns are disjoint.
+10 < output_stride`), with the offset-disjointness helpers
+(`y0k_offset_disjoint` / `y0jk_offset_disjoint`) showing the eleven channel
+columns are disjoint.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics

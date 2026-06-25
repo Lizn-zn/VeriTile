@@ -44,12 +44,11 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 (symbolic `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale` and strides);
 the Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=128, BLOCK_M=BLOCK_N=64`,
 `sm_scale=0.1`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(16384,128,1)`)
-is the special case (the pinned `attention_kernel_genuine_output_compute_correct`
-is that corollary).
+is the special case.
 The top summary asserts the **genuine** closed form: every observable `Out` lane
 equals the base-2 streaming-softmax `attentionKernelSpec` (= `attnGenScore fscore
 vFlat`) of the loaded Q/K/V tiles under the kernel's actual bias-augmented per-key
-score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec`,
+score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec_general`,
 NOT a self-referential readback. This is a single-program
 scope (the store is unmasked at this shape since `N_CTX` is a multiple of
 `BLOCK_M`); cross-program composition into the full output is the trusted host

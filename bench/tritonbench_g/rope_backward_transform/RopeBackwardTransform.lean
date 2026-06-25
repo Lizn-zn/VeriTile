@@ -43,7 +43,7 @@ rope_backward_body_steps (the load-bearing lemma)
   │     load_ptr_maskOther_real, …; expandDim wall handled by the *_arange recipes)
   ├─ ifThenElse (constBool true).boolNot takes the else-branch (4 store pairs)
   └─ readback: cross-region peel (q_ptr ≠ k_ptr) + same-region disjoint peel
-       (qFirstHalf_ne_qSecondHalf-style) + scatter_readback_prop_masked_nd_of_true
+       (first-half vs second-half offsets) + scatter_readback_prop_masked_nd_of_true
 
 supporting head-slice + per-store track (one Q/K head, one row):
   ├─ rope_backward_q0_head_compute_correct → rope_backward_q0_head_correct
@@ -53,9 +53,7 @@ supporting head-slice + per-store track (one Q/K head, one row):
 ```
 
 Full-kernel offset disjointness within a half pair is discharged inline (by
-`omega`) in the readback peel; `qFirstHalf_ne_qSecondHalf` /
-`kFirstHalf_ne_kSecondHalf` state the same fact standalone but are not invoked by
-the body proof.
+`omega`) in the readback peel.
 
 ## Modeling boundary
 

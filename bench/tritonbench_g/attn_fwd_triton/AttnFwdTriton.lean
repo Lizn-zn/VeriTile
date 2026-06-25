@@ -43,13 +43,13 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float; the `exp2`, the `tl.dot`
 the bit level); `@triton.autotune`/`num_warps`/`num_stages` are not modeled.
 The verified result is the **genuine closed form**: the full surface (preLoop +
 the inlined `forRange` streaming loop + postLoop) is executed and its `Out` store
-is proven equal to `attnFwdTritonOutSpec` — masked base-2 (`exp2`) per-key-scale
+is proven equal to `attnFwdTritonOutSpecG` — masked base-2 (`exp2`) per-key-scale
 **causal** softmax (`keyScale = aftKeyScale = q_scale · k_scale[block]`,
 `keep = causalKeep qStart`, head-active `q`/`k`/`v` masks at `e/d ≥ 96`) — at
 every active output lane (`attn_fwd_triton_output_summary_general`). The
 inner online-softmax recurrence (`m_i`/`l_i`/`acc` updates, the final `acc / l_i`
 normalization) is reconciled to this closed form via the ⊥-seeded `aftStateBot`
-streaming fold and `aftStateBot_full_eq_spec`; the loop is driven by `forRange_inv`
+streaming fold and `aftgStateBotG_full_eq_spec`; the loop is driven by `forRange_inv`
 + `aftg_attn_stepG`. The result is **dimension-general**: it holds for arbitrary
 symbolic block/head dimensions at the contiguous layout (`stride_qm = HEAD_DIM`,
 `stride_qk = 1`, `stride_kn = HEAD_DIM`). Its side conditions (documented at the
@@ -675,17 +675,19 @@ noncomputable def aftStateBotK
 
 end Correct
 
-/-! ## FOUNDATION Part 1 — `aftBody_split` (preLoop ++ forRange aftLoopBody :: postLoop)
+/-! ## FOUNDATION Part 1 — pinned-shape body pieces (`aftPreLoop` ++ forRange `aftLoopBody` :: postLoop)
 
 The lowered algorithm body of `attn_fwd_triton_surface` at the Python test shape is
 a 25-statement list: 22 preLoop statements (`aftPreLoop`), then the static
 `Stmt.forRange "start_n" 0 128 64 aftLoopBody` (loop body = 22 statements), then 2
 postLoop statements (`acc = acc / l_i[:, None]` and the masked `tl.store`). This is
 a **static** `forRange` (range bounds `0..128 step 64`, NOT a `forRangeDyn`), so the
-`forRange_inv` master invariant principle drives the loop. Mirrors `flash_body_split`.
+`forRange_inv` master invariant principle drives the loop.
 
 The three pieces are transcribed concretely (the per-statement op-eval recipes above
-encode the exact `Op`/`Broadcast`/dtype terms); `aftBody_split` is checked by `rfl`. -/
+encode the exact `Op`/`Broadcast`/dtype terms); the dimension-general split that the
+top theorem actually consumes is `aftg_body_splitG` (checked by `rfl`), which mirrors
+these pieces with the test-shape numerals replaced by symbolic dimensions. -/
 
 namespace AftFoundation
 

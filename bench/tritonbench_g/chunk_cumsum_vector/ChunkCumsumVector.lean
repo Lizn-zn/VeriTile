@@ -46,7 +46,7 @@ chunk_cumsum_vector_python_case{1,2,3}_slice_summary           ← TOP THEOREMS
             └─ cumsumStoreValue_eq_globalCumsumVectorClosed  (carry + dot = global Σ)
 
 mathematical core (the carry-fold + within-chunk identity):
-  dotLowerTri_sum_if_some / dotLowerTri_sum_if   `tl.dot(m_s,·)` = guarded prefix Σ
+  dotLowerTri_sum_if_some                        `tl.dot(m_s,·)` = guarded prefix Σ
   singleBlockStoreValue_eq_closed                single chunk (carry=0) = global prefix Σ
   cumsumStoreValue_eq_globalCumsumVectorClosed   carry[j] + within-chunk Σ = global prefix Σ,
                                                  given carry[j] = Σ_{flat<c·BT, flat<T} s[flat,j]
@@ -58,7 +58,7 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
 `BT ∈ {16,32,64}` config set) is not modeled — the public Python-case theorems
 fix the three checked shapes (`T,S = 4,5`; `8,10`; `1,5`) with `BS = 32`,
 `BT = 16` (so each chunk loop runs once with carry `= 0`); the closed-form
-lemmas (`dotLowerTri_sum_if*`, `*_eq_closed`,
+lemmas (`dotLowerTri_sum_if_some`, `*_eq_closed`,
 `cumsumStoreValue_eq_globalCumsumVectorClosed`, and the
 `*_surface_closed_form` / `*_cumsum_slice_closed_form` realizers) are stated and
 proven **general over `T`, `S`, `BT`, `BS` and the number of chunks**. The
@@ -66,7 +66,7 @@ proven **general over `T`, `S`, `BT`, `BS` and the number of chunks**. The
 the algorithm layer. The in-chunk prefix sum is modeled exactly as the
 lower-triangular matmul `lowerTriTile · sourceTile` (matching `tl.dot(m_s, b_s)`)
 and shown equal to the genuine per-column prefix `Finset.sum`
-(`dotLowerTri_sum_if`). The cross-chunk carry recurrence threaded by `b_z` is
+(`dotLowerTri_sum_if_some`). The cross-chunk carry recurrence threaded by `b_z` is
 `carry_{c+1}[j] = carry_c[j] + Σ chunk_c[·,j]`; its invariant
 `carry_c[j] = Σ_{flat < c·BT, flat < T} s[i_bh·s_s_h + flat·s_s_t + j·s_s_d]` is
 the explicit hypothesis of `cumsumStoreValue_eq_globalCumsumVectorClosed` — under

@@ -28,11 +28,11 @@ statement covers every program of the grid.
 
 ```
 context_attn_nopad_output_summary_general                   ← TOP THEOREM (symbolic, dimension-general)
-  └─ nopad_exec                              full surface exec → genuine closed form (concrete shape)
-       ├─ nopadPreLoop_eval                  19 preLoop stmts → nopadInvariant … 0
-       ├─ forRangeDyn_inv ∘ nopad_attn_step  loop body advances nopadInvariant c → c+1
-       │    └─ osNormStepBot_block_eq + nopadBlockM_{sup,lij,acc} bridges
-       └─ nopadPostLoop_eval                 masked store → ctxNopadGenuineOutValue
+  └─ nopad_exec_general                      full surface exec → genuine closed form (dimension-general)
+       ├─ nopadPreLoop_evalG                 19 preLoop stmts → nopadInvariantG … 0
+       ├─ forRangeDyn_inv ∘ nopad_attn_stepG loop body advances nopadInvariantG c → c+1
+       │    └─ osNormStepBot_block_eq + nopadBlockMG_{sup,lij,acc} bridges
+       └─ nopadPostLoop_evalG                masked store → ctxNopadGenuineOutValue
             └─ nopadFoldUpto_full_eq_genuine ∘ ctxNopad_fold_eq_exactFoldM
 (genuine spec: ctxNopadGenuineOutValue = contextAttnNopadExactFoldM, the boundary-
  masked causal softmax; = attentionRealCausalBlock via the closed-form bridge.
@@ -51,8 +51,8 @@ of the loaded Q/K/V memory — at every active lane (`offs_m < cur_batch_seq_len
 with `offs_d < head_dim` folded into the slice), and preserves out-of-bounds lanes.
 The online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal
 `-inf` mask, in-loop normalization) is decoded statement-by-statement
-(`nopadPreLoop_eval`/`nopad_attn_step`/`nopadPostLoop_eval`, assembled in
-`nopad_exec`) and *proven* to collapse to this closed form, not re-stated as a
+(`nopadPreLoop_evalG`/`nopad_attn_stepG`/`nopadPostLoop_evalG`, assembled in
+`nopad_exec_general`) and *proven* to collapse to this closed form, not re-stated as a
 spec. `toAlgorithm?` lowering is available separately as
 `context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported`. The top theorem is
 dimension-general: it is stated over symbolic `BLK`/`DM` (with
