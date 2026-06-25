@@ -6787,6 +6787,113 @@ theorem aft3_denom_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
         = (aft3StateBotG qT kT vT ks keep (c * BN) i d).2.1 * α from hcancel]
 
 set_option maxHeartbeats 1600000 in
+/-- **Seeded masked denom reconciliation (case 4).** `l_i' = (seededfold((c+1)·BN)).2.1`. -/
+theorem aft3_denom_reg_eq_seededG (s0 : BlockState) (Q K V : RegionName)
+    (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
+    (hc1 : (c + 1) * BN ≤ NC) (i : Fin BM) (d : Fin ND)
+    (keep : Fin BM → Fin NC → Prop) [∀ i j, Decidable (keep i j)]
+    (seed : Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ) (Lseed Tseed : ℝ)
+    (hseedL : (seed i d).2.1 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Lseed)
+    (hseedT : (seed i d).2.2 = ((seed i d).1.elim 0 (fun r => pow2 (-r))) * Tseed)
+    (hseedmL : (seed i d).1 = ⊥ → Lseed = 0) (hseedmT : (seed i d).1 = ⊥ → Tseed = 0)
+    (mc : Fin BN → Bool)
+    (hmc : ∀ jL : Fin BN, mc jL = decide (keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩))
+    (qtile : Tile .real [BM, ND]) (ktile : Tile .real [ND, BN]) (qkT : Tile .real [BM, BN])
+    (ltile mtile mijT alphaT : Tile .real [BM]) (pT pmT : Tile .real [BM, BN])
+    (hq : qtile = ⟨fun idx : TileIndex [BM, ND] => some (qTile3G s0 Q base BM ND sqm sqk idx)⟩)
+    (hk : ∀ idx : TileIndex [ND, BN],
+        ktile.data idx = some (s0.readMem K (base + idx.1.val * skk + (c * BN + idx.2.1.val) * skn)))
+    (hqkT : ∀ jL : Fin BN, qkT.data (i, jL, PUnit.unit) =
+        if mc jL then
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+            (Tile.scalar (some sc))).data (i, jL, PUnit.unit)
+        else (⊥ : WithBot ℝ))
+    (hltile : ltile.data (i, PUnit.unit) = some
+        ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).2.1))
+    (hmtile : mtile.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed (c * BN) i d).1)
+    (hmij : mijT.data (i, PUnit.unit)
+        = (aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+            (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).1)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT))
+    (hpT : pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)))
+    (hpmT : ∀ jL : Fin BN, pmT.data (i, jL, PUnit.unit) =
+        if mc jL then pT.data (i, jL, PUnit.unit) else (some (0.0 : ℝ) : WithBot ℝ)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT)
+        (Tile.reduceSumDrop (aft3Ax1G BM BN) pmT)).data (i, PUnit.unit)
+      = some ((aft3StateSeededG (qTile3G s0 Q base BM ND sqm sqk) (kTile3G s0 K base NC ND skn skk)
+          (vTile3G s0 V base NC ND svk svn) (keyScale3G sc NC) keep seed ((c + 1) * BN) i d).2.1) := by
+  set qT := qTile3G s0 Q base BM ND sqm sqk
+  set kT := kTile3G s0 K base NC ND skn skk
+  set vT := vTile3G s0 V base NC ND svk svn
+  set ks := keyScale3G sc NC
+  set m := (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).1 with hm_def
+  set Mc1 := (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).1 with hMc1
+  have hMsucc : Mc1 = m ⊔ ((aft3BlockG qT kT vT ks keep BN c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    rw [hMc1, aft3StateSeededG_succ, aft3OsStepBot_block_fst m
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+        ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)]
+  have hMc1bot : ∀ jL : Fin BN, mc jL = Bool.true → Mc1 ≠ ⊥ := by
+    intro jL hmcj
+    have hkp : keep i ⟨c * BN + jL.val, aft3_block_idx_lt BN c NC jL.val jL.isLt hc1⟩ :=
+      of_decide_eq_true ((hmc jL).symm.trans hmcj)
+    have hne := aft3_kept_lane_ne_botG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hc1 i d keep jL hkp
+    intro hMbot
+    rw [hMc1, aft3StateSeededG_fst] at hMbot
+    exact hne (le_bot_iff.mp (le_sup_right.trans (le_of_eq hMbot)))
+  have halphaVal : alphaT.data (i, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]; show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmij,
+      NumericDType.sub]
+  have hsum := aft3_nume_row_sum_masked_genG s0 Q K V base BM ND NC sqm sqk skn skk svk svn sc BN c hBN hc1 i d
+    keep mc hmc qtile ktile mijT pT pmT qkT Mc1 hq hk hqkT hmij hMc1bot hpT hpmT
+  have hcons := aft3StateSeededG_consistent qT kT vT ks keep seed Lseed Tseed (c * BN) i d
+    hseedL hseedT hseedmL hseedmT
+  have hblockEq := aft3OsStepBot_block_eq m
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1)
+    ((aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.2)
+    (Tseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1 * p.2)).sum)
+    (Lseed + ((aft3KeysUptoG qT kT vT ks keep (c * BN) i d).map (fun p => pow2 p.1)).sum)
+    (aft3BlockG qT kT vT ks keep BN c i d)
+    hcons.1 hcons.2
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmL (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1)]; ring)
+    (fun hbot => by
+      rw [hm_def, aft3StateSeededG_fst] at hbot
+      rw [hseedmT (le_bot_iff.mp (le_sup_left.trans (le_of_eq hbot))),
+        aft3KeysUptoG_sum_zero_of_bot qT kT vT ks keep (c * BN) i d
+          (le_bot_iff.mp (le_sup_right.trans (le_of_eq hbot))) (fun p => pow2 p.1 * p.2)]; ring)
+  rw [← hMsucc] at hblockEq
+  rw [show (aft3StateSeededG qT kT vT ks keep seed ((c + 1) * BN) i d).2.1
+        = (Mc1, (aft3StateSeededG qT kT vT ks keep seed (c * BN) i d).2.1
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((aft3BlockG qT kT vT ks keep BN c i d).map (fun p => pow2 (p.1 - Mc1.unbotD 0))).sum,
+            _).2.1 from by
+    rw [aft3StateSeededG_succ]; rw [← hblockEq]]
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hsum]
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+    hltile, halphaVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  rfl
+
+set_option maxHeartbeats 1600000 in
 /-- **General masked `acc' = aft3StateBotG((c+1)·BN).2.2` (cases 1/2).** -/
 theorem aft3_acc_reg_eq_maskedG (s0 : BlockState) (Q K V : RegionName)
     (base BM ND NC sqm sqk skn skk svk svn : Nat) (sc : ℝ) (BN c : Nat) (hBN : 0 < BN)
