@@ -38,8 +38,9 @@ copy_to_kcache_seqlen_n1_surface_output_summary       ← TOP THEOREM (decode pa
 ```
 The `n_tokens > 1` (prefill) path is covered at the surface-lowering level only
 (`copy_to_kcache_seqlen_n_kernel{,_signed}_toAlgorithm_supported` plus the
-Python `n = 2` test-shape lowerings and the `signedPastKvSeqLen` position
-sanity check). The post-arithmetic split-x slice
+Python `n = 2` test-shape lowerings
+`copy_to_kcache_seqlen_n2_{old,new}_layout_python{,_signed}_toAlgorithm_supported`).
+The post-arithmetic split-x slice
 `copy_to_kcache_split_x_block_{correct,compute_correct}` proves the store once
 the cache slot has been selected.
 

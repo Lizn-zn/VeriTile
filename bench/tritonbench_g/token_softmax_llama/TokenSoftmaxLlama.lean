@@ -56,11 +56,10 @@ of the `Prob_Out` slice at the test shapes. Out-of-range lanes are preserved
 
 `tokenSoftmaxSpec` is the genuine, self-contained stable-softmax value at a lane
 (reduceMax-shift, `exp`, `/ reduceSum`) over the masked input row
-`tokenSoftmaxInputTile` (inactive lanes `⊥`, matching `other=-inf`). The recipes
-`evalOp_load_region_maskOther_negInf` (the `-inf`-masked region load lowers to the
-`⊥`-padded tile) and `row_op_eval` (the `castFloat(load …)` `row` register equals
-`tokenSoftmaxInputTile`, modulo the model-identity real cast) document the
-data-dependent part of the body.
+`tokenSoftmaxInputTile` (inactive lanes `⊥`, matching `other=-inf`): the
+`-inf`-masked region load lowers to the `⊥`-padded tile, and the `castFloat(load
+…)` `row` register equals `tokenSoftmaxInputTile` modulo the model-identity real
+cast.
 
 `token_softmax_surface_correct` closes the whole chain `row → reduceMax → sub →
 exp → reduceSum → div → masked store = tokenSoftmaxSpec`: the entire body is

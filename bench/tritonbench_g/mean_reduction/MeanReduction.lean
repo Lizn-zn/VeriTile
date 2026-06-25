@@ -43,8 +43,8 @@ modeled (the kernel is launched with fixed `BLOCK_M`/`BLOCK_N`). The
 `.to(tl.float32)` cast on each loaded chunk reduces to the identity at the
 algorithm layer (post-erasure all dtypes unify to `ℝ`). The masked load uses
 `other=0.0`, so out-of-range columns contribute `0` to the row sum. The output
-scatter relies on `meanOutOffset_injective` (the per-row output offset map is
-injective). The only side condition is `BLOCK_N ≠ 0` (a nonempty inner chunk).
+scatter relies on `meanOutOffset_injective_col1` (the per-row output offset map
+is injective). The only side condition is `BLOCK_N ≠ 0` (a nonempty inner chunk).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MeanReduction

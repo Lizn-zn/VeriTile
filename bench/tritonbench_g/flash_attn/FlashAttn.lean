@@ -79,22 +79,22 @@ to this kernel's exact `make_block_ptr` AST.
 
 Additionally banked sorry-free toward the invariant skeleton (this run): the
 per-row online-softmax **running-state recurrence** `flashKV`/`flashKeysUpto`/
-`flashState` (the `osStep` fold over the causally-filtered streamed key prefix),
-its one-block advance `flashState_succ` (= the kernel's per-block update
-`osBlockStep`, via the new `Math/Attention.lean` lemma `osBlockStep_eq_foldl_osStep`
-+ the sorted-window split `flashKeysUpto_succ`), the full-window bridges
-`flashState_full_eq_spec{,_causal}` (final state reads off `flashAttnOValueSpec{,
+`flashStateBot` (the `osStepBot` fold over the causally-filtered streamed key
+prefix, seeded at `⊥` to match the kernel's `−inf` max register), its one-block
+advance `flashStateBot_succ` (the kernel's per-block update, via the sorted-window
+split `flashKeysUpto_succ`), the full-window bridges
+`flashStateBot_full_eq_spec{,_causal}` (final state reads off `flashAttnOValueSpec{,
 Causal}`), the `max`/`denom` channel-independence lemmas
-`flashState_{fst,snd_fst}_eq`, and the `attnInvariant` definition binding the
-kernel's 12 live registers to `flashState` after `c` blocks.
+`flashRunningMax_eq`/`flashStateBot_snd_fst_eq`, and the `attnInvariant` definition
+binding the kernel's 12 live registers to `flashStateBot` after `c` blocks.
 
 The exec-side `preLoop`/`attn_step`/`attn_postLoop` stage over this
 `attnInvariant` is now **closed, sorry-free**: the loop-body step
 `flash_attn_step_general` threads the loop-body op-eval recipes — including the
 causal `tl.where(off_m ≥ start_n+off_n, qk, -inf)` mask — and the WithBot
-`reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one `flashState_succ`
+`reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one `flashStateBot_succ`
 step; `flash_attn_exec_general` composes it via `forRangeDyn_inv` together with
-the dual `O`/`L` stores, read off through `flashState_full_eq_spec{,_causal}`.
+the dual `O`/`L` stores, read off through `flashStateBot_full_eq_spec{,_causal}`.
 These assemble into the genuine top theorems
 `flash_attn_python_case1/2_genuine_compute_correct_general`. That mirrors
 `VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
@@ -1228,20 +1228,6 @@ theorem flashKeysUpto_succ
     by_cases h1 : c * BLOCK_N ≤ j.val <;> by_cases h2 : j.val < (c + 1) * BLOCK_N <;>
       by_cases h3 : (causal → j.val ≤ qStart + i.val) <;> simp [h1, h2, h3, and_assoc]
 
-/-- **One-block invariant advance** (pure math): `flashState` after `c+1` blocks
-is `osBlockStep` (= the kernel's per-block update) applied to `flashState` after
-`c` blocks with block `c`'s keys. -/
-theorem flashState_succ
-    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
-    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
-    flashState qT kT vT scale causal qStart ((c + 1) * BLOCK_N) i d
-      = VeriTile.Triton.osBlockStep
-          (flashState qT kT vT scale causal qStart (c * BLOCK_N) i d)
-          (flashBlock qT kT vT scale causal qStart BLOCK_N c i d) := by
-  unfold flashState
-  rw [flashKeysUpto_succ, List.foldl_append,
-    VeriTile.Triton.osBlockStep_eq_foldl_osStep]
-
 /-- The score-projection (`.1`) of the per-row key list is channel-independent. -/
 theorem flashKeysUpto_map_fst_eq
     (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
@@ -1253,25 +1239,6 @@ theorem flashKeysUpto_map_fst_eq
   apply List.filterMap_congr
   intro j _
   by_cases h : j.val < hi ∧ (causal → j.val ≤ qStart + i.val) <;> simp [h]
-
-/-- `blockMax` depends only on the score projections. -/
-private theorem blockMax_eq_foldl_map (m₀ : ℝ) (block : List (ℝ × ℝ)) :
-    VeriTile.Triton.blockMax m₀ block = (block.map (fun p => p.1)).foldl max m₀ := by
-  unfold VeriTile.Triton.blockMax
-  induction block generalizing m₀ with
-  | nil => rfl
-  | cons a t ih => simp only [List.foldl_cons, List.map_cons]; exact ih (max m₀ a.1)
-
-/-- The running `max` component of `flashState` is channel-independent. -/
-theorem flashState_fst_eq
-    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
-    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
-    (flashState qT kT vT scale causal qStart hi i d).1
-      = (flashState qT kT vT scale causal qStart hi i d').1 := by
-  unfold flashState
-  rw [VeriTile.Triton.osStep_foldl_fst, VeriTile.Triton.osStep_foldl_fst,
-    blockMax_eq_foldl_map, blockMax_eq_foldl_map,
-    flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
 
 /-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
 `WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block —
@@ -1416,22 +1383,6 @@ theorem flashBlock_map_sum
   · intro jL _
     simp only [flashKV]
 
-/-- A real `foldl max` over a list, coerced to `WithBot`, is `max` of the seed
-with the `WithBot` `foldr` of the coerced list (associativity/commutativity of
-`max`). The bridge between `blockMax` (a real foldl) and the kernel's `WithBot`
-running max. -/
-theorem flash_foldl_max_coe (m0 : ℝ) (L : List ℝ) :
-    ((L.foldl (fun a x => max a x) m0 : ℝ) : WithBot ℝ)
-      = max ((m0 : ℝ) : WithBot ℝ) ((L.map (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥) := by
-  induction L generalizing m0 with
-  | nil => simp
-  | cons a t ih =>
-    simp only [List.foldl_cons, List.map_cons, List.foldr_cons]
-    rw [ih (max m0 a), WithBot.coe_max]
-    rw [show (((a : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun x => ((x : ℝ) : WithBot ℝ)) t)))
-          = max ((a : ℝ) : WithBot ℝ) ((List.map (fun x => ((x : ℝ) : WithBot ℝ)) t).foldr (· ⊔ ·) ⊥) from rfl]
-    rw [← max_assoc]
-
 /-- The `WithBot` `foldr` of a causally-filtered score list (coerced) equals the
 `Finset.sup` over `Fin n` of the lane terms (`⊥` on filtered-out lanes). -/
 theorem flash_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
@@ -1503,75 +1454,6 @@ theorem flash_window_sup_reindex (BLOCK_N c SEQLEN : Nat) (hwin : (c + 1) * BLOC
       rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hq⟩)]
     · rw [if_neg hq]; exact bot_le
 
-/-- **Block running-max bridge.** `↑(blockMax m₀ block)` for `block` the
-causally-filtered `flashBlock` window equals `max (some m₀)` of the kernel's
-`WithBot` `Finset.sup` over `Fin BLOCK_N` of the masked score row. Combines the
-foldl→coe-foldr bridge, the filterMap-foldr→sup bridge, and the window reindex —
-the math bridge for the kernel's `max_new = tl.maximum(max, tl.max(qk,1))`. -/
-theorem flashBlock_blockMax
-    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
-    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
-    (m₀ : ℝ) (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) :
-    ((blockMax m₀ (flashBlock qT kT vT scale causal qStart BLOCK_N c i d) : ℝ) : WithBot ℝ)
-      = max ((m₀ : ℝ) : WithBot ℝ)
-          (Finset.univ.sup (fun jL : Fin BLOCK_N =>
-            if (causal → c * BLOCK_N + jL.val ≤ qStart + i.val) then
-              ((scale * Finset.univ.sum (fun e : Fin DIM =>
-                  qT (i, e, PUnit.unit) * kT (⟨c * BLOCK_N + jL.val, by
-                    have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
-                    omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-            else ⊥)) := by
-  classical
-  set F : Nat → WithBot ℝ := fun jg =>
-    if h : jg < SEQLEN then
-      ((scale * Finset.univ.sum (fun e : Fin DIM =>
-          qT (i, e, PUnit.unit) * kT (⟨jg, h⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-    else ⊥ with hF
-  rw [show blockMax m₀ (flashBlock qT kT vT scale causal qStart BLOCK_N c i d)
-        = ((flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map (fun p => p.1)).foldl
-            (fun a x => max a x) m₀ from by unfold blockMax; rw [List.foldl_map]]
-  rw [flash_foldl_max_coe]
-  congr 1
-  rw [show (flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map (fun p => p.1)
-        = (List.finRange SEQLEN).filterMap (fun j : Fin SEQLEN =>
-            if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
-            then some (scale * Finset.univ.sum (fun e : Fin DIM =>
-                  qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))) else none) from by
-    unfold flashBlock flashKV
-    rw [List.map_filterMap]
-    apply List.filterMap_congr
-    intro j _
-    by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val) <;>
-      simp [hj]]
-  rw [flash_filterMap_foldr_sup SEQLEN
-    (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val))
-    (fun j => scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)))]
-  -- rewrite the Fin SEQLEN windowed sup body as `if window∧Qc then F j.val else ⊥`
-  rw [show (Finset.univ.sup (fun j : Fin SEQLEN =>
-        if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
-        then ((scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)) : ℝ) : WithBot ℝ)
-        else ⊥))
-      = Finset.univ.sup (fun j : Fin SEQLEN =>
-          if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
-          then F j.val else ⊥) from by
-    apply Finset.sup_congr rfl
-    intro j _
-    by_cases hw : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
-    · rw [if_pos hw, if_pos hw, hF]; simp only [dif_pos j.isLt]
-    · rw [if_neg hw, if_neg hw]]
-  rw [flash_window_sup_reindex BLOCK_N c SEQLEN hwin F
-    (fun jg => causal → jg ≤ qStart + i.val)]
-  -- the BLOCK_N sup bodies agree (F at c·BN+jL = the explicit score)
-  apply Finset.sup_congr rfl
-  intro jL _
-  have hb : c * BLOCK_N + jL.val < SEQLEN := by
-    have h1 := jL.isLt
-    have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
-    omega
-  by_cases hq : (causal → c * BLOCK_N + jL.val ≤ qStart + i.val)
-  · rw [if_pos hq, if_pos hq, hF]; simp only [dif_pos hb]
-  · rw [if_neg hq, if_neg hq]
-
 /-! ## ⊥-seeded running-max advance (binds the kernel's `max` register)
 
 The kernel's `max` register seeds at `⊥` (`tl.zeros − inf`), not real `0`, so the
@@ -1581,7 +1463,7 @@ bridges (`flash_filterMap_foldr_sup` / `flash_window_sup_reindex`) in their `⊥
 form. -/
 
 /-- `flashRunningMax` is channel-independent (depends only on the score
-projections, like `flashState_fst_eq`). -/
+projections, like the denom sibling `flashStateBot_snd_fst_eq`). -/
 theorem flashRunningMax_eq
     (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
     (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
@@ -1932,7 +1814,7 @@ theorem flashStateBot_logsumexp
 
 /-- **One-block advance** of the ⊥-seeded state: streaming block `c` folds that
 block's keys (via `osStepBot`) onto the state after `c` blocks. (`foldl_append` over
-the `flashKeysUpto_succ` window split — the ⊥-seed analogue of `flashState_succ`.) -/
+the `flashKeysUpto_succ` window split, in ⊥-seed form.) -/
 theorem flashStateBot_succ
     (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
     (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
@@ -2313,7 +2195,7 @@ running state by one block. The kernel's explicit per-block tile arithmetic
 expanding both sides onto the banked closed forms
 `flashStateBot_{snd_fst,snd_snd}` (`= κ(M)·Σ pow2 score [· v]`) and the
 window-split / block bridges (`flashKeysUpto_succ`, `flashRunningMax_succ`,
-`flashBlock_blockMax`, `flashBlock_map_sum`). -/
+`flashBlock_map_sum`). -/
 
 /-- Overwriting a register slot shadows the inner write (BlockState ext). -/
 theorem flash_setReg_shadow (s : BlockState) (name : RegName)

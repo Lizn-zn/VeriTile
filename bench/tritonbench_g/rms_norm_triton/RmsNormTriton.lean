@@ -30,8 +30,8 @@ rms_norm_kernel_output_summary                ← TOP THEOREM
        └─ rms_norm_kernel_correct             ← algorithm-layer readback per lane
 ```
 
-The spec `rmsNormSpec` threads the carriers `rmsSumCarrier` (`reduceSum (x*x)`),
-`rmsVarCarrier` (`/N`), and `rmsRrmsCarrier` (`(sqrt (var + eps))⁻¹`), then
+The spec `rmsNormSpec` threads the carriers `rmsSumCarrier` (`reduceSum (x*x)`)
+and `rmsRrmsCarrier` (`(sqrt (sum/N + eps))⁻¹`), then
 forms `(x * rrms) * w` lane-wise. In-bounds lanes hold `rmsNormSpec`,
 out-of-bounds lanes are preserved.
 

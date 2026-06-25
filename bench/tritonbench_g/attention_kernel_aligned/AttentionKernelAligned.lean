@@ -40,9 +40,9 @@ attention_kernel_aligned_python_test_shape_output_summary_general    ← GENERAL
 
 genuine producer closed form (sorry-free; exec assembly now connected):
   alignedClosedForm  := attentionRealBase2ScalarScaleBias (loaded Q/K/V) (sm_scale·log2e) (rel_h+rel_w bias)
-  alignedClosedForm_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
-  aligned_exec : preLoop (→ invariant 0) + forRangeDyn_inv over attn_step + attn_postLoop;
-    attnGenScore_eq_alignedClosedForm bridges the genuine `fscore` softmax to `alignedClosedForm`
+  attentionRealBase2ScalarScaleBias_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
+  aligned_exec_general : preLoop (→ invariant 0) + forRangeDyn_inv over attn_step + attn_postLoop;
+    attnGenScore_eq_alignedClosedForm_general bridges the genuine `fscore` softmax to `alignedClosedForm`
     (with `log2e = 1.44269504`, the kernel's literal `qk_scale` constant).
 ```
 
@@ -58,12 +58,11 @@ is the special case.
 The public summary asserts the **genuine** closed form: every observable `Out`
 lane equals the base-2 streaming-softmax `alignedClosedForm` of the loaded Q/K/V
 tiles under the scalar score scale `sm_scale·log2(e)` and the fused `rel_h+rel_w`
-bias — discharged whole-kernel by `ClosedForm.aligned_exec`, NOT a self-referential
-readback. (The `producedOutputValue` definition below is retained only as a
-documented *execution observation*; it is referenced by no public summary.) The genuine
+bias — discharged whole-kernel by `ClosedForm.aligned_exec_general`, NOT a self-referential
+readback. The genuine
 producer closed form is `alignedClosedForm`, with the streaming bridge
-`alignedClosedForm_eq_streaming` and the exec-side assembly
-`ClosedForm.aligned_exec` both proved sorry-free. This is a
+`attentionRealBase2ScalarScaleBias_eq_streaming` and the exec-side assembly
+`ClosedForm.aligned_exec_general` both proved sorry-free. This is a
 single-program scope (the store is unmasked at this shape since `N_CTX` is a
 multiple of `BLOCK_M`); cross-program composition into the full output is the
 trusted host boundary.
@@ -249,50 +248,6 @@ def surfaceOutOffset
   s.pids 1 * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_om + kIndex idx * stride_on
 
-/-- **Execution observation (NOT a specification).** The kernel's own executed
-`Out` value at lane `idx` — i.e. `exec(surface) |> readMem Out`. This is
-self-referential (`Out = whatever the kernel writes`) and is therefore used only
-as an internal observation, never as the public summary's `expected`. The genuine
-closed-form specification is `alignedClosedForm`. -/
-noncomputable def producedOutputValue
-    (s : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
-    (stride_qh stride_qm stride_qk
-      stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn
-      stride_oh stride_om stride_on
-      stride_b0h stride_b0m
-      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
-    (out_dtype : FloatDType)
-    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
-  match exec (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
-      sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn stride_oh stride_om stride_on stride_b0h
-      stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL
-      BLOCK_M BLOCK_N out_dtype) s with
-  | some s' => s'.readMem Out (surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx)
-  | none => 0.0
-
-/-! ## Genuine closed-form output spec (NOT self-referential)
-
-`producedOutputValue` above is the kernel's own executed `Out` value; it is the
-*observation*, not a specification. The definitions below give the **genuine
-closed form** the aligned online-softmax recurrence computes — the base-2
-softmax over the loaded `Q`/`K`/`V` tiles with the scalar score scale
-`qk_scale = sm_scale · log2(e)` folded into `q` and the fused `rel_h + rel_w`
-position bias `b0 + b1` added to the score — expressed over the loaded memory
-tiles, independent of the kernel's execution. The streaming-softmax math heart
-that justifies it (`osStep` fold == batch base-2 softmax) is proved sorry-free in
-`VeriTile/Triton/Math/Attention.lean`
-(`attentionRealBase2ScalarScaleBias_eq_streaming`).
-
-Under the Python launch layout (contiguous per-head `Q`/`K`/`V` with
-`stride_qm = stride_kn = stride_vk = BLOCK_DMODEL`, head stride `1`, and
-`P_SEQ = 0` so `S = N_CTX`), key `j`, head lane `e` of the per-`(batch,head)`
-tile sits at `pid₁ · stride_qh + j · BLOCK_DMODEL + e`. -/
-
-open VeriTile.Triton (attentionRealBase2ScalarScaleBias)
-
 /-- The kernel's literal base-2-`e` constant `1.44269504` (the truncated
 `log2(e) = 1 / log 2` the `@triton.jit` source folds into `q` via
 `qk_scale = sm_scale · 1.44269504`, `q = (q · qk_scale).to(...)`). The genuine
@@ -342,7 +297,7 @@ noncomputable def alignedBias (s : BlockState) (B0 : RegionName)
 base-2 attention of the loaded `Q`/`K`/`V` tiles, with the constant scalar score
 scale `sm_scale · log2(e)` and the fused `rel_h + rel_w` bias `b0 + b1`. This is
 the value the streaming softmax `acc / l_i` computes — defined over the loaded
-tiles, NOT the kernel's own executed output (`producedOutputValue`). -/
+tiles, NOT a readback of the kernel's own executed output. -/
 noncomputable def alignedClosedForm
     (s : BlockState) (Q K V B0 : RegionName) (sm_scale : ℝ)
     (stride_qh stride_b0h stride_b0m
@@ -1055,183 +1010,11 @@ theorem ak_li_op_eval (s : BlockState) (BM BN : Nat)
   simp only [evalOp_mul, evalOp_ref, hl, ha, hsumN, Option.bind_eq_bind, Option.bind_some]; rfl
 
 
-/-! ### preLoop — full 19-statement prologue → `alignedInvariant … 0` -/
-
-def attnPreLoopTail (B0 : RegionName) : List Stmt :=
-  [ Stmt.assign .real [] "qk_scale" (Op.mul .real Broadcast.nil (Op.const 1.0) (Op.const 1.44269504)),
-    Stmt.assign .real [32, 64] "q"
-      (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "Q_block_ptr") []) .none),
-    Stmt.assign .fp16 [32, 64] "q"
-      (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 64] "q") (Op.ref .real [] "qk_scale"))),
-    Stmt.assign .nat [] "lo" (Op.constNat 0),
-    Stmt.assign .nat [] "hi" (Op.constNat 128),
-    Stmt.assign .nat [32] "b_ptr_offsets_m" (Op.arange 32),
-    Stmt.assign .nat [] "b_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 8192)),
-    Stmt.assign .nat [64] "b_ptr_offsets_n_1"
-      (Op.add .nat Broadcast.scalarR
-        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)),
-    Stmt.assign .real [32, 64] "b1"
-      (Op.load .real (.region B0
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
-            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarL
-                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 32))
-                (Op.ref .nat [32] "b_ptr_offsets_m")) (Op.constNat 128))))
-          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "b_ptr_offsets_n_1"))))
-        .none) ]
-
-theorem attnPreLoopTail_check (Q K V B0 Out : RegionName) :
-    ((attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
-        8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-        FloatDType.fp16).toAlgKernel.body.take 19).drop 10 = attnPreLoopTail B0 := by
-  rfl
-
-theorem ak_qscale_op_eval (s : BlockState) (qtile : Tile .real [32, 64]) (sc : ℝ)
-    (hq : s.regs .real [32, 64] "q" = some qtile)
-    (hqs : s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
-    evalOp (Op.castFloat .real .fp16
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 64] "q") (Op.ref .real [] "qk_scale"))) s
-      = some (⟨fun idx : TileIndex [32, 64] =>
-          FloatDType.real.cast FloatDType.fp16 ((qtile.data idx).bind (fun x => some (x * sc)))⟩ : Tile .fp16 [32, 64]) := by
-  have hmul0 : evalOp
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 64] "q") (Op.ref .real [] "qk_scale")) s
-      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := by
-    rw [evalOp_mul]; simp only [evalOp_ref, hq, hqs, Option.bind_eq_bind, Option.bind_some]
-  have hmul : @evalOp FloatDType.real.toTileDType [32, 64]
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 64] "q") (Op.ref .real [] "qk_scale")) s
-      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := hmul0
-  rw [evalOp_castFloat, hmul]
-  simp only [Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
-    NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
-
 theorem evalOp_mod' {dtype a b shape} (h : IntegralDType dtype)
     (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
     evalOp (.mod h bc x y) s = (do
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
   simp [evalOp]
-
-theorem ak_bn1_op_eval (s : BlockState) :
-    evalOp (Op.add .nat Broadcast.scalarR
-        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)) s
-      = some (Tile.vec (fun jL : Fin 64 => jL.val % 64 + 64)) := by
-  rw [evalOp_add, evalOp_mod']
-  simp only [evalOp_arange, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
-    Broadcast.rightIndex, NumericDType.add, IntegralDType.nat_mod]
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-theorem preLoop (Q K V B0 Out : RegionName) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ s0, stepStmts ((attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
-        8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-        FloatDType.fp16).toAlgKernel.body.take 19) s = some s0
-      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
-      ∧ s0.regs .nat [] "hi" = some (Tile.scalar 128)
-      ∧ alignedInvariant s Q K V B0 Out 1.0
-          (s.pids 1 * 8192) (s.pids 1 * 8192) (s.pids 1 * 8192)
-          32 64 64 0 64 128 1 64 64 1 2 (s.pids 0) 0 s0 := by
-  rw [show (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
-        8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-        FloatDType.fp16).toAlgKernel.body.take 19
-      = (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
-          8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-          FloatDType.fp16).toAlgKernel.body.take 10 ++ attnPreLoopTail B0 from by
-    conv_lhs => rw [← List.take_append_drop 10
-      ((attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out 1.0
-          8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
-          FloatDType.fp16).toAlgKernel.body.take 19)]
-    rw [List.take_take, attnPreLoopTail_check Q K V B0 Out]
-    norm_num]
-  obtain ⟨s10, hpre, hpids, hstartm, hoffhz, hqoff, hkvoff, hQp, hKp, hVp, hmi, hli, hacc, hundef10, hmem10⟩ :=
-    preLoop_prefix Q K V B0 Out 1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32 64 FloatDType.fp16 s
-  rw [stepStmts.append_some hpre]
-  unfold attnPreLoopTail
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.mul .real Broadcast.nil (Op.const 1.0) (Op.const 1.44269504)) s10
-        = some (Tile.scalar (some (1.0 * 1.44269504))) from by
-      rw [evalOp_mul]; simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
-      refine congrArg some (congrArg Tile.scalar ?_)
-      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "Q_block_ptr") []) .none)
-          (s10.setReg "qk_scale" .real [] (Tile.scalar (some (1.0 * 1.44269504))))
-        = some (⟨fun idx : TileIndex [32, 64] =>
-            some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (1.0 * 1.44269504)))).readMem Q
-              (s.pids 1 * 8192 + (s.pids 0 * 32 + idx.1.val) * 64 + idx.2.1.val * 1))⟩
-            : Tile .real [32, 64]) from
-      load_blockPtr_Q_eval Q (s.pids 1 * 8192) 128 64 32 64 64 1 (s.pids 0 * 32)
-        (Op.ref .blockPtr [32, 64] "Q_block_ptr") _
-        (by rw [evalOp_ref]; rw [show (s10.setReg "qk_scale" .real [] (Tile.scalar (some (1.0 * 1.44269504)))).regs .blockPtr [32, 64] "Q_block_ptr" = s10.regs .blockPtr [32, 64] "Q_block_ptr" from by simp [BlockState.setReg_ne_name]]; exact hQp)))]
-  erw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 64] "q") (Op.ref .real [] "qk_scale"))) _
-        = some (⟨fun idx : TileIndex [32, 64] =>
-            FloatDType.real.cast FloatDType.fp16
-              (some (1.0 * 1.44269504 * qRaw s Q (s.pids 1 * 8192) 32 64 (s.pids 0) idx))⟩ : Tile .fp16 [32, 64]) from by
-      rw [ak_qscale_op_eval _
-        (⟨fun idx : TileIndex [32, 64] =>
-          some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (1.0 * 1.44269504)))).readMem Q
-            (s.pids 1 * 8192 + (s.pids 0 * 32 + idx.1.val) * 64 + idx.2.1.val * 1))⟩ : Tile .real [32, 64])
-        (1.0 * 1.44269504)
-        (by rw [BlockState.setReg_same])
-        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
-      refine congrArg some ?_; ext idx
-      simp only [Option.bind, Option.map, qRaw]
-      have hrm : (s10.setReg "qk_scale" .real [] (Tile.scalar (some (1.0 * 1.44269504)))).readMem Q
-            (s.pids 1 * 8192 + (s.pids 0 * 32 + idx.1.val) * 64 + idx.2.1.val * 1)
-          = s.readMem Q (s.pids 1 * 8192 + (s.pids 0 * 32 + idx.1.val) * 64 + idx.2.1.val) := by
-        rw [BlockState.setReg_readMem]
-        unfold BlockState.readMem; rw [hmem10]; congr 1; ring
-      rw [hrm]; exact congrArg _ (congrArg _ (mul_comm _ _))))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 0 _))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 128 _))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange 32 _))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (evalOp_mul_ref_const _ "off_hz" (s.pids 1) 8192
-      (by simp [BlockState.setReg_ne_name, hoffhz])))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (ak_bn1_op_eval _))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (load_b1_eval _ B0 32 64 128 64 (s.pids 0) (s.pids 1 * 8192)
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
-      (by simp [BlockState.setReg_ne_name, hstartm])
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
-  rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_⟩
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · simp only [BlockState.setReg_pids]; exact hpids
-  · rfl
-  · norm_num
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hmi]; rfl
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hli]; rfl
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hacc]; rfl
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hKp]
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hVp]
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
-      not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, FloatDType.toTileDType_fp16]
-  · rw [BlockState.setReg_same]
-    refine congrArg some ?_; ext idx
-    simp only [b1Val, BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem10]
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hstartm
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hqoff
-  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-  · intro rg o
-    show s10.undef rg o = 0
-    rw [hundef10]; exact hundef rg o
-  · show s10.mem = s.mem
-    exact hmem10
-
 
 /-! ### fp16 block-store readback lemmas -/
 

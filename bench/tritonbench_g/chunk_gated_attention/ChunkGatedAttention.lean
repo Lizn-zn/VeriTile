@@ -42,8 +42,8 @@ chunk_gated_attention_python_test_shape_output_summary        ← pinned corolla
   └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
        (+ `*_offset_injective` side lemmas at the bench shape)
 
-`hClosed_zero` / `hClosed_succ` capture the gated carry-fold recurrence algebra
-standalone; they are not invoked by the summary proofs.
+`hClosed` captures the gated carry-fold as a standalone closed form (the
+`hSeed`·∏`hGate` + Σ`hStepTerm`·∏`hGate` fold over chunks).
 ```
 
 The four `(GATEK, USE_INITIAL_STATE, STORE_FINAL_STATE)` flag combinations in the
@@ -61,9 +61,9 @@ regions**, never read-backs of the kernel's own output:
   matmul. `producedChunkGatedAttentionHStateValue := hClosed i_t` (loop-row store),
   `producedChunkGatedAttentionFinalStateValue := hClosed 4` (final state).
 
-The carry-fold `hClosed_succ : hClosed (m+1) = hClosed m ⊙ G_m + S_m` (with base
-case `hClosed_zero`) is the exact closed-form counterpart of the Python loop body
-`b_h = b_h * exp(b_gn) [gate] ; b_h += b_k @ b_v`. This generalizes the scalar
+The carry-fold satisfied by `hClosed` — `hClosed (m+1) = hClosed m ⊙ G_m + S_m`
+with base case `hClosed 0 = hSeed` — is the exact closed-form counterpart of the
+Python loop body `b_h = b_h * exp(b_gn) [gate] ; b_h += b_k @ b_v`. This generalizes the scalar
 gated carry-fold of `chunk_gate_recurrence` (#290) and the per-channel decay
 outer-product of `fused_rwkv6` (#291) to a chunk-level matrix gate plus a full
 gated `b_k @ b_v` accumulation.
@@ -84,8 +84,8 @@ The **cross-chunk loop scheduling** that threads the carried `b_h` register from
 chunk `m` to `m+1` — i.e. that the materialized previous-state buffer holds
 `hClosed m` so that the body advances it to `hClosed (m+1)` — is the *trusted
 runtime boundary* (the recurrence is presented to the store faces via the carried
-register, exactly as in #290). Its algebraic content is fully discharged by
-`hClosed_succ`/`hClosed_zero`; the store faces are stated relative to a buffer
+register, exactly as in #290). Its algebraic content is captured by the
+`hClosed` closed form; the store faces are stated relative to a buffer
 hypothesis `buffer = hClosed m`.
 -/
 
@@ -925,56 +925,6 @@ noncomputable def hClosed
         (∏ j ∈ Finset.Ico (t + 1) m,
           hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
 
-/-- `hClosed` at `m = 0` is the seed `b_h^(0)` (the very first state store). -/
-theorem hClosed_zero
-    (s : BlockState) (K V G H0 : RegionName)
-    (GATEK USE_INITIAL_STATE : Bool)
-    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
-    (idx : TileIndex [BK, BV]) :
-    hClosed s K V G H0 GATEK USE_INITIAL_STATE
-        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV 0 idx
-      = hSeed s H0 USE_INITIAL_STATE KSize VSize BK BV idx := by
-  simp [hClosed]
-
-/-- **The gated chunk carry-fold recurrence.** Unrolling one chunk:
-`b_h^(m+1) = b_h^(m) ⊙ G_m + S_m`. This is the exact closed-form counterpart of
-the Python loop body `b_h = b_h * exp(b_gn) [+ gate] ; b_h += b_k @ b_v`. -/
-theorem hClosed_succ
-    (s : BlockState) (K V G H0 : RegionName)
-    (GATEK USE_INITIAL_STATE : Bool)
-    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
-    (idx : TileIndex [BK, BV]) :
-    hClosed s K V G H0 GATEK USE_INITIAL_STATE
-        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx
-      = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx *
-          hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV m idx
-        + hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-            KSize VSize BT BK BV m idx := by
-  unfold hClosed
-  rw [Finset.prod_range_succ, Finset.sum_range_succ]
-  rw [show Finset.Ico (m + 1) (m + 1) = (∅ : Finset Nat) from by simp,
-      Finset.prod_empty, mul_one]
-  have hsum :
-      (∑ t ∈ Finset.range m,
-          hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-              KSize VSize BT BK BV t idx *
-            ∏ j ∈ Finset.Ico (t + 1) (m + 1),
-              hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
-        = (∑ t ∈ Finset.range m,
-            hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-                KSize VSize BT BK BV t idx *
-              ∏ j ∈ Finset.Ico (t + 1) m,
-                hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
-          * hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV m idx := by
-    rw [Finset.sum_mul]
-    apply Finset.sum_congr rfl
-    intro t ht
-    simp only [Finset.mem_range] at ht
-    rw [Finset.prod_Ico_succ_top (by omega : t + 1 ≤ m)]
-    ring
-  rw [hsum]; ring
-
 /-- **Genuine closed form** for the `h` loop-row state store at chunk `i_t`:
 the folded gated state `hClosed i_t`, over the input regions `K`, `V`, `G`, `H0`
 at the bench shape. **Not** a read-back of the kernel's own output. -/
@@ -1027,7 +977,7 @@ These are the symbolic-dimension counterparts of the test-shape closed-form
 faces above. They carry **honest side-conditions only**: offset injectivity of
 each store footprint (a contiguity/aliasing-freedom hypothesis on the strides),
 and the buffer-carries-`hClosed` hypothesis (the cross-chunk loop scheduling that
-threads the carried `b_h` register, whose algebra is `hClosed_succ`/`hClosed_zero`,
+threads the carried `b_h` register, whose algebra is the `hClosed` carry-fold,
 is the trusted runtime boundary, exactly as in #290). No dimension is pinned. -/
 
 /-- Dimension-general `h` loop-row store closed-form face: at chunk `i_t`, the
@@ -1140,7 +1090,7 @@ This is the headline: it packages, for symbolic dimensions,
 Honest side-conditions only: offset injectivity of each store footprint (a
 contiguity/aliasing-freedom hypothesis on the strides) and the
 buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
-the carried `b_h` register, whose algebra is `hClosed_succ`/`hClosed_zero`, is the
+the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
 trusted runtime boundary, as in #290). No dimension is pinned. The pinned
 `chunk_gated_attention_python_test_shape_output_summary` is a thin instantiation. -/
 theorem chunk_gated_attention_output_summary_general
@@ -1263,7 +1213,7 @@ This packages, for the benchmark shape
   state `hClosed i_t`, and (when `STORE_FINAL_STATE`) the `ht` store realizes the
   fully-folded `hClosed 4` — provided the materialized state buffers `BH`/`BHFinal`
   carry those folded states (the cross-chunk loop scheduling that threads the
-  carried `b_h` register, whose algebra is `hClosed_succ`/`hClosed_zero`, is the
+  carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
   trusted runtime boundary, as in #290). -/
 theorem chunk_gated_attention_python_test_shape_output_summary
     (G GCum K V H H0 Ht BH BHFinal : RegionName) (i_t : Fin 4) (s : BlockState)

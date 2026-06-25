@@ -42,8 +42,9 @@ supporting per-row store track:
     └─ rotary_kernel_o0o1_row_o1_correct
 
 full 2D track:
-  rotary_kernel_non_interleaved + the `*2D` offsets (outOffset2D/x0Offset2D/…)
-  give the `[BLOCK_M, BLOCK_HALF]` tile body.
+  only the `[BLOCK_M, BLOCK_HALF]` tile coordinate/active-mask helpers
+  (`rowIndex2D`/`dimIndex2D`/`active2D`) remain; the full 2D body kernel and
+  its closed-form proof are not present.
 
 surfaces_store_summary collects the four case `toAlgorithm` lowerings.
 ```
@@ -188,53 +189,6 @@ theorem rotary_kernel_surface_toAlgorithm_supported
       IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE).toAlgorithm? =
         Except.ok alg := by
   simp [rotary_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-
-/-- Surface transcription of the non-varlen, scalar-offset, non-interleaved,
-non-conjugate branch of `rotary_transform_ops.py`'s `rotary_kernel`.
-
-This keeps the full `[BLOCK_M, BLOCK_K / 2]` tile shape of the Python branch and
-writes both `o0` and `o1`; the proof below focuses on the one-row `o0`
-projection of this surface. -/
-def rotary_kernel_non_interleaved
-    (OUT X COS SIN : RegionName)
-    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
-      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
-      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
-      BLOCK_M BLOCK_HALF : Nat) :
-    ComputeKernel := triton {
-    pid_m = tl.program_id(axis=0)
-    pid_batch = tl.program_id(axis=1)
-    pid_head = tl.program_id(axis=2)
-    X = X + pid_batch * $(stride_x_batch) + pid_head * $(stride_x_nheads)
-    OUT = OUT + pid_batch * $(stride_out_batch) + pid_head * $(stride_out_nheads)
-    if pid_m * $(BLOCK_M) >= $(seqlen) {
-      return
-    }
-    rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-    rm_cs = rm + $(SEQLEN_OFFSETS)
-    rk_half = tl.arange(0, $(BLOCK_HALF))
-    X = X + (rm[:, None] * $(stride_x_seqlen) +
-      rk_half[None, :] * $(stride_x_headdim))
-    COS = COS + (rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :])
-    SIN = SIN + (rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :])
-    cos = tl.load(COS, mask=(rm_cs[:, None] < $(seqlen_ro)) &
-      (rk_half[None, :] < $(rotary_dim_half)), other=1.0).to(tl.float32)
-    sin = tl.load(SIN, mask=(rm_cs[:, None] < $(seqlen_ro)) &
-      (rk_half[None, :] < $(rotary_dim_half)), other=0.0).to(tl.float32)
-    x0 = tl.load(X, mask=(rm[:, None] < $(seqlen)) &
-      (rk_half[None, :] < $(rotary_dim_half)), other=0.0).to(tl.float32)
-    x1 = tl.load(X + $(rotary_dim_half) * $(stride_x_headdim),
-      mask=(rm[:, None] < $(seqlen)) &
-        (rk_half[None, :] < $(rotary_dim_half)), other=0.0).to(tl.float32)
-    o0 = x0 * cos - x1 * sin
-    o1 = x0 * sin + x1 * cos
-    OUT = OUT + (rm[:, None] * $(stride_out_seqlen) +
-      rk_half[None, :] * $(stride_out_headdim))
-    tl.store(OUT, o0, mask=(rm[:, None] < $(seqlen)) &
-      (rk_half[None, :] < $(rotary_dim_half)))
-    tl.store(OUT + $(rotary_dim_half) * $(stride_out_headdim), o1,
-      mask=(rm[:, None] < $(seqlen)) & (rk_half[None, :] < $(rotary_dim_half)))
-}
 
 /-- Proof-oriented one-row first-half slice of `rotary_transform_ops.py`'s
 `rotary_kernel`.
@@ -1006,13 +960,14 @@ theorem rotary_kernel_o0o1_row_all_outputs_compute_correct
 
 /-! ### Full 2D `[BLOCK_M, BLOCK_HALF]` non-interleaved kernel correctness
 
-The `rotary_kernel_non_interleaved` kernel above lifts the one-row
-`o0`/`o1` companion stores to the FULL `[BLOCK_M, BLOCK_HALF]` tile of the
-non-interleaved, non-varlen, non-conjugate, scalar-offset branch from
-`rotary_transform_ops.py`. The 2D tile-indexed offset functions and active
-predicate below mirror the 1D ones (`outOffset`, `active`, etc.) but use
+The full `[BLOCK_M, BLOCK_HALF]` non-interleaved tile body lifts the one-row
+`o0`/`o1` companion stores (proven on `rotary_kernel_o0o1_row` above) to the
+FULL `[BLOCK_M, BLOCK_HALF]` tile of the non-interleaved, non-varlen,
+non-conjugate, scalar-offset branch from `rotary_transform_ops.py`. Only the
+2D tile-indexed coordinate and active-mask helpers below survive — they mirror
+the 1D ones (`outOffset`, `active`, etc.) but use
 `TileIndex [BLOCK_M, BLOCK_HALF]` instead of `Fin BLOCK_HALF`. The proof
-target is the same: `o0 = x0 * cos - x1 * sin` written into `OUT` at the
+target would be the same: `o0 = x0 * cos - x1 * sin` written into `OUT` at the
 first-half `rk_half` offsets, with the companion `o1` store landing on the
 disjoint second-half offsets. -/
 
@@ -1036,81 +991,7 @@ instance active2DDecidable (s : BlockState) (seqlen rotary_dim_half BLOCK_M : Na
   unfold active2D
   infer_instance
 
-/-- 2D-tile first-half output offset (matches the surface's outer
-`OUT = OUT + (rm[:, None] * stride_out_seqlen + rk_half[None, :] *
-stride_out_headdim)` chain after batch/head base advancement). -/
-def outOffset2D
-    (s : BlockState)
-    (stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
-      BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
-  s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-    rowIndex2D s BLOCK_M idx * stride_out_seqlen +
-    dimIndex2D idx * stride_out_headdim
-
-/-- 2D-tile second-half output offset (`+ rotary_dim_half * stride_headdim`). -/
-def out1Offset2D
-    (s : BlockState)
-    (stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
-      rotary_dim_half BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
-  s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-    rowIndex2D s BLOCK_M idx * stride_out_seqlen +
-    (dimIndex2D idx + rotary_dim_half) * stride_out_headdim
-
-/-- 2D-tile `x0` input offset. -/
-def x0Offset2D
-    (s : BlockState)
-    (stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
-      BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
-  s.pids 1 * stride_x_batch + s.pids 2 * stride_x_nheads +
-    rowIndex2D s BLOCK_M idx * stride_x_seqlen +
-    dimIndex2D idx * stride_x_headdim
-
-/-- 2D-tile `x1` input offset (`+ rotary_dim_half * stride_x_headdim`). -/
-def x1Offset2D
-    (s : BlockState)
-    (stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
-      rotary_dim_half BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
-  s.pids 1 * stride_x_batch + s.pids 2 * stride_x_nheads +
-    rowIndex2D s BLOCK_M idx * stride_x_seqlen +
-    (dimIndex2D idx + rotary_dim_half) * stride_x_headdim
-
-/-- 2D-tile cos/sin offset. -/
-def rotOffset2D (s : BlockState) (SEQLEN_OFFSETS rotary_dim_half BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
-  (rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS) * rotary_dim_half + dimIndex2D idx
-
-/-- 2D-tile expected `o0` value at active positions. -/
-noncomputable def rotaryO0Spec2D
-    (s : BlockState) (X COS SIN : RegionName)
-    (SEQLEN_OFFSETS seqlen_ro stride_x_batch stride_x_seqlen stride_x_nheads
-      stride_x_headdim rotary_dim_half BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : ℝ :=
-  let cosVal :=
-    if rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS < seqlen_ro ∧
-        dimIndex2D idx < rotary_dim_half then
-      s.readMem COS (rotOffset2D s SEQLEN_OFFSETS rotary_dim_half BLOCK_M idx)
-    else
-      1.0
-  let sinVal :=
-    if rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS < seqlen_ro ∧
-        dimIndex2D idx < rotary_dim_half then
-      s.readMem SIN (rotOffset2D s SEQLEN_OFFSETS rotary_dim_half BLOCK_M idx)
-    else
-      0.0
-  s.readMem X
-      (x0Offset2D s stride_x_batch stride_x_seqlen stride_x_nheads
-        stride_x_headdim BLOCK_M idx) *
-    cosVal -
-  s.readMem X
-      (x1Offset2D s stride_x_batch stride_x_seqlen stride_x_nheads
-        stride_x_headdim rotary_dim_half BLOCK_M idx) *
-    sinVal
-
-/-! The `rotary_kernel_non_interleaved` full 2D `[BLOCK_M, BLOCK_HALF]` body
+/-! The full 2D `[BLOCK_M, BLOCK_HALF]` non-interleaved body
 proof remains open: the surface's `.to(tl.float32)` casts on each `tl.load`
 plus the early-return `if pid_m * BLOCK_M >= seqlen { return }` guard prevent
 the standard `simp [exec, ..., stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop,
@@ -1123,10 +1004,9 @@ Specifically, `simp` leaves the kernel as a `match (ComputeExpr.compute
 expected `List.foldl writeMem` form. Closing the full 2D surface requires
 extending the elementwise simp set with the appropriate
 `ComputeOp/Expr.toAlgorithm?_*` lemmas covering `.to(tl.float32)`-cast loads
-with masked `Op.const _ |>.broadcast` other-values. The 2D helper
-definitions above (`outOffset2D`, `out1Offset2D`, `x0Offset2D`, `x1Offset2D`,
-`rotOffset2D`, `active2D`, `rotaryO0Spec2D`) are kept in place as a stable
-surface contract once the simp-set extension lands. -/
+with masked `Op.const _ |>.broadcast` other-values. The surviving 2D helper
+definitions above (`rowIndex2D`, `dimIndex2D`, `active2D`) are kept in place as
+a stable coordinate/active-mask contract once the simp-set extension lands. -/
 
 /-! ## Python test-shape surface wrappers -/
 

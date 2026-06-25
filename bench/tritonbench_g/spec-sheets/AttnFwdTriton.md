@@ -92,7 +92,7 @@ def outOffset
 The kernel masks every non-causal key with the `-1e6` `tl.where` sentinel, so only
 the **kept** (causal) keys `j ≤ qStart + i` need a boundedness assumption, and only
 `≥ -1e6` (non-strict) is required: the masked keys are pinned to the sentinel and
-never raise the running max. This mirrors the pinned `aftScoreBound` form. -/
+never raise the running max. -/
 ```
 ```lean
 def aftgScoreBoundG

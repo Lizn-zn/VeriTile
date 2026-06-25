@@ -28,11 +28,11 @@ statement covers every program of the grid.
 
 ```
 context_attn_nopad_output_summary_general                   ← TOP THEOREM (symbolic, dimension-general)
-  └─ nopad_exec                              full surface exec → genuine closed form (concrete shape)
-       ├─ nopadPreLoop_eval                  19 preLoop stmts → nopadInvariant … 0
-       ├─ forRangeDyn_inv ∘ nopad_attn_step  loop body advances nopadInvariant c → c+1
-       │    └─ osNormStepBot_block_eq + nopadBlockM_{sup,lij,acc} bridges
-       └─ nopadPostLoop_eval                 masked store → ctxNopadGenuineOutValue
+  └─ nopad_exec_general                      full surface exec → genuine closed form (dimension-general)
+       ├─ nopadPreLoop_evalG                 19 preLoop stmts → nopadInvariantG … 0
+       ├─ forRangeDyn_inv ∘ nopad_attn_stepG loop body advances nopadInvariantG c → c+1
+       │    └─ osNormStepBot_block_eq + nopadBlockMG_{sup,lij,acc} bridges
+       └─ nopadPostLoop_evalG                masked store → ctxNopadGenuineOutValue
             └─ nopadFoldUpto_full_eq_genuine ∘ ctxNopad_fold_eq_exactFoldM
 (genuine spec: ctxNopadGenuineOutValue = contextAttnNopadExactFoldM, the boundary-
  masked causal softmax; = attentionRealCausalBlock via the closed-form bridge.
@@ -51,8 +51,8 @@ of the loaded Q/K/V memory — at every active lane (`offs_m < cur_batch_seq_len
 with `offs_d < head_dim` folded into the slice), and preserves out-of-bounds lanes.
 The online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal
 `-inf` mask, in-loop normalization) is decoded statement-by-statement
-(`nopadPreLoop_eval`/`nopad_attn_step`/`nopadPostLoop_eval`, assembled in
-`nopad_exec`) and *proven* to collapse to this closed form, not re-stated as a
+(`nopadPreLoop_evalG`/`nopad_attn_stepG`/`nopadPostLoop_evalG`, assembled in
+`nopad_exec_general`) and *proven* to collapse to this closed form, not re-stated as a
 spec. `toAlgorithm?` lowering is available separately as
 `context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported`. The top theorem is
 dimension-general: it is stated over symbolic `BLK`/`DM` (with
@@ -299,34 +299,6 @@ noncomputable def ctxVTile
     s.readMem V
       ((startLoc s B_Start_Loc + j.val) * 768 + s.pids 1 * 128 + d.val)
 
-/-- **Genuine closed-form output** of `context_attn_nopad` at query lane `i`,
-channel `d`, over the first `S` keys:
-
-`out[i,d] = (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ)·V[j,d]) / (Σ_{j ≤ gi} exp(sm_scale·rawᵢⱼ))`
-
-where `gi = start_m·BLOCK_M + i` and `rawᵢⱼ = Σ_e Q[gi,e]·K[j,e]`. This is exactly
-`attentionRealCausalBlock` (the library's local-block causal softmax) instantiated
-with this kernel's no-padding Q/K/V tiles, scale `sm_scale`, and query-start
-`gi₀ = start_m·BLOCK_M`. No self-reference: it is a pure function of `Q`/`K`/`V`
-memory. -/
-noncomputable def contextAttnNopadClosedForm
-    (s : BlockState) (Q K V B_Start_Loc : RegionName)
-    (sm_scale : ℝ) (BLOCK_M S : Nat)
-    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
-  let i := idx.1
-  let d := idx.2.1
-  let gi := s.pids 2 * BLOCK_M + i.val
-  let raw := fun j : Fin S =>
-    Finset.univ.sum (fun e : Fin 128 =>
-      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-        * ctxKTile s K B_Start_Loc S (j, e, PUnit.unit))
-  let weight := fun j : Fin S =>
-    if j.val ≤ gi then Real.exp (sm_scale * raw j) else 0
-  let denom := Finset.univ.sum (fun j : Fin S => weight j)
-  let numer := Finset.univ.sum (fun j : Fin S =>
-    weight j * ctxVTile s V B_Start_Loc S (j, d, PUnit.unit))
-  numer / denom
-
 /-! ### Boundary-masked (load-faithful) closed form
 
 The kernel's `k`/`v` loads carry the no-padding mask `(start_n + offs_n) <
@@ -334,8 +306,8 @@ cur_batch_seq_len` (`other=0`), so phantom keys `j ≥ cur_batch_seq_len` load a
 `0`. The boundary-masked tiles below reflect that. For an **active** query row
 (`gi = start_m·BLOCK_M + i < cur_batch_seq_len`) the causal mask `j ≤ gi` already
 forces every contributing key into `j < cur_batch_seq_len`, so the boundary mask
-is subsumed and the masked closed form coincides with the genuine
-`contextAttnNopadClosedForm`. -/
+is subsumed and the masked closed form coincides with the genuine causal softmax
+over the active keys. -/
 
 /-- Sequence-length-masked key tile: `ctxKTile` for `j < bel = cur_batch_seq_len`,
 else `0` (the kernel's `k` load mask). -/
@@ -660,7 +632,7 @@ theorem ctxNopad_fold_eq_exactFoldM
 Mirror of #307's `srKeysUpto`/`srBlock`/`srKeysUpto_succ`/`srStateBot_succ`,
 adapted to nopad's *causal* per-key filter. The streamed prefix after `c` blocks
 is `ctxNopadKeysUpto … (c·128)` — the causal-and-window key list — and one loop
-iteration appends `nopadBlock c` (the keys in `[c·128, (c+1)·128)` that are causal
+iteration appends `nopadBlockMG c` (the keys in `[c·128, (c+1)·128)` that are causal
 for row `i`). -/
 
 /-- The `(score, value)` keys row `i`/channel `d` has streamed after window
@@ -671,20 +643,6 @@ noncomputable def ctxNopadKeysUpto
   let gi := s.pids 2 * BLOCK_M + i.val
   (List.finRange S).filterMap (fun j : Fin S =>
     if j.val ≤ gi ∧ j.val < hi then
-      some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-              ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
-                * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
-            ctxVTileM s V B_Start_Loc S bel (j, d, PUnit.unit))
-    else none)
-
-/-- Block-`c` causal keys for row `i`/channel `d`: causal `j ≤ gi` AND
-`c·128 ≤ j.val < (c+1)·128` — the keys the loop's `c`-th iteration streams. -/
-noncomputable def nopadBlock
-    (s : BlockState) (Q K V B_Start_Loc : RegionName) (sm_scale : ℝ)
-    (BLOCK_M S bel c : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
-  let gi := s.pids 2 * BLOCK_M + i.val
-  (List.finRange S).filterMap (fun j : Fin S =>
-    if j.val ≤ gi ∧ c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then
       some (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
               ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
                 * ctxKTileM s K B_Start_Loc S bel (j, e, PUnit.unit)),
@@ -837,12 +795,12 @@ theorem context_attn_nopad_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-! ### 128-lane ↔ `nopadBlock` reduction bridges (per row `i` / channel `d`)
+/-! ### 128-lane ↔ `nopadBlockMG` reduction bridges (per row `i` / channel `d`)
 
 Mirror of #307's `srBlock_sup_eq`/`srBlock_esum_sum`/`srBlock_acc_sum`, in 2D and
 under nopad's *causal* per-lane guard. The loop body reduces a `Fin 128` masked
 row (lane `jL` ↦ global key `c·128 + jL`, causal-visible when `c·128 + jL ≤ gi`
-and in-window `c·128 + jL < S`); the `osNormStepBot` math uses `nopadBlock`'s
+and in-window `c·128 + jL < S`); the `osNormStepBot` math uses `nopadBlockMG`'s
 `Fin S` filterMap over the causal window `[c·128, (c+1)·128)`. -/
 
 /-- filterMap-sum over `Fin n` with a guard collapses into the masked
@@ -1125,52 +1083,6 @@ theorem osNormStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List
       rw [show acc * (Real.exp (-Mr) * L) + Real.exp (-Mr) * (block.map (fun p => Real.exp p.1 * p.2)).sum
             = Real.exp (-Mr) * (acc * L + (block.map (fun p => Real.exp p.1 * p.2)).sum) from by ring]
       rw [hacc, mul_div_mul_left _ _ (Real.exp_ne_zero _)]
-
-/-- The loop invariant after `c` `128`-blocks at the Python test shape. Binds the
-running `m_i`/`l_i`/`acc` registers to `nopadFoldUpto … (c·128)` and preserves every
-preLoop-seeded register. `S = ctxNopadWindow`, `bel = seqLen`, scale =
-`sm_scale_python`. -/
-noncomputable def nopadInvariant
-    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName)
-    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
-  s.pids = s0.pids
-  ∧ s.mem = s0.mem
-  ∧ (∀ rg o, s.undef rg o = 0)
-  ∧ s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))
-  ∧ s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))
-  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 2))
-  ∧ s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s0 B_Seqlen))
-  ∧ s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar (startLoc s0 B_Start_Loc))
-  ∧ s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
-  ∧ s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))
-  ∧ s.regs .nat [128] "offs_m" = some (Tile.vec (fun i : Fin 128 => s0.pids 2 * 128 + i.val))
-  ∧ s.regs .real [128, 128] "q" =
-      some (⟨fun idx : TileIndex [128, 128] =>
-        some (ctxQTileMRow s0 Q B_Start_Loc 128 (seqLen s0 B_Seqlen) (idx.1, idx.2.1, PUnit.unit))⟩
-        : Tile .real [128, 128])
-  ∧ s.regs .ptr [128, 128] "k_ptrs" =
-      some (⟨fun idx : TileIndex [128, 128] =>
-        (K, idx.2.1.val * 768 + s0.pids 1 * 128 + idx.1.val)⟩ : Tile .ptr [128, 128])
-  ∧ s.regs .ptr [128, 128] "v_ptrs" =
-      some (⟨fun idx : TileIndex [128, 128] =>
-        (V, idx.1.val * 768 + s0.pids 1 * 128 + idx.2.1.val)⟩ : Tile .ptr [128, 128])
-  ∧ s.regs .nat [] "block_mask" =
-      some (Tile.scalar (if 128 * s0.pids 2 < seqLen s0 B_Seqlen then 1 else 0))
-  ∧ s.regs .real [128] "m_i" =
-      some (⟨fun idx : TileIndex [128] =>
-        (nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
-          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 ⟨0, by norm_num⟩).1⟩
-        : Tile .real [128])
-  ∧ s.regs .real [128] "l_i" =
-      some (⟨fun idx : TileIndex [128] =>
-        ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
-          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 ⟨0, by norm_num⟩).2.1 : WithBot ℝ)⟩
-        : Tile .real [128])
-  ∧ s.regs .real [128, 128] "acc" =
-      some (⟨fun idx : TileIndex [128, 128] =>
-        ((nopadFoldUpto s0 Q K V B_Start_Loc sm_scale_python
-          (ctxNopadWindow s0 B_Seqlen 128) (seqLen s0 B_Seqlen) (c * 128) idx.1 idx.2.1).2.2 : WithBot ℝ)⟩
-        : Tile .real [128, 128])
 
 /-- `seqLen` depends only on `mem`/`pids`. -/
 theorem seqLen_eq_of_mem_pids (s s0 : BlockState) (B_Seqlen : RegionName)

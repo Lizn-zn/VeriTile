@@ -44,12 +44,11 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 (symbolic `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale` and strides);
 the Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=128, BLOCK_M=BLOCK_N=64`,
 `sm_scale=0.1`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(16384,128,1)`)
-is the special case (the pinned `attention_kernel_genuine_output_compute_correct`
-is that corollary).
+is the special case.
 The top summary asserts the **genuine** closed form: every observable `Out` lane
 equals the base-2 streaming-softmax `attentionKernelSpec` (= `attnGenScore fscore
 vFlat`) of the loaded Q/K/V tiles under the kernel's actual bias-augmented per-key
-score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec`,
+score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec_general`,
 NOT a self-referential readback. This is a single-program
 scope (the store is unmasked at this shape since `N_CTX` is a multiple of
 `BLOCK_M`); cross-program composition into the full output is the trusted host
@@ -549,8 +548,8 @@ streaming registers `m_i`/`l_i`/`acc` equal the generalized partials
 first `c` blocks (kernel seed `l_i = 0`, hence `lPgK` not `lPg`), and the K/V
 block pointers have advanced `c` column/row steps of `BLOCK_N`. The loop-invariant
 registers (`q` pre-scaled+loaded, `b1`, `b_offset`, `start_m`/`off_hz`) are fixed.
-`preLoop` establishes `attnKernelInvariant … 0`, `attn_step` advances it by one
-block, and `attn_postLoop` reads the closed form off `… numKVBlocks` via
+`preLoopG` establishes `attnKernelInvariant … 0`, `attn_stepG` advances it by one
+block, and `attn_postLoopG` reads the closed form off `… numKVBlocks` via
 `attentionKernelSpec_eq_ratio`. -/
 noncomputable def attnKernelInvariant
     (s0 : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
@@ -799,69 +798,9 @@ theorem evalOp_exp2' {shape : TileShape} (a : Op .real shape) (s : BlockState) :
     evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
   simp [evalOp]
 
-/-- The lowered 15-statement `forRangeDyn` body of the Python-shape kernel. -/
-def attnLoopBody (B0 : RegionName) : List Stmt :=
-  [ Stmt.assign .real [128, 64] "k"
-      (Op.load .real (.blockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") []) .none),
-    Stmt.assign .real [64, 128] "v"
-      (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") []) .none),
-    Stmt.assign .fp16 [64, 64] "qk" (Op.full [64, 64] (Op.castFloat .real .fp16 (Op.const 0))),
-    Stmt.assign .real [64, 64] "qk"
-      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk"))
-        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q"))
-          (Op.ref .real [128, 64] "k"))),
-    Stmt.assign .real [64, 1] "b0"
-      (Op.load .real (.region B0
-        (Op.add .nat Broadcast.scalarR
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
-            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarL
-                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
-                (Op.ref .nat [64] "b_ptr_offsets_m")) (Op.constNat 128))))
-          (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))))
-        .none),
-    Stmt.assign .real [64, 64] "qk"
-      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 64] "qk")
-        (Op.mul .real Broadcast.scalarR
-          (Op.add .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
-            (Op.ref .real [64, 1] "b0") (Op.ref .real [64, 64] "b1")) (Op.const 1.44269504))),
-    Stmt.assign .real [64] "m_i_new"
-      (Op.where
-        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "m_i")
-          (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk")))
-        (Op.ref .real [64] "m_i")
-        (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk"))),
-    Stmt.assign .real [64] "alpha"
-      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "m_i")
-        (Op.ref .real [64] "m_i_new"))),
-    Stmt.assign .real [64, 64] "p"
-      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [64, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m_i_new")))),
-    Stmt.assign .real [64, 128] "acc"
-      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [64, 128] "acc")
-        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "alpha"))),
-    Stmt.assign .real [64, 128] "acc"
-      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 128] "acc")
-        (Op.dot (batch := []) (Op.castFloat .fp16 .real
-          (Op.castFloat .real .fp16 (Op.ref .real [64, 64] "p"))) (Op.ref .real [64, 128] "v"))),
-    Stmt.assign .real [64] "l_i"
-      (Op.add .real (Broadcast.consSame Broadcast.nil)
-        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "l_i")
-          (Op.ref .real [64] "alpha"))
-        (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "p"))),
-    Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_i_new"),
-    Stmt.assign .blockPtr [128, 64] "K_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") [(0:Nat), (64:Nat)]),
-    Stmt.assign .blockPtr [64, 128] "V_block_ptr"
-      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") [(64:Nat), (0:Nat)]) ]
-
 /-- The lowered 15-statement `forRangeDyn` body, dimension-parameterized over
-`BLOCK_M BLOCK_N HEAD_DIM stride_b0m`. Specializes to `attnLoopBody` at the
-Python test shape (`64 64 128 128`). -/
+`BLOCK_M BLOCK_N HEAD_DIM stride_b0m` (at the Python test shape these are
+`64 64 128 128`). -/
 def attnLoopBodyG (B0 : RegionName)
     (BLOCK_M BLOCK_N HEAD_DIM stride_b0m : Nat) : List Stmt :=
   [ Stmt.assign .real [HEAD_DIM, BLOCK_N] "k"
@@ -962,22 +901,8 @@ theorem attnLoopBodyG_check (Q K V B0 Out : RegionName) (sm_scale : ℝ)
     List.drop_succ_cons, List.drop_zero, attnLoopBodyG]
   rfl
 
-/-- The lowered 3-statement post-loop (`acc /= l_i[:, None]`, `O_block_ptr`,
-masked-free block store to `Out`). -/
-def attnPostLoop (Out : RegionName) : List Stmt :=
-  [ Stmt.assign .real [64, 128] "acc"
-      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [64, 128] "acc")
-        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))),
-    Stmt.assign .blockPtr [64, 128] "O_block_ptr"
-      (Op.makeBlockPtrDynOffsets Out (Op.ref .nat [] "q_offset") [128, 128] [64, 128]
-        [128, 1] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64), Op.constNat 0]),
-    Stmt.store .fp16 [64, 128] (.blockPtr (Op.ref .blockPtr [64, 128] "O_block_ptr") [])
-      (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) .none ]
-
 /-- The lowered 3-statement post-loop, dimension-parameterized over
-`BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on`. Specializes to `attnPostLoop`
-at the Python test shape. -/
+`BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on`. -/
 def attnPostLoopG (Out : RegionName)
     (BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on : Nat) : List Stmt :=
   [ Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
@@ -1011,40 +936,6 @@ theorem attnPostLoopG_check (Q K V B0 Out : RegionName) (sm_scale : ℝ)
     List.drop_succ_cons, List.drop_zero, attnPostLoopG]
   rfl
 
-/-! ### Loop-body op-eval recipes (Python shape) -/
-
-/-- **`qk = fp16-zeros + dot(q, k)`** (L2-L3 collapsed): the fp16 `tl.zeros` is
-`0`, so after the dot-add `qk` is `castFloat(0) + dot(castFloat q, k)`. -/
-theorem qk_dot_op_eval (s : BlockState) (qtile : Tile .fp16 [64, 128]) (ktile : Tile .real [128, 64])
-    (hqk : s.regs .fp16 [64, 64] "qk" = some ⟨fun _ : TileIndex [64, 64] =>
-        FloatDType.real.cast FloatDType.fp16 (some 0)⟩)
-    (hq : s.regs .fp16 [64, 128] "q" = some qtile)
-    (hk : s.regs .real [128, 64] "k" = some ktile) :
-    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk"))
-        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q"))
-          (Op.ref .real [128, 64] "k"))) s
-      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
-          (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile)) := by
-  have hczA : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk")) s
-      = some (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩ : Tile .real [64, 64]) := by
-    rw [evalOp_castFloat]; simp [hqk]
-  have hcz : @evalOp TileDType.real [64, 64] (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk")) s
-      = some (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩ : Tile .real [64, 64]) := hczA
-  have hcbA : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) s
-      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) := by
-    rw [evalOp_castFloat]; simp [hq]
-  have hcb2 : @evalOp TileDType.real [64, 128] (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) s
-      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) := hcbA
-  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) (Op.ref .real [128, 64] "k")) s
-      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile) := by
-    rw [evalOp_dot]; simp [hcb2, hk]
-  have hdotN2 : @evalOp TileDType.real [64, 64]
-      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) (Op.ref .real [128, 64] "k")) s
-      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile) := hdotN
-  rw [evalOp_add, hcz, hdotN2]; rfl
-
 /-- **General** `qk = fp16-zeros + dot(q, k)` (dimension-parameterized). -/
 theorem qk_dot_op_evalG (s : BlockState) (BM BN HEAD : Nat)
     (qtile : Tile .fp16 [BM, HEAD]) (ktile : Tile .real [HEAD, BN])
@@ -1077,25 +968,6 @@ theorem qk_dot_op_evalG (s : BlockState) (BM BN HEAD : Nat)
       = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, HEAD]) ktile) := hdotN
   rw [evalOp_add, hcz, hdotN2]; rfl
 
-/-- **`qk += (b0 + b1)·log2e`** (L5): adds the additive relative-position bias. -/
-theorem qk_bias_op_eval (s : BlockState) (qktile : Tile .real [64, 64])
-    (b0tile : Tile .real [64, 1]) (b1tile : Tile .real [64, 64])
-    (hqk : s.regs .real [64, 64] "qk" = some qktile)
-    (hb0 : s.regs .real [64, 1] "b0" = some b0tile)
-    (hb1 : s.regs .real [64, 64] "b1" = some b1tile) :
-    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 64] "qk")
-        (Op.mul .real Broadcast.scalarR
-          (Op.add .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
-            (Op.ref .real [64, 1] "b0") (Op.ref .real [64, 64] "b1")) (Op.const 1.44269504))) s
-      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qktile
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil)) b0tile b1tile)
-            (Tile.scalar (some 1.44269504)))) := by
-  rw [evalOp_add]
-  simp only [evalOp_mul, evalOp_add, evalOp_const, evalOp_ref, hqk, hb0, hb1,
-    Option.bind_eq_bind, Option.bind_some]
-
 /-- **General** `qk += (b0 + b1)·log2e` (dimension-parameterized). -/
 theorem qk_bias_op_evalG (s : BlockState) (BM BN : Nat) (qktile : Tile .real [BM, BN])
     (b0tile : Tile .real [BM, 1]) (b1tile : Tile .real [BM, BN])
@@ -1114,58 +986,6 @@ theorem qk_bias_op_evalG (s : BlockState) (BM BN : Nat) (qktile : Tile .real [BM
   rw [evalOp_add]
   simp only [evalOp_mul, evalOp_add, evalOp_const, evalOp_ref, hqk, hb0, hb1,
     Option.bind_eq_bind, Option.bind_some]
-
-/-- **`b0` per-block bias load** (L4): resolves the `B0 + b_offset + (...)[:, None]
-+ start_n // BLOCK_N` pointer to the per-row read at `b_offset + (start_m·BLOCK_M
-+ r)·stride_b0m + start_n // BLOCK_N` (= `b0Val`'s address at `c = start_n /
-BLOCK_N`). -/
-theorem load_b0_eval (s : BlockState) (B0 : RegionName)
-    (BLOCK_M stride_b0m smbm boff snv : Nat) (hax : 1 < [BLOCK_M].length.succ)
-    (hbo : s.regs .nat [] "b_offset" = some (Tile.scalar boff))
-    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar smbm))
-    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar snv))
-    (hm : s.regs .nat [BLOCK_M] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin BLOCK_M => r.val))) :
-    evalOp ((Op.load .real (.region B0
-        (Op.add .nat Broadcast.scalarR
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
-            (Op.expandDim ⟨1, hax⟩ (Op.mul .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarL
-                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M))
-                (Op.ref .nat [BLOCK_M] "b_ptr_offsets_m")) (Op.constNat stride_b0m))))
-          (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))))
-        .none : Op .real [BLOCK_M, 1])) s
-      = some (⟨fun idx : TileIndex [BLOCK_M, 1] =>
-          some (s.readMem B0
-            (boff + (smbm * BLOCK_M + idx.1.val) * stride_b0m + snv / 64))⟩ : Tile .real [BLOCK_M, 1]) := by
-  rw [evalOp_load_region_none]
-  have hoff : evalOp ((Op.add .nat Broadcast.scalarR
-        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
-          (Op.expandDim ⟨1, hax⟩ (Op.mul .nat Broadcast.scalarR
-            (Op.add .nat Broadcast.scalarL
-              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M))
-              (Op.ref .nat [BLOCK_M] "b_ptr_offsets_m")) (Op.constNat stride_b0m))))
-        (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))) : Op .nat [BLOCK_M, 1]) s
-      = some (⟨fun idx : TileIndex [BLOCK_M, 1] =>
-          boff + (smbm * BLOCK_M + idx.1.val) * stride_b0m + snv / 64⟩ : Tile .nat [BLOCK_M, 1]) := by
-    conv_lhs => unfold evalOp
-    -- outer add scalarR: arg1 = add scalarL, arg2 = floorDiv
-    conv_lhs => unfold evalOp  -- arg1 add scalarL
-    conv_lhs => unfold evalOp  -- expandDim
-    conv_lhs => unfold evalOp  -- inner mul scalarR
-    conv_lhs => unfold evalOp  -- inner add scalarL
-    conv_lhs => unfold evalOp  -- inner mul nil
-    rw [evalOp_ref, hsm]
-    simp only [evalOp_ref, evalOp_constNat, hbo, hsn, hm, Option.bind, Option.map]
-    refine congrArg some ?_
-    ext idx
-    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex, Broadcast.leftIndex,
-      Broadcast.rightIndex, Tile.scalar, Tile.vec, NumericDType.add, NumericDType.mul,
-      IntegralDType.floorDiv]
-  rw [hoff]
-  simp only [Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_
-  ext idx
-  simp only [BlockState.readMemValue_real, Region.cast_id]
 
 /-- **General** `b0` per-block bias load (dimension-parameterized over `BLOCK_N`). -/
 theorem load_b0_evalG (s : BlockState) (B0 : RegionName)
@@ -1215,9 +1035,9 @@ theorem load_b0_evalG (s : BlockState) (B0 : RegionName)
   ext idx
   simp only [BlockState.readMemValue_real, Region.cast_id]
 
-/-! ### Loop-body execution chain (`attnLoopBody_steps`)
+/-! ### Loop-body execution chain (`attnLoopBody_stepsG`)
 
-Steps the 15-statement `attnLoopBody` one block at a time, exposing the symbolic
+Steps the 15-statement `attnLoopBodyG` one block at a time, exposing the symbolic
 `qk`/`m_i_new`/`alpha`/`p`/`acc`/`l_i` tiles so the banked per-cell bridges
 (`mijg_eq`/`alphag_eq`/`lig_eq`/`accg_eq`) advance the invariant by one block.
 Mirrors `flashLoopBody_steps`, but the kernel's `qk = dot + (b0+b1)·log2e` bias
@@ -1327,215 +1147,6 @@ theorem ak_li_op_eval (s : BlockState) (BM BN : Nat)
       = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ptile) := hsumN0
   rw [evalOp_add]
   simp only [evalOp_mul, evalOp_ref, hl, ha, hsumN, Option.bind_eq_bind, Option.bind_some]; rfl
-
-set_option maxHeartbeats 1000000 in
-set_option maxRecDepth 8000 in
-theorem attnLoopBody_steps (B0 : RegionName) (sin : BlockState) (SN : Nat)
-    (gm : Fin 64 → Nat)
-    (Kreg Vreg : RegionName) (kbase vbase kcol vrow kcols vrows : Nat)
-    (boff smbm : Nat)
-    (qtile : Tile .fp16 [64, 128]) (mtile ltile : Tile .real [64])
-    (acctile : Tile .real [64, 128]) (ktile : Tile .real [128, 64]) (vtile : Tile .real [64, 128])
-    (b1tile : Tile .real [64, 64])
-    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
-    (hbo : sin.regs .nat [] "b_offset" = some (Tile.scalar boff))
-    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar smbm))
-    (hm : sin.regs .nat [64] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin 64 => r.val)))
-    (hmax : sin.regs .real [64] "m_i" = some mtile)
-    (hl : sin.regs .real [64] "l_i" = some ltile)
-    (hacc : sin.regs .real [64, 128] "acc" = some acctile)
-    (hq : sin.regs .fp16 [64, 128] "q" = some qtile)
-    (hb1 : sin.regs .real [64, 64] "b1" = some b1tile)
-    (hKp : sin.regs .blockPtr [128, 64] "K_block_ptr" = some
-      (⟨fun _ : TileIndex [128, 64] =>
-        { region := Kreg, baseOffset := kbase, parentShape := [128, kcols],
-          blockShape := [128, 64], strides := [1, 128], offsets := [0, kcol] }⟩))
-    (hVp : sin.regs .blockPtr [64, 128] "V_block_ptr" = some
-      (⟨fun _ : TileIndex [64, 128] =>
-        { region := Vreg, baseOffset := vbase, parentShape := [vrows, 128],
-          blockShape := [64, 128], strides := [128, 1], offsets := [vrow, 0] }⟩))
-    (hkload : ∀ idx : TileIndex [128, 64],
-      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * 1 + (kcol + idx.2.1.val) * 128)))
-    (hvload : ∀ idx : TileIndex [64, 128],
-      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 128 + idx.2.1.val * 1)))
-    (qoffV : Nat) (hqo : sin.regs .nat [] "q_offset" = some (Tile.scalar qoffV))
-    (hundef : ∀ rg o, sin.undef rg o = 0) :
-    ∃ sF, stepStmts (attnLoopBody B0) sin = some sF
-      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
-      ∧ sF.regs .fp16 [64, 128] "q" = some qtile
-      ∧ sF.regs .real [64, 64] "b1" = some b1tile
-      ∧ sF.regs .nat [] "b_offset" = some (Tile.scalar boff)
-      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar smbm)
-      ∧ sF.regs .nat [] "q_offset" = some (Tile.scalar qoffV)
-      ∧ sF.regs .nat [64] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin 64 => r.val))
-      ∧ sF.regs .blockPtr [128, 64] "K_block_ptr" = some
-          (⟨fun _ : TileIndex [128, 64] =>
-            { region := Kreg, baseOffset := kbase, parentShape := [128, kcols],
-              blockShape := [128, 64], strides := [1, 128], offsets := [0, kcol + 64] }⟩)
-      ∧ sF.regs .blockPtr [64, 128] "V_block_ptr" = some
-          (⟨fun _ : TileIndex [64, 128] =>
-            { region := Vreg, baseOffset := vbase, parentShape := [vrows, 128],
-              blockShape := [64, 128], strides := [128, 1], offsets := [vrow + 64, 0] }⟩)
-      ∧ ∃ (qkT : Tile .real [64, 64]) (rmaxT mnewT alphaT : Tile .real [64])
-            (pT : Tile .real [64, 64]),
-          (∀ i : Fin 64, ∀ j : Fin 64,
-            qkT.data (i, j, PUnit.unit)
-              = (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                  (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                    (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
-                    (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile))
-                  (Tile.bop NumericDType.real.mul Broadcast.scalarR
-                    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil))
-                      (⟨fun idx : TileIndex [64, 1] =>
-                        some (sin.readMem B0 (boff + (smbm * 64 + idx.1.val) * 128 + SN / 64))⟩)
-                      b1tile)
-                    (Tile.scalar (some 1.44269504)))).data (i, j, PUnit.unit))
-          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some rmaxT
-          ∧ mnewT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
-          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewT)
-          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mnewT))
-          ∧ sF.regs .real [64] "m_i" = some mnewT
-          ∧ sF.regs .real [64, 128] "acc" = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-              (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
-              (Tile.dot [] pT vtile))
-          ∧ sF.regs .real [64] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
-              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT)
-              (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 64].length) pT)) := by
-  -- the qk tile after L2–L5 (fp16-zeros + dot + bias)
-  set b0T : Tile .real [64, 1] :=
-    ⟨fun idx : TileIndex [64, 1] => some (sin.readMem B0 (boff + (smbm * 64 + idx.1.val) * 128 + SN / 64))⟩ with hb0T
-  set qkdotT : Tile .real [64, 64] :=
-    Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-      (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
-      (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile) with hqkdotT
-  set qkT : Tile .real [64, 64] :=
-    Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qkdotT
-      (Tile.bop NumericDType.real.mul Broadcast.scalarR
-        (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil)) b0T b1tile)
-        (Tile.scalar (some 1.44269504))) with hqkT
-  have hqkData : ∀ i : Fin 64, ∀ j : Fin 64, qkT.data (i, j, PUnit.unit)
-      = (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qkdotT
-          (Tile.bop NumericDType.real.mul Broadcast.scalarR
-            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil)) b0T b1tile)
-            (Tile.scalar (some 1.44269504)))).data (i, j, PUnit.unit) := fun _ _ => rfl
-  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 64].length) qkT = some t :=
-    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [64, 64] (⟨1, by simp⟩ : Fin [64, 64].length) from by decide)]⟩
-  set mnewT : Tile .real [64] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmnew
-  set alphaT : Tile .real [64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewT) with halpha
-  set pT : Tile .real [64, 64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mnewT)) with hpT
-  unfold attnLoopBody
-  -- L0: k = load K_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") []) .none) sin
-        = some ktile from by
-      rw [load_blockPtr_K_eval Kreg kbase 128 (kcols) 128 64 1 128 kcol
-        (Op.ref .blockPtr [128, 64] "K_block_ptr") sin (by rw [evalOp_ref]; simp [hKp])]
-      refine congrArg some ?_; ext idx; rw [hkload idx]))]
-  -- L1: v = load V_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") []) .none) _
-        = some vtile from by
-      rw [load_blockPtr_Q_eval Vreg vbase (vrows) 128 64 128 128 1 vrow
-        (Op.ref .blockPtr [64, 128] "V_block_ptr") _ (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, hVp])]
-      refine congrArg some ?_; ext idx
-      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
-  -- L2: qk = fp16 zeros
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show @evalOp TileDType.fp16 [64, 64] (Op.full [64, 64] (Op.castFloat .real .fp16 (Op.const 0)))
-          ((sin.setReg "k" .real [128, 64] ktile).setReg "v" .real [64, 128] vtile)
-        = some (⟨fun _ : TileIndex [64, 64] => FloatDType.real.cast FloatDType.fp16 (some 0)⟩ : Tile .fp16 [64, 64]) from by
-      conv_lhs => unfold evalOp
-      conv_lhs => unfold evalOp
-      conv_lhs => unfold evalOp
-      simp only [Option.bind_eq_bind]
-      rfl))]
-  -- L3: qk += dot(q, k)  →  qkdotT
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk"))
-          (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q"))
-            (Op.ref .real [128, 64] "k"))) _ = some qkdotT from by
-      rw [qk_dot_op_eval _ qtile ktile (by rw [BlockState.setReg_same])
-        (by simp [BlockState.setReg_ne_name, hq]) (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])]))]
-  -- L4: b0 = load B0[..]  →  b0T
-  rw [stepStmts.cons_some
-    (stepStmt_assign_eq_some (v := b0T)
-      (by
-        rw [load_b0_eval
-          ((((sin.setReg "k" .real [128, 64] ktile).setReg "v" .real [64, 128] vtile).setReg "qk"
-              .fp16 [64, 64] (⟨fun _ : TileIndex [64, 64] => FloatDType.real.cast FloatDType.fp16 (some 0)⟩)).setReg
-            "qk" .real [64, 64] qkdotT)
-          B0 64 128 smbm boff SN attnLoopBody._proof_1
-          (by simp [BlockState.setReg_ne_name, hbo]) (by simp [BlockState.setReg_ne_name, hsm])
-          (by simp [BlockState.setReg_ne_name, hsn]) (by simp [BlockState.setReg_ne_name, hm])]
-        refine congrArg some ?_; ext idx
-        simp only [hb0T, BlockState.setReg_readMem] : _ = some b0T))]
-  -- L5: qk += (b0 + b1)·log2e  →  qkT
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          (Op.ref .real [64, 64] "qk")
-          (Op.mul .real Broadcast.scalarR
-            (Op.add .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
-              (Op.ref .real [64, 1] "b0") (Op.ref .real [64, 64] "b1")) (Op.const 1.44269504))) _
-        = some qkT from by
-      rw [qk_bias_op_eval _ qkdotT b0T b1tile (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
-        (by rw [BlockState.setReg_same]) (by simp [BlockState.setReg_ne_name, hb1])]))]
-  -- L6: m_i_new = maximum(m_i, reduceMax qk 1)
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_mnew_op_eval _ 64 64 mtile qkT rmaxT
-      (by simp [BlockState.setReg_ne_name, hmax]) (by rw [BlockState.setReg_same]) hrm))]
-  -- L7: alpha = exp2(m_i - m_i_new)
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_alpha_op_eval _ 64 mtile mnewT
-      (by simp [BlockState.setReg_ne_name, hmax]) (by simp [BlockState.setReg_same, hmnew])))]
-  -- L8: p = exp2(qk - m_i_new[:,None])
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_p_op_eval _ 64 64 (by simp) qkT mnewT
-      (by simp [BlockState.setReg_ne_name]) (by simp [BlockState.setReg_ne_name, hmnew])))]
-  -- L9: acc *= alpha[:,None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_accmul_op_eval _ 64 128 (by simp) acctile alphaT
-      (by simp [BlockState.setReg_ne_name, hacc]) (by simp [BlockState.setReg_same, halpha])))]
-  -- L10: acc += dot((p).to fp16).to real, v)
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_accadd_op_eval _ 64 64 128
-      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT))
-      pT vtile
-      (by rw [BlockState.setReg_same]) (by simp [BlockState.setReg_ne_name, hpT])
-      (by simp [BlockState.setReg_ne_name])))]
-  -- L11: l_i = l_i * alpha + sum p 1
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_li_op_eval _ 64 64 ltile alphaT pT
-      (by simp [BlockState.setReg_ne_name, hl]) (by simp [BlockState.setReg_ne_name, halpha])
-      (by simp [BlockState.setReg_ne_name, hpT])))]
-  -- L12: m_i = m_i_new
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (ak_ref_op_eval _ "m_i_new" mnewT (by rfl)))]
-  -- L13: K_block_ptr = advance(K_block_ptr, [0, 64])
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (advance_col_eval _ Kreg kbase 128 (kcols) 128 64 1 128 kcol 64 "K_block_ptr"
-      (by simp [BlockState.setReg_ne_name, hKp])))]
-  -- L14: V_block_ptr = advance(V_block_ptr, [64, 0])
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (advance_row_eval _ Vreg vbase (vrows) 128 64 128 128 1 vrow 64 "V_block_ptr"
-      (by simp [BlockState.setReg_ne_name, hVp])))]
-  rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, pT,
-    hqkData, hrm, rfl, rfl, rfl, ?_, ?_, ?_⟩
-  · simp [BlockState.setReg_pids]
-  · funext rg o; simp [BlockState.setReg_mem]
-  · intro rg o; simp [BlockState.setReg_undef, hundef]
-  · simp [BlockState.setReg_ne_name, hq]
-  · simp [BlockState.setReg_ne_name, hb1]
-  · simp [BlockState.setReg_ne_name, hbo]
-  · simp [BlockState.setReg_ne_name, hsm]
-  · simp [BlockState.setReg_ne_name, hqo]
-  · simp [BlockState.setReg_ne_name, hm]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
 
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
@@ -1748,39 +1359,6 @@ theorem attnLoopBody_stepsG (B0 : RegionName) (BLOCK_M BLOCK_N HEAD stride_b0m :
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
 
-/-- The lowered statements 10–18 of the Python-shape prologue (after the
-deterministic `preLoop_prefix`): qk_scale, the Q load + scale + fp16 cast, the
-`lo`/`hi` constants, the bias arange/offset prep, and the `b1` region load. -/
-def attnPreLoopTail (B0 : RegionName) : List Stmt :=
-  [ Stmt.assign .real [] "qk_scale" (Op.mul .real Broadcast.nil (Op.const 0.1) (Op.const 1.44269504)),
-    Stmt.assign .real [64, 128] "q"
-      (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "Q_block_ptr") []) .none),
-    Stmt.assign .fp16 [64, 128] "q"
-      (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))),
-    Stmt.assign .nat [] "lo" (Op.constNat 0),
-    Stmt.assign .nat [] "hi" (Op.constNat 128),
-    Stmt.assign .nat [64] "b_ptr_offsets_m" (Op.arange 64),
-    Stmt.assign .nat [] "b_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 16384)),
-    Stmt.assign .nat [64] "b_ptr_offsets_n_1"
-      (Op.add .nat Broadcast.scalarR
-        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)),
-    Stmt.assign .real [64, 64] "b1"
-      (Op.load .real (.region B0
-        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
-          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
-            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
-              (Op.add .nat Broadcast.scalarL
-                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
-                (Op.ref .nat [64] "b_ptr_offsets_m")) (Op.constNat 128))))
-          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "b_ptr_offsets_n_1"))))
-        .none) ]
-
-theorem attnPreLoopTail_check (Q K V B0 Out : RegionName) :
-    ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.take 19).drop 10 = attnPreLoopTail B0 := by
-  rfl
-
 /-- The lowered prologue tail (statements 10–18), dimension-parameterized over
 `sm_scale BLOCK_M BLOCK_N HEAD_DIM N_CTX P_SEQ BIAS_LAST_SIZE stride_b0h stride_b0m`. -/
 def attnPreLoopTailG (B0 : RegionName) (sm_scale : ℝ)
@@ -1828,27 +1406,6 @@ theorem attnPreLoopTailG_check (Q K V B0 Out : RegionName) (sm_scale : ℝ)
     List.take_succ_cons, List.take_zero, List.drop_succ_cons, List.drop_zero, attnPreLoopTailG]
   rfl
 
-/-- **`q = (q * qk_scale).to fp16`** op-eval recipe (the pre-scale + fp16 cast). -/
-theorem ak_qscale_op_eval (s : BlockState) (qtile : Tile .real [64, 128]) (sc : ℝ)
-    (hq : s.regs .real [64, 128] "q" = some qtile)
-    (hqs : s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
-    evalOp (Op.castFloat .real .fp16
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))) s
-      = some (⟨fun idx : TileIndex [64, 128] =>
-          FloatDType.real.cast FloatDType.fp16 ((qtile.data idx).bind (fun x => some (x * sc)))⟩ : Tile .fp16 [64, 128]) := by
-  have hmul0 : evalOp
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale")) s
-      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := by
-    rw [evalOp_mul]; simp only [evalOp_ref, hq, hqs, Option.bind_eq_bind, Option.bind_some]
-  have hmul : @evalOp FloatDType.real.toTileDType [64, 128]
-        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale")) s
-      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := hmul0
-  rw [evalOp_castFloat, hmul]
-  simp only [Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
-    NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
-
 /-- **General** `q = (q · qk_scale).to fp16` (dimension-parameterized). -/
 theorem ak_qscale_op_evalG (s : BlockState) (BM HEAD : Nat) (qtile : Tile .real [BM, HEAD]) (sc : ℝ)
     (hq : s.regs .real [BM, HEAD] "q" = some qtile)
@@ -1877,17 +1434,6 @@ theorem evalOp_mod' {dtype a b shape} (h : IntegralDType dtype)
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
   simp [evalOp]
 
-/-- **`b_ptr_offsets_n_1 = (arange % BIAS) + BIAS`** op-eval recipe. -/
-theorem ak_bn1_op_eval (s : BlockState) :
-    evalOp (Op.add .nat Broadcast.scalarR
-        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)) s
-      = some (Tile.vec (fun jL : Fin 64 => jL.val % 64 + 64)) := by
-  rw [evalOp_add, evalOp_mod']
-  simp only [evalOp_arange, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
-  refine congrArg some ?_; ext idx
-  simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
-    Broadcast.rightIndex, NumericDType.add, IntegralDType.nat_mod]
-
 /-- **General** `b_ptr_offsets_n_1 = (arange % BIAS) + BIAS` (parameterized). -/
 theorem ak_bn1_op_evalG (s : BlockState) (BLOCK_N BIAS_LAST_SIZE : Nat) :
     evalOp (Op.add .nat Broadcast.scalarR
@@ -1899,148 +1445,9 @@ theorem ak_bn1_op_evalG (s : BlockState) (BLOCK_N BIAS_LAST_SIZE : Nat) :
   simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
     Broadcast.rightIndex, NumericDType.add, IntegralDType.nat_mod]
 
-/-! ### preLoop — full 19-statement prologue → `attnKernelInvariant … 0` -/
-
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
-theorem preLoop (Q K V B0 Out : RegionName) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    ∃ s0, stepStmts ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.take 19) s = some s0
-      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
-      ∧ s0.regs .nat [] "hi" = some (Tile.scalar 128)
-      ∧ attnKernelInvariant s Q K V B0 Out 0.1
-          (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
-          64 64 128 0 64 128 1 128 128 1 2 (s.pids 0) 0 s0 := by
-  -- decompose body.take 19 = take 10 ++ attnPreLoopTail
-  rw [show (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16).toAlgKernel.body.take 19
-      = (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-          16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-          FloatDType.fp16).toAlgKernel.body.take 10 ++ attnPreLoopTail B0 from by
-    conv_lhs => rw [← List.take_append_drop 10
-      ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
-          16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-          FloatDType.fp16).toAlgKernel.body.take 19)]
-    rw [List.take_take, attnPreLoopTail_check Q K V B0 Out]
-    norm_num]
-  -- step the prefix (0-9)
-  obtain ⟨s10, hpre, hpids, hstartm, hoffhz, hqoff, hkvoff, hQp, hKp, hVp, hmi, hli, hacc, hundef10, hmem10⟩ :=
-    preLoop_prefix Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64 FloatDType.fp16 s
-  rw [stepStmts.append_some hpre]
-  unfold attnPreLoopTail
-  -- T0: qk_scale = 0.1 * 1.44269504
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.mul .real Broadcast.nil (Op.const 0.1) (Op.const 1.44269504)) s10
-        = some (Tile.scalar (some (0.1 * 1.44269504))) from by
-      rw [evalOp_mul]; simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
-      refine congrArg some (congrArg Tile.scalar ?_)
-      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
-  -- T1: q = load Q_block_ptr
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "Q_block_ptr") []) .none)
-          (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504))))
-        = some (⟨fun idx : TileIndex [64, 128] =>
-            some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
-              (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩
-            : Tile .real [64, 128]) from
-      load_blockPtr_Q_eval Q (s.pids 1 * 16384) 128 128 64 128 128 1 (s.pids 0 * 64)
-        (Op.ref .blockPtr [64, 128] "Q_block_ptr") _
-        (by rw [evalOp_ref]; rw [show (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).regs .blockPtr [64, 128] "Q_block_ptr" = s10.regs .blockPtr [64, 128] "Q_block_ptr" from by simp [BlockState.setReg_ne_name]]; exact hQp)))]
-  -- T2: q = (q * qk_scale).to fp16
-  erw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))) _
-        = some (⟨fun idx : TileIndex [64, 128] =>
-            FloatDType.real.cast FloatDType.fp16
-              (some (0.1 * 1.44269504 * qRaw s Q (s.pids 1 * 16384) 64 128 (s.pids 0) idx))⟩ : Tile .fp16 [64, 128]) from by
-      rw [ak_qscale_op_eval _
-        (⟨fun idx : TileIndex [64, 128] =>
-          some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
-            (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩ : Tile .real [64, 128])
-        (0.1 * 1.44269504)
-        (by rw [BlockState.setReg_same])
-        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
-      refine congrArg some ?_; ext idx
-      simp only [Option.bind, Option.map, qRaw]
-      have hrm : (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
-            (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
-          = s.readMem Q (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val) := by
-        rw [BlockState.setReg_readMem]
-        unfold BlockState.readMem; rw [hmem10]; congr 1; ring
-      rw [hrm]; ring_nf))]
-  -- T3: lo = 0
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 0 _))]
-  -- T4: hi = 128
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 128 _))]
-  -- T5: b_ptr_offsets_m = arange 64
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange 64 _))]
-  -- T6: b_offset = off_hz * 16384
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (evalOp_mul_ref_const _ "off_hz" (s.pids 1) 16384
-      (by simp [BlockState.setReg_ne_name, hoffhz])))]
-  -- T7: b_ptr_offsets_n_1 = (arange % 64) + 64
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (ak_bn1_op_eval _))]
-  -- T8: b1 = load B0[..]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (load_b1_eval _ B0 64 64 128 64 (s.pids 0) (s.pids 1 * 16384)
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
-      (by simp [BlockState.setReg_ne_name, hstartm])
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
-      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
-  rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_⟩
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-  -- the invariant at i = 0
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- pids
-    simp only [BlockState.setReg_pids]; exact hpids
-  · -- i = c * BLOCK_N
-    rfl
-  · -- c ≤ nB
-    norm_num
-  · -- m_i = mPg 0 = ⊥
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hmi]; rfl
-  · -- l_i = lPgK 0 = 0
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hli]; rfl
-  · -- acc = oPg 0 = 0
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-    rw [hacc]; rfl
-  · -- K block ptr offset [0, 0]
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hKp]
-  · -- V block ptr offset [0, 0]
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hVp]
-  · -- q = scaled fp16 cast
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
-      not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, FloatDType.toTileDType_fp16]
-  · -- b1 = b1Val
-    rw [BlockState.setReg_same]
-    refine congrArg some ?_; ext idx
-    simp only [b1Val, BlockState.setReg_readMem]
-    unfold BlockState.readMem; rw [hmem10]
-  · -- b_offset
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-  · -- start_m
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hstartm
-  · -- q_offset
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hqoff
-  · -- b_ptr_offsets_m
-    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
-  · -- undef = 0
-    intro rg o
-    show s10.undef rg o = 0
-    rw [hundef10]; exact hundef rg o
-  · -- mem = s.mem
-    show s10.mem = s.mem
-    exact hmem10
-
-set_option maxHeartbeats 1000000 in
-set_option maxRecDepth 8000 in
-/-- **General** `preLoop` (dimension-parameterized). Steps the 19-statement
+/-- **General** `preLoopG` (dimension-parameterized). Steps the 19-statement
 prologue to `attnKernelInvariant … 0`. Contiguous Q/K/V layout
 (`stride_qm=HEAD, stride_qk=1, stride_kk=1, stride_kn=HEAD, stride_vk=HEAD,
 stride_vn=1`) per `qRaw`/`kFlat`/`vFlat`. -/
@@ -2169,84 +1576,8 @@ theorem preLoopG (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
   · show s10.mem = s.mem
     exact hmem10
 
-/-! ### M3 — `attn_qk_cell`: the body's `qk` cell = `fscore` at the global key
-
-The crux. The loop body's symbolic `qk` tile (from `attnLoopBody_steps`:
-`fp16-zeros + dot(q, k) + (b0 + b1)·log2e`) evaluated at row `i`, lane `jL`, equals
-the genuine per-key score `fscore` at the global key `gkey 64 nB c jL`
-(`= c·64 + jL`). The Fin plumbing keeps `jL : Fin 64` (never coerced to ℕ in the
-key) so the `b0`/`b1` block/lane reindex (`j/64 = c`, `j%64 = jL`) lines up; all
-casts collapse to identity (modeling boundary). -/
 set_option maxHeartbeats 1000000 in
-theorem attn_qk_cell (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
-    (q_offset kv_offset b_offset : Nat) (nB c bcol : Nat) (hc : c < nB)
-    (qtile : Tile .fp16 [64, 128]) (ktile : Tile .real [128, 64])
-    (b1tile : Tile .real [64, 64])
-    (hbcol : bcol = c)
-    (hq : qtile = ⟨fun idx : TileIndex [64, 128] =>
-        FloatDType.real.cast FloatDType.fp16
-          (some (sm_scale * 1.44269504 * qRaw s0 Q q_offset 64 128 (s0.pids 0) idx))⟩)
-    (hk : ∀ idx : TileIndex [128, 64],
-        ktile.data idx = some (s0.readMem K (kv_offset + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 128)))
-    (hb1 : b1tile = ⟨fun idx : TileIndex [64, 64] =>
-        some (b1Val s0 B0 b_offset 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
-    (i : Fin 64) (jL : Fin 64) :
-    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-          (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
-          (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile))
-        (Tile.bop NumericDType.real.mul Broadcast.scalarR
-          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil))
-            (⟨fun idx : TileIndex [64, 1] =>
-              some (s0.readMem B0 (b_offset + (s0.pids 0 * 64 + idx.1.val) * 128 + bcol))⟩)
-            b1tile)
-          (Tile.scalar (some 1.44269504)))).data (i, jL, PUnit.unit)
-      = some (fscore s0 Q K B0 sm_scale q_offset kv_offset b_offset
-          64 64 128 (64 * nB) 64 128 (s0.pids 0) i (gkey 64 nB c hc jL)) := by
-  -- the dot row = scale · Σ_e qRaw · kFlat
-  have hdot : (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile).data (i, jL, PUnit.unit)
-      = some (sm_scale * 1.44269504 * Finset.univ.sum (fun e : Fin 128 =>
-          qRaw s0 Q q_offset 64 128 (s0.pids 0) (i, e, PUnit.unit)
-            * kFlat s0 K kv_offset 128 (64 * nB) e (gkey 64 nB c hc jL))) := by
-    rw [Tile.dot_nil_data]
-    rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
-          (fun e => Option.map₂ (· * ·)
-            ((⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]).data (i, e, PUnit.unit))
-            (ktile.data (e, jL, PUnit.unit))))
-        = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
-          (fun e => (some (sm_scale * 1.44269504 * (qRaw s0 Q q_offset 64 128 (s0.pids 0) (i, e, PUnit.unit)
-              * kFlat s0 K kv_offset 128 (64 * nB) e (gkey 64 nB c hc jL))) : WithBot ℝ))
-        from Finset.sum_congr rfl (fun e _ => by
-          simp only [hq, FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-            FloatDType.real_toWithBot, Option.map₂]
-          rw [hk (e, jL, PUnit.unit)]
-          simp only [Option.bind, Option.map]
-          refine congrArg some ?_
-          simp only [qRaw, kFlat, gkey]
-          rw [show kv_offset + e.val * 1 + (c * 64 + jL.val) * 128
-                = kv_offset + e.val + (c * 64 + jL.val) * 128 from by ring]
-          ring)]
-    rw [withBot_sum_some]
-    refine congrArg some ?_
-    rw [Finset.mul_sum]
-  -- assemble: cells
-  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar,
-    NumericDType.add, NumericDType.mul, hb1, hdot, b1Val, b0Val]
-  -- fp16-zeros cell = some 0
-  simp only [FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-    WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
-  refine congrArg some ?_
-  simp only [fscore, qRaw, kFlat, b0Val, b1Val, gkey, hbcol]
-  have hjLlt := jL.isLt
-  rw [show (c * 64 + jL.val) / 64 = c from by
-    rw [Nat.mul_comm c 64, Nat.mul_add_div (by norm_num : (0:Nat) < 64), Nat.div_eq_of_lt jL.isLt]
-    omega]
-  rw [show (c * 64 + jL.val) % 64 = jL.val from by
-    rw [Nat.mul_comm c 64, Nat.mul_add_mod, Nat.mod_eq_of_lt jL.isLt]]
-  ring
-
-set_option maxHeartbeats 1000000 in
-/-- **General** `attn_qk_cell` (dimension-parameterized over `BLOCK_M BLOCK_N HEAD
+/-- **General** `attn_qk_cellG` (dimension-parameterized over `BLOCK_M BLOCK_N HEAD
 BIAS_LAST_SIZE stride_b0m`, with `0 < BLOCK_N`). -/
 theorem attn_qk_cellG (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
     (BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m : Nat) (hBN : 0 < BLOCK_N)
@@ -2313,165 +1644,9 @@ theorem attn_qk_cellG (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
     rw [Nat.mul_comm c BLOCK_N, Nat.mul_add_mod, Nat.mod_eq_of_lt jL.isLt]]
   ring
 
-/-! ### M3 — `attn_step`: the loop body advances the invariant by one block -/
-
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-theorem attn_step (Q K V B0 Out : RegionName) (s0 : BlockState)
-    (nB : Nat) (i : Nat) (s : BlockState) (hilt : i < 64 * nB)
-    (hinv : attnKernelInvariant s0 Q K V B0 Out 0.1
-        (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-        64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) i s) :
-    ∃ s', stepStmts (attnLoopBody B0) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
-      ∧ attnKernelInvariant s0 Q K V B0 Out 0.1
-          (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-          64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) (i + 64) s' := by
-  have hBN : (0:Nat) < 64 := by norm_num
-  have hc : i / 64 < nB := (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm]; exact hilt)
-  have hc1 : (i + 64) / 64 = i / 64 + 1 := Nat.add_div_right i hBN
-  simp only [attnKernelInvariant] at hinv
-  obtain ⟨hpids, hieq, hcle, hmi, hli, hacc, hKp, hVp, hq, hb1, hbo, hsm, hqo, hm, hundef, hmem⟩ := hinv
-  set sc := fscore s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-    64 64 128 (64 * nB) 64 128 (s0.pids 0) with hscdef
-  set V' := vFlat s0 V (s0.pids 1 * 16384) 128 (64 * nB) with hVpdef
-  -- memory of the body-input state = s0
-  have hrmem : ∀ (R : RegionName) (o : Nat),
-      (s.setReg "start_n" .nat [] (Tile.scalar i)).readMem R o = s0.readMem R o := by
-    intro R o; simp only [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
-  -- the running registers carried into the body (named to avoid simp recursion)
-  have hmi' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64] "m_i"
-      = some (⟨fun r : TileIndex [64] => mPg 64 nB sc r.1 (i / 64)⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi
-  have hli' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64] "l_i"
-      = some (⟨fun r : TileIndex [64] => ((lPgK sc r.1 (i / 64) : ℝ) : WithBot ℝ)⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli
-  have hacc' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64, 128] "acc"
-      = some (⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 (i / 64) : ℝ) : WithBot ℝ)⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc
-  have hKp' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .blockPtr [128, 64] "K_block_ptr"
-      = some (⟨fun _ : TileIndex [128, 64] =>
-        { region := K, baseOffset := s0.pids 1 * 16384, parentShape := [128, 64 * nB + 0],
-          blockShape := [128, 64], strides := [1, 128], offsets := [0, i / 64 * 64] }⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hKp]
-  have hVp' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .blockPtr [64, 128] "V_block_ptr"
-      = some (⟨fun _ : TileIndex [64, 128] =>
-        { region := V, baseOffset := s0.pids 1 * 16384, parentShape := [64 * nB + 0, 128],
-          blockShape := [64, 128], strides := [128, 1], offsets := [i / 64 * 64, 0] }⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hVp]
-  have hq' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .fp16 [64, 128] "q"
-      = some (⟨fun idx : TileIndex [64, 128] =>
-        FloatDType.real.cast FloatDType.fp16
-          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq
-  have hb1' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64, 64] "b1"
-      = some (⟨fun idx : TileIndex [64, 64] =>
-        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩) := by
-    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hb1
-  -- run the body chain
-  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hb1F, hboF, hsmF, hqoF, hmF, hKpF, hVpF,
-      qkT, rmaxT, mnewT, alphaT, pT, hqkData, hrm, hmnewd, halphad, hpTd, hm_iF, haccF, hl_iF⟩ :=
-    attnLoopBody_steps B0 (s.setReg "start_n" .nat [] (Tile.scalar i)) i
-      (fun r : Fin 64 => r.val)
-      K V (s0.pids 1 * 16384) (s0.pids 1 * 16384) (i / 64 * 64) (i / 64 * 64) (64 * nB + 0) (64 * nB + 0)
-      (s0.pids 1 * 16384) (s0.pids 0)
-      (⟨fun idx : TileIndex [64, 128] =>
-        FloatDType.real.cast FloatDType.fp16
-          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩)
-      (⟨fun r : TileIndex [64] => mPg 64 nB sc r.1 (i / 64)⟩)
-      (⟨fun r : TileIndex [64] => ((lPgK sc r.1 (i / 64) : ℝ) : WithBot ℝ)⟩)
-      (⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 (i / 64) : ℝ) : WithBot ℝ)⟩)
-      (⟨fun idx : TileIndex [128, 64] =>
-        some (s0.readMem K (s0.pids 1 * 16384 + idx.1.val * 1 + (i / 64 * 64 + idx.2.1.val) * 128))⟩)
-      (⟨fun idx : TileIndex [64, 128] =>
-        some (s0.readMem V (s0.pids 1 * 16384 + (i / 64 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩)
-      (⟨fun idx : TileIndex [64, 64] =>
-        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
-      (by rw [BlockState.setReg_same])
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbo)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
-      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hm)
-      hmi' hli' hacc' hq' hb1' hKp' hVp'
-      (fun idx => congrArg some (hrmem K _).symm) (fun idx => congrArg some (hrmem V _).symm)
-      (s0.pids 1 * 16384) (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqo)
-      (by intro rg o; simp [BlockState.setReg_undef, hundef])
-  refine ⟨sF, hchain, ?_⟩
-  -- the per-cell qk bridge
-  have hqk : ∀ (r : Fin 64) (jL : Fin 64),
-      qkT.data (r, jL, PUnit.unit) = some (sc r (gkey 64 nB (i / 64) hc jL)) := by
-    intro r jL
-    rw [hqkData r jL]
-    have := attn_qk_cell s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-      nB (i / 64) (i / 64) hc
-      (⟨fun idx : TileIndex [64, 128] =>
-        FloatDType.real.cast FloatDType.fp16
-          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩)
-      (⟨fun idx : TileIndex [128, 64] =>
-        some (s0.readMem K (s0.pids 1 * 16384 + idx.1.val * 1 + (i / 64 * 64 + idx.2.1.val) * 128))⟩)
-      (⟨fun idx : TileIndex [64, 64] =>
-        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
-      rfl rfl (fun idx => rfl) rfl r jL
-    simp only [hscdef]
-    simp only [hrmem] at this ⊢
-    exact this
-  -- m_ij bridge
-  have hmij_eq : ∀ idx : TileIndex [64], mnewT.data idx
-      = mPg 64 nB sc idx.1 (i / 64 + 1) := by
-    intro idx
-    rw [hmnewd]
-    refine mijg_eq 64 nB (i / 64) hc sc _ rmaxT idx.1 ?_ ?_
-    · rfl
-    · exact reduceMaxDrop_data_row 64 64 hBN _ rmaxT hrm idx.1 _ (fun jL => hqk idx.1 jL)
-  simp only [attnKernelInvariant]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [hpidsF]; exact hpids
-  · rw [hc1, Nat.add_one_mul, ← hieq]
-  · rw [hc1]; omega
-  · -- m_i = mPg (c+1)
-    rw [hm_iF, hc1]; refine congrArg some ?_; ext idx; exact hmij_eq idx
-  · -- l_i = lPgK (c+1)
-    rw [hl_iF, hc1]; refine congrArg some ?_; ext idx
-    rw [halphad, hpTd]
-    exact lig_eq 64 nB (i / 64) hBN hc sc _ mnewT _ qkT idx.1 rfl (hmij_eq idx) rfl (fun jL => hqk idx.1 jL)
-  · -- acc = oPg (c+1)
-    rw [haccF, hc1]; refine congrArg some ?_
-    ext idx
-    have hv : ∀ jL : Fin 64,
-        (⟨fun idx : TileIndex [64, 128] =>
-          some (s0.readMem V (s0.pids 1 * 16384 + (i / 64 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩
-          : Tile .real [64, 128]).data (jL, idx.2.1, PUnit.unit)
-          = some (V' (gkey 64 nB (i / 64) hc jL, idx.2.1, PUnit.unit)) := by
-      intro jL
-      refine congrArg some ?_
-      simp only [hVpdef, vFlat, gkey]
-      rw [show s0.pids 1 * 16384 + (i / 64 * 64 + jL.val) * 128 + idx.2.1.val * 1
-            = s0.pids 1 * 16384 + (i / 64 * 64 + jL.val) * 128 + idx.2.1.val from by ring]
-    refine accg_eq 64 nB (i / 64) hc sc V' _ alphaT pT _ idx.1 idx.2.1 rfl ?_ ?_ hv
-    · rw [halphad]
-      exact alphag_eq 64 nB (i / 64) sc _ mnewT idx.1 rfl (hmij_eq (idx.1, PUnit.unit))
-    · intro jL
-      rw [hpTd]
-      refine exp2_some (fun a b => sc a (gkey 64 nB (i / 64) hc b) - mRg sc a (i / 64 + 1)) _ idx.1 jL ?_
-      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
-        TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk idx.1 jL,
-        hmij_eq (idx.1, PUnit.unit),
-        mPg_eq_coe sc hBN idx.1 (i / 64 + 1) (Nat.le_add_left 1 (i / 64)) hc,
-        NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
-  · -- K block ptr advances
-    rw [hKpF, hc1, show i / 64 * 64 + 64 = (i / 64 + 1) * 64 from by ring]
-  · -- V block ptr advances
-    rw [hVpF, hc1, show i / 64 * 64 + 64 = (i / 64 + 1) * 64 from by ring]
-  · rw [hqF]
-  · rw [hb1F]
-  · rw [hboF]
-  · rw [hsmF]
-  · rw [hqoF]
-  · rw [hmF]
-  · exact hundefF
-  · rw [hmemF]; exact hmem
-
-set_option maxHeartbeats 1600000 in
-set_option maxRecDepth 8000 in
-/-- **General** `attn_step` (dimension-parameterized). Advances the invariant by
+/-- **General** `attn_stepG` (dimension-parameterized). Advances the invariant by
 one key block of `BLOCK_N` keys. Contiguous K/V layout (`stride_kk=1,
 stride_kn=HEAD, stride_vk=HEAD, stride_vn=1`) per `kFlat`/`vFlat`. -/
 theorem attn_stepG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ)
@@ -2617,7 +1792,7 @@ theorem attn_stepG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ
   · exact hundefF
   · rw [hmemF]; exact hmem
 
-/-! ### M3 — `attn_postLoop`: `acc /= l_i` + block store = `attentionKernelSpec`
+/-! ### M3 — `attn_postLoopG`: `acc /= l_i` + block store = `attentionKernelSpec`
 
 After the streaming loop (invariant at `c = nB`), the `acc /= l_i[:, None]` rescale
 and the (unmasked) block-pointer store write the normalized accumulator
@@ -2678,120 +1853,7 @@ theorem scatter_memcell_fp16_nd' {region : RegionName} {shape : TileShape}
   rw [if_pos ⟨rfl, rfl⟩]
 
 set_option maxHeartbeats 1000000 in
-theorem attn_postLoop (Q K V B0 Out : RegionName) (s0 : BlockState)
-    (nB : Nat) (hnB : 1 ≤ nB) (st : BlockState)
-    (hinv : attnKernelInvariant s0 Q K V B0 Out 0.1
-        (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-        64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) (64 * nB) st) :
-    ∃ sfin, stepStmts (attnPostLoop Out) st = some sfin
-      ∧ ∀ idx : TileIndex [64, 128],
-          sfin.mem Out (s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
-            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-                (some (attentionKernelSpec s0 Q K V B0 0.1
-                  (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-                  64 64 128 (64 * nB) 64 128 (s0.pids 0) idx))) := by
-  have hBN : (0:Nat) < 64 := by norm_num
-  have hcnB : (64 * nB) / 64 = nB := by rw [Nat.mul_comm, Nat.mul_div_cancel _ hBN]
-  simp only [attnKernelInvariant, hcnB] at hinv
-  obtain ⟨hpids, hieq, hcle, hmi, hli, hacc, hKp, hVp, hq, hb1, hbo, hsm, hqo, hm, hundef, hmem⟩ := hinv
-  set sc := fscore s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-    64 64 128 (64 * nB) 64 128 (s0.pids 0) with hscdef
-  set V' := vFlat s0 V (s0.pids 1 * 16384) 128 (64 * nB) with hVpdef
-  -- div result tile (acc / l_i[:, None]) = oPg / lPgK
-  set acc' : Tile .real [64, 128] :=
-    ⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 nB / lPgK sc idx.1 nB : ℝ) : WithBot ℝ)⟩
-    with hacc'def
-  unfold attnPostLoop
-  -- L0: acc = acc / l_i[:, None]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-        (Op.ref .real [64, 128] "acc")
-        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))) st = some acc' from by
-      have hexp : @evalOp TileDType.real [64, 1]
-            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i")) st
-          = some (Tile.expandDim ⟨1, by simp⟩
-              (⟨fun r : TileIndex [64] => ((lPgK sc r.1 nB : ℝ) : WithBot ℝ)⟩ : Tile .real [64])) :=
-        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hli
-      rw [evalOp_div]
-      simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]
-      refine congrArg some ?_; ext idx
-      simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
-        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
-        Option.map₂, Option.bind, Option.map, hacc'def]
-      rfl))]
-  set st1 := st.setReg "acc" .real [64, 128] acc' with hst1
-  -- L1: O_block_ptr = makeBlockPtr(Out + q_offset, offsets=(start_m*64, 0))
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_rowcol_eval Out (Op.ref .nat [] "q_offset") [128, 128] [64, 128] [128, 1]
-      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64)) st1
-      (s0.pids 1 * 16384) (s0.pids 0 * 64)
-      (by rw [evalOp_ref]; simp only [hst1, BlockState.setReg_ne_name]; exact hqo)
-      (evalOp_mul_ref_const st1 "start_m" (s0.pids 0) 64
-        (by simp only [hst1, BlockState.setReg_ne_name]; exact hsm))))]
-  set st2 := st1.setReg "O_block_ptr" .blockPtr [64, 128]
-      ⟨fun _ : TileIndex [64, 128] =>
-        { region := Out, baseOffset := s0.pids 1 * 16384, parentShape := [128, 128],
-          blockShape := [64, 128], strides := [128, 1], offsets := [s0.pids 0 * 64, 0] }⟩
-    with hst2
-  -- store value / offset functions
-  set oValFn : TileIndex [64, 128] → TileCarrier TileDType.fp16 :=
-    fun idx => FloatDType.real.cast FloatDType.fp16
-      (some (oPg sc V' idx.1 idx.2.1 nB / lPgK sc idx.1 nB)) with hoValFn
-  set oOffFn : TileIndex [64, 128] → Nat :=
-    fun idx => s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 with hoOffFn
-  have hOpref : @evalOp TileDType.blockPtr [64, 128] (Op.ref .blockPtr [64, 128] "O_block_ptr") st2
-      = some (⟨fun _ : TileIndex [64, 128] =>
-          { region := Out, baseOffset := s0.pids 1 * 16384, parentShape := [128, 128],
-            blockShape := [64, 128], strides := [128, 1], offsets := [s0.pids 0 * 64, 0] }⟩
-          : Tile .blockPtr [64, 128]) := by rw [evalOp_ref, hst2, BlockState.setReg_same]
-  have haccref : @evalOp TileDType.real [64, 128] (Op.ref .real [64, 128] "acc") st2 = some acc' := by
-    rw [evalOp_ref, hst2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hst1,
-      BlockState.setReg_same]
-  have hval : evalOp (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) st2
-        = some (⟨oValFn⟩ : Tile .fp16 [64, 128]) := by
-    rw [evalOp_castFloat]; erw [haccref]; rfl
-  -- L2: store O via O_block_ptr (acc.to fp16)
-  have hstore : stepStmt (Stmt.store .fp16 [64, 128]
-      (MemAccess.blockPtr (Op.ref .blockPtr [64, 128] "O_block_ptr") [])
-      (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) MaskOpt.none) st2
-      = some ((TileShape.allIndices [64, 128]).foldl
-          (fun acc idx => acc.writeMemTyped .fp16 Out (oOffFn idx) (oValFn idx)) st2) := by
-    unfold stepStmt
-    erw [hval]
-    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
-    erw [hOpref]
-    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
-    refine congrArg some ?_
-    refine List.foldl_ext _ _ st2 ?_
-    intro acc idx _
-    simp only [TileShape.blockPtr_inBounds_nil_index, Bool.and_true, Bool.true_and,
-      TileShape.blockPtr_address_2d_row_offset_index, hoOffFn, if_true]
-  rw [stepStmts.cons_some hstore, stepStmts.nil]
-  refine ⟨_, rfl, ?_⟩
-  intro idx
-  have hinjO : Function.Injective oOffFn := by
-    rintro ⟨⟨a, ha⟩, ⟨b, hb⟩, _⟩ ⟨⟨c, hc⟩, ⟨d, hd⟩, _⟩ heq
-    simp only [hoOffFn] at heq
-    have hac : a = c ∧ b = d := by
-      set P := s0.pids 0 * 64 with hP
-      omega
-    obtain ⟨rfl, rfl⟩ := hac
-    rfl
-  rw [show s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 = oOffFn idx from rfl]
-  rw [scatter_memcell_fp16_nd' (region := Out) st2 oOffFn oValFn hinjO idx]
-  refine congrArg (MemCell.of .fp16) ?_
-  rw [hoValFn]
-  simp only [FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue, FloatDType.ofWithBot,
-    FloatDType.toWithBot, WithBot.unbotD_coe]
-  refine congrArg (FloatDType.real.cast FloatDType.fp16) ?_
-  refine congrArg some ?_
-  rw [lPgK_eq_lPg sc idx.1 nB hnB le_rfl]
-  exact attentionKernelSpec_eq_ratio s0 Q K V B0 0.1
-    (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
-    64 64 128 64 128 nB (s0.pids 0) hBN hnB idx.1 idx.2.1
-
-set_option maxHeartbeats 1000000 in
-/-- **General** `attn_postLoop` (dimension-parameterized). The `acc /= l_i` rescale
+/-- **General** `attn_postLoopG` (dimension-parameterized). The `acc /= l_i` rescale
 and block store write the closed form `attentionKernelSpec` to `Out` at every lane.
 Contiguous Out layout (`stride_om=HEAD, stride_on=1`). -/
 theorem attn_postLoopG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ)

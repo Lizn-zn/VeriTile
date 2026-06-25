@@ -22,7 +22,7 @@ materialized carry buffer; no dimension is pinned. Exposes:
    input regions `K`, `V`, never an `exec` read-back.
 3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes its genuine spec
    `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
-   the inter-block half of `oRowClosed`.
+   the inter-block half of the causal linear-attention output row.
 
 Honest side-conditions only: `0 < BLOCK_MODEL` (column tiling is nonempty) is
 not even needed here because injectivity holds unconditionally from the `Fin`
@@ -436,7 +436,7 @@ The inter-block contribution to the output: with the carried state `kv` loaded
 from a materialized `KVPrev` tile, `o_inter[r, c] = Σ_a q[r,a]·kv[a,c]`. This is
 the `tl.dot(q, kv)` producer; under the carry invariant `KVPrev = kvClosed m`
 its value is exactly `Σ_a q[r,a]·(Σ_{s<m·BLOCK} k[s,a]·v[s,c])`, the inter-block
-half of `oRowClosed`. -/
+half of the causal linear-attention output row. -/
 ```
 ```lean
 def lightning_attention_forward_o_inter_dot_slice

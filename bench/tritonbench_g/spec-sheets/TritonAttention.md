@@ -494,13 +494,7 @@ Honest side conditions: positive block dims and `num_block`, `BD ∣ bwdKBase`, 
 streaming boundary `bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride
 arithmetic `hbase`, input/output region disjointness, and the honest pids grid. All
 specs are defined purely over the **input** `Q`/`K`/`V`/`DO`/`M`/`Delta`/`DQ`
-memory — never over the kernel's own `exec` readback.
-
-NOTE: the pinned `triton_attention_bwd_grads_genuine_output_summary` (`num_block = 1`)
-is kept as an independent theorem rather than a corollary: it lives on a different
-write-map surface (`bwdGradOffset` single-block / pinned `bwdKernelD*Spec` specs)
-whose bridge to this multi-block surface is non-trivial, so re-deriving it here
-would risk the already-proven pinned result for no gain. -/
+memory — never over the kernel's own `exec` readback. -/
 ```
 </details>
 
@@ -944,7 +938,6 @@ def dIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
 - `triton_attention_bwd_dkdv_store_slice_compute_correct`
 - `triton_attention_bwd_dk_store_slice_compute_correct`
 - `triton_attention_bwd_dv_store_slice_compute_correct`
-- `triton_attention_bwd_grads_genuine_output_summary`
 - `triton_attention_forward_output_store_python_test_shape_compute_correct`
 - `triton_attention_forward_l_store_python_test_shape_compute_correct`
 - `triton_attention_forward_m_store_python_test_shape_compute_correct`
