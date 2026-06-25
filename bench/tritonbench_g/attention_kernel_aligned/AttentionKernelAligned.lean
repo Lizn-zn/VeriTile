@@ -59,8 +59,7 @@ The public summary asserts the **genuine** closed form: every observable `Out`
 lane equals the base-2 streaming-softmax `alignedClosedForm` of the loaded Q/K/V
 tiles under the scalar score scale `sm_scale·log2(e)` and the fused `rel_h+rel_w`
 bias — discharged whole-kernel by `ClosedForm.aligned_exec_general`, NOT a self-referential
-readback. (The `producedOutputValue` definition below is retained only as a
-documented *execution observation*; it is referenced by no public summary.) The genuine
+readback. The genuine
 producer closed form is `alignedClosedForm`, with the streaming bridge
 `attentionRealBase2ScalarScaleBias_eq_streaming` and the exec-side assembly
 `ClosedForm.aligned_exec_general` both proved sorry-free. This is a
@@ -298,7 +297,7 @@ noncomputable def alignedBias (s : BlockState) (B0 : RegionName)
 base-2 attention of the loaded `Q`/`K`/`V` tiles, with the constant scalar score
 scale `sm_scale · log2(e)` and the fused `rel_h + rel_w` bias `b0 + b1`. This is
 the value the streaming softmax `acc / l_i` computes — defined over the loaded
-tiles, NOT the kernel's own executed output (`producedOutputValue`). -/
+tiles, NOT a readback of the kernel's own executed output. -/
 noncomputable def alignedClosedForm
     (s : BlockState) (Q K V B0 : RegionName) (sm_scale : ℝ)
     (stride_qh stride_b0h stride_b0m

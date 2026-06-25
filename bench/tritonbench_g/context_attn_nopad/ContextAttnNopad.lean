@@ -306,8 +306,8 @@ cur_batch_seq_len` (`other=0`), so phantom keys `j ≥ cur_batch_seq_len` load a
 `0`. The boundary-masked tiles below reflect that. For an **active** query row
 (`gi = start_m·BLOCK_M + i < cur_batch_seq_len`) the causal mask `j ≤ gi` already
 forces every contributing key into `j < cur_batch_seq_len`, so the boundary mask
-is subsumed and the masked closed form coincides with the genuine
-`contextAttnNopadClosedForm`. -/
+is subsumed and the masked closed form coincides with the genuine causal softmax
+over the active keys. -/
 
 /-- Sequence-length-masked key tile: `ctxKTile` for `j < bel = cur_batch_seq_len`,
 else `0` (the kernel's `k` load mask). -/
@@ -632,7 +632,7 @@ theorem ctxNopad_fold_eq_exactFoldM
 Mirror of #307's `srKeysUpto`/`srBlock`/`srKeysUpto_succ`/`srStateBot_succ`,
 adapted to nopad's *causal* per-key filter. The streamed prefix after `c` blocks
 is `ctxNopadKeysUpto … (c·128)` — the causal-and-window key list — and one loop
-iteration appends `nopadBlock c` (the keys in `[c·128, (c+1)·128)` that are causal
+iteration appends `nopadBlockMG c` (the keys in `[c·128, (c+1)·128)` that are causal
 for row `i`). -/
 
 /-- The `(score, value)` keys row `i`/channel `d` has streamed after window
@@ -795,12 +795,12 @@ theorem context_attn_nopad_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-! ### 128-lane ↔ `nopadBlock` reduction bridges (per row `i` / channel `d`)
+/-! ### 128-lane ↔ `nopadBlockMG` reduction bridges (per row `i` / channel `d`)
 
 Mirror of #307's `srBlock_sup_eq`/`srBlock_esum_sum`/`srBlock_acc_sum`, in 2D and
 under nopad's *causal* per-lane guard. The loop body reduces a `Fin 128` masked
 row (lane `jL` ↦ global key `c·128 + jL`, causal-visible when `c·128 + jL ≤ gi`
-and in-window `c·128 + jL < S`); the `osNormStepBot` math uses `nopadBlock`'s
+and in-window `c·128 + jL < S`); the `osNormStepBot` math uses `nopadBlockMG`'s
 `Fin S` filterMap over the causal window `[c·128, (c+1)·128)`. -/
 
 /-- filterMap-sum over `Fin n` with a guard collapses into the masked

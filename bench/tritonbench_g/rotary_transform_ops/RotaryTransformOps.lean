@@ -42,8 +42,9 @@ supporting per-row store track:
     └─ rotary_kernel_o0o1_row_o1_correct
 
 full 2D track:
-  rotary_kernel_non_interleaved + the `*2D` offsets (outOffset2D/x0Offset2D/…)
-  give the `[BLOCK_M, BLOCK_HALF]` tile body.
+  only the `[BLOCK_M, BLOCK_HALF]` tile coordinate/active-mask helpers
+  (`rowIndex2D`/`dimIndex2D`/`active2D`) remain; the full 2D body kernel and
+  its closed-form proof are not present.
 
 surfaces_store_summary collects the four case `toAlgorithm` lowerings.
 ```
@@ -959,13 +960,14 @@ theorem rotary_kernel_o0o1_row_all_outputs_compute_correct
 
 /-! ### Full 2D `[BLOCK_M, BLOCK_HALF]` non-interleaved kernel correctness
 
-The `rotary_kernel_non_interleaved` kernel above lifts the one-row
-`o0`/`o1` companion stores to the FULL `[BLOCK_M, BLOCK_HALF]` tile of the
-non-interleaved, non-varlen, non-conjugate, scalar-offset branch from
-`rotary_transform_ops.py`. The 2D tile-indexed offset functions and active
-predicate below mirror the 1D ones (`outOffset`, `active`, etc.) but use
+The full `[BLOCK_M, BLOCK_HALF]` non-interleaved tile body lifts the one-row
+`o0`/`o1` companion stores (proven on `rotary_kernel_o0o1_row` above) to the
+FULL `[BLOCK_M, BLOCK_HALF]` tile of the non-interleaved, non-varlen,
+non-conjugate, scalar-offset branch from `rotary_transform_ops.py`. Only the
+2D tile-indexed coordinate and active-mask helpers below survive — they mirror
+the 1D ones (`outOffset`, `active`, etc.) but use
 `TileIndex [BLOCK_M, BLOCK_HALF]` instead of `Fin BLOCK_HALF`. The proof
-target is the same: `o0 = x0 * cos - x1 * sin` written into `OUT` at the
+target would be the same: `o0 = x0 * cos - x1 * sin` written into `OUT` at the
 first-half `rk_half` offsets, with the companion `o1` store landing on the
 disjoint second-half offsets. -/
 
@@ -989,7 +991,7 @@ instance active2DDecidable (s : BlockState) (seqlen rotary_dim_half BLOCK_M : Na
   unfold active2D
   infer_instance
 
-/-! The `rotary_kernel_non_interleaved` full 2D `[BLOCK_M, BLOCK_HALF]` body
+/-! The full 2D `[BLOCK_M, BLOCK_HALF]` non-interleaved body
 proof remains open: the surface's `.to(tl.float32)` casts on each `tl.load`
 plus the early-return `if pid_m * BLOCK_M >= seqlen { return }` guard prevent
 the standard `simp [exec, ..., stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop,
@@ -1002,10 +1004,9 @@ Specifically, `simp` leaves the kernel as a `match (ComputeExpr.compute
 expected `List.foldl writeMem` form. Closing the full 2D surface requires
 extending the elementwise simp set with the appropriate
 `ComputeOp/Expr.toAlgorithm?_*` lemmas covering `.to(tl.float32)`-cast loads
-with masked `Op.const _ |>.broadcast` other-values. The 2D helper
-definitions above (`outOffset2D`, `out1Offset2D`, `x0Offset2D`, `x1Offset2D`,
-`rotOffset2D`, `active2D`, `rotaryO0Spec2D`) are kept in place as a stable
-surface contract once the simp-set extension lands. -/
+with masked `Op.const _ |>.broadcast` other-values. The surviving 2D helper
+definitions above (`rowIndex2D`, `dimIndex2D`, `active2D`) are kept in place as
+a stable coordinate/active-mask contract once the simp-set extension lands. -/
 
 /-! ## Python test-shape surface wrappers -/
 

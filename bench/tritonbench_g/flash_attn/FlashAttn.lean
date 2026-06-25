@@ -79,22 +79,22 @@ to this kernel's exact `make_block_ptr` AST.
 
 Additionally banked sorry-free toward the invariant skeleton (this run): the
 per-row online-softmax **running-state recurrence** `flashKV`/`flashKeysUpto`/
-`flashState` (the `osStep` fold over the causally-filtered streamed key prefix),
-its one-block advance `flashState_succ` (= the kernel's per-block update
-`osBlockStep`, via the new `Math/Attention.lean` lemma `osBlockStep_eq_foldl_osStep`
-+ the sorted-window split `flashKeysUpto_succ`), the full-window bridges
-`flashState_full_eq_spec{,_causal}` (final state reads off `flashAttnOValueSpec{,
+`flashStateBot` (the `osStepBot` fold over the causally-filtered streamed key
+prefix, seeded at `⊥` to match the kernel's `−inf` max register), its one-block
+advance `flashStateBot_succ` (the kernel's per-block update, via the sorted-window
+split `flashKeysUpto_succ`), the full-window bridges
+`flashStateBot_full_eq_spec{,_causal}` (final state reads off `flashAttnOValueSpec{,
 Causal}`), the `max`/`denom` channel-independence lemmas
-`flashState_{fst,snd_fst}_eq`, and the `attnInvariant` definition binding the
-kernel's 12 live registers to `flashState` after `c` blocks.
+`flashRunningMax_eq`/`flashStateBot_snd_fst_eq`, and the `attnInvariant` definition
+binding the kernel's 12 live registers to `flashStateBot` after `c` blocks.
 
 The exec-side `preLoop`/`attn_step`/`attn_postLoop` stage over this
 `attnInvariant` is now **closed, sorry-free**: the loop-body step
 `flash_attn_step_general` threads the loop-body op-eval recipes — including the
 causal `tl.where(off_m ≥ start_n+off_n, qk, -inf)` mask — and the WithBot
-`reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one `flashState_succ`
+`reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one `flashStateBot_succ`
 step; `flash_attn_exec_general` composes it via `forRangeDyn_inv` together with
-the dual `O`/`L` stores, read off through `flashState_full_eq_spec{,_causal}`.
+the dual `O`/`L` stores, read off through `flashStateBot_full_eq_spec{,_causal}`.
 These assemble into the genuine top theorems
 `flash_attn_python_case1/2_genuine_compute_correct_general`. That mirrors
 `VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
@@ -1463,7 +1463,7 @@ bridges (`flash_filterMap_foldr_sup` / `flash_window_sup_reindex`) in their `⊥
 form. -/
 
 /-- `flashRunningMax` is channel-independent (depends only on the score
-projections, like `flashState_fst_eq`). -/
+projections, like the denom sibling `flashStateBot_snd_fst_eq`). -/
 theorem flashRunningMax_eq
     (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
     (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
@@ -1814,7 +1814,7 @@ theorem flashStateBot_logsumexp
 
 /-- **One-block advance** of the ⊥-seeded state: streaming block `c` folds that
 block's keys (via `osStepBot`) onto the state after `c` blocks. (`foldl_append` over
-the `flashKeysUpto_succ` window split — the ⊥-seed analogue of `flashState_succ`.) -/
+the `flashKeysUpto_succ` window split, in ⊥-seed form.) -/
 theorem flashStateBot_succ
     (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
     (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
@@ -2195,7 +2195,7 @@ running state by one block. The kernel's explicit per-block tile arithmetic
 expanding both sides onto the banked closed forms
 `flashStateBot_{snd_fst,snd_snd}` (`= κ(M)·Σ pow2 score [· v]`) and the
 window-split / block bridges (`flashKeysUpto_succ`, `flashRunningMax_succ`,
-`flashBlock_blockMax`, `flashBlock_map_sum`). -/
+`flashBlock_map_sum`). -/
 
 /-- Overwriting a register slot shadows the inner write (BlockState ext). -/
 theorem flash_setReg_shadow (s : BlockState) (name : RegName)

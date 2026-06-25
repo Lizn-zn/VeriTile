@@ -328,7 +328,7 @@ def natDist3 (SM : Nat) (i : Fin 64) (j : Fin 128) : Nat :=
 
 /-- **Faithful case-1 keep predicate** (sliding window, non-complement): the
 kernel's `mask = (dist ≥ 0) & (dist < 64)`. The `dist ≥ 0` clause is vacuous on
-ℕ, so this is exactly `natDist3 SM i j < 64` — matching `aft3MaskCell1` cell for
+ℕ, so this is exactly `natDist3 SM i j < 64` — matching `aft3MaskCell1G` cell for
 cell (true by construction). -/
 def natSlidingWindowKeep (SM : Nat) (i : Fin 64) (j : Fin 128) : Prop :=
   natDist3 SM i j < 64
@@ -338,7 +338,7 @@ instance natSlidingWindowKeepDecidable (SM : Nat) (i : Fin 64) (j : Fin 128) :
   unfold natSlidingWindowKeep; infer_instance
 
 /-- **Faithful case-2 keep predicate** (complement sliding window): the kernel's
-`mask = dist ≥ 64`, i.e. `64 ≤ natDist3 SM i j` — matching `aft3MaskCell2`. -/
+`mask = dist ≥ 64`, i.e. `64 ≤ natDist3 SM i j` — matching `aft3MaskCell2G`. -/
 def natComplementSlidingWindowKeep (SM : Nat) (i : Fin 64) (j : Fin 128) : Prop :=
   64 ≤ natDist3 SM i j
 
@@ -365,7 +365,7 @@ set_option maxRecDepth 8000 in
 `order=(0,1)`: parent `(BLOCK_DMODEL, NKV_CTX)`, strides `(stride_kk, stride_kn)`,
 offsets `[0, colOff]` (column advances by `BLOCK_N` per block). Each lane reads
 `readMem` at `base + e·strideT + (colOff + j)·strideS`. With `K`'s
-`strides=(1, 64)` this is head-lane `e`, key `colOff + j` — exactly a `kTile3`
+`strides=(1, 64)` this is head-lane `e`, key `colOff + j` — exactly a `kTile3G`
 read after `colOff` column advances. -/
 theorem aft3_load_k_eval
     (region : RegionName) (base rows cols BT BS strideT strideS colOff : Nat)
@@ -391,7 +391,7 @@ set_option maxRecDepth 8000 in
 `order=(1,0)`: parent `(NKV_CTX, BLOCK_DMODEL)`, strides `(stride_vk, stride_vn)`,
 offsets `[rowOff, 0]` (row advances by `BLOCK_N` per block). Each lane reads
 `base + (rowOff + j)·strideT + d·strideS`. With `V`'s `strides=(64, 1)` this is
-key `rowOff + j`, head-lane `d` — exactly a `vTile3` read after `rowOff` row
+key `rowOff + j`, head-lane `d` — exactly a `vTile3G` read after `rowOff` row
 advances. -/
 theorem aft3_load_v_eval
     (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
@@ -494,7 +494,7 @@ theorem aft3_qk_dot_eval (s : BlockState) (BM BN BD : Nat)
   rw [evalOp_add]; simp only [evalOp_ref, hqk, hdot, Option.bind_eq_bind, Option.bind_some]; rfl
 
 /-- **L4 (register variant): `qk = qk * qk_scale`** with `qk_scale` read from the
-`qk_scale` register (= `keyScale3`). -/
+`qk_scale` register (= `keyScale3G`). -/
 theorem aft3_qk_scale_ref_eval (s : BlockState) (BM BN : Nat) (sc : ℝ)
     (qktile : Tile .real [BM, BN]) (hqk : s.regs .real [BM, BN] "qk" = some qktile)
     (hqs : s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
@@ -537,8 +537,8 @@ theorem aft3_acc_eval (s : BlockState) (BM BN BD : Nat)
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
-exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
-aft3PostLoop`. -/
+exactly `aft3PreLoopG ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBodyG ::
+aft3PostLoopG`. -/
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
   let m := st.1; let l := st.2.1; let acc := st.2.2
   let s := sv.1; let v := sv.2
@@ -954,7 +954,7 @@ theorem aft3_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P
 These mirror the case-3 (`noWindowKeep`) bridges, but the kernel's `qk` cell is
 the *masked* tile `if mc jL then some score else ⊥` (out-of-window lanes set to
 `-inf` by the `tl.where`). The reconciliation hypothesis `hmc` ties the lowered
-nat-mask `mc` (= `aft3MaskCell1`/`aft3MaskCell2` on lane `jL`) to the faithful
+nat-mask `mc` (= `aft3MaskCell1G`/`aft3MaskCell2G` on lane `jL`) to the faithful
 `keep` predicate at the global key `c·64 + jL`. The empty-block case (`mc` all
 false) is now genuinely reachable, so — unlike case 3 — no `ne_bot` assumption is
 made: the ⊥-carry (`m_ij = ⊥`, `α = 0`) is handled by the seed-cancellation in
@@ -1100,8 +1100,8 @@ theorem attentionFwdTriton3Case3OutSpecG_eq_streaming
 
 /-! ## Dimension-general ⊥-seeded online-softmax math foundation
 
-A parallel, dimension-general copy of `aft3KeysUpto`/`aft3RunningMax`/
-`aft3StateBot`/`aft3Block`/`aft3StateBot1` and their lemmas, parameterized over
+The dimension-general ⊥-seeded streaming defs `aft3KeysUptoG`/`aft3RunningMaxG`/
+`aft3StateBotG`/`aft3BlockG`/`aft3StateBot1G` and their lemmas, parameterized over
 `BM` (rows, `Fin BM`), `ND` (head dim, `Fin ND`), `NC` (keys, `Fin NC`), `BN`
 (block stride). The generic ⊥-seed core lemmas (`aft3OsStepBot*`,
 `aft3_foldl_sup_bot_eq_foldr`, `aft3_filterMap_window_split`, `aft3StateBot_fst`)
@@ -1541,10 +1541,10 @@ theorem aft3StateBotKG_full_eq_streaming {BM ND NC : Nat}
 
 /-! ## Dimension-general loop-body op-eval recipes
 
-`*G` variants of the shape-pinned recipes (`aft3_qk_sub_eval`/`aft3_p_eval`/etc.),
-generalized to `[BM, BN]`/`[BM]` and symbolic window size. The already-general
-recipes (`aft3_load_*`, `aft3_advance_*`, `aft3_qkzeros_eval`, `aft3_qk_dot_eval`,
-`aft3_qk_scale_eval`, `aft3_acc_eval`, the floorDiv/mod/ptr helpers) are reused
+The `*G` op-eval recipes (`aft3_qk_sub_evalG`/`aft3_p_evalG`/etc.) are stated over
+`[BM, BN]`/`[BM]` with symbolic window size. The already-general recipes
+(`aft3_load_*`, `aft3_advance_*`, `aft3_qkzeros_eval`, `aft3_qk_dot_eval`,
+`aft3_qk_scale_ref_eval`, `aft3_acc_eval`, the floorDiv/mod/ptr helpers) are reused
 directly. -/
 
 /-- General L5: `dist = arange[:,None] - arange[None,:] + start_m·BM - start_n + off`. -/
@@ -2716,8 +2716,8 @@ theorem aft3LoopBodyG3_steps (sin : BlockState) (SM SN ohz off : Nat)
 
 /-! ## Dimension-general math-bridge layer (cases 1/2/3)
 
-A parallel, dimension-general copy of the test-shape register bridges
-(`aft3_score_cell`/`aft3_mij_reg_eq`/`aft3_denom_reg_eq`/`aft3_acc_reg_eq` and
+The dimension-general register bridges
+(`aft3_score_cellG`/`aft3_mij_reg_eqG`/`aft3_denom_reg_eqG`/`aft3_acc_reg_eqG` and
 their masked variants), parameterized over `BM`/`ND`/`NC`/`BN`. The generic
 ⊥-seed/foldl helpers (`aft3OsStepBot_block_*`, `aft3_filterMap_finRange_sum`,
 `aft3_mem_le_foldr_sup`) and the G-foundation (`aft3StateBotG_*`,

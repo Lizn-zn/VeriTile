@@ -637,7 +637,7 @@ set_option maxRecDepth 8000 in
 /-- **Bind-aware masked `.ptr` load reducer.** Given the pointer-tile and mask-tile
 evaluations, fire the masked `tl.load` over an arbitrary evaluated `.ptr` op (not
 just a `ref`): kept lanes read `s.readMem`, masked-out lanes read `s.undef`.
-Generalizes `afc_load_k_eval`/`afc_load_v_eval` to inline (non-`ref`) ptr/mask ops,
+Generalizes `afc_load_k_eval` to inline (non-`ref`) ptr/mask ops,
 unblocking the preLoop `q` load (inline `boolAnd` mask). -/
 theorem afc_evalOp_load_ptr_mask_of {shape : TileShape}
     (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (s : BlockState)
@@ -899,9 +899,9 @@ theorem osStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (�
 The kernel seeds `l_i = tl.zeros + 1.0` (not `0`). On the first streamed key the
 running max transitions from `⊥`, forcing `α = (realExp2 (realSub ⊥ m')).unbotD 0
 = 0`, which annihilates the `1` carry. Hence the seed-`1` fold and the seed-`0`
-fold agree on every nonempty key prefix. `afcStateBot1` is the faithful seed-`1`
-state; it equals `afcStateBot` on nonempty windows. Ported from the triton3
-foundation (`aft3StateBot1`). -/
+fold agree on every nonempty key prefix. `afcStateBot1G` is the faithful seed-`1`
+state; it equals `afcStateBotG` on nonempty windows. Ported from the triton3
+foundation (`aft3StateBot1G`). -/
 
 /-- **⊥-seed independence of the `l`/`acc` carries.** From a `⊥`-max start the
 first key resets the carries, so the `osStepBot` fold over a nonempty list is
@@ -947,7 +947,7 @@ every key's coerced score exceeds the `-1e6` masking sentinel (the def quantifie
 over all `j` with strict `>`) — i.e. the streamed running max is never `⊥` once a
 key is kept, and the scores stay above `-1e6`. Captured as: at the full window,
 the running max is `> -1e6`
-(equivalently the masked-block `max(m_i, -1e6)` agrees with `afcRunningMax`). This
+(equivalently the masked-block `max(m_i, -1e6)` agrees with `afcRunningMaxG`). This
 is a legitimate precondition for bounded `Q`/`K` (analogous to #316's `undef = 0` /
 `M ≠ Out` preconditions). -/
 def afcScoreBound
@@ -1116,8 +1116,8 @@ namespace AfcFoundation
 open VeriTile.Triton
 
 /-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
-`N_CTX`/`HEAD_ACTIVE`). Mirrors `afcLoopBody` with the test-shape numerals replaced
-by the corresponding dimension parameters. -/
+`N_CTX`/`HEAD_ACTIVE`): the streamed per-key-block statements with every dimension
+carried as a parameter rather than a fixed numeral. -/
 def afcLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
     Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
@@ -1225,9 +1225,9 @@ def afcLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
         (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
 
 /-- General preLoop (22 deterministic prefix statements), symbolic dims with
-contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`).
-Mirrors `afcPreLoop` with the test-shape numerals replaced by the corresponding
-dimension parameters. -/
+contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`):
+the deterministic prefix with every dimension carried as a parameter rather than a
+fixed numeral. -/
 def afcPreLoopG (Q K V QScale KScale Out : RegionName)
     (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "start_m" (Op.programId 0),
@@ -1510,9 +1510,9 @@ theorem attnFwdCausalOutSpecG_eq_streaming
 
 /-! ### General ⊥-seed online-softmax foundation math
 
-Mirrors the pinned `afcKV`/`afcKeysUpto`/`afcBlock`/`afcRunningMax`/`afcStateBot`/
-`afcStateBot1` over symbolic `BLOCK_M`(query rows)/`BLOCK_DMODEL`(channels)/
-`SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
+The dimension-general `afcKVG`/`afcKeysUptoG`/`afcBlockG`/`afcRunningMaxG`/
+`afcStateBotG`/`afcStateBot1G` stack over symbolic `BLOCK_M`(query rows)/
+`BLOCK_DMODEL`(channels)/`SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
 (`osStepBot`, `osStepBot_foldl_consistent`, `osStepBot_block_eq`,
 `osStepBot_bot_seed_indep`, `afc_filterMap_window_split`, `afc_filterMap_foldr_sup`,
 `afc_mem_le_foldr_sup`, `afc_filterMap_finRange_sum`, `afc_foldl_sup_bot_eq_foldr`). -/

@@ -843,7 +843,7 @@ noncomputable def gStateBot (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot �
 <details><summary><code>ctxKVM</code></summary>
 
 ```
-/-- **Faithful per-key `(score, value)` the loop folds**: `ctxKV` with the
+/-- **Faithful per-key `(score, value)` the loop folds**: the per-key data with the
 `block_end_loc` load mask applied to `k`/`v` and the row mask applied to `q`.
 Active causal lane (`j ≤ gi+plen`) gets `sm·Σ_e ctxQTileM(i,e)·ctxKTileM(j,e)` (so
 phantom `j ≥ bel` get `sm·0 = 0`); future lane gets the `-1e8` sentinel; value is
@@ -1270,7 +1270,7 @@ noncomputable def gStateBot (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot �
 <details><summary><code>ctxKVM</code></summary>
 
 ```
-/-- **Faithful per-key `(score, value)` the loop folds**: `ctxKV` with the
+/-- **Faithful per-key `(score, value)` the loop folds**: the per-key data with the
 `block_end_loc` load mask applied to `k`/`v` and the row mask applied to `q`.
 Active causal lane (`j ≤ gi+plen`) gets `sm·Σ_e ctxQTileM(i,e)·ctxKTileM(j,e)` (so
 phantom `j ≥ bel` get `sm·0 = 0`); future lane gets the `-1e8` sentinel; value is

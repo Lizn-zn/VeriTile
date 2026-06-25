@@ -548,8 +548,8 @@ streaming registers `m_i`/`l_i`/`acc` equal the generalized partials
 first `c` blocks (kernel seed `l_i = 0`, hence `lPgK` not `lPg`), and the K/V
 block pointers have advanced `c` column/row steps of `BLOCK_N`. The loop-invariant
 registers (`q` pre-scaled+loaded, `b1`, `b_offset`, `start_m`/`off_hz`) are fixed.
-`preLoop` establishes `attnKernelInvariant … 0`, `attn_step` advances it by one
-block, and `attn_postLoop` reads the closed form off `… numKVBlocks` via
+`preLoopG` establishes `attnKernelInvariant … 0`, `attn_stepG` advances it by one
+block, and `attn_postLoopG` reads the closed form off `… numKVBlocks` via
 `attentionKernelSpec_eq_ratio`. -/
 noncomputable def attnKernelInvariant
     (s0 : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
@@ -799,8 +799,8 @@ theorem evalOp_exp2' {shape : TileShape} (a : Op .real shape) (s : BlockState) :
   simp [evalOp]
 
 /-- The lowered 15-statement `forRangeDyn` body, dimension-parameterized over
-`BLOCK_M BLOCK_N HEAD_DIM stride_b0m`. Specializes to `attnLoopBody` at the
-Python test shape (`64 64 128 128`). -/
+`BLOCK_M BLOCK_N HEAD_DIM stride_b0m` (at the Python test shape these are
+`64 64 128 128`). -/
 def attnLoopBodyG (B0 : RegionName)
     (BLOCK_M BLOCK_N HEAD_DIM stride_b0m : Nat) : List Stmt :=
   [ Stmt.assign .real [HEAD_DIM, BLOCK_N] "k"
@@ -902,8 +902,7 @@ theorem attnLoopBodyG_check (Q K V B0 Out : RegionName) (sm_scale : ℝ)
   rfl
 
 /-- The lowered 3-statement post-loop, dimension-parameterized over
-`BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on`. Specializes to `attnPostLoop`
-at the Python test shape. -/
+`BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on`. -/
 def attnPostLoopG (Out : RegionName)
     (BLOCK_M BLOCK_DMODEL N_CTX stride_om stride_on : Nat) : List Stmt :=
   [ Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
@@ -1036,9 +1035,9 @@ theorem load_b0_evalG (s : BlockState) (B0 : RegionName)
   ext idx
   simp only [BlockState.readMemValue_real, Region.cast_id]
 
-/-! ### Loop-body execution chain (`attnLoopBody_steps`)
+/-! ### Loop-body execution chain (`attnLoopBody_stepsG`)
 
-Steps the 15-statement `attnLoopBody` one block at a time, exposing the symbolic
+Steps the 15-statement `attnLoopBodyG` one block at a time, exposing the symbolic
 `qk`/`m_i_new`/`alpha`/`p`/`acc`/`l_i` tiles so the banked per-cell bridges
 (`mijg_eq`/`alphag_eq`/`lig_eq`/`accg_eq`) advance the invariant by one block.
 Mirrors `flashLoopBody_steps`, but the kernel's `qk = dot + (b0+b1)·log2e` bias
@@ -1448,7 +1447,7 @@ theorem ak_bn1_op_evalG (s : BlockState) (BLOCK_N BIAS_LAST_SIZE : Nat) :
 
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
-/-- **General** `preLoop` (dimension-parameterized). Steps the 19-statement
+/-- **General** `preLoopG` (dimension-parameterized). Steps the 19-statement
 prologue to `attnKernelInvariant … 0`. Contiguous Q/K/V layout
 (`stride_qm=HEAD, stride_qk=1, stride_kk=1, stride_kn=HEAD, stride_vk=HEAD,
 stride_vn=1`) per `qRaw`/`kFlat`/`vFlat`. -/
@@ -1578,7 +1577,7 @@ theorem preLoopG (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     exact hmem10
 
 set_option maxHeartbeats 1000000 in
-/-- **General** `attn_qk_cell` (dimension-parameterized over `BLOCK_M BLOCK_N HEAD
+/-- **General** `attn_qk_cellG` (dimension-parameterized over `BLOCK_M BLOCK_N HEAD
 BIAS_LAST_SIZE stride_b0m`, with `0 < BLOCK_N`). -/
 theorem attn_qk_cellG (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
     (BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m : Nat) (hBN : 0 < BLOCK_N)
@@ -1647,7 +1646,7 @@ theorem attn_qk_cellG (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **General** `attn_step` (dimension-parameterized). Advances the invariant by
+/-- **General** `attn_stepG` (dimension-parameterized). Advances the invariant by
 one key block of `BLOCK_N` keys. Contiguous K/V layout (`stride_kk=1,
 stride_kn=HEAD, stride_vk=HEAD, stride_vn=1`) per `kFlat`/`vFlat`. -/
 theorem attn_stepG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ)
@@ -1793,7 +1792,7 @@ theorem attn_stepG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ
   · exact hundefF
   · rw [hmemF]; exact hmem
 
-/-! ### M3 — `attn_postLoop`: `acc /= l_i` + block store = `attentionKernelSpec`
+/-! ### M3 — `attn_postLoopG`: `acc /= l_i` + block store = `attentionKernelSpec`
 
 After the streaming loop (invariant at `c = nB`), the `acc /= l_i[:, None]` rescale
 and the (unmasked) block-pointer store write the normalized accumulator
@@ -1854,7 +1853,7 @@ theorem scatter_memcell_fp16_nd' {region : RegionName} {shape : TileShape}
   rw [if_pos ⟨rfl, rfl⟩]
 
 set_option maxHeartbeats 1000000 in
-/-- **General** `attn_postLoop` (dimension-parameterized). The `acc /= l_i` rescale
+/-- **General** `attn_postLoopG` (dimension-parameterized). The `acc /= l_i` rescale
 and block store write the closed form `attentionKernelSpec` to `Out` at every lane.
 Contiguous Out layout (`stride_om=HEAD, stride_on=1`). -/
 theorem attn_postLoopG (Q K V B0 Out : RegionName) (s0 : BlockState) (sm_scale : ℝ)

@@ -1265,7 +1265,7 @@ end MistralInvariant
 
 section MistralAttnStep
 
-/-! ## One-block invariant advance (`mistral_attn_step`). -/
+/-! ## One-block invariant advance (`mistral_attn_stepG`). -/
 
 /-- The block-`c` score list (`.map fst`) of `mistralBlockMG` is channel-independent. -/
 theorem mistralBlockMG_fst_channel_indep

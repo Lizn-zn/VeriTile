@@ -48,7 +48,7 @@ is proven equal to `attnFwdTritonOutSpecG` — masked base-2 (`exp2`) per-key-sc
 `keep = causalKeep qStart`, head-active `q`/`k`/`v` masks at `e/d ≥ 96`) — at
 every active output lane (`attn_fwd_triton_output_summary_general`). The
 inner online-softmax recurrence (`m_i`/`l_i`/`acc` updates, the final `acc / l_i`
-normalization) is reconciled to this closed form via the ⊥-seeded `aftStateBot`
+normalization) is reconciled to this closed form via the ⊥-seeded `aftgStateBotG`
 streaming fold and `aftgStateBotG_full_eq_spec`; the loop is driven by `forRange_inv`
 + `aftg_attn_stepG`. The result is **dimension-general**: it holds for arbitrary
 symbolic block/head dimensions at the contiguous layout (`stride_qm = HEAD_DIM`,
@@ -573,19 +573,17 @@ theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
 
 end Correct
 
-/-! ## FOUNDATION Part 1 — pinned-shape body pieces (`aftPreLoop` ++ forRange `aftLoopBody` :: postLoop)
+/-! ## FOUNDATION Part 1 — dimension-general body pieces (`aftgPreLoopG` ++ forRange `aftgLoopBodyG` :: postLoop)
 
-The lowered algorithm body of `attn_fwd_triton_surface` at the Python test shape is
-a 25-statement list: 22 preLoop statements (`aftPreLoop`), then the static
-`Stmt.forRange "start_n" 0 128 64 aftLoopBody` (loop body = 22 statements), then 2
-postLoop statements (`acc = acc / l_i[:, None]` and the masked `tl.store`). This is
-a **static** `forRange` (range bounds `0..128 step 64`, NOT a `forRangeDyn`), so the
-`forRange_inv` master invariant principle drives the loop.
+The lowered algorithm body of `attn_fwd_triton_surface` is a preLoop / loop / postLoop
+list: the deterministic preLoop statements (`aftgPreLoopG`), then the static
+`Stmt.forRange` over `aftgLoopBodyG`, then the postLoop statements (`aftgPostLoopG`:
+`acc = acc / l_i[:, None]` and the masked `tl.store`). This is a **static** `forRange`
+(NOT a `forRangeDyn`), so the `forRange_inv` master invariant principle drives the loop.
 
-The three pieces are transcribed concretely (the per-statement op-eval recipes above
-encode the exact `Op`/`Broadcast`/dtype terms); the dimension-general split that the
-top theorem actually consumes is `aftg_body_splitG` (checked by `rfl`), which mirrors
-these pieces with the test-shape numerals replaced by symbolic dimensions. -/
+The dimension-general split that the top theorem actually consumes is `aftg_body_splitG`
+(checked by `rfl`), carrying every block/head dimension as a symbolic parameter rather
+than a fixed numeral. -/
 
 namespace AftFoundation
 
@@ -711,7 +709,7 @@ set_option maxRecDepth 8000 in
 /-- **Bind-aware masked `.ptr` load reducer.** Given the pointer-tile and mask-tile
 evaluations, fire the masked `tl.load` over an arbitrary evaluated `.ptr` op (not
 just a `ref`): kept lanes read `s.readMem`, masked-out lanes read `s.undef`.
-Generalizes `aftg_load_k_eval`/`aftg_load_v_eval` to inline (non-`ref`) ptr/mask ops,
+Generalizes `aftg_load_k_eval` to inline (non-`ref`) ptr/mask ops,
 unblocking the preLoop `q` load (inline `boolAnd` mask). -/
 theorem aftg_evalOp_load_ptr_mask_of {shape : TileShape}
     (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (s : BlockState)
@@ -991,8 +989,8 @@ namespace AftgFoundation
 open VeriTile.Triton
 
 /-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
-`N_CTX`/`HEAD_ACTIVE`). Mirrors `aftLoopBody` with the test-shape numerals replaced
-by the corresponding dimension parameters. -/
+`N_CTX`/`HEAD_ACTIVE`): the streamed per-key-block statements with every dimension
+carried as a parameter rather than a fixed numeral. -/
 def aftgLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   [ -- 0: start_n = tl.multiple_of(start_n, BLOCK_N)  (identity)
     Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
@@ -1100,9 +1098,9 @@ def aftgLoopBodyG (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat
         (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
 
 /-- General preLoop (22 deterministic prefix statements), symbolic dims with
-contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`).
-Mirrors `aftPreLoop` with the test-shape numerals replaced by the corresponding
-dimension parameters. -/
+contiguous strides (`stride_qm = HEAD_DIM`, `stride_qk = 1`, `stride_kn = HEAD_DIM`):
+the deterministic prefix with every dimension carried as a parameter rather than a
+fixed numeral. -/
 def aftgPreLoopG (Q K V QScale KScale Out : RegionName)
     (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "start_m" (Op.programId 0),
@@ -1385,9 +1383,9 @@ theorem attnFwdTritonOutSpecG_eq_streaming
 
 /-! ### General ⊥-seed online-softmax foundation math
 
-Mirrors the pinned `aftKV`/`aftKeysUpto`/`aftBlock`/`aftRunningMax`/`aftStateBot`/
-`aftStateBot1` over symbolic `BLOCK_M`(query rows)/`BLOCK_DMODEL`(channels)/
-`SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
+The dimension-general `aftgKVG`/`aftgKeysUptoG`/`aftgBlockG`/`aftgRunningMaxG`/
+`aftgStateBotG`/`aftgStateBot1G` stack over symbolic `BLOCK_M`(query rows)/
+`BLOCK_DMODEL`(channels)/`SEQ`(keys)/`BLOCK_N`(block stride). Reuses the dim-agnostic generic core
 (`osStepBot`, `osStepBot_foldl_consistent`, `osStepBot_block_eq`,
 `osStepBot_bot_seed_indep`, `aftg_filterMap_window_split`, `aftg_filterMap_foldr_sup`,
 `aftg_mem_le_foldr_sup`, `aftg_filterMap_finRange_sum`, `aftg_foldl_sup_bot_eq_foldr`). -/
@@ -1625,7 +1623,7 @@ theorem aftgKeysUptoG_full_eq_pred (qStart : Nat) (i : Fin BLOCK_M) (d : Fin BLO
 The kernel masks every non-causal key with the `-1e6` `tl.where` sentinel, so only
 the **kept** (causal) keys `j ≤ qStart + i` need a boundedness assumption, and only
 `≥ -1e6` (non-strict) is required: the masked keys are pinned to the sentinel and
-never raise the running max. This mirrors the pinned `aftScoreBound` form. -/
+never raise the running max. -/
 def aftgScoreBoundG
     (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (kT vT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ)
     (keyScale : Fin SEQ → ℝ) (qStart : Nat) : Prop :=

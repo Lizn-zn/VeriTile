@@ -10,7 +10,7 @@
 /-- **Public general Python case-1 output summary (genuine closed form).** The full
 attention-score surface lowers to the algorithm layer, and the kernel writes the
 genuine closed-form score `case1OutClosedFormG` to every active output column —
-dimension-parameterized version of `attention_score_python_case1_output_summary`. -/
+the dimension-parameterized case-1 output summary (symbolic shape/strides). -/
 ```
 </details>
 
@@ -324,5 +324,4 @@ def case1MOffsetG (s : BlockState) (ROUND_CTX r : Nat) : Nat := s.pids 1 * ROUND
 - `attention_score_python_case3_output_surface_summary`
 - `attention_score_python_case4_output_surface_summary`
 - `attention_score_case1_genuine_compute_correct`
-- `attention_score_python_case1_output_summary`
 - `attention_score_case1_genuine_compute_correct_general`

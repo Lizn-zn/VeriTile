@@ -69,8 +69,7 @@ modeling depth differs by kernel:
 * **Backward grads** (`DQ`, `DK`, `DV`) are verified against explicit closed
   forms defined over the **input** memory (never re-reading `exec`): the ★ MAIN
   dimension-general `triton_attention_bwd_grads_genuine_output_summary_general`
-  together with the pinned `triton_attention_bwd_grads_genuine_output_summary`
-  check the stores against `DQ = priorDQ + Σ_J fp16(ds)·k` (`bwdKernelDQSpecG`),
+  checks the stores against `DQ = priorDQ + Σ_J fp16(ds)·k` (`bwdKernelDQSpecG`),
   `DV[J,e] = Σ_I fp16(p)·do`, and `DK[J,e] = Σ_I fp16(ds)·q` (the genuine fp16
   column sums over all query rows).
 * **Backward preprocess** and the **backward score `P`/`DS` step** are verified
@@ -91,7 +90,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `triton_attention_forward_output_summary_general` (forward, dimension-general), `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary_general` (backward gradients, multi-block general), `triton_attention_bwd_grads_genuine_output_summary` -/
+/-! **★ Main theorems:** `triton_attention_forward_output_summary_general` (forward, dimension-general), `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary_general` (backward gradients, multi-block general) -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -2490,8 +2489,8 @@ pointers, built inside the outer body; no post-inner `[0,0]` rewinds), parametri
 over `BM = BLOCK_M = BLOCK_N` (square score blocks), `BD = BLOCK_DMODEL` (head
 dim) and `nb = num_block`.  Strides are pinned to the contiguous launch
 (`stride_qm = BD`, `stride_qk = 1`) used by the top theorem, mirroring the
-forward `taLoopBodyG`/`ta_body_splitG`.  These collapse to the pinned
-`bwdInnerBody`/`bwdOuterBody`/`bwdPreLoop` at `BM = 128`, `BD = 64`, `nb = 1`. -/
+forward `taLoopBodyG`/`ta_body_splitG`.  At `BM = 128`, `BD = 64`, `nb = 1` these
+`bwdInnerBodyG`/`bwdOuterBodyG`/`bwdPreLoopG` specialize to the Python test shape. -/
 
 /-- General `make_block_ptr` op (k/v/dk/dv style, no `lo`): parent `[D0, BD]`,
 block `[BM, BD]`, contiguous strides `[BD, 1]`, dynamic row offset
@@ -2701,8 +2700,8 @@ set_option maxRecDepth 8000 in
 /-- **General body split.** The general (contiguous-stride) backward kernel lowers
 to `bwdPreLoopG ++ [forRange start_n 0 nb 1 bwdOuterBodyG]` on the new surface.
 `stride_qm = stride_kn = stride_vk = BD`, `stride_qk = stride_kk = stride_vn = 1`;
-`stride_qz`/`stride_qh` carry the per-batch/head pointer offset. Collapses to the
-pinned `bwd_body_split` at `BM = 128`, `BD = 64`, `nb = 1`, `D0 = 1024`,
+`stride_qz`/`stride_qh` carry the per-batch/head pointer offset. The Python test
+shape is `BM = 128`, `BD = 64`, `nb = 1`, `D0 = 1024`,
 `N_CTX = 128`, `H = 4`, `stride_qz = 32768`, `stride_qh = 8192`. -/
 theorem bwd_body_splitG (Q K V Out DO DQ DK DV L M Delta : RegionName) (sc : ℝ)
     (stride_qz stride_qh Z H N_CTX D0 nb BM BD : Nat) :
@@ -2901,8 +2900,7 @@ value the kernel *literally* stores: `_fwd_kernel` keeps `l_prev` as the running
 `Σ exp(qk − m_curr)` (rescaled by `exp(m_prev − m_curr)` across blocks), and the
 final `tl.store(l_ptrs, l_prev)` records exactly this m-shifted sum — **not** the
 un-shifted `Σ exp(score)` nor its log. (Recovering the un-shifted log-sum-exp
-needs the separately stored `M`: `log L + M = log(Σ exp(score))`. See
-`exp_fwdMSpec_mul_fwdLSpec`.) The in-loop `l_rcp = 1/l_curr`
+needs the separately stored `M`: `log L + M = log(Σ exp(score))`.) The in-loop `l_rcp = 1/l_curr`
 division only rescales the output `p`/`acc`; it never touches the stored
 `l_prev`. -/
 noncomputable def fwdLSpec
@@ -7415,8 +7413,8 @@ theorem bwd_store_dq_evalG (s sPre : BlockState) (R : RegionName) (base D0 BM BD
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **General fp16 boundary-checked block-ptr store** (dimension-general clone of
-`bwd_store_fp16_bc_eval`).  Storing `castFloat .real .fp16 (ref valNm)` through a
+/-- **General fp16 boundary-checked block-ptr store** (dimension-general,
+`bwd_store_fp16_bc_evalG`).  Storing `castFloat .real .fp16 (ref valNm)` through a
 `bwdPtrTileG R base D0 BM BD rowOff` block pointer (boundary check `[0,1]`) writes,
 for every in-bounds lane `(i,e)`, an fp16 `MemCell` at `R[base + (rowOff+i)·BD + e]`.
 Under `rowOff + i < D0` (the `hrow` side-condition) every lane is in bounds, so the
@@ -7548,8 +7546,8 @@ private theorem bwd_store_fp16_bc_evalG (R : RegionName) (base D0 BM BD rowOff :
 
 set_option maxHeartbeats 1600000 in
 set_option maxRecDepth 8000 in
-/-- **General fp16-store register preservation** (dimension-general clone of
-`bwd_store_fp16_regs_eq`).  An fp16 block-ptr store leaves every register untouched. -/
+/-- **General fp16-store register preservation** (dimension-general,
+`bwd_store_fp16_regs_eqG`).  An fp16 block-ptr store leaves every register untouched. -/
 private theorem bwd_store_fp16_regs_eqG (sPre : BlockState) (BM BD : Nat)
     (ptrTile : Tile .blockPtr [BM, BD]) (ptrNm valNm : RegName) (vt : Tile .real [BM, BD])
     (hptr : sPre.regs .blockPtr [BM, BD] ptrNm = some ptrTile)
@@ -7956,7 +7954,7 @@ private theorem foldl_writeMem_disjoint_offset {α : Type} (W : RegionName)
 
 /-! ### ════════ General inner Q-block step (Phase 2, item 3) ════════
 
-Dimension-general (`BM`/`BD`) clone of `bwdInnerBody_step'`, parametric over the
+Dimension-general (`BM`/`BD`) inner Q-block step `bwd_inner_stepG`, parametric over the
 counter `start_m = qRow` (global query-block base row), the key-block base row
 `kRow = lo = start_n·BM`, and arbitrary prior `dv`/`dk` accumulator tiles.  The
 body is structurally `bwdInnerBodyG`; the proof reuses the general statement-evals
@@ -8505,7 +8503,7 @@ reaches a state whose `dv`/`dk` registers hold the block-`qRow` accumulation
 (`bwdInnerDvG`/`bwdInnerDkG` onto the priors), whose `DQ` memory holds the
 genuine `bwdInnerDqG` cell value, and which preserves `pids`/`undef`, `mem` off
 `DQ`, and every register not assigned by the body (in particular `k`/`v` and the
-KV/grad block pointers).  Generalizes `bwdInnerBody_step'`. -/
+KV/grad block pointers).  Dimension-general inner Q-block step. -/
 private theorem bwd_inner_stepG (s sin : BlockState) (Q K V DO M Delta DQ : RegionName)
     (BM BD D0 NCTX qRow kRow : Nat) (sc : ℝ)
     (accDv accDk : Tile .real [BM, BD])
@@ -9167,9 +9165,9 @@ private theorem bwdInnerLoop_frameG (s0 : BlockState) (Q K V DO M Delta DQ : Reg
 
 set_option maxHeartbeats 16000000 in
 set_option maxRecDepth 8000 in
-/-- **General outer-body step** for KV block `n` (`start_n = n`). Mirrors the
-pinned `bwdOuterBody_step` (which is the `nb = 1`, `n = 0` case) but at symbolic
-`BM`/`BD`/`nb` with a dynamic row offset `lo = n·BM`: the q/do/dq block pointers
+/-- **General outer-body step** for KV block `n` (`start_n = n`). At symbolic
+`BM`/`BD`/`nb` with a dynamic row offset `lo = n·BM` (the Python test shape is the
+`nb = 1`, `n = 0` case): the q/do/dq block pointers
 are (re-)built at `bwdPtrTileG _ (bwdKBase s) D0 BM BD (n·BM)`, the whole inner
 `forRangeDyn` is driven by `bwdInnerLoop_driveG`, and the fp16 `DV`/`DK` stores
 land the genuine general column sums `bwdKernelD{V,K}SpecG` at every key row
@@ -10448,13 +10446,7 @@ Honest side conditions: positive block dims and `num_block`, `BD ∣ bwdKBase`, 
 streaming boundary `bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride
 arithmetic `hbase`, input/output region disjointness, and the honest pids grid. All
 specs are defined purely over the **input** `Q`/`K`/`V`/`DO`/`M`/`Delta`/`DQ`
-memory — never over the kernel's own `exec` readback.
-
-NOTE: the pinned `triton_attention_bwd_grads_genuine_output_summary` (`num_block = 1`)
-is kept as an independent theorem rather than a corollary: it lives on a different
-write-map surface (`bwdGradOffset` single-block / pinned `bwdKernelD*Spec` specs)
-whose bridge to this multi-block surface is non-trivial, so re-deriving it here
-would risk the already-proven pinned result for no gain. -/
+memory — never over the kernel's own `exec` readback. -/
 theorem triton_attention_bwd_grads_genuine_output_summary_general
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)

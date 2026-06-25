@@ -34,7 +34,6 @@ lightning_attention_python_test_shape_complete_summary    ← TOP THEOREM
 
 Genuine forward closed form (NOT self-referential):
   kvClosed / kvClosed_succ                          kv carry-fold over K·V
-  oRowClosed                                        causal linear-attention output row
   kvStepSpec_eq_kvClosed_succ                       carry invariant: body advances kvClosed
   lightning_attention_forward_kv_step_slice_compute_correct      kv += dot(k_trans, v) body
   lightning_attention_forward_o_inter_dot_slice_compute_correct  o_inter = dot(q, kv) body
@@ -49,8 +48,8 @@ standalone specification over the input regions `K,V` — the running `kᵀ·v` 
 over the first `m` key blocks — and `kvClosed_succ` is the exact closed-form
 counterpart of the Python `kv += tl.dot(k_trans, v)`. The carry-fold step lemma
 `kvStepSpec_eq_kvClosed_succ` shows one loop body advances `kvClosed` by one
-block under the carry invariant `KVPrev = kvClosed m`; `oRowClosed` is the
-genuine causal linear-attention output `Σ_{s≤t}(q_t·k_s)·v_s`. The remaining
+block under the carry invariant `KVPrev = kvClosed m`; the genuine causal
+linear-attention output row is `Σ_{s≤t}(q_t·k_s)·v_s`. The remaining
 boundary is the cross-block `NUM_BLOCK` loop *driver* threading the invariant
 (the carry hypotheses `hPrev`/`hK`/`hV` of `kvStepSpec_eq_kvClosed_succ`, the
 documented loop boundary as in #290/#291), and the host launch (grid/block-model
@@ -140,8 +139,8 @@ o[t, c] = Σ_{s ≤ t} (Σ_a q[t,a]·k[s,a]) · v[s,c].
 The definitions below are a **standalone specification over the input regions**
 `Q,K,V` — never a read-back of the kernel's own output. `kvClosed m` is the
 genuine `kv` state entering block `m` (the sum of `kᵀ·v` over the first `m`
-blocks); `oRowClosed` is the genuine output row. `kvClosed_succ` is the exact
-closed-form counterpart of the Python loop's `kv += tl.dot(k_trans, v)`. -/
+blocks); the genuine output row is the causal linear-attention sum. `kvClosed_succ`
+is the exact closed-form counterpart of the Python loop's `kv += tl.dot(k_trans, v)`. -/
 
 /-- `K[qk_offset + s·d + a]`: the key entry at global key row `s`, head channel
 `a`, for the program `off_bh`. -/
@@ -318,7 +317,7 @@ The inter-block contribution to the output: with the carried state `kv` loaded
 from a materialized `KVPrev` tile, `o_inter[r, c] = Σ_a q[r,a]·kv[a,c]`. This is
 the `tl.dot(q, kv)` producer; under the carry invariant `KVPrev = kvClosed m`
 its value is exactly `Σ_a q[r,a]·(Σ_{s<m·BLOCK} k[s,a]·v[s,c])`, the inter-block
-half of `oRowClosed`. -/
+half of the causal linear-attention output row. -/
 
 def lightning_attention_forward_o_inter_dot_slice
     (Q KVPrev OInter : RegionName) (BLOCK D BLOCK_MODEL : Nat) :
@@ -1244,7 +1243,7 @@ materialized carry buffer; no dimension is pinned. Exposes:
    input regions `K`, `V`, never an `exec` read-back.
 3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes its genuine spec
    `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
-   the inter-block half of `oRowClosed`.
+   the inter-block half of the causal linear-attention output row.
 
 Honest side-conditions only: `0 < BLOCK_MODEL` (column tiling is nonempty) is
 not even needed here because injectivity holds unconditionally from the `Fin`

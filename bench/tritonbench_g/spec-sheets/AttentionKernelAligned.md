@@ -164,7 +164,7 @@ def surfaceOutOffset
 base-2 attention of the loaded `Q`/`K`/`V` tiles, with the constant scalar score
 scale `sm_scale · log2(e)` and the fused `rel_h + rel_w` bias `b0 + b1`. This is
 the value the streaming softmax `acc / l_i` computes — defined over the loaded
-tiles, NOT the kernel's own executed output (`producedOutputValue`). -/
+tiles, NOT a readback of the kernel's own executed output. -/
 ```
 ```lean
 noncomputable def alignedClosedForm

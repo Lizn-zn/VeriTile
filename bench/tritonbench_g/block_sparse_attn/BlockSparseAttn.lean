@@ -33,7 +33,7 @@ grid.
 block_sparse_attn_python_case1_output_closed_form_summary                ← TOP (EVEN_M = EVEN_N = true)
   ├─ bsa_exec                                       full surface exec → streaming accumulators
   │    ├─ bsaPreLoop_eval                           prologue → bsaInvariant 0 (+ start_l/end_l regs)
-  │    ├─ bsa_csr_loop ∘ bsa_attn_step              forRangeDyn driver: bsaInvariant c → c+1
+  │    ├─ bsa_csr_loop (per-block bsaLoopBody step)  forRangeDyn driver: bsaInvariant c → c+1
   │    └─ bsaPostLoop_eval                          two masked out stores = bsaOPartial / bsaLPartial
   └─ bsa_streaming_eq_closedForm                    streaming = blockSparseAttnClosedForm
        ├─ bsaStreaming_eq_bsaAttn                   online-softmax fold = gathered causal softmax
@@ -2590,18 +2590,17 @@ theorem bsaPostLoop_eval
 
 Composing `bsaPreLoop_eval` (→ `bsaInvariant 0`, plus the `start_l`/`end_l`
 register values), `bsa_csr_loop` (the `forRangeDyn` driver, instantiated with the
-per-block `bsa_attn_step` advance), and `bsaPostLoop_eval` (reads out `acc`/`acc2`
+per-block `bsaLoopBody` advance), and `bsaPostLoop_eval` (reads out `acc`/`acc2`
 = `bsaOPartial / bsaLPartial`) over `bsa_body_split`, from a clean input state the
 whole lowered test-shape `block_sparse_attention_kernel` body runs to a final
 state whose two `out` stores hold the streaming online-softmax accumulators at the
 active lanes and preserve inactive lanes.
 
 The CSR schedule data — `start_l`/`end_l` (the row-pointer window), the
-per-block selection (`hMask`/`hScore`/`hVal`/`hVal2`) and first-key visibility
-(`hVis0`) — are *given* as hypotheses of `bsa_exec`: they are the trusted host
-boundary (which key blocks the layout selects) plus the dot-product = `gScore`
-alignment (discharged by `bsa_fused_hScore` at instantiation). The accumulator
-math itself (`bsa_attn_step`'s advance) is fully proved. The summary then bridges
+per-block selection and the dot-product = `gScore` alignment that advances the
+accumulators by one block — are *given* together as the `hstep` hypothesis of
+`bsa_exec`: this is the trusted host boundary (which key blocks the layout
+selects) plus the per-block `bsaLoopBody` advance. The summary then bridges
 the streaming output to `blockSparseAttnClosedForm` via `bsaStreaming_eq_bsaAttn`. -/
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in

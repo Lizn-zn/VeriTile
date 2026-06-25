@@ -23,7 +23,7 @@ This is the headline: it packages, for symbolic dimensions,
 Honest side-conditions only: offset injectivity of each store footprint (a
 contiguity/aliasing-freedom hypothesis on the strides) and the
 buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
-the carried `b_h` register, whose algebra is `hClosed_succ`/`hClosed_zero`, is the
+the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
 trusted runtime boundary, as in #290). No dimension is pinned. The pinned
 `chunk_gated_attention_python_test_shape_output_summary` is a thin instantiation. -/
 ```

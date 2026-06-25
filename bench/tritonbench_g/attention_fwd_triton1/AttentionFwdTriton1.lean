@@ -153,7 +153,7 @@ to since `b_h_0 = 0`) is
 
   `Oᵢ[t, d] = ((scale·Qᵢ) · Kᵢ · Vᵢ)[t, d] + ((scale·Qᵢ) · b_h_i)[t, d]`.
 
-The first summand is exactly `boFormulaSpec` for chunk `i`'s tiles; the second
+The first summand is exactly `localTerm` for chunk `i`'s tiles; the second
 is the contraction of the scaled query against the accumulated state. The
 definitions below give that genuine closed form purely in terms of the input
 memory (no reference to the executed kernel output), and the identity theorems
@@ -290,8 +290,8 @@ theorem aft1_load_bp_2d_ref (rg : RegionName) (s : BlockState) (name : RegName)
 These mirror the executed kernel's per-chunk memory reads exactly (batch-head
 `i_bh = pids 0`), so the loop-body stepping connects to them definitionally. The
 genuine file-level `recurrentState`/`outputClosedForm` are reconciled with these
-through the accessor hypotheses at the summary, exactly as
-`localTerm_eq_boFormulaSpec` / `recurrentState_eq_sum_bhFormulaSpec` do. -/
+through the accessor hypotheses at the summary, via the general bridge
+`aft1OutG_eq_outputClosedForm`. -/
 
 /-- An `ifThen` with a `false` constexpr condition is a no-op. -/
 theorem aft1_ifThen_false_noop (body : List Stmt) (X : BlockState) :

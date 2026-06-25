@@ -513,7 +513,7 @@ theorem osStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (�
 Per-statement `evalOp` recipes specific to this kernel — the causal `≥` mask and
 the `-1e8` sentinel `where`, which the non-causal template does not have. Reusable
 building blocks for the step lemma of the streaming loop (the remaining
-multi-thousand-line FA-1 grind matching the loop to `contextAttnExactFold`). -/
+multi-thousand-line FA-1 grind matching the loop to `contextAttnExactFoldMG`). -/
 
 /-- Axis-0 `expandDim` over a `nat` register (the `offs_n[None, :]` row broadcast). -/
 @[simp] theorem ctx_evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
@@ -649,8 +649,7 @@ theorem ctx_evalOp_load_scalar_nat (region : Region .nat) (off : Op .nat [])
   rfl
 
 /-- The Python-shape preLoop: the first 19 lowered statements of the context
-surface kernel. Transcribed from `(surface …).toAlgKernel.body.take 19` (checked
-by `rfl` in `ctxPreLoop_take`). -/
+surface kernel. Transcribed from `(surface …).toAlgKernel.body.take 19`. -/
 def ctxPreLoop (Q : RegionName) (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) :
     List Stmt :=
   [ Stmt.assign .nat [] "start_m" (Op.programId 0),
@@ -1620,7 +1619,7 @@ theorem ctxLoopBody_steps (Q K V : RegionName) (sin : BlockState) (SN : Nat)
 /-! ## STEP C — exec-side bridge suite (context analogues of flash's bridges)
 
 Generic ⊥-seeded online-softmax machinery over an abstract per-key
-`(score, value)` function `g : Fin S → ℝ × ℝ`. Both the spec form (`g = ctxKV`,
+`(score, value)` function `g : Fin S → ℝ × ℝ`. Both the spec form (`g = ctxKVM`,
 score `ctxQTile`) and the kernel-loaded form (`g` over the actual loaded `q`
 tile) instantiate it, so the per-block advance bridges are proved once. The
 context kernel keeps **all** keys (the causal mask becomes the `-1e8` sentinel
@@ -1918,7 +1917,7 @@ contribute `exp2(score)·0 = 0` to the numerator (zeroed `v`) yet `exp2(score)` 
 the denominator.
 
 To stay faithful we capture **exactly** that: the per-key data the loop folds uses
-`block_end_loc`-masked tiles. `ctxKVM` is `ctxKV` with `k`/`v` read through the
+`block_end_loc`-masked tiles. `ctxKVM` reads the per-key `k`/`v` through the
 `< bel` load mask (`ctxKTileM`/`ctxVTileM`), so the closed form
 `contextAttnExactFoldM` over `final` keys equals what the kernel's `m_i`/`l_i`/`acc`
 loop produces — phantom-key denominator contribution included. -/
@@ -1945,7 +1944,7 @@ noncomputable def ctxQTileM
     ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
   else 0
 
-/-- **Faithful per-key `(score, value)` the loop folds**: `ctxKV` with the
+/-- **Faithful per-key `(score, value)` the loop folds**: the per-key data with the
 `block_end_loc` load mask applied to `k`/`v` and the row mask applied to `q`.
 Active causal lane (`j ≤ gi+plen`) gets `sm·Σ_e ctxQTileM(i,e)·ctxKTileM(j,e)` (so
 phantom `j ≥ bel` get `sm·0 = 0`); future lane gets the `-1e8` sentinel; value is
@@ -1979,7 +1978,8 @@ and the test-shape stride literals. The `…G` family below abstracts those: the
 channel dim becomes `BLOCK_DMODEL`, the head count `H`, and the per-axis strides
 (`stride_q*`, `stride_k*`, `stride_v*`) free parameters, while `BLOCK_M`/`S`/`bel`
 stay free as before. Instantiating `H = 16`, `BLOCK_DMODEL = 128`, and the test
-strides recovers the pinned defs (see `ctxKVMG_pin`/`contextAttnExactFoldMG_pin`). -/
+strides specializes `ctxKVMG`/`contextAttnExactFoldMG` back to the pinned concrete
+shape. -/
 
 /-- General coordinate-faithful query tile `Q[gi, e]` at head/stride parameters
 (`gi = pids0·BLOCK_M + i`, offset by `cur_batch_in_all_start_index`). -/
@@ -2121,9 +2121,9 @@ blocks (loop counter `c·BLOCK_N`), the `m_i`/`l_i`/`acc` registers carry the
 ⊥-seeded `gStateBot (c·BLOCK_N)` fold over the kernel-loaded per-key data `ctxGG`.
 `kv_group_num = 1` (so `cur_kv_head = cur_head`); `0 < BLOCK_DMODEL` makes the
 score-channel lane `⟨0,…⟩` well-formed. Instantiating `H=16`, `BLOCK_N=BLOCK_DMODEL
-=128` and the test strides recovers `ctxInvariant` (BLOCK_M=128) / `ctxInvariant64`
-(BLOCK_M=64): the per-key data coincides with the pinned `ctxG`/`ctxG64` (see
-`ctxGG_pin` here / `ctxGG_pin64` after the Tesla-shape defs). -/
+=128` and the test strides specializes back to `ctxInvariant` (BLOCK_M=128) /
+`ctxInvariant64` (BLOCK_M=64): the per-key data coincides with the pinned
+`ctxG`/`ctxG64`. -/
 noncomputable def ctxInvariantG
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
     (sm_scale : ℝ)

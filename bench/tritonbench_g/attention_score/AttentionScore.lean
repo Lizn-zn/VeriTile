@@ -46,15 +46,16 @@ sorry-free.  The full `exec`-side connection is now **complete and sorry-free**:
 `score_loop_eval`, built on the one-block step `score_loopBody_eval` →
 post-loop masked store `score_post_eval`) and proves the kernel writes exactly
 `case1OutClosedForm` to `Out` at every active column. The public
-`attention_score_python_case1_output_summary` now states this genuine closed
-form — the former self-referential `producedAttentionScoreCase1OutValue` is
-removed.
+`attention_score_python_case1_output_summary_general` now states this genuine
+closed form — the former self-referential `producedAttentionScoreCase1OutValue`
+is removed.
 
 ## Proof architecture
 
-The four `output_summary` theorems mirror the four Python test cases
+The public summaries mirror the four Python test cases
 (case1: sliding window non-complement; case2: complement; case3: no sliding
-window; case4: smaller sliding-window size). `case1` is a standalone theorem;
+window; case4: smaller sliding-window size). `case1`'s public summary is the
+dimension-general `attention_score_python_case1_output_summary_general`;
 `case2`/`case3`/`case4` are `abbrev` aliases for the corresponding
 `*_output_surface_summary` theorems.
 
@@ -64,7 +65,7 @@ attention_score_python_case1_output_summary_general          ← GENERAL TOP THE
   └─ attention_score_case1_genuine_compute_correct_general        masked Out store = case1OutClosedFormG
        └─ attention_score_case1_exec_eq_closedForm_general       full exec unfold (preLoop+loop+post)
 
-attention_score_python_case1_output_summary                  ← TEST-SHAPE PINNED SUMMARY (case 1, independent chain)
+(case 1 test-shape chain — no public summary root; building blocks below)
   ├─ attention_score_python_case1_surface_toAlgorithm_supported
   └─ attention_score_case1_genuine_compute_correct (→ attention_score_case1_exec_eq_closedForm)
 
@@ -84,8 +85,8 @@ collapses to the identity post-erasure; `@triton.autotune`/`@triton.heuristics`
 and `num_warps`/`num_stages` are not modeled. The case 1 main summary is
 dimension-general (`attention_score_python_case1_output_summary_general`, symbolic
 shape/strides); the Python test shape (`B=2, H=4, N_CTX=NKV_CTX=128, D_MODEL=64,
-BLOCK_M=BLOCK_N=64`, contiguous strides) is the special case (recovered by the
-pinned `attention_score_python_case1_output_summary`). Cases 2/3/4 remain pinned
+BLOCK_M=BLOCK_N=64`, contiguous strides) is recovered as the special case by
+instantiating the general theorem. Cases 2/3/4 remain pinned
 at the test shape, with the case-specific
 `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW` flags and window sizes baked into
 the launch arguments; `sm_scale` is kept universally quantified. The `Out`
@@ -2944,7 +2945,7 @@ theorem attention_score_case1_genuine_compute_correct_general
 /-- **Public general Python case-1 output summary (genuine closed form).** The full
 attention-score surface lowers to the algorithm layer, and the kernel writes the
 genuine closed-form score `case1OutClosedFormG` to every active output column —
-dimension-parameterized version of `attention_score_python_case1_output_summary`. -/
+the dimension-parameterized case-1 output summary (symbolic shape/strides). -/
 theorem attention_score_python_case1_output_summary_general
     (Q K M Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk

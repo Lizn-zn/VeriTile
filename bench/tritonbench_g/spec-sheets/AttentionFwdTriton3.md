@@ -430,8 +430,8 @@ noncomputable def aft3StateBotG {BM ND NC : Nat}
 
 ```
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
-exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
-aft3PostLoop`. -/
+exactly `aft3PreLoopG ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBodyG ::
+aft3PostLoopG`. -/
 ```
 ```lean
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
@@ -872,8 +872,8 @@ noncomputable def aft3StateBotG {BM ND NC : Nat}
 
 ```
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
-exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
-aft3PostLoop`. -/
+exactly `aft3PreLoopG ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBodyG ::
+aft3PostLoopG`. -/
 ```
 ```lean
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
@@ -1272,8 +1272,8 @@ noncomputable def aft3KeysUptoG {BM ND NC : Nat}
 
 ```
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
-exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
-aft3PostLoop`. -/
+exactly `aft3PreLoopG ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBodyG ::
+aft3PostLoopG`. -/
 ```
 ```lean
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
@@ -1725,8 +1725,8 @@ noncomputable def aft3KeysUptoG {BM ND NC : Nat}
 
 ```
 /-- **Body split (case 1).** The lowered algorithm body of the case-1 surface is
-exactly `aft3PreLoop ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBody ::
-aft3PostLoop`. -/
+exactly `aft3PreLoopG ++ Stmt.forRange "start_n" 0 128 64 aft3LoopBodyG ::
+aft3PostLoopG`. -/
 ```
 ```lean
 noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
