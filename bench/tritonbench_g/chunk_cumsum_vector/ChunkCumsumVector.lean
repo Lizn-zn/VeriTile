@@ -1499,4 +1499,31 @@ abbrev chunk_cumsum_vector_python_case3_output_summary
     (SReg Z : RegionName) (s : BlockState) :=
   chunk_cumsum_vector_single_block_python_case3_closed_form SReg Z s
 
+/-- **Dimension-general single-chunk output summary.** Subsumes the per-shape
+`chunk_cumsum_vector_python_case{1,2,3}_output_summary` (which differ only in the
+concrete `s_s_h s_s_t s_s_d T S BT BS` numerals) at fully symbolic dimensions.
+For any single-Python-chunk shape (`T ≤ BT`, so the loop runs once with carry
+`= 0`), the single-block `S → Z` surface realizes the genuine per-column global
+prefix sum `singleBlockCumsumVectorClosed` — a standalone `Finset.sum`, never a
+read-back of the kernel's own output. The active-lane collision-freedom of the
+block address map is the explicit hypothesis. -/
+theorem chunk_cumsum_vector_output_summary_general
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
+      ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
+          singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        singleBlockCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BS idx) :=
+  chunk_cumsum_vector_single_block_surface_closed_form SReg Z s_s_h s_s_t s_s_d
+    T S BT BS s hNoCollision
+
 end VeriTile.Bench.TritonBenchG.ChunkCumsumVector
