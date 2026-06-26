@@ -3586,5 +3586,289 @@ theorem bsaPreLoop_evalG
     refine congrArg some (congrArg Tile.scalar ?_)
     simp only [BlockState.readMemValue, BlockState.readMemTyped, BlockState.setReg_mem]
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **General CSR loop driver.** Mirrors `bsa_csr_loop` at symbolic dims: from the
+loop-entry invariant (`bsaInvariantG … 0`) and per-block gather bridges,
+`forRangeDyn "col_idx_idx" start_l end_l 1 bsaLoopBodyG` runs to a final state at
+counter `final ≥ end_l` satisfying `bsaInvariantG … numKVBlocks`. -/
+theorem bsa_csr_loopG
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
+    (sqb sqh sqm skb skh skn svb svh svn colStrideH : Nat) (scale : ℝ)
+    (qStart numKVBlocks : Nat) (gpos : Fin (BLOCK_N * numKVBlocks) → Nat)
+    (Qg : TileIndex [BLOCK_M, 2 * BLOCK_D] → ℝ)
+    (Kg : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] → ℝ)
+    (Vg Vg2 : TileIndex [BLOCK_N * numKVBlocks, BLOCK_D] → ℝ)
+    (s0 : BlockState) (start_l end_l : Nat)
+    (hbound : end_l - start_l = numKVBlocks) (hsle : start_l ≤ end_l)
+    (sEntry : BlockState)
+    (hStartOp : evalOp (Op.ref .nat [] "start_l") sEntry = some (Tile.scalar start_l))
+    (hStopOp : evalOp (Op.ref .nat [] "end_l") sEntry = some (Tile.scalar end_l))
+    (hInit : bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s0 0 sEntry)
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+        total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+        s0 (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBodyG C BLOCK_M BLOCK_D BLOCK_N num_heads colStrideH skn svn total_seq_len scale)
+          (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+            total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+            s0 (i - start_l + 1) st') :
+    ∃ final sFinal,
+      stepStmt (Stmt.forRangeDyn "col_idx_idx" (Op.ref .nat [] "start_l") (Op.ref .nat [] "end_l")
+        (Op.constNat 1) (bsaLoopBodyG C BLOCK_M BLOCK_D BLOCK_N num_heads colStrideH skn svn total_seq_len scale))
+        sEntry = some sFinal
+      ∧ end_l ≤ final
+      ∧ bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+          total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+          s0 numKVBlocks sFinal := by
+  obtain ⟨final, sFinal, hExec, hfin, hP⟩ :=
+    forRangeDyn_inv (idx := "col_idx_idx")
+      (P := fun i st => bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads
+        num_layout total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2
+        scale s0 (i - start_l) st ∧ start_l ≤ i ∧ i ≤ end_l)
+      (start := start_l) (stop := end_l) (step := 1)
+      hStartOp hStopOp (evalOp_constNat 1 sEntry) (by norm_num)
+      ⟨by rw [Nat.sub_self]; exact hInit, le_refl _, by omega⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hinv, hge, hle⟩ := hPi
+        obtain ⟨st', hbody, hinv'⟩ := hstep i st hge hlt hinv
+        refine ⟨st', hbody, ?_, ?_, ?_⟩
+        · have : i + 1 - start_l = (i - start_l) + 1 := by omega
+          rw [this]; exact hinv'
+        · omega
+        · omega)
+  refine ⟨final, sFinal, hExec, hfin, ?_⟩
+  obtain ⟨hinv, _, hfle⟩ := hP
+  have hfeq : final = end_l := le_antisymm hfle hfin
+  have hsub : final - start_l = numKVBlocks := by rw [hfeq]; exact hbound
+  rw [hsub] at hinv
+  exact hinv
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **General PostLoop execution + accumulator readback.** Mirrors `bsaPostLoop_eval`
+at symbolic dims. The two masked `out` stores write the running `acc`/`acc2`
+(= `bsaOPartial / bsaLPartial` at the full window) at every active lane and
+preserve out-of-bounds lanes. Honest side-conditions: output-offset injectivity
+(`hinj`) and the two stores hitting disjoint offsets (`hdisj`, since
+`out2Offset = outOffset + BLOCK_D`). -/
+theorem bsaPostLoop_evalG
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
+    (sqb sqh sqm skb skh skn svb svh svn sob soh som : Nat) (scale : ℝ)
+    (qStart numKVBlocks : Nat) (gpos : Fin (BLOCK_N * numKVBlocks) → Nat)
+    (Qg : TileIndex [BLOCK_M, 2 * BLOCK_D] → ℝ)
+    (Kg : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] → ℝ)
+    (Vg Vg2 : TileIndex [BLOCK_N * numKVBlocks, BLOCK_D] → ℝ)
+    (s0 : BlockState) (s : BlockState)
+    (hinj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] => outOffset s0 num_heads sob soh som BLOCK_M idx))
+    (hdisj : ∀ a b : TileIndex [BLOCK_M, BLOCK_D],
+      outOffset s0 num_heads sob soh som BLOCK_M a
+        ≠ out2Offset s0 num_heads sob soh som BLOCK_M BLOCK_D b)
+    (hinv : bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+      s0 numKVBlocks s) :
+    ∃ sP, stepStmts (bsaPostLoopG Out BLOCK_M BLOCK_D sob soh som) s = some sP
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          sP.readMem Out (outOffset s0 num_heads sob soh som BLOCK_M idx)
+            = if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+                (bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg scale numKVBlocks idx /
+                  bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (outOffset s0 num_heads sob soh som BLOCK_M idx))
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          sP.readMem Out (out2Offset s0 num_heads sob soh som BLOCK_M BLOCK_D idx)
+            = if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+                (bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg2 scale numKVBlocks idx /
+                  bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (out2Offset s0 num_heads sob soh som BLOCK_M BLOCK_D idx)) := by
+  obtain ⟨hpids, hmem, hundef, hqsl, hsm, hbh, hoh, hob, hhg, hohkv, hom, hon, hod,
+    hlh, hmi, hli, hacc, hacc2, hq, hq2, hkp, hvp⟩ := hinv
+  set accFn : TileIndex [BLOCK_M, BLOCK_D] → ℝ := fun idx =>
+    bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg scale numKVBlocks idx /
+      bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1 with haccFn
+  set acc2Fn : TileIndex [BLOCK_M, BLOCK_D] → ℝ := fun idx =>
+    bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg2 scale numKVBlocks idx /
+      bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1 with hacc2Fn
+  set offFn : TileIndex [BLOCK_M, BLOCK_D] → Nat := fun idx =>
+    outOffset s0 num_heads sob soh som BLOCK_M idx with hoffFn
+  -- out2Offset = offFn + BLOCK_D (definitional)
+  have ho2eq : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      out2Offset s0 num_heads sob soh som BLOCK_M BLOCK_D idx = offFn idx + BLOCK_D := by
+    intro idx; simp only [hoffFn, outOffset, out2Offset]; omega
+  unfold bsaPostLoopG
+  -- stmt 0: off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_b") (Op.constNat sob))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat soh)))
+          (Op.mul NumericDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat som)))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_D] "offs_d"))) s
+        = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => offFn idx⟩ : Tile .nat [BLOCK_M, BLOCK_D]) from by
+      rw [evalOp_add, evalOp_add, evalOp_add, evalOp_mul, evalOp_mul, evalOp_mul]
+      erw [evalOp_expandDim_ref_of_regs .nat [BLOCK_M] ⟨1, by simp⟩ "offs_m" _
+            (Tile.vec (fun i : Fin BLOCK_M => s0.pids 0 * BLOCK_M + i.val)) hom,
+        evalOp_expandDim_ref_of_regs .nat [BLOCK_D] ⟨0, by simp⟩ "offs_d" _
+            (Tile.vec (fun e : Fin BLOCK_D => e.val)) hod]
+      simp only [evalOp_ref, hob, hoh, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [hoffFn, outOffset, offB, offH, mIndex, dIndex, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec, Tile.scalar_data_index, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex]
+      try ring))]
+  set s1 := s.setReg "off_o" .nat [BLOCK_M, BLOCK_D]
+    (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => offFn idx⟩ : Tile .nat [BLOCK_M, BLOCK_D]) with hs1d
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "off_o" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs1offo : s1.regs .nat [BLOCK_M, BLOCK_D] "off_o" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => offFn idx⟩ : Tile .nat [BLOCK_M, BLOCK_D]) := by
+    rw [hs1d, BlockState.setReg_same]
+  -- stmt 1: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_M, BLOCK_D] "off_o")) s1
+        = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, offFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_D]) from by
+      simp only [evalOp, evalOp_ref, hs1offo, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨ir, dd, u⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))]
+  set s2 := s1.setReg "out_ptrs" .ptr [BLOCK_M, BLOCK_D]
+    (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, offFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_D]) with hs2d
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "out_ptrs" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2ptr : s2.regs .ptr [BLOCK_M, BLOCK_D] "out_ptrs" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, offFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_D]) := by
+    rw [hs2d, BlockState.setReg_same]
+  have hs2acc : s2.regs .real [BLOCK_M, BLOCK_D] "acc" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (some (accFn idx) : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_D]) :=
+    e2 (by decide) (e1 (by decide) hacc)
+  have hs2acc2 : s2.regs .real [BLOCK_M, BLOCK_D] "acc2" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (some (acc2Fn idx) : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_D]) :=
+    e2 (by decide) (e1 (by decide) hacc2)
+  have hs2m : s2.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun i : Fin BLOCK_M => s0.pids 0 * BLOCK_M + i.val)) :=
+    e2 (by decide) (e1 (by decide) hom)
+  have hs2qsl : s2.regs .nat [] "q_seq_len" = some (Tile.scalar total_seq_len) :=
+    e2 (by decide) (e1 (by decide) hqsl)
+  have hs2mem : s2.mem = s0.mem := by
+    funext rg o; rw [hs2d, BlockState.setReg_mem, hs1d, BlockState.setReg_mem]; exact hmem ▸ rfl
+  have hexpM : @evalOp .nat [BLOCK_M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) s2
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BLOCK_M => s0.pids 0 * BLOCK_M + i.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLOCK_M] ⟨1, by simp⟩ "offs_m" s2 _ hs2m
+  -- stmt 2: masked store of acc at off_o
+  have hstore1 : stepStmt (Stmt.store .real [BLOCK_M, BLOCK_D] (MemAccess.ptr (Op.ref .ptr [BLOCK_M, BLOCK_D] "out_ptrs"))
+      (Op.ref .real [BLOCK_M, BLOCK_D] "acc")
+      (MaskOpt.mask (Op.remap [BLOCK_M, BLOCK_D] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+          (Op.ref .nat [] "q_seq_len"))))) s2
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_D]).foldl
+          (fun acc idx =>
+            if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+              acc.writeMem Out (offFn idx) (accFn idx)
+            else acc) s2) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hs2acc, hs2ptr, hs2qsl, evalOp, hexpM, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim, Tile.vec,
+      Tile.scalar, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+      TileShape.dropInsertedIndex, BlockState.writeMemTyped_real, FloatDType.real_storeValue,
+      decide_eq_true_eq]
+    simp only [show (WithBot.unbotD 0 (some (accFn (ir, dd, u))) : ℝ) = accFn (ir, dd, u) from rfl]
+  rw [stepStmts.cons_some hstore1]
+  set s3 := (TileShape.allIndices [BLOCK_M, BLOCK_D]).foldl
+      (fun acc idx => if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+        acc.writeMem Out (offFn idx) (accFn idx) else acc) s2 with hs3d
+  have hs3ptr : s3.regs .ptr [BLOCK_M, BLOCK_D] "out_ptrs" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, offFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_D]) := by
+    rw [hs3d, BlockState.foldl_writeMem_prop_masked_regs]; exact hs2ptr
+  have hs3acc2 : s3.regs .real [BLOCK_M, BLOCK_D] "acc2" = some
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_D] => (some (acc2Fn idx) : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_D]) := by
+    rw [hs3d, BlockState.foldl_writeMem_prop_masked_regs]; exact hs2acc2
+  have hs3m : s3.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun i : Fin BLOCK_M => s0.pids 0 * BLOCK_M + i.val)) := by
+    rw [hs3d, BlockState.foldl_writeMem_prop_masked_regs]; exact hs2m
+  have hs3qsl : s3.regs .nat [] "q_seq_len" = some (Tile.scalar total_seq_len) := by
+    rw [hs3d, BlockState.foldl_writeMem_prop_masked_regs]; exact hs2qsl
+  have hexpM3 : @evalOp .nat [BLOCK_M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) s3
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BLOCK_M => s0.pids 0 * BLOCK_M + i.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLOCK_M] ⟨1, by simp⟩ "offs_m" s3 _ hs3m
+  have hstore2inner : stepStmt (Stmt.store .real [BLOCK_M, BLOCK_D]
+      (MemAccess.ptr (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_M, BLOCK_D] "out_ptrs") (Op.constNat BLOCK_D)))
+      (Op.ref .real [BLOCK_M, BLOCK_D] "acc2")
+      (MaskOpt.mask (Op.remap [BLOCK_M, BLOCK_D] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+          (Op.ref .nat [] "q_seq_len"))))) s3
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_D]).foldl
+          (fun acc idx =>
+            if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+              acc.writeMem Out (offFn idx + BLOCK_D) (acc2Fn idx)
+            else acc) s3) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hs3acc2, hs3ptr, hs3qsl, evalOp, hexpM3, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim, Tile.vec,
+      Tile.scalar, Tile.ptrAdd_data, Tile.scalar_data, ComparableDType.lt, Broadcast.leftIndex,
+      Broadcast.rightIndex, TileShape.dropInsertedIndex, BlockState.writeMemTyped_real,
+      FloatDType.real_storeValue, decide_eq_true_eq]
+    simp only [show (WithBot.unbotD 0 (some (acc2Fn (ir, dd, u))) : ℝ) = acc2Fn (ir, dd, u) from rfl]
+  rw [stepStmts.cons_some (stepStmt_ifThen_true (by simp [evalOp])
+    (by rw [stepStmts.cons_some hstore2inner, stepStmts.nil])), stepStmts.nil]
+  set s4 := (TileShape.allIndices [BLOCK_M, BLOCK_D]).foldl
+      (fun acc idx => if s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+        acc.writeMem Out (offFn idx + BLOCK_D) (acc2Fn idx) else acc) s3 with hs4d
+  refine ⟨s4, rfl, ?_, ?_⟩
+  · -- first store readback at outOffset
+    intro idx
+    show s4.readMem Out (offFn idx) = _
+    have hs4read : s4.readMem Out (offFn idx) = s3.readMem Out (offFn idx) := by
+      rw [hs4d]
+      apply bsa_foldl_writeMem_preserves_off
+      intro k _hk _hPk
+      have hh := hdisj idx k
+      simp only [out2Offset, hoffFn, outOffset] at hh ⊢
+      omega
+    rw [hs4read, hs3d]
+    rw [BlockState.scatter_readback_prop_masked_nd s2 offFn accFn
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] => s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len) hinj idx]
+    by_cases hlt : s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      simp only [hoffFn, BlockState.readMem, hs2mem, hmem]
+  · -- second store readback at out2Offset
+    intro idx
+    rw [ho2eq idx, hs4d]
+    have hinj2 : Function.Injective (fun idx : TileIndex [BLOCK_M, BLOCK_D] => offFn idx + BLOCK_D) := by
+      intro a b h; exact hinj (by simpa using Nat.add_right_cancel h)
+    rw [BlockState.scatter_readback_prop_masked_nd s3 (fun idx => offFn idx + BLOCK_D) acc2Fn
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] => s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len) hinj2 idx]
+    by_cases hlt : s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      rw [hs3d]
+      have hpres : ∀ k ∈ TileShape.allIndices [BLOCK_M, BLOCK_D],
+          (s0.pids 0 * BLOCK_M + k.1.val < total_seq_len) → offFn k ≠ offFn idx + BLOCK_D := by
+        intro k _hk _hPk
+        have hh := hdisj k idx
+        simp only [out2Offset, hoffFn, outOffset] at hh ⊢
+        omega
+      rw [bsa_foldl_writeMem_preserves_off offFn accFn
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => s0.pids 0 * BLOCK_M + idx.1.val < total_seq_len)
+        (offFn idx + BLOCK_D) _ s2 hpres]
+      simp only [BlockState.readMem, hs2mem, hmem]
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
