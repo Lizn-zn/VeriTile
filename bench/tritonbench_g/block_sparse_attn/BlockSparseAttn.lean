@@ -4031,5 +4031,151 @@ theorem bsa_streaming_eq_closedFormG
     sqb sqh sqm skb skh skn svb svh svn (s.pids 1 % num_heads % num_layout) num_heads start_l numKVBlocks
     (2 * BLOCK_D) BLOCK_M BLOCK_N BLOCK_D dBlockBase scale i d
 
+set_option maxHeartbeats 4000000 in
+/-- **General (symbolic-dimension) public summary.** At *arbitrary* tile dims and
+strides (`NUM_D_BLOCKS = 2`, `EVEN_M = EVEN_N = true`), the full faithful
+`block_sparse_attention_kernel` surface (prologue + the CSR `forRangeDyn`
+online-softmax loop + the two masked `out` stores) **realizes the genuine causal
+block-sparse softmax closed form** `blockSparseAttnClosedForm` at every active
+output lane, for both D-blocks (`dBlockBase = 0` / `BLOCK_D`).
+
+This is the symbolic-dimension generalization of
+`block_sparse_attn_python_case1_output_closed_form_summary` (which is the instance
+`BLOCK_M=BLOCK_N=BLOCK_D=16`, `num_heads=4`, `num_kv_heads=2`, strides
+`2048/512/32/1024`, `num_layout=1`, row/col CSR strides `3`/`4`,
+`total_seq_len=16`).
+
+Honest side-conditions: clean undef (`hundef`); the CSR row-pointer window
+(`hStartL`/`hEndL`/`hsle`) with a nonempty window (`hN`); positivity of the block
+size (`hBN`); output-offset injectivity (`hinj`) and the two stores hitting
+disjoint offsets (`hdisj`); first-key causal visibility (`hVis0`); and the
+per-block selection / load-alignment advance (`hstep`, the trusted host boundary).
+This is **not** the self-referential executed value: the streaming
+`m_i`/`l_i`/`acc`/`acc2` recurrence is unfolded statement-by-statement
+(`bsa_execG`) and proven to collapse to the closed form
+(`bsa_streaming_eq_closedFormG`). -/
+theorem block_sparse_attn_output_closed_form_summary_general
+    (Out Q K V : RegionName) (R C : Region .nat) (s : BlockState)
+    (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
+    (rowStrideH colStrideH sqb sqh sqm skb skh skn svb svh svn sob soh som : Nat) (scale : ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hBN : 0 < BLOCK_N)
+    (start_l end_l : Nat)
+    (hStartL : s.readMemValue .nat R.cast
+      (s.pids 1 % num_heads % num_layout * rowStrideH + s.pids 0) = start_l)
+    (hEndL : s.readMemValue .nat R.cast
+      (s.pids 1 % num_heads % num_layout * rowStrideH + s.pids 0 + 1) = end_l)
+    (hsle : start_l ≤ end_l) (hN : 0 < end_l - start_l)
+    (hinj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] => outOffset s num_heads sob soh som BLOCK_M idx))
+    (hdisj : ∀ a b : TileIndex [BLOCK_M, BLOCK_D],
+      outOffset s num_heads sob soh som BLOCK_M a
+        ≠ out2Offset s num_heads sob soh som BLOCK_M BLOCK_D b)
+    (hVis0 : ∀ idx : TileIndex [BLOCK_M, BLOCK_D], active s total_seq_len BLOCK_M idx →
+      selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N 0
+        ≤ s.pids 0 * BLOCK_M + idx.1.val)
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+          total_seq_len sqb sqh sqm skb skh skn svb svh svn (s.pids 0 * BLOCK_M) (end_l - start_l)
+          (fun r : Fin (BLOCK_N * (end_l - start_l)) =>
+            selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+          (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+            qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+          (fun jx : TileIndex [BLOCK_N * (end_l - start_l), 2 * BLOCK_D] =>
+            kRowBSA s K num_heads num_kv_heads skb skh skn
+              (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+          (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+            vRowBSA s V num_heads num_kv_heads svb svh svn
+              (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (0 + jx.2.1.val))
+          (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+            vRowBSA s V num_heads num_kv_heads svb svh svn
+              (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (BLOCK_D + jx.2.1.val))
+          scale s (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBodyG C BLOCK_M BLOCK_D BLOCK_N num_heads colStrideH skn svn total_seq_len scale)
+          (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+            total_seq_len sqb sqh sqm skb skh skn svb svh svn (s.pids 0 * BLOCK_M) (end_l - start_l)
+            (fun r : Fin (BLOCK_N * (end_l - start_l)) =>
+              selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+            (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+              qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+            (fun jx : TileIndex [BLOCK_N * (end_l - start_l), 2 * BLOCK_D] =>
+              kRowBSA s K num_heads num_kv_heads skb skh skn
+                (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+            (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+              vRowBSA s V num_heads num_kv_heads svb svh svn
+                (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (0 + jx.2.1.val))
+            (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+              vRowBSA s V num_heads num_kv_heads svb svh svn
+                (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (BLOCK_D + jx.2.1.val))
+            scale s (i - start_l + 1) st') :
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attention_kernel Out Q K V R C
+        rowStrideH colStrideH num_layout scale sqb sqh sqm skb skh skn svb svh svn sob soh som
+        num_heads num_kv_heads total_seq_len BLOCK_M BLOCK_N BLOCK_D 2 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => active s total_seq_len BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, outOffset s num_heads sob soh som BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        blockSparseAttnClosedForm s Q K V C num_heads num_kv_heads sqb sqh sqm skb skh skn svb svh svn
+          (s.pids 1 % num_heads % num_layout) num_heads start_l (end_l - start_l) (2 * BLOCK_D) BLOCK_M BLOCK_N
+          0 scale idx.1 idx.2.1.val)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attention_kernel Out Q K V R C
+        rowStrideH colStrideH num_layout scale sqb sqh sqm skb skh skn svb svh svn sob soh som
+        num_heads num_kv_heads total_seq_len BLOCK_M BLOCK_N BLOCK_D 2 Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => active s total_seq_len BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, out2Offset s num_heads sob soh som BLOCK_M BLOCK_D idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        blockSparseAttnClosedForm s Q K V C num_heads num_kv_heads sqb sqh sqm skb skh skn svb svh svn
+          (s.pids 1 % num_heads % num_layout) num_heads start_l (end_l - start_l) (2 * BLOCK_D) BLOCK_M BLOCK_N
+          BLOCK_D scale idx.1 idx.2.1.val)) := by
+  obtain ⟨sF, hstepK, hOut, hOut2⟩ :=
+    bsa_execG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len
+      rowStrideH colStrideH sqb sqh sqm skb skh skn svb svh svn sob soh som scale
+      (s.pids 0 * BLOCK_M) (end_l - start_l)
+      (fun r : Fin (BLOCK_N * (end_l - start_l)) =>
+        selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+      (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+        qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+      (fun jx : TileIndex [BLOCK_N * (end_l - start_l), 2 * BLOCK_D] =>
+        kRowBSA s K num_heads num_kv_heads skb skh skn
+          (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+      (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+        vRowBSA s V num_heads num_kv_heads svb svh svn
+          (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (0 + jx.2.1.val))
+      (fun jx : TileIndex [BLOCK_N * (end_l - start_l), BLOCK_D] =>
+        vRowBSA s V num_heads num_kv_heads svb svh svn
+          (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (BLOCK_D + jx.2.1.val))
+      s hundef start_l end_l hStartL hEndL rfl hsle hinj hdisj hstep
+  constructor
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    rw [hOut idx, if_pos (show s.pids 0 * BLOCK_M + idx.1.val < total_seq_len from hActive)]
+    exact bsa_streaming_eq_closedFormG s Q K V C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      sqb sqh sqm skb skh skn svb svh svn scale (end_l - start_l) hBN hN start_l 0 idx (hVis0 idx hActive)
+  · rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
+    obtain rfl : sF = s' := Option.some.inj hExec
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    rw [hOut2 idx, if_pos (show s.pids 0 * BLOCK_M + idx.1.val < total_seq_len from hActive)]
+    exact bsa_streaming_eq_closedFormG s Q K V C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      sqb sqh sqm skb skh skn svb svh svn scale (end_l - start_l) hBN hN start_l BLOCK_D idx (hVis0 idx hActive)
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
