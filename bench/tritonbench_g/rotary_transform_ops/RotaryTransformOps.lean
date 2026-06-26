@@ -1174,4 +1174,107 @@ theorem rotary_transform_ops_python_output_summary
       0 128 16 128 96 24 8 1 96 24 8 1 8 16 s hOutInj hOut1Inj
       (by decide) (by decide)).2
 
+/-- **Dimension-general public output summary for `rotary_transform_ops.py`**
+(genuine, not self-referential).
+
+This is the symbolic-dimension companion of
+`rotary_transform_ops_python_output_summary`: every sequence length, rotary
+dimension, block size, and stride is a `Nat` parameter rather than a pinned
+Python literal, and the per-lane output-offset injectivity plus the
+`stride_out_headdim ≠ 0` / `BLOCK_HALF ≤ rotary_dim_half` disjointness
+side-conditions are taken as hypotheses.
+
+For ANY shape, the full `rotary_kernel_surface` (with all four prologue
+branches and the conjugate/interleaved flags) lowers to the algorithm layer,
+and on the non-interleaved rotation body run on a `[BLOCK_M, BLOCK_HALF]` row
+tile BOTH output halves are written so that every active lane of the
+first-half (`o0`) store equals the genuine closed form `x0·cos − x1·sin`
+(`rotaryO0Spec`) and every active lane of the second-half (`o1`) store equals
+`x0·sin + x1·cos` (`rotaryO1Spec`) — the actual rotary embedding read from the
+precomputed `COS`/`SIN` cache, NOT the kernel's own re-executed value.
+
+The host launch remains the trusted boundary. -/
+theorem rotary_transform_ops_output_summary_general
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat)
+    (SEQLEN_OFFSETS_SCALAR seqlen rotary_dim seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_K BLOCK_M : Nat)
+    (IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE : Bool)
+    (body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
+      body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
+      body_stride_out_headdim body_stride_x_batch body_stride_x_seqlen
+      body_stride_x_nheads body_stride_x_headdim body_BLOCK_M BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        outOffset s body_stride_out_batch body_stride_out_seqlen
+          body_stride_out_nheads body_stride_out_headdim body_BLOCK_M i))
+    (hOut1Inj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        out1Offset s body_stride_out_batch body_stride_out_seqlen
+          body_stride_out_nheads body_stride_out_headdim body_rotary_dim_half
+          body_BLOCK_M i))
+    (hStrideHd : body_stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ body_rotary_dim_half) :
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      SEQLEN_OFFSETS_SCALAR seqlen rotary_dim seqlen_ro stride_out_batch
+      stride_out_seqlen stride_out_nheads stride_out_headdim stride_x_batch
+      stride_x_seqlen stride_x_nheads stride_x_headdim BLOCK_K BLOCK_M
+      IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_kernel_o0o1_row OUT X COS SIN
+        body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
+        body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
+        body_stride_out_headdim body_stride_x_batch body_stride_x_seqlen
+        body_stride_x_nheads body_stride_x_headdim body_BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF =>
+          active s body_seqlen body_rotary_dim_half body_BLOCK_M i)
+        (fun i => (OUT,
+          outOffset s body_stride_out_batch body_stride_out_seqlen
+            body_stride_out_nheads body_stride_out_headdim body_BLOCK_M i)))
+      (expected := fun i =>
+        rotaryO0Spec s X COS SIN body_SEQLEN_OFFSETS body_seqlen_ro
+          body_stride_x_batch body_stride_x_seqlen body_stride_x_nheads
+          body_stride_x_headdim body_rotary_dim_half body_BLOCK_M i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_kernel_o0o1_row OUT X COS SIN
+        body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
+        body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
+        body_stride_out_headdim body_stride_x_batch body_stride_x_seqlen
+        body_stride_x_nheads body_stride_x_headdim body_BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF =>
+          active s body_seqlen body_rotary_dim_half body_BLOCK_M i)
+        (fun i => (OUT,
+          out1Offset s body_stride_out_batch body_stride_out_seqlen
+            body_stride_out_nheads body_stride_out_headdim body_rotary_dim_half
+            body_BLOCK_M i)))
+      (expected := fun i =>
+        rotaryO1Spec s X COS SIN body_SEQLEN_OFFSETS body_seqlen_ro
+          body_stride_x_batch body_stride_x_seqlen body_stride_x_nheads
+          body_stride_x_headdim body_rotary_dim_half body_BLOCK_M i)) := by
+  refine ⟨rotary_kernel_surface_toAlgorithm_supported OUT X COS SIN CU_SEQLENS
+      SEQLEN_OFFSETS SEQLEN_OFFSETS_SCALAR seqlen rotary_dim seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_K BLOCK_M IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE,
+    ?_, ?_⟩
+  · exact (rotary_kernel_o0o1_row_all_outputs_compute_correct OUT X COS SIN
+      body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
+      body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
+      body_stride_out_headdim body_stride_x_batch body_stride_x_seqlen
+      body_stride_x_nheads body_stride_x_headdim body_BLOCK_M BLOCK_HALF s
+      hOutInj hOut1Inj hStrideHd hHalfBound).1
+  · exact (rotary_kernel_o0o1_row_all_outputs_compute_correct OUT X COS SIN
+      body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
+      body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
+      body_stride_out_headdim body_stride_x_batch body_stride_x_seqlen
+      body_stride_x_nheads body_stride_x_headdim body_BLOCK_M BLOCK_HALF s
+      hOutInj hOut1Inj hStrideHd hHalfBound).2
+
 end VeriTile.Bench.TritonBenchG.RotaryTransformOps

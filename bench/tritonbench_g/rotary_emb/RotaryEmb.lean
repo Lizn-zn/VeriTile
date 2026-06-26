@@ -1227,4 +1227,87 @@ instance activeFullQDecidable (s : BlockState) (max_total_len HEAD_Q
   unfold activeFullQ
   infer_instance
 
+/-- **Dimension-general public Python summary for `rotary_emb_fwd`.**
+The pinned `rotary_emb_python_case{1,2,3,4}_output_summary` theorems are
+concrete-shape instantiations of this theorem: for arbitrary symbolic strides,
+sequence length, head counts, and block sizes, the full `_rotary_kernel` surface
+lowers to the algorithm layer and each of the four Python-observable stores
+(Q even/odd, K even/odd) reads back, on every active lane, to the genuine
+interleaved rotary closed form (`rotary{Q0,Q1,K0,K1}Spec`). The general
+block-level building blocks (`rotary_emb_q0/q1/k0/k1_block_compute_correct`)
+consume within-family offset injectivity, taken here as hypotheses. -/
+theorem rotary_emb_output_summary_general
+    (Q K Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+      HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hQEven : Function.Injective
+      (fun i : Fin BLOCK_HALF => qOffset s stride_qbs stride_qh stride_qd (dimEven i)))
+    (hQOdd : Function.Injective
+      (fun i : Fin BLOCK_HALF => qOffset s stride_qbs stride_qh stride_qd (dimOdd i)))
+    (hKEven : Function.Injective
+      (fun i : Fin BLOCK_HALF => kOffset s stride_kbs stride_kh stride_kd (dimEven i)))
+    (hKOdd : Function.Injective
+      (fun i : Fin BLOCK_HALF => kOffset s stride_kbs stride_kh stride_kd (dimOdd i))) :
+    (∃ alg, (rotary_kernel_surface Q K Cos Sin stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_emb_q0_block Q Cos Sin stride_qbs stride_qh stride_qd
+        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => active s max_total_len HEAD_Q)
+        (fun i => (Q, qOffset s stride_qbs stride_qh stride_qd (dimEven i))))
+      (expected := fun i =>
+        rotaryQ0Spec s Q Cos Sin stride_qbs stride_qh stride_qd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_emb_q1_block Q Cos Sin stride_qbs stride_qh stride_qd
+        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => active s max_total_len HEAD_Q)
+        (fun i => (Q, qOffset s stride_qbs stride_qh stride_qd (dimOdd i))))
+      (expected := fun i =>
+        rotaryQ1Spec s Q Cos Sin stride_qbs stride_qh stride_qd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_emb_k0_block K Cos Sin stride_kbs stride_kh stride_kd
+        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => activeK s max_total_len HEAD_K)
+        (fun i => (K, kOffset s stride_kbs stride_kh stride_kd (dimEven i))))
+      (expected := fun i =>
+        rotaryK0Spec s K Cos Sin stride_kbs stride_kh stride_kd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_emb_k1_block K Cos Sin stride_kbs stride_kh stride_kd
+        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => activeK s max_total_len HEAD_K)
+        (fun i => (K, kOffset s stride_kbs stride_kh stride_kd (dimOdd i))))
+      (expected := fun i =>
+        rotaryK1Spec s K Cos Sin stride_kbs stride_kh stride_kd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i)) :=
+  ⟨rotary_kernel_surface_toAlgorithm_supported Q K Cos Sin stride_qbs stride_qh
+      stride_qd stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL,
+   rotary_emb_q0_block_compute_correct Q Cos Sin stride_qbs stride_qh stride_qd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q
+      BLOCK_HALF s hQEven,
+   rotary_emb_q1_block_compute_correct Q Cos Sin stride_qbs stride_qh stride_qd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q
+      BLOCK_HALF s hQOdd,
+   rotary_emb_k0_block_compute_correct K Cos Sin stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K
+      BLOCK_HALF s hKEven,
+   rotary_emb_k1_block_compute_correct K Cos Sin stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K
+      BLOCK_HALF s hKOdd⟩
+
 end VeriTile.Bench.TritonBenchG.RotaryEmb

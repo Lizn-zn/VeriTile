@@ -1482,4 +1482,36 @@ theorem reversed_cumsum_python_case4_output_summary
     exact singleBlockStoreValue_eq_reversedCumsumClosed s SReg
       1024 32 1 32 32 16 32 idx
 
+/-- **Dimension-general single-chunk output summary.** Subsumes the per-shape
+`reversed_cumsum_python_case{1,2,3}_output_summary` (which differ only in the
+concrete `s_s_h s_s_t s_s_d T S BT BS` numerals) at fully symbolic dimensions.
+For any single-chunk shape (`T ≤ BT`, so the reverse loop runs once with carry
+`b_z = 0`), the full reverse-traversal surface lowers to the algorithm layer, and
+the faithful single-chunk surface writes into every active lane `(i, j)` the
+genuine reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]` (`reversedCumsumClosed`,
+a standalone `Finset.sum`, not a read-back of the kernel output). The active-lane
+collision-freedom of the block address map is the explicit hypothesis. -/
+theorem reversed_cumsum_output_summary_general
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
+      ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
+          singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
+    (∃ alg, (reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS).toAlgorithm? =
+      Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_single_block_surface SReg Z s_s_h s_s_t s_s_d
+        T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        reversedCumsumClosed s SReg s_s_h s_s_t s_s_d T S BT BS idx)) := by
+  refine ⟨reversed_cumsum_surface_toAlgorithm_supported SReg Z
+    s_s_h s_s_t s_s_d T S BT BS, ?_⟩
+  exact reversed_cumsum_single_block_surface_active_closed_form SReg Z
+    s_s_h s_s_t s_s_d T S BT BS s hNoCollision
+
 end VeriTile.Bench.TritonBenchG.ReversedCumsum

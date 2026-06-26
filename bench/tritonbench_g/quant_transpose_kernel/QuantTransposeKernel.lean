@@ -431,4 +431,44 @@ theorem quantize_global_transpose_python_case4_blocked_output_summary
       A AbsmaxInv B 512 1 256 1 256 512 128 128 8
   · exact quantize_global_transpose_python_case4_compute_correct A AbsmaxInv B s
 
+/-- **Dimension-general blocked output summary.** For arbitrary strides, sizes
+`M`/`N`, block sizes `BLOCK_M`/`BLOCK_N`, group factor `GROUP_M`, and real scale
+`scale127` (and any program coordinates in `s`), the faithful full surface is
+recorded as **blocked** at algorithm erasure (it stores CUDA `llrint`/int8
+results, not the real-valued pre-rounding expression), while the checked
+scaled-store slice realizes the genuine pre-rounding quantity
+`scale127 * (a * absmax_inv)` (`quantTransposeScaledSpec`) at every in-range tile
+lane, leaving out-of-range lanes unchanged. The pinned
+`quantize_global_transpose_python_case{1..4}_blocked_output_summary` theorems are
+concrete instantiations of this. Output-address injectivity for the transposed
+writeback is taken as a hypothesis (`hOutInj`); the concrete cases discharge it
+via their per-shape `*_offset_injective` lemmas. The `llrint` rounding / int8
+cast remain the honest, unmodeled blocker. -/
+theorem quantize_global_transpose_blocked_output_summary_general
+    (A AbsmaxInv B : RegionName)
+    (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat)
+    (scale127 : ℝ)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        bOffset s stride_bm stride_bn BLOCK_M BLOCK_N idx)) :
+    (∃ err, (quantize_global_transpose_real_surface A AbsmaxInv B
+      stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N
+      GROUP_M).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_transpose_scaled_store_slice A AbsmaxInv B
+        stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N scale127)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s M N BLOCK_M BLOCK_N)
+        (fun idx => (B, bOffset s stride_bm stride_bn BLOCK_M BLOCK_N idx)))
+      (expected := fun idx =>
+        quantTransposeScaledSpec s A AbsmaxInv stride_am stride_an
+          BLOCK_M BLOCK_N scale127 idx) :=
+  ⟨quantize_global_transpose_real_surface_toAlgorithm_blocked A AbsmaxInv B
+      stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M,
+   quantize_global_transpose_scaled_store_slice_compute_correct A AbsmaxInv B
+      stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N scale127 s
+      hOutInj⟩
+
 end VeriTile.Bench.TritonBenchG.QuantTransposeKernel

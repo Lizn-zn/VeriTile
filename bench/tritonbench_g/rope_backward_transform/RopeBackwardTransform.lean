@@ -1641,4 +1641,70 @@ theorem rope_backward_python_backward_output_summary
   · exact fun idx h => rope_backward_k1_backward_correct Q K COS SIN
       128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef idx h
 
+/-- **Dimension-general Python-path backward output summary.** For arbitrary
+strides, `sl`/`bs`/`n_qh`/`n_kh`/`hd`/`pad_n_qh`/`pad_n_kh`/`pad_hd`/`BLOCK_SIZE`
+(and any program ids in `s`), the full backward surface lowers and every active
+lane of each of the four `BACKWARD_PASS = true` Python-observable stores (Q/K
+first and second halves) reads back to the genuine rotary-backward closed form,
+NOT the kernel's own executed value, against the real `triton_rope_surface`
+kernel — under the honest `undef`-zero and `q_ptr ≠ k_ptr` side conditions.
+The pinned `rope_backward_python_backward_output_summary` is the concrete
+instantiation of this at the Python test shape. -/
+theorem rope_backward_python_backward_output_summary_general
+    (Q K COS SIN : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
+    (∃ alg, (triton_rope_surface Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∀ idx : TileIndex [pad_n_qh, pad_hd/2],
+      activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem Q (qFullFirstOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
+        | none => (0.0 : ℝ)) =
+        ropeBackwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_qh, pad_hd/2],
+      activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem Q (qFullSecondOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
+        | none => (0.0 : ℝ)) =
+        ropeBackwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_kh, pad_hd/2],
+      activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem K (kFullFirstOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
+        | none => (0.0 : ℝ)) =
+        ropeBackwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_kh, pad_hd/2],
+      activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem K (kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
+        | none => (0.0 : ℝ)) =
+        ropeBackwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx) := by
+  refine ⟨triton_rope_surface_toAlgorithm_supported Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE Bool.true, ?_, ?_, ?_, ?_⟩
+  · exact fun idx h => rope_backward_q0_backward_correct Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE s hundef hqk idx h
+  · exact fun idx h => rope_backward_q1_backward_correct Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE s hundef hqk idx h
+  · exact fun idx h => rope_backward_k0_backward_correct Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE s hundef idx h
+  · exact fun idx h => rope_backward_k1_backward_correct Q K COS SIN
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE s hundef idx h
+
 end VeriTile.Bench.TritonBenchG.RopeBackwardTransform

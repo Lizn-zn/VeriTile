@@ -2,51 +2,66 @@
 
 **Python source:** `bench/tritonbench_g/rope_backward_transform/rope_backward_transform.py`
 
-## Public theorem: `rope_backward_python_backward_output_summary`
+## Public theorem: `rope_backward_python_backward_output_summary_general`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Public Python-path backward summary for `test_rope_backward` (genuine,
-full-tile). The checked Python test fixes `batch_size = 2`, `seq_len = 4`,
-`n_q_head = n_kv_head = 8`, `head_dim = 16`; after transpose+contiguous both
-Q/K rows have stride `8 * 16 = 128` and cos/sin rows stride `8`. Every active
+/-- **Dimension-general Python-path backward output summary.** For arbitrary
+strides, `sl`/`bs`/`n_qh`/`n_kh`/`hd`/`pad_n_qh`/`pad_n_kh`/`pad_hd`/`BLOCK_SIZE`
+(and any program ids in `s`), the full backward surface lowers and every active
 lane of each of the four `BACKWARD_PASS = true` Python-observable stores (Q/K
 first and second halves) reads back to the genuine rotary-backward closed form,
 NOT the kernel's own executed value, against the real `triton_rope_surface`
-kernel (no head-slice gap). The host launch / `next_power_of_2` padding and
-`q_ptr ≠ k_ptr` (distinct Q/K buffers) remain the trusted boundary. -/
+kernel — under the honest `undef`-zero and `q_ptr ≠ k_ptr` side conditions.
+The pinned `rope_backward_python_backward_output_summary` is the concrete
+instantiation of this at the Python test shape. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-theorem rope_backward_python_backward_output_summary
+theorem rope_backward_python_backward_output_summary_general
     (Q K COS SIN : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
     (∃ alg, (triton_rope_surface Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true).toAlgorithm? =
+      q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE Bool.true).toAlgorithm? =
         Except.ok alg) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem Q (qFullFirstOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
+    (∀ idx : TileIndex [pad_n_qh, pad_hd/2],
+      activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem Q (qFullFirstOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
         | none => (0.0 : ℝ)) =
-        ropeBackwardKernelQ0Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem Q (qFullSecondOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
+        ropeBackwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_qh, pad_hd/2],
+      activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem Q (qFullSecondOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
         | none => (0.0 : ℝ)) =
-        ropeBackwardKernelQ1Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem K (kFullFirstOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
+        ropeBackwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_kh, pad_hd/2],
+      activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem K (kFullFirstOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
         | none => (0.0 : ℝ)) =
-        ropeBackwardKernelK0Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem K (kFullSecondOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
+        ropeBackwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (∀ idx : TileIndex [pad_n_kh, pad_hd/2],
+      activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx →
+      (match exec (triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+          pad_hd BLOCK_SIZE Bool.true) s with
+        | some s' => s'.readMem K (kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
         | none => (0.0 : ℝ)) =
-        ropeBackwardKernelK1Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx)
+        ropeBackwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)
 ```
 
 **Assumptions / layout contracts:**
@@ -300,3 +315,4 @@ def sinFullFirstOffset
 - `rope_backward_q1_head_compute_correct`
 - `rope_backward_k0_head_compute_correct`
 - `rope_backward_k1_head_compute_correct`
+- `rope_backward_python_backward_output_summary`

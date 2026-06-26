@@ -408,4 +408,34 @@ theorem quantize_global_python_n4096_bs2048_blocked_output_summary
   · exact quantize_global_python_n4096_bs2048_compute_correct
       x_ptr absmax_inv_ptr output_ptr s
 
+/-- **Dimension-general blocked output summary.** For arbitrary `n_elements`,
+`BLOCK_SIZE`, and real scale `scale127` (and any program id in `s`), the faithful
+full surface is recorded as **blocked** at algorithm projection (it stores CUDA
+`llrint`/int8 results, not the real-valued pre-rounding expression), while the
+checked store slice realizes the genuine pre-rounding quantity
+`scale127 * (x * absmax_inv)` (`quantizeGlobalScaledSpec`) at every in-range lane,
+leaving out-of-range lanes unchanged. The pinned
+`quantize_global_python_n<N>_bs<B>_blocked_output_summary` theorems are concrete
+instantiations of this (with `scale127 = 127.0`). No injectivity hypothesis is
+needed: the 1-D block offset map is injective by construction. The `llrint`
+rounding / int8 cast remain the honest, unmodeled blocker. -/
+theorem quantize_global_blocked_output_summary_general
+    (x_ptr absmax_inv_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) (scale127 : ℝ) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      n_elements BLOCK_SIZE).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        n_elements BLOCK_SIZE scale127)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => offset s BLOCK_SIZE i < n_elements)
+          (fun i => (output_ptr, offset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr BLOCK_SIZE scale127 i) :=
+  ⟨quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      n_elements BLOCK_SIZE,
+   quantize_global_scaled_store_slice_compute_correct x_ptr absmax_inv_ptr output_ptr
+      n_elements BLOCK_SIZE scale127 s⟩
+
 end VeriTile.Bench.TritonBenchG.QuantizeGlobal
