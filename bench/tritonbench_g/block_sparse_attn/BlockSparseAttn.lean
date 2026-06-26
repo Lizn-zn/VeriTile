@@ -3870,5 +3870,166 @@ theorem bsaPostLoop_evalG
         (offFn idx + BLOCK_D) _ s2 hpres]
       simp only [BlockState.readMem, hs2mem, hmem]
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+/-- **General full-kernel execution.** Mirrors `bsa_exec` at symbolic dims. From a
+clean input state, the whole lowered `block_sparse_attention_kernel` body (at
+arbitrary tile dims/strides, `NUM_D_BLOCKS = 2`, `EVEN_M = EVEN_N = true`) runs to
+a final state whose two `out` stores hold the streaming online-softmax
+accumulators at active lanes and preserve inactive lanes. Composes
+`bsaPreLoop_evalG` → `bsa_csr_loopG` → `bsaPostLoop_evalG` over `bsa_body_splitG`.
+The CSR schedule (`start_l`/`end_l`, per-block `bsaLoopBodyG` advance) is the
+trusted host boundary, supplied as `hstep`. -/
+theorem bsa_execG
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
+    (rowStrideH colStrideH sqb sqh sqm skb skh skn svb svh svn sob soh som : Nat) (scale : ℝ)
+    (qStart numKVBlocks : Nat) (gpos : Fin (BLOCK_N * numKVBlocks) → Nat)
+    (Qg : TileIndex [BLOCK_M, 2 * BLOCK_D] → ℝ)
+    (Kg : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] → ℝ)
+    (Vg Vg2 : TileIndex [BLOCK_N * numKVBlocks, BLOCK_D] → ℝ)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (start_l end_l : Nat)
+    (hStartL : s.readMemValue .nat R.cast
+      (s.pids 1 % num_heads % num_layout * rowStrideH + s.pids 0) = start_l)
+    (hEndL : s.readMemValue .nat R.cast
+      (s.pids 1 % num_heads % num_layout * rowStrideH + s.pids 0 + 1) = end_l)
+    (hbound : end_l - start_l = numKVBlocks) (hsle : start_l ≤ end_l)
+    (hinj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] => outOffset s num_heads sob soh som BLOCK_M idx))
+    (hdisj : ∀ a b : TileIndex [BLOCK_M, BLOCK_D],
+      outOffset s num_heads sob soh som BLOCK_M a
+        ≠ out2Offset s num_heads sob soh som BLOCK_M BLOCK_D b)
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+        total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+        s (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBodyG C BLOCK_M BLOCK_D BLOCK_N num_heads colStrideH skn svn total_seq_len scale)
+          (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariantG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+            total_seq_len sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale
+            s (i - start_l + 1) st') :
+    ∃ sF, stepStmts ((block_sparse_attention_kernel Out Q K V R C
+        rowStrideH colStrideH num_layout scale sqb sqh sqm skb skh skn svb svh svn sob soh som
+        num_heads num_kv_heads total_seq_len BLOCK_M BLOCK_N BLOCK_D 2 Bool.true Bool.true).toAlgKernel.body) s = some sF
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          sF.readMem Out (outOffset s num_heads sob soh som BLOCK_M idx)
+            = if s.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+                (bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg scale numKVBlocks idx /
+                  bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (outOffset s num_heads sob soh som BLOCK_M idx))
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          sF.readMem Out (out2Offset s num_heads sob soh som BLOCK_M BLOCK_D idx)
+            = if s.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+                (bsaOPartial BLOCK_N qStart numKVBlocks gpos Qg Kg Vg2 scale numKVBlocks idx /
+                  bsaLPartial BLOCK_N qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (out2Offset s num_heads sob soh som BLOCK_M BLOCK_D idx)) := by
+  rw [bsa_body_splitG]
+  obtain ⟨s0, hpre, hinv0, hsl, hel⟩ :=
+    bsaPreLoop_evalG s Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      total_seq_len rowStrideH sqb sqh sqm skb skh skn svb svh svn qStart numKVBlocks gpos Qg Kg Vg Vg2 scale hundef
+  rw [stepStmts.append_some hpre]
+  have hStartOp : evalOp (Op.ref .nat [] "start_l") s0 = some (Tile.scalar start_l) := by
+    rw [evalOp_ref, hsl, hStartL]
+  have hStopOp : evalOp (Op.ref .nat [] "end_l") s0 = some (Tile.scalar end_l) := by
+    rw [evalOp_ref, hel, hEndL]
+  obtain ⟨final, sL, hloop, _hfin, hinvL⟩ :=
+    bsa_csr_loopG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      total_seq_len sqb sqh sqm skb skh skn svb svh svn colStrideH scale qStart numKVBlocks gpos Qg Kg Vg Vg2
+      s start_l end_l hbound hsle s0 hStartOp hStopOp hinv0 hstep
+  rw [stepStmts.cons_some hloop]
+  obtain ⟨sP, hpost, hOut, hOut2⟩ :=
+    bsaPostLoop_evalG Out Q K V R C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
+      total_seq_len sqb sqh sqm skb skh skn svb svh svn sob soh som scale qStart numKVBlocks gpos Qg Kg Vg Vg2
+      s sL hinj hdisj hinvL
+  rw [hpost]
+  obtain ⟨_, hmemL, _⟩ := hinvL
+  refine ⟨sP, rfl, ?_, ?_⟩
+  · intro idx
+    rw [hOut idx]
+    by_cases hlt : s.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      simp only [BlockState.readMem, hmemL]
+  · intro idx
+    rw [hOut2 idx]
+    by_cases hlt : s.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      simp only [BlockState.readMem, hmemL]
+
+set_option maxHeartbeats 4000000 in
+/-- **General streaming output = genuine closed form.** Mirrors
+`bsa_streaming_eq_closedForm` at symbolic dims: with `Bk = BLOCK_N` keys per CSR
+block, contraction `HEAD_DIM = 2·BLOCK_D`, value dim `Dv = BLOCK_D`,
+`M = BLOCK_M`, the streaming `bsaOPartial / bsaLPartial` ratio at the full window
+equals `blockSparseAttnClosedForm`. Chains `bsaStreaming_eq_bsaAttn`,
+`bsaAttn_reindex` (`BLOCK_N·numKVBlocks = numKVBlocks·BLOCK_N`), and
+`bsaAttn_eq_blockSparseAttnClosedForm`. `hVis0` (first selected key causally
+visible) ensures a nonzero normalizer. -/
+theorem bsa_streaming_eq_closedFormG
+    (s : BlockState) (Q K V : RegionName) (C : Region .nat)
+    (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout : Nat)
+    (sqb sqh sqm skb skh skn svb svh svn : Nat) (scale : ℝ)
+    (numKVBlocks : Nat) (hBN : 0 < BLOCK_N) (hN : 0 < numKVBlocks) (start_l dBlockBase : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_D])
+    (hVis0 : selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N 0
+      ≤ s.pids 0 * BLOCK_M + idx.1.val) :
+    BSAMathCausal.bsaOPartial BLOCK_N (s.pids 0 * BLOCK_M) numKVBlocks
+        (fun r : Fin (BLOCK_N * numKVBlocks) =>
+          selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+        (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+          qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+        (fun jx : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] =>
+          kRowBSA s K num_heads num_kv_heads skb skh skn
+            (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+        (fun jx : TileIndex [BLOCK_N * numKVBlocks, BLOCK_D] =>
+          vRowBSA s V num_heads num_kv_heads svb svh svn
+            (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val)
+            (dBlockBase + jx.2.1.val))
+        scale numKVBlocks idx /
+      BSAMathCausal.bsaLPartial BLOCK_N (s.pids 0 * BLOCK_M) numKVBlocks
+        (fun r : Fin (BLOCK_N * numKVBlocks) =>
+          selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+        (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+          qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+        (fun jx : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] =>
+          kRowBSA s K num_heads num_kv_heads skb skh skn
+            (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+        scale numKVBlocks idx.1
+      = blockSparseAttnClosedForm s Q K V C num_heads num_kv_heads sqb sqh sqm skb skh skn svb svh svn
+          (s.pids 1 % num_heads % num_layout) num_heads start_l numKVBlocks (2 * BLOCK_D) BLOCK_M BLOCK_N
+          dBlockBase scale idx.1 idx.2.1.val := by
+  have h1 := BSAMathCausal.bsaStreaming_eq_bsaAttn (M := BLOCK_M) (D := 2 * BLOCK_D) (Dv := BLOCK_D)
+    (Bk := BLOCK_N) hBN (s.pids 0 * BLOCK_M) numKVBlocks hN
+    (fun r : Fin (BLOCK_N * numKVBlocks) =>
+      selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N r.val)
+    (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+      qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val)
+    (fun jx : TileIndex [BLOCK_N * numKVBlocks, 2 * BLOCK_D] =>
+      kRowBSA s K num_heads num_kv_heads skb skh skn
+        (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) jx.2.1.val)
+    (fun jx : TileIndex [BLOCK_N * numKVBlocks, BLOCK_D] =>
+      vRowBSA s V num_heads num_kv_heads svb svh svn
+        (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val)
+        (dBlockBase + jx.2.1.val))
+    scale idx hVis0
+  rw [h1]
+  rw [BSAMathCausal.bsaAttn_reindex (M := BLOCK_M) (D := 2 * BLOCK_D) (Dv := BLOCK_D)
+      (Bk₁ := BLOCK_N) (N₁ := numKVBlocks) (Bk₂ := numKVBlocks) (N₂ := BLOCK_N) (Nat.mul_comm BLOCK_N numKVBlocks)
+      (s.pids 0 * BLOCK_M)
+      (fun n => selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N n)
+      (fun n e => kRowBSA s K num_heads num_kv_heads skb skh skn
+        (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N n) e.val)
+      (fun n d => vRowBSA s V num_heads num_kv_heads svb svh svn
+        (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N n) (dBlockBase + d.val))
+      (fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
+        qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val) scale idx]
+  obtain ⟨i, d, u⟩ := idx
+  exact BSAMathCausal.bsaAttn_eq_blockSparseAttnClosedForm s Q K V C num_heads num_kv_heads
+    sqb sqh sqm skb skh skn svb svh svn (s.pids 1 % num_heads % num_layout) num_heads start_l numKVBlocks
+    (2 * BLOCK_D) BLOCK_M BLOCK_N BLOCK_D dBlockBase scale i d
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
