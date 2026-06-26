@@ -358,4 +358,42 @@ theorem quantize_rowwise_python_case3_blocked_output_summary
   · exact quantize_rowwise_python_case3_all_outputs_compute_correct
       x_ptr output_ptr MaxVals output_maxs s
 
+/-- **Dimension-general blocked output summary.** For arbitrary `_n_elements`,
+`BLOCK_SIZE`, padded width `P2`, and real scale `scale127` (and any program id in
+`s`), the faithful full surface is recorded as **blocked** at algorithm erasure
+(it stores CUDA `llrint`/int8 results, not the real-valued pre-rounding
+expression), while the checked proof slices realize the genuine pre-rounding
+scaled row output `scale127 * (x / max_val)` (`quantizeRowwiseScaledSpec`) at
+every in-range lane and the per-row `output_maxs` writeback
+(`quantizeRowwiseMaxSpec`). The pinned
+`quantize_rowwise_python_case{1,3}_blocked_output_summary` theorems are concrete
+instantiations of this (with `scale127 = 127.0`). The `max(|x|)` reduction is
+taken as the precomputed `MaxVals` input; the `llrint` rounding / int8 cast
+remain the honest, unmodeled blocker. -/
+theorem quantize_rowwise_blocked_output_summary_general
+    (x_ptr output_ptr MaxVals output_maxs : RegionName)
+    (_n_elements BLOCK_SIZE P2 : Nat) (scale127 : ℝ) (s : BlockState) :
+    (∃ err,
+      (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
+        _n_elements BLOCK_SIZE P2).toAlgorithm? = Except.error err) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
+        _n_elements BLOCK_SIZE P2 scale127)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin P2 => i.val < BLOCK_SIZE)
+          (fun i => (output_ptr, offset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        quantizeRowwiseScaledSpec s x_ptr MaxVals BLOCK_SIZE scale127 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
+      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals))) :=
+  ⟨quantize_rowwise_real_surface_toAlgorithm_blocked x_ptr output_ptr output_maxs
+      _n_elements BLOCK_SIZE P2,
+   quantize_rowwise_scaled_store_slice_compute_correct x_ptr output_ptr MaxVals
+      _n_elements BLOCK_SIZE P2 scale127 s,
+   quantize_rowwise_max_store_slice_compute_correct MaxVals output_maxs s⟩
+
 end VeriTile.Bench.TritonBenchG.RowwiseQuantizationTriton
