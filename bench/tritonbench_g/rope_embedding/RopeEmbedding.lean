@@ -1231,4 +1231,77 @@ abbrev rope_embedding_python_case4_output_summary
     (Q dY cos sin : RegionName) (sQ sDY : BlockState) :=
   rope_embedding_python_case4_forward_backward_summary Q dY cos sin sQ sDY
 
+/-- **Dimension-general forward+backward output summary.** For arbitrary strides,
+`seqlen`/`head_dim`/`n_heads`/`ROPE_GROUP_SIZE`/`BLOCK_SIZE` (and any program ids in
+`sQ`/`sDY`), the forward surface lowers and both forward half-kernels realize the
+genuine rotary specs `ropeFirst/SecondSpec` on `Q`, and symmetrically the backward
+surface lowers and both backward half-kernels realize `ropeBackwardFirst/SecondSpec`
+on `dY` — under the honest offset-injectivity side conditions. The pinned
+`..._python_case{1,2,3,4}_*` summaries are concrete instantiations of this. -/
+theorem rope_embedding_forward_backward_summary_general
+    (Q dY cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      ROPE_GROUP_SIZE BLOCK_SIZE : Nat)
+    (sQ sDY : BlockState)
+    (hQF : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qFirstOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i))
+    (hQS : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qSecondOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i))
+    (hDF : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qFirstOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i))
+    (hDS : Function.Injective
+      (fun i : Fin BLOCK_SIZE => qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
+    (∃ alg, (rope_embedding_surface Q Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads Bool.false BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (Q, qFirstOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (Q, qSecondOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeSecondSpec sQ Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    (∃ alg, (rope_embedding_surface dY Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads Bool.true BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_backward_first_half dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sDY)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sDY head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (dY, qFirstOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeBackwardFirstSpec sDY dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_backward_second_half dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sDY)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sDY head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (dY, qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeBackwardSecondSpec sDY dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) :=
+  ⟨rope_embedding_surface_toAlgorithm_supported Q Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads Bool.false BLOCK_SIZE ROPE_GROUP_SIZE,
+   rope_embedding_forward_first_half_compute_correct Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE sQ hQF,
+   rope_embedding_forward_second_half_compute_correct Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE sQ hQS,
+   rope_embedding_surface_toAlgorithm_supported dY Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads Bool.true BLOCK_SIZE ROPE_GROUP_SIZE,
+   rope_embedding_backward_first_half_compute_correct dY cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE sDY hDF,
+   rope_embedding_backward_second_half_compute_correct dY cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE sDY hDS⟩
+
 end VeriTile.Bench.TritonBenchG.RopeEmbedding
