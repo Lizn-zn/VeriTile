@@ -1445,6 +1445,82 @@ theorem fill_kv_cache_python_test_layout_output_summary
   · exact fill_kv_cache_python_test_layout_all_outputs_compute_correct
       KStates VStates KCaches VCaches BlockOffsets SIDX BIDX KV_BLOCK_IDX s
 
+/-- **Dimension-general** non-quantized cache-fill summary.
+
+This is the symbolic-dimension version of
+`fill_kv_cache_python_test_layout_output_summary`: every shape / stride is a
+universally quantified `Nat`, with the per-program K-cache and V-cache
+offset-injectivity facts taken as hypotheses. The surface conjunct lowers the
+faithful `_fill_kv_cache_kernel` body, and the output conjuncts expose the
+masked K/V cache tile writebacks at the selected source/cache block positions.
+The Python test-shape summary is the `num_heads = 4`,
+`head_dim = head_dim_v = 16`, `BLOCK = 8` instance of this theorem. -/
+theorem fill_kv_cache_output_summary_general
+    (KStates VStates KCaches VCaches QStartLoc QSeqLens KVSeqLens
+      BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      num_heads head_dim head_dim_v stride_kss stride_ksh stride_ksd
+      stride_vss stride_vsh stride_vsd stride_kcn stride_kcb stride_kch
+      stride_kcd stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+      BLOCK BLOCK_D BLOCK_DV BLOCK_H : Nat)
+    (s : BlockState)
+    (hKInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_D] =>
+        kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+          stride_kch stride_kcd stride_boff idx))
+    (hVInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx)) :
+    (∃ alg, (fill_kv_cache_kernel_surface KStates VStates KCaches VCaches
+      QStartLoc QSeqLens KVSeqLens BlockOffsets num_heads head_dim head_dim_v
+      stride_kss stride_ksh stride_ksd stride_vss stride_vsh stride_vsd
+      stride_kcn stride_kcb stride_kch stride_kcd stride_vcn stride_vcb
+      stride_vch stride_vcd stride_boff BLOCK BLOCK_D BLOCK_DV
+      BLOCK_H).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd
+        stride_kcn stride_kcb stride_kch stride_kcd stride_boff
+        num_heads head_dim BLOCK_H BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_heads head_dim BLOCK_H BLOCK_D)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+            stride_kch stride_kcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem KStates
+          (kSourceOffset s SIDX stride_kss stride_ksh stride_ksd idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+        num_heads head_dim_v BLOCK_H BLOCK_DV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_heads head_dim_v BLOCK_H BLOCK_DV)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem VStates
+          (vSourceOffset s SIDX stride_vss stride_vsh stride_vsd idx))) := by
+  refine ⟨fill_kv_cache_kernel_surface_toAlgorithm_supported KStates VStates
+      KCaches VCaches QStartLoc QSeqLens KVSeqLens BlockOffsets num_heads
+      head_dim head_dim_v stride_kss stride_ksh stride_ksd stride_vss stride_vsh
+      stride_vsd stride_kcn stride_kcb stride_kch stride_kcd stride_vcn
+      stride_vcb stride_vch stride_vcd stride_boff BLOCK BLOCK_D BLOCK_DV
+      BLOCK_H,
+    fill_k_cache_tile_compute_correct KStates KCaches BlockOffsets SIDX BIDX
+      KV_BLOCK_IDX stride_kss stride_ksh stride_ksd stride_kcn stride_kcb
+      stride_kch stride_kcd stride_boff num_heads head_dim BLOCK_H BLOCK_D s
+      hKInj,
+    fill_v_cache_tile_compute_correct VStates VCaches BlockOffsets SIDX BIDX
+      KV_BLOCK_IDX stride_vss stride_vsh stride_vsd stride_vcn stride_vcb
+      stride_vch stride_vcd stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV s
+      hVInj⟩
+
 /-- Python quantized cache-fill layout: K/V cache values plus K/V scale and
 zero-point metadata stores are compute-correct for the observed shape, assuming
 the quantized value tiles and metadata tiles have already been computed. -/

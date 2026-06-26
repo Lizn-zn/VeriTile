@@ -461,4 +461,38 @@ theorem dequantize_matmul_python_256x64_output_summary
       128 256 256 1 256 1 256 64
   · exact dequantize_matmul_python_256x64_compute_correct b_ptr b_scale_ptr fpb_ptr s
 
+/-- **Dimension-general output summary for `dequantize_matmul.py`.**
+
+For arbitrary matrix dims `K`/`N`, strides `stride_bk`/`stride_bn`/`stride_fpbk`/
+`stride_fpbn`, and block sizes `BLOCK_SIZE_N`/`BLOCK_SIZE_K` (and any program ids
+in `s`), under the honest row-major output-offset injectivity side condition the
+`dequantize_kernel` surface lowers to the algorithm layer and the masked store
+into `fp_b` realizes the genuine elementwise dequantize `int_b * scale_b`
+(`dequantizeSpec`) on every active lane (`k·BSK + i < K ∧ n·BSN + j < N`),
+unchanged otherwise. The four pinned
+`dequantize_matmul_python_{128x128,64x256,32x256,256x64}_output_summary` (mirroring
+the `@triton.autotune` configs) are concrete instantiations of this one theorem. -/
+theorem dequantize_matmul_output_summary_general
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K)) :
+    (∃ alg, (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+      stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K)
+          (fun idx => (fpb_ptr,
+            fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx)))
+      (expected := fun idx =>
+        dequantizeSpec s b_ptr b_scale_ptr stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx) :=
+  ⟨dequantize_kernel_surface_toAlgorithm_supported b_ptr b_scale_ptr fpb_ptr
+      K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K,
+   dequantize_kernel_compute_correct b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+      stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K s hOutInj⟩
+
 end VeriTile.Bench.TritonBenchG.DequantizeMatmul

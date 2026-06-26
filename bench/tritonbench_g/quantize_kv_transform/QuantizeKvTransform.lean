@@ -1415,4 +1415,55 @@ theorem destindex_copy_quantize_kv_transform_python_h12_d96_output_summary
         (fun h => hOut h.symm)
         (destindex_copy_quantize_kv_transform_python_h12_scale_offset_injective s DestLoc)
 
+/-- **Dimension-general output summary.** For arbitrary strides / `head_num` /
+`head_dim` / `BLOCK_DMODEL` / `BLOCK_HEAD` (and any program ids in `s`), the
+destindex quantize-KV-transform surface lowers, writes the genuine per-cell int
+value `quantizeKvTransformSurfaceIntValue` to `Out` (masked by `active`), and the
+genuine real per-row scale `quantizeKvTransformScaleCell` to `OutScale` (masked
+by `scaleActive`) — under honest offset-injectivity side conditions
+(`hValInj` for the full value tile, `hScaleInj` for the per-head scale) and the
+region-distinctness no-aliasing hypothesis `hOut`. The pinned
+`..._python_h12_d96_output_summary` (which uses the active-lane no-collision
+variant because of the `BLOCK_DMODEL = 128 > head_dim = 96` padding) is the
+concrete instantiation; this general version assumes full tile injectivity, which
+holds whenever `BLOCK_DMODEL = head_dim` and `BLOCK_HEAD = head_num`. -/
+theorem destindex_copy_quantize_kv_transform_output_summary_general
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) (hD : 0 < BLOCK_DMODEL) (hOut : Out ≠ OutScale)
+    (hValInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx))
+    (hScaleInj : Function.Injective
+      (fun i : Fin BLOCK_HEAD => scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    (∃ alg, (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
+    (∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+            stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD) s).map
+          (·.readMemValue .int Out (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx))
+        = some (if active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx then
+            quantizeKvTransformSurfaceIntValue s K stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL hD idx
+          else s.readMemValue .int Out (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx))) ∧
+    (∀ i : Fin BLOCK_HEAD,
+      (exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+            stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+            stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD) s).map
+          (·.readMem OutScale (scaleOutOffset s DestLoc stride_os_bs stride_os_h i))
+        = some (if scaleActive head_num BLOCK_HEAD i then
+            quantizeKvTransformScaleCell s K stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL hD i.val
+          else s.readMem OutScale (scaleOutOffset s DestLoc stride_os_bs stride_os_h i))) :=
+  ⟨destindex_copy_quantize_kv_transform_real_surface_toAlgorithm_supported K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD,
+   destindex_copy_quantize_kv_transform_real_surface_value_output_compute_correct K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD s hD hOut hValInj,
+   destindex_copy_quantize_kv_transform_real_surface_scale_output_compute_correct K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD s hD (fun h => hOut h.symm) hScaleInj⟩
+
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform
