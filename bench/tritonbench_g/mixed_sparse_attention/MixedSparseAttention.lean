@@ -10470,4 +10470,191 @@ theorem msaGcol0_eq_colKeyGlobalG (BN : Nat) (s0 : BlockState) (Cols ColCounts :
   rw [show (s0.pids 1 * 2 + s0.pids 0) * 8 + 0 + j = (s0.pids 1 * 2 + s0.pids 0) * 8 + j
     from by omega]
 
+
+set_option maxHeartbeats 4000000 in
+/-- **Connector.** The genuine cat-fold ratio equals `mixedSparseAttnClosedForm`.
+Requires `num_cols ≤ 64 = BLOCK_N`: the kernel's single column block (`max_num_cols
+= 16 < step = 64`) only processes lanes `j < 64`, so the closed form's column phase
+must be over at most `BLOCK_N` columns (the faithful regime). -/
+theorem msa_catFold_eq_closedFormG
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD : Nat) (hBN16 : 16 ≤ BN) (s0 : BlockState) (sm_scale : ℝ) (i : Fin BM) (d : Fin BD)
+    (hNCBN : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ BN) :
+    msaNumerUpto BM BN BD
+        (msaCatScore BM BN 8
+          (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+          (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0))
+        (msaCatVblk BN BD 8
+          (msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0)
+          (msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0))
+        9 i d
+      / msaDenomUpto BM BN
+        (msaCatScore BM BN 8
+          (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+          (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0))
+        9 i
+    = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
+        32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+        (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
+        (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+        (seqLen s0 4 (Region.cast Seqlens)) BD BM BN sm_scale i d := by
+  set NB := s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0) with hNB
+  set NC := s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) with hNC
+  set SL := seqLen s0 4 (Region.cast Seqlens) with hSL
+  set scoreA := msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscA
+  set scoreB := msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscB
+  set vblkA := msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0 with hvbA
+  set vblkB := msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0 with hvbB
+  set cat := msaCatScore BM BN 8 scoreA scoreB with hcat
+  set catV := msaCatVblk BN BD 8 vblkA vblkB with hcatV
+  -- abbreviations matching the closed form's per-lane terms
+  set SN : Nat → Nat := fun b => blockStartN s0 BlockOffsets 2 4 NB b with hSNd
+  -- per-block-A weight (the closed form's `wBlock`)
+  have hwA : ∀ (b : Fin 8) (j : Fin BN), msaE (scoreA b.val i j)
+      = (if s0.pids 0 * BM + i.val < SL ∧ SN b.val + j.val ≤ s0.pids 0 * BM + i.val then
+          Real.exp (effScale sm_scale *
+            (if SN b.val + j.val < SL ∧ b.val < NB
+              then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (SN b.val + j.val) else 0))
+        else 0) := by
+    intro b j
+    rw [hscA, msaScoreA0G, msaE_scoreLaneA_eqG, msaSN0G_eq_blockStartN]
+  -- per-block-A value (the closed form's `vBlock`)
+  have hvA : ∀ (b : Fin 8) (j : Fin BN), vblkA b.val j d
+      = (if SN b.val + j.val < SL ∧ b.val < NB then
+          vRow s0 V 4 32768 8192 64 (SN b.val + j.val) d else 0) := by
+    intro b j
+    rw [hvbA, msaVblkA0_eqG]
+    rw [show msaSN0G s0 Blocks BlockOffsets b.val = SN b.val from by
+      rw [hSNd]; exact msaSN0G_eq_blockStartN s0 Blocks BlockOffsets b.val]
+  -- per-column-B weight (the closed form's `wCol`, as a `Nat → ℝ` over the gathered col)
+  set gcol : Fin BN → Nat := msaGcol0G s0 Cols ColCounts BN 0 with hgcol
+  have hwB : ∀ (j : Fin BN), msaE (scoreB 0 i j)
+      = (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+          Real.exp (effScale sm_scale *
+            (if j.val < NC ∧ (0:Nat) < NC
+              then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j) else 0))
+        else 0) := by
+    intro j
+    rw [hscB, msaScoreB0G]
+    have h0 : (0 : Nat) * BN = 0 := by ring
+    rw [h0, msaE_scoreLaneB_eqG]
+    simp only [Nat.zero_add, ← hSL, ← hNC, ← hgcol]
+  have hvB : ∀ (j : Fin BN), vblkB 0 j d
+      = (if j.val < NC ∧ (0:Nat) < NC then vRow s0 V 4 32768 8192 64 (gcol j) d else 0) := by
+    intro j
+    rw [hvbB, msaVblkB0G]
+    have h0 : (0 : Nat) * BN = 0 := by ring
+    rw [h0, ← hgcol]
+    have := msaVblkB0_eqG V Blocks ColCounts BD BN s0 0 gcol j d
+    simp only [Nat.zero_add, ← hNC] at this ⊢
+    exact this
+  -- numerator split: block-A (Fin 8) + 1 column-B term
+  have hnumBlk : (∑ l ∈ Finset.range 8, ∑ j : Fin BN, msaE (cat l i j) * catV l j d)
+      = ∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) * vblkA b.val j d := by
+    rw [Fin.sum_univ_eq_sum_range (fun b => ∑ j : Fin BN, msaE (scoreA b i j) * vblkA b j d) 8]
+    apply Finset.sum_congr rfl; intro b hb
+    rw [Finset.mem_range] at hb
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_pos hb, hcatV, msaCatVblk, if_pos hb]
+  have hnum : msaNumerUpto BM BN BD cat catV 9 i d
+      = (∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) * vblkA b.val j d)
+        + ∑ j : Fin BN, msaE (scoreB 0 i j) * vblkB 0 j d := by
+    rw [msaNumerUpto, show (9 : Nat) = 8 + 1 from rfl, Finset.sum_range_succ, hnumBlk]
+    refine congrArg (_ + ·) ?_
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_neg (by omega), hcatV, msaCatVblk, if_neg (by omega)]
+  have hdenBlk : (∑ l ∈ Finset.range 8, ∑ j : Fin BN, msaE (cat l i j))
+      = ∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) := by
+    rw [Fin.sum_univ_eq_sum_range (fun b => ∑ j : Fin BN, msaE (scoreA b i j)) 8]
+    apply Finset.sum_congr rfl; intro b hb
+    rw [Finset.mem_range] at hb
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_pos hb]
+  have hden : msaDenomUpto BM BN cat 9 i
+      = (∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j))
+        + ∑ j : Fin BN, msaE (scoreB 0 i j) := by
+    rw [msaDenomUpto, show (9 : Nat) = 8 + 1 from rfl, Finset.sum_range_succ, hdenBlk]
+    refine congrArg (_ + ·) ?_
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_neg (by omega)]
+  have hNCle : NC ≤ BN := hNCBN
+  rw [hnum, hden]
+  -- expose the closed form's `numer / denom`; fold raw terms back to the set abbrevs
+  simp only [mixedSparseAttnClosedForm, mIndex, ← hNB, ← hNC, ← hSL, ← hSNd]
+  -- rewrite LHS block/column terms to closed-form per-lane shapes
+  simp only [hwA, hvA, hwB, hvB]
+  -- the gated column summands (numerator/denominator) as `Nat → ℝ` functions
+  set numCol : Nat → ℝ := fun jn =>
+    (if s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
+        Real.exp (effScale sm_scale *
+          (if jn < NC ∧ (0:Nat) < NC
+            then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (colKeyGlobal s0 Cols 2 8 jn) else 0))
+      else 0) *
+      (if jn < NC ∧ (0:Nat) < NC then vRow s0 V 4 32768 8192 64 (colKeyGlobal s0 Cols 2 8 jn) d else 0)
+    with hnumCol
+  set denCol : Nat → ℝ := fun jn =>
+    (if s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
+        Real.exp (effScale sm_scale *
+          (if jn < NC ∧ (0:Nat) < NC
+            then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (colKeyGlobal s0 Cols 2 8 jn) else 0))
+      else 0)
+    with hdenCol
+  -- gcol-keyed column sum = colKeyGlobal-keyed sum (for j < NC); both vanish for j ≥ NC
+  have hgcConv : ∀ j : Fin BN, j.val < NC → gcol j = colKeyGlobal s0 Cols 2 8 j.val := by
+    intro j hj; rw [hgcol]
+    exact msaGcol0_eq_colKeyGlobalG BN s0 Cols ColCounts j.val (by rw [← hNC]; exact hj) j.isLt
+  have hcolNum :
+      (∑ j : Fin BN,
+        (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+            Real.exp (effScale sm_scale *
+              (if j.val < NC ∧ (0:Nat) < NC
+                then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j) else 0))
+          else 0) *
+          (if j.val < NC ∧ (0:Nat) < NC then vRow s0 V 4 32768 8192 64 (gcol j) d else 0))
+        = ∑ c : Fin NC, numCol c.val := by
+    rw [← msa_col_sum_collapseG BN NC hNCle numCol
+      (fun jn hjn => by rw [hnumCol]; simp only [if_neg (by omega : ¬(jn < NC ∧ (0:Nat) < NC)), mul_zero])]
+    apply Finset.sum_congr rfl; intro j _
+    rw [hnumCol]
+    by_cases hj : j.val < NC
+    · rw [hgcConv j hj]
+    · simp only [if_neg (by omega : ¬(j.val < NC ∧ (0:Nat) < NC)), mul_zero]
+  have hcolDen :
+      (∑ j : Fin BN,
+        (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+            Real.exp (effScale sm_scale *
+              (if j.val < NC ∧ (0:Nat) < NC
+                then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j) else 0))
+          else 0))
+        = ∑ c : Fin NC, denCol c.val := by
+    rw [← msa_col_sum_collapseG BN NC hNCle denCol
+      (fun jn hjn => by rw [hdenCol]; simp only []; rw [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC)))])]
+    apply Finset.sum_congr rfl; intro j _
+    rw [hdenCol]; simp only []
+    by_cases hj : j.val < NC
+    · rw [hgcConv j hj]
+    · rw [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC)))]
+      simp only [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC)))]
+  rw [hcolNum, hcolDen]
+  -- final: match Fin 8 block sums + Fin NC column sums to closed form
+  congr 1
+  · congr 1
+    apply Finset.sum_congr rfl; intro c _
+    rw [hnumCol]; simp only []
+    -- closed form `wCol c * vRow(colKeyGlobal c)`; gate `c.val < NC ∧ 0 < NC` is true
+    have hcNC : c.val < NC := c.isLt
+    have h0NC : (0:Nat) < NC := by omega
+    simp only [if_pos (And.intro hcNC h0NC)]
+    by_cases hrow : s0.pids 0 * BM + i.val < SL
+    · rw [if_pos hrow, if_pos (And.intro hrow (And.intro hcNC h0NC))]
+    · rw [if_neg hrow, if_neg (by tauto : ¬(s0.pids 0 * BM + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC)))]
+  · congr 1
+    apply Finset.sum_congr rfl; intro c _
+    rw [hdenCol]; simp only []
+    have hcNC : c.val < NC := c.isLt
+    have h0NC : (0:Nat) < NC := by omega
+    by_cases hrow : s0.pids 0 * BM + i.val < SL
+    · rw [if_pos (And.intro hrow (And.intro hcNC h0NC)), if_pos hrow, if_pos (And.intro hcNC h0NC)]
+    · rw [if_neg (by tauto : ¬(s0.pids 0 * BM + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC))), if_neg hrow]
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
