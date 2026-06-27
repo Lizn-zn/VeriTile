@@ -11995,4 +11995,524 @@ noncomputable def msaScoreLaneBGS (Blocks ColCounts : Region .nat) (Seqlens : Re
           (FloatDType.real.cast FloatDType.fp16 (qF (i, e, PUnit.unit))))
         (msaKLaneBGS Blocks ColCounts BD BN NR skn kpF s0 sv gcol e j)))
 
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+theorem msa_attn_stepAGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD : Nat) (hBN : 0 < BN) (H NR NS NV skn svn : Nat)
+    (scoreA : Nat → Fin BM → Fin BN → WithBot ℝ) (vblkA : Nat → Fin BN → Fin BD → ℝ)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 : BlockState) (c SN : Nat) (s : BlockState)
+    (hinv : msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+      scoreA vblkA qF kpF vpF opF s0 c s)
+    (hSN : (if c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0) then
+        s0.readMemValue .nat (Region.cast BlockOffsets)
+          ((s0.pids 1 * NR + s0.pids 0) * NS + c)
+       else BlockState.defaultCarrier .nat) = SN)
+    (hscore : ∀ (i : Fin BM) (j : Fin BN), scoreA c i j =
+      msaScoreLaneAGS Q K Seqlens Blocks BlockOffsets BM BN BD H NR skn qF kpF s0 c SN i j)
+    (hvblk : ∀ (j : Fin BN) (d : Fin BD),
+      (some (vblkA c j d) : WithBot ℝ) = msaVLaneAGS V Seqlens Blocks BD BN H NR svn vpF s0 c SN j d) :
+    ∃ s', stepStmts (msaLoopBodyAGS BM BN BD skn svn) (s.setReg "block_index" .nat [] (Tile.scalar c)) = some s'
+      ∧ msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+          scoreA vblkA qF kpF vpF opF s0 (c + 1) s' := by
+  obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
+    hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmi, hli, hacc⟩ := hinv
+  -- readMemValue transports across any mem-equal state
+  have rmv : ∀ (sX : BlockState), sX.mem = s0.mem → ∀ (dt : TileDType) (rg : RegionName) (o : Nat),
+      sX.readMemValue dt rg o = s0.readMemValue dt rg o := by
+    intro sX hX dt rg o
+    simp only [BlockState.readMemValue, BlockState.readMemAs, BlockState.readMemTyped, hX]
+  -- guard bit
+  set NB := s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0) with hNBdef
+  set SL := seqLen s0 H (Region.cast Seqlens) with hSLdef
+  set cb : Bool := decide (c < NB) with hcbdef
+  unfold msaLoopBodyAGS
+  -- s1: block_index := c
+  set s1 := s.setReg "block_index" .nat [] (Tile.scalar c) with hs1d
+  have hs1pids : s1.pids = s0.pids := by rw [hs1d, BlockState.setReg_pids]; exact hpids
+  have hs1mem : s1.mem = s0.mem := by funext rg o; rw [hs1d, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "block_index" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs1bi : s1.regs .nat [] "block_index" = some (Tile.scalar c) := by rw [hs1d, BlockState.setReg_same]
+  have hs1nb : s1.regs .nat [] "num_blks" = some (Tile.scalar NB) := e1 (by decide) hnb
+  -- A1: cond = block_index < num_blks
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_cond_eval s1 "block_index" "num_blks" c NB hs1bi hs1nb))]
+  rw [show (Tile.cop ComparableDType.nat.lt Broadcast.nil (Tile.scalar c) (Tile.scalar NB))
+        = (Tile.scalar cb : Tile .bool []) from by
+    refine Tile.ext (fun idx => ?_)
+    simp only [Tile.cop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+      ComparableDType.lt, hcbdef]]
+  set s2 := s1.setReg "cond" .bool [] (Tile.scalar cb) with hs2d
+  have e2 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "cond" → s1.regs dt sh nm = some t → s2.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs2pids : s2.pids = s0.pids := by rw [hs2d, BlockState.setReg_pids]; exact hs1pids
+  have hs2mem : s2.mem = s0.mem := by funext rg o; rw [hs2d, BlockState.setReg_mem]; exact hs1mem ▸ rfl
+  have hs2cond : s2.regs .bool [] "cond" = some (Tile.scalar cb) := by rw [hs2d, BlockState.setReg_same]
+  have hs2bp : s2.regs .ptr [] "blks_ptr" =
+      some (Tile.scalar (Region.cast BlockOffsets, (s0.pids 1 * NR + s0.pids 0) * NS)) :=
+    e2 (by decide) (e1 (by decide) hbp)
+  have hs2bi : s2.regs .nat [] "block_index" = some (Tile.scalar c) := e2 (by decide) hs1bi
+  -- A2: start_n = masked load(blks_ptr + block_index, mask=cond)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_startn_eval s2 (Region.cast BlockOffsets) ((s0.pids 1 * NR + s0.pids 0) * NS) c cb
+      hs2bp hs2bi hs2cond))]
+  rw [show (Tile.scalar (if cb then
+        s2.readMemValue .nat (Region.cast BlockOffsets) ((s0.pids 1 * NR + s0.pids 0) * NS + c)
+       else BlockState.defaultCarrier .nat) : Tile .nat [])
+      = Tile.scalar SN from by
+    rw [rmv s2 hs2mem .nat (Region.cast BlockOffsets) _]
+    rw [← hSN]
+    by_cases h : c < NB
+    · rw [hcbdef, if_pos (by simpa using h), if_pos h]
+    · rw [hcbdef, if_neg (by simpa using h), if_neg h]]
+  set s3 := s2.setReg "start_n" .nat [] (Tile.scalar SN) with hs3d
+  have e3 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "start_n" → s2.regs dt sh nm = some t → s3.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs3d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs3pids : s3.pids = s0.pids := by rw [hs3d, BlockState.setReg_pids]; exact hs2pids
+  have hs3mem : s3.mem = s0.mem := by funext rg o; rw [hs3d, BlockState.setReg_mem]; exact hs2mem ▸ rfl
+  have hs3sn : s3.regs .nat [] "start_n" = some (Tile.scalar SN) := by rw [hs3d, BlockState.setReg_same]
+  have hs3on : s3.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)) :=
+    e3 (by decide) (e2 (by decide) (e1 (by decide) hoffn))
+  -- A3: cols = start_n + offs_n
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_cols_eval s3 BN SN hs3sn hs3on))]
+  rw [show (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+        (Tile.vec (fun j : Fin BN => j.val)) : Tile .nat [BN])
+      = (Tile.vec (fun j : Fin BN => SN + j.val) : Tile .nat [BN]) from by
+    refine Tile.ext (fun idx => ?_)
+    simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+      Broadcast.rightIndex, NumericDType.add]]
+  set ct : Tile .nat [BN] := Tile.vec (fun j : Fin BN => SN + j.val) with hctd
+  set s4 := s3.setReg "cols" .nat [BN] ct with hs4d
+  have e4 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "cols" → s3.regs dt sh nm = some t → s4.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs4d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs4pids : s4.pids = s0.pids := by rw [hs4d, BlockState.setReg_pids]; exact hs3pids
+  have hs4mem : s4.mem = s0.mem := by funext rg o; rw [hs4d, BlockState.setReg_mem]; exact hs3mem ▸ rfl
+  have hs4cols : s4.regs .nat [BN] "cols" = some ct := by rw [hs4d, BlockState.setReg_same]
+  have hs4seq : s4.regs .nat [] "seqlen" = some (Tile.scalar SL) :=
+    e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hseq)))
+  have hs4cond : s4.regs .bool [] "cond" = some (Tile.scalar cb) :=
+    e4 (by decide) (e3 (by decide) hs2cond)
+  -- A4: n_mask = (cols < seqlen) & cond
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_nmask_eval s4 BN SL cb ct hs4cols hs4seq hs4cond))]
+  set nm : Tile .bool [BN] := Tile.bop (fun x y : Bool => x && y) Broadcast.scalarR
+    (Tile.cop ComparableDType.nat.lt Broadcast.scalarR ct (Tile.scalar SL)) (Tile.scalar cb) with hnmd
+  set s5 := s4.setReg "n_mask" .bool [BN] nm with hs5d
+  have e5 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "n_mask" → s4.regs dt sh nm' = some t → s5.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs5d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs5pids : s5.pids = s0.pids := by rw [hs5d, BlockState.setReg_pids]; exact hs4pids
+  have hs5mem : s5.mem = s0.mem := by funext rg o; rw [hs5d, BlockState.setReg_mem]; exact hs4mem ▸ rfl
+  have hs5nm : s5.regs .bool [BN] "n_mask" = some nm := by rw [hs5d, BlockState.setReg_same]
+  have hs5cols : s5.regs .nat [BN] "cols" = some ct := e5 (by decide) hs4cols
+  have hs5kp : s5.regs .ptr [BD, 1] "k_ptrs" = some (⟨fun idx : TileIndex [BD, 1] => kpF idx⟩ : Tile .ptr [BD, 1]) :=
+    e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hkp))))
+  -- A5: k = masked K load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_load_k_eval s5 BD BN skn (by simp) (⟨fun idx : TileIndex [BD, 1] => kpF idx⟩ : Tile .ptr [BD, 1])
+      ct nm hs5kp hs5cols hs5nm))]
+  -- normalize the k-load tile to per-lane msaKLaneA
+  set kT : Tile .real [BD, BN] := ⟨fun idx : TileIndex [BD, BN] =>
+    msaKLaneAGS K Seqlens Blocks BlockOffsets BD BN H NR skn kpF s0 c SN idx.1 idx.2.1⟩ with hkTd
+  rw [show (⟨fun idx : TileIndex [BD, BN] =>
+        let ptrs := Tile.ptrAdd Broadcast.nil.consL.consR
+          (⟨fun idx : TileIndex [BD, 1] => kpF idx⟩ : Tile .ptr [BD, 1])
+          (Tile.bop NumericDType.nat.mul Broadcast.scalarR (Tile.expandDim ⟨0, by simp⟩ ct) (Tile.scalar skn))
+        if (Tile.remap Broadcast.nil.consSame.consL.leftIndex (Tile.expandDim ⟨0, by simp⟩ nm)).data idx then
+          s5.readMemValue .real (ptrs.data idx).1 (ptrs.data idx).2
+        else (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BD, BN]) = kT from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨e, j, u⟩ := idx
+    simp only [hkTd, msaKLaneAGS, hctd, hnmd, Tile.remap, Tile.ptrAdd_data, Tile.bop_data,
+      Tile.cop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim_data, Broadcast.leftIndex,
+      Broadcast.rightIndex, NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex,
+      rmv s5 hs5mem .real]
+    by_cases hca : SN + j.val < seqLen s0 H (Region.cast Seqlens)
+        ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0)
+    · rw [if_pos (by simpa [hcbdef] using hca), if_pos hca]
+    · rw [if_neg (by simpa [hcbdef] using hca), if_neg hca]]
+  set s6 := s5.setReg "k" .real [BD, BN] kT with hs6d
+  have e6 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "k" → s5.regs dt sh nm' = some t → s6.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs6d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs6pids : s6.pids = s0.pids := by rw [hs6d, BlockState.setReg_pids]; exact hs5pids
+  have hs6mem : s6.mem = s0.mem := by funext rg o; rw [hs6d, BlockState.setReg_mem]; exact hs5mem ▸ rfl
+  have hs6k : s6.regs .real [BD, BN] "k" = some kT := by rw [hs6d, BlockState.setReg_same]
+  have hs6cols : s6.regs .nat [BN] "cols" = some ct := e6 (by decide) hs5cols
+  have hs6nm : s6.regs .bool [BN] "n_mask" = some nm := e6 (by decide) hs5nm
+  have hs6vp : s6.regs .ptr [1, BD] "v_ptrs" = some (⟨fun idx : TileIndex [1, BD] => vpF idx⟩ : Tile .ptr [1, BD]) :=
+    e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hvp)))))
+  -- A6: v = masked V load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_load_v_eval s6 BN BD svn (by simp) (⟨fun idx : TileIndex [1, BD] => vpF idx⟩ : Tile .ptr [1, BD])
+      ct nm hs6vp hs6cols hs6nm))]
+  set vT : Tile .real [BN, BD] := ⟨fun idx : TileIndex [BN, BD] =>
+    msaVLaneAGS V Seqlens Blocks BD BN H NR svn vpF s0 c SN idx.1 idx.2.1⟩ with hvTd
+  rw [show (⟨fun idx : TileIndex [BN, BD] =>
+        let ptrs := Tile.ptrAdd Broadcast.nil.consR.consL
+          (⟨fun idx : TileIndex [1, BD] => vpF idx⟩ : Tile .ptr [1, BD])
+          (Tile.bop NumericDType.nat.mul Broadcast.scalarR (Tile.expandDim ⟨1, by simp⟩ ct) (Tile.scalar svn))
+        if (Tile.remap Broadcast.nil.consL.consSame.leftIndex (Tile.expandDim ⟨1, by simp⟩ nm)).data idx then
+          s6.readMemValue .real (ptrs.data idx).1 (ptrs.data idx).2
+        else (some (0.0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BN, BD]) = vT from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨j, d, u⟩ := idx
+    simp only [hvTd, msaVLaneAGS, hctd, hnmd, Tile.remap, Tile.ptrAdd_data, Tile.bop_data,
+      Tile.cop_data, Tile.bop, Tile.scalar, Tile.vec, Tile.expandDim_data, Broadcast.leftIndex,
+      Broadcast.rightIndex, NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex,
+      rmv s6 hs6mem .real]
+    by_cases hca : SN + j.val < seqLen s0 H (Region.cast Seqlens)
+        ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0)
+    · rw [if_pos (by simpa [hcbdef] using hca), if_pos hca]
+    · rw [if_neg (by simpa [hcbdef] using hca), if_neg hca]]
+  set s7 := s6.setReg "v" .real [BN, BD] vT with hs7d
+  have e7 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "v" → s6.regs dt sh nm' = some t → s7.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs7d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs7pids : s7.pids = s0.pids := by rw [hs7d, BlockState.setReg_pids]; exact hs6pids
+  have hs7mem : s7.mem = s0.mem := by funext rg o; rw [hs7d, BlockState.setReg_mem]; exact hs6mem ▸ rfl
+  have hs7v : s7.regs .real [BN, BD] "v" = some vT := by rw [hs7d, BlockState.setReg_same]
+  have hs7k : s7.regs .real [BD, BN] "k" = some kT := e7 (by decide) hs6k
+  -- A7: qk = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_qkzeros_eval s7 BM BN))]
+  set s8 := s7.setReg "qk" .real [BM, BN] (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) with hs8d
+  have e8 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "qk" → s7.regs dt sh nm' = some t → s8.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs8d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs8pids : s8.pids = s0.pids := by rw [hs8d, BlockState.setReg_pids]; exact hs7pids
+  have hs8mem : s8.mem = s0.mem := by funext rg o; rw [hs8d, BlockState.setReg_mem]; exact hs7mem ▸ rfl
+  have hs8qk0 : s8.regs .real [BM, BN] "qk" = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+    rw [hs8d, BlockState.setReg_same]
+  have hs8cols : s8.regs .nat [BN] "cols" = some ct := e8 (by decide) (e7 (by decide) hs6cols)
+  have hs8offm : s8.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => s0.pids 0 * BM + i.val)) :=
+    e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hoffm)))))))
+  -- A8: causal_mask = cols[None,:] ≤ offs_m[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_causal_eval s8 BM BN (by simp) (by simp) ct (Tile.vec (fun i : Fin BM => s0.pids 0 * BM + i.val))
+      hs8cols hs8offm))]
+  set cmT : Tile .bool [BM, BN] := Tile.cop ComparableDType.nat.le Broadcast.nil.consR.consL
+    (Tile.expandDim ⟨0, by simp⟩ ct) (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BM => s0.pids 0 * BM + i.val))) with hcmTd
+  set s9 := s8.setReg "causal_mask" .bool [BM, BN] cmT with hs9d
+  have e9 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "causal_mask" → s8.regs dt sh nm' = some t → s9.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs9d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs9pids : s9.pids = s0.pids := by rw [hs9d, BlockState.setReg_pids]; exact hs8pids
+  have hs9mem : s9.mem = s0.mem := by funext rg o; rw [hs9d, BlockState.setReg_mem]; exact hs8mem ▸ rfl
+  have hs9cm : s9.regs .bool [BM, BN] "causal_mask" = some cmT := by rw [hs9d, BlockState.setReg_same]
+  have hs9qk0 : s9.regs .real [BM, BN] "qk" = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) :=
+    e9 (by decide) hs8qk0
+  have hs9mmask : s9.regs .bool [BM, 1] "m_mask" = some (⟨fun idx : TileIndex [BM, 1] =>
+      decide (s0.pids 0 * BM + idx.1.val < seqLen s0 H (Region.cast Seqlens))⟩ : Tile .bool [BM, 1]) :=
+    e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hmmask))))))))
+  -- A9: qk = where(m_mask & causal_mask, qk, -inf)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_where_causal_eval s9 BM BN
+      (⟨fun idx : TileIndex [BM, 1] => decide (s0.pids 0 * BM + idx.1.val < seqLen s0 H (Region.cast Seqlens))⟩ : Tile .bool [BM, 1])
+      cmT (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN])
+      hs9mmask hs9cm hs9qk0))]
+  set qkSel : Tile .real [BM, BN] :=
+    Tile.select (Tile.bop (fun x y : Bool => x && y) Broadcast.nil.consL.consSame
+        (⟨fun idx : TileIndex [BM, 1] => decide (s0.pids 0 * BM + idx.1.val < seqLen s0 H (Region.cast Seqlens))⟩ : Tile .bool [BM, 1]) cmT)
+      (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN])
+      (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) with hqkSeld
+  set s10 := s9.setReg "qk" .real [BM, BN] qkSel with hs10d
+  have e10 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "qk" → s9.regs dt sh nm' = some t → s10.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs10d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs10pids : s10.pids = s0.pids := by rw [hs10d, BlockState.setReg_pids]; exact hs9pids
+  have hs10mem : s10.mem = s0.mem := by funext rg o; rw [hs10d, BlockState.setReg_mem]; exact hs9mem ▸ rfl
+  have hs10qk : s10.regs .real [BM, BN] "qk" = some qkSel := by rw [hs10d, BlockState.setReg_same]
+  have hs10q : s10.regs FloatDType.fp16.toTileDType [BM, BD] "q" =
+      some (⟨fun idx : TileIndex [BM, BD] => FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD]) :=
+    e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hq)))))))))
+  have hs10k : s10.regs .real [BD, BN] "k" = some kT :=
+    e10 (by decide) (e9 (by decide) (e8 (by decide) hs7k))
+  -- A10: qk += dot(q, k)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (msa_qk_dot_eval s10 BM BN BD qkSel (⟨fun idx : TileIndex [BM, BD] => FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD]) kT
+      hs10qk hs10q hs10k))]
+  -- normalize the A10 qk tile to `fun i j => scoreA c i j`
+  rw [show (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qkSel
+        (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real
+          ((⟨fun idx : TileIndex [BM, BD] => FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD]).data i)⟩ : Tile .real [BM, BD]) kT) : Tile .real [BM, BN])
+      = (⟨fun idx : TileIndex [BM, BN] => scoreA c idx.1 idx.2.1⟩ : Tile .real [BM, BN]) from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨i, j, u⟩ := idx
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qkSel
+      (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real
+        ((⟨fun idx : TileIndex [BM, BD] => FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD]).data i)⟩ : Tile .real [BM, BD]) kT)).data (i, j, u) = scoreA c i j
+    rw [hscore i j, msaScoreLaneAGS]
+    simp only [Tile.bop_data, Tile.bop, qkSel, hqkSeld, Tile.select_data, Tile.cop_data,
+      Tile.dot_nil_data, hkTd, hcmTd, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, Tile.vec, Tile.scalar, NumericDType.add, ComparableDType.le,
+      TileShape.dropInsertedIndex]
+    by_cases hcond : s0.pids 0 * BM + i.val < seqLen s0 H (Region.cast Seqlens) ∧ SN + j.val ≤ s0.pids 0 * BM + i.val
+    · obtain ⟨h1, h2⟩ := hcond
+      rw [if_pos (by simp only [hctd, Tile.vec, Tile.scalar, decide_eq_true_eq,
+        Bool.and_eq_true]; exact ⟨h1, h2⟩), if_pos ⟨h1, h2⟩]; rfl
+    · rw [if_neg (by simp only [hctd, Tile.vec, Tile.scalar, Bool.and_eq_true,
+        decide_eq_true_eq]; exact hcond), if_neg hcond]; rfl]
+  set qkS : Tile .real [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => scoreA c idx.1 idx.2.1⟩ with hqkSd
+  set s11 := s10.setReg "qk" .real [BM, BN] qkS with hs11d
+  have e11 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "qk" → s10.regs dt sh nm' = some t → s11.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs11d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs11pids : s11.pids = s0.pids := by rw [hs11d, BlockState.setReg_pids]; exact hs10pids
+  have hs11mem : s11.mem = s0.mem := by funext rg o; rw [hs11d, BlockState.setReg_mem]; exact hs10mem ▸ rfl
+  have hs11qk : s11.regs .real [BM, BN] "qk" = some qkS := by rw [hs11d, BlockState.setReg_same]
+  have hs11pids : s11.pids = s0.pids := by rw [hs11d, BlockState.setReg_pids]; exact hs10pids
+  have hs11mem : s11.mem = s0.mem := by funext rg o; rw [hs11d, BlockState.setReg_mem]; exact hs10mem ▸ rfl
+  -- m_i from invariant (must transport across the s setReg chain), reading msaMPartial c
+  set mp : Tile .real [BM] := ⟨fun idx : TileIndex [BM] => msaMPartial BM BN scoreA c idx.1⟩ with hmpd
+  have hs11mi : s11.regs .real [BM] "m_i" = some mp :=
+    e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hmi))))))))))
+  -- the row-max reduce of qkS
+  set rmaxT : Tile .real [BM] := ⟨fun idx : TileIndex [BM] =>
+    (Finset.univ : Finset (Fin BN)).sup (fun j => scoreA c idx.1 j)⟩ with hrmaxTd
+  have hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkS = some rmaxT := by
+    unfold Tile.reduceMaxDrop
+    rw [dif_pos (by simp only [TileShape.axisDim]; exact hBN)]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨i, u⟩ := idx
+    simp only [hrmaxTd, hqkSd, TileShape.insertAxisIndex, TileShape.axisDim, TileShape.eraseAxis]
+    rw [Finset.sup'_eq_sup]
+    rfl
+  -- A11: m_i_new = maximum(m_i, max(qk,1)) = select(gt mp rmaxT) mp rmaxT
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_minew_eval s11 BM BN mp qkS rmaxT hs11mi hs11qk hrm))]
+  -- bridge select(gt) → ⊔ → msaMPartial (c+1)
+  set mnew : Tile .real [BM] := ⟨fun idx : TileIndex [BM] => msaMPartial BM BN scoreA (c + 1) idx.1⟩ with hmnewd
+  rw [show (Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mp rmaxT) mp rmaxT)
+      = mnew from by
+    refine Tile.ext (fun idx => ?_); obtain ⟨i, u⟩ := idx
+    simp only [hmnewd, hmpd, hrmaxTd, Tile.select_data, Tile.cop_data, Tile.bop,
+      Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, msaMPartial]
+    by_cases h : (Finset.univ : Finset (Fin BN)).sup (fun j => scoreA c i j) < msaMPartial BM BN scoreA c i
+    · rw [if_pos (by simpa using h), max_eq_left (le_of_lt h)]
+    · rw [if_neg (by simpa using h), max_eq_right (not_lt.mp h)]]
+  set s12 := s11.setReg "m_i_new" .real [BM] mnew with hs12d
+  have e12 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "m_i_new" → s11.regs dt sh nm' = some t → s12.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs12d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs12pids : s12.pids = s0.pids := by rw [hs12d, BlockState.setReg_pids]; exact hs11pids
+  have hs12mem : s12.mem = s0.mem := by funext rg o; rw [hs12d, BlockState.setReg_mem]; exact hs11mem ▸ rfl
+  have hs12mnew : s12.regs .real [BM] "m_i_new" = some mnew := by rw [hs12d, BlockState.setReg_same]
+  have hs12mi : s12.regs .real [BM] "m_i" = some mp := e12 (by decide) hs11mi
+  -- A12: alpha = exp2(m_i - m_i_new)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_alpha_eval s12 BM mp mnew hs12mi hs12mnew))]
+  set alphaT : Tile .real [BM] := Tile.uop WithBot.realExp2
+    (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mp mnew) with halphaTd
+  set s13 := s12.setReg "alpha" .real [BM] alphaT with hs13d
+  have e13 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "alpha" → s12.regs dt sh nm' = some t → s13.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs13d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs13pids : s13.pids = s0.pids := by rw [hs13d, BlockState.setReg_pids]; exact hs12pids
+  have hs13mem : s13.mem = s0.mem := by funext rg o; rw [hs13d, BlockState.setReg_mem]; exact hs12mem ▸ rfl
+  have hs13alpha : s13.regs .real [BM] "alpha" = some alphaT := by rw [hs13d, BlockState.setReg_same]
+  have hs13qk : s13.regs .real [BM, BN] "qk" = some qkS := e13 (by decide) (e12 (by decide) hs11qk)
+  have hs13mnew : s13.regs .real [BM] "m_i_new" = some mnew := e13 (by decide) hs12mnew
+  -- A13: p = exp2(qk - m_i_new[:,None])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_p_eval s13 BM BN (by simp) qkS mnew hs13qk hs13mnew))]
+  set pT : Tile .real [BM, BN] := Tile.uop WithBot.realExp2
+    (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkS
+      (Tile.expandDim ⟨1, by simp⟩ mnew)) with hpTd
+  set s14 := s13.setReg "p" .real [BM, BN] pT with hs14d
+  have e14 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "p" → s13.regs dt sh nm' = some t → s14.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs14d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs14pids : s14.pids = s0.pids := by rw [hs14d, BlockState.setReg_pids]; exact hs13pids
+  have hs14mem : s14.mem = s0.mem := by funext rg o; rw [hs14d, BlockState.setReg_mem]; exact hs13mem ▸ rfl
+  have hs14p : s14.regs .real [BM, BN] "p" = some pT := by rw [hs14d, BlockState.setReg_same]
+  have hs14alpha : s14.regs .real [BM] "alpha" = some alphaT := e14 (by decide) hs13alpha
+  -- l_i from invariant
+  set liT : Tile .real [BM] := ⟨fun idx : TileIndex [BM] => (some (msaLPartial BM BN scoreA c idx.1) : WithBot ℝ)⟩ with hliTd
+  have hs14li : s14.regs .real [BM] "l_i" = some liT :=
+    e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hli)))))))))))))
+  -- A14: acc_scale = l_i*0 + alpha
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_accscale_eval s14 BM liT alphaT hs14li hs14alpha))]
+  set ascT : Tile .real [BM] := Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR liT (Tile.scalar (some (0 : ℝ) : WithBot ℝ))) alphaT with hascTd
+  set s15 := s14.setReg "acc_scale" .real [BM] ascT with hs15d
+  have e15 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "acc_scale" → s14.regs dt sh nm' = some t → s15.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs15d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs15pids : s15.pids = s0.pids := by rw [hs15d, BlockState.setReg_pids]; exact hs14pids
+  have hs15mem : s15.mem = s0.mem := by funext rg o; rw [hs15d, BlockState.setReg_mem]; exact hs14mem ▸ rfl
+  have hs15asc : s15.regs .real [BM] "acc_scale" = some ascT := by rw [hs15d, BlockState.setReg_same]
+  -- acc from invariant
+  set accT : Tile .real [BM, BD] := ⟨fun idx : TileIndex [BM, BD] =>
+    (some (msaOPartial BM BN BD scoreA vblkA c idx.1 idx.2.1) : WithBot ℝ)⟩ with haccTd
+  have hs15acc : s15.regs .real [BM, BD] "acc" = some accT :=
+    e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) (e7 (by decide) (e6 (by decide) (e5 (by decide) (e4 (by decide) (e3 (by decide) (e2 (by decide) (e1 (by decide) hacc))))))))))))))
+  -- A15: acc *= acc_scale[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_acc_rescale_eval s15 BM BD (by simp) accT ascT hs15acc hs15asc))]
+  set accMul : Tile .real [BM, BD] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+    accT (Tile.expandDim ⟨1, by simp⟩ ascT) with haccMuld
+  set s16 := s15.setReg "acc" .real [BM, BD] accMul with hs16d
+  have e16 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "acc" → s15.regs dt sh nm' = some t → s16.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs16d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs16pids : s16.pids = s0.pids := by rw [hs16d, BlockState.setReg_pids]; exact hs15pids
+  have hs16mem : s16.mem = s0.mem := by funext rg o; rw [hs16d, BlockState.setReg_mem]; exact hs15mem ▸ rfl
+  have hs16acc : s16.regs .real [BM, BD] "acc" = some accMul := by rw [hs16d, BlockState.setReg_same]
+  have hs16p : s16.regs .real [BM, BN] "p" = some pT := e16 (by decide) (e15 (by decide) hs14p)
+  have hs16v : s16.regs .real [BN, BD] "v" = some vT :=
+    e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) (e12 (by decide) (e11 (by decide) (e10 (by decide) (e9 (by decide) (e8 (by decide) hs7v))))))))
+  -- A16: acc += dot((p).to(fp16), v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_acc_eval s16 BM BN BD accMul pT vT hs16acc hs16p hs16v))]
+  set accFinal : Tile .real [BM, BD] := Tile.bop NumericDType.real.add
+    (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) accMul
+    (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real
+      (FloatDType.real.cast FloatDType.fp16 (pT.data i))⟩ : Tile .real [BM, BN]) vT) with haccFinald
+  set s17 := s16.setReg "acc" .real [BM, BD] accFinal with hs17d
+  have e17 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "acc" → s16.regs dt sh nm' = some t → s17.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs17d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs17pids : s17.pids = s0.pids := by rw [hs17d, BlockState.setReg_pids]; exact hs16pids
+  have hs17mem : s17.mem = s0.mem := by funext rg o; rw [hs17d, BlockState.setReg_mem]; exact hs16mem ▸ rfl
+  have hs17acc : s17.regs .real [BM, BD] "acc" = some accFinal := by rw [hs17d, BlockState.setReg_same]
+  have hs17li : s17.regs .real [BM] "l_i" = some liT := e17 (by decide) (e16 (by decide) hs14li)
+  have hs17alpha : s17.regs .real [BM] "alpha" = some alphaT :=
+    e17 (by decide) (e16 (by decide) (e15 (by decide) hs14alpha))
+  have hs17p : s17.regs .real [BM, BN] "p" = some pT := e17 (by decide) hs16p
+  -- A17: l_i = l_i*alpha + sum(p,1)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_li_eval s17 BM BN liT alphaT pT hs17li hs17alpha hs17p))]
+  set liFinal : Tile .real [BM] := Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+    (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) liT alphaT)
+    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pT) with hliFinald
+  set s18 := s17.setReg "l_i" .real [BM] liFinal with hs18d
+  have e18 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "l_i" → s17.regs dt sh nm' = some t → s18.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs18d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs18pids : s18.pids = s0.pids := by rw [hs18d, BlockState.setReg_pids]; exact hs17pids
+  have hs18mem : s18.mem = s0.mem := by funext rg o; rw [hs18d, BlockState.setReg_mem]; exact hs17mem ▸ rfl
+  have hs18li : s18.regs .real [BM] "l_i" = some liFinal := by rw [hs18d, BlockState.setReg_same]
+  have hs18mnew : s18.regs .real [BM] "m_i_new" = some mnew :=
+    e18 (by decide) (e17 (by decide) (e16 (by decide) (e15 (by decide) (e14 (by decide) (e13 (by decide) hs12mnew)))))
+  -- A18: m_i = m_i_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (msa_reg_carry_eval s18 BM "m_i_new" mnew hs18mnew))]
+  rw [stepStmts.nil]
+  set s19 := s18.setReg "m_i" .real [BM] mnew with hs19d
+  refine ⟨s19, rfl, ?_⟩
+  -- realExp2 always returns `some _`
+  have hexp2some : ∀ z : WithBot ℝ, WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
+    intro z; cases z <;> rfl
+  have e19 : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "m_i" → s18.regs dt sh nm' = some t → s19.regs dt sh nm' = some t := by
+    intro dt sh nm' t hne h; rw [hs19d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  -- chain a preserved register from s to s19 (skips all written names)
+  have chainAll : ∀ {dt : TileDType} {sh : TileShape} {nm' : RegName} {t : Tile dt sh},
+      nm' ≠ "block_index" → nm' ≠ "cond" → nm' ≠ "start_n" → nm' ≠ "cols" → nm' ≠ "n_mask"
+      → nm' ≠ "k" → nm' ≠ "v" → nm' ≠ "qk" → nm' ≠ "causal_mask" → nm' ≠ "m_i_new"
+      → nm' ≠ "alpha" → nm' ≠ "p" → nm' ≠ "acc_scale" → nm' ≠ "acc" → nm' ≠ "l_i" → nm' ≠ "m_i"
+      → s.regs dt sh nm' = some t → s19.regs dt sh nm' = some t := by
+    intro dt sh nm' t h0 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h
+    exact e19 h15 (e18 h14 (e17 h13 (e16 h13 (e15 h12 (e14 h11 (e13 h10 (e12 h9 (e11 h7
+      (e10 h7 (e9 h8 (e8 h7 (e7 h6 (e6 h5 (e5 h4 (e4 h3 (e3 h2 (e2 h1 (e1 h0 h))))))))))))))))))
+  have hs19pids : s19.pids = s0.pids := by rw [hs19d, BlockState.setReg_pids]; exact hs18pids
+  have hs19mem : s19.mem = s0.mem := by funext rg o; rw [hs19d, BlockState.setReg_mem]; exact hs18mem ▸ rfl
+  have hs19undef : ∀ rg o, s19.undef rg o = 0 := by
+    intro rg o
+    have : s19.undef rg o = s.undef rg o := by
+      rw [hs19d, BlockState.setReg_undef, hs18d, BlockState.setReg_undef, hs17d, BlockState.setReg_undef,
+        hs16d, BlockState.setReg_undef, hs15d, BlockState.setReg_undef, hs14d, BlockState.setReg_undef,
+        hs13d, BlockState.setReg_undef, hs12d, BlockState.setReg_undef, hs11d, BlockState.setReg_undef,
+        hs10d, BlockState.setReg_undef, hs9d, BlockState.setReg_undef, hs8d, BlockState.setReg_undef,
+        hs7d, BlockState.setReg_undef, hs6d, BlockState.setReg_undef, hs5d, BlockState.setReg_undef,
+        hs4d, BlockState.setReg_undef, hs3d, BlockState.setReg_undef, hs2d, BlockState.setReg_undef,
+        hs1d, BlockState.setReg_undef]
+    rw [this]; exact hundef rg o
+  unfold msaInvariantAGS
+  refine ⟨hs19pids, hs19mem, hs19undef, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hsm
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hoh
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hseq
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hoffm
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hoffn
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hoffd
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hnb
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hnc
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hbp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hcp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hq
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hkp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hvp
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hop
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hmmask
+  · exact chainAll (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hmnb
+  · -- m_i = msaMPartial (c+1)
+    rw [hs19d, BlockState.setReg_same]
+  · -- l_i = some (msaLPartial (c+1))
+    rw [show s19.regs .real [BM] "l_i" = some liFinal from by
+      rw [hs19d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hs18li]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨i, u⟩ := idx
+    show liFinal.data (i, u) = (some (msaLPartial BM BN scoreA (c + 1) i) : WithBot ℝ)
+    -- the reduce-sum lane → some of real sum
+    have hsumL : (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pT).data (i, PUnit.unit)
+        = (some ((Finset.univ : Finset (Fin BN)).sum (fun j : Fin BN =>
+            (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (scoreA c i j)
+              (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0)) : WithBot ℝ) := by
+      rw [Tile.reduceSumDrop_data, ← WithBot.sum_someTerm_eq_some]
+      apply Finset.sum_congr rfl; intro j _
+      simp only [hpTd, hmnewd, hqkSd, Tile.uop_data, Tile.bop_data, Tile.bop, Tile.expandDim_data,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub, TileShape.insertAxisIndex,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.dropInsertedIndex, WithBot.realSub]
+      exact hexp2some _
+    simp only [hliFinald, halphaTd, hmpd, hmnewd, hliTd, Tile.bop_data, Tile.bop,
+      Tile.uop_data, NumericDType.add, NumericDType.mul, NumericDType.sub,
+      Broadcast.leftIndex, Broadcast.rightIndex, WithBot.realSub, WithBot.realAdd, WithBot.realMul]
+    rw [hexp2some (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN scoreA c i) (msaMPartial BM BN scoreA (c+1) i))]
+    erw [hsumL]
+    rw [Option.map₂_some_some, Option.map₂_some_some]
+    rw [show msaLPartial BM BN scoreA (c + 1) i =
+        (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN scoreA c i)
+            (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0 * msaLPartial BM BN scoreA c i +
+          (Finset.univ : Finset (Fin BN)).sum (fun j =>
+            (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (scoreA c i j)
+              (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0) from rfl]
+    refine congrArg some ?_; ring
+  · -- acc = some (msaOPartial (c+1))
+    rw [show s19.regs .real [BM, BD] "acc" = some accFinal from by
+      rw [hs19d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        hs18d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hs17acc]
+    refine congrArg some (Tile.ext (fun idx => ?_)); obtain ⟨i, d, u⟩ := idx
+    show accFinal.data (i, d, u) = (some (msaOPartial BM BN BD scoreA vblkA (c + 1) i d) : WithBot ℝ)
+    -- the p·v dot lane → some of real sum
+    have hsumO : (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 (pT.data i))⟩ : Tile .real [BM, BN]) vT).data (i, d, PUnit.unit)
+        = (some ((Finset.univ : Finset (Fin BN)).sum (fun j : Fin BN =>
+            (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (scoreA c i j)
+              (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0 * vblkA c j d)) : WithBot ℝ) := by
+      rw [Tile.dot_nil_data, ← WithBot.sum_someTerm_eq_some]
+      apply Finset.sum_congr rfl; intro j _
+      simp only [hpTd, hmnewd, hqkSd, hvTd, Tile.uop_data, Tile.bop_data, Tile.bop,
+        Tile.expandDim_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub,
+        TileShape.dropInsertedIndex, WithBot.realSub]
+      rw [hexp2some (Option.map₂ (fun x y : ℝ => x - y) (scoreA c i j) (msaMPartial BM BN scoreA (c+1) i)),
+        ← hvblk j d]
+      simp only [FloatDType.cast, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+        FloatDType.real_ofWithBot, FloatDType.real_toWithBot]
+      rfl
+    simp only [haccFinald, haccMuld, halphaTd, hmpd, hmnewd, haccTd, hascTd, hliTd,
+      Tile.bop_data, Tile.bop, Tile.uop_data, Tile.expandDim_data, Tile.scalar,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul, NumericDType.sub,
+      TileShape.dropInsertedIndex, WithBot.realSub, WithBot.realAdd, WithBot.realMul]
+    rw [hexp2some (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN scoreA c i) (msaMPartial BM BN scoreA (c+1) i))]
+    rw [hsumO]
+    rw [Option.map₂_some_some, Option.map₂_some_some, Option.map₂_some_some, Option.map₂_some_some]
+    rw [show msaOPartial BM BN BD scoreA vblkA (c + 1) i d =
+        (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (msaMPartial BM BN scoreA c i)
+            (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0 * msaOPartial BM BN BD scoreA vblkA c i d +
+          (Finset.univ : Finset (Fin BN)).sum (fun j =>
+            (WithBot.realExp2 (Option.map₂ (fun x y : ℝ => x - y) (scoreA c i j)
+              (msaMPartial BM BN scoreA (c + 1) i))).unbotD 0 * vblkA c j d) from rfl]
+    refine congrArg some ?_
+    ring
+
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
