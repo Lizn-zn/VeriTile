@@ -13000,4 +13000,207 @@ theorem msa_attn_stepBGS
               (msaSeedMax BM BN mA scoreB (c + 1) i))).unbotD 0 * vblkB c j d) from rfl]
     refine congrArg some ?_; ring
 
+
+/-! ## FULLY-GENERAL stream defs + loop drivers + handoff (symbolic strides + layout) -/
+
+
+/-- Symbolic masked block-start gather. -/
+noncomputable def msaSN0GS (s0 : BlockState) (Blocks BlockOffsets : Region .nat) (NR NS c : Nat) : Nat :=
+  if c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0) then
+    s0.readMemValue .nat (Region.cast BlockOffsets) ((s0.pids 1 * NR + s0.pids 0) * NS + c)
+  else BlockState.defaultCarrier .nat
+
+/-- Symbolic block-A score stream. -/
+noncomputable def msaScoreA0GS (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BM BN BD H NR NS skn : Nat) (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (s0 : BlockState) : Nat → Fin BM → Fin BN → WithBot ℝ :=
+  fun c i j => msaScoreLaneAGS Q K Seqlens Blocks BlockOffsets BM BN BD H NR skn qF kpF s0 c
+    (msaSN0GS s0 Blocks BlockOffsets NR NS c) i j
+
+/-- Symbolic block-A value stream. -/
+noncomputable def msaVblkA0GS (V : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BD BN H NR NS svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) :
+    Nat → Fin BN → Fin BD → ℝ :=
+  fun c j d => (msaVLaneAGS V Seqlens Blocks BD BN H NR svn vpF s0 c (msaSN0GS s0 Blocks BlockOffsets NR NS c) j d).unbotD 0
+
+theorem msaVLaneAGS_some_unbotD (V : RegionName) (Seqlens Blocks : Region .nat)
+    (BD BN H NR svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) (c SN : Nat)
+    (j : Fin BN) (d : Fin BD) :
+    (some ((msaVLaneAGS V Seqlens Blocks BD BN H NR svn vpF s0 c SN j d).unbotD 0) : WithBot ℝ)
+      = msaVLaneAGS V Seqlens Blocks BD BN H NR svn vpF s0 c SN j d := by
+  unfold msaVLaneAGS
+  split <;> simp [WithBot.unbotD_coe]
+
+theorem msaVLaneBGS_some_unbotD (Blocks ColCounts : Region .nat)
+    (BD BN NR svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) (sv : Nat)
+    (gcol : Fin BN → Nat) (j : Fin BN) (d : Fin BD) :
+    (some ((msaVLaneBGS Blocks ColCounts BD BN NR svn vpF s0 sv gcol j d).unbotD 0) : WithBot ℝ)
+      = msaVLaneBGS Blocks ColCounts BD BN NR svn vpF s0 sv gcol j d := by
+  unfold msaVLaneBGS
+  split <;> simp [WithBot.unbotD_coe]
+
+/-- Symbolic gathered columns at loop value `sv`. -/
+noncomputable def msaGcol0GS (s0 : BlockState) (Cols ColCounts : Region .nat) (BN NR NV sv : Nat) :
+    Fin BN → Nat :=
+  fun j => msaColLaneBGS Cols ColCounts BN NR NV s0 sv j
+
+/-- Symbolic column-B score stream (loop value `sv = c·BN`). -/
+noncomputable def msaScoreB0GS (Q K : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD H NR NV skn : Nat) (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (s0 : BlockState) : Nat → Fin BM → Fin BN → WithBot ℝ :=
+  fun c i j => msaScoreLaneBGS Blocks ColCounts Seqlens BM BN BD H NR skn qF kpF s0 (c * BN)
+    (msaGcol0GS s0 Cols ColCounts BN NR NV (c * BN)) i j
+
+/-- Symbolic column-B value stream. -/
+noncomputable def msaVblkB0GS (V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BD BN NR NV svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) :
+    Nat → Fin BN → Fin BD → ℝ :=
+  fun c j d => (msaVLaneBGS Blocks ColCounts BD BN NR svn vpF s0 (c * BN)
+    (msaGcol0GS s0 Cols ColCounts BN NR NV (c * BN)) j d).unbotD 0
+
+set_option maxHeartbeats 4000000 in
+/-- **General Loop-A driver.** -/
+theorem msa_loopA_execGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD : Nat) (hBN : 0 < BN) (H NR NS NV skn svn : Nat)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 s : BlockState)
+    (hinv : msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+      (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn qF kpF s0)
+      (msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn vpF s0) qF kpF vpF opF s0 0 s) :
+    ∃ sF, stepStmt (Stmt.forRangeDyn "block_index" (Op.constNat 0)
+        (Op.ref .nat [] "max_num_blks") (Op.constNat 1) (msaLoopBodyAGS BM BN BD skn svn)) s = some sF
+      ∧ msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+          (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn qF kpF s0)
+          (msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn vpF s0) qF kpF vpF opF s0 8 sF := by
+  set scoreA := msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn qF kpF s0 with hscA
+  set vblkA := msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn vpF s0 with hvbA
+  have hmnb : s.regs .nat [] "max_num_blks" = some (Tile.scalar 8) := by
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, h, _⟩ := hinv; exact h
+  obtain ⟨final, sF, hloop, hfin, hP⟩ :=
+    VeriTile.Triton.forRangeDyn_inv (idx := "block_index")
+      (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "max_num_blks")
+      (stepOp := Op.constNat 1)
+      (P := fun i st => msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+        scoreA vblkA qF kpF vpF opF s0 i st ∧ i ≤ 8)
+      (s_init := s) (start := 0) (stop := 8) (step := 1)
+      (by rw [evalOp_constNat]) (by rw [evalOp_ref, hmnb]) (by rw [evalOp_constNat])
+      (by norm_num) ⟨hinv, by norm_num⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hPinv, hPle⟩ := hPi
+        obtain ⟨s', hstep, hinv'⟩ := msa_attn_stepAGS Q K V Seqlens Blocks BlockOffsets
+          ColCounts Cols Out BM BN BD hBN H NR NS NV skn svn scoreA vblkA qF kpF vpF opF s0 i
+          (msaSN0GS s0 Blocks BlockOffsets NR NS i) st hPinv rfl
+          (fun a b => rfl)
+          (fun a b => by rw [hvbA]; exact msaVLaneAGS_some_unbotD V Seqlens Blocks BD BN H NR svn vpF s0 i _ a b)
+        exact ⟨s', hstep, hinv', by omega⟩)
+  refine ⟨sF, hloop, ?_⟩
+  obtain ⟨hPinv, hPle⟩ := hP
+  have : final = 8 := by omega
+  subst this; exact hPinv
+
+set_option maxHeartbeats 4000000 in
+/-- **General Loop-B driver.** Needs `16 ≤ BN` so exactly one column block runs
+(`range(0, 16, BN)` has one iteration when `BN ≥ 16`). -/
+theorem msa_loopB_execGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD : Nat) (hBN : 0 < BN) (hBN16 : 16 ≤ BN) (H NR NS NV skn svn : Nat)
+    (mA : Fin BM → WithBot ℝ) (lA : Fin BM → ℝ) (oA : Fin BM → Fin BD → ℝ)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 s : BlockState)
+    (hinv : msaInvariantBGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+      (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn qF kpF s0)
+      (msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn vpF s0)
+      mA lA oA qF kpF vpF opF s0 0 s) :
+    ∃ sF, stepStmt (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+        (Op.ref .nat [] "max_num_cols") (Op.constNat BN) (msaLoopBodyBGS BM BN BD skn svn)) s = some sF
+      ∧ msaInvariantBGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+          (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn qF kpF s0)
+          (msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn vpF s0)
+          mA lA oA qF kpF vpF opF s0 1 sF := by
+  set scoreB := msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn qF kpF s0 with hscB
+  set vblkB := msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn vpF s0 with hvbB
+  have hmnc : s.regs .nat [] "max_num_cols" = some (Tile.scalar 16) := by
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, h, _⟩ := hinv; exact h
+  obtain ⟨final, sF, hloop, hfin, hP⟩ :=
+    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "max_num_cols")
+      (stepOp := Op.constNat BN)
+      (P := fun i st => msaInvariantBGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+        scoreB vblkB mA lA oA qF kpF vpF opF s0 (i / BN) st ∧ i % BN = 0 ∧ i ≤ BN)
+      (s_init := s) (start := 0) (stop := 16) (step := BN)
+      (by rw [evalOp_constNat]) (by rw [evalOp_ref, hmnc]) (by rw [evalOp_constNat])
+      (by exact hBN.ne') ⟨by rw [Nat.zero_div]; exact hinv, by simp, by omega⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hPinv, hPmod, hPle⟩ := hPi
+        obtain ⟨s', hstep, hinv'⟩ := msa_attn_stepBGS Q K V Seqlens Blocks BlockOffsets
+          ColCounts Cols Out BM BN BD hBN H NR NS NV skn svn scoreB vblkB mA lA oA qF kpF vpF opF s0 (i / BN) i st hPinv
+          (msaGcol0GS s0 Cols ColCounts BN NR NV i) (fun j => rfl)
+          (fun a b => by
+            have hii : i / BN * BN = i := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hPmod)
+            rw [hscB, msaScoreB0GS, hii])
+          (fun a b => by
+            have hii : i / BN * BN = i := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hPmod)
+            rw [hvbB, msaVblkB0GS, hii]
+            exact msaVLaneBGS_some_unbotD Blocks ColCounts BD BN NR svn vpF s0 i _ a b)
+        have hi0 : i = 0 := by
+          have hltBN : i < BN := lt_of_lt_of_le hlt hBN16
+          rw [Nat.mod_eq_of_lt hltBN] at hPmod; exact hPmod
+        refine ⟨s', hstep, ?_, by rw [hi0]; simp, by omega⟩
+        rw [show (i + BN) / BN = i / BN + 1 from by
+          rw [Nat.add_div_right _ hBN]]; exact hinv')
+  refine ⟨sF, hloop, ?_⟩
+  obtain ⟨hPinv, hPmod, hPle⟩ := hP
+  -- final ≥ 16 (it is the first multiple of BN reaching the stop), ≤ BN, and a multiple of BN ⇒ = BN
+  have hfge : 16 ≤ final := by omega
+  have hdvd : BN ∣ final := Nat.dvd_of_mod_eq_zero hPmod
+  have hf : final = BN := by
+    rcases (Nat.eq_zero_or_pos final) with h0 | hpos
+    · omega
+    · exact Nat.le_antisymm hPle (Nat.le_of_dvd hpos hdvd)
+  rw [show (1 : Nat) = final / BN from by rw [hf]; rw [Nat.div_self hBN]]; exact hPinv
+
+set_option maxHeartbeats 4000000 in
+/-- **General A→B handoff.** -/
+theorem msa_handoffGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD H NR NS NV : Nat)
+    (scoreA : Nat → Fin BM → Fin BN → WithBot ℝ) (vblkA : Nat → Fin BN → Fin BD → ℝ)
+    (scoreB : Nat → Fin BM → Fin BN → WithBot ℝ) (vblkB : Nat → Fin BN → Fin BD → ℝ)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 : BlockState) (bF : Nat) (s : BlockState)
+    (hinv : msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+      scoreA vblkA qF kpF vpF opF s0 bF s) :
+    ∃ s', stepStmts [Stmt.assign .nat [] "max_num_cols" (Op.constNat 16)] s = some s'
+      ∧ msaInvariantBGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
+          scoreB vblkB (msaMPartial BM BN scoreA bF)
+          (fun i => msaLPartial BM BN scoreA bF i)
+          (fun i d => msaOPartial BM BN BD scoreA vblkA bF i d)
+          qF kpF vpF opF s0 0 s' := by
+  obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
+    hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmi, hli, hacc⟩ := hinv
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 16 s)), stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  set s' := s.setReg "max_num_cols" .nat [] (Tile.scalar 16) with hs'd
+  have e : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "max_num_cols" → s.regs dt sh nm = some t → s'.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs'd, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  refine ⟨by rw [hs'd, BlockState.setReg_pids]; exact hpids,
+    by funext rg o; rw [hs'd, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o,
+    by intro rg o; rw [hs'd, BlockState.setReg_undef]; exact hundef rg o,
+    e (by decide) hsm, e (by decide) hoh, e (by decide) hseq, e (by decide) hoffm,
+    e (by decide) hoffn, e (by decide) hoffd, e (by decide) hnb, e (by decide) hnc,
+    e (by decide) hbp, e (by decide) hcp, e (by decide) hq, e (by decide) hkp,
+    e (by decide) hvp, e (by decide) hop, e (by decide) hmmask, e (by decide) hmnb,
+    by rw [hs'd, BlockState.setReg_same], ?_, ?_, ?_⟩
+  · rw [e (by decide) hmi]; rfl
+  · rw [e (by decide) hli]; rfl
+  · rw [e (by decide) hacc]; rfl
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
