@@ -10720,4 +10720,153 @@ theorem mixed_sparse_attention_offset_injectiveG
   have hm : ma = mb := by omega
   have hd : da = db := by omega
   subst hm; subst hd; rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readback.** Stepping the 2 post-loop statements
+(`acc /= l_i`, masked fp16 store of `acc`) from a Loop-B-end state satisfying
+`msaInvariantB … 1` (one column block run, seeded by Loop-A's 8-block finals), the
+kernel's `Out` store holds the genuine closed form `mixedSparseAttnClosedForm` at
+every active output lane (`pids 0·64 + i < seqlen`) and preserves inactive lanes.
+The faithful regime side conditions (`num_cols ≤ 64`, per-active-lane positive cat
+denominator) are supplied as hypotheses. -/
+theorem msaPostLoop_evalG
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (Out : RegionName) (BM BN BD : Nat) (hBN16 : 16 ≤ BN) (hBD : BD ≤ 64) (s0 s : BlockState) (sm_scale : ℝ)
+    (hNCBN : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ BN)
+    (hpos : ∀ i : Fin BM, s0.pids 0 * BM + i.val < seqLen s0 4 (Region.cast Seqlens) →
+      0 < msaDenomUpto BM BN
+        (msaCatScore0G Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD s0 sm_scale) 9 i)
+    (hinv : msaInvariantBG Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD
+      (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+      (msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0)
+      (msaMPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+      (msaLPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+      (fun ii dd => msaOPartial BM BN BD
+        (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+        (msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0) 8 ii dd)
+      (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) (msaVPtrG V BD s0) (msaOPtrG Out BM BD s0) s0 1 s) :
+    ∃ sP, stepStmts (msaPostLoopG BM BD) s = some sP
+      ∧ ∀ idx : TileIndex [BM, BD],
+          sP.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 BM idx)
+            = if s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens) then
+                (some (mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
+                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+                  (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
+                  (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+                  (seqLen s0 4 (Region.cast Seqlens)) BD BM BN sm_scale idx.1 (dIndex idx)) : WithBot ℝ)
+              else s.readMemValue .fp16 Out (outOffset s0 4 32768 8192 64 1 BM idx) := by
+  obtain ⟨hpids, hmem, hundef, hsm, hoh, hseq, hoffm, hoffn, hoffd, hnb, hnc,
+    hbp, hcp, hq, hkp, hvp, hop, hmmask, hmnb, hmnc, hmi, hli, hacc⟩ := hinv
+  set scoreA := msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscA
+  set scoreB := msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscB
+  set vblkA := msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0 with hvbA
+  set vblkB := msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0 with hvbB
+  set mA := msaMPartial BM BN scoreA 8 with hmA
+  set lA := msaLPartial BM BN scoreA 8 with hlA
+  set oA := fun ii dd => msaOPartial BM BN BD scoreA vblkA 8 ii dd with hoA
+  -- the per-lane ratio register value after the divide
+  set ratio : TileIndex [BM, BD] → ℝ := fun idx =>
+    msaOPartialSeed BM BN BD mA lA oA scoreB vblkB 1 idx.1 idx.2.1
+      / msaLPartialSeed BM BN mA lA scoreB 1 idx.1 with hratio
+  unfold msaPostLoopG
+  -- stmt 0: acc = acc / l_i[:, None]
+  have hexpand : @evalOp .real [BM, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "l_i")) s
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx : TileIndex [BM] =>
+            (some (msaLPartialSeed BM BN mA lA scoreB 1 idx.1) : WithBot ℝ)⟩ : Tile .real [BM])) :=
+    evalOp_expandDim_ref_of_regs .real [BM] ⟨1, by simp⟩ "l_i" s _ hli
+  have hdiv : evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "l_i"))) s
+      = some (⟨fun idx : TileIndex [BM, BD] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [BM, BD]) := by
+    rw [evalOp_div]
+    simp only [evalOp_ref, hacc, hexpand, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.bop_data, Tile.bop, Tile.expandDim, NumericDType.div,
+      Broadcast.leftIndex, Broadcast.rightIndex, TileShape.dropInsertedIndex, hratio]
+    rfl
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hdiv)]
+  set s1 := s.setReg "acc" .real [BM, BD]
+    (⟨fun idx : TileIndex [BM, BD] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [BM, BD]) with hs1d
+  have e1 : ∀ {dt : TileDType} {sh : TileShape} {nm : RegName} {t : Tile dt sh},
+      nm ≠ "acc" → s.regs dt sh nm = some t → s1.regs dt sh nm = some t := by
+    intro dt sh nm t hne h; rw [hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]; exact h
+  have hs1acc : s1.regs .real [BM, BD] "acc" = some
+      (⟨fun idx : TileIndex [BM, BD] => (some (ratio idx) : WithBot ℝ)⟩ : Tile .real [BM, BD]) := by
+    rw [hs1d, BlockState.setReg_same]
+  have hs1op : s1.regs .ptr [BM, BD] "o_ptrs" = some
+      (⟨fun idx : TileIndex [BM, BD] => msaOPtrG Out BM BD s0 idx⟩ : Tile .ptr [BM, BD]) := e1 (by decide) hop
+  have hs1mm : s1.regs .bool [BM, 1] "m_mask" = some
+      (⟨fun idx : TileIndex [BM, 1] =>
+        decide (s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [BM, 1]) :=
+    e1 (by decide) hmmask
+  have hs1mem : s1.mem = s0.mem := by
+    funext rg o; rw [hs1d, BlockState.setReg_mem]; exact congrFun (congrFun hmem rg) o
+  have hs1pids : s1.pids = s0.pids := by rw [hs1d, BlockState.setReg_pids]; exact hpids
+  -- stmt 1: masked fp16 store of acc at o_ptrs
+  have hstore : stepStmt (Stmt.store FloatDType.fp16.toTileDType [BM, BD]
+      (MemAccess.ptr (Op.ref .ptr [BM, BD] "o_ptrs"))
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BD] "acc"))
+      (MaskOpt.mask (Op.remap [BM, BD] Broadcast.nil.consL.consSame.leftIndex
+        (Op.ref .bool [BM, 1] "m_mask")))) s1
+      = some ((TileShape.allIndices [BM, BD]).foldl
+          (fun acc idx =>
+            if s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens) then
+              acc.writeMemTyped FloatDType.fp16.toTileDType Out (outOffset s0 4 32768 8192 64 1 BM idx)
+                (FloatDType.real.cast FloatDType.fp16 (some (ratio idx)))
+            else acc) s1) := by
+    have hval : evalOp (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BD] "acc")) s1
+        = some (⟨fun idx : TileIndex [BM, BD] =>
+            FloatDType.real.cast FloatDType.fp16 (some (ratio idx))⟩ : Tile FloatDType.fp16.toTileDType [BM, BD]) := by
+      rw [evalOp_castFloat]
+      erw [evalOp_ref, hs1acc]
+      rfl
+    have hmask : @evalOp .bool [BM, BD] (Op.remap [BM, BD] Broadcast.nil.consL.consSame.leftIndex
+          (Op.ref .bool [BM, 1] "m_mask")) s1
+        = some (Tile.remap Broadcast.nil.consL.consSame.leftIndex
+            (⟨fun idx : TileIndex [BM, 1] =>
+              decide (s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens))⟩ : Tile .bool [BM, 1])) := by
+      rw [msa_evalOp_remap]
+      erw [evalOp_ref, hs1mm]
+      rfl
+    have hptr : evalOp (Op.ref .ptr [BM, BD] "o_ptrs") s1
+        = some (⟨fun idx : TileIndex [BM, BD] => msaOPtrG Out BM BD s0 idx⟩ : Tile .ptr [BM, BD]) := by
+      rw [evalOp_ref, hs1op]
+    unfold stepStmt
+    simp only [hval, hmask, hptr, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, u⟩ := idx
+    simp only [Tile.cop_data, Tile.remap, Broadcast.leftIndex, Broadcast.rightIndex,
+      TileShape.dropInsertedIndex, decide_eq_true_eq, outOffset, offZ, offH, mIndex, dIndex,
+      msaOPtrG, mul_one]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  have hinj : Function.Injective (fun idx : TileIndex [BM, BD] =>
+      outOffset s0 4 32768 8192 64 1 BM idx) :=
+    mixed_sparse_attention_offset_injectiveG BM BD hBD s0
+  rw [msa_fp16_scatter_readback s1
+    (fun idx : TileIndex [BM, BD] => outOffset s0 4 32768 8192 64 1 BM idx)
+    (fun idx : TileIndex [BM, BD] => FloatDType.real.cast FloatDType.fp16 (some (ratio idx)))
+    (fun idx : TileIndex [BM, BD] => s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens))
+    hinj idx]
+  by_cases hlt : s0.pids 0 * BM + idx.1.val < seqLen s0 4 (Region.cast Seqlens)
+  · rw [if_pos hlt, if_pos hlt]
+    obtain ⟨ir, dd, u⟩ := idx
+    -- fp16 round-trip is identity: stored cell value = some ratio = some closedForm
+    rw [show FloatDType.fp16.ofReal (FloatDType.fp16.storeValue
+          (FloatDType.real.cast FloatDType.fp16 (some (ratio (ir, dd, u)))))
+        = (some (ratio (ir, dd, u)) : WithBot ℝ) from rfl]
+    rw [hratio]
+    exact congrArg some
+      (msaSeeded_ratio_eq_closedFormG Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD hBN16 s0 sm_scale ir dd
+        hNCBN (hpos ir hlt))
+  · rw [if_neg hlt, if_neg hlt]
+    simp only [BlockState.readMemValue, BlockState.readMemAs, hs1mem, hmem]
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
