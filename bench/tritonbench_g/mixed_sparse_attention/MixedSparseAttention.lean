@@ -11914,4 +11914,85 @@ theorem msaPreLoop_evalGS
       ne_eq, String.reduceEq, not_false_eq_true]
     refine congrArg some (Tile.ext (fun idx => ?_))
     simp only [msaOPartial_zero]
+
+/-! ## FULLY-GENERAL lane defs (symbolic strides + layout) -/
+
+/-! ## GENERAL lane defs (symbolic block dims) -/
+
+/-- Symbolic Loop-A masked K-load lane `(e,j)`. -/
+noncomputable def msaKLaneAGS (K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BD BN H NR skn : Nat) (kpF : TileIndex [BD, 1] → RegionName × Nat) (s0 : BlockState) (c SN : Nat)
+    (e : Fin BD) (j : Fin BN) : WithBot ℝ :=
+  if (SN + j.val < seqLen s0 H (Region.cast Seqlens)
+      ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0)) then
+    (s0.readMemValue .real (kpF (e, ⟨0, by simp⟩, PUnit.unit)).1
+      ((kpF (e, ⟨0, by simp⟩, PUnit.unit)).2 + (SN + j.val) * skn) : WithBot ℝ)
+  else (some (0.0 : ℝ) : WithBot ℝ)
+
+/-- Symbolic Loop-A masked V-load lane `(j,d)`. -/
+noncomputable def msaVLaneAGS (V : RegionName) (Seqlens Blocks : Region .nat)
+    (BD BN H NR svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) (c SN : Nat)
+    (j : Fin BN) (d : Fin BD) : WithBot ℝ :=
+  if (SN + j.val < seqLen s0 H (Region.cast Seqlens)
+      ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0)) then
+    (s0.readMemValue .real (vpF (⟨0, by simp⟩, d, PUnit.unit)).1
+      ((vpF (⟨0, by simp⟩, d, PUnit.unit)).2 + (SN + j.val) * svn) : WithBot ℝ)
+  else (some (0.0 : ℝ) : WithBot ℝ)
+
+/-- Symbolic Loop-A masked `qk` lane `(i,j)`. -/
+noncomputable def msaScoreLaneAGS (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BM BN BD H NR skn : Nat) (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (s0 : BlockState) (c SN : Nat) (i : Fin BM) (j : Fin BN) : WithBot ℝ :=
+  Option.map₂ (· + ·)
+    (if (s0.pids 0 * BM + i.val < seqLen s0 H (Region.cast Seqlens)
+        ∧ SN + j.val ≤ s0.pids 0 * BM + i.val) then
+      (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+    (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+      (fun e : Fin BD => Option.map₂ (· * ·)
+        (FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 (qF (i, e, PUnit.unit))))
+        (msaKLaneAGS K Seqlens Blocks BlockOffsets BD BN H NR skn kpF s0 c SN e j)))
+
+/-- Symbolic Loop-B gathered column lane `j`. -/
+noncomputable def msaColLaneBGS (Cols : Region .nat) (ColCounts : Region .nat)
+    (BN NR NV : Nat) (s0 : BlockState) (sv : Nat) (j : Fin BN) : Nat :=
+  if sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0) then
+    s0.readMemValue .nat (Region.cast Cols) ((s0.pids 1 * NR + s0.pids 0) * NV + sv + j.val)
+  else 0
+
+/-- Symbolic Loop-B masked K-load lane `(e,j)`. -/
+noncomputable def msaKLaneBGS (Blocks ColCounts : Region .nat)
+    (BD BN NR skn : Nat) (kpF : TileIndex [BD, 1] → RegionName × Nat) (s0 : BlockState) (sv : Nat)
+    (gcol : Fin BN → Nat) (e : Fin BD) (j : Fin BN) : WithBot ℝ :=
+  if (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0)
+      ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0)) then
+    (s0.readMemValue .real (kpF (e, ⟨0, by simp⟩, PUnit.unit)).1
+      ((kpF (e, ⟨0, by simp⟩, PUnit.unit)).2 + gcol j * skn) : WithBot ℝ)
+  else (some (0.0 : ℝ) : WithBot ℝ)
+
+/-- Symbolic Loop-B masked V-load lane `(j,d)`. -/
+noncomputable def msaVLaneBGS (Blocks ColCounts : Region .nat)
+    (BD BN NR svn : Nat) (vpF : TileIndex [1, BD] → RegionName × Nat) (s0 : BlockState) (sv : Nat)
+    (gcol : Fin BN → Nat) (j : Fin BN) (d : Fin BD) : WithBot ℝ :=
+  if (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0)
+      ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0)) then
+    (s0.readMemValue .real (vpF (⟨0, by simp⟩, d, PUnit.unit)).1
+      ((vpF (⟨0, by simp⟩, d, PUnit.unit)).2 + gcol j * svn) : WithBot ℝ)
+  else (some (0.0 : ℝ) : WithBot ℝ)
+
+/-- Symbolic Loop-B masked `qk` lane `(i,j)` (NON-causal). -/
+noncomputable def msaScoreLaneBGS (Blocks ColCounts : Region .nat) (Seqlens : Region .nat)
+    (BM BN BD H NR skn : Nat) (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (s0 : BlockState) (sv : Nat) (gcol : Fin BN → Nat) (i : Fin BM) (j : Fin BN) : WithBot ℝ :=
+  Option.map₂ (· + ·)
+    (if (s0.pids 0 * BM + i.val < seqLen s0 H (Region.cast Seqlens)
+        ∧ (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0)
+          ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0))) then
+      (some (0 : ℝ) : WithBot ℝ) else (⊥ : WithBot ℝ))
+    (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+      (fun e : Fin BD => Option.map₂ (· * ·)
+        (FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 (qF (i, e, PUnit.unit))))
+        (msaKLaneBGS Blocks ColCounts BD BN NR skn kpF s0 sv gcol e j)))
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
