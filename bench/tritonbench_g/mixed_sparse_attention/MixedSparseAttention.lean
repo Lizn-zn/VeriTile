@@ -10657,4 +10657,67 @@ theorem msa_catFold_eq_closedFormG
     · rw [if_pos (And.intro hrow (And.intro hcNC h0NC)), if_pos hrow, if_pos (And.intro hcNC h0NC)]
     · rw [if_neg (by tauto : ¬(s0.pids 0 * BM + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC))), if_neg hrow]
 
+
+noncomputable abbrev msaCatScore0G
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD : Nat) (s0 : BlockState) (sm_scale : ℝ := 0.1) : Nat → Fin BM → Fin BN → WithBot ℝ :=
+  msaCatScore BM BN 8
+    (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+    (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+
+/-- **Seeded-ratio bridge.** The two-phase seeded online-softmax ratio at the
+Loop-B end (`c = 1`, seeded by Loop-A's `bF = 8` finals) equals
+`mixedSparseAttnClosedForm`, given the cat denominator is positive at this lane. -/
+theorem msaSeeded_ratio_eq_closedFormG
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD : Nat) (hBN16 : 16 ≤ BN) (s0 : BlockState) (sm_scale : ℝ) (i : Fin BM) (d : Fin BD)
+    (hNCBN : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) ≤ BN)
+    (hpos : 0 < msaDenomUpto BM BN
+      (msaCatScore0G Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD s0 sm_scale) 9 i) :
+    (msaOPartialSeed BM BN BD
+        (msaMPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+        (msaLPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+        (fun ii dd => msaOPartial BM BN BD
+          (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+          (msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0) 8 ii dd)
+        (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0)
+        (msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0) 1 i d)
+      / (msaLPartialSeed BM BN
+        (msaMPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+        (msaLPartial BM BN (msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 8)
+        (msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0) 1 i)
+    = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols 4
+        32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
+        (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0))
+        (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+        (seqLen s0 4 (Region.cast Seqlens)) BD BM BN sm_scale i d := by
+  set scoreA := msaScoreA0G Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscA
+  set scoreB := msaScoreB0G Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0) s0 with hscB
+  set vblkA := msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0 with hvbA
+  set vblkB := msaVblkB0G V Seqlens Blocks BlockOffsets ColCounts Cols BD BN (msaVPtrG V BD s0) s0 with hvbB
+  rw [msaOPartialSeed_eq_cat BM BN BD 8 scoreA scoreB vblkA vblkB _ _ 1 i d rfl rfl,
+      msaLPartialSeed_eq_cat BM BN 8 scoreA scoreB _ 1 i rfl,
+      show (8 + 1 : Nat) = 9 from rfl]
+  rw [msaPartial_ratio_collapse BM BN BD _ _ 9 i d (by
+    rw [show msaCatScore BM BN 8 scoreA scoreB
+        = msaCatScore0G Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD s0 sm_scale from rfl]
+    exact hpos)]
+  exact msa_catFold_eq_closedFormG Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD hBN16 s0 sm_scale i d hNCBN
+
+/-- General output-offset injectivity: with fixed output strides `(stride_om,
+stride_ok) = (64, 1)`, the per-lane offset is injective on `TileIndex [BM, BD]`
+when `BD ≤ 64` (so the channel index `d < BD ≤ 64` never collides with the row
+stride `·64`). -/
+theorem mixed_sparse_attention_offset_injectiveG
+    (BM BD : Nat) (hBD : BD ≤ 64) (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [BM, BD] =>
+        outOffset s 4 32768 8192 64 1 BM idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp only [outOffset, offZ, offH, mIndex, dIndex, mul_one] at h
+  have hda64 : da < 64 := lt_of_lt_of_le hda hBD
+  have hdb64 : db < 64 := lt_of_lt_of_le hdb hBD
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst hm; subst hd; rfl
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
