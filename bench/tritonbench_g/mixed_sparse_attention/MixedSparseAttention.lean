@@ -11064,4 +11064,336 @@ theorem mixed_sparse_attention_output_closed_form_summary_general
   obtain ⟨sF, hexec, hOut⟩ := msa_execG Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
     BM BN BD hBN hBN16 hBD s sm_scale hundef hactive hNCBN hpos
   exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
+
+/-! ## FULLY-GENERAL (symbolic strides + layout) AST + body split -/
+
+def msaGuardGS (BM : Nat) : Op .bool [] :=
+  Op.ge ComparableDType.nat Broadcast.nil
+    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BM))
+    (Op.ref .nat [] "seqlen")
+
+/-- Symbolic setup statements (block dims `BM`/`BN`/`BD`; strides pinned). -/
+def msaSetupGS (Q K V : RegionName) (seqlens : Region .nat)
+    (block_count block_offset column_count column_index : Region .nat)
+    (Out : RegionName) (BM BN BD : Nat)
+    (H sqz sqh sqm sqk skz skh skk svk som sok NR NS NV : Nat)
+    (sm_scale : ℝ := 0.1) : List Stmt :=
+  [ Stmt.assign .nat [BM] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BM))
+        (Op.arange BM)),
+    Stmt.assign .nat [BN] "offs_n" (Op.arange BN),
+    Stmt.assign .nat [BD] "offs_d" (Op.arange BD),
+    Stmt.assign .nat [] "qo_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H))
+          (Op.constNat sqz))
+        (Op.mul .nat Broadcast.nil
+          (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H))
+          (Op.constNat sqh))),
+    Stmt.assign .nat [] "kv_offset"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H))
+          (Op.constNat skz))
+        (Op.mul .nat Broadcast.nil
+          (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H))
+          (Op.constNat skh))),
+    Stmt.assign .ptr [BM, BD] "q_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat sqm)))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_d")) (Op.constNat sqk)))),
+    Stmt.assign .ptr [BD, 1] "k_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BD] "offs_d")) (Op.constNat skk)))),
+    Stmt.assign .ptr [1, BD] "v_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "kv_offset")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_d")) (Op.constNat svk)))),
+    Stmt.assign .ptr [BM, BD] "o_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qo_offset")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat som)))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_d")) (Op.constNat sok)))),
+    Stmt.assign .nat [] "num_blks"
+      (Op.load .nat
+        (MemAccess.region block_count
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat NR))
+            (Op.ref .nat [] "start_m")))
+        MaskOpt.none),
+    Stmt.assign .ptr [] "blks_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase block_offset)
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat NR))
+            (Op.ref .nat [] "start_m"))
+          (Op.constNat NS))),
+    Stmt.assign .nat [] "num_cols"
+      (Op.load .nat
+        (MemAccess.region column_count
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat NR))
+            (Op.ref .nat [] "start_m")))
+        MaskOpt.none),
+    Stmt.assign .ptr [] "cols_ptr"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase column_index)
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat NR))
+            (Op.ref .nat [] "start_m"))
+          (Op.constNat NV))),
+    Stmt.assign .real [BM] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [BM] "l_i" (Op.full [BM] (Op.const 0)),
+    Stmt.assign .real [BM, BD] "acc" (Op.full [BM, BD] (Op.const 0)),
+    Stmt.assign .real [] "qk_scale"
+      (Op.mul .real Broadcast.nil (Op.const (sm_scale : ℝ)) (Op.const 1.44269504)),
+    Stmt.assign .real [BM, BD] "q"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BM, BD] "q_ptrs")) MaskOpt.none),
+    Stmt.assign FloatDType.fp16.toTileDType [BM, BD] "q"
+      (Op.castFloat FloatDType.real FloatDType.fp16
+        (Op.mul .real Broadcast.scalarR
+          (Op.ref .real [BM, BD] "q")
+          (Op.ref .real [] "qk_scale"))),
+    Stmt.assign .bool [BM, 1] "m_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.ref .nat [] "seqlen")),
+    Stmt.assign .nat [] "max_num_blks" (Op.constNat 8) ]
+
+/-- Symbolic Loop-A body. -/
+def msaLoopBodyAGS (BM BN BD skn svn : Nat) : List Stmt :=
+  [ Stmt.assign .bool [] "cond"
+      (Op.lt ComparableDType.nat Broadcast.nil
+        (Op.ref .nat [] "block_index") (Op.ref .nat [] "num_blks")),
+    Stmt.assign .nat [] "start_n"
+      (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "blks_ptr") (Op.ref .nat [] "block_index")))
+        (MaskOpt.mask (Op.ref .bool [] "cond"))),
+    Stmt.assign .nat [BN] "cols"
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n")),
+    Stmt.assign .bool [BN] "n_mask"
+      (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.ref .nat [BN] "cols") (Op.ref .nat [] "seqlen"))
+        (Op.ref .bool [] "cond")),
+    Stmt.assign .real [BD, BN] "k"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consL.consR (Op.ref .ptr [BD, 1] "k_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "cols")) (Op.constNat skn))))
+        (MaskOpt.maskOther
+          (Op.remap [BD, BN] Broadcast.nil.consSame.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BD, BN]))),
+    Stmt.assign .real [BN, BD] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, BD] "v_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "cols")) (Op.constNat svn))))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BN, BD]))),
+    Stmt.assign .real [BM, BN] "qk" (Op.full [BM, BN] (Op.const 0)),
+    Stmt.assign .bool [BM, BN] "causal_mask"
+      (Op.le ComparableDType.nat Broadcast.nil.consR.consL
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "cols"))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))),
+    Stmt.assign .real [BM, BN] "qk"
+      ((Op.boolAnd Broadcast.nil.consL.consSame
+          (Op.ref .bool [BM, 1] "m_mask") (Op.ref .bool [BM, BN] "causal_mask")).where
+        (Op.ref .real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN])),
+    Stmt.assign .real [BM, BN] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.ref FloatDType.fp16.toTileDType [BM, BD] "q")) : Op .real [BM, BD])
+          (Op.ref .real [BD, BN] "k"))),
+    Stmt.assign .real [BM] "m_i_new"
+      ((Op.gt ComparableDType.real Broadcast.nil.consSame
+          (Op.ref .real [BM] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+            (Op.ref .real [BM, BN] "qk"))).where
+        (Op.ref .real [BM] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+          (Op.ref .real [BM, BN] "qk"))),
+    Stmt.assign .real [BM] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_i_new"))),
+    Stmt.assign .real [BM, BN] "p"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "m_i_new")))),
+    Stmt.assign .real [BM] "acc_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [BM] "l_i") (Op.const 0))
+        (Op.ref .real [BM] "alpha")),
+    Stmt.assign .real [BM, BD] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "acc_scale"))),
+    Stmt.assign .real [BM, BD] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BN] "p"))) : Op .real [BM, BN])
+          (Op.ref .real [BN, BD] "v"))),
+    Stmt.assign .real [BM] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+          (Op.ref .real [BM, BN] "p"))),
+    Stmt.assign .real [BM] "m_i" (Op.ref .real [BM] "m_i_new") ]
+
+/-- Symbolic Loop-B body. -/
+def msaLoopBodyBGS (BM BN BD skn svn : Nat) : List Stmt :=
+  [ Stmt.assign .bool [] "cond"
+      (Op.lt ComparableDType.nat Broadcast.nil
+        (Op.ref .nat [] "start_n") (Op.ref .nat [] "num_cols")),
+    Stmt.assign .bool [BN] "n_mask"
+      (Op.boolAnd Broadcast.scalarR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+          (Op.ref .nat [] "num_cols"))
+        (Op.ref .bool [] "cond")),
+    Stmt.assign .nat [BN] "cols"
+      (Op.load .nat
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarL
+            (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] "cols_ptr") (Op.ref .nat [] "start_n"))
+            (Op.ref .nat [BN] "offs_n")))
+        (MaskOpt.maskOther
+          (Op.remap [BN] Broadcast.nil.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [] "cond")))
+          ((Op.constNat 0).broadcast [BN]))),
+    Stmt.assign .real [BD, BN] "k"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consL.consR (Op.ref .ptr [BD, 1] "k_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "cols")) (Op.constNat skn))))
+        (MaskOpt.maskOther
+          (Op.remap [BD, BN] Broadcast.nil.consSame.consL.leftIndex
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BD, BN]))),
+    Stmt.assign .real [BN, BD] "v"
+      (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.nil.consR.consL (Op.ref .ptr [1, BD] "v_ptrs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "cols")) (Op.constNat svn))))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .bool [BN] "n_mask")))
+          ((Op.const 0.0).broadcast [BN, BD]))),
+    Stmt.assign .real [BM, BN] "qk" (Op.full [BM, BN] (Op.const 0)),
+    Stmt.assign .real [BM, BN] "qk"
+      ((Op.boolAnd Broadcast.nil.consL.leadR
+          (Op.ref .bool [BM, 1] "m_mask") (Op.ref .bool [BN] "n_mask")).where
+        (Op.ref .real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN])),
+    Stmt.assign .real [BM, BN] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.ref FloatDType.fp16.toTileDType [BM, BD] "q")) : Op .real [BM, BD])
+          (Op.ref .real [BD, BN] "k"))),
+    Stmt.assign .real [BM] "m_i_new"
+      ((Op.gt ComparableDType.real Broadcast.nil.consSame
+          (Op.ref .real [BM] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+            (Op.ref .real [BM, BN] "qk"))).where
+        (Op.ref .real [BM] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+          (Op.ref .real [BM, BN] "qk"))),
+    Stmt.assign .real [BM] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_i_new"))),
+    Stmt.assign .real [BM, BN] "p"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "m_i_new")))),
+    Stmt.assign .real [BM] "acc_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [BM] "l_i") (Op.const 0))
+        (Op.ref .real [BM] "alpha")),
+    Stmt.assign .real [BM, BD] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "acc_scale"))),
+    Stmt.assign .real [BM, BD] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.dot (batch := [])
+          ((Op.castFloat FloatDType.fp16 FloatDType.real
+            (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BN] "p"))) : Op .real [BM, BN])
+          (Op.ref .real [BN, BD] "v"))),
+    Stmt.assign .real [BM] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false
+          (Op.ref .real [BM, BN] "p"))),
+    Stmt.assign .real [BM] "m_i" (Op.ref .real [BM] "m_i_new") ]
+
+/-- Symbolic post-loop. -/
+def msaPostLoopGS (BM BD : Nat) : List Stmt :=
+  [ Stmt.assign .real [BM, BD] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BM, BD] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BM] "l_i"))),
+    Stmt.store FloatDType.fp16.toTileDType [BM, BD]
+      (MemAccess.ptr (Op.ref .ptr [BM, BD] "o_ptrs"))
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BD] "acc"))
+      (MaskOpt.mask
+        (Op.remap [BM, BD] Broadcast.nil.consL.consSame.leftIndex
+          (Op.ref .bool [BM, 1] "m_mask"))) ]
+
+set_option maxRecDepth 8000 in
+/-- **General body split** (symbolic block dims). -/
+theorem msa_body_splitGS
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD : Nat)
+    (H NCTX Zc NR NS NV : Nat)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok : Nat)
+    (sm_scale : ℝ := 0.1) :
+    (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+      (sm_scale : ℝ) Blocks BlockOffsets ColCounts Cols Out
+      sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok
+      Zc H NCTX NR NS NV BM BN BD FloatDType.fp16).toAlgKernel.body
+      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+          Stmt.assign .nat [] "off_hz" (Op.programId 1),
+          Stmt.assign .nat [] "seqlen"
+            (Op.load .nat
+              (MemAccess.region Seqlens
+                (Op.floorDiv IntegralDType.nat Broadcast.nil
+                  (Op.ref .nat [] "off_hz") (Op.constNat H)))
+              MaskOpt.none),
+          Stmt.ifThen (Op.boolNot (msaGuardGS BM))
+            (msaSetupGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD
+              H sqz sqh sqm sqk skz skh skk svk som sok NR NS NV sm_scale
+              ++ [ Stmt.forRangeDyn "block_index" (Op.constNat 0)
+                    (Op.ref .nat [] "max_num_blks") (Op.constNat 1) (msaLoopBodyAGS BM BN BD skn svn),
+                   Stmt.assign .nat [] "max_num_cols" (Op.constNat 16),
+                   Stmt.forRangeDyn "start_n" (Op.constNat 0)
+                    (Op.ref .nat [] "max_num_cols") (Op.constNat BN) (msaLoopBodyBGS BM BN BD skn svn) ]
+              ++ msaPostLoopGS BM BD) ] := by
+  rfl
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
