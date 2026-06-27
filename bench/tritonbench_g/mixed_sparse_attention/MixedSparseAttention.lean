@@ -10197,4 +10197,277 @@ theorem msa_handoffG
   · rw [e (by decide) hmi]; rfl
   · rw [e (by decide) hli]; rfl
   · rw [e (by decide) hacc]; rfl
+
+/-! ## GENERAL closed-form math bridge helpers (symbolic block dims) -/
+
+theorem msaScoreA_dot_eqG
+    (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BM BN BD : Nat) (s0 : BlockState) (sm_scale : ℝ) (c SN : Nat) (i : Fin BM) (j : Fin BN) :
+    (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+        (fun e : Fin BD => Option.map₂ (· * ·)
+          (FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+          (msaKLaneAG K Seqlens Blocks BlockOffsets BD BN (msaKPtrG K BD s0) s0 c SN e j)))
+      = some ((sm_scale * 1.44269504) *
+          (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+              ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+            then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (SN + j.val)
+            else 0)) := by
+  have hterm : ∀ e : Fin BD, Option.map₂ (· * ·)
+        (FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+        (msaKLaneAG K Seqlens Blocks BlockOffsets BD BN (msaKPtrG K BD s0) s0 c SN e j)
+      = some ((sm_scale * 1.44269504) *
+          (qRow s0 Q 4 32768 8192 64 BM i e.val *
+            (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+                ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+              then kRow s0 K 4 32768 8192 64 (SN + j.val) e.val else 0))) := by
+    intro e
+    have hQoff : ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
+        + (s0.pids 0 * BM + i.val) * 64 + e.val
+      = qoBase s0 4 32768 8192 + mIndex s0 BM i * 64 + e.val := by
+      unfold qoBase offZ offH mIndex; ring
+    have hKoff : ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + e.val + (SN + j.val) * 64
+      = qoBase s0 4 32768 8192 + (SN + j.val) * 64 + e.val := by
+      unfold qoBase offZ offH; ring
+    unfold msaQValG msaKLaneAG msaKPtrG
+    by_cases hin : SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+        ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+    · rw [if_pos hin, if_pos hin]
+      simp only [BlockState.readMemValue_real, FloatDType.cast,
+        FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+        FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some]
+      rw [hQoff, hKoff]
+      show some _ = some ((sm_scale * 1.44269504) *
+        (qRow s0 Q 4 32768 8192 64 BM i e.val * kRow s0 K 4 32768 8192 64 (SN + j.val) e.val))
+      unfold qRow kRow; ring_nf
+    · rw [if_neg hin, if_neg hin]
+      simp only [BlockState.readMemValue_real, FloatDType.cast,
+        FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+        FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some, mul_zero]
+      norm_num
+  rw [show (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+        (fun e : Fin BD => Option.map₂ (· * ·)
+          (FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+          (msaKLaneAG K Seqlens Blocks BlockOffsets BD BN (msaKPtrG K BD s0) s0 c SN e j)))
+      = @Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+          (fun e : Fin BD => some ((sm_scale * 1.44269504) *
+            (qRow s0 Q 4 32768 8192 64 BM i e.val *
+              (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+                  ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+                then kRow s0 K 4 32768 8192 64 (SN + j.val) e.val else 0))))
+      from Finset.sum_congr rfl (fun e _ => hterm e)]
+  rw [WithBot.sum_someTerm_eq_some]
+  congr 1
+  by_cases hin : SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+      ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin]
+    rw [show rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (SN + j.val)
+        = ∑ e : Fin BD, qRow s0 Q 4 32768 8192 64 BM i e.val *
+            kRow s0 K 4 32768 8192 64 (SN + j.val) e.val from rfl]
+    rw [Finset.mul_sum]
+    apply Finset.sum_congr rfl; intro e _; rw [if_pos hin]
+  · rw [if_neg hin, mul_zero]
+    apply Finset.sum_eq_zero; intro e _; rw [if_neg hin, mul_zero, mul_zero]
+
+/-- The block-A score-lane softmax weight is exactly `mixedSparseAttnClosedForm`'s
+`wBlock` term at `effScale 0.1` (including the spurious-block weight-1 path). -/
+theorem msaE_scoreLaneA_eqG
+    (Q K : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BM BN BD : Nat) (s0 : BlockState) (sm_scale : ℝ) (c SN : Nat) (i : Fin BM) (j : Fin BN) :
+    msaE (msaScoreLaneAG Q K Seqlens Blocks BlockOffsets BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0)
+        s0 c SN i j)
+      = (if s0.pids 0 * BM + i.val < seqLen s0 4 (Region.cast Seqlens)
+            ∧ SN + j.val ≤ s0.pids 0 * BM + i.val then
+          Real.exp (effScale sm_scale *
+            (if SN + j.val < seqLen s0 4 (Region.cast Seqlens)
+                ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+              then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (SN + j.val) else 0))
+        else 0) := by
+  unfold msaScoreLaneAG
+  rw [msaScoreA_dot_eqG]
+  by_cases hgate : s0.pids 0 * BM + i.val < seqLen s0 4 (Region.cast Seqlens)
+      ∧ SN + j.val ≤ s0.pids 0 * BM + i.val
+  · rw [if_pos hgate, if_pos hgate]
+    show msaE (some (0 + (sm_scale * 1.44269504) * _)) = _
+    rw [msaE_some]
+    rw [zero_add]
+    congr 1
+    unfold effScale; ring
+  · rw [if_neg hgate, if_neg hgate]
+    rfl
+
+/-- The column-B `Σ_e q·K` reduces to `some (0.1·1.44269504 · rawMasked)` over the
+gathered column `gcol j`; same fp16-identity argument as `msaScoreA_dot_eq`. -/
+theorem msaScoreB_dot_eqG
+    (Q K : RegionName) (Blocks ColCounts : Region .nat)
+    (BM BN BD : Nat) (s0 : BlockState) (sm_scale : ℝ) (sv : Nat) (gcol : Fin BN → Nat) (i : Fin BM) (j : Fin BN) :
+    (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+        (fun e : Fin BD => Option.map₂ (· * ·)
+          (FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+          (msaKLaneBG Blocks ColCounts BD BN (msaKPtrG K BD s0) s0 sv gcol e j)))
+      = some ((sm_scale * 1.44269504) *
+          (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+              ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+            then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j) else 0)) := by
+  have hterm : ∀ e : Fin BD, Option.map₂ (· * ·)
+        (FloatDType.fp16.cast FloatDType.real
+          (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+        (msaKLaneBG Blocks ColCounts BD BN (msaKPtrG K BD s0) s0 sv gcol e j)
+      = some ((sm_scale * 1.44269504) *
+          (qRow s0 Q 4 32768 8192 64 BM i e.val *
+            (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+                ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+              then kRow s0 K 4 32768 8192 64 (gcol j) e.val else 0))) := by
+    intro e
+    have hQoff : ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192)
+        + (s0.pids 0 * BM + i.val) * 64 + e.val
+      = qoBase s0 4 32768 8192 + mIndex s0 BM i * 64 + e.val := by
+      unfold qoBase offZ offH mIndex; ring
+    have hKoff : ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + e.val + gcol j * 64
+      = qoBase s0 4 32768 8192 + gcol j * 64 + e.val := by
+      unfold qoBase offZ offH; ring
+    unfold msaQValG msaKLaneBG msaKPtrG
+    by_cases hin : sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+        ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+    · rw [if_pos hin, if_pos hin]
+      simp only [BlockState.readMemValue_real, FloatDType.cast,
+        FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+        FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some]
+      rw [hQoff, hKoff]
+      show some _ = some ((sm_scale * 1.44269504) *
+        (qRow s0 Q 4 32768 8192 64 BM i e.val * kRow s0 K 4 32768 8192 64 (gcol j) e.val))
+      unfold qRow kRow; ring_nf
+    · rw [if_neg hin, if_neg hin]
+      simp only [BlockState.readMemValue_real, FloatDType.cast,
+        FloatDType.real_toWithBot, FloatDType.fp16_ofWithBot, FloatDType.fp16_toWithBot,
+        FloatDType.real_ofWithBot, WithBot.realMul, Option.map₂_some_some, mul_zero]
+      norm_num
+  rw [show (@Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+        (fun e : Fin BD => Option.map₂ (· * ·)
+          (FloatDType.fp16.cast FloatDType.real
+            (FloatDType.real.cast FloatDType.fp16 (msaQValG Q BM BD s0 sm_scale (i, e, PUnit.unit))))
+          (msaKLaneBG Blocks ColCounts BD BN (msaKPtrG K BD s0) s0 sv gcol e j)))
+      = @Finset.sum (Fin BD) (WithBot ℝ) _ Finset.univ
+          (fun e : Fin BD => some ((sm_scale * 1.44269504) *
+            (qRow s0 Q 4 32768 8192 64 BM i e.val *
+              (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+                  ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+                then kRow s0 K 4 32768 8192 64 (gcol j) e.val else 0))))
+      from Finset.sum_congr rfl (fun e _ => hterm e)]
+  rw [WithBot.sum_someTerm_eq_some]
+  congr 1
+  by_cases hin : sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+      ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin]
+    rw [show rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j)
+        = ∑ e : Fin BD, qRow s0 Q 4 32768 8192 64 BM i e.val *
+            kRow s0 K 4 32768 8192 64 (gcol j) e.val from rfl]
+    rw [Finset.mul_sum]
+    apply Finset.sum_congr rfl; intro e _; rw [if_pos hin]
+  · rw [if_neg hin, mul_zero]
+    apply Finset.sum_eq_zero; intro e _; rw [if_neg hin, mul_zero, mul_zero]
+
+/-- The column-B score-lane softmax weight is exactly `mixedSparseAttnClosedForm`'s
+`wCol` term at `effScale sm_scale` (no `cols < seqlen` mask — the kernel applies none). -/
+theorem msaE_scoreLaneB_eqG
+    (Q K : RegionName) (Blocks ColCounts Seqlens : Region .nat)
+    (BM BN BD : Nat) (s0 : BlockState) (sm_scale : ℝ) (sv : Nat) (gcol : Fin BN → Nat) (i : Fin BM) (j : Fin BN) :
+    msaE (msaScoreLaneBG Blocks ColCounts Seqlens BM BN BD (msaQValG Q BM BD s0 sm_scale) (msaKPtrG K BD s0)
+        s0 sv gcol i j)
+      = (if s0.pids 0 * BM + i.val < seqLen s0 4 (Region.cast Seqlens)
+            ∧ (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+              ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)) then
+          Real.exp (effScale sm_scale *
+            (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+                ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+              then rawScore s0 Q K 4 32768 8192 64 32768 8192 64 BD BM i (gcol j) else 0))
+        else 0) := by
+  unfold msaScoreLaneBG
+  rw [msaScoreB_dot_eqG]
+  by_cases hgate : s0.pids 0 * BM + i.val < seqLen s0 4 (Region.cast Seqlens)
+      ∧ (sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+        ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+  · rw [if_pos hgate, if_pos hgate]
+    show msaE (some (0 + (sm_scale * 1.44269504) * _)) = _
+    rw [msaE_some, zero_add]
+    congr 1
+    unfold effScale; ring
+  · rw [if_neg hgate, if_neg hgate]
+    rfl
+
+/-- The block-A value lane equals `mixedSparseAttnClosedForm`'s `vBlock` term. -/
+theorem msaVblkA0_eqG
+    (V : RegionName) (Seqlens Blocks BlockOffsets : Region .nat)
+    (BD BN : Nat) (s0 : BlockState) (c : Nat) (j : Fin BN) (d : Fin BD) :
+    msaVblkA0G V Seqlens Blocks BlockOffsets BD BN (msaVPtrG V BD s0) s0 c j d
+      = (if msaSN0G s0 Blocks BlockOffsets c + j.val < seqLen s0 4 (Region.cast Seqlens)
+            ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0) then
+          vRow s0 V 4 32768 8192 64
+            (msaSN0G s0 Blocks BlockOffsets c + j.val) d else 0) := by
+  unfold msaVblkA0G msaVLaneAG msaVPtrG vRow qoBase offZ offH
+  by_cases hin : msaSN0G s0 Blocks BlockOffsets c + j.val < seqLen s0 4 (Region.cast Seqlens)
+      ∧ c < s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin, if_pos hin]
+    rw [show ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + d.val
+        + (msaSN0G s0 Blocks BlockOffsets c + j.val) * 64
+      = (s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192
+        + (msaSN0G s0 Blocks BlockOffsets c + j.val) * 64 + d.val from by ring]
+    simp [BlockState.readMemValue_real]
+  · rw [if_neg hin, if_neg hin]; norm_num
+
+/-- The column-B value lane equals the gathered-column `vRow`. -/
+theorem msaVblkB0_eqG
+    (V : RegionName) (Blocks ColCounts : Region .nat)
+    (BD BN : Nat) (s0 : BlockState) (sv : Nat) (gcol : Fin BN → Nat) (j : Fin BN) (d : Fin BD) :
+    (msaVLaneBG Blocks ColCounts BD BN (msaVPtrG V BD s0) s0 sv gcol j d).unbotD 0
+      = (if sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+            ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) then
+          vRow s0 V 4 32768 8192 64 (gcol j) d else 0) := by
+  unfold msaVLaneBG msaVPtrG vRow qoBase offZ offH
+  by_cases hin : sv + j.val < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+      ∧ sv < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0)
+  · rw [if_pos hin, if_pos hin]
+    rw [show ((s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192) + d.val + gcol j * 64
+      = (s0.pids 1 / 4) * 32768 + (s0.pids 1 % 4) * 8192 + gcol j * 64 + d.val from by ring]
+    simp [BlockState.readMemValue_real]
+  · rw [if_neg hin, if_neg hin]; norm_num
+
+/-- A `Fin 64`-sum of column terms that vanish for `j ≥ numCols` collapses to the
+`Fin numCols` sum (given `numCols ≤ 64`). The terms depend on `j` only via `j.val`,
+so they are presented as a `Nat → ℝ` function `f`. -/
+theorem msa_col_sum_collapseG (BN numCols : Nat) (h : numCols ≤ BN)
+    (f : Nat → ℝ) (hz : ∀ j, numCols ≤ j → f j = 0) :
+    (∑ j : Fin BN, f j.val) = ∑ c : Fin numCols, f c.val := by
+  rw [Fin.sum_univ_eq_sum_range (fun k => f k) BN,
+      Fin.sum_univ_eq_sum_range (fun k => f k) numCols]
+  rw [← Finset.sum_range_add_sum_Ico (fun k => f k) h]
+  rw [Finset.sum_Ico_eq_sum_range]
+  rw [show (∑ k ∈ Finset.range (BN - numCols), f (numCols + k)) = 0 from
+    Finset.sum_eq_zero (fun k _ => hz _ (by omega))]
+  rw [add_zero]
+
+/-- `msaSN0` (the kernel's masked block start) equals the closed form's
+`blockStartN` at the python `(NUM_ROWS, NNZ_S) = (2, 4)` layout. -/
+theorem msaSN0G_eq_blockStartN (s0 : BlockState) (Blocks BlockOffsets : Region .nat) (c : Nat) :
+    msaSN0G s0 Blocks BlockOffsets c
+      = blockStartN s0 BlockOffsets 2 4
+          (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * 2 + s0.pids 0)) c := by
+  unfold msaSN0G blockStartN; rfl
+
+/-- The gathered column at sv=0, lane `j < numCols`, is `colKeyGlobal j`. -/
+theorem msaGcol0_eq_colKeyGlobalG (BN : Nat) (s0 : BlockState) (Cols ColCounts : Region .nat)
+    (j : Nat) (hj : j < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0))
+    (hjBN : j < BN) :
+    msaGcol0G s0 Cols ColCounts BN 0 ⟨j, hjBN⟩
+      = colKeyGlobal s0 Cols 2 8 j := by
+  unfold msaGcol0G msaColLaneBG colKeyGlobal
+  have h0 : (0 : Nat) < s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * 2 + s0.pids 0) :=
+    by omega
+  rw [if_pos h0]
+  rw [show (s0.pids 1 * 2 + s0.pids 0) * 8 + 0 + j = (s0.pids 1 * 2 + s0.pids 0) * 8 + j
+    from by omega]
+
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
