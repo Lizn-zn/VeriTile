@@ -11027,43 +11027,7 @@ theorem msa_execG
   rw [if_pos hlt] at this
   exact this
 
-/-- **Genuine dimension-general closed-form summary.** For symbolic block dims
-`BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL` (under the honest faithful-regime side
-conditions `0 < BLOCK_N`, `16 ≤ BLOCK_N` — so the kernel's single column block at
-`max_num_cols = 16` covers all visited columns — and `BLOCK_DMODEL ≤ 64` — so the
-fixed output strides `(stride_om, stride_ok) = (64, 1)` stay injective), the
-executed surface kernel writes the genuine non-self-referential mixed-sparse
-closed form `mixedSparseAttnClosedForm` to every active `Out` lane. Same
-value-equality style as the pinned per-case summaries; the case `64/64/64` and
-`32/32/64` summaries are instances of this theorem. Side conditions
-(`num_cols ≤ BLOCK_N`, per-active-lane positive online-softmax denominator,
-clean `undef`) are honest hypotheses; the spec reads INPUT memory only. -/
-theorem mixed_sparse_attention_output_closed_form_summary_general
-    (Q K V Out : RegionName)
-    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
-    (BM BN BD : Nat) (hBN : 0 < BN) (hBN16 : 16 ≤ BN) (hBD : BD ≤ 64)
-    (sm_scale : ℝ)
-    (hundef : ∀ rg o, s.undef rg o = 0)
-    (hactive : s.pids 0 * BM < seqLen s 4 (Region.cast Seqlens))
-    (hNCBN : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0) ≤ BN)
-    (hpos : ∀ i : Fin BM, s.pids 0 * BM + i.val < seqLen s 4 (Region.cast Seqlens) →
-      0 < msaDenomUpto BM BN
-        (msaCatScore0G Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD s sm_scale) 9 i) :
-    ∃ sF, exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
-        sm_scale Blocks BlockOffsets ColCounts Cols Out
-        32768 8192 64 1 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-        2 4 128 2 4 8 BM BN BD FloatDType.fp16).toAlgKernel s = some sF
-      ∧ ∀ idx : TileIndex [BM, BD],
-          active s 4 Seqlens BM idx →
-            sF.readMemValue .fp16 Out (outOffset s 4 32768 8192 64 1 BM idx)
-              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols 4
-                  32768 8192 64 32768 8192 64 32768 8192 64 2 4 8
-                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * 2 + s.pids 0))
-                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * 2 + s.pids 0))
-                  (seqLen s 4 (Region.cast Seqlens)) BD BM BN sm_scale idx.1 (dIndex idx)) : WithBot ℝ) := by
-  obtain ⟨sF, hexec, hOut⟩ := msa_execG Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
-    BM BN BD hBN hBN16 hBD s sm_scale hundef hactive hNCBN hpos
-  exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
+
 
 /-! ## FULLY-GENERAL (symbolic strides + layout) AST + body split -/
 
@@ -14084,5 +14048,55 @@ theorem msa_execGS
   have := hOut idx
   rw [if_pos hlt] at this
   exact this
+
+
+/-- **Genuine dimension-general closed-form summary.** For symbolic block dims
+`BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL` (under the honest faithful-regime side
+conditions `0 < BLOCK_N`, `16 ≤ BLOCK_N` — so the kernel's single column block at
+`max_num_cols = 16` covers all visited columns — and `BLOCK_DMODEL ≤ 64` — so the
+fixed output strides `(stride_om, stride_ok) = (64, 1)` stay injective), the
+executed surface kernel writes the genuine non-self-referential mixed-sparse
+closed form `mixedSparseAttnClosedForm` to every active `Out` lane. Same
+value-equality style as the pinned per-case summaries; the case `64/64/64` and
+`32/32/64` summaries are instances of this theorem. Side conditions
+(`num_cols ≤ BLOCK_N`, per-active-lane positive online-softmax denominator,
+clean `undef`) are honest hypotheses; the spec reads INPUT memory only. -/
+theorem mixed_sparse_attention_output_closed_form_summary_general
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
+    (BM BN BD : Nat) (hBN : 0 < BN) (hBN16 : 16 ≤ BN)
+    -- memory-layout strides (Q/K/V/O batch z, head h, row m / key n, channel k)
+    -- and grid/layout sizes, ALL symbolic
+    (NCTX Zc H NR NS NV
+      sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok : Nat)
+    -- honest contiguity hypotheses (the natural row-major attention layout):
+    -- channel strides are 1; V reuses K's batch/head base; O channel stride 1 and
+    -- its row stride covers the channel block (BD ≤ stride_om)
+    (hsqk : sqk = 1) (hskk : skk = 1) (hsvk : svk = 1) (hvz : svz = skz) (hvh : svh = skh)
+    (hsok : sok = 1) (hBDsom : BD ≤ som)
+    (sm_scale : ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (hactive : s.pids 0 * BM < seqLen s H (Region.cast Seqlens))
+    (hNCBN : s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * NR + s.pids 0) ≤ BN)
+    (hpos : ∀ i : Fin BM, s.pids 0 * BM + i.val < seqLen s H (Region.cast Seqlens) →
+      0 < msaDenomUpto BM BN
+        (msaCatScore0GS Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD
+          H NR NS NV sqz sqh sqm sqk skz skh skn skk s sm_scale) 9 i) :
+    ∃ sF, exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        sm_scale Blocks BlockOffsets ColCounts Cols Out
+        sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok
+        Zc H NCTX NR NS NV BM BN BD FloatDType.fp16).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [BM, BD],
+          active s H Seqlens BM idx →
+            sF.readMemValue .fp16 Out (outOffset s H sqz sqh som sok BM idx)
+              = (some (mixedSparseAttnClosedForm s Q K V BlockOffsets Cols H
+                  sqz sqh sqm skz skh skn svz svh svn NR NS NV
+                  (s.readMemValue .nat (Region.cast Blocks) (s.pids 1 * NR + s.pids 0))
+                  (s.readMemValue .nat (Region.cast ColCounts) (s.pids 1 * NR + s.pids 0))
+                  (seqLen s H (Region.cast Seqlens)) BD BM BN sm_scale idx.1 (dIndex idx)) : WithBot ℝ) := by
+  obtain ⟨sF, hexec, hOut⟩ := msa_execGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out
+    BM BN BD hBN hBN16 NCTX Zc H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok
+    hsqk hskk hsvk hvz hvh hsok hBDsom s sm_scale hundef hactive hNCBN hpos
+  exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
