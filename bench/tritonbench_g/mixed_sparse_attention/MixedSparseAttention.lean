@@ -13493,4 +13493,281 @@ theorem msaGcol0_eq_colKeyGlobalGS (BN NR NV : Nat) (s0 : BlockState) (Cols ColC
 
 
 
+
+/-! ## FULLY-GENERAL catFold connector + seeded ratio + offset injectivity (symbolic strides + layout) -/
+
+set_option maxHeartbeats 4000000 in
+theorem msa_catFold_eq_closedFormGS
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk : Nat)
+    (hsqk : sqk = 1) (hskk : skk = 1) (hsvk : svk = 1) (hvz : svz = skz) (hvh : svh = skh)
+    (hBN16 : 16 ≤ BN) (s0 : BlockState) (sm_scale : ℝ) (i : Fin BM) (d : Fin BD)
+    (hNCBN : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0) ≤ BN) :
+    msaNumerUpto BM BN BD
+        (msaCatScore BM BN 8
+          (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+          (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0))
+        (msaCatVblk BN BD 8
+          (msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn (msaVPtrGS V BD H skz skh svk s0) s0)
+          (msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn (msaVPtrGS V BD H skz skh svk s0) s0))
+        9 i d
+      / msaDenomUpto BM BN
+        (msaCatScore BM BN 8
+          (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+          (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0))
+        9 i
+    = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols H
+        sqz sqh sqm skz skh skn svz svh svn NR NS NV
+        (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0))
+        (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0))
+        (seqLen s0 H (Region.cast Seqlens)) BD BM BN sm_scale i d := by
+  subst svz svh
+  set NB := s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0) with hNB
+  set NC := s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0) with hNC
+  set SL := seqLen s0 H (Region.cast Seqlens) with hSL
+  set scoreA := msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0 with hscA
+  set scoreB := msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0 with hscB
+  set vblkA := msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn (msaVPtrGS V BD H skz skh svk s0) s0 with hvbA
+  set vblkB := msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn (msaVPtrGS V BD H skz skh svk s0) s0 with hvbB
+  set cat := msaCatScore BM BN 8 scoreA scoreB with hcat
+  set catV := msaCatVblk BN BD 8 vblkA vblkB with hcatV
+  -- abbreviations matching the closed form's per-lane terms
+  set SN : Nat → Nat := fun b => blockStartN s0 BlockOffsets NR NS NB b with hSNd
+  -- per-block-A weight (the closed form's `wBlock`)
+  have hwA : ∀ (b : Fin 8) (j : Fin BN), msaE (scoreA b.val i j)
+      = (if s0.pids 0 * BM + i.val < SL ∧ SN b.val + j.val ≤ s0.pids 0 * BM + i.val then
+          Real.exp (effScale sm_scale *
+            (if SN b.val + j.val < SL ∧ b.val < NB
+              then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (SN b.val + j.val) else 0))
+        else 0) := by
+    intro b j
+    rw [hscA, msaScoreA0GS, msaE_scoreLaneA_eqGS (hsqk := hsqk) (hskk := hskk), msaSN0GS_eq_blockStartN]
+  -- per-block-A value (the closed form's `vBlock`)
+  have hvA : ∀ (b : Fin 8) (j : Fin BN), vblkA b.val j d
+      = (if SN b.val + j.val < SL ∧ b.val < NB then
+          vRow s0 V H skz skh svn (SN b.val + j.val) d else 0) := by
+    intro b j
+    rw [hvbA, msaVblkA0_eqGS (hsvk := hsvk)]
+    rw [show msaSN0GS s0 Blocks BlockOffsets NR NS b.val = SN b.val from by
+      rw [hSNd]; exact msaSN0GS_eq_blockStartN s0 Blocks BlockOffsets NR NS b.val]
+  -- per-column-B weight (the closed form's `wCol`, as a `Nat → ℝ` over the gathered col)
+  set gcol : Fin BN → Nat := msaGcol0GS s0 Cols ColCounts BN NR NV 0 with hgcol
+  have hwB : ∀ (j : Fin BN), msaE (scoreB 0 i j)
+      = (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+          Real.exp (effScale sm_scale *
+            (if j.val < NC ∧ (0:Nat) < NC
+              then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (gcol j) else 0))
+        else 0) := by
+    intro j
+    rw [hscB, msaScoreB0GS]
+    have h0 : (0 : Nat) * BN = 0 := by ring
+    rw [h0, msaE_scoreLaneB_eqGS (hsqk := hsqk) (hskk := hskk)]
+    simp only [Nat.zero_add, ← hSL, ← hNC, ← hgcol]
+  have hvB : ∀ (j : Fin BN), vblkB 0 j d
+      = (if j.val < NC ∧ (0:Nat) < NC then vRow s0 V H skz skh svn (gcol j) d else 0) := by
+    intro j
+    rw [hvbB, msaVblkB0GS]
+    have h0 : (0 : Nat) * BN = 0 := by ring
+    rw [h0, ← hgcol]
+    have := msaVblkB0_eqGS V Blocks ColCounts BD BN H NR skz skh svk svn hsvk s0 0 gcol j d
+    simp only [Nat.zero_add, ← hNC] at this ⊢
+    exact this
+  -- numerator split: block-A (Fin 8) + 1 column-B term
+  have hnumBlk : (∑ l ∈ Finset.range 8, ∑ j : Fin BN, msaE (cat l i j) * catV l j d)
+      = ∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) * vblkA b.val j d := by
+    rw [Fin.sum_univ_eq_sum_range (fun b => ∑ j : Fin BN, msaE (scoreA b i j) * vblkA b j d) 8]
+    apply Finset.sum_congr rfl; intro b hb
+    rw [Finset.mem_range] at hb
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_pos hb, hcatV, msaCatVblk, if_pos hb]
+  have hnum : msaNumerUpto BM BN BD cat catV 9 i d
+      = (∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) * vblkA b.val j d)
+        + ∑ j : Fin BN, msaE (scoreB 0 i j) * vblkB 0 j d := by
+    rw [msaNumerUpto, show (9 : Nat) = 8 + 1 from rfl, Finset.sum_range_succ, hnumBlk]
+    refine congrArg (_ + ·) ?_
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_neg (by omega), hcatV, msaCatVblk, if_neg (by omega)]
+  have hdenBlk : (∑ l ∈ Finset.range 8, ∑ j : Fin BN, msaE (cat l i j))
+      = ∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j) := by
+    rw [Fin.sum_univ_eq_sum_range (fun b => ∑ j : Fin BN, msaE (scoreA b i j)) 8]
+    apply Finset.sum_congr rfl; intro b hb
+    rw [Finset.mem_range] at hb
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_pos hb]
+  have hden : msaDenomUpto BM BN cat 9 i
+      = (∑ b : Fin 8, ∑ j : Fin BN, msaE (scoreA b.val i j))
+        + ∑ j : Fin BN, msaE (scoreB 0 i j) := by
+    rw [msaDenomUpto, show (9 : Nat) = 8 + 1 from rfl, Finset.sum_range_succ, hdenBlk]
+    refine congrArg (_ + ·) ?_
+    apply Finset.sum_congr rfl; intro j _
+    rw [hcat, msaCatScore, if_neg (by omega)]
+  have hNCle : NC ≤ BN := hNCBN
+  rw [hnum, hden]
+  -- expose the closed form's `numer / denom`; fold raw terms back to the set abbrevs
+  simp only [mixedSparseAttnClosedForm, mIndex, ← hNB, ← hNC, ← hSL, ← hSNd]
+  -- rewrite LHS block/column terms to closed-form per-lane shapes
+  simp only [hwA, hvA, hwB, hvB]
+  -- the gated column summands (numerator/denominator) as `Nat → ℝ` functions
+  set numCol : Nat → ℝ := fun jn =>
+    (if s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
+        Real.exp (effScale sm_scale *
+          (if jn < NC ∧ (0:Nat) < NC
+            then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (colKeyGlobal s0 Cols NR NV jn) else 0))
+      else 0) *
+      (if jn < NC ∧ (0:Nat) < NC then vRow s0 V H skz skh svn (colKeyGlobal s0 Cols NR NV jn) d else 0)
+    with hnumCol
+  set denCol : Nat → ℝ := fun jn =>
+    (if s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC) then
+        Real.exp (effScale sm_scale *
+          (if jn < NC ∧ (0:Nat) < NC
+            then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (colKeyGlobal s0 Cols NR NV jn) else 0))
+      else 0)
+    with hdenCol
+  -- gcol-keyed column sum = colKeyGlobal-keyed sum (for j < NC); both vanish for j ≥ NC
+  have hgcConv : ∀ j : Fin BN, j.val < NC → gcol j = colKeyGlobal s0 Cols NR NV j.val := by
+    intro j hj; rw [hgcol]
+    exact msaGcol0_eq_colKeyGlobalGS BN NR NV s0 Cols ColCounts j.val (by rw [← hNC]; exact hj) j.isLt
+  have hcolNum :
+      (∑ j : Fin BN,
+        (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+            Real.exp (effScale sm_scale *
+              (if j.val < NC ∧ (0:Nat) < NC
+                then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (gcol j) else 0))
+          else 0) *
+          (if j.val < NC ∧ (0:Nat) < NC then vRow s0 V H skz skh svn (gcol j) d else 0))
+        = ∑ c : Fin NC, numCol c.val := by
+    rw [← msa_col_sum_collapseGS BN NC hNCle numCol
+      (fun jn hjn => by rw [hnumCol]; simp only [if_neg (by omega : ¬(jn < NC ∧ (0:Nat) < NC)), mul_zero])]
+    apply Finset.sum_congr rfl; intro j _
+    rw [hnumCol]
+    by_cases hj : j.val < NC
+    · rw [hgcConv j hj]
+    · simp only [if_neg (by omega : ¬(j.val < NC ∧ (0:Nat) < NC)), mul_zero]
+  have hcolDen :
+      (∑ j : Fin BN,
+        (if s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC) then
+            Real.exp (effScale sm_scale *
+              (if j.val < NC ∧ (0:Nat) < NC
+                then rawScore s0 Q K H sqz sqh sqm skz skh skn BD BM i (gcol j) else 0))
+          else 0))
+        = ∑ c : Fin NC, denCol c.val := by
+    rw [← msa_col_sum_collapseGS BN NC hNCle denCol
+      (fun jn hjn => by rw [hdenCol]; simp only []; rw [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (jn < NC ∧ (0:Nat) < NC)))])]
+    apply Finset.sum_congr rfl; intro j _
+    rw [hdenCol]; simp only []
+    by_cases hj : j.val < NC
+    · rw [hgcConv j hj]
+    · rw [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC)))]
+      simp only [if_neg (by omega : ¬(s0.pids 0 * BM + i.val < SL ∧ (j.val < NC ∧ (0:Nat) < NC)))]
+  rw [hcolNum, hcolDen]
+  -- final: match Fin 8 block sums + Fin NC column sums to closed form
+  congr 1
+  · congr 1
+    apply Finset.sum_congr rfl; intro c _
+    rw [hnumCol]; simp only []
+    -- closed form `wCol c * vRow(colKeyGlobal c)`; gate `c.val < NC ∧ 0 < NC` is true
+    have hcNC : c.val < NC := c.isLt
+    have h0NC : (0:Nat) < NC := by omega
+    simp only [if_pos (And.intro hcNC h0NC)]
+    by_cases hrow : s0.pids 0 * BM + i.val < SL
+    · rw [if_pos hrow, if_pos (And.intro hrow (And.intro hcNC h0NC))]
+    · rw [if_neg hrow, if_neg (by tauto : ¬(s0.pids 0 * BM + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC)))]
+  · congr 1
+    apply Finset.sum_congr rfl; intro c _
+    rw [hdenCol]; simp only []
+    have hcNC : c.val < NC := c.isLt
+    have h0NC : (0:Nat) < NC := by omega
+    by_cases hrow : s0.pids 0 * BM + i.val < SL
+    · rw [if_pos (And.intro hrow (And.intro hcNC h0NC)), if_pos hrow, if_pos (And.intro hcNC h0NC)]
+    · rw [if_neg (by tauto : ¬(s0.pids 0 * BM + i.val < SL ∧ (c.val < NC ∧ (0:Nat) < NC))), if_neg hrow]
+
+
+noncomputable abbrev msaCatScore0GS
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk : Nat) (s0 : BlockState) (sm_scale : ℝ := 0.1) : Nat → Fin BM → Fin BN → WithBot ℝ :=
+  msaCatScore BM BN 8
+    (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+    (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+
+/-- **Seeded-ratio bridge.** The two-phase seeded online-softmax ratio at the
+Loop-B end (`c = 1`, seeded by Loop-A's `bF = 8` finals) equals
+`mixedSparseAttnClosedForm`, given the cat denominator is positive at this lane. -/
+theorem msaSeeded_ratio_eq_closedFormGS
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk : Nat)
+    (hsqk : sqk = 1) (hskk : skk = 1) (hsvk : svk = 1) (hvz : svz = skz) (hvh : svh = skh)
+    (hBN16 : 16 ≤ BN) (s0 : BlockState) (sm_scale : ℝ) (i : Fin BM) (d : Fin BD)
+    (hNCBN : s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0) ≤ BN)
+    (hpos : 0 < msaDenomUpto BM BN
+      (msaCatScore0GS Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk s0 sm_scale) 9 i) :
+    (msaOPartialSeed BM BN BD
+        (msaMPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0) 8)
+        (msaLPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0) 8)
+        (fun ii dd => msaOPartial BM BN BD
+          (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+          (msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn (msaVPtrGS V BD H skz skh svk s0) s0) 8 ii dd)
+        (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0)
+        (msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn (msaVPtrGS V BD H skz skh svk s0) s0) 1 i d)
+      / (msaLPartialSeed BM BN
+        (msaMPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0) 8)
+        (msaLPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0) 8)
+        (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0) 1 i)
+    = mixedSparseAttnClosedForm s0 Q K V BlockOffsets Cols H
+        sqz sqh sqm skz skh skn svz svh svn NR NS NV
+        (s0.readMemValue .nat (Region.cast Blocks) (s0.pids 1 * NR + s0.pids 0))
+        (s0.readMemValue .nat (Region.cast ColCounts) (s0.pids 1 * NR + s0.pids 0))
+        (seqLen s0 H (Region.cast Seqlens)) BD BM BN sm_scale i d := by
+  set scoreA := msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0 with hscA
+  set scoreB := msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s0 sm_scale) (msaKPtrGS K BD H skz skh skk s0) s0 with hscB
+  set vblkA := msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn (msaVPtrGS V BD H skz skh svk s0) s0 with hvbA
+  set vblkB := msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn (msaVPtrGS V BD H skz skh svk s0) s0 with hvbB
+  rw [msaOPartialSeed_eq_cat BM BN BD 8 scoreA scoreB vblkA vblkB _ _ 1 i d rfl rfl,
+      msaLPartialSeed_eq_cat BM BN 8 scoreA scoreB _ 1 i rfl,
+      show (8 + 1 : Nat) = 9 from rfl]
+  rw [msaPartial_ratio_collapse BM BN BD _ _ 9 i d (by
+    rw [show msaCatScore BM BN 8 scoreA scoreB
+        = msaCatScore0GS Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk s0 sm_scale from rfl]
+    exact hpos)]
+  exact msa_catFold_eq_closedFormGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk hsqk hskk hsvk hvz hvh hBN16 s0 sm_scale i d hNCBN
+
+
+/-- General output-offset injectivity with symbolic output strides: offset
+`= base + m·som + d·sok`. With channel stride `sok = 1` and `BD ≤ som` (the row
+stride covers the channel block — the natural contiguous layout `som = head_dim ≥
+BD`), the per-lane offset is injective on `TileIndex [BM, BD]`. -/
+theorem mixed_sparse_attention_offset_injectiveGS
+    (BM BD H sqz sqh som sok : Nat) (hsok : sok = 1) (hBDsom : BD ≤ som) (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [BM, BD] =>
+        outOffset s H sqz sqh som sok BM idx) := by
+  subst hsok
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp only [outOffset, offZ, offH, mIndex, dIndex, mul_one] at h
+  have hdas : da < som := lt_of_lt_of_le hda hBDsom
+  have hdbs : db < som := lt_of_lt_of_le hdb hBDsom
+  -- generalize the two row-index sums and the shared prefix to opaque atoms
+  generalize hA : s.pids 0 * BM + ma = A at h
+  generalize hB : s.pids 0 * BM + mb = B at h
+  generalize hP : s.pids 1 / H * sqz + s.pids 1 % H * sqh = P at h
+  -- h : P + A * som + da = P + B * som + db
+  have key : A * som + da = B * som + db := by omega
+  have hAB : A = B := by
+    rcases Nat.lt_trichotomy A B with hlt | heq | hgt
+    · exfalso
+      have hle : (A + 1) * som ≤ B * som := Nat.mul_le_mul_right som (by omega)
+      have hexp : A * som + som ≤ B * som := by rw [Nat.add_mul, one_mul] at hle; exact hle
+      omega
+    · exact heq
+    · exfalso
+      have hle : (B + 1) * som ≤ A * som := Nat.mul_le_mul_right som (by omega)
+      have hexp : B * som + som ≤ A * som := by rw [Nat.add_mul, one_mul] at hle; exact hle
+      omega
+  have hm : ma = mb := by
+    have : s.pids 0 * BM + ma = s.pids 0 * BM + mb := by rw [hA, hB]; exact hAB
+    omega
+  subst hm
+  have hd : da = db := by
+    have : A * som + da = A * som + db := by rw [hAB] at key ⊢; exact key
+    omega
+  subst hd; rfl
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
