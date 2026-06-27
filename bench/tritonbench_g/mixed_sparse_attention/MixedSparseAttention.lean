@@ -11396,4 +11396,136 @@ theorem msa_body_splitGS
                     (Op.ref .nat [] "max_num_cols") (Op.constNat BN) (msaLoopBodyBGS BM BN BD skn svn) ]
               ++ msaPostLoopGS BM BD) ] := by
   rfl
+
+/-! ## FULLY-GENERAL invariants + ptr/val defs (symbolic strides + layout) -/
+
+noncomputable def msaInvariantAGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD H NR NS NV : Nat)
+    (scoreA : Nat → Fin BM → Fin BN → WithBot ℝ) (vblkA : Nat → Fin BN → Fin BD → ℝ)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "seqlen" = some (Tile.scalar (seqLen s0 H (Region.cast Seqlens)))
+  ∧ s.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => s0.pids 0 * BM + i.val))
+  ∧ s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))
+  ∧ s.regs .nat [BD] "offs_d" = some (Tile.vec (fun e : Fin BD => e.val))
+  ∧ s.regs .nat [] "num_blks" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast Blocks)
+        (s0.pids 1 * NR + s0.pids 0)))
+  ∧ s.regs .nat [] "num_cols" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast ColCounts)
+        (s0.pids 1 * NR + s0.pids 0)))
+  ∧ s.regs .ptr [] "blks_ptr" =
+      some (Tile.scalar (Region.cast BlockOffsets, (s0.pids 1 * NR + s0.pids 0) * NS))
+  ∧ s.regs .ptr [] "cols_ptr" =
+      some (Tile.scalar (Region.cast Cols, (s0.pids 1 * NR + s0.pids 0) * NV))
+  ∧ s.regs FloatDType.fp16.toTileDType [BM, BD] "q" =
+      some (⟨fun idx : TileIndex [BM, BD] =>
+        FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD])
+  ∧ s.regs .ptr [BD, 1] "k_ptrs" =
+      some (⟨fun idx : TileIndex [BD, 1] => kpF idx⟩ : Tile .ptr [BD, 1])
+  ∧ s.regs .ptr [1, BD] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, BD] => vpF idx⟩ : Tile .ptr [1, BD])
+  ∧ s.regs .ptr [BM, BD] "o_ptrs" =
+      some (⟨fun idx : TileIndex [BM, BD] => opF idx⟩ : Tile .ptr [BM, BD])
+  ∧ s.regs .bool [BM, 1] "m_mask" =
+      some (⟨fun idx : TileIndex [BM, 1] =>
+        decide (s0.pids 0 * BM + idx.1.val < seqLen s0 H (Region.cast Seqlens))⟩ : Tile .bool [BM, 1])
+  ∧ s.regs .nat [] "max_num_blks" = some (Tile.scalar 8)
+  ∧ s.regs .real [BM] "m_i" =
+      some (⟨fun idx : TileIndex [BM] => msaMPartial BM BN scoreA c idx.1⟩ : Tile .real [BM])
+  ∧ s.regs .real [BM] "l_i" =
+      some (⟨fun idx : TileIndex [BM] =>
+        (some (msaLPartial BM BN scoreA c idx.1) : WithBot ℝ)⟩ : Tile .real [BM])
+  ∧ s.regs .real [BM, BD] "acc" =
+      some (⟨fun idx : TileIndex [BM, BD] =>
+        (some (msaOPartial BM BN BD scoreA vblkA c idx.1 idx.2.1) : WithBot ℝ)⟩
+          : Tile .real [BM, BD])
+
+/-- Symbolic Loop-B invariant. -/
+noncomputable def msaInvariantBGS
+    (Q K V : RegionName) (Seqlens : Region .nat)
+    (Blocks BlockOffsets ColCounts Cols : Region .nat) (Out : RegionName)
+    (BM BN BD H NR NS NV : Nat)
+    (scoreB : Nat → Fin BM → Fin BN → WithBot ℝ) (vblkB : Nat → Fin BN → Fin BD → ℝ)
+    (mA : Fin BM → WithBot ℝ) (lA : Fin BM → ℝ) (oA : Fin BM → Fin BD → ℝ)
+    (qF : TileIndex [BM, BD] → WithBot ℝ) (kpF : TileIndex [BD, 1] → RegionName × Nat)
+    (vpF : TileIndex [1, BD] → RegionName × Nat) (opF : TileIndex [BM, BD] → RegionName × Nat)
+    (s0 : BlockState) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "off_hz" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "seqlen" = some (Tile.scalar (seqLen s0 H (Region.cast Seqlens)))
+  ∧ s.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => s0.pids 0 * BM + i.val))
+  ∧ s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))
+  ∧ s.regs .nat [BD] "offs_d" = some (Tile.vec (fun e : Fin BD => e.val))
+  ∧ s.regs .nat [] "num_blks" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast Blocks)
+        (s0.pids 1 * NR + s0.pids 0)))
+  ∧ s.regs .nat [] "num_cols" =
+      some (Tile.scalar (s0.readMemValue .nat (Region.cast ColCounts)
+        (s0.pids 1 * NR + s0.pids 0)))
+  ∧ s.regs .ptr [] "blks_ptr" =
+      some (Tile.scalar (Region.cast BlockOffsets, (s0.pids 1 * NR + s0.pids 0) * NS))
+  ∧ s.regs .ptr [] "cols_ptr" =
+      some (Tile.scalar (Region.cast Cols, (s0.pids 1 * NR + s0.pids 0) * NV))
+  ∧ s.regs FloatDType.fp16.toTileDType [BM, BD] "q" =
+      some (⟨fun idx : TileIndex [BM, BD] =>
+        FloatDType.real.cast FloatDType.fp16 (qF idx)⟩ : Tile FloatDType.fp16.toTileDType [BM, BD])
+  ∧ s.regs .ptr [BD, 1] "k_ptrs" =
+      some (⟨fun idx : TileIndex [BD, 1] => kpF idx⟩ : Tile .ptr [BD, 1])
+  ∧ s.regs .ptr [1, BD] "v_ptrs" =
+      some (⟨fun idx : TileIndex [1, BD] => vpF idx⟩ : Tile .ptr [1, BD])
+  ∧ s.regs .ptr [BM, BD] "o_ptrs" =
+      some (⟨fun idx : TileIndex [BM, BD] => opF idx⟩ : Tile .ptr [BM, BD])
+  ∧ s.regs .bool [BM, 1] "m_mask" =
+      some (⟨fun idx : TileIndex [BM, 1] =>
+        decide (s0.pids 0 * BM + idx.1.val < seqLen s0 H (Region.cast Seqlens))⟩ : Tile .bool [BM, 1])
+  ∧ s.regs .nat [] "max_num_blks" = some (Tile.scalar 8)
+  ∧ s.regs .nat [] "max_num_cols" = some (Tile.scalar 16)
+  ∧ s.regs .real [BM] "m_i" =
+      some (⟨fun idx : TileIndex [BM] =>
+        msaSeedMax BM BN mA scoreB c idx.1⟩ : Tile .real [BM])
+  ∧ s.regs .real [BM] "l_i" =
+      some (⟨fun idx : TileIndex [BM] =>
+        (some (msaLPartialSeed BM BN mA lA scoreB c idx.1) : WithBot ℝ)⟩ : Tile .real [BM])
+  ∧ s.regs .real [BM, BD] "acc" =
+      some (⟨fun idx : TileIndex [BM, BD] =>
+        (some (msaOPartialSeed BM BN BD mA lA oA scoreB vblkB c idx.1 idx.2.1) : WithBot ℝ)⟩
+          : Tile .real [BM, BD])
+
+/-- Symbolic `q_ptrs` lane. -/
+def msaQPtrGS (Q : RegionName) (BM BD H sqz sqh sqm sqk : Nat) (s0 : BlockState) : TileIndex [BM, BD] → RegionName × Nat :=
+  fun idx => (Q, ((s0.pids 1 / H) * sqz + (s0.pids 1 % H) * sqh)
+    + (s0.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk)
+
+/-- Symbolic `k_ptrs` lane. -/
+def msaKPtrGS (K : RegionName) (BD H skz skh skk : Nat) (s0 : BlockState) : TileIndex [BD, 1] → RegionName × Nat :=
+  fun idx => (K, ((s0.pids 1 / H) * skz + (s0.pids 1 % H) * skh) + idx.1.val * skk)
+
+/-- Symbolic `v_ptrs` lane. -/
+def msaVPtrGS (V : RegionName) (BD H skz skh svk : Nat) (s0 : BlockState) : TileIndex [1, BD] → RegionName × Nat :=
+  fun idx => (V, ((s0.pids 1 / H) * skz + (s0.pids 1 % H) * skh) + idx.2.1.val * svk)
+
+/-- Symbolic `o_ptrs` lane. -/
+def msaOPtrGS (Out : RegionName) (BM BD H sqz sqh som sok : Nat) (s0 : BlockState) : TileIndex [BM, BD] → RegionName × Nat :=
+  fun idx => (Out, ((s0.pids 1 / H) * sqz + (s0.pids 1 % H) * sqh)
+    + (s0.pids 0 * BM + idx.1.val) * som + idx.2.1.val * sok)
+
+/-- Symbolic scaled `q` value. -/
+noncomputable def msaQValGS (Q : RegionName) (BM BD H sqz sqh sqm sqk : Nat) (s0 : BlockState)
+    (sm_scale : ℝ := 0.1) : TileIndex [BM, BD] → WithBot ℝ :=
+  fun idx => WithBot.realMul
+    (s0.readMemValue .real Q (((s0.pids 1 / H) * sqz + (s0.pids 1 % H) * sqh)
+      + (s0.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk))
+    (some (sm_scale * 1.44269504))
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
