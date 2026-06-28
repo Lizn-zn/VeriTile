@@ -1,12 +1,11 @@
 # Spec-sheet index
 
-- 141 kernels, 286 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 279 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
-| 328 | [MixedSparseAttention.md](MixedSparseAttention.md) | 45 | 3 | 168 | 22 |  |
 | 306 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 30 | 4 | 136 | 76 |  |
 | 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 |  |
 | 267 | [ContextAttnLlama.md](ContextAttnLlama.md) | 43 | 4 | 115 | 19 |  |
@@ -15,11 +14,12 @@
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
 | 201 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 15 | 0 | 136 | 20 |  |
 | 177 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
+| 172 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 3 | 79 | 15 |  |
 | 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
 | 148 | [RotaryEmbNopad.md](RotaryEmbNopad.md) | 14 | 0 | 96 | 10 |  |
 | 146 | [FlashDecode2Phi.md](FlashDecode2Phi.md) | 19 | 0 | 85 | 4 |  |
-| 143 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 3 | 53 | 12 |  |
+| 145 | [MixedSparseAttention.md](MixedSparseAttention.md) | 32 | 3 | 33 | 13 |  |
 | 143 | [ChunkDeltaFwd.md](ChunkDeltaFwd.md) | 21 | 4 | 64 | 12 |  |
 | 143 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 22 | 9 | 57 | 11 |  |
 | 121 | [SoftmaxFlaggems.md](SoftmaxFlaggems.md) | 19 | 0 | 57 | 7 |  |
