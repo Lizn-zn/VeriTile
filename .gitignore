@@ -4,6 +4,9 @@
 # macOS
 .DS_Store
 
+# Node.js modules
+node_modules/
+
 # Editor / tooling
 /.claude/
 *.olean
