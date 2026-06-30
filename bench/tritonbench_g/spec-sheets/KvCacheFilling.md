@@ -9,14 +9,13 @@
 ```
 /-- **Dimension-general** non-quantized cache-fill summary.
 
-This is the symbolic-dimension version of
-`fill_kv_cache_python_test_layout_output_summary`: every shape / stride is a
-universally quantified `Nat`, with the per-program K-cache and V-cache
-offset-injectivity facts taken as hypotheses. The surface conjunct lowers the
-faithful `_fill_kv_cache_kernel` body, and the output conjuncts expose the
-masked K/V cache tile writebacks at the selected source/cache block positions.
-The Python test-shape summary is the `num_heads = 4`,
-`head_dim = head_dim_v = 16`, `BLOCK = 8` instance of this theorem. -/
+Every shape / stride is a universally quantified `Nat`, with the per-program
+K-cache and V-cache offset-injectivity facts taken as hypotheses. The surface
+conjunct lowers the faithful `_fill_kv_cache_kernel` body, and the output
+conjuncts expose the masked K/V cache tile writebacks at the selected
+source/cache block positions. The Python test shapes (`num_heads = 4`,
+`head_dim = head_dim_v = 16`, `BLOCK = 8`) are just an instance of this
+theorem. -/
 ```
 </details>
 
@@ -321,24 +320,3 @@ def dimIndex (_s : BlockState) (j : Fin BLOCK_D) : Nat :=
 - `fill_quant_k_zero_store_slice_compute_correct`
 - `fill_quant_v_scale_store_slice_compute_correct`
 - `fill_quant_v_zero_store_slice_compute_correct`
-- `fill_k_cache_tile_test_h4_d16_compute_correct`
-- `fill_v_cache_tile_test_h4_dv16_compute_correct`
-- `fill_quant_k_cache_value_store_test_h4_d16_compute_correct`
-- `fill_quant_v_cache_value_store_test_h4_dv16_compute_correct`
-- `fill_quant_k_scale_store_test_h4_compute_correct`
-- `fill_quant_k_zero_store_test_h4_compute_correct`
-- `fill_quant_v_scale_store_test_h4_compute_correct`
-- `fill_quant_v_zero_store_test_h4_compute_correct`
-- `fill_k_cache_tile_python_test_layout_compute_correct`
-- `fill_v_cache_tile_python_test_layout_compute_correct`
-- `fill_quant_k_cache_value_store_python_test_layout_compute_correct`
-- `fill_quant_v_cache_value_store_python_test_layout_compute_correct`
-- `fill_quant_k_scale_store_python_test_layout_compute_correct`
-- `fill_quant_k_zero_store_python_test_layout_compute_correct`
-- `fill_quant_v_scale_store_python_test_layout_compute_correct`
-- `fill_quant_v_zero_store_python_test_layout_compute_correct`
-- `fill_kv_cache_python_test_layout_all_outputs_compute_correct`
-- `fill_kv_cache_python_test_layout_output_summary`
-- `fill_quant_kv_cache_python_test_layout_all_outputs_compute_correct`
-- `fill_quant_int8_kv_cache_python_test_layout_summary`
-- `fill_quant_int4_kv_cache_python_test_layout_summary`

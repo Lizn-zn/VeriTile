@@ -49,15 +49,12 @@ per-program statements cover every program of the grid.
 ## Proof architecture
 
 ```
-chunk_delta_fwd_python_case{1,2}_output_summary          ← TOP THEOREMS
-  └─ chunk_delta_fwd_exec_genuine                            (per-store exec readback)
-
-chunk_delta_fwd_output_summary_general                   (dimension-general headline)
+chunk_delta_fwd_output_summary_general                   ← TOP THEOREM (dimension-general headline)
   ├─ chunk_delta_rule_fwd_h_surface_toAlgorithm_supported   full surface lowers
   ├─ chunk_delta_fwd_h_store_slice_realizes_state           (state store h)
   ├─ chunk_delta_fwd_v_new_store_slice_realizes_vNew        (corrected v_new)
   └─ chunk_delta_fwd_final_state_store_slice_realizes_final  (final_state)
-       └─ per-store exec readback lemmas + genuine recurrence closed form
+       └─ chunk_delta_fwd_exec_genuine (per-store exec readback) + genuine recurrence closed form
 ```
 
 ## Modeling boundary
@@ -89,11 +86,8 @@ set_option linter.unusedVariables false
 /-! **★ Main theorem (dimension-general):** `chunk_delta_fwd_output_summary_general`
 — arbitrary symbolic `T BT BC BK BV NT` + strides; the full surface lowers and the
 three masked store faces realize the genuine delta-rule recurrence under honest
-symbolic-dim producer hypotheses + offset injectivity.
-
-**★ Concrete Python cases (producer hypotheses discharged from `exec`):**
-`chunk_delta_fwd_python_case1_output_summary`,
-`chunk_delta_fwd_python_case2_output_summary`. -/
+symbolic-dim producer hypotheses + offset injectivity (producer hypotheses
+discharged end-to-end from `exec` via `chunk_delta_fwd_exec_genuine`). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1371,53 +1365,6 @@ theorem cdfStore_h_step_props (s sin : BlockState) (h : RegionName) (i_t : Nat)
     exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
       h offFn valFn Pmask _ sin off (fun i _ _ => hoff i)
 
-/-! ## Per-Python-shape offset injectivity
-
-`chunk_delta_fwd.py`'s checked tests use `B = 2`, `H = 4`, `T = 128`,
-`K = 64`, `V = 64`, and `BT = 32`. The Python launcher derives
-`BK = 64`, `BV = 64`, `BC = 32`, and `NT = 4`. Contiguous tensor strides passed
-to the kernel are:
-- `u/v_new`: `(s_vo_h, s_vo_t, s_vo_d) = (8192, 64, 1)`
-- `h`: `(s_h_h, s_h_t) = (16384, 64)` for shape `(B, H, NT * K, V)`. -/
-
-theorem chunk_delta_fwd_h_python_test_shape_offset_injective
-    (s : BlockState) (i_t : Fin 4) :
-    Function.Injective
-      (fun idx : TileIndex [64, 64] =>
-        hOffset s i_t.val 16384 64 64 64 64 64 idx) := by
-  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp [hOffset, kIndex, vIndex] at h
-  have hk : ka = kb := by omega
-  have hv : va = vb := by omega
-  subst kb
-  subst vb
-  rfl
-
-theorem chunk_delta_fwd_v_new_python_test_shape_offset_injective
-    (s : BlockState) (i_t : Fin 4) :
-    Function.Injective
-      (fun idx : TileIndex [32, 64] =>
-        vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx) := by
-  rintro ⟨⟨ca, hca⟩, ⟨va, hva⟩, _⟩ ⟨⟨cb, hcb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp [vNewOffset, cIndex, vIndex] at h
-  have hc : ca = cb := by omega
-  have hv : va = vb := by omega
-  subst cb
-  subst vb
-  rfl
-
-theorem chunk_delta_fwd_final_state_python_test_shape_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx) := by
-  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp [finalStateOffset, kIndex, vIndex] at h
-  have hk : ka = kb := by omega
-  have hv : va = vb := by omega
-  subst kb
-  subst vb
-  rfl
-
 /-! ## Cross-chunk exec carry-fold (genuine producer derivation)
 
 We step the lowered (algorithm-layer, float-erased) surface body of the checked
@@ -2442,12 +2389,10 @@ The genuine recurrence specs (`stateValue`, `vNewValue`, `hValue`, `finalValue`)
 are the closed forms over the **input** memory `k`/`v`/`d`/`initial_state`, never
 an exec-readback. The producer hypotheses are honest explicit hypotheses on the
 producer buffers (the same KIND of assumption as the `chunk_cumsum` carry
-invariant); for the two checked Python shapes they are *discharged end-to-end
-from the kernel `exec` with no producer hypotheses* by
-`chunk_delta_fwd_python_case{1,2}_output_summary` below (which call
-`chunk_delta_fwd_exec_genuine`). This headline statement carries **no concrete
-dimension literals**: it is the genuine dimension-generalization of the recurrence
-store faces. -/
+invariant); they are *discharged end-to-end from the kernel `exec` with no
+producer hypotheses* by `chunk_delta_fwd_exec_genuine`. This headline statement
+carries **no concrete dimension literals**: it is the genuine
+dimension-generalization of the recurrence store faces. -/
 theorem chunk_delta_fwd_output_summary_general
     (k v d v_new h initial_state final_state BH BVN BHFinal : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
@@ -2526,200 +2471,6 @@ theorem chunk_delta_fwd_output_summary_general
   · exact chunk_delta_fwd_final_state_store_slice_realizes_final BHFinal final_state
       k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK NT
       USE_INITIAL_STATE s hInjF hBHF
-
-/-! ## Public Python-case coverage summaries (genuine `exec`-derived)
-
-Each summary certifies that (i) the full chunk-delta surface lowers to the
-algorithm layer, and (ii) executing the **whole kernel** (prologue + outer
-`forRange` carry + inner `forRangeDyn` + epilogue) writes the genuine delta-rule
-recurrence closed forms `hValue`, `vNewSpec`, and `finalValue` into the output
-buffers `h`, `v_new`, and `final_state` at every active lane. **No producer
-hypotheses** — the cross-chunk fold is derived end-to-end from the kernel `exec`.
-The `NK = 1` host assertion is modeled by `s.pids 0 = 0`; output offset
-injectivity and region distinctness are side conditions for the test shape.
-These two concrete cases *discharge* the producer hypotheses of the general
-headline `chunk_delta_fwd_output_summary_general` end-to-end from `exec` at the
-two checked Python shapes. -/
-
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python case 1 summary: no initial state, no final-state output.
-`B=2,H=4,T=128,K=V=64,BT=BC=32,BK=BV=64,NT=4`. The full surface lowers, and
-executing the whole kernel writes the genuine recurrence closed forms `hValue`
-into `h[j]` and `vNewSpec` into `v_new[j]` at every active lane. -/
-theorem chunk_delta_fwd_python_case1_output_summary
-    (k v d v_new h initial_state final_state : RegionName)
-    (s : BlockState) (hpids0 : s.pids 0 = 0)
-    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
-    (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
-    (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
-    (hFv2 : final_state ≠ v) (hFd : final_state ≠ d) :
-    -- (1) the full surface lowers to the algorithm layer
-    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
-      final_state 8192 128 1 8192 64 1 16384 64
-      4 128 64 64 32 32 64 64 4 Bool.false Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    -- (2) the full surface runs to completion (existence / termination)
-    (∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-        Bool.false Bool.false).toAlgKernel s = some sF) ∧
-    -- (3) standard Realizes (per output buffer): every active lane of the executed
-    --     whole kernel holds the genuine recurrence closed form
-    (∀ j : Fin 4, ComputeCorrect.Realizes
-      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (h, hOffset s j.val 16384 64 64 64 64 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          Bool.false j.val idx)) ∧
-    (∀ j : Fin 4, ComputeCorrect.Realizes
-      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => vNewActive s j.val 0 128 64 32 32 64 idx)
-        (fun idx : TileIndex [32, 64] => (v_new, vNewOffset s j.val 0 8192 64 1 32 32 64 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          Bool.false j.val idx)) := by
-  obtain ⟨sF, hexec, hh, hvn, _⟩ :=
-    chunk_delta_fwd_exec_genuine k v d v_new h initial_state final_state
-      Bool.false Bool.false s hpids0 hVk hVv hVd hHv hHk hHv2 hHd
-      hFh hFv hFk hFv2 hFd
-      (fun i_t => chunk_delta_fwd_v_new_python_test_shape_offset_injective s i_t)
-      (fun i_t => chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
-      (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
-  obtain ⟨alg, halg⟩ := chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
-    initial_state final_state 8192 128 1 8192 64 1 16384 64
-    4 128 64 64 32 32 64 64 4 Bool.false Bool.false
-  have hk : (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-      Bool.false Bool.false).toAlgorithm?
-        = Except.ok (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-            8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-            Bool.false Bool.false).toAlgKernel := by
-    simp only [ComputeKernel.toAlgKernel, halg]
-  refine ⟨⟨alg, halg⟩, ⟨sF, hexec⟩, ?_, ?_⟩
-  · intro j
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hact
-    rw [hExec] at hexec
-    obtain rfl := Option.some.inj hexec
-    exact hh j idx hact
-  · intro j
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hact
-    rw [hExec] at hexec
-    obtain rfl := Option.some.inj hexec
-    exact hvn j idx hact
-
-
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python case 2 summary: initial state and final-state output enabled.
-Same shape as case 1. Executing the whole kernel writes `hValue` into `h[j]`,
-`vNewSpec` into `v_new[j]`, and `finalValue` (`H_4`) into `final_state`, all at
-every active lane. -/
-theorem chunk_delta_fwd_python_case2_output_summary
-    (k v d v_new h initial_state final_state : RegionName)
-    (s : BlockState) (hpids0 : s.pids 0 = 0)
-    (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
-    (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
-    (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
-    (hFv2 : final_state ≠ v) (hFd : final_state ≠ d) :
-    -- (1) the full surface lowers to the algorithm layer
-    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
-      final_state 8192 128 1 8192 64 1 16384 64
-      4 128 64 64 32 32 64 64 4 Bool.true Bool.true).toAlgorithm?
-        = Except.ok alg) ∧
-    -- (2) the full surface runs to completion (existence / termination)
-    (∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-        Bool.true Bool.true).toAlgKernel s = some sF) ∧
-    -- (3) standard Realizes (per output buffer): h, v_new, and final_state
-    (∀ j : Fin 4, ComputeCorrect.Realizes
-      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (h, hOffset s j.val 16384 64 64 64 64 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          Bool.true j.val idx)) ∧
-    (∀ j : Fin 4, ComputeCorrect.Realizes
-      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => vNewActive s j.val 0 128 64 32 32 64 idx)
-        (fun idx : TileIndex [32, 64] => (v_new, vNewOffset s j.val 0 8192 64 1 32 32 64 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          Bool.true j.val idx)) ∧
-    ComputeCorrect.Realizes
-      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx : TileIndex [64, 64] => (final_state, finalStateOffset s 64 64 64 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        finalValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          Bool.true 4 idx) := by
-  obtain ⟨sF, hexec, hh, hvn, hfin⟩ :=
-    chunk_delta_fwd_exec_genuine k v d v_new h initial_state final_state
-      Bool.true Bool.true s hpids0 hVk hVv hVd hHv hHk hHv2 hHd
-      hFh hFv hFk hFv2 hFd
-      (fun i_t => chunk_delta_fwd_v_new_python_test_shape_offset_injective s i_t)
-      (fun i_t => chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
-      (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
-  obtain ⟨alg, halg⟩ := chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
-    initial_state final_state 8192 128 1 8192 64 1 16384 64
-    4 128 64 64 32 32 64 64 4 Bool.true Bool.true
-  have hk : (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-      Bool.true Bool.true).toAlgorithm?
-        = Except.ok (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-            8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
-            Bool.true Bool.true).toAlgKernel := by
-    simp only [ComputeKernel.toAlgKernel, halg]
-  have hfin' := hfin rfl
-  refine ⟨⟨alg, halg⟩, ⟨sF, hexec⟩, ?_, ?_, ?_⟩
-  · intro j
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hact
-    rw [hExec] at hexec
-    obtain rfl := Option.some.inj hexec
-    exact hh j idx hact
-  · intro j
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hact
-    rw [hExec] at hexec
-    obtain rfl := Option.some.inj hexec
-    exact hvn j idx hact
-  · rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel hk
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hact
-    rw [hExec] at hexec
-    obtain rfl := Option.some.inj hexec
-    exact hfin' idx hact
 
 end Correct
 

@@ -318,10 +318,5 @@ def case1MOffsetG (s : BlockState) (ROUND_CTX r : Nat) : Nat := s.pids 1 * ROUND
 
 ## Also present (pinned special-case summaries)
 - `attention_score_final_store_slice_compute_correct`
-- `attention_score_final_store_python_test_shape_compute_correct`
-- `attention_score_python_case1_output_surface_summary`
-- `attention_score_python_case2_output_surface_summary`
-- `attention_score_python_case3_output_surface_summary`
-- `attention_score_python_case4_output_surface_summary`
 - `attention_score_case1_genuine_compute_correct`
 - `attention_score_case1_genuine_compute_correct_general`

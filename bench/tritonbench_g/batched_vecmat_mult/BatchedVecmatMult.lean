@@ -2,7 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `batched_vecmat_mult` — strict per-kernel correctness
@@ -878,20 +878,6 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
   intro idx
   exact batched_vecmat_block_output_store_slice_correct VecmatPre output
     dim_n BLOCK_M BLOCK_N s s' hOutInj hExec idx
-
-/-- Python `test_vecmat` full-surface coverage.
-
-The Python regression runs this same mathematical kernel twice with different
-launch metadata only. This wrapper fixes the checked `M = N = K = 128`,
-`block_m = 16`, `block_n = 32`, and `block_k = 64` surface, including the
-vectorized `BLOCK_M × BLOCK_N` accumulator, the two-iteration K loop, broadcast,
-reduction, transpose, and final output store. -/
-theorem batched_vecmat_python_test_surface_toAlgorithm_supported
-    (A B output : RegionName) :
-    ∃ alg, (batched_vecmat_surface A B output
-      128 128 128 16 32 64).toAlgorithm? = Except.ok alg := by
-  exact batched_vecmat_surface_toAlgorithm_supported A B output
-    128 128 128 16 32 64
 
 
 /-! ## Genuine GEMV closed-form correctness over the full dynamic K-loop

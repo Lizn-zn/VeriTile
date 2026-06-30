@@ -273,12 +273,5 @@ def reqIdx (s : BlockState) (B_req_idx : RegionName) : Nat :=
 
 ## Also present (pinned special-case summaries)
 - `token_attn_reducev_final_store_slice_compute_correct`
-- `token_attn_reducev_final_store_python_test_shape_compute_correct`
 - `token_attn_reducev_closed_form_correct`
 - `token_attn_reducev_closed_form_compute_correct`
-- `token_attn_reducev_python_case1_output_surface_summary`
-- `token_attn_reducev_python_case2_output_surface_summary`
-- `token_attn_reducev_python_case3_output_surface_summary`
-- `token_attn_reducev_python_case1_output_summary`
-- `token_attn_reducev_python_case2_output_summary`
-- `token_attn_reducev_python_case3_output_summary`

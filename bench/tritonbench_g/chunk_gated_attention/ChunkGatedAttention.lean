@@ -35,12 +35,7 @@ chunk_gated_attention_output_summary_general                  ← TOP THEOREM (d
   ├─ chunk_gated_attention_cum_compute_slice_closed_form_general (cumulative-normalizer store)
   ├─ chunk_gated_attention_h_state_store_slice_closed_form_general (per-chunk h-state store)
   └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
-
-chunk_gated_attention_python_test_shape_output_summary        ← pinned corollary (bench shape)
-  ├─ chunk_gated_attention_cum_compute_slice_closed_form_general (cumulative-normalizer store)
-  ├─ chunk_gated_attention_h_state_store_slice_closed_form_general (per-chunk h-state store; ×4 flag combos)
-  └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
-       (+ `*_offset_injective` side lemmas at the bench shape)
+       (+ `*_offset_injective` side lemmas)
 
 `hClosed` captures the gated carry-fold as a standalone closed form (the
 `hSeed`·∏`hGate` + Σ`hStepTerm`·∏`hGate` fold over chunks).
@@ -48,7 +43,7 @@ chunk_gated_attention_python_test_shape_output_summary        ← pinned corolla
 
 The four `(GATEK, USE_INITIAL_STATE, STORE_FINAL_STATE)` flag combinations in the
 summary match the four Python `fwd_inner` test cases. Offset-injectivity side
-lemmas (`*_offset_injective`) at the bench shape underpin the store readbacks.
+lemmas (`*_offset_injective`) underpin the store readbacks.
 
 The expected values are **genuine standalone closed forms over the input
 regions**, never read-backs of the kernel's own output:
@@ -96,8 +91,7 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorem:** `chunk_gated_attention_output_summary_general`
-(dimension-general; the pinned `chunk_gated_attention_python_test_shape_output_summary`
-is a thin instantiation). -/
+(dimension-general). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -680,42 +674,6 @@ theorem chunk_gated_attention_final_state_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-theorem chunk_gated_attention_python_pre_bs16_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [32, 16] => tileOffset s 8192 64 1 32 16 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
-  simp [tileOffset, tIndex, sIndex] at h
-  have ht : ta = tb := by omega
-  have hs : sa = sb := by omega
-  subst tb
-  subst sb
-  rfl
-
-theorem chunk_gated_attention_python_pre_bs32_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [32, 32] => tileOffset s 8192 64 1 32 32 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
-  simp [tileOffset, tIndex, sIndex] at h
-  have ht : ta = tb := by omega
-  have hs : sa = sb := by omega
-  subst tb
-  subst sb
-  rfl
-
-theorem chunk_gated_attention_python_pre_bs64_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [32, 64] => tileOffset s 8192 64 1 32 64 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
-  simp [tileOffset, tIndex, sIndex] at h
-  have ht : ta = tb := by omega
-  have hs : sa = sb := by omega
-  subst tb
-  subst sb
-  rfl
-
 theorem chunk_gated_attention_python_h_state_offset_injective
     (s : BlockState) (i_t : Fin 4) :
     Function.Injective
@@ -740,82 +698,6 @@ theorem chunk_gated_attention_python_final_state_offset_injective
   subst kb
   subst vb
   rfl
-
-theorem chunk_gated_attention_cum_python_bs16_compute_correct
-    (SReg Z : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
-        128 64 32 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 16] => active s 128 64 32 16 idx)
-        (fun idx : TileIndex [32, 16] => (Z, tileOffset s 8192 64 1 32 16 idx)))
-      (expected := fun idx : TileIndex [32, 16] =>
-        cumComputeStoreValue s SReg 8192 64 1 128 64 32 16 idx) := by
-  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
-    8192 64 1 128 64 32 16 s
-    (chunk_gated_attention_python_pre_bs16_offset_injective s)
-
-theorem chunk_gated_attention_cum_python_bs32_compute_correct
-    (SReg Z : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
-        128 64 32 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 32] => active s 128 64 32 32 idx)
-        (fun idx : TileIndex [32, 32] => (Z, tileOffset s 8192 64 1 32 32 idx)))
-      (expected := fun idx : TileIndex [32, 32] =>
-        cumComputeStoreValue s SReg 8192 64 1 128 64 32 32 idx) := by
-  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
-    8192 64 1 128 64 32 32 s
-    (chunk_gated_attention_python_pre_bs32_offset_injective s)
-
-theorem chunk_gated_attention_cum_python_bs64_compute_correct
-    (SReg Z : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
-        128 64 32 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 64] => active s 128 64 32 64 idx)
-        (fun idx : TileIndex [32, 64] => (Z, tileOffset s 8192 64 1 32 64 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        cumComputeStoreValue s SReg 8192 64 1 128 64 32 64 idx) := by
-  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
-    8192 64 1 128 64 32 64 s
-    (chunk_gated_attention_python_pre_bs64_offset_injective s)
-
-theorem chunk_gated_attention_h_state_python_test_shape_compute_correct
-    (BH H : RegionName) (i_t : Fin 4) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx) := by
-  exact chunk_gated_attention_h_state_store_slice_compute_correct BH H i_t.val
-    4096 32 1 32 32 16 16 s
-    (chunk_gated_attention_python_h_state_offset_injective s i_t)
-
-theorem chunk_gated_attention_final_state_python_test_shape_compute_correct
-    (BHFinal Ht : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        finalStateStoreValue s BHFinal 32 32 16 16 idx) := by
-  exact chunk_gated_attention_final_state_store_slice_compute_correct BHFinal Ht
-    32 32 16 16 s
-    (chunk_gated_attention_python_final_state_offset_injective s)
 
 def cumSurfaceTIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
   s.pids 1 * BT + i.val
@@ -1091,8 +973,7 @@ Honest side-conditions only: offset injectivity of each store footprint (a
 contiguity/aliasing-freedom hypothesis on the strides) and the
 buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
 the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
-trusted runtime boundary, as in #290). No dimension is pinned. The pinned
-`chunk_gated_attention_python_test_shape_output_summary` is a thin instantiation. -/
+trusted runtime boundary, as in #290). No dimension is pinned. -/
 theorem chunk_gated_attention_output_summary_general
     (SReg GCum K V G H H0 Ht BH BHFinal : RegionName)
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
@@ -1165,186 +1046,6 @@ end Correct
 /-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
 
 section TestShape
-
-/-- Python test-shape output coverage for chunk gated attention: every checked
-state-output surface (`h` at each loop row and final state) realizes its masked
-store shape. -/
-theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
-    (BH H BHFinal Ht : RegionName) (i_t : Fin 4) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
-  constructor
-  · exact chunk_gated_attention_h_state_python_test_shape_compute_correct
-      BH H i_t s
-  · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
-      BHFinal Ht s
-
-
-/-! ### ════════ Pinned corollary of the ★ MAIN THEOREM ★ ════════ -/
-/-- Public Python test-shape summary for `chunk_gated_attention.py`, against the
-**genuine closed forms** (no self-referential read-back). This is a thin
-bench-shape instantiation of the dimension-general headline
-`chunk_gated_attention_output_summary_general`.
-
-This packages, for the benchmark shape
-`B=2, H=4, T=128, S=64, K=32, V=32, BT=32, BK=BV=16`:
-
-* `fwd_pre` cumulative normalizer: the `b_o = m_s @ b_s` store realizes the
-  genuine causal-cumsum `cumComputeStoreValue` (`lowerTri @ source`).
-* The four Python `fwd_inner` `(GATEK, USE_INITIAL_STATE, STORE_FINAL_STATE)`
-  branch combinations: each `h` loop-row store realizes the genuine folded gated
-  state `hClosed i_t`, and (when `STORE_FINAL_STATE`) the `ht` store realizes the
-  fully-folded `hClosed 4` — provided the materialized state buffers `BH`/`BHFinal`
-  carry those folded states (the cross-chunk loop scheduling that threads the
-  carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
-  trusted runtime boundary, as in #290). -/
-theorem chunk_gated_attention_python_test_shape_output_summary
-    (G GCum K V H H0 Ht BH BHFinal : RegionName) (i_t : Fin 4) (s : BlockState)
-    (hBufFFF : ∀ idx : TileIndex [16, 16],
-      s.readMem BH (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.false Bool.false
-            4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx)
-    (hBufTTF : ∀ idx : TileIndex [16, 16],
-      s.readMem BH (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.true Bool.true
-            4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx)
-    (hBufFTT : ∀ idx : TileIndex [16, 16],
-      s.readMem BH (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.false Bool.true
-            4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx)
-    (hBufTFT : ∀ idx : TileIndex [16, 16],
-      s.readMem BH (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.true Bool.false
-            4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx)
-    (hFinFTT : ∀ idx : TileIndex [16, 16],
-      s.readMem BHFinal (finalStateOffset s 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.false Bool.true
-            4096 1 128 4096 32 1 32 32 32 16 16 4 idx)
-    (hFinTFT : ∀ idx : TileIndex [16, 16],
-      s.readMem BHFinal (finalStateOffset s 32 32 16 16 idx)
-        = hClosed s K V GCum H0 Bool.true Bool.false
-            4096 1 128 4096 32 1 32 32 32 16 16 4 idx) :
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_cum_compute_slice G GCum 8192 64 1
-        128 64 32 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [32, 16] => active s 128 64 32 16 idx)
-        (fun idx : TileIndex [32, 16] =>
-          (GCum, tileOffset s 8192 64 1 32 16 idx)))
-      (expected := fun idx : TileIndex [32, 16] =>
-        cumComputeStoreValue s G 8192 64 1 128 64 32 16 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
-          Bool.false Bool.false Bool.false i_t idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
-          Bool.true Bool.true Bool.false i_t idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
-          Bool.false Bool.true Bool.true i_t idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionFinalStateValue s K V GCum H H0 Ht
-          Bool.false Bool.true Bool.true idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
-          Bool.true Bool.false Bool.true i_t idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        producedChunkGatedAttentionFinalStateValue s K V GCum H H0 Ht
-          Bool.true Bool.false Bool.true idx)) := by
-  have hStateInj := chunk_gated_attention_python_h_state_offset_injective s i_t
-  have hFinalInj := chunk_gated_attention_python_final_state_offset_injective s
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · exact chunk_gated_attention_cum_compute_slice_closed_form_general G GCum
-      8192 64 1 128 64 32 16 s
-      (chunk_gated_attention_python_pre_bs16_offset_injective s)
-  · simpa [producedChunkGatedAttentionHStateValue] using
-      chunk_gated_attention_h_state_store_slice_closed_form_general BH H K V GCum H0
-        Bool.false Bool.false i_t.val 4096 1 128 4096 32 1 4096 32 1
-        32 32 32 16 16 s hStateInj hBufFFF
-  · simpa [producedChunkGatedAttentionHStateValue] using
-      chunk_gated_attention_h_state_store_slice_closed_form_general BH H K V GCum H0
-        Bool.true Bool.true i_t.val 4096 1 128 4096 32 1 4096 32 1
-        32 32 32 16 16 s hStateInj hBufTTF
-  · simpa [producedChunkGatedAttentionHStateValue] using
-      chunk_gated_attention_h_state_store_slice_closed_form_general BH H K V GCum H0
-        Bool.false Bool.true i_t.val 4096 1 128 4096 32 1 4096 32 1
-        32 32 32 16 16 s hStateInj hBufFTT
-  · simpa [producedChunkGatedAttentionFinalStateValue] using
-      chunk_gated_attention_final_state_store_slice_closed_form_general BHFinal Ht
-        K V GCum H0 Bool.false Bool.true 4096 1 128 4096 32 1
-        32 32 32 16 16 4 s hFinalInj hFinFTT
-  · simpa [producedChunkGatedAttentionHStateValue] using
-      chunk_gated_attention_h_state_store_slice_closed_form_general BH H K V GCum H0
-        Bool.true Bool.false i_t.val 4096 1 128 4096 32 1 4096 32 1
-        32 32 32 16 16 s hStateInj hBufTFT
-  · simpa [producedChunkGatedAttentionFinalStateValue] using
-      chunk_gated_attention_final_state_store_slice_closed_form_general BHFinal Ht
-        K V GCum H0 Bool.true Bool.false 4096 1 128 4096 32 1
-        32 32 32 16 16 4 s hFinalInj hFinTFT
 
 end TestShape
 

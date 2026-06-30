@@ -28,10 +28,6 @@ mv_kernel_output_summary_general                 ← ★ MAIN THEOREM (symbolic 
   └─ mv_kernel_one_block_compute_correct → mv_kernel_one_block_correct
        └─ mvSpec / mvProdTile  (row-wise `Tile.reduceSum` of `a * b`)
        (honest side-condition: output-offset injectivity `hOutInj`)
-
-mv_kernel_python_test_shape_complete_summary     ← concrete checked shapes
-  ├─ mv_kernel_python_case2_output_summary        (N=4, M=3)   := general @ (4,3), stride 1
-  └─ mv_kernel_python_case3_output_summary        (N=32, M=16) := general @ (32,16), stride 1
 ```
 
 `mv_kernel_surface_toAlgorithm_supported` separately establishes that the full
@@ -45,9 +41,8 @@ shapes (`M ∈ {3, 16}`) the `M` loop executes exactly one block; the
 `mv_kernel_one_block` slice captures that single-block path, with the full
 looping surface verified only to lower (`toAlgorithm?`). The `.to(tl.float32)`
 casts reduce to the identity post-erasure. Masked loads use `other=0.0`. The
-output scatter requires the per-row offset map to be injective
-(`mv_kernel_python_stride1_output_offset_injective` for the contiguous Python
-strides).
+output scatter requires the per-row offset map to be injective (the `hOutInj`
+hypothesis of the main theorem; holds for the contiguous Python strides).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatrixVectorMultip
@@ -59,8 +54,7 @@ set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorem:** `mv_kernel_output_summary_general` — dimension-general
 correctness for `mv_kernel` against `mvSpec` (symbolic `N M BLOCK_N BLOCK_M` and
-strides; honest side-conditions only). The concrete Python `case2`/`case3`
-summaries are thin corollaries that instantiate it at the checked test shapes. -/
+strides; honest side-conditions only). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -270,7 +264,7 @@ Bundles the two genuine obligations at fully symbolic dimensions
 The single honest side-condition is output-offset injectivity
 (`hOutInj`): distinct block rows must map to distinct `C` slots, which
 holds for any nonzero `stride_cn` (and in particular the contiguous
-Python strides, via `mv_kernel_python_stride1_output_offset_injective`). -/
+Python strides). -/
 abbrev mv_kernel_general_prop
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
@@ -311,125 +305,6 @@ theorem mv_kernel_output_summary_general
   · exact mv_kernel_one_block_compute_correct A B C N M stride_an stride_am
       stride_bm stride_cn BLOCK_N BLOCK_M s hOutInj
 
-/-! ## Python test-case wrappers
-
-The bundled Python test constructs contiguous tensors for shapes `(N, M) =
-(4, 3)` and `(32, 16)`. Triton's autotune choices all have `BLOCK_M >= 32`, so
-each checked path executes a single `M` block; the wrappers below leave
-`BLOCK_N`/`BLOCK_M` explicit to cover the autotuned choices while pinning the
-Python tensor strides. -/
-
-theorem mv_kernel_python_stride1_output_offset_injective
-    (s : BlockState) (BLOCK_N : Nat) :
-    Function.Injective (fun i : Fin BLOCK_N => cOffset s 1 BLOCK_N i) := by
-  intro a b h
-  apply Fin.ext
-  simpa [cOffset, nIndex] using h
-
-theorem mv_kernel_python_case2_surface_toAlgorithm_supported
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) :
-    ∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-      Except.ok alg := by
-  exact mv_kernel_surface_toAlgorithm_supported A B C 4 3 3 1 1 1
-    BLOCK_N BLOCK_M
-
-theorem mv_kernel_python_case3_surface_toAlgorithm_supported
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) :
-    ∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-      Except.ok alg := by
-  exact mv_kernel_surface_toAlgorithm_supported A B C 32 16 16 1 1 1
-    BLOCK_N BLOCK_M
-
-theorem mv_kernel_python_case2_one_block_compute_correct
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
-        (fun i => (C, cOffset s 1 BLOCK_N i)))
-      (expected := fun i =>
-        mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i) := by
-  exact mv_kernel_one_block_compute_correct A B C 4 3 3 1 1 1
-    BLOCK_N BLOCK_M s (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
-
-theorem mv_kernel_python_case3_one_block_compute_correct
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
-        (fun i => (C, cOffset s 1 BLOCK_N i)))
-      (expected := fun i =>
-        mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i) := by
-  exact mv_kernel_one_block_compute_correct A B C 32 16 16 1 1 1
-    BLOCK_N BLOCK_M s (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
-
-/-- Factored Python case-2 theorem surface for `mv_kernel`.
-
-The shape tuple is benchmark-local glue, while the reusable reduction/store
-mechanics stay in the earlier one-block correctness theorem. -/
-abbrev mv_kernel_python_case2_prop
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) : Prop :=
-  (∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-    Except.ok alg) ∧
-  ComputeCorrect.Realizes
-    (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
-    (initialState := s)
-    (write := ComputeCorrect.WriteMap.writeIf
-      (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
-      (fun i => (C, cOffset s 1 BLOCK_N i)))
-    (expected := fun i =>
-      mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i)
-
-/-- Factored Python case-3 theorem surface for `mv_kernel`. -/
-abbrev mv_kernel_python_case3_prop
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) : Prop :=
-  (∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-    Except.ok alg) ∧
-  ComputeCorrect.Realizes
-    (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
-    (initialState := s)
-    (write := ComputeCorrect.WriteMap.writeIf
-      (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
-      (fun i => (C, cOffset s 1 BLOCK_N i)))
-    (expected := fun i =>
-      mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i)
-
-
-/-- Public Python case-2 summary for `mv_kernel` (thin corollary of the
-dimension-general `mv_kernel_output_summary_general` at `(N, M) = (4, 3)` with
-the contiguous Python strides). -/
-theorem mv_kernel_python_case2_output_summary
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s :=
-  mv_kernel_output_summary_general A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M s
-    (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
-
-/-- Public Python case-3 summary for `mv_kernel` (thin corollary of the
-dimension-general `mv_kernel_output_summary_general` at `(N, M) = (32, 16)` with
-the contiguous Python strides). -/
-theorem mv_kernel_python_case3_output_summary
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s :=
-  mv_kernel_output_summary_general A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M s
-    (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
-
 end Correct
-
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-/-- Combined checked-shape summary for `matrix_vector_multip.py`. -/
-theorem mv_kernel_python_test_shape_complete_summary
-    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s ∧
-    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s := by
-  constructor
-  · exact mv_kernel_python_case2_output_summary A B C BLOCK_N BLOCK_M s
-  · exact mv_kernel_python_case3_output_summary A B C BLOCK_N BLOCK_M s
-end TestShape
 
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip

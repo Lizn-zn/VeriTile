@@ -28,10 +28,8 @@ every program of the grid.
 ## Proof architecture
 
 ```
-rotary_nopad_python_case1_output_summary              ← TOP (abbrev alias)
-  = rotary_nopad_python_case1_all_outputs_surface_summary
-      ├─ rotary_nopad_python_case1_surface_toAlgorithm_supported
-      │     └─ rotary_embedding_kernel_surface_toAlgorithm_supported
+rotary_emb_nopad_output_summary_general               ← TOP (dimension-general)
+      ├─ rotary_embedding_kernel_surface_toAlgorithm_supported
       ├─ rotary_embedding_q_surface_q0_compute_correct → rotary_embedding_q_surface_q0_correct   (Q first half)
       ├─ rotary_embedding_q_surface_q1_compute_correct → rotary_embedding_q_surface_q1_correct   (Q second half)
       ├─ rotary_embedding_k_surface_k0_compute_correct → rotary_embedding_k_surface_k0_correct   (K first half)
@@ -58,12 +56,13 @@ identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`).
 computed. Scoping is **one half-store at a time** (q0/q1/k0/k1), each over the
 active lanes (`tokens_range < q_total_tokens`, `cur_head_idx < Q_HEAD_NUM`, and
 for K the GQA-leader predicate); out-of-bounds lanes are preserved verbatim. The
-top summary covers the no-cache `case1` Python shape (contiguous
-`(32, 8, 64)` Q / `(32, 4, 64)` K, `HEAD_DIM = 64`, `BLOCK_TOKENS = 4`,
-`KV_GROUP_NUM = 2`). The `fused_rotary_embedding_kernel_v2` KV-cache/Q track is verified
-at the per-store-slice level (including the context paged-cache offsets) but is
-**not folded into a single top-level v2 summary** here — honestly, only `case1`
-has a public `output_summary`. `@triton.autotune` is not modeled.
+top summary is dimension-general, covering arbitrary symbolic token/head/KV-group
+counts, head-dim half, block size, and strides for the no-cache
+`_rotary_embedding_kernel`. The `fused_rotary_embedding_kernel_v2` KV-cache/Q
+track is verified at the per-store-slice level (including the context paged-cache
+offsets) but is **not folded into a single top-level v2 summary** here — honestly,
+only the no-cache kernel has a public `output_summary`. `@triton.autotune` is not
+modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.RotaryEmbNopad
@@ -2157,97 +2156,14 @@ theorem rotary_nopad_python_k_offsets_disjoint
   simp [kFullFirstOffset, kFullSecondOffset] at h
   omega
 
-/-- Python no-cache case full surface lowering for `total_tokens = 32`,
-`q_head_num = 8`, `kv_head_num = 4`, and `head_dim = 64`. -/
-theorem rotary_nopad_python_case1_surface_toAlgorithm_supported
-    (Q K Cos Sin : RegionName) :
-    ∃ alg, (rotary_embedding_kernel_surface Q K Cos Sin
-      512 64 256 64 1 64 1 32 8 2 64 4).toAlgorithm? =
-        Except.ok alg := by
-  exact rotary_embedding_kernel_surface_toAlgorithm_supported Q K Cos Sin
-    512 64 256 64 1 64 1 32 8 2 64 4
-
-/-- Public Python no-cache case coverage summary: the full Q/K rotary surface
-lowers, and all four Q/K half-output stores realize the checked tensor strides. -/
-theorem rotary_nopad_python_case1_all_outputs_surface_summary
-    (Q K Cos Sin : RegionName) (s : BlockState) :
-    (∃ alg, (rotary_embedding_kernel_surface Q K Cos Sin
-      512 64 256 64 1 64 1 32 8 2 64 4).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_embedding_q_surface Q Cos Sin
-        512 64 1 64 1 32 8 32 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx)
-        (fun idx => (Q, qFullFirstOffset s 512 64 1 4 idx)))
-      (expected := fun idx =>
-        rotaryNopadQ0FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_embedding_q_surface Q Cos Sin
-        512 64 1 64 1 32 8 32 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx)
-        (fun idx => (Q, qFullSecondOffset s 512 64 1 4 32 idx)))
-      (expected := fun idx =>
-        rotaryNopadQ1FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_embedding_k_surface K Cos Sin
-        256 64 1 64 1 32 2 32 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx)
-        (fun idx => (K, kFullFirstOffset s 256 64 1 2 4 idx)))
-      (expected := fun idx =>
-        rotaryNopadK0FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_embedding_k_surface K Cos Sin
-        256 64 1 64 1 32 2 32 4)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx)
-        (fun idx => (K, kFullSecondOffset s 256 64 1 2 4 32 idx)))
-      (expected := fun idx =>
-        rotaryNopadK1FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx)) := by
-  constructor
-  · exact rotary_nopad_python_case1_surface_toAlgorithm_supported Q K Cos Sin
-  constructor
-  · exact rotary_embedding_q_surface_q0_compute_correct Q Cos Sin
-      512 64 1 64 1 32 8 32 4 s
-      (rotary_nopad_python_q_first_offset_injective s)
-      (rotary_nopad_python_q_offsets_disjoint s)
-  constructor
-  · exact rotary_embedding_q_surface_q1_compute_correct Q Cos Sin
-      512 64 1 64 1 32 8 32 4 s
-      (rotary_nopad_python_q_second_offset_injective s)
-      (rotary_nopad_python_q_offsets_disjoint s)
-  constructor
-  · exact rotary_embedding_k_surface_k0_compute_correct K Cos Sin
-      256 64 1 64 1 32 2 32 4 s
-      (rotary_nopad_python_k_first_offset_injective s)
-      (rotary_nopad_python_k_offsets_disjoint s)
-  · exact rotary_embedding_k_surface_k1_compute_correct K Cos Sin
-      256 64 1 64 1 32 2 32 4 s
-      (rotary_nopad_python_k_second_offset_injective s)
-      (rotary_nopad_python_k_offsets_disjoint s)
-
-/-- `output_summary` alias for the Python no-cache rotary embedding path. -/
-abbrev rotary_nopad_python_case1_output_summary
-    (Q K Cos Sin : RegionName) (s : BlockState) :=
-  rotary_nopad_python_case1_all_outputs_surface_summary Q K Cos Sin s
-
 /-- **Dimension-general public output summary for `rotary_emb_nopad.py`**
 (genuine, not self-referential).
 
-Symbolic-dimension companion of
-`rotary_nopad_python_case1_all_outputs_surface_summary`: every token count,
-head count, KV-group count, head-dim half, block size, and stride is a `Nat`
-parameter rather than a pinned Python literal, and the per-lane
+Every token count, head count, KV-group count, head-dim half, block size, and
+stride is a `Nat` parameter rather than a pinned Python literal, and the per-lane
 output-offset injectivity / first-vs-second-half disjointness side-conditions
-are taken as hypotheses (the concrete-shape variants
-`rotary_nopad_python_q/k_*_offset_injective` / `_offsets_disjoint` discharge
-them at the Python case-1 shape).
+are taken as hypotheses (`rotary_nopad_python_q/k_*_offset_injective` /
+`_offsets_disjoint` discharge them at concrete shapes).
 
 For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus
 the conditional GQA-leader K stores) lowers to the algorithm layer, and all

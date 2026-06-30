@@ -54,7 +54,7 @@ with `stepStmts.cons_some (stepStmt_assign_eq_some recipe)`, keeping the `BlockS
 symbolic (readbacks peel via the `setReg`-name-inequality `@[simp]` set, never `whnf`).
 
 ```
-chunk_gla_simple_python_case{1,2,3,4}_output_summary       ← TOP THEOREMS
+chunk_gla_simple_output_summary_general                    ← TOP THEOREM (dimension-general)
   ├─ chunk_gla_simple_fwd_surface_toAlgorithm_supported     full surface lowers
   └─ chunk_gla_simple_exec_glaOutput                        exec readback o = glaOutput
        ├─ chunk_gla_simple_body_split                       body = front ++ [store]
@@ -637,37 +637,6 @@ noncomputable def bgTile (s : BlockState) (g : RegionName) (T BT : Nat) : Tile .
   ⟨fun idx => if (s.pids 1 * BT + idx.1.val < T) then
       some (s.readMem g (s.pids 2 * T + (s.pids 1 * BT + idx.1.val) * 1)) else some 0⟩
 
-/-! ## Per-Python-case output-offset injectivity -/
-
-/-- Case 1: `B=2,H=4,T=128,K=64,V=64,BT=32`, contiguous `s_v_h=8192`,
-`s_v_t=64`, `BV=64`. -/
-theorem chunk_gla_simple_output_python_case1_offset_injective (s : BlockState) :
-    Function.Injective (fun idx : TileIndex [32, 64] => outOffset s 8192 64 32 64 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp only [outOffset, tIndex, vIndex] at h
-  have ht : ta = tb := by omega
-  have hv : va = vb := by omega
-  subst tb; subst vb; rfl
-
-/-- Cases 2 & 3: same layout, `BT=64`. -/
-theorem chunk_gla_simple_output_python_case2_case3_offset_injective (s : BlockState) :
-    Function.Injective (fun idx : TileIndex [64, 64] => outOffset s 8192 64 64 64 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp only [outOffset, tIndex, vIndex] at h
-  have ht : ta = tb := by omega
-  have hv : va = vb := by omega
-  subst tb; subst vb; rfl
-
-/-- Case 4: `B=1,H=2,T=64,K=32,V=32,BT=64`, contiguous `s_v_h=2048`,
-`s_v_t=32`, `BV=32`. -/
-theorem chunk_gla_simple_output_python_case4_offset_injective (s : BlockState) :
-    Function.Injective (fun idx : TileIndex [64, 32] => outOffset s 2048 32 64 32 idx) := by
-  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp only [outOffset, tIndex, vIndex] at h
-  have ht : ta = tb := by omega
-  have hv : va = vb := by omega
-  subst tb; subst vb; rfl
-
 /-! ## Full-kernel exec produces `glaOutput` -/
 
 /-- The compiled (algorithm-lowered) front of the kernel: everything except the
@@ -1084,83 +1053,39 @@ theorem chunk_gla_simple_exec_glaOutput
   rw [hboData idx.1 idx.2.1 (by simpa [active, tIndex, vIndex] using hActive)]
   rfl
 
-/-! ## Public Python-case coverage summaries
 
-Each summary certifies that (i) the full GLA forward surface lowers to the
-algorithm layer, and (ii) executing it writes the genuine GLA closed form
-`glaOutput` to `o` at every active output lane — derived end-to-end from
-`q/k/v/h/g` via `chunk_gla_simple_exec_glaOutput`, with no producer hypothesis. -/
+/-! ## Public dimension-general output summary -/
 
-/-- Public Python case 1 summary (`B=2,H=4,T=128,K=BK=64,V=64,BT=32`, `scale=0.1`). -/
-theorem chunk_gla_simple_python_case1_output_summary
-    (q k v h g o : RegionName) (s : BlockState)
-    (hundef : ∀ rg off, s.undef rg off = 0) :
-    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
-      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [32, 64], active s 128 64 32 64 idx →
-      (exec (chunk_gla_simple_fwd_surface q k v h g o
-          8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64) s).map
-          (·.readMem o (outOffset s 8192 64 32 64 idx))
-        = some (glaOutput s q k v h g 8192 64 8192 64 4096 64 (0.1 : ℝ)
-            128 64 64 32 64 64 idx.1 idx.2.1)) := by
-  refine ⟨chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
-    8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64, fun idx hActive =>
-    chunk_gla_simple_exec_glaOutput q k v h g o 8192 64 8192 64 4096 64 (0.1 : ℝ)
-      128 64 64 32 64 64 s rfl (by norm_num) (by norm_num) hundef
-      (chunk_gla_simple_output_python_case1_offset_injective s) idx hActive⟩
+/-- **Public dimension-general output summary.** Over *symbolic* strides, scale,
+and dimensions `T K V BT BK BV` (with `K = BK`, `BK,BT > 0`, the `undef`-free and
+output-offset-injective side conditions), the full simple-GLA forward surface
 
-/-- Public Python case 2 summary (`BT=64`, `scale=0.1`). -/
-theorem chunk_gla_simple_python_case2_output_summary
-    (q k v h g o : RegionName) (s : BlockState)
-    (hundef : ∀ rg off, s.undef rg off = 0) :
-    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
-      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [64, 64], active s 128 64 64 64 idx →
-      (exec (chunk_gla_simple_fwd_surface q k v h g o
-          8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64) s).map
-          (·.readMem o (outOffset s 8192 64 64 64 idx))
-        = some (glaOutput s q k v h g 8192 64 8192 64 4096 64 (0.1 : ℝ)
-            128 64 64 64 64 64 idx.1 idx.2.1)) := by
-  refine ⟨chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
-    8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64, fun idx hActive =>
-    chunk_gla_simple_exec_glaOutput q k v h g o 8192 64 8192 64 4096 64 (0.1 : ℝ)
-      128 64 64 64 64 64 s rfl (by norm_num) (by norm_num) hundef
-      (chunk_gla_simple_output_python_case2_case3_offset_injective s) idx hActive⟩
+* lowers to the algorithm layer, and
+* executes so that every active output lane of `o` equals the genuine GLA closed
+  form `glaOutput` (read off the kernel's actual store; the `glaOutput` spec reads
+  the *input* memory `q/k/v/h/g`, NOT a self-referential exec read-back).
 
-/-- Public Python case 3 summary (`BT=64`, `scale=0.2`). -/
-theorem chunk_gla_simple_python_case3_output_summary
-    (q k v h g o : RegionName) (s : BlockState)
-    (hundef : ∀ rg off, s.undef rg off = 0) :
-    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
-      8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [64, 64], active s 128 64 64 64 idx →
-      (exec (chunk_gla_simple_fwd_surface q k v h g o
-          8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64) s).map
-          (·.readMem o (outOffset s 8192 64 64 64 idx))
-        = some (glaOutput s q k v h g 8192 64 8192 64 4096 64 (0.2 : ℝ)
-            128 64 64 64 64 64 idx.1 idx.2.1)) := by
-  refine ⟨chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
-    8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64, fun idx hActive =>
-    chunk_gla_simple_exec_glaOutput q k v h g o 8192 64 8192 64 4096 64 (0.2 : ℝ)
-      128 64 64 64 64 64 s rfl (by norm_num) (by norm_num) hundef
-      (chunk_gla_simple_output_python_case2_case3_offset_injective s) idx hActive⟩
-
-/-- Public Python case 4 summary (`B=1,H=2,T=64,K=BK=32,V=32,BT=64`, `scale=0.2`). -/
-theorem chunk_gla_simple_python_case4_output_summary
-    (q k v h g o : RegionName) (s : BlockState)
-    (hundef : ∀ rg off, s.undef rg off = 0) :
-    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
-      2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [64, 32], active s 64 32 64 32 idx →
-      (exec (chunk_gla_simple_fwd_surface q k v h g o
-          2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32) s).map
-          (·.readMem o (outOffset s 2048 32 64 32 idx))
-        = some (glaOutput s q k v h g 2048 32 2048 32 1024 32 (0.2 : ℝ)
-            64 32 32 64 32 32 idx.1 idx.2.1)) := by
-  refine ⟨chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
-    2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32, fun idx hActive =>
-    chunk_gla_simple_exec_glaOutput q k v h g o 2048 32 2048 32 1024 32 (0.2 : ℝ)
-      64 32 32 64 32 32 s rfl (by norm_num) (by norm_num) hundef
-      (chunk_gla_simple_output_python_case4_offset_injective s) idx hActive⟩
-
-end VeriTile.Bench.TritonBenchG.ChunkGlaSimple
+Both conjuncts are discharged via `chunk_gla_simple_fwd_surface_toAlgorithm_supported`
+and `chunk_gla_simple_exec_glaOutput`. The pinned per-Python-case summaries are
+specializations of this theorem at their literal dimensions. -/
+theorem chunk_gla_simple_output_summary_general
+    (q k v h g o : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
+    (scale : ℝ) (T K V BT BK BV : Nat) (s : BlockState)
+    (hKBK : K = BK) (hBK : 0 < BK) (hBT : 0 < BT)
+    (hundef : ∀ rg off, s.undef rg off = 0)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)) :
+    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
+        s_h_h s_h_t scale T K V BT BK BV).toAlgorithm? = Except.ok alg) ∧
+    (∀ idx : TileIndex [BT, BV], active s T V BT BV idx →
+      (exec (chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
+          s_h_h s_h_t scale T K V BT BK BV) s).map
+          (·.readMem o (outOffset s s_v_h s_v_t BT BV idx))
+        = some (glaOutput s q k v h g s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+            scale T K V BT BK BV idx.1 idx.2.1)) :=
+  ⟨chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o s_k_h s_k_t
+      s_v_h s_v_t s_h_h s_h_t scale T K V BT BK BV,
+   fun idx hActive =>
+    chunk_gla_simple_exec_glaOutput q k v h g o s_k_h s_k_t s_v_h s_v_t
+      s_h_h s_h_t scale T K V BT BK BV s hKBK hBK hBT hundef hInj idx hActive⟩

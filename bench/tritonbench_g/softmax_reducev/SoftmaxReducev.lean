@@ -844,24 +844,6 @@ theorem srOsStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (
     · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-Mr) from rfl]; ring
     · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-Mr) from rfl]; ring
 
-theorem softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) :
-    ∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
-        Except.ok alg := by
-  exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
-    BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)
-
-theorem softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
-    (Logics V Out : RegionName) (BLoc : Region .int)
-    (BStartLoc BSeqLen : Region .nat) :
-    ∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
-      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
-        Except.ok alg := by
-  exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
-    BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0
-
 /-! ### Memory-side data functions (Python test shape)
 
 The per-program scalars and per-token data the kernel reads, at the test shape

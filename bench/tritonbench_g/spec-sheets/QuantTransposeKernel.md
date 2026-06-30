@@ -14,12 +14,10 @@ recorded as **blocked** at algorithm erasure (it stores CUDA `llrint`/int8
 results, not the real-valued pre-rounding expression), while the checked
 scaled-store slice realizes the genuine pre-rounding quantity
 `scale127 * (a * absmax_inv)` (`quantTransposeScaledSpec`) at every in-range tile
-lane, leaving out-of-range lanes unchanged. The pinned
-`quantize_global_transpose_python_case{1..4}_blocked_output_summary` theorems are
-concrete instantiations of this. Output-address injectivity for the transposed
-writeback is taken as a hypothesis (`hOutInj`); the concrete cases discharge it
-via their per-shape `*_offset_injective` lemmas. The `llrint` rounding / int8
-cast remain the honest, unmodeled blocker. -/
+lane, leaving out-of-range lanes unchanged. This holds over arbitrary (symbolic)
+dimensions. Output-address injectivity for the transposed writeback is taken as a
+hypothesis (`hOutInj`). The `llrint` rounding / int8 cast remain the honest,
+unmodeled blocker. -/
 ```
 </details>
 
@@ -114,11 +112,3 @@ def colIndex (s : BlockState) (BLOCK_N : Nat) (j : Fin BLOCK_N) : Nat :=
 
 ## Also present (pinned special-case summaries)
 - `quantize_global_transpose_scaled_store_slice_compute_correct`
-- `quantize_global_transpose_python_case1_compute_correct`
-- `quantize_global_transpose_python_case2_compute_correct`
-- `quantize_global_transpose_python_case3_compute_correct`
-- `quantize_global_transpose_python_case4_compute_correct`
-- `quantize_global_transpose_python_case1_blocked_output_summary`
-- `quantize_global_transpose_python_case2_blocked_output_summary`
-- `quantize_global_transpose_python_case3_blocked_output_summary`
-- `quantize_global_transpose_python_case4_blocked_output_summary`

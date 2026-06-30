@@ -2,7 +2,7 @@
 
 **Python source:** `bench/tritonbench_g/attention_kernel_aligned/attention_kernel_aligned.py`
 
-## Public theorem: `attention_kernel_aligned_python_test_shape_output_summary_general`
+## Public theorem: `attention_kernel_aligned_output_summary_general`
 
 <details><summary>docstring</summary>
 
@@ -25,7 +25,7 @@ test shape (`sm_scale = 1.0`, `stride_qh = 8192`, `stride_b0h = 8192`,
 
 **Statement:**
 ```lean
-theorem attention_kernel_aligned_python_test_shape_output_summary_general
+theorem attention_kernel_aligned_output_summary_general
     (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     (stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)
     (hKN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hHD : 0 < HEAD) (hnB : 1 ≤ nB)

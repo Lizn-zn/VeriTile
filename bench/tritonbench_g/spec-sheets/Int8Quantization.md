@@ -23,9 +23,9 @@ injective on the `[BLK, C]` block), this bundles:
 * the **scale** store realizing the per-block scalar `scaleStoreSpec`.
 
 All expected values are computed from the kernel **inputs** (no `exec`/`readMem`
-self-reference). The pinned `per_block_int8_python_case{1,2}_output_summary` are
-concrete instantiations of this general closed form (mirrors the
-dimension-parameterized reference `attention_forward_triton_closed_form_correct`). -/
+self-reference). This general closed form holds over arbitrary dimensions
+(mirrors the dimension-parameterized reference
+`attention_forward_triton_closed_form_correct`). -/
 ```
 </details>
 
@@ -193,14 +193,4 @@ def colIndex (_s : BlockState) (j : Fin C) : Nat :=
 - `q_kernel_per_block_int8_test1_scale_store_slice_compute_correct`
 - `per_block_int8_test_scale_stride4_store_slice_compute_correct`
 - `k_kernel_per_block_int8_test2_scale_store_slice_compute_correct`
-- `q_kernel_per_block_int8_python_case1_scaled_store_compute_correct`
-- `k_kernel_per_block_int8_python_case1_scaled_store_compute_correct`
-- `q_kernel_per_block_int8_python_case2_scaled_store_compute_correct`
-- `k_kernel_per_block_int8_python_case2_scaled_store_compute_correct`
-- `per_block_int8_python_case1_all_outputs_compute_correct`
-- `per_block_int8_python_case2_all_outputs_compute_correct`
-- `per_block_int8_python_case1_internal_summary`
-- `per_block_int8_python_case2_internal_summary`
-- `per_block_int8_python_case1_output_summary`
-- `per_block_int8_python_case2_output_summary`
 - `per_block_int8_closed_form_correct`

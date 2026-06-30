@@ -52,9 +52,6 @@ fused_recurrent_rwkv6_output_summary_general                  ← TOP THEOREM (d
   │      └─ outputStepSpec_eq_outputClosed   (Σ_{j_k} … = o_m)
   └─ fused_recurrent_rwkv6_final_state_closed_form             ht = b_h^(T)
        └─ stateClosed at m = T  +  final_state_store_slice
-
-fused_recurrent_rwkv6_python_test_case{1..4}_output_summary  ← thin Python-shape corollaries
-  └─ (instantiations of fused_recurrent_rwkv6_output_summary_general; section TestShape)
 ```
 
 ## Modeling boundary
@@ -80,7 +77,7 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem:** `fused_recurrent_rwkv6_output_summary_general` (dimension-general; the four `fused_recurrent_rwkv6_python_test_case{1..4}_output_summary` theorems are thin corollaries). -/
+/-! **★ Main theorem:** `fused_recurrent_rwkv6_output_summary_general` (dimension-general). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -913,157 +910,6 @@ end Correct
 /-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
 
 section TestShape
-
-/-! ## Genuine Python regression-shape corollaries
-
-Thin instantiations of `fused_recurrent_rwkv6_output_summary_general` at the
-Python regression shape `s_k_h = s_v_h = 32, B = 2, H = 3, T = 4, K = V = 8,
-BK = BV = 8, scale = 0.5`, projecting the clauses each flag configuration
-exercises. Case 1: no initial / no final state; case 2: initial state; case 3:
-final state; case 4: both. -/
-
-/-- **Genuine RWKV6 Python case 1 summary** (no initial state, no final state). -/
-theorem fused_recurrent_rwkv6_python_test_case1_output_summary
-    (q k v w u o h0 ht BHPrev BHOut : RegionName) (t : Fin 4) (s : BlockState)
-    (hPrev : ∀ idx : TileIndex [8, 8],
-      s.readMem BHPrev (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.false 32 32 8 8 8 8 t.val idx) :
-    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
-      32 32 2 3 4 8 8 8 8 0.5 Bool.false Bool.false Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        t.val 32 32 2 3 4 8 8 8 8 0.5)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jv : Fin 8 => active s 8 8 jv)
-        (fun jv => (o, outStepOffset s t.val 32 2 3 8 8 jv)))
-      (expected := fun jv : Fin 8 =>
-        outputClosed s q k v w u h0 Bool.false 32 32 3 8 8 8 8 0.5 t.val jv)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
-        t.val 32 32 8 8 8 8)
-      (initialState := s)
-      (write := fun idx : TileIndex [8, 8] => some (BHOut, finalStateOffset s 8 8 8 8 idx))
-      (expected := fun idx =>
-        stateClosed s k v w h0 Bool.false 32 32 8 8 8 8 (t.val + 1) idx)) := by
-  obtain ⟨_, h2, h3, _⟩ := fused_recurrent_rwkv6_output_summary_general
-    q k v w u o h0 ht BHPrev BHOut BHPrev Bool.false Bool.false
-    32 32 2 3 t.val 8 8 8 8 t.val 0.5 s (by omega) (by omega) (by omega) hPrev hPrev
-  exact ⟨fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _
-    _ _ _ _ _ _ _ _ _ _ _ _ _, h2, h3⟩
-
-/-- **Genuine RWKV6 Python case 2 summary** (initial state, no final state). -/
-theorem fused_recurrent_rwkv6_python_test_case2_output_summary
-    (q k v w u o h0 ht BHPrev BHOut : RegionName) (t : Fin 4) (s : BlockState)
-    (hPrev : ∀ idx : TileIndex [8, 8],
-      s.readMem BHPrev (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 t.val idx) :
-    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
-      32 32 2 3 4 8 8 8 8 0.5 Bool.true Bool.false Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        t.val 32 32 2 3 4 8 8 8 8 0.5)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jv : Fin 8 => active s 8 8 jv)
-        (fun jv => (o, outStepOffset s t.val 32 2 3 8 8 jv)))
-      (expected := fun jv : Fin 8 =>
-        outputClosed s q k v w u h0 Bool.true 32 32 3 8 8 8 8 0.5 t.val jv)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
-        t.val 32 32 8 8 8 8)
-      (initialState := s)
-      (write := fun idx : TileIndex [8, 8] => some (BHOut, finalStateOffset s 8 8 8 8 idx))
-      (expected := fun idx =>
-        stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 (t.val + 1) idx)) := by
-  obtain ⟨_, h2, h3, _⟩ := fused_recurrent_rwkv6_output_summary_general
-    q k v w u o h0 ht BHPrev BHOut BHPrev Bool.true Bool.false
-    32 32 2 3 t.val 8 8 8 8 t.val 0.5 s (by omega) (by omega) (by omega) hPrev hPrev
-  exact ⟨fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _
-    _ _ _ _ _ _ _ _ _ _ _ _ _, h2, h3⟩
-
-/-- **Genuine RWKV6 Python case 3 summary** (no initial state, with final state):
-adds the final-state writeback realizing `stateClosed(T)` (`T = 4`). -/
-theorem fused_recurrent_rwkv6_python_test_case3_output_summary
-    (q k v w u o h0 ht BHPrev BHOut BHFinal : RegionName) (t : Fin 4)
-    (s : BlockState)
-    (hPrev : ∀ idx : TileIndex [8, 8],
-      s.readMem BHPrev (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.false 32 32 8 8 8 8 t.val idx)
-    (hFinal : ∀ idx : TileIndex [8, 8],
-      s.readMem BHFinal (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.false 32 32 8 8 8 8 4 idx) :
-    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
-      32 32 2 3 4 8 8 8 8 0.5 Bool.false Bool.true Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        t.val 32 32 2 3 4 8 8 8 8 0.5)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jv : Fin 8 => active s 8 8 jv)
-        (fun jv => (o, outStepOffset s t.val 32 2 3 8 8 jv)))
-      (expected := fun jv : Fin 8 =>
-        outputClosed s q k v w u h0 Bool.false 32 32 3 8 8 8 8 0.5 t.val jv)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht 8 8 8 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
-        (fun idx : TileIndex [8, 8] => (ht, finalStateOffset s 8 8 8 8 idx)))
-      (expected := fun idx : TileIndex [8, 8] =>
-        if finalActive s 8 8 8 8 idx then
-          stateClosed s k v w h0 Bool.false 32 32 8 8 8 8 4 idx
-        else 0)) := by
-  obtain ⟨h1, h2, _, h4⟩ := fused_recurrent_rwkv6_output_summary_general
-    q k v w u o h0 ht BHPrev BHPrev BHFinal Bool.false Bool.true
-    32 32 2 3 4 8 8 8 8 t.val 0.5 s (by omega) (by omega) (by omega) hPrev hFinal
-  exact ⟨h1, h2, h4⟩
-
-/-- **Genuine RWKV6 Python case 4 summary** (initial state and final state). -/
-theorem fused_recurrent_rwkv6_python_test_case4_output_summary
-    (q k v w u o h0 ht BHPrev BHOut BHFinal : RegionName) (t : Fin 4)
-    (s : BlockState)
-    (hPrev : ∀ idx : TileIndex [8, 8],
-      s.readMem BHPrev (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 t.val idx)
-    (hFinal : ∀ idx : TileIndex [8, 8],
-      s.readMem BHFinal (finalStateOffset s 8 8 8 8 idx)
-        = stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 4 idx) :
-    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
-      32 32 2 3 4 8 8 8 8 0.5 Bool.true Bool.true Bool.false).toAlgorithm?
-        = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        t.val 32 32 2 3 4 8 8 8 8 0.5)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jv : Fin 8 => active s 8 8 jv)
-        (fun jv => (o, outStepOffset s t.val 32 2 3 8 8 jv)))
-      (expected := fun jv : Fin 8 =>
-        outputClosed s q k v w u h0 Bool.true 32 32 3 8 8 8 8 0.5 t.val jv)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
-        t.val 32 32 8 8 8 8)
-      (initialState := s)
-      (write := fun idx : TileIndex [8, 8] => some (BHOut, finalStateOffset s 8 8 8 8 idx))
-      (expected := fun idx =>
-        stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 (t.val + 1) idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht 8 8 8 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
-        (fun idx : TileIndex [8, 8] => (ht, finalStateOffset s 8 8 8 8 idx)))
-      (expected := fun idx : TileIndex [8, 8] =>
-        if finalActive s 8 8 8 8 idx then
-          stateClosed s k v w h0 Bool.true 32 32 8 8 8 8 4 idx
-        else 0)) :=
-  fused_recurrent_rwkv6_output_summary_general
-    q k v w u o h0 ht BHPrev BHOut BHFinal Bool.true Bool.true
-    32 32 2 3 4 8 8 8 8 t.val 0.5 s (by omega) (by omega) (by omega) hPrev hFinal
 
 end TestShape
 

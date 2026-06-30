@@ -3,7 +3,6 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Kernel
-import VeriTile.Triton.LoopInvariant
 
 /-!
 # `matmul_leakyrelu_fp8` — closed-form matmul + leaky-ReLU correctness

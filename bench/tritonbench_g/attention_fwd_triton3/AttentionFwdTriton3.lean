@@ -3,7 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Kernel
 
 /-!
 # `attention_fwd_triton3` — strict per-kernel correctness
@@ -282,45 +282,6 @@ offset `off_hz * ROUND_CTX + offs_m`. -/
 def lRowOffset (s : BlockState) (off_hz ROUND_CTX BLOCK_M : Nat)
     (i : Fin BLOCK_M) : Nat :=
   off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + i.val)
-
-theorem attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
-    (Q K V M Out L : RegionName) :
-    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgorithm? =
-        Except.ok alg := by
-  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
-    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
-
-theorem attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
-    (Q K V M Out L : RegionName) :
-    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1).toAlgorithm? =
-        Except.ok alg := by
-  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
-    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
-
-theorem attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
-    (Q K V M Out L : RegionName) :
-    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      32768 8192 64 1
-      2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0).toAlgorithm? =
-        Except.ok alg := by
-  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
-    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-    32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
 
 /-- Global query row for output tile-row `i` in this program. -/
 def natDist3 (SM : Nat) (i : Fin 64) (j : Fin 128) : Nat :=

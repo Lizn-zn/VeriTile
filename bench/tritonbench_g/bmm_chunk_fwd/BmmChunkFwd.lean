@@ -1400,67 +1400,52 @@ theorem bmm_chunk_fwd_closed_form_correct
   rw [hExec] at hmain
   exact hmain
 
-/-! ## Public Python test-shape summaries (genuine spec)
+/-! ## Public output summary (genuine spec, dimension-general)
 
-Python test case 1 (ungrouped) and case 4 (grouped) are the pure batched-matmul
-configurations (`causal = false`, `seq_idx = None`). Both use `chunk_size = 32`,
-`K = 64`, fp16 inputs, with the `(2,128,64)` / `(2,128,4,64)` layouts. -/
+The pure batched-matmul configuration (`causal = false`, `seq_idx = None`,
+covering Python test cases 1 and 4) over **fully symbolic** dimensions: arbitrary
+`chunk_size`, `ngroups`, tile dims `BM`/`BN`, all batch/chunk/head/row/col
+strides, K-block size `BK` (with `0 < BK`), and K-block count `numKBlocks` (so
+`K = BK · numKBlocks`). -/
 
-/-- **Python case 1 summary** (ungrouped: `batch=2`, `seqlen=128`, `K=64`,
-`chunk_size=32`; strides `a=b=(8192,64,0,1)`, `out=(4096,1024,0,32,1)`,
-`ngroups=1`; `BLOCK_SIZE_K=32`, `numKBlocks=2`): the genuine batched matmul
-surface lowers to the algorithm layer and realizes the per-program matrix
-product `Σ_{k<64} A[i,k]·B[k,j]` on every in-bounds output lane. -/
-theorem bmm_chunk_fwd_python_case1_summary
-    (A B Out : RegionName) (s : BlockState) (BM BN : Nat)
-    (hInj : Function.Injective (outOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-      32 4096 1024 0 32 1 (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN) BM BN))
-    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) 32 BN) BM i < 32)
-    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) 32 BN) BN j < 32)
+/-- **`bmm_chunk_fwd` output summary (dimension-general).**
+
+The genuine batched-matmul surface (1) lowers to the algorithm layer and (2)
+realizes the per-program matrix product `Σ_{k < BK·numKBlocks} A[i,k]·B[k,j]`
+over ℝ on every in-bounds output lane — the closed-form spec read from INPUT
+memory (`outputCell`/`bmmSpec` via `bmm_chunk_fwd_closed_form_correct`), NOT the
+kernel's own executed value.
+
+Preconditions: `0 < BK`; all tile rows/cols in-bounds
+(`PM·BM+i < chunk_size`, `PN·BN+j < chunk_size`), making the load/store masks
+all-true; output-address injectivity; clean initial `undef`. `PB/PC/PH/PM/PN`
+are the kernel's own derived program coordinates. -/
+theorem bmm_chunk_fwd_output_summary_general
+    (A B Out : RegionName) (s : BlockState)
+    (chunk_size ngroups SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK numKBlocks : Nat)
+    (hBK : 0 < BK)
+    (hInj : Function.Injective (outOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+      chunk_size SOB SOC SOH SOM SON (pidM (s.pids 0) chunk_size BN) (pidN (s.pids 0) chunk_size BN) BM BN))
+    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) chunk_size BN) BM i < chunk_size)
+    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) chunk_size BN) BN j < chunk_size)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (bmm_matmul_surface A B Out 32 64 1 8192 64 0 1 8192 64 0 1
-        4096 1024 0 32 1 BM BN 32).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
+        SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := bmm_matmul_surface A B Out 32 64 1 8192 64 0 1 8192 64 0 1
-        4096 1024 0 32 1 BM BN 32)
+      (kernel := bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
+        SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>
-        some (Out, outOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          32 4096 1024 0 32 1 (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN) BM BN idx))
+        some (Out, outOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          chunk_size SOB SOC SOH SOM SON (pidM (s.pids 0) chunk_size BN) (pidN (s.pids 0) chunk_size BN) BM BN idx))
       (expected := fun idx : TileIndex [BM, BN] =>
-        outputCell s A B (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN)
-          32 BM BN 8192 64 0 1 8192 64 0 1 32 2 idx) := by
-  refine ⟨bmm_matmul_surface_toAlgorithm_supported A B Out 32 64 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1 BM BN 32, ?_⟩
-  exact bmm_chunk_fwd_closed_form_correct A B Out s 32 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1 BM BN 32 2
-    (by norm_num) hInj hmlt hnlt hundef
-
-/-- **Python case 4 summary** (grouped: `batch=2`, `seqlen=128`, `ngroups=4`,
-`K=64`, `chunk_size=32`; strides `a=b=(32768,256,64,1)`,
-`out=(16384,4096,1024,32,1)`; `BLOCK_SIZE_K=32`, `numKBlocks=2`): the genuine
-batched matmul surface lowers and realizes `Σ_{k<64} A[i,k]·B[k,j]` per program. -/
-theorem bmm_chunk_fwd_python_case4_summary
-    (A B Out : RegionName) (s : BlockState) (BM BN : Nat)
-    (hInj : Function.Injective (outOffset (s.pids 1) (pidC (s.pids 2) 4) (pidH (s.pids 2) 4)
-      32 16384 4096 1024 32 1 (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN) BM BN))
-    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) 32 BN) BM i < 32)
-    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) 32 BN) BN j < 32)
-    (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (bmm_matmul_surface A B Out 32 64 4 32768 256 64 1 32768 256 64 1
-        16384 4096 1024 32 1 BM BN 32).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := bmm_matmul_surface A B Out 32 64 4 32768 256 64 1 32768 256 64 1
-        16384 4096 1024 32 1 BM BN 32)
-      (initialState := s)
-      (write := fun idx : TileIndex [BM, BN] =>
-        some (Out, outOffset (s.pids 1) (pidC (s.pids 2) 4) (pidH (s.pids 2) 4)
-          32 16384 4096 1024 32 1 (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN) BM BN idx))
-      (expected := fun idx : TileIndex [BM, BN] =>
-        outputCell s A B (s.pids 1) (pidC (s.pids 2) 4) (pidH (s.pids 2) 4)
-          (pidM (s.pids 0) 32 BN) (pidN (s.pids 0) 32 BN)
-          32 BM BN 32768 256 64 1 32768 256 64 1 32 2 idx) := by
-  refine ⟨bmm_matmul_surface_toAlgorithm_supported A B Out 32 64 4 32768 256 64 1 32768 256 64 1 16384 4096 1024 32 1 BM BN 32, ?_⟩
-  exact bmm_chunk_fwd_closed_form_correct A B Out s 32 4 32768 256 64 1 32768 256 64 1 16384 4096 1024 32 1 BM BN 32 2
-    (by norm_num) hInj hmlt hnlt hundef
+        outputCell s A B (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) chunk_size BN) (pidN (s.pids 0) chunk_size BN)
+          chunk_size BM BN SAB SAS SAH SAK SBB SBS SBH SBK BK numKBlocks idx) := by
+  refine ⟨bmm_matmul_surface_toAlgorithm_supported A B Out chunk_size (BK * numKBlocks) ngroups
+    SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK, ?_⟩
+  exact bmm_chunk_fwd_closed_form_correct A B Out s chunk_size ngroups
+    SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK numKBlocks
+    hBK hInj hmlt hnlt hundef
 
 end VeriTile.Bench.TritonBenchG.BmmChunkFwd

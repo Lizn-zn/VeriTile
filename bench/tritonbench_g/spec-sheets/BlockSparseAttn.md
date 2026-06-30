@@ -14,11 +14,10 @@ online-softmax loop + the two masked `out` stores) **realizes the genuine causal
 block-sparse softmax closed form** `blockSparseAttnClosedForm` at every active
 output lane, for both D-blocks (`dBlockBase = 0` / `BLOCK_D`).
 
-This is the symbolic-dimension generalization of
-`block_sparse_attn_python_case1_output_closed_form_summary` (which is the instance
-`BLOCK_M=BLOCK_N=BLOCK_D=16`, `num_heads=4`, `num_kv_heads=2`, strides
-`2048/512/32/1024`, `num_layout=1`, row/col CSR strides `3`/`4`,
-`total_seq_len=16`).
+This is the symbolic-dimension generalization of the former case-1 Python-shape
+summary (the instance `BLOCK_M=BLOCK_N=BLOCK_D=16`, `num_heads=4`,
+`num_kv_heads=2`, strides `2048/512/32/1024`, `num_layout=1`, row/col CSR strides
+`3`/`4`, `total_seq_len=16`).
 
 Honest side-conditions: clean undef (`hundef`); the CSR row-pointer window
 (`hStartL`/`hEndL`/`hsle`) with a nonempty window (`hN`); positivity of the block
@@ -885,4 +884,3 @@ def headGroups (num_heads num_kv_heads : Nat) : Nat := num_heads / num_kv_heads
 - `block_sparse_attn_python_first_output_compute_correct`
 - `block_sparse_attn_python_second_output_compute_correct`
 - `block_sparse_attn_python_output_pair_compute_correct`
-- `block_sparse_attn_python_case1_output_closed_form_summary`

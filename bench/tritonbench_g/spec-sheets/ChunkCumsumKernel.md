@@ -22,8 +22,7 @@ The carry invariant `carry_c = Σ_{flat < c·BT, flat < T} s[i_bh·T+flat]` is
 *proven* by the loop induction (`forRangeDyn_inv` + `surface_step`), not assumed.
 `expected` is a standalone `Finset.sum` over input memory (`globalCumsumClosed`),
 never a read-back of the kernel's own output. This is the dimension-parameterized
-headline; `chunk_cumsum_scalar_python_test_shape_output_summary` is the `T = 4`,
-`BT = 16` corollary. -/
+headline; the `T = 4`, `BT = 16` Python benchmark shape is one instantiation. -/
 ```
 </details>
 
@@ -86,9 +85,3 @@ def chunk_cumsum_scalar_surface
 - `chunk_cumsum_scalar_store_slice_compute_correct`
 - `chunk_cumsum_scalar_cumsum_slice_compute_correct`
 - `chunk_cumsum_scalar_single_block_surface_compute_correct`
-- `chunk_cumsum_scalar_single_block_python_test_shape_compute_correct`
-- `chunk_cumsum_scalar_store_python_test_shape_compute_correct`
-- `chunk_cumsum_scalar_cumsum_python_test_shape_compute_correct`
-- `chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct`
-- `chunk_cumsum_scalar_python_test_shape_summary`
-- `chunk_cumsum_scalar_python_test_shape_output_summary`

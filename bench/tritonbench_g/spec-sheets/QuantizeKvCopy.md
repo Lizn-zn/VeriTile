@@ -8,7 +8,7 @@
 
 ```
 /-- **Dimension-general grouped summary (genuine, gap-free).** The symbolic
-generalization of `destindex_copy_quantize_kv_group_python_output_summary`: all
+generalization of the former pinned Python-shape grouped summary: all
 strides, `group_size`, `BLOCK_GROUP_NUM`, and `BLOCK_GROUP_DIM` are arbitrary
 `Nat` parameters. Bundles the three already-general building blocks
 (`..._toAlgorithm_supported`, `..._value_output_compute_correct`,
@@ -149,4 +149,3 @@ def dimIndex (_s : BlockState) (j : Fin BLOCK_GROUP_DIM) : Nat :=
 - `destindex_copy_quantize_kv_group_scale_store_slice_compute_correct`
 - `destindex_copy_quantize_kv_group_real_surface_value_output_compute_correct`
 - `destindex_copy_quantize_kv_group_real_surface_scale_output_compute_correct`
-- `destindex_copy_quantize_kv_group_python_output_summary`

@@ -27,22 +27,20 @@ covers every program of the grid.
 ## Proof architecture
 
 ```
-kv_cache_copy_python_case1_all_outputs_summary         ← TOP THEOREM (old layout)
-kv_cache_copy_python_case2_all_outputs_summary         ← TOP THEOREM (split-x layout)
-  ├─ kv_cache_copy_python_case{1,2}_surface_toAlgorithm_supported   surface lowers
-  │    └─ copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported
+kv_cache_copy_seqlen1_output_summary_general           ← TOP THEOREM (old layout, dimension-general)
+kv_cache_copy_split_x_output_summary_general           ← TOP THEOREM (split-x layout, dimension-general)
+  ├─ copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported   surface lowers
   ├─ K-cache scatter ComputeCorrect
-  │    ├─ copy_to_kcache_seqlen1_old_layout_block_compute_correct   (case 1)
+  │    ├─ copy_to_kcache_seqlen1_old_layout_block_compute_correct   (old layout)
   │    │    └─ copy_to_kcache_seqlen1_xblock_compute_correct → _xblock_correct
-  │    └─ copy_to_kcache_seqlen1_new_layout_xblock_compute_correct  (case 2, ∀ split_x)
+  │    └─ copy_to_kcache_seqlen1_new_layout_xblock_compute_correct  (split-x, ∀ split_x)
   ├─ V-cache scatter ComputeCorrect
   │    └─ copy_to_vcache_seqlen1_dblock_compute_correct → _dblock_correct
-  └─ offset-injectivity lemmas
+  └─ offset-injectivity lemmas (taken as hypotheses)
        kv_cache_copy_python_{old,new}_kcache_offset_injective,
        kv_cache_copy_python_vcache_offset_injective
 ```
-(`kv_cache_copy_python_case{1,2}_output_summary` are abbrev aliases of the
-two top theorems.) Single-x-block lemmas `copy_to_kcache_one_xblock_*` /
+Single-x-block lemmas `copy_to_kcache_one_xblock_*` /
 `copy_to_vcache_one_dblock_*` underlie the seqlen1 versions.
 
 ## Modeling boundary
@@ -1030,32 +1028,6 @@ theorem copy_to_vcache_one_dblock_compute_correct
     s s' hOutInj hExec i
   simpa [hActive] using h
 
-/-! ## Python test-shape wrappers -/
-
-/-- Python case 1 full surface lowering for the legacy K-cache layout
-`[num_blocks, num_kv_heads, block_size, head_dim]`. -/
-theorem kv_cache_copy_python_case1_surface_toAlgorithm_supported
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) :
-    ∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths 256 64 1 256 64 1 4096 1024 0 64 1
-      4096 1024 64 1 10 1 16 64 64).toAlgorithm? = Except.ok alg := by
-  exact copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache
-    VCache BLOCK_TABLES context_lengths 256 64 1 256 64 1 4096 1024
-    0 64 1 4096 1024 64 1 10 1 16 64 64
-
-/-- Python case 2 full surface lowering for the new split-x K-cache layout
-`[num_blocks, num_kv_heads, head_dim // 8, block_size, 8]`. -/
-theorem kv_cache_copy_python_case2_surface_toAlgorithm_supported
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) :
-    ∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths 256 64 1 256 64 1 4096 1024 128 8 1
-      4096 1024 64 1 10 1 16 64 8).toAlgorithm? = Except.ok alg := by
-  exact copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache
-    VCache BLOCK_TABLES context_lengths 256 64 1 256 64 1 4096 1024
-    128 8 1 4096 1024 64 1 10 1 16 64 8
-
 theorem kv_cache_copy_python_old_kcache_offset_injective
     (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) :
     Function.Injective
@@ -1089,97 +1061,6 @@ theorem kv_cache_copy_python_vcache_offset_injective
     seqlen1OffsetLastBlock, seqlen1PastKvSeqLen, dimIndex] at h
   exact Fin.ext (by omega)
 
-/-- Public Python case 1 coverage summary: full old-layout K/V cache surface
-lowers, and the K-cache plus V-cache writebacks realize the checked output
-strides. -/
-theorem kv_cache_copy_python_case1_all_outputs_summary
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :
-    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths 256 64 1 256 64 1 4096 1024 0 64 1
-      4096 1024 64 1 10 1 16 64 64).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths 0 256 64 1 4096 1024 0 64 10 1 16 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => kActive 0 64 64 i)
-        (fun i => (KCache,
-          seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0
-            4096 1024 0 64 10 1 16 64 i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s 0 256 64 1 64 i))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => active 64 i)
-        (fun i => (VCache,
-          seqlen1VCacheOffset s BLOCK_TABLES context_lengths
-            4096 1024 64 1 10 1 16 i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s 256 64 1 i))) := by
-  constructor
-  · exact kv_cache_copy_python_case1_surface_toAlgorithm_supported
-      K V KCache VCache BLOCK_TABLES context_lengths
-  constructor
-  · exact copy_to_kcache_seqlen1_old_layout_block_compute_correct K KCache
-      BLOCK_TABLES context_lengths 256 64 1 4096 1024 64 10 1 16 64 s
-      (kv_cache_copy_python_old_kcache_offset_injective s BLOCK_TABLES
-        context_lengths)
-  · exact copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
-      context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64 s
-      (kv_cache_copy_python_vcache_offset_injective s BLOCK_TABLES
-        context_lengths)
-
-/-- Public Python case 2 coverage summary: full new-layout K/V cache surface
-lowers, every `split_x : Fin 8` K-cache writeback realizes its x-block, and the
-V-cache writeback realizes the checked output strides. -/
-theorem kv_cache_copy_python_case2_all_outputs_summary
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :
-    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths 256 64 1 256 64 1 4096 1024 128 8 1
-      4096 1024 64 1 10 1 16 64 8).toAlgorithm? = Except.ok alg) ∧
-    (∀ split_x : Fin 8,
-      ComputeCorrect.Realizes
-        (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-          context_lengths split_x.val 256 64 1 4096 1024 128 8 10 1 16 64 8)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 8 => kActive split_x.val 64 8 i)
-          (fun i => (KCache,
-            seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x.val
-              4096 1024 128 8 10 1 16 8 i)))
-        (expected := fun i =>
-          s.readMem K (kSourceOffset s split_x.val 256 64 1 8 i))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => active 64 i)
-        (fun i => (VCache,
-          seqlen1VCacheOffset s BLOCK_TABLES context_lengths
-            4096 1024 64 1 10 1 16 i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s 256 64 1 i))) := by
-  constructor
-  · exact kv_cache_copy_python_case2_surface_toAlgorithm_supported
-      K V KCache VCache BLOCK_TABLES context_lengths
-  constructor
-  · intro split_x
-    exact copy_to_kcache_seqlen1_new_layout_xblock_compute_correct K KCache
-      BLOCK_TABLES context_lengths split_x.val 256 64 1 4096 1024 128 8
-      10 1 16 64 8 s
-      (kv_cache_copy_python_new_kcache_offset_injective s BLOCK_TABLES
-        context_lengths split_x.val)
-  · exact copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
-      context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64 s
-      (kv_cache_copy_python_vcache_offset_injective s BLOCK_TABLES
-        context_lengths)
-
 /-! ## Dimension-general public summaries
 
 The two `*_output_summary_general` theorems below are the symbolic-dimension
@@ -1193,7 +1074,7 @@ general theorem. Both share the general V-cache writeback. -/
 
 /-- **Dimension-general** old-layout (`seqlen1`, single x-block) summary.
 
-Symbolic-dimension version of `kv_cache_copy_python_case1_all_outputs_summary`:
+Over arbitrary (symbolic) dimensions:
 the surface lowers, the legacy K-cache writeback covers the whole head in one
 x-block, and the V-cache writeback realizes its strides. Offset-injectivity for
 the K and V cache stores is supplied as hypotheses. -/
@@ -1259,7 +1140,7 @@ theorem kv_cache_copy_seqlen1_output_summary_general
 
 /-- **Dimension-general** split-x (new layout) summary.
 
-Symbolic-dimension version of `kv_cache_copy_python_case2_all_outputs_summary`:
+Over arbitrary (symbolic) dimensions:
 the surface lowers, every `split_x` partition's K-cache writeback realizes its
 x-block, and the V-cache writeback realizes its strides. Per-`split_x`
 K-cache offset-injectivity and the V-cache offset-injectivity are hypotheses. -/
@@ -1328,19 +1209,5 @@ theorem kv_cache_copy_split_x_output_summary_general
       context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
       stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM s
       hVInj⟩
-
-/-- `output_summary` alias for Python case 1, old K-cache layout. -/
-abbrev kv_cache_copy_python_case1_output_summary
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :=
-  kv_cache_copy_python_case1_all_outputs_summary K V KCache VCache
-    BLOCK_TABLES context_lengths s
-
-/-- `output_summary` alias for Python case 2, new split-x K-cache layout. -/
-abbrev kv_cache_copy_python_case2_output_summary
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :=
-  kv_cache_copy_python_case2_all_outputs_summary K V KCache VCache
-    BLOCK_TABLES context_lengths s
 
 end VeriTile.Bench.TritonBenchG.KvCacheCopy
