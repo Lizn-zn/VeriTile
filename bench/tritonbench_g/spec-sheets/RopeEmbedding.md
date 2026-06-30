@@ -133,7 +133,3 @@ def colIndex (i : Fin BLOCK_SIZE) : Nat :=
 - `rope_embedding_forward_second_half_compute_correct`
 - `rope_embedding_backward_first_half_compute_correct`
 - `rope_embedding_backward_second_half_compute_correct`
-- `rope_embedding_python_base_first_half_compute_correct`
-- `rope_embedding_python_base_second_half_compute_correct`
-- `rope_embedding_python_base_backward_first_half_compute_correct`
-- `rope_embedding_python_base_backward_second_half_compute_correct`

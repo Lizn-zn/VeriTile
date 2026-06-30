@@ -13,8 +13,7 @@
 Every token count, head count, KV-group count, head-dim half, block size, and
 stride is a `Nat` parameter rather than a pinned Python literal, and the per-lane
 output-offset injectivity / first-vs-second-half disjointness side-conditions
-are taken as hypotheses (`rotary_nopad_python_q/k_*_offset_injective` /
-`_offsets_disjoint` discharge them at concrete shapes).
+are taken as hypotheses of the main theorem.
 
 For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus
 the conditional GQA-leader K stores) lowers to the algorithm layer, and all

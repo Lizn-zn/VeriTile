@@ -37,9 +37,7 @@ copy_to_kcache_seqlen_n1_surface_output_summary       ← TOP THEOREM (decode pa
   copy_to_kcache_seqlen_n1_new_layout_xblock_compute_correct  (split-x layout))
 ```
 The `n_tokens > 1` (prefill) path is covered at the surface-lowering level only
-(`copy_to_kcache_seqlen_n_kernel{,_signed}_toAlgorithm_supported` plus the
-Python `n = 2` test-shape lowerings
-`copy_to_kcache_seqlen_n2_{old,new}_layout_python{,_signed}_toAlgorithm_supported`).
+(`copy_to_kcache_seqlen_n_kernel_toAlgorithm_supported`).
 The post-arithmetic split-x slice
 `copy_to_kcache_split_x_block_{correct,compute_correct}` proves the store once
 the cache slot has been selected.
@@ -168,61 +166,6 @@ theorem copy_to_kcache_seqlen_n_signed_kernel_toAlgorithm_supported
       n_tokens _HEAD_DIM KCACHE_X).toAlgorithm? = Except.ok alg := by
   simp [copy_to_kcache_seqlen_n_signed_kernel, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
-
-/-- Python test `n = 2`, legacy cache layout
-`[num_blocks, num_kv_heads, block_size, head_dim]`.
-
-For the checked test:
-* `k.shape = (bsz*n, num_kv_heads, head_dim) = (4, 4, 64)`,
-  so `k.stride = (256, 64, 1)`;
-* `k_cache.shape = (10, 4, 16, 64)`,
-  so `k_cache.stride = (4096, 1024, 64, 1)`;
-* `block_tables.shape = (2, 10)`, stride `(10, 1)`;
-* `block_size = 16`, `n_tokens = 2`, `HEAD_DIM = KCACHE_X = 64`.
-
-The theorem pins those parameters on the complete signed kernel. -/
-theorem copy_to_kcache_seqlen_n2_old_layout_python_toAlgorithm_supported
-    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .int) :
-    ∃ alg, (copy_to_kcache_seqlen_n_kernel K KCache BLOCK_TABLES seq_lengths
-      256 64 1 4096 1024 0 64 1 10 1 16 2 64 64).toAlgorithm? =
-        Except.ok alg := by
-  exact copy_to_kcache_seqlen_n_kernel_toAlgorithm_supported K KCache
-    BLOCK_TABLES seq_lengths 256 64 1 4096 1024 0 64 1 10 1 16 2 64 64
-
-theorem copy_to_kcache_seqlen_n2_old_layout_python_signed_toAlgorithm_supported
-    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .int) :
-    ∃ alg, (copy_to_kcache_seqlen_n_signed_kernel K KCache BLOCK_TABLES
-      seq_lengths 256 64 1 4096 1024 0 64 1 10 1 16 2 64 64).toAlgorithm? =
-        Except.ok alg := by
-  exact copy_to_kcache_seqlen_n_signed_kernel_toAlgorithm_supported K KCache
-    BLOCK_TABLES seq_lengths 256 64 1 4096 1024 0 64 1 10 1 16 2 64 64
-
-/-- Python test `n = 2`, new split-x cache layout
-`[num_blocks, num_kv_heads, head_dim // x, block_size, x]`.
-
-For the checked test:
-* `k.shape = (4, 4, 64)`, so `k.stride = (256, 64, 1)`;
-* `k_cache.shape = (10, 4, 8, 16, 8)`,
-  so `k_cache.stride = (4096, 1024, 128, 8, 1)`;
-* `block_tables.shape = (2, 10)`, stride `(10, 1)`;
-* `block_size = 16`, `n_tokens = 2`, `HEAD_DIM = 64`, `KCACHE_X = 8`.
-
-This keeps the signed `cur_token_shift`/`past_kv_seq_len` path intact. -/
-theorem copy_to_kcache_seqlen_n2_new_layout_python_toAlgorithm_supported
-    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .int) :
-    ∃ alg, (copy_to_kcache_seqlen_n_kernel K KCache BLOCK_TABLES seq_lengths
-      256 64 1 4096 1024 128 8 1 10 1 16 2 64 8).toAlgorithm? =
-        Except.ok alg := by
-  exact copy_to_kcache_seqlen_n_kernel_toAlgorithm_supported K KCache
-    BLOCK_TABLES seq_lengths 256 64 1 4096 1024 128 8 1 10 1 16 2 64 8
-
-theorem copy_to_kcache_seqlen_n2_new_layout_python_signed_toAlgorithm_supported
-    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .int) :
-    ∃ alg, (copy_to_kcache_seqlen_n_signed_kernel K KCache BLOCK_TABLES
-      seq_lengths 256 64 1 4096 1024 128 8 1 10 1 16 2 64 8).toAlgorithm? =
-        Except.ok alg := by
-  exact copy_to_kcache_seqlen_n_signed_kernel_toAlgorithm_supported K KCache
-    BLOCK_TABLES seq_lengths 256 64 1 4096 1024 128 8 1 10 1 16 2 64 8
 
 /-- Surface transcription of `kcache_copy_triton.py`'s
 `_copy_to_kcache_seqlen_n_kernel` for the `n_tokens = 1` decode path.

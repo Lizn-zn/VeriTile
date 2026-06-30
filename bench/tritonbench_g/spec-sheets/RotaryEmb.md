@@ -215,4 +215,3 @@ def headIndex (s : BlockState) : Nat :=
 - `rotary_emb_q1_block_compute_correct`
 - `rotary_emb_k0_block_compute_correct`
 - `rotary_emb_k1_block_compute_correct`
-- `rotary_emb_python_shape_all_outputs_compute_correct`

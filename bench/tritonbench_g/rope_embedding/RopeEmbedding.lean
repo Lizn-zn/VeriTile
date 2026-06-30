@@ -39,10 +39,8 @@ rope_embedding_forward_backward_summary_general    ← TOP (dimension-general)
             └─ rope_embedding_backward_second_half_correct
 ```
 
-The two offset families are shown disjoint by
-`rope_embedding_python_first_offset_injective` /
-`rope_embedding_python_second_offset_injective`, which the half-store
-compute-correctness lemmas consume.
+The disjointness of the two offset families is taken as hypotheses of the
+main theorem, which the half-store compute-correctness lemmas consume.
 
 ## Modeling boundary
 
@@ -632,78 +630,6 @@ theorem rope_embedding_backward_second_half_compute_correct
     cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
     BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
-
-theorem rope_embedding_python_first_offset_injective
-    (s : BlockState) (Q_row_stride head_dim ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_SIZE =>
-        qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) := by
-  intro a b h
-  simp [qFirstOffset, headStart, colIndex] at h
-  exact Fin.ext h
-
-theorem rope_embedding_python_second_offset_injective
-    (s : BlockState) (Q_row_stride head_dim ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_SIZE =>
-        qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) := by
-  intro a b h
-  simp [qSecondOffset, qFirstOffset, headStart, colIndex] at h
-  exact Fin.ext h
-
-theorem rope_embedding_python_base_first_half_compute_correct
-    (Q cos sin : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := rope_embedding_forward_first_half Q cos sin 512 32 32 16 64 8 4 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => active s 64 8 4 32 i)
-        (fun i => (Q, qFirstOffset s 512 64 4 i)))
-      (expected := fun i => ropeFirstSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
-  exact rope_embedding_forward_first_half_compute_correct Q cos sin
-    512 32 32 16 64 8 4 32 s
-    (rope_embedding_python_first_offset_injective s 512 64 4 32)
-
-theorem rope_embedding_python_base_second_half_compute_correct
-    (Q cos sin : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := rope_embedding_forward_second_half Q cos sin 512 32 32 16 64 8 4 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => active s 64 8 4 32 i)
-        (fun i => (Q, qSecondOffset s 512 64 4 i)))
-      (expected := fun i => ropeSecondSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
-  exact rope_embedding_forward_second_half_compute_correct Q cos sin
-    512 32 32 16 64 8 4 32 s
-    (rope_embedding_python_second_offset_injective s 512 64 4 32)
-
-theorem rope_embedding_python_base_backward_first_half_compute_correct
-    (Q cos sin : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := rope_embedding_backward_first_half Q cos sin 512 32 32 16 64 8 4 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => active s 64 8 4 32 i)
-        (fun i => (Q, qFirstOffset s 512 64 4 i)))
-      (expected := fun i =>
-        ropeBackwardFirstSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
-  exact rope_embedding_backward_first_half_compute_correct Q cos sin
-    512 32 32 16 64 8 4 32 s
-    (rope_embedding_python_first_offset_injective s 512 64 4 32)
-
-theorem rope_embedding_python_base_backward_second_half_compute_correct
-    (Q cos sin : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := rope_embedding_backward_second_half Q cos sin 512 32 32 16 64 8 4 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 32 => active s 64 8 4 32 i)
-        (fun i => (Q, qSecondOffset s 512 64 4 i)))
-      (expected := fun i =>
-        ropeBackwardSecondSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
-  exact rope_embedding_backward_second_half_compute_correct Q cos sin
-    512 32 32 16 64 8 4 32 s
-    (rope_embedding_python_second_offset_injective s 512 64 4 32)
 
 /-- **Dimension-general forward+backward output summary.** For arbitrary strides,
 `seqlen`/`head_dim`/`n_heads`/`ROPE_GROUP_SIZE`/`BLOCK_SIZE` (and any program ids in

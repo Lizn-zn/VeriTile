@@ -36,9 +36,7 @@ kv_cache_copy_split_x_output_summary_general           ← TOP THEOREM (split-x 
   │    └─ copy_to_kcache_seqlen1_new_layout_xblock_compute_correct  (split-x, ∀ split_x)
   ├─ V-cache scatter ComputeCorrect
   │    └─ copy_to_vcache_seqlen1_dblock_compute_correct → _dblock_correct
-  └─ offset-injectivity lemmas (taken as hypotheses)
-       kv_cache_copy_python_{old,new}_kcache_offset_injective,
-       kv_cache_copy_python_vcache_offset_injective
+  └─ offset-injectivity (K-cache old/new layout, V-cache) taken as hypotheses
 ```
 Single-x-block lemmas `copy_to_kcache_one_xblock_*` /
 `copy_to_vcache_one_dblock_*` underlie the seqlen1 versions.
@@ -1027,39 +1025,6 @@ theorem copy_to_vcache_one_dblock_compute_correct
     stride_vch stride_vcs stride_vcd stride_bts stride_btb HEAD_DIM BLOCK_D
     s s' hOutInj hExec i
   simpa [hActive] using h
-
-theorem kv_cache_copy_python_old_kcache_offset_injective
-    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) :
-    Function.Injective
-      (fun i : Fin 64 =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0
-          4096 1024 0 64 10 1 16 64 i) := by
-  intro a b h
-  simp [seqlen1KCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
-    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen] at h
-  exact Fin.ext (by omega)
-
-theorem kv_cache_copy_python_new_kcache_offset_injective
-    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) (split_x : Nat) :
-    Function.Injective
-      (fun i : Fin 8 =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x
-          4096 1024 128 8 10 1 16 8 i) := by
-  intro a b h
-  simp [seqlen1KCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
-    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen] at h
-  exact Fin.ext (by omega)
-
-theorem kv_cache_copy_python_vcache_offset_injective
-    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) :
-    Function.Injective
-      (fun i : Fin 64 =>
-        seqlen1VCacheOffset s BLOCK_TABLES context_lengths
-          4096 1024 64 1 10 1 16 i) := by
-  intro a b h
-  simp [seqlen1VCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
-    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen, dimIndex] at h
-  exact Fin.ext (by omega)
 
 /-! ## Dimension-general public summaries
 

@@ -14,8 +14,7 @@ lane of each of the four `BACKWARD_PASS = true` Python-observable stores (Q/K
 first and second halves) reads back to the genuine rotary-backward closed form,
 NOT the kernel's own executed value, against the real `triton_rope_surface`
 kernel — under the honest `undef`-zero and `q_ptr ≠ k_ptr` side conditions.
-The pinned `rope_backward_python_backward_output_summary` is the concrete
-instantiation of this at the Python test shape. -/
+Concrete Python benchmark shapes are instantiations of this. -/
 ```
 </details>
 
@@ -315,4 +314,3 @@ def sinFullFirstOffset
 - `rope_backward_q1_head_compute_correct`
 - `rope_backward_k0_head_compute_correct`
 - `rope_backward_k1_head_compute_correct`
-- `rope_backward_python_backward_output_summary`

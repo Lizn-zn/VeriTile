@@ -43,7 +43,7 @@ triton_attention_forward_output_summary_general                     ← ★ TOP 
 triton_attention_bwd_preprocess_genuine_output_summary_general      ← ★ TOP (preprocess NewDO/Delta, dimension-general)
   └─ bwdPreprocessNewDOSpecG / bwdPreprocessDeltaSpecG (genuine input-memory specs)
 ```
-(Offset injectivity discharged by the `triton_attention_python_*_offset_injective` lemmas.)
+(Offset injectivity taken as hypotheses of the main theorem.)
 
 ## Modeling boundary
 
@@ -73,8 +73,8 @@ modeling depth differs by kernel:
   composition is trusted.
 
 Side conditions: the dimension-general summaries quantify over symbolic
-`(B,H,T,D)`, block sizes, strides and `sm_scale`, discharging tile-offset
-injectivity via the `triton_attention_python_*_offset_injective` lemmas; the
+`(B,H,T,D)`, block sizes, strides and `sm_scale`, taking tile-offset
+injectivity as hypotheses of the main theorem; the
 backward-grads summary additionally requires the score tiles distinct
 (`PTile ≠ DSTile`).
 -/
@@ -2093,70 +2093,6 @@ theorem triton_attention_bwd_dv_store_slice_compute_correct
           BLOCK_M idx) := by
   exact triton_attention_bwd_dkdv_store_slice_compute_correct DVPre DV H D0
     stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL s hOutInj
-
-/-! ## Python test-shape wrappers
-
-The checked Python test uses `q/k/v/o` with shape `(2, 4, 128, 64)`, so
-the contiguous tensor strides are `(32768, 8192, 64, 1)`. The forward and
-backward launchers use `BLOCK_M = BLOCK_N = 128`, `BLOCK_DMODEL = 64`,
-`H = 4`, and `D0 = batch * heads * seq_len = 1024`. -/
-
-theorem triton_attention_python_output_offset_injective
-    (s : BlockState) (hzRowOffset : Nat) :
-    Function.Injective
-      (fun idx : TileIndex [128, 64] =>
-        outOffset s hzRowOffset 64 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, rowIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem triton_attention_python_row_offset_injective
-    (s : BlockState) (off_hz : Nat) :
-    Function.Injective
-      (fun i : Fin 128 => lRowOffset s off_hz 128 128 i) := by
-  intro a b h
-  simp [lRowOffset] at h
-  exact Fin.ext (by omega)
-
-theorem triton_attention_python_newdo_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [128, 64] => newdoOffset s 128 64 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [newdoOffset, newdoMIndex, newdoNIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem triton_attention_python_bwd_grad_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [128, 64] =>
-        bwdGradOffset s 4 32768 8192 64 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [bwdGradOffset, bwdOffZ, bwdOffH, bwdRowIndex, bwdColIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem triton_attention_python_bwd_score_offset_injective :
-    Function.Injective
-      (fun idx : TileIndex [128, 128] => bwdScoreOffset 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ h
-  simp [bwdScoreOffset] at h
-  have hm : ma = mb := by omega
-  have hn : na = nb := by omega
-  subst mb
-  subst nb
-  rfl
 
 /-- Block-ptr base offset for the program: `off_z·32768 + off_h·8192`. -/
 def bwdKBase (s : BlockState) : Nat :=

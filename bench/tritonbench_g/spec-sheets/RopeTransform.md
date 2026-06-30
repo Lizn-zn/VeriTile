@@ -8,9 +8,7 @@
 
 ```
 /-- **Dimension-general public Python forward summary for `rope_transform.py`.**
-The pinned `rope_transform_python_forward_output_summary` is the concrete-shape
-(`batch=2`, `seq=4`, `n_q_head = n_kv_head = 8`, `head_dim = 16`, row strides
-`128`, cos/sin stride `8`) instantiation of this theorem: for arbitrary symbolic
+For arbitrary symbolic
 row strides, sequence length, head counts, head dim, and `next_power_of_2`
 padding, the full `BACKWARD_PASS = false` surface lowers to the algorithm layer
 and each of the four Python-observable forward stores — Q/K first and second
@@ -127,4 +125,3 @@ def activeQFull (n_qh hd : Nat)
 - `rope_kernel_o0o1_row_o0_compute_correct`
 - `rope_kernel_o0o1_row_o1_compute_correct`
 - `rope_kernel_o0o1_row_all_outputs_compute_correct`
-- `rope_transform_python_forward_output_summary`

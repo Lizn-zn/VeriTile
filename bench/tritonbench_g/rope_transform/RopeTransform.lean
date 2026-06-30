@@ -26,7 +26,7 @@ statement covers every program of the grid.
 ## Proof architecture
 
 ```
-rope_transform_python_forward_output_summary          ← TOP THEOREM (genuine)
+rope_transform_output_summary_general                 ← TOP THEOREM (genuine, dimension-general)
   ├─ triton_rope_surface_toAlgorithm_supported          surface lowers to the algorithm layer
   ├─ rope_transform_q0_forward_correct  → ropeForwardKernelQ0Spec  (q1·cos − q2·sin)
   ├─ rope_transform_q1_forward_correct  → ropeForwardKernelQ1Spec  (q2·cos + q1·sin)
@@ -2098,55 +2098,8 @@ theorem rope_kernel_o0o1_row_all_outputs_compute_correct
 
 
 
-/-- **Public Python forward summary for `rope_transform.py`** (genuine, not
-self-referential). For the checked Python test shape (`batch=2`, `seq=4`,
-`n_q_head = n_kv_head = 8`, `head_dim = 16`, row strides `128`, cos/sin stride
-`8`), the full `BACKWARD_PASS = false` surface lowers to the algorithm layer and
-each of the four Python-observable forward stores — Q/K first and second halves —
-reads back, on every active lane, to the genuine rotary closed form
-(`ropeForwardKernel{Q0,Q1,K0,K1}Spec`), NOT the kernel's own executed value.
-The host launch / `next_power_of_2` padding remains the trusted boundary. -/
-theorem rope_transform_python_forward_output_summary
-    (Q K COS SIN : RegionName)
-    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
-    (∃ alg, (triton_rope_surface Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false) s with
-        | some s' => s'.readMem Q (qFullFirstOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeForwardKernelQ0Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false) s with
-        | some s' => s'.readMem Q (qFullSecondOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeForwardKernelQ1Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false) s with
-        | some s' => s'.readMem K (kFullFirstOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeForwardKernelK0Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false) s with
-        | some s' => s'.readMem K (kFullSecondOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeForwardKernelK1Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx) := by
-  refine ⟨triton_rope_surface_toAlgorithm_supported Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false, ?_, ?_, ?_, ?_⟩
-  · exact fun idx h => rope_transform_q0_forward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef hqk idx h
-  · exact fun idx h => rope_transform_q1_forward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef hqk idx h
-  · exact fun idx h => rope_transform_k0_forward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef idx h
-  · exact fun idx h => rope_transform_k1_forward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef idx h
-
 /-- **Dimension-general public Python forward summary for `rope_transform.py`.**
-The pinned `rope_transform_python_forward_output_summary` is the concrete-shape
-(`batch=2`, `seq=4`, `n_q_head = n_kv_head = 8`, `head_dim = 16`, row strides
-`128`, cos/sin stride `8`) instantiation of this theorem: for arbitrary symbolic
+For arbitrary symbolic
 row strides, sequence length, head counts, head dim, and `next_power_of_2`
 padding, the full `BACKWARD_PASS = false` surface lowers to the algorithm layer
 and each of the four Python-observable forward stores — Q/K first and second

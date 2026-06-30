@@ -246,15 +246,5 @@ noncomputable def quantizeCopyKvScaleValue
 </details>
 
 ## Also present (pinned special-case summaries)
-- `destindex_copy_quantize_kv_value_store_slice_compute_correct`
-- `destindex_copy_quantize_kv_scale_store_slice_compute_correct`
 - `destindex_copy_quantize_kv_real_surface_value_output_compute_correct`
 - `destindex_copy_quantize_kv_real_surface_scale_output_compute_correct`
-- `destindex_copy_quantize_kv_python_d64_value_store_compute_correct`
-- `destindex_copy_quantize_kv_python_d256_value_store_compute_correct`
-- `destindex_copy_quantize_kv_python_scale_store_compute_correct`
-- `destindex_copy_quantize_kv_python_d64_all_outputs_compute_correct`
-- `destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct`
-- `destindex_copy_quantize_kv_python_d64_summary`
-- `destindex_copy_quantize_kv_python_d256_summary`
-- `destindex_copy_quantize_kv_python_d64_output_summary`

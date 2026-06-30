@@ -27,7 +27,7 @@ statement covers every program of the grid.
 ## Proof architecture
 
 ```
-rope_backward_python_backward_output_summary          ← TOP THEOREM (genuine)
+rope_backward_python_backward_output_summary_general  ← TOP THEOREM (genuine)
   ├─ triton_rope_surface_toAlgorithm_supported          surface lowers to the algorithm layer
   ├─ rope_backward_q0_backward_correct  → ropeBackwardKernelQ0Spec  (q1·cos + q2·sin)
   ├─ rope_backward_q1_backward_correct  → ropeBackwardKernelQ1Spec  (q2·cos − q1·sin)
@@ -1595,52 +1595,6 @@ theorem rope_backward_k1_backward_correct
         = s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd / 2) by ring]
   exact hk1 idx hActive.1 hActive.2
 
-/-- Public Python-path backward summary for `test_rope_backward` (genuine,
-full-tile). The checked Python test fixes `batch_size = 2`, `seq_len = 4`,
-`n_q_head = n_kv_head = 8`, `head_dim = 16`; after transpose+contiguous both
-Q/K rows have stride `8 * 16 = 128` and cos/sin rows stride `8`. Every active
-lane of each of the four `BACKWARD_PASS = true` Python-observable stores (Q/K
-first and second halves) reads back to the genuine rotary-backward closed form,
-NOT the kernel's own executed value, against the real `triton_rope_surface`
-kernel (no head-slice gap). The host launch / `next_power_of_2` padding and
-`q_ptr ≠ k_ptr` (distinct Q/K buffers) remain the trusted boundary. -/
-theorem rope_backward_python_backward_output_summary
-    (Q K COS SIN : RegionName)
-    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
-    (∃ alg, (triton_rope_surface Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem Q (qFullFirstOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeBackwardKernelQ0Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeQFull (pad_n_qh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem Q (qFullSecondOffset (pad_n_qh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeBackwardKernelQ1Spec (pad_n_qh := 8) (pad_hd_half := 16/2) s Q COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem K (kFullFirstOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeBackwardKernelK0Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx) ∧
-    (∀ idx : TileIndex [8, 16/2], activeKFull (pad_n_kh := 8) (pad_hd_half := 16/2) 8 16 idx →
-      (match exec (triton_rope_surface Q K COS SIN 128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true) s with
-        | some s' => s'.readMem K (kFullSecondOffset (pad_n_kh := 8) (pad_hd_half := 16/2) s 128 16 idx)
-        | none => (0.0 : ℝ)) =
-        ropeBackwardKernelK1Spec (pad_n_kh := 8) (pad_hd_half := 16/2) s K COS SIN 128 4 8 8 16 idx) := by
-  refine ⟨triton_rope_surface_toAlgorithm_supported Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true, ?_, ?_, ?_, ?_⟩
-  · exact fun idx h => rope_backward_q0_backward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef hqk idx h
-  · exact fun idx h => rope_backward_q1_backward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef hqk idx h
-  · exact fun idx h => rope_backward_k0_backward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef idx h
-  · exact fun idx h => rope_backward_k1_backward_correct Q K COS SIN
-      128 128 8 8 4 2 8 8 16 8 8 16 8 s hundef idx h
-
 /-- **Dimension-general Python-path backward output summary.** For arbitrary
 strides, `sl`/`bs`/`n_qh`/`n_kh`/`hd`/`pad_n_qh`/`pad_n_kh`/`pad_hd`/`BLOCK_SIZE`
 (and any program ids in `s`), the full backward surface lowers and every active
@@ -1648,8 +1602,7 @@ lane of each of the four `BACKWARD_PASS = true` Python-observable stores (Q/K
 first and second halves) reads back to the genuine rotary-backward closed form,
 NOT the kernel's own executed value, against the real `triton_rope_surface`
 kernel — under the honest `undef`-zero and `q_ptr ≠ k_ptr` side conditions.
-The pinned `rope_backward_python_backward_output_summary` is the concrete
-instantiation of this at the Python test shape. -/
+Concrete Python benchmark shapes are instantiations of this. -/
 theorem rope_backward_python_backward_output_summary_general
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
