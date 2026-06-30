@@ -2,6 +2,9 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Triton.Semantics.MaskedReduction
+import VeriTile.Triton.Semantics.TiledIndexing
 
 /-!
 # `cross_entropy_ops` — strict per-kernel correctness
@@ -26,40 +29,138 @@ quantified, the per-program statements cover every program of the grid.
 ## Proof architecture
 
 ```
-cross_entropy_fwd_surface_toAlgorithm_supported        ← full fwd surface lowers
+cross_entropy_fwd_output_summary                       ← TOP THEOREM (fwd, genuine end-to-end)
+  ├─ (toAlgorithm? = Except.ok _)                      full fwd surface lowers
+  ├─ cross_entropy_fwd_lse_correct                     ← genuine masked-lane scaled LSE store
+  │    ├─ ceFwd_body_split                             body = LSE prefix ++ loss/zloss tail
+  │    ├─ storeFree_stepStmt_mem / _stepStmts_mem      loss/zloss tail preserves lse_ptr
+  │    └─ ceFwdLsePrefix_correct                       prefix writes scaled partialLSE_full
+  ├─ cross_entropy_fwd_loss_correct                    ← genuine branchy loss store
+  │    ├─ ceFwdLsePrefix_regs                          mid-state register values
+  │    ├─ ceFwdLsePrefix_mem_of_ne                     prefix store frames logits_ptr
+  │    └─ crossEntropyLossSpec                         five-way closed form (input memory)
+  └─ cross_entropy_fwd_z_loss_correct                  ← genuine z-loss store (¬SPLIT)
+       └─ zLossSpec                                    lse_square_scale·lse² closed form
 cross_entropy_bwd_store_slice_compute_correct          ← masked (dloss·scale)·probs
   └─ cross_entropy_bwd_store_slice_correct
-cross_entropy_lse_store_slice_compute_correct          ← scalar LSE writeback
-  └─ cross_entropy_lse_store_slice_correct
-cross_entropy_loss_store_slice_compute_correct         ← scalar loss writeback
-  └─ cross_entropy_loss_store_slice_correct
-cross_entropy_z_loss_store_slice_compute_correct       ← scalar z-loss writeback
-  └─ cross_entropy_z_loss_store_slice_correct
 ```
 
-The full forward kernel is proved only to *lower* to the algorithm layer
-(`toAlgorithm? = Except.ok _`); its end-to-end value spec is **not** discharged,
-so no per-kernel `output_summary` is asserted. The discharged ComputeCorrect
-results are the proof-oriented store *slices* (precomputed
-`Probs`/`LsePre`/`LossPre`/`ZLossPre` tiles → masked or scalar writeback).
+The forward kernel is now **genuinely value-correct end-to-end** (all three side
+outputs, all branches):
+
+* **`lse_ptr`**: executing the *full* surface writes to
+  `lse_ptr[col_block·n_rows + row]` exactly the masked-lane stable log-sum-exp
+  (`partialLSE_full` with `HAS_SCALE = true`, `scale = logit_scale`) of the INPUT
+  block logits, mirroring the proven `logsumexp_fwd` machinery. The loss/zloss
+  tail does not disturb the LSE cell — its only stores target `loss_ptr`/`z_loss_ptr`,
+  both `≠ lse_ptr`, established structurally via the `storeFree` `mem`-frame lemma.
+* **`loss_ptr`**: writes exactly the faithful five-way cross-entropy
+  `crossEntropyLossSpec` (`label==ignored` / label-in-block / `HAS_SMOOTHING` /
+  `SPLIT` / `lse²`), with each logit sub-term scaled by `logit_scale` and read
+  from INPUT memory; `lse` is the genuine scaled `partialLSE_full`.
+* **`z_loss_ptr`** (under `¬SPLIT`): writes exactly `lse_square_scale·lse²`
+  (`zLossSpec`), `0` when the label is ignored.
+
+All value specs read INPUT memory, never `exec(...).readMem` — non-self-referential.
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.heuristics`
-(`HAS_SMOOTHING`) and `@triton.autotune` are not modeled (`HAS_SMOOTHING`/`SPLIT`
-are plain `Bool` parameters). The `.to(tl.float32)`/`.to(tl.int64)` casts erase
-to identity at the algorithm layer. The forward LSE uses
-`other = -float("inf")` for out-of-block lanes. The masked `dlogits` store leaves
-inactive lanes (`col_offsets ≥ n_cols`) untouched and assumes the per-tile output
-offset is injective. The spec is built inline; it does not reference a
-`VeriTile.Triton.Math.*` oracle.
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `HAS_SMOOTHING`/`SPLIT`
+are plain `Bool`/`constexpr` parameters modeled as `Bool`. The
+`.to(tl.float32)`/`.to(tl.int64)` casts erase to identity at the algorithm layer.
+The forward LSE uses `other = -float("inf")` for out-of-block lanes. The masked
+`dlogits` store leaves inactive lanes (`col_offsets ≥ n_cols`) untouched and
+assumes the per-tile output offset is injective. The spec is built inline; it
+does not reference a `VeriTile.Triton.Math.*` oracle.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.CrossEntropyOps
 
 open VeriTile.Triton
+open VeriTile.Triton.TiledLogSumExp
 
 set_option linter.unusedSimpArgs false
+
+/-! ## Memory-frame helper
+
+The forward loss computation is a sequence of register assignments and nested
+`if`/`else` blocks that contain only assignments (one data-dependent scalar load,
+and the branch-selected `loss`/`z_loss` formulas) before the stores. Such
+statements never touch memory, so they preserve every memory cell. We make this
+precise with a structural `StoreFree` predicate and a `mem`-preservation frame
+lemma, used to show the genuine `lse` store survives the loss/zloss branches. -/
+
+/-- A statement that performs no memory writes (no `store`/`atomicAdd`/
+`atomicRMW`), recursively through `if`/`else`/loop bodies. -/
+def storeFree : Stmt → Bool
+  | .assign _ _ _ _ => Bool.true
+  | .store _ _ _ _ _ => Bool.false
+  | .atomicAdd _ _ _ _ _ => Bool.false
+  | .atomicRMW _ _ _ _ _ _ _ _ => Bool.false
+  | .forLoop _ _ _ => Bool.false
+  | .forRange _ _ _ _ _ => Bool.false
+  | .forRangeDyn _ _ _ _ _ => Bool.false
+  | .ifThen _ body => body.attach.all (fun ⟨st, _⟩ => storeFree st)
+  | .ifThenElse _ t e =>
+      t.attach.all (fun ⟨st, _⟩ => storeFree st) &&
+      e.attach.all (fun ⟨st, _⟩ => storeFree st)
+
+mutual
+/-- A store-free statement preserves all of memory. -/
+theorem storeFree_stepStmt_mem (st : Stmt) (s s' : BlockState)
+    (hsf : storeFree st = Bool.true) (h : stepStmt st s = some s') :
+    s'.mem = s.mem := by
+  match st with
+  | .assign dtype shape name e =>
+      cases hv : evalOp e s with
+      | none => simp [stepStmt, hv] at h
+      | some v => simp [stepStmt, hv] at h; subst h; rfl
+  | .store _ _ _ _ _ => simp [storeFree] at hsf
+  | .atomicAdd _ _ _ _ _ => simp [storeFree] at hsf
+  | .atomicRMW _ _ _ _ _ _ _ _ => simp [storeFree] at hsf
+  | .ifThen cond body =>
+      cases hc : evalOp cond s with
+      | none => simp [stepStmt, hc] at h
+      | some c =>
+          by_cases hb : c.data PUnit.unit
+          · simp [stepStmt, hc, hb] at h
+            exact storeFree_stepStmts_mem body s s' (by simpa [storeFree] using hsf) h
+          · simp [stepStmt, hc, hb] at h; subst h; rfl
+  | .ifThenElse cond t e =>
+      cases hc : evalOp cond s with
+      | none => simp [stepStmt, hc] at h
+      | some c =>
+          simp only [storeFree, Bool.and_eq_true] at hsf
+          by_cases hb : c.data PUnit.unit
+          · simp [stepStmt, hc, hb] at h
+            exact storeFree_stepStmts_mem t s s' (by simpa using hsf.1) h
+          · simp [stepStmt, hc, hb] at h
+            exact storeFree_stepStmts_mem e s s' (by simpa using hsf.2) h
+  | .forLoop _ _ _ => simp [storeFree] at hsf
+  | .forRange _ _ _ _ _ => simp [storeFree] at hsf
+  | .forRangeDyn _ _ _ _ _ => simp [storeFree] at hsf
+
+/-- A list of store-free statements preserves all of memory. -/
+theorem storeFree_stepStmts_mem (stmts : List Stmt) (s s' : BlockState)
+    (hsf : stmts.all (fun st => storeFree st) = Bool.true)
+    (h : stepStmts stmts s = some s') :
+    s'.mem = s.mem := by
+  match stmts with
+  | [] => rw [stepStmts.nil] at h; injection h with h; subst h; rfl
+  | st :: rest =>
+      simp only [List.all_cons, Bool.and_eq_true] at hsf
+      cases hstep : stepStmt st s with
+      | none =>
+          rw [show stepStmts (st :: rest) s = none from by
+            conv_lhs => unfold stepStmts
+            rw [hstep]] at h
+          exact absurd h (by simp)
+      | some smid =>
+          rw [stepStmts.cons_some hstep] at h
+          have h1 := storeFree_stepStmt_mem st s smid hsf.1 hstep
+          have h2 := storeFree_stepStmts_mem rest smid s' hsf.2 h
+          rw [h2, h1]
+end
 
 /-- Faithful transcription of `cross_entropy_ops.py`'s
 `cross_entropy_fwd_kernel`.
@@ -259,132 +360,1152 @@ theorem cross_entropy_bwd_store_slice_compute_correct
     logit_scale s s' hExec i
   simpa [hActive] using h
 
-/-- Proof-oriented LSE-store slice of `cross_entropy_ops.py`'s forward kernel.
-Companion to the bwd_store_slice: takes a precomputed `LsePre` scalar and
-proves the writeback into `lse_ptr`. -/
-def cross_entropy_lse_store_slice
-    (LsePre lse_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  lse = tl.load(LsePre + col_block_idx * $(n_rows) + row_idx)
-  tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
-}
-
 def lseOutOffset (s : BlockState) (n_rows : Nat) : Nat :=
   s.pids 1 * n_rows + s.pids 0
 
-noncomputable def lseStoreSpec (s : BlockState) (LsePre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem LsePre (lseOutOffset s n_rows)
+/-- The LSE-computing prefix of `cross_entropy_fwd_surface`: program ids, the
+row-offset pointer, the masked block-logits load *scaled by `logit_scale`*, the
+running max, the optional smoothing sum, the stable LSE, and the LSE store. -/
+def ceFwdLsePrefix
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ)
+    (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool) : List Stmt :=
+  [Stmt.assign TileDType.nat [] "row_idx" (Op.programId 0),
+   Stmt.assign TileDType.nat [] "col_block_idx" (Op.programId 1),
+   Stmt.assign TileDType.ptr [] "logits_ptr"
+     (Op.ptrAdd Broadcast.nil (Op.ptrBase logits_ptr)
+       (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "row_idx")
+         (Op.constNat logits_row_stride))),
+   Stmt.assign TileDType.nat [n + 1] "col_offsets"
+     (Op.add NumericDType.nat Broadcast.scalarL
+       (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+         (Op.constNat (n + 1)))
+       (Op.arange (n + 1))),
+   Stmt.assign TileDType.int [] "label_idx"
+     (Op.load TileDType.int (MemAccess.region labels_ptr (Op.ref TileDType.nat [] "row_idx"))
+       MaskOpt.none),
+   Stmt.assign TileDType.real [n + 1] "logits"
+     (Op.mul NumericDType.real Broadcast.scalarR
+       (Op.load ComputeDType.fp32.eraseDType
+         (MemAccess.ptr
+           (Op.ptrAdd Broadcast.scalarL (Op.ref TileDType.ptr [] "logits_ptr")
+             (Op.ref TileDType.nat [n + 1] "col_offsets")))
+         (MaskOpt.maskOther
+           (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [n + 1] "col_offsets")
+             (Op.constNat n_cols))
+           (Op.negInf.broadcast [n + 1])))
+       (Op.const logit_scale)),
+   Stmt.assign TileDType.real [] "max_logits"
+     (Op.reduceMax ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [n + 1] "logits")),
+   Stmt.ifThen (Op.constBool HAS_SMOOTHING)
+     [Stmt.assign TileDType.real [] "sum_logits"
+       (Op.reduceSum ⟨0, by simp⟩ Bool.false
+         ((Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [n + 1] "col_offsets")
+               (Op.constNat n_cols)).where
+           (Op.ref TileDType.real [n + 1] "logits") ((Op.const 0.0).broadcast [n + 1])))],
+   Stmt.assign TileDType.real [] "lse"
+     (Op.add NumericDType.real Broadcast.nil
+       (Op.reduceSum ⟨0, by simp⟩ Bool.false
+           (Op.sub NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [n + 1] "logits")
+               (Op.ref TileDType.real [] "max_logits")).exp).log
+       (Op.ref TileDType.real [] "max_logits")),
+   Stmt.store TileDType.real []
+     (MemAccess.region lse_ptr
+       (Op.add NumericDType.nat Broadcast.nil
+         (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+           (Op.constNat n_rows))
+         (Op.ref TileDType.nat [] "row_idx")))
+     (Op.ref TileDType.real [] "lse") MaskOpt.none]
 
-theorem cross_entropy_lse_store_slice_correct
-    (LsePre lse_ptr : RegionName) (n_rows : Nat) (s s' : BlockState)
-    (hExec : exec (cross_entropy_lse_store_slice LsePre lse_ptr n_rows) s = some s') :
+/-- The loss/zloss tail of `cross_entropy_fwd_surface`: the branch-selected
+`loss`/`z_loss` computation (all register assignments, no stores), the single
+store to `loss_ptr`, and the `¬SPLIT`-guarded store to `z_loss_ptr`. -/
+def ceFwdLossTail
+    (loss_ptr z_loss_ptr logits_ptr : RegionName)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) : List Stmt :=
+  [Stmt.ifThenElse
+     (Op.eq ComparableDType.int Broadcast.nil (Op.ref TileDType.int [] "label_idx")
+       (Op.constInt ignored_index))
+     [Stmt.assign TileDType.real [] "loss" (Op.const 0.0),
+      Stmt.assign TileDType.real [] "z_loss" (Op.const 0.0)]
+     [Stmt.assign TileDType.int [] "label_idx"
+         (Op.sub NumericDType.int Broadcast.nil (Op.ref TileDType.int [] "label_idx")
+           (Op.constInt class_start_idx)),
+       Stmt.ifThenElse
+         (Op.boolAnd Broadcast.nil
+           (Op.ge ComparableDType.int Broadcast.nil (Op.ref TileDType.int [] "label_idx")
+             (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                 (Op.constNat (n + 1))).castNatToInt)
+           (Op.lt ComparableDType.int Broadcast.nil (Op.ref TileDType.int [] "label_idx")
+             ((Op.lt ComparableDType.nat Broadcast.nil (Op.constNat n_cols)
+                     (Op.mul NumericDType.nat Broadcast.nil
+                       (Op.add NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                         (Op.constNat 1))
+                       (Op.constNat (n + 1)))).where
+                 (Op.constNat n_cols)
+                 (Op.mul NumericDType.nat Broadcast.nil
+                   (Op.add NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                     (Op.constNat 1))
+                   (Op.constNat (n + 1)))).castNatToInt))
+         [Stmt.assign TileDType.real [] "logits_label"
+             (Op.mul NumericDType.real Broadcast.nil
+               (Op.load TileDType.real
+                 (MemAccess.ptr
+                   (Op.ptrAdd Broadcast.nil (Op.ref TileDType.ptr [] "logits_ptr")
+                     (Op.ref TileDType.int [] "label_idx").castIntToNat))
+                 MaskOpt.none)
+               (Op.const logit_scale)),
+           Stmt.ifThenElse (Op.constBool HAS_SMOOTHING)
+             [Stmt.assign TileDType.real [] "loss"
+                 (Op.sub NumericDType.real Broadcast.nil
+                   (Op.sub NumericDType.real Broadcast.nil
+                     ((Op.constBool SPLIT).boolNot.ite (Op.ref TileDType.real [] "lse") (Op.const 0.0))
+                     (Op.div NumericDType.real Broadcast.nil
+                       (Op.mul NumericDType.real Broadcast.nil (Op.const smoothing)
+                         (Op.ref TileDType.real [] "sum_logits"))
+                       (Op.const ↑total_classes)))
+                   (Op.mul NumericDType.real Broadcast.nil
+                     (Op.sub NumericDType.real Broadcast.nil (Op.const 1.0) (Op.const smoothing))
+                     (Op.ref TileDType.real [] "logits_label")))]
+             [Stmt.assign TileDType.real [] "loss"
+                 (Op.sub NumericDType.real Broadcast.nil
+                   ((Op.constBool SPLIT).boolNot.ite (Op.ref TileDType.real [] "lse") (Op.const 0.0))
+                   (Op.ref TileDType.real [] "logits_label"))]]
+         [Stmt.ifThenElse (Op.constBool HAS_SMOOTHING)
+             [Stmt.assign TileDType.real [] "loss"
+                 (Op.mul NumericDType.real Broadcast.nil (Op.const smoothing)
+                   (Op.sub NumericDType.real Broadcast.nil
+                     ((Op.constBool SPLIT).boolNot.ite (Op.ref TileDType.real [] "lse") (Op.const 0.0))
+                     (Op.div NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "sum_logits")
+                       (Op.const ↑total_classes))))]
+             [Stmt.assign TileDType.real [] "loss" (Op.const 0.0)]],
+       Stmt.ifThenElse (Op.constBool SPLIT).boolNot
+         [Stmt.assign TileDType.real [] "z_loss"
+             (Op.mul NumericDType.real Broadcast.nil
+               (Op.mul NumericDType.real Broadcast.nil (Op.const lse_square_scale)
+                 (Op.ref TileDType.real [] "lse"))
+               (Op.ref TileDType.real [] "lse")),
+           Stmt.assign TileDType.real [] "loss"
+             (Op.add NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "loss")
+               (Op.ref TileDType.real [] "z_loss"))]
+         [Stmt.assign TileDType.real [] "z_loss" (Op.const 0.0)]],
+   Stmt.store TileDType.real []
+     (MemAccess.region loss_ptr
+       (Op.add NumericDType.nat Broadcast.nil
+         (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+           (Op.constNat n_rows))
+         (Op.ref TileDType.nat [] "row_idx")))
+     (Op.ref TileDType.real [] "loss") MaskOpt.none,
+   Stmt.ifThen (Op.constBool SPLIT).boolNot
+     [Stmt.store TileDType.real []
+       (MemAccess.region z_loss_ptr
+         (Op.add NumericDType.nat Broadcast.nil
+           (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+             (Op.constNat n_rows))
+           (Op.ref TileDType.nat [] "row_idx")))
+       (Op.ref TileDType.real [] "z_loss") MaskOpt.none]]
+
+/-- The full forward algorithm body splits as prefix (through the LSE store) ++
+loss/zloss tail. -/
+theorem ceFwd_body_split
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) :
+    (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes
+      class_start_idx n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgKernel.body =
+      ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing logit_scale
+        total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING ++
+      ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing logit_scale
+        lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
+        n HAS_SMOOTHING SPLIT := by
+  rfl
+
+/-- Row-logits function for program `row_idx`: position `j` reads INPUT memory
+`logits_ptr` at `row_idx * logits_row_stride + j`. -/
+noncomputable def rowLogits
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride n_cols : Nat) (j : Fin n_cols) : ℝ :=
+  s.readMem logits_ptr (s.pids 0 * logits_row_stride + j.val)
+
+/-- The kernel's `sum_logits = tl.sum(tl.where(col_offsets < n_cols, logits, 0))`:
+the sum of in-range *scaled* block logits, read from INPUT memory. Out-of-range
+lanes contribute `0`. -/
+noncomputable def blockSumLogits
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride n_cols : Nat) (n : Nat) (logit_scale : ℝ) : ℝ :=
+  ∑ i : Fin (n+1),
+    if h : s.pids 1 * (n+1) + i.val < n_cols then
+      rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+    else 0
+
+/-- The label logit `logits_label = tl.load(logits_ptr + (label_idx -
+class_start_idx)) * logit_scale`, read from INPUT memory at the shifted label
+position and scaled. -/
+noncomputable def labelLogit
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride : Nat) (lblShift : Int) (logit_scale : ℝ) : ℝ :=
+  s.readMem logits_ptr (s.pids 0 * logits_row_stride + lblShift.toNat) * logit_scale
+
+/-- The label value loaded by the kernel: `label_idx = tl.load(labels_ptr +
+row_idx)` from INPUT memory. -/
+noncomputable def labelValue (s : BlockState) (labels_ptr : Region .int) : Int :=
+  s.readMemValue .int (Region.cast labels_ptr) (s.pids 0)
+
+/-- The genuine `loss` value computed by `cross_entropy_fwd_surface` for program
+`(row_idx, col_block_idx)`, a faithful Lean transcription of the kernel's
+five-way branch over `label_idx`/in-block/`HAS_SMOOTHING`/`SPLIT`/`lse²`. All
+logit sub-terms are scaled by `logit_scale` and read from INPUT memory; `lse` is
+the genuine scaled `partialLSE_full`. -/
+noncomputable def crossEntropyLossSpec
+    (s : BlockState) (logits_ptr : RegionName) (labelVal : Int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (lse : ℝ) : ℝ :=
+  if labelVal = ignored_index then 0 else
+    let lblShift : Int := labelVal - class_start_idx
+    let lseTerm : ℝ := if SPLIT then 0 else lse
+    let sq : ℝ := if SPLIT then 0 else lse_square_scale * lse * lse
+    let core : ℝ :=
+      if (lblShift ≥ (s.pids 1 * (n+1) : Nat)) ∧
+         (lblShift < (min n_cols ((s.pids 1 + 1) * (n+1)) : Nat)) then
+        if HAS_SMOOTHING then
+          lseTerm - smoothing * blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale
+            / total_classes
+            - (1 - smoothing) * labelLogit s logits_ptr logits_row_stride lblShift logit_scale
+        else
+          lseTerm - labelLogit s logits_ptr logits_row_stride lblShift logit_scale
+      else
+        if HAS_SMOOTHING then
+          smoothing * (lseTerm - blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale
+            / total_classes)
+        else 0
+    core + sq
+
+/-- The genuine `z_loss` value stored to `z_loss_ptr` (only under `¬SPLIT`):
+`lse_square_scale·lse²`, or `0` when the label is ignored. -/
+noncomputable def zLossSpec
+    (labelVal : Int) (lse_square_scale : ℝ) (ignored_index : Int) (lse : ℝ) : ℝ :=
+  if labelVal = ignored_index then 0 else lse_square_scale * lse * lse
+
+/-- **Prefix correctness.** Executing the LSE-computing prefix writes the genuine
+masked-lane stable log-sum-exp of the `logit_scale`-scaled block logits (read
+from INPUT memory) to `lse_ptr` at offset `col_block_idx * n_rows + row_idx`.
+Mirrors `logsumexp_fwd_kernel_correct_full` (`HAS_SCALE = true`). -/
+theorem ceFwdLsePrefix_correct
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ)
+    (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool)
+    (s : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols) :
+    (stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+        logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING) s).map
+        (·.readMem lse_ptr (lseOutOffset s n_rows)) =
+      some (partialLSE_full (n := n)
+        (rowLogits s logits_ptr logits_row_stride n_cols) (s.pids 1) h_tail
+        Bool.true logit_scale) := by
+  have h_ne : (Finset.univ : Finset (Fin (n+1))).Nonempty := Finset.univ_nonempty
+  have h_filter : (validLanes n n_cols (s.pids 1)).Nonempty := validLanes_nonempty h_tail
+  let rm : Fin (n+1) → ℝ := fun i =>
+    s.readMem logits_ptr (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + i.val))
+  have h_fold : ∀ i : Fin (n+1),
+      s.readMem logits_ptr (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + ↑i)) = rm i :=
+    fun _ => rfl
+  have h_rm : ∀ (i : Fin (n+1)) (hi : s.pids 1 * (n+1) + i.val < n_cols),
+      rm i = rowLogits s logits_ptr logits_row_stride n_cols
+        ⟨s.pids 1 * (n+1) + i.val, hi⟩ := by
+    intro i hi; rfl
+  unfold ceFwdLsePrefix
+  cases HAS_SMOOTHING <;>
+  · simp [stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt, lseOutOffset]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt, if_true, h_fold]
+    erw [sup'_masked_map_eq h_ne h_filter rm (· * logit_scale),
+         sum_exp_masked_map_eq rm (· * logit_scale)]
+    simp only [WithBot.realLog_coe]
+    erw [Option.map₂_coe_coe, WithBot.unbotD_coe]
+    rw [add_comm]
+    unfold partialLSE_full scaledLane_full validLanes
+    simp only [reduceIte]
+    have h_m_eq : (validLanes n n_cols (s.pids 1)).sup' h_filter (fun i => rm i * logit_scale) =
+        (validLanes n n_cols (s.pids 1)).sup' h_filter
+          (fun x => (if h : s.pids 1 * (n+1) + x.val < n_cols then
+            rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + x.val, h⟩
+            else 0) * logit_scale) := by
+      apply Finset.sup'_congr h_filter rfl
+      intro i hi
+      simp only [validLanes, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+      rw [h_rm i hi, dif_pos hi]
+    congr 1
+    congr 1
+    erw [h_m_eq]
+    apply Finset.sum_congr rfl
+    intro i hi
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi
+    rw [h_rm i hi, dif_pos hi]
+    rfl
+
+/-- Mid-state register characterization: after the LSE prefix executes, every
+register read by the loss/zloss tail holds its genuine value — the program ids,
+the row-offset pointer, the loaded label, the genuine scaled `lse`, and (under
+`HAS_SMOOTHING`) the genuine scaled `sum_logits`. -/
+theorem ceFwdLsePrefix_regs
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ)
+    (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool)
+    (s smid : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hpre : stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING) s
+      = some smid) :
+    smid.regs TileDType.nat [] "row_idx" = some (Tile.scalar (s.pids 0)) ∧
+    smid.regs TileDType.nat [] "col_block_idx" = some (Tile.scalar (s.pids 1)) ∧
+    smid.regs TileDType.ptr [] "logits_ptr" =
+      some (Tile.scalar ((Region.cast logits_ptr : RegionName),
+        s.pids 0 * logits_row_stride)) ∧
+    smid.regs TileDType.int [] "label_idx" =
+      some (Tile.scalar (labelValue s labels_ptr)) ∧
+    smid.regs TileDType.real [] "lse" =
+      some (Tile.scalar (some (partialLSE_full (n := n)
+        (rowLogits s logits_ptr logits_row_stride n_cols) (s.pids 1) h_tail
+        Bool.true logit_scale))) ∧
+    (HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits" =
+        some (Tile.scalar (some (blockSumLogits s logits_ptr logits_row_stride
+          n_cols n logit_scale)))) := by
+  have h_ne : (Finset.univ : Finset (Fin (n+1))).Nonempty := Finset.univ_nonempty
+  have h_filter : (validLanes n n_cols (s.pids 1)).Nonempty := validLanes_nonempty h_tail
+  let rm : Fin (n+1) → ℝ := fun i =>
+    s.readMem logits_ptr (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + i.val))
+  have h_rm : ∀ (i : Fin (n+1)) (hi : s.pids 1 * (n+1) + i.val < n_cols),
+      rm i = rowLogits s logits_ptr logits_row_stride n_cols
+        ⟨s.pids 1 * (n+1) + i.val, hi⟩ := fun _ _ => rfl
+  -- The `lse` register carrier equals `some (partialLSE_full …)` (scaled).
+  have h_lse_carrier :
+      Option.map₂ (fun x1 x2 : ℝ => x1 + x2)
+        (WithBot.realLog
+          (∑ x : Fin (n+1), WithBot.realExp
+            (Option.map₂ (fun x1 x2 : ℝ => x1 - x2)
+              (Option.map (fun a : ℝ => a * logit_scale)
+                (if s.pids 1 * (n+1) + x.val < n_cols then ((some (rm x) : WithBot ℝ)) else none))
+              (@Finset.sup' (WithBot ℝ) (Fin (n+1)) _ Finset.univ h_ne
+                (fun x => Option.map (fun a : ℝ => a * logit_scale)
+                  (if s.pids 1 * (n+1) + x.val < n_cols then ((some (rm x) : WithBot ℝ)) else none))))))
+        (@Finset.sup' (WithBot ℝ) (Fin (n+1)) _ Finset.univ h_ne
+          (fun x => Option.map (fun a : ℝ => a * logit_scale)
+            (if s.pids 1 * (n+1) + x.val < n_cols then ((some (rm x) : WithBot ℝ)) else none)))
+      = some (partialLSE_full (n := n)
+          (rowLogits s logits_ptr logits_row_stride n_cols) (s.pids 1) h_tail
+          Bool.true logit_scale) := by
+    erw [sup'_masked_map_eq h_ne h_filter rm (· * logit_scale),
+         sum_exp_masked_map_eq rm (· * logit_scale)]
+    simp only [WithBot.realLog_coe]
+    erw [Option.map₂_coe_coe]
+    rw [add_comm]
+    unfold partialLSE_full scaledLane_full
+    simp only [reduceIte]
+    have h_m_eq : (validLanes n n_cols (s.pids 1)).sup' h_filter (fun i => rm i * logit_scale) =
+        (validLanes n n_cols (s.pids 1)).sup' h_filter
+          (fun x => (if h : s.pids 1 * (n+1) + x.val < n_cols then
+            rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + x.val, h⟩
+            else 0) * logit_scale) := by
+      apply Finset.sup'_congr h_filter rfl
+      intro i hi
+      simp only [validLanes, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+      rw [h_rm i hi, dif_pos hi]
+    have h_sum_eq : ∀ M : ℝ,
+        (∑ i ∈ validLanes n n_cols (s.pids 1), Real.exp (rm i * logit_scale - M))
+        = ∑ i ∈ validLanes n n_cols (s.pids 1),
+            Real.exp ((if h : s.pids 1 * (n+1) + i.val < n_cols then
+              rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ else 0) * logit_scale - M) := by
+      intro M
+      apply Finset.sum_congr rfl
+      intro i hi
+      simp only [validLanes, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+      rw [h_rm i hi, dif_pos hi]
+    rw [h_m_eq, h_sum_eq]
+  -- The `sum_logits` register carrier equals `some (blockSumLogits …)` (scaled).
+  have h_sum_carrier :
+      (∑ x : Fin (n+1),
+        ((if s.pids 1 * (n+1) + x.val < n_cols then
+          Option.map (fun a : ℝ => a * logit_scale)
+            (if s.pids 1 * (n+1) + x.val < n_cols then some (rm x) else none)
+        else some (0.0 : ℝ)) : WithBot ℝ))
+      = some (blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale) := by
+    unfold blockSumLogits
+    rw [show (some (∑ i : Fin (n+1), if h : s.pids 1 * (n+1) + i.val < n_cols then
+          rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+          else 0) : WithBot ℝ)
+        = ((∑ i : Fin (n+1), if h : s.pids 1 * (n+1) + i.val < n_cols then
+          rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+          else 0 : ℝ) : WithBot ℝ) from rfl, WithBot.coe_sum]
+    apply Finset.sum_congr rfl
+    intro i _
+    by_cases hi : s.pids 1 * (n+1) + i.val < n_cols
+    · simp only [hi, if_true, dif_pos hi, Option.map_some]; rw [h_rm i hi]; rfl
+    · simp only [hi, if_false, dif_neg hi]; congr 1; norm_num
+  revert hpre
+  unfold ceFwdLsePrefix
+  cases hHS : HAS_SMOOTHING <;>
+  · intro hpre
+    simp [stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] at hpre
+    subst hpre
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [BlockState.writeMem_regs]; rfl
+    · rw [BlockState.writeMem_regs]; rfl
+    · rw [BlockState.writeMem_regs]
+      refine Eq.trans rfl ?_; congr 1
+      ext j; simp [Tile.ptrAdd, Region.cast]
+    · rw [BlockState.writeMem_regs]; rfl
+    · rw [BlockState.writeMem_regs]
+      exact congrArg (some ∘ Tile.scalar) h_lse_carrier
+    · intro hh
+      first
+        | exact absurd hh (by decide)
+        | (rw [BlockState.writeMem_regs];
+           exact congrArg (some ∘ Tile.scalar) h_sum_carrier)
+
+/-- **Prefix memory frame.** The LSE-computing prefix has exactly one store (to
+`lse_ptr`); every other region's memory is untouched. Hence for any region
+`r ≠ lse_ptr`, the post-prefix state `smid` reads `r` exactly as the input `s`. -/
+theorem ceFwdLsePrefix_mem_of_ne
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ) (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool)
+    (s smid : BlockState)
+    (hpre : stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING) s
+      = some smid)
+    (r : RegionName) (hr : r ≠ lse_ptr) (o : Nat) :
+    smid.mem r o = s.mem r o := by
+  obtain ⟨s2, hfrontStep, hstoreStep⟩ :
+      ∃ s2, stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+              logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).dropLast s
+            = some s2 ∧
+          stepStmts [(ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+              logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).getLast
+              (by cases HAS_SMOOTHING <;> simp [ceFwdLsePrefix])] s2 = some smid := by
+    have hsplit : ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+        logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING =
+        (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+          logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).dropLast ++
+        [(ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+          logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).getLast
+          (by cases HAS_SMOOTHING <;> simp [ceFwdLsePrefix])] := by
+      exact (List.dropLast_append_getLast _).symm
+    rw [hsplit, stepStmts.append_some_iff] at hpre
+    exact hpre
+  have hfront : (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+      logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).dropLast.all
+      (fun st => storeFree st) = Bool.true := by
+    cases HAS_SMOOTHING <;> simp [ceFwdLsePrefix, storeFree]
+  have hmem2 : s2.mem = s.mem := storeFree_stepStmts_mem _ s s2 hfront hfrontStep
+  have hgetLast : (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+      logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING).getLast
+      (by cases HAS_SMOOTHING <;> simp [ceFwdLsePrefix]) =
+      Stmt.store TileDType.real []
+        (MemAccess.region lse_ptr
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+              (Op.constNat n_rows))
+            (Op.ref TileDType.nat [] "row_idx")))
+        (Op.ref TileDType.real [] "lse") MaskOpt.none := by
+    cases HAS_SMOOTHING <;> rfl
+  rw [hgetLast] at hstoreStep
+  simp only [stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hstoreStep
+  cases hLse : s2.regs TileDType.real [] "lse" with
+  | none => rw [hLse] at hstoreStep; simp at hstoreStep
+  | some vLse =>
+  cases hCol : s2.regs TileDType.nat [] "col_block_idx" with
+  | none => rw [hLse, hCol] at hstoreStep; simp at hstoreStep
+  | some vCol =>
+  cases hRow : s2.regs TileDType.nat [] "row_idx" with
+  | none => rw [hLse, hCol, hRow] at hstoreStep; simp at hstoreStep
+  | some vRow =>
+      rw [hLse, hCol, hRow] at hstoreStep
+      simp only [TileShape.allIndices, List.foldl, bind, Option.bind, if_true] at hstoreStep
+      obtain rfl := Option.some.inj hstoreStep
+      simp only [BlockState.writeMemTyped, BlockState.writeMemAs]
+      rw [if_neg, hmem2]
+      rintro ⟨hreg, -⟩
+      exact hr (by rw [Region.cast_id] at hreg; exact hreg)
+
+/-- **Genuine forward LSE correctness.** Executing the *full* forward surface
+writes to `lse_ptr` at offset `col_block_idx * n_rows + row_idx` exactly the
+masked-lane stable log-sum-exp of the `logit_scale`-scaled block of row logits
+read from INPUT memory. The loss/zloss tail does not disturb the LSE cell: its
+stores target `loss_ptr`/`z_loss_ptr`, both `≠ lse_ptr`. -/
+theorem cross_entropy_fwd_lse_correct
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (s s' : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hne : lse_ptr ≠ loss_ptr)
+    (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
     s'.readMem lse_ptr (lseOutOffset s n_rows) =
-      lseStoreSpec s LsePre n_rows := by
-  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul] at hExec
-  subst s'
-  simp [lseOutOffset, lseStoreSpec]
+      partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+        (s.pids 1) h_tail Bool.true logit_scale := by
+  rw [exec, ceFwd_body_split, stepStmts.append_some_iff] at hExec
+  obtain ⟨smid, hpre, hsuf⟩ := hExec
+  -- The loss/zloss tail preserves `readMem lse_ptr`: its first statement is
+  -- store-free; the loss store targets `loss_ptr ≠ lse_ptr`; the optional
+  -- z_loss store targets `z_loss_ptr ≠ lse_ptr`.
+  have hframe : s'.readMem lse_ptr (lseOutOffset s n_rows)
+      = smid.readMem lse_ptr (lseOutOffset s n_rows) := by
+    -- The tail is [ifStmt, lossStore, zIfStore]; ifStmt is store-free, and
+    -- neither store touches lse_ptr.
+    obtain ⟨ifStmt, lossStore, zIfStore, heq, hsf, hLossEq, hZEq⟩ :
+        ∃ (ifStmt lossStore zIfStore : Stmt),
+          ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing logit_scale
+            lse_square_scale ignored_index total_classes class_start_idx n_cols
+            n_rows n HAS_SMOOTHING SPLIT = [ifStmt, lossStore, zIfStore] ∧
+          storeFree ifStmt = Bool.true ∧
+          lossStore =
+            Stmt.store TileDType.real []
+              (MemAccess.region loss_ptr
+                (Op.add NumericDType.nat Broadcast.nil
+                  (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                    (Op.constNat n_rows))
+                  (Op.ref TileDType.nat [] "row_idx")))
+              (Op.ref TileDType.real [] "loss") MaskOpt.none ∧
+          zIfStore =
+            Stmt.ifThen (Op.constBool SPLIT).boolNot
+              [Stmt.store TileDType.real []
+                (MemAccess.region z_loss_ptr
+                  (Op.add NumericDType.nat Broadcast.nil
+                    (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                      (Op.constNat n_rows))
+                    (Op.ref TileDType.nat [] "row_idx")))
+                (Op.ref TileDType.real [] "z_loss") MaskOpt.none] :=
+      ⟨_, _, _, rfl, by simp [storeFree], rfl, rfl⟩
+    rw [heq] at hsuf
+    simp only [stepStmts] at hsuf
+    cases hstep0 : stepStmt ifStmt smid with
+    | none => rw [hstep0] at hsuf; simp at hsuf
+    | some s2 =>
+        rw [hstep0] at hsuf
+        simp only at hsuf
+        have hmem2 : s2.mem = smid.mem :=
+          storeFree_stepStmt_mem _ smid s2 hsf hstep0
+        -- statement 1: store to loss_ptr — only touches loss_ptr ≠ lse_ptr
+        subst hLossEq
+        simp only [stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+          Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hsuf
+        cases hLoss : s2.regs TileDType.real [] "loss" with
+        | none => rw [hLoss] at hsuf; simp at hsuf
+        | some vLoss =>
+        cases hCol : s2.regs TileDType.nat [] "col_block_idx" with
+        | none => rw [hLoss, hCol] at hsuf; simp at hsuf
+        | some vCol =>
+        cases hRow : s2.regs TileDType.nat [] "row_idx" with
+        | none => rw [hLoss, hCol, hRow] at hsuf; simp at hsuf
+        | some vRow =>
+            rw [hLoss, hCol, hRow] at hsuf
+            simp only [TileShape.allIndices, List.foldl, bind, Option.bind,
+              if_true] at hsuf
+            set s3 := s2.writeMemTyped TileDType.real (Region.cast loss_ptr)
+              (vCol.data PUnit.unit * (Tile.scalar (n_rows : TileCarrier .nat)).data PUnit.unit
+                + vRow.data PUnit.unit) (vLoss.data PUnit.unit) with hs3
+            have hmem3lse : ∀ X, s3.mem lse_ptr X = s2.mem lse_ptr X := by
+              intro X
+              rw [hs3, BlockState.writeMemTyped]
+              simp only [BlockState.writeMemAs]
+              apply if_neg
+              rintro ⟨hr, -⟩
+              exact hne hr
+            -- statement 2: optional store to z_loss_ptr — only touches z_loss_ptr ≠ lse_ptr
+            subst hZEq
+            cases hzstep : stepStmt (Stmt.ifThen (Op.constBool SPLIT).boolNot
+                [Stmt.store TileDType.real []
+                  (MemAccess.region z_loss_ptr
+                    (Op.add NumericDType.nat Broadcast.nil
+                      (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "col_block_idx")
+                        (Op.constNat n_rows))
+                      (Op.ref TileDType.nat [] "row_idx")))
+                  (Op.ref TileDType.real [] "z_loss") MaskOpt.none]) s3 with
+            | none => rw [hzstep] at hsuf; simp at hsuf
+            | some s4 =>
+                rw [hzstep] at hsuf
+                obtain rfl := Option.some.inj hsuf
+                have h4 : s4.mem lse_ptr (lseOutOffset s n_rows)
+                    = s3.mem lse_ptr (lseOutOffset s n_rows) := by
+                  rcases hsp : SPLIT with _ | _
+                  · simp only [stepStmt, evalOp, evalOp.eq_def, Op.constBool, Op.boolNot,
+                      hsp, Tile.uop, Tile.scalar, Bool.not_false, bind, Option.bind,
+                      reduceIte, if_true] at hzstep
+                    simp only [stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
+                      Option.map, Tile.bop, Tile.ptrAdd,
+                      NumericDType.add, NumericDType.mul] at hzstep
+                    cases hZL : s3.regs TileDType.real [] "z_loss" with
+                    | none => rw [hZL] at hzstep; simp at hzstep
+                    | some vZ =>
+                    cases hCol2 : s3.regs TileDType.nat [] "col_block_idx" with
+                    | none => rw [hZL, hCol2] at hzstep; simp at hzstep
+                    | some vCol2 =>
+                    cases hRow2 : s3.regs TileDType.nat [] "row_idx" with
+                    | none => rw [hZL, hCol2, hRow2] at hzstep; simp at hzstep
+                    | some vRow2 =>
+                        rw [hZL, hCol2, hRow2] at hzstep
+                        simp only [TileShape.allIndices, List.foldl, bind, Option.bind,
+                          if_true] at hzstep
+                        obtain rfl := Option.some.inj hzstep
+                        rw [BlockState.writeMemTyped]
+                        simp only [BlockState.writeMemAs]
+                        apply if_neg
+                        rintro ⟨hr, -⟩
+                        exact hneZ hr
+                  · simp only [stepStmt, evalOp, evalOp.eq_def, Op.constBool, Op.boolNot,
+                      hsp, Tile.uop, Tile.scalar, Bool.not_true] at hzstep
+                    obtain rfl := Option.some.inj hzstep
+                    rfl
+                simp only [BlockState.readMem]
+                rw [h4, hmem3lse, hmem2]
+  rw [hframe]
+  have hprefix := ceFwdLsePrefix_correct loss_ptr lse_ptr logits_ptr labels_ptr
+    smoothing logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING s h_tail
+  rw [hpre, Option.map_some] at hprefix
+  exact Option.some.inj hprefix
 
-theorem cross_entropy_lse_store_slice_compute_correct
-    (LsePre lse_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_lse_store_slice LsePre lse_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (lse_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => lseStoreSpec s LsePre n_rows) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [cross_entropy_lse_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact cross_entropy_lse_store_slice_correct LsePre lse_ptr n_rows s s' hExec
-
-/-- Proof-oriented loss-store slice of `cross_entropy_ops.py`'s forward kernel.
-Same scalar-copy pattern as the LSE store slice. -/
-def cross_entropy_loss_store_slice
-    (LossPre loss_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  loss = tl.load(LossPre + col_block_idx * $(n_rows) + row_idx)
-  tl.store(loss_ptr + col_block_idx * $(n_rows) + row_idx, loss)
-}
-
-noncomputable def lossStoreSpec (s : BlockState) (LossPre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem LossPre (lseOutOffset s n_rows)
-
-theorem cross_entropy_loss_store_slice_correct
-    (LossPre loss_ptr : RegionName) (n_rows : Nat) (s s' : BlockState)
-    (hExec : exec (cross_entropy_loss_store_slice LossPre loss_ptr n_rows)
-      s = some s') :
+/-- **Genuine forward loss correctness.** -/
+theorem cross_entropy_fwd_loss_correct
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (s s' : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hLL : lse_ptr ≠ logits_ptr)
+    (hLZ : loss_ptr ≠ z_loss_ptr)
+    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
     s'.readMem loss_ptr (lseOutOffset s n_rows) =
-      lossStoreSpec s LossPre n_rows := by
-  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul] at hExec
-  subst s'
-  simp [lseOutOffset, lossStoreSpec]
+      crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
+        lse_square_scale ignored_index total_classes class_start_idx n_cols
+        logits_row_stride n HAS_SMOOTHING SPLIT
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale) := by
+  rw [exec, ceFwd_body_split, stepStmts.append_some_iff] at hExec
+  obtain ⟨smid, hpre, hsuf⟩ := hExec
+  obtain ⟨hrow, hcol, hlp, hlbl, hlse, hsum⟩ :=
+    ceFwdLsePrefix_regs loss_ptr lse_ptr logits_ptr labels_ptr smoothing logit_scale
+      total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING s smid h_tail hpre
+  have hLLframe : smid.readMem logits_ptr
+      (s.pids 0 * logits_row_stride + Int.toNat (labelValue s labels_ptr - class_start_idx))
+      = s.readMem logits_ptr
+      (s.pids 0 * logits_row_stride + Int.toNat (labelValue s labels_ptr - class_start_idx)) := by
+    unfold BlockState.readMem
+    rw [ceFwdLsePrefix_mem_of_ne loss_ptr lse_ptr logits_ptr labels_ptr smoothing logit_scale
+      total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING s smid hpre
+      logits_ptr (Ne.symm hLL) _]
+  simp only [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def, hrow, hcol, hlp,
+    hlbl, hlse, Option.bind, Tile.scalar, Tile.bop, Tile.cop, Tile.uop, Tile.select,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComparableDType.eq, ComparableDType.ge, ComparableDType.lt, Broadcast.nil,
+    BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_ne_dtype,
+    BlockState.readMemValue_real] at hsuf
+  unfold crossEntropyLossSpec
+  cases hHS : HAS_SMOOTHING <;> cases hSP : SPLIT <;>
+    simp only [hHS, hSP, Bool.not_true, Bool.not_false, if_true, if_false,
+      Bool.false_eq_true, reduceIte, Bool.true_eq_false] at hsuf ⊢
+  · -- HAS_SMOOTHING = false, SPLIT = false
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+      hrow, hcol, hlp, hlse, Tile.scalar,
+      BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+      reduceCtorEq, not_false_eq_true, String.reduceEq, reduceIte] at hsuf
+    by_cases hIgn : labelValue s labels_ptr = ignored_index
+    · simp only [hIgn, decide_true, if_true, Bool.not_false, Bool.not_true,
+        BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+        reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, Tile.scalar,
+        BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+        Option.bind_some, TileShape.allIndices, List.foldl, Option.bind, reduceIte] at hsuf
+      obtain rfl := Option.some.inj hsuf
+      rw [if_pos hIgn]
+      rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+        rw [Region.cast_id]; exact hLZ)]
+      simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+        BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+        Region.cast_id, and_true, if_pos]
+      rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+      norm_num
+    · simp only [hIgn, decide_false, Bool.false_eq_true, if_false] at hsuf ⊢
+      have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+          else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+        by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+        · simp only [hb, decide_true, if_true]; omega
+        · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+      simp only [hmin] at hsuf
+      by_cases hInb : labelValue s labels_ptr - class_start_idx ≥ (↑(s.pids 1 * (n + 1)) : Int) ∧
+          labelValue s labels_ptr - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n + 1))) : Int)
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «true» := by
+          simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨hInb.1, hInb.2⟩
+        rw [if_pos hInb]
+        simp only [hbool, if_true, Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hlp, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl,
+          Option.bind, reduceIte] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+          rw [Region.cast_id]; exact hLZ)]
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        rw [hLLframe]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realAdd, Option.map₂_some_some,
+          labelLogit]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «false» := by
+          rw [Bool.and_eq_false_iff]
+          by_cases h1 : labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))
+          · right; simp only [decide_eq_false_iff_not, not_lt]
+            rcases not_and_or.mp hInb with h | h
+            · exact absurd h1 h
+            · exact not_lt.mp h
+          · left; simp only [decide_eq_false_iff_not]; exact h1
+        rw [if_neg hInb]
+        simp only [hbool, Bool.false_eq_true, if_false, if_true, reduceIte,
+          Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+          rw [Region.cast_id]; exact hLZ)]
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realAdd, Option.map₂_some_some]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+        norm_num
+  · -- HAS_SMOOTHING = false, SPLIT = true
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+      hrow, hcol, hlp, hlse, Tile.scalar,
+      BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+      reduceCtorEq, not_false_eq_true, String.reduceEq, reduceIte] at hsuf
+    by_cases hIgn : labelValue s labels_ptr = ignored_index
+    · simp only [hIgn, decide_true, if_true, Bool.not_true, Bool.not_false,
+        BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+        reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, Tile.scalar,
+        BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+        Option.bind_some, TileShape.allIndices, List.foldl, Option.bind, reduceIte] at hsuf
+      obtain rfl := Option.some.inj hsuf
+      rw [if_pos hIgn]
+      simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+        BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+        Region.cast_id, and_true, if_pos]
+      rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+      norm_num
+    · simp only [hIgn, decide_false, Bool.false_eq_true, if_false] at hsuf ⊢
+      have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+          else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+        by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+        · simp only [hb, decide_true, if_true]; omega
+        · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+      simp only [hmin] at hsuf
+      by_cases hInb : labelValue s labels_ptr - class_start_idx ≥ (↑(s.pids 1 * (n + 1)) : Int) ∧
+          labelValue s labels_ptr - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n + 1))) : Int)
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «true» := by
+          simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨hInb.1, hInb.2⟩
+        rw [if_pos hInb]
+        simp only [hbool, if_true, if_false, reduceIte, Bool.not_true, Bool.not_false,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hlp, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        rw [hLLframe]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realAdd, Option.map₂_some_some,
+          labelLogit]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+        norm_num
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «false» := by
+          rw [Bool.and_eq_false_iff]
+          by_cases h1 : labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))
+          · right; simp only [decide_eq_false_iff_not, not_lt]
+            rcases not_and_or.mp hInb with h | h
+            · exact absurd h1 h
+            · exact not_lt.mp h
+          · left; simp only [decide_eq_false_iff_not]; exact h1
+        rw [if_neg hInb]
+        simp only [hbool, Bool.false_eq_true, if_false, if_true, reduceIte,
+          Bool.not_true, Bool.not_false,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+        norm_num
+  · -- HAS_SMOOTHING = true, SPLIT = false
+    have hsum' := hsum hHS
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+      hrow, hcol, hlp, hlse, hsum', Tile.scalar,
+      BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+      reduceCtorEq, not_false_eq_true, String.reduceEq, reduceIte] at hsuf
+    by_cases hIgn : labelValue s labels_ptr = ignored_index
+    · simp only [hIgn, decide_true, if_true, Bool.not_false, Bool.not_true,
+        BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+        reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, Tile.scalar,
+        BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+        Option.bind_some, TileShape.allIndices, List.foldl, Option.bind, reduceIte] at hsuf
+      obtain rfl := Option.some.inj hsuf
+      rw [if_pos hIgn]
+      rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+        rw [Region.cast_id]; exact hLZ)]
+      simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+        BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+        Region.cast_id, and_true, if_pos]
+      rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+      norm_num
+    · simp only [hIgn, decide_false, Bool.false_eq_true, if_false] at hsuf ⊢
+      have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+          else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+        by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+        · simp only [hb, decide_true, if_true]; omega
+        · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+      simp only [hmin] at hsuf
+      by_cases hInb : labelValue s labels_ptr - class_start_idx ≥ (↑(s.pids 1 * (n + 1)) : Int) ∧
+          labelValue s labels_ptr - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n + 1))) : Int)
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «true» := by
+          simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨hInb.1, hInb.2⟩
+        rw [if_pos hInb]
+        simp only [hbool, if_true, Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hlp, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+          rw [Region.cast_id]; exact hLZ)]
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        rw [hLLframe]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realDiv, WithBot.realAdd,
+          Option.map₂_some_some, labelLogit]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+        norm_num
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «false» := by
+          rw [Bool.and_eq_false_iff]
+          by_cases h1 : labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))
+          · right; simp only [decide_eq_false_iff_not, not_lt]
+            rcases not_and_or.mp hInb with h | h
+            · exact absurd h1 h
+            · exact not_lt.mp h
+          · left; simp only [decide_eq_false_iff_not]; exact h1
+        rw [if_neg hInb]
+        simp only [hbool, Bool.false_eq_true, if_false, if_true, reduceIte,
+          Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ (by
+          rw [Region.cast_id]; exact hLZ)]
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realDiv, WithBot.realAdd,
+          Option.map₂_some_some]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+  · -- HAS_SMOOTHING = true, SPLIT = true
+    have hsum' := hsum hHS
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+      hrow, hcol, hlp, hlse, hsum', Tile.scalar,
+      BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+      reduceCtorEq, not_false_eq_true, String.reduceEq, reduceIte] at hsuf
+    by_cases hIgn : labelValue s labels_ptr = ignored_index
+    · simp only [hIgn, decide_true, if_true, Bool.not_true, Bool.not_false,
+        BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+        reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, Tile.scalar,
+        BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+        Option.bind_some, TileShape.allIndices, List.foldl, Option.bind, reduceIte] at hsuf
+      obtain rfl := Option.some.inj hsuf
+      rw [if_pos hIgn]
+      simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+        BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+        Region.cast_id, and_true, if_pos]
+      rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+      norm_num
+    · simp only [hIgn, decide_false, Bool.false_eq_true, if_false] at hsuf ⊢
+      have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+          else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+        by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+        · simp only [hb, decide_true, if_true]; omega
+        · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+      simp only [hmin] at hsuf
+      by_cases hInb : labelValue s labels_ptr - class_start_idx ≥ (↑(s.pids 1 * (n + 1)) : Int) ∧
+          labelValue s labels_ptr - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n + 1))) : Int)
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «true» := by
+          simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨hInb.1, hInb.2⟩
+        rw [if_pos hInb]
+        simp only [hbool, if_true, if_false, reduceIte, Bool.not_true, Bool.not_false,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hlp, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        rw [hLLframe]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realDiv, WithBot.realAdd,
+          Option.map₂_some_some, labelLogit]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+        norm_num
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (min n_cols ((s.pids 1 + 1) * (n + 1))))) = «false» := by
+          rw [Bool.and_eq_false_iff]
+          by_cases h1 : labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))
+          · right; simp only [decide_eq_false_iff_not, not_lt]
+            rcases not_and_or.mp hInb with h | h
+            · exact absurd h1 h
+            · exact not_lt.mp h
+          · left; simp only [decide_eq_false_iff_not]; exact h1
+        rw [if_neg hInb]
+        simp only [hbool, Bool.false_eq_true, if_false, if_true, reduceIte,
+          Bool.not_true, Bool.not_false,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_eq_bind, Option.bind_some, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        simp only [WithBot.realSub, WithBot.realMul, WithBot.realDiv, WithBot.realAdd,
+          Option.map₂_some_some]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+        norm_num
 
-theorem cross_entropy_loss_store_slice_compute_correct
-    (LossPre loss_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_loss_store_slice LossPre loss_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => lossStoreSpec s LossPre n_rows) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [cross_entropy_loss_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact cross_entropy_loss_store_slice_correct LossPre loss_ptr n_rows s s' hExec
-
-/-- Proof-oriented z_loss-store slice of `cross_entropy_ops.py`'s forward kernel. -/
-def cross_entropy_z_loss_store_slice
-    (ZLossPre z_loss_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  z_loss = tl.load(ZLossPre + col_block_idx * $(n_rows) + row_idx)
-  tl.store(z_loss_ptr + col_block_idx * $(n_rows) + row_idx, z_loss)
-}
-
-noncomputable def zLossStoreSpec (s : BlockState) (ZLossPre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem ZLossPre (lseOutOffset s n_rows)
-
-theorem cross_entropy_z_loss_store_slice_correct
-    (ZLossPre z_loss_ptr : RegionName) (n_rows : Nat) (s s' : BlockState)
-    (hExec : exec (cross_entropy_z_loss_store_slice ZLossPre z_loss_ptr n_rows)
-      s = some s') :
+/-- **Genuine forward z-loss correctness (¬SPLIT).** When `SPLIT = false`,
+executing the *full* forward surface writes to `z_loss_ptr` at offset
+`col_block_idx * n_rows + row_idx` exactly `zLossSpec`: `lse_square_scale·lse²`
+(or `0` when the label is ignored), with `lse` the genuine scaled
+`partialLSE_full`. -/
+theorem cross_entropy_fwd_z_loss_correct
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool)
+    (s s' : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING Bool.false) s = some s') :
     s'.readMem z_loss_ptr (lseOutOffset s n_rows) =
-      zLossStoreSpec s ZLossPre n_rows := by
-  simp [exec, cross_entropy_z_loss_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul] at hExec
-  subst s'
-  simp [lseOutOffset, zLossStoreSpec]
+      zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale) := by
+  rw [exec, ceFwd_body_split, stepStmts.append_some_iff] at hExec
+  obtain ⟨smid, hpre, hsuf⟩ := hExec
+  obtain ⟨hrow, hcol, hlp, hlbl, hlse, hsum⟩ :=
+    ceFwdLsePrefix_regs loss_ptr lse_ptr logits_ptr labels_ptr smoothing logit_scale
+      total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING s smid h_tail hpre
+  simp only [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def, hrow, hcol, hlp,
+    hlbl, hlse, Option.bind, Tile.scalar, Tile.bop, Tile.cop, Tile.uop, Tile.select,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComparableDType.eq, ComparableDType.ge, ComparableDType.lt, Broadcast.nil,
+    BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_ne_dtype,
+    BlockState.readMemValue_real, Bool.not_false, reduceIte] at hsuf
+  unfold zLossSpec
+  cases hHS : HAS_SMOOTHING <;>
+    simp only [hHS, Bool.not_true, Bool.not_false, if_true, if_false,
+      Bool.false_eq_true, reduceIte] at hsuf ⊢ <;>
+    (first
+      | (have hsum' := hsum hHS)
+      | (have hsum' := hcol)) <;>
+  · by_cases hIgn : labelValue s labels_ptr = ignored_index
+    · simp only [hIgn, decide_true, if_true, Bool.not_false, Bool.not_true,
+        BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+        reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, Tile.scalar,
+        BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+        Option.bind_some, Option.bind_eq_bind, TileShape.allIndices, List.foldl, Option.bind,
+        reduceIte] at hsuf
+      obtain rfl := Option.some.inj hsuf
+      rw [if_pos hIgn]
+      simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+        BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+        Region.cast_id, and_true, if_true]
+      rw [show (some (0.0:ℝ)) = ((0.0:ℝ) : WithBot ℝ) from rfl, WithBot.unbotD_coe]
+      norm_num
+    · rw [if_neg hIgn]
+      by_cases hInb : labelValue s labels_ptr - class_start_idx ≥ (↑(s.pids 1 * (n + 1)) : Int) ∧
+          labelValue s labels_ptr - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n + 1))) : Int)
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+                else (s.pids 1 + 1) * (n + 1)))) = «true» := by
+          have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+              else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+            by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+            · simp only [hb, decide_true, if_true]; omega
+            · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+          rw [hmin]
+          simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨hInb.1, hInb.2⟩
+        simp only [decide_eq_false_iff_not.mpr hIgn, Bool.false_eq_true, if_false,
+          hbool, if_true, Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hlp, hsum', Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_some, Option.bind_eq_bind, TileShape.allIndices, List.foldl, Option.bind,
+          reduceIte] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        simp only [WithBot.realMul, Option.map₂_some_some]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
+      · have hbool : (decide (labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))) &&
+            decide (labelValue s labels_ptr - class_start_idx <
+              Int.ofNat (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+                else (s.pids 1 + 1) * (n + 1)))) = «false» := by
+          have hmin : (if decide (n_cols < (s.pids 1 + 1) * (n + 1)) = «true» then n_cols
+              else (s.pids 1 + 1) * (n + 1)) = min n_cols ((s.pids 1 + 1) * (n + 1)) := by
+            by_cases hb : n_cols < (s.pids 1 + 1) * (n + 1)
+            · simp only [hb, decide_true, if_true]; omega
+            · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+          rw [hmin, Bool.and_eq_false_iff]
+          by_cases h1 : labelValue s labels_ptr - class_start_idx ≥ Int.ofNat (s.pids 1 * (n + 1))
+          · right; simp only [decide_eq_false_iff_not, not_lt]
+            rcases not_and_or.mp hInb with h | h
+            · exact absurd h1 h
+            · exact not_lt.mp h
+          · left; simp only [decide_eq_false_iff_not]; exact h1
+        simp only [decide_eq_false_iff_not.mpr hIgn,
+          hbool, Bool.false_eq_true, if_false, if_true, reduceIte,
+          Bool.not_false, Bool.not_true,
+          BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_dtype, ne_eq,
+          reduceCtorEq, not_false_eq_true, String.reduceEq, hcol, hrow, hlse, hsum', Tile.scalar,
+          BlockState.writeMem_regs, BlockState.writeMemTyped_real,
+          Option.bind_some, Option.bind_eq_bind, TileShape.allIndices, List.foldl, Option.bind] at hsuf
+        obtain rfl := Option.some.inj hsuf
+        simp only [BlockState.writeMemTyped_real, BlockState.setReg_readMem,
+          BlockState.writeMem_readMem, lseOutOffset, FloatDType.real_storeValue,
+          Region.cast_id, and_true, if_true]
+        simp only [WithBot.realMul, Option.map₂_some_some]
+        rw [show ∀ x : ℝ, WithBot.unbotD 0 (some x) = x from fun x => rfl]
 
-theorem cross_entropy_z_loss_store_slice_compute_correct
-    (ZLossPre z_loss_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_z_loss_store_slice ZLossPre z_loss_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (z_loss_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => zLossStoreSpec s ZLossPre n_rows) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [cross_entropy_z_loss_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact cross_entropy_z_loss_store_slice_correct ZLossPre z_loss_ptr n_rows s s' hExec
+/-- **Per-kernel forward output summary for `cross_entropy_fwd_surface`
+(genuine, end-to-end).**
+
+For any execution `exec ... s = some s'` (with the side outputs and the logits
+buffer pairwise-distinct as needed, and at least one valid lane), bundles:
+1. the full forward surface lowers to the algorithm layer (`toAlgorithm? = ok`);
+2. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
+   masked-lane stable log-sum-exp `partialLSE_full` of the INPUT block logits,
+   *scaled by `logit_scale`*;
+3. **genuine loss output**: `loss_ptr[col_block·n_rows + row]` holds exactly the
+   faithful five-way cross-entropy `crossEntropyLossSpec`, every logit sub-term
+   scaled by `logit_scale` and read from INPUT memory;
+4. **genuine z-loss output (¬SPLIT)**: when `SPLIT = false`,
+   `z_loss_ptr[col_block·n_rows + row]` holds exactly `zLossSpec`
+   (`lse_square_scale·lse²`, or `0` when the label is ignored).
+
+All value specs read INPUT memory, never `exec(...).readMem`, so this summary is
+non-self-referential. The region-distinctness hypotheses are the only framing
+side-conditions. -/
+theorem cross_entropy_fwd_output_summary
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (s s' : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hne : lse_ptr ≠ loss_ptr)
+    (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hLL : lse_ptr ≠ logits_ptr)
+    (hLZ : loss_ptr ≠ z_loss_ptr)
+    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
+    (∃ alg,
+      (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
+        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgorithm? =
+        Except.ok alg) ∧
+    (s'.readMem lse_ptr (lseOutOffset s n_rows) =
+      partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+        (s.pids 1) h_tail Bool.true logit_scale) ∧
+    (s'.readMem loss_ptr (lseOutOffset s n_rows) =
+      crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
+        lse_square_scale ignored_index total_classes class_start_idx n_cols
+        logits_row_stride n HAS_SMOOTHING SPLIT
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale)) ∧
+    (SPLIT = Bool.false →
+      s'.readMem z_loss_ptr (lseOutOffset s n_rows) =
+        zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
+          (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+            (s.pids 1) h_tail Bool.true logit_scale)) := by
+  refine ⟨⟨_, rfl⟩, ?_, ?_, ?_⟩
+  · exact cross_entropy_fwd_lse_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride n HAS_SMOOTHING SPLIT s s' h_tail hne hneZ hExec
+  · exact cross_entropy_fwd_loss_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride n HAS_SMOOTHING SPLIT s s' h_tail hLL hLZ hExec
+  · intro hSP
+    subst hSP
+    exact cross_entropy_fwd_z_loss_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride n HAS_SMOOTHING s s' h_tail hExec
 
 end VeriTile.Bench.TritonBenchG.CrossEntropyOps

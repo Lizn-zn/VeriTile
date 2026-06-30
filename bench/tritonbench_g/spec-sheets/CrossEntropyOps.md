@@ -2,196 +2,146 @@
 
 **Python source:** `bench/tritonbench_g/cross_entropy_ops/cross_entropy_ops.py`
 
-## Public theorem: `cross_entropy_bwd_store_slice_compute_correct`
+## Public theorem: `cross_entropy_fwd_output_summary`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Compute-facing correctness for the final masked `dlogits` store. -/
+/-- **Per-kernel forward output summary for `cross_entropy_fwd_surface`
+(genuine, end-to-end).**
+
+For any execution `exec ... s = some s'` (with the side outputs and the logits
+buffer pairwise-distinct as needed, and at least one valid lane), bundles:
+1. the full forward surface lowers to the algorithm layer (`toAlgorithm? = ok`);
+2. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
+   masked-lane stable log-sum-exp `partialLSE_full` of the INPUT block logits,
+   *scaled by `logit_scale`*;
+3. **genuine loss output**: `loss_ptr[col_block·n_rows + row]` holds exactly the
+   faithful five-way cross-entropy `crossEntropyLossSpec`, every logit sub-term
+   scaled by `logit_scale` and read from INPUT memory;
+4. **genuine z-loss output (¬SPLIT)**: when `SPLIT = false`,
+   `z_loss_ptr[col_block·n_rows + row]` holds exactly `zLossSpec`
+   (`lse_square_scale·lse²`, or `0` when the label is ignored).
+
+All value specs read INPUT memory, never `exec(...).readMem`, so this summary is
+non-self-referential. The region-distinctness hypotheses are the only framing
+side-conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-theorem cross_entropy_bwd_store_slice_compute_correct
-    (dlogits_ptr dloss_ptr Probs : RegionName)
-    (n_cols dlogits_row_stride dloss_row_stride probs_row_stride BLOCK_SIZE : Nat)
-    (logit_scale : ℝ)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_bwd_store_slice dlogits_ptr dloss_ptr Probs
-        n_cols dlogits_row_stride dloss_row_stride probs_row_stride BLOCK_SIZE
-        logit_scale)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => active s n_cols BLOCK_SIZE i)
-        (fun i => (dlogits_ptr, outOffset s dlogits_row_stride BLOCK_SIZE i)))
-      (expected := fun i =>
-        expectedGrad s dloss_ptr Probs dloss_row_stride probs_row_stride
-          BLOCK_SIZE logit_scale i)
+theorem cross_entropy_fwd_output_summary
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (s s' : BlockState)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (hne : lse_ptr ≠ loss_ptr)
+    (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hLL : lse_ptr ≠ logits_ptr)
+    (hLZ : loss_ptr ≠ z_loss_ptr)
+    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
+    (∃ alg,
+      (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
+        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgorithm? =
+        Except.ok alg) ∧
+    (s'.readMem lse_ptr (lseOutOffset s n_rows) =
+      partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+        (s.pids 1) h_tail Bool.true logit_scale) ∧
+    (s'.readMem loss_ptr (lseOutOffset s n_rows) =
+      crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
+        lse_square_scale ignored_index total_classes class_start_idx n_cols
+        logits_row_stride n HAS_SMOOTHING SPLIT
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale)) ∧
+    (SPLIT = Bool.false →
+      s'.readMem z_loss_ptr (lseOutOffset s n_rows) =
+        zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
+          (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+            (s.pids 1) h_tail Bool.true logit_scale))
 ```
 
 **Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_SIZE => active s n_cols BLOCK_SIZE i`
+- `h_tail : s.pids 1 * (n+1) < n_cols`
+- `hne : lse_ptr ≠ loss_ptr`
+- `hneZ : lse_ptr ≠ z_loss_ptr`
+- `hLL : lse_ptr ≠ logits_ptr`
+- `hLZ : loss_ptr ≠ z_loss_ptr`
 
-**Closed-form spec defs (transitive):** `cross_entropy_bwd_store_slice`, `active`, `outOffset`, `expectedGrad`, `colOffset`, `probsOffset`
+**Closed-form spec defs (transitive):** `cross_entropy_fwd_surface`, `lseOutOffset`, `rowLogits`, `crossEntropyLossSpec`, `labelValue`, `zLossSpec`, `blockSumLogits`, `labelLogit`
 
-<details><summary><code>cross_entropy_bwd_store_slice</code></summary>
+<details><summary><code>cross_entropy_fwd_surface</code></summary>
 
 ```
-/-- Proof-oriented final-store slice of `cross_entropy_ops.py`'s
-`cross_entropy_bwd_kernel`.
+/-- Faithful transcription of `cross_entropy_ops.py`'s
+`cross_entropy_fwd_kernel`.
 
-The full kernel computes `probs` from logits/LSE/labels/smoothing. This slice
-starts from a precomputed `Probs` row and proves the masked
-`dlogits = (dloss * logit_scale) * probs` writeback. -/
+This preserves the block logits load, `logit_scale`, optional smoothing sum,
+LSE side store, label-in-block loss selection, optional split behavior, z-loss
+computation, and non-split `z_loss_ptr` side store. -/
 ```
 ```lean
-def cross_entropy_bwd_store_slice
-    (dlogits_ptr dloss_ptr Probs : RegionName)
-    (n_cols dlogits_row_stride dloss_row_stride probs_row_stride BLOCK_SIZE : Nat)
-    (logit_scale : ℝ) :
+def cross_entropy_fwd_surface
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) :
     ComputeKernel := triton {
   row_idx = tl.program_id(0)
   col_block_idx = tl.program_id(1)
+  logits_ptr = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
-  dloss = tl.load(dloss_ptr + row_idx * $(dloss_row_stride))
-  probs = tl.load(Probs + row_idx * $(probs_row_stride) + col_offsets,
-    mask=col_offsets < $(n_cols), other=0.0)
-  tl.store(dlogits_ptr + row_idx * $(dlogits_row_stride) + col_offsets,
-    (dloss * $(logit_scale)) * probs, mask=col_offsets < $(n_cols))
-}
-```
-</details>
-
-<details><summary><code>active</code></summary>
-
-```lean
-def active (s : BlockState) (n_cols BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Prop :=
-  colOffset s BLOCK_SIZE i < n_cols
-```
-</details>
-
-<details><summary><code>outOffset</code></summary>
-
-```lean
-def outOffset
-    (s : BlockState) (dlogits_row_stride BLOCK_SIZE : Nat)
-    (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 0 * dlogits_row_stride + colOffset s BLOCK_SIZE i
-```
-</details>
-
-<details><summary><code>expectedGrad</code></summary>
-
-```lean
-noncomputable def expectedGrad
-    (s : BlockState) (dloss_ptr Probs : RegionName)
-    (dloss_row_stride probs_row_stride BLOCK_SIZE : Nat)
-    (logit_scale : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
-  (s.readMem dloss_ptr (s.pids 0 * dloss_row_stride) * logit_scale) *
-    s.readMem Probs (probsOffset s probs_row_stride BLOCK_SIZE i)
-```
-</details>
-
-<details><summary><code>colOffset</code></summary>
-
-```lean
-def colOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 1 * BLOCK_SIZE + i.val
-```
-</details>
-
-<details><summary><code>probsOffset</code></summary>
-
-```lean
-def probsOffset
-    (s : BlockState) (probs_row_stride BLOCK_SIZE : Nat)
-    (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 0 * probs_row_stride + colOffset s BLOCK_SIZE i
-```
-</details>
-
-## Public theorem: `cross_entropy_lse_store_slice_compute_correct`
-
-**Statement:**
-```lean
-theorem cross_entropy_lse_store_slice_compute_correct
-    (LsePre lse_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_lse_store_slice LsePre lse_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (lse_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => lseStoreSpec s LsePre n_rows)
-```
-
-**Closed-form spec defs (transitive):** `cross_entropy_lse_store_slice`, `lseOutOffset`, `lseStoreSpec`
-
-<details><summary><code>cross_entropy_lse_store_slice</code></summary>
-
-```
-/-- Proof-oriented LSE-store slice of `cross_entropy_ops.py`'s forward kernel.
-Companion to the bwd_store_slice: takes a precomputed `LsePre` scalar and
-proves the writeback into `lse_ptr`. -/
-```
-```lean
-def cross_entropy_lse_store_slice
-    (LsePre lse_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  lse = tl.load(LsePre + col_block_idx * $(n_rows) + row_idx)
+  label_idx = tl.load(labels_ptr + row_idx)
+  logits = tl.load(logits_ptr + col_offsets,
+    mask=col_offsets < $(n_cols), other=-float("inf")).to(tl.float32) * $(logit_scale)
+  max_logits = tl.max(logits, 0)
+  if HAS_SMOOTHING {
+    sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), 0)
+  }
+  lse = tl.log(tl.sum(tl.exp(logits - max_logits), 0)) + max_logits
   tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
-}
-```
-</details>
-
-<details><summary><code>lseOutOffset</code></summary>
-
-```lean
-def lseOutOffset (s : BlockState) (n_rows : Nat) : Nat :=
-  s.pids 1 * n_rows + s.pids 0
-```
-</details>
-
-<details><summary><code>lseStoreSpec</code></summary>
-
-```lean
-noncomputable def lseStoreSpec (s : BlockState) (LsePre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem LsePre (lseOutOffset s n_rows)
-```
-</details>
-
-## Public theorem: `cross_entropy_loss_store_slice_compute_correct`
-
-**Statement:**
-```lean
-theorem cross_entropy_loss_store_slice_compute_correct
-    (LossPre loss_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_loss_store_slice LossPre loss_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => lossStoreSpec s LossPre n_rows)
-```
-
-**Closed-form spec defs (transitive):** `cross_entropy_loss_store_slice`, `lseOutOffset`, `lossStoreSpec`
-
-<details><summary><code>cross_entropy_loss_store_slice</code></summary>
-
-```
-/-- Proof-oriented loss-store slice of `cross_entropy_ops.py`'s forward kernel.
-Same scalar-copy pattern as the LSE store slice. -/
-```
-```lean
-def cross_entropy_loss_store_slice
-    (LossPre loss_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  loss = tl.load(LossPre + col_block_idx * $(n_rows) + row_idx)
+  if label_idx == $((ignored_index : Int)) {
+    loss = 0.0
+    z_loss = 0.0
+  } else {
+    label_idx -= $((class_start_idx : Int))
+    if (label_idx >= col_block_idx * $(BLOCK_SIZE)) and
+        (label_idx < min($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
+      logits_label = tl.load(logits_ptr + label_idx) * $(logit_scale)
+      if HAS_SMOOTHING {
+        loss = (lse if not SPLIT else 0.0) -
+          $(smoothing) * sum_logits / $(total_classes) -
+          (1.0 - $(smoothing)) * logits_label
+      } else {
+        loss = (lse if not SPLIT else 0.0) - logits_label
+      }
+    } else {
+      if HAS_SMOOTHING {
+        loss = $(smoothing) *
+          ((lse if not SPLIT else 0.0) - sum_logits / $(total_classes))
+      } else {
+        loss = 0.0
+      }
+    }
+    if not SPLIT {
+      z_loss = $(lse_square_scale) * lse * lse
+      loss += z_loss
+    } else {
+      z_loss = 0.0
+    }
+  }
   tl.store(loss_ptr + col_block_idx * $(n_rows) + row_idx, loss)
+  if not SPLIT {
+    tl.store(z_loss_ptr + col_block_idx * $(n_rows) + row_idx, z_loss)
+  }
 }
 ```
 </details>
@@ -204,60 +154,116 @@ def lseOutOffset (s : BlockState) (n_rows : Nat) : Nat :=
 ```
 </details>
 
-<details><summary><code>lossStoreSpec</code></summary>
+<details><summary><code>rowLogits</code></summary>
 
+```
+/-- Row-logits function for program `row_idx`: position `j` reads INPUT memory
+`logits_ptr` at `row_idx * logits_row_stride + j`. -/
+```
 ```lean
-noncomputable def lossStoreSpec (s : BlockState) (LossPre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem LossPre (lseOutOffset s n_rows)
+noncomputable def rowLogits
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride n_cols : Nat) (j : Fin n_cols) : ℝ :=
+  s.readMem logits_ptr (s.pids 0 * logits_row_stride + j.val)
 ```
 </details>
 
-## Public theorem: `cross_entropy_z_loss_store_slice_compute_correct`
-
-**Statement:**
-```lean
-theorem cross_entropy_z_loss_store_slice_compute_correct
-    (ZLossPre z_loss_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := cross_entropy_z_loss_store_slice ZLossPre z_loss_ptr n_rows)
-      (initialState := s)
-      (write := fun _ : PUnit => some (z_loss_ptr, lseOutOffset s n_rows))
-      (expected := fun _ => zLossStoreSpec s ZLossPre n_rows)
-```
-
-**Closed-form spec defs (transitive):** `cross_entropy_z_loss_store_slice`, `lseOutOffset`, `zLossStoreSpec`
-
-<details><summary><code>cross_entropy_z_loss_store_slice</code></summary>
+<details><summary><code>crossEntropyLossSpec</code></summary>
 
 ```
-/-- Proof-oriented z_loss-store slice of `cross_entropy_ops.py`'s forward kernel. -/
+/-- The genuine `loss` value computed by `cross_entropy_fwd_surface` for program
+`(row_idx, col_block_idx)`, a faithful Lean transcription of the kernel's
+five-way branch over `label_idx`/in-block/`HAS_SMOOTHING`/`SPLIT`/`lse²`. All
+logit sub-terms are scaled by `logit_scale` and read from INPUT memory; `lse` is
+the genuine scaled `partialLSE_full`. -/
 ```
 ```lean
-def cross_entropy_z_loss_store_slice
-    (ZLossPre z_loss_ptr : RegionName) (n_rows : Nat) :
-    ComputeKernel := triton {
-  row_idx = tl.program_id(0)
-  col_block_idx = tl.program_id(1)
-  z_loss = tl.load(ZLossPre + col_block_idx * $(n_rows) + row_idx)
-  tl.store(z_loss_ptr + col_block_idx * $(n_rows) + row_idx, z_loss)
-}
+noncomputable def crossEntropyLossSpec
+    (s : BlockState) (logits_ptr : RegionName) (labelVal : Int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (lse : ℝ) : ℝ :=
+  if labelVal = ignored_index then 0 else
+    let lblShift : Int := labelVal - class_start_idx
+    let lseTerm : ℝ := if SPLIT then 0 else lse
+    let sq : ℝ := if SPLIT then 0 else lse_square_scale * lse * lse
+    let core : ℝ :=
+      if (lblShift ≥ (s.pids 1 * (n+1) : Nat)) ∧
+         (lblShift < (min n_cols ((s.pids 1 + 1) * (n+1)) : Nat)) then
+        if HAS_SMOOTHING then
+          lseTerm - smoothing * blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale
+            / total_classes
+            - (1 - smoothing) * labelLogit s logits_ptr logits_row_stride lblShift logit_scale
+        else
+          lseTerm - labelLogit s logits_ptr logits_row_stride lblShift logit_scale
+      else
+        if HAS_SMOOTHING then
+          smoothing * (lseTerm - blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale
+            / total_classes)
+        else 0
+    core + sq
 ```
 </details>
 
-<details><summary><code>lseOutOffset</code></summary>
+<details><summary><code>labelValue</code></summary>
 
+```
+/-- The label value loaded by the kernel: `label_idx = tl.load(labels_ptr +
+row_idx)` from INPUT memory. -/
+```
 ```lean
-def lseOutOffset (s : BlockState) (n_rows : Nat) : Nat :=
-  s.pids 1 * n_rows + s.pids 0
+noncomputable def labelValue (s : BlockState) (labels_ptr : Region .int) : Int :=
+  s.readMemValue .int (Region.cast labels_ptr) (s.pids 0)
 ```
 </details>
 
-<details><summary><code>zLossStoreSpec</code></summary>
+<details><summary><code>zLossSpec</code></summary>
 
+```
+/-- The genuine `z_loss` value stored to `z_loss_ptr` (only under `¬SPLIT`):
+`lse_square_scale·lse²`, or `0` when the label is ignored. -/
+```
 ```lean
-noncomputable def zLossStoreSpec (s : BlockState) (ZLossPre : RegionName)
-    (n_rows : Nat) : ℝ :=
-  s.readMem ZLossPre (lseOutOffset s n_rows)
+noncomputable def zLossSpec
+    (labelVal : Int) (lse_square_scale : ℝ) (ignored_index : Int) (lse : ℝ) : ℝ :=
+  if labelVal = ignored_index then 0 else lse_square_scale * lse * lse
 ```
 </details>
+
+<details><summary><code>blockSumLogits</code></summary>
+
+```
+/-- The kernel's `sum_logits = tl.sum(tl.where(col_offsets < n_cols, logits, 0))`:
+the sum of in-range *scaled* block logits, read from INPUT memory. Out-of-range
+lanes contribute `0`. -/
+```
+```lean
+noncomputable def blockSumLogits
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride n_cols : Nat) (n : Nat) (logit_scale : ℝ) : ℝ :=
+  ∑ i : Fin (n+1),
+    if h : s.pids 1 * (n+1) + i.val < n_cols then
+      rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+    else 0
+```
+</details>
+
+<details><summary><code>labelLogit</code></summary>
+
+```
+/-- The label logit `logits_label = tl.load(logits_ptr + (label_idx -
+class_start_idx)) * logit_scale`, read from INPUT memory at the shifted label
+position and scaled. -/
+```
+```lean
+noncomputable def labelLogit
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride : Nat) (lblShift : Int) (logit_scale : ℝ) : ℝ :=
+  s.readMem logits_ptr (s.pids 0 * logits_row_stride + lblShift.toNat) * logit_scale
+```
+</details>
+
+## Also present (pinned special-case summaries)
+- `cross_entropy_bwd_store_slice_compute_correct`
