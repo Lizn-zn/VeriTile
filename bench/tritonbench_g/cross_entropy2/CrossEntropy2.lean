@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Triton.Math.Loss
 import VeriTile.Triton.Semantics.MaskedReduction
 import VeriTile.Triton.Semantics.TiledIndexing
 
@@ -1507,5 +1508,156 @@ theorem cross_entropy_fwd_output_summary
     exact cross_entropy_fwd_z_loss_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
       smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
       n_cols n_rows logits_row_stride n HAS_SMOOTHING s s' h_tail hExec
+
+/-! ## Bridge to the canonical pure cross-entropy math
+
+In the base regime — a single column block exactly spanning the vocabulary
+(`col_block_idx = 0`, `BLOCK_SIZE = n_cols = n+1`), no split (`SPLIT = false`),
+no `lse²` term (`lse_square_scale = 0`), the label active and in range, and
+`total_classes = n_cols` — the kernel's genuine five-way `crossEntropyLossSpec`
+collapses to the shared pure `crossEntropyLoss` / `crossEntropyLossSmoothed`
+from `VeriTile.Triton.Math.Loss`, with the per-class `logit_scale` folded into
+the logits (`xs = logit_scale • rowLogits`). -/
+
+open VeriTile.Triton.TiledLoss in
+/-- Folding the scale into the logits: a scaled stable LSE equals the plain
+stable LSE of the scaled logits. -/
+theorem stableLSE_scale_fold {D : Nat} (xs : Fin D → ℝ) (hD : 0 < D) (scale : ℝ) :
+    stableLSE xs hD Bool.true scale
+      = stableLSE (fun j => scale * xs j) hD Bool.false 0 := by
+  rw [stableLSE_eq_LSE, stableLSE_eq_LSE]
+  unfold LSE
+  simp only [Bool.false_eq_true, reduceIte, if_true]
+  congr 1
+  apply Finset.sum_congr rfl
+  intro i _
+  congr 1
+  ring
+
+open VeriTile.Triton.TiledLoss in
+/-- The scaled `partialLSE_full` (full-vocab single block) equals the canonical
+`stableLSE` of the scale-folded row logits. -/
+theorem partialLSE_full_scale_eq_stableLSE
+    (s : BlockState) (logits_ptr : RegionName) (logits_row_stride : Nat) (n : Nat)
+    (logit_scale : ℝ)
+    (h_tail : s.pids 1 * (n+1) < (n+1))
+    (h0 : s.pids 1 = 0) :
+    partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride (n+1))
+        (s.pids 1) h_tail Bool.true logit_scale
+      = stableLSE (fun j => logit_scale * rowLogits s logits_ptr logits_row_stride (n+1) j)
+          (Nat.succ_pos n) Bool.false 0 := by
+  rw [show partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride (n+1))
+        (s.pids 1) h_tail Bool.true logit_scale
+      = partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride (n+1))
+        0 (by rw [h0] at h_tail; exact h_tail) Bool.true logit_scale from by
+    congr 1 <;> simp [h0]]
+  rw [partialLSE_full_zero_self_eq_stableLSE _ _ _, stableLSE_scale_fold]
+
+open VeriTile.Triton.TiledLoss in
+/-- The kernel's scaled `blockSumLogits` (full-vocab single block) equals the
+plain total of the scale-folded row logits. -/
+theorem blockSumLogits_scale_eq_sum
+    (s : BlockState) (logits_ptr : RegionName) (logits_row_stride : Nat) (n : Nat)
+    (logit_scale : ℝ) (h0 : s.pids 1 = 0) :
+    blockSumLogits s logits_ptr logits_row_stride (n+1) n logit_scale
+      = ∑ i : Fin (n+1), logit_scale * rowLogits s logits_ptr logits_row_stride (n+1) i := by
+  unfold blockSumLogits rowLogits
+  apply Finset.sum_congr rfl
+  intro i _
+  have hi : s.pids 1 * (n+1) + i.val < n+1 := by rw [h0]; simp [i.isLt]
+  rw [dif_pos hi]
+  simp only [h0, Nat.zero_mul, Nat.zero_add]
+  ring
+
+open VeriTile.Triton.TiledLoss in
+/-- The kernel's scaled `labelLogit` is the scale-folded row logit at `t`. -/
+theorem labelLogit_scale_eq_rowLogits
+    (s : BlockState) (logits_ptr : RegionName) (logits_row_stride : Nat) (n : Nat)
+    (lblShift : Int) (logit_scale : ℝ) (t : Fin (n+1)) (ht : (t : Nat) = lblShift.toNat) :
+    labelLogit s logits_ptr logits_row_stride lblShift logit_scale
+      = logit_scale * rowLogits s logits_ptr logits_row_stride (n+1) t := by
+  unfold labelLogit rowLogits
+  rw [ht]; ring
+
+open VeriTile.Triton.TiledLoss in
+/-- **Bridge: textbook cross-entropy (no smoothing), scale folded.** In the base
+regime (`HAS_SMOOTHING = false`, `SPLIT = false`, `lse_square_scale = 0`,
+`s.pids 1 = 0`, `n_cols = n+1`, `class_start_idx = 0`, label active and in range
+as `t : Fin (n+1)`), the kernel's genuine `crossEntropyLossSpec` with
+`lse = partialLSE_full` equals the canonical pure `crossEntropyLoss` of the
+scale-folded row logits `logit_scale • rowLogits` at `t`. -/
+theorem crossEntropyLossSpec_eq_crossEntropyLoss
+    (s : BlockState) (logits_ptr : RegionName)
+    (labelVal : Int) (smoothing logit_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (n : Nat)
+    (h_tail : s.pids 1 * (n+1) < (n+1))
+    (h0 : s.pids 1 = 0)
+    (t : Fin (n+1))
+    (hNotIgn : labelVal ≠ ignored_index)
+    (hShift : (t : Nat) = (labelVal - 0).toNat)
+    (hNonneg : 0 ≤ labelVal - 0) :
+    crossEntropyLossSpec s logits_ptr labelVal smoothing logit_scale 0 ignored_index
+        total_classes 0 (n+1) 0 n Bool.false Bool.false
+        (partialLSE_full (n := n) (rowLogits s logits_ptr 0 (n+1)) (s.pids 1) h_tail
+          Bool.true logit_scale)
+      = crossEntropyLoss (fun j => logit_scale * rowLogits s logits_ptr 0 (n+1) j) t
+          (Nat.succ_pos n) := by
+  unfold crossEntropyLossSpec crossEntropyLoss
+  rw [if_neg hNotIgn]
+  have hin : (labelVal - 0 ≥ (s.pids 1 * (n+1) : Nat)) ∧
+      (labelVal - 0 < (min (n+1) ((s.pids 1 + 1) * (n+1)) : Nat)) := by
+    constructor
+    · rw [h0]; simpa using hNonneg
+    · rw [h0]; simp only [Nat.zero_add, Nat.one_mul, Nat.min_self]
+      have htlt : (t : Nat) < n+1 := t.isLt
+      rw [hShift] at htlt
+      have : (labelVal - 0) = ((labelVal - 0).toNat : Int) := (Int.toNat_of_nonneg hNonneg).symm
+      rw [this]; exact_mod_cast htlt
+  simp only [Bool.false_eq_true, reduceIte, if_pos hin]
+  rw [partialLSE_full_scale_eq_stableLSE s logits_ptr 0 n logit_scale h_tail h0]
+  rw [labelLogit_scale_eq_rowLogits s logits_ptr 0 n (labelVal - 0) logit_scale t hShift]
+  ring
+
+open VeriTile.Triton.TiledLoss in
+/-- **Bridge: textbook cross-entropy with label smoothing, scale folded.** In the
+smoothed base regime (`HAS_SMOOTHING = true`, `SPLIT = false`,
+`lse_square_scale = 0`, `s.pids 1 = 0`, `n_cols = n+1`, `class_start_idx = 0`,
+`total_classes = n+1`, label active and in range as `t : Fin (n+1)`), the
+kernel's genuine `crossEntropyLossSpec` with `lse = partialLSE_full` equals the
+canonical pure `crossEntropyLossSmoothed` of the scale-folded row logits at `t`
+with smoothing strength `smoothing`. -/
+theorem crossEntropyLossSpec_eq_crossEntropyLossSmoothed
+    (s : BlockState) (logits_ptr : RegionName)
+    (labelVal : Int) (smoothing logit_scale : ℝ) (ignored_index : Int)
+    (n : Nat)
+    (h_tail : s.pids 1 * (n+1) < (n+1))
+    (h0 : s.pids 1 = 0)
+    (t : Fin (n+1))
+    (hNotIgn : labelVal ≠ ignored_index)
+    (hShift : (t : Nat) = (labelVal - 0).toNat)
+    (hNonneg : 0 ≤ labelVal - 0) :
+    crossEntropyLossSpec s logits_ptr labelVal smoothing logit_scale 0 ignored_index
+        (n+1) 0 (n+1) 0 n Bool.true Bool.false
+        (partialLSE_full (n := n) (rowLogits s logits_ptr 0 (n+1)) (s.pids 1) h_tail
+          Bool.true logit_scale)
+      = crossEntropyLossSmoothed (fun j => logit_scale * rowLogits s logits_ptr 0 (n+1) j) t
+          smoothing (Nat.succ_pos n) := by
+  unfold crossEntropyLossSpec crossEntropyLossSmoothed
+  rw [if_neg hNotIgn]
+  have hin : (labelVal - 0 ≥ (s.pids 1 * (n+1) : Nat)) ∧
+      (labelVal - 0 < (min (n+1) ((s.pids 1 + 1) * (n+1)) : Nat)) := by
+    constructor
+    · rw [h0]; simpa using hNonneg
+    · rw [h0]; simp only [Nat.zero_add, Nat.one_mul, Nat.min_self]
+      have htlt : (t : Nat) < n+1 := t.isLt
+      rw [hShift] at htlt
+      have : (labelVal - 0) = ((labelVal - 0).toNat : Int) := (Int.toNat_of_nonneg hNonneg).symm
+      rw [this]; exact_mod_cast htlt
+  simp only [if_true, reduceIte, if_pos hin]
+  rw [partialLSE_full_scale_eq_stableLSE s logits_ptr 0 n logit_scale h_tail h0]
+  rw [labelLogit_scale_eq_rowLogits s logits_ptr 0 n (labelVal - 0) logit_scale t hShift]
+  rw [blockSumLogits_scale_eq_sum s logits_ptr 0 n logit_scale h0]
+  push_cast
+  ring
 
 end VeriTile.Bench.TritonBenchG.CrossEntropy2

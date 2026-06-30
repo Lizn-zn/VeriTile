@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Triton.Math.Loss
 import VeriTile.Triton.Semantics.MaskedReduction
 import VeriTile.Triton.Semantics.TiledIndexing
 
@@ -863,5 +864,54 @@ theorem cross_entropy_backward_store_slice_compute_correct
     VOCAB_SIZE logits_row_stride dloss_row_stride grad_row_stride BLOCK_SIZE
     s s' hExec i
   simpa [hActive] using h
+
+/-! ## Bridge to the canonical pure cross-entropy math
+
+In the textbook regime — `DO_SOFTCAPPING = false`, `DO_LOGIT_SCALING = false`,
+and the block exactly spanning the vocabulary (`BLOCK_SIZE = VOCAB_SIZE = n+1`,
+so every lane is valid) — the kernel's genuine LSE/loss specs collapse to the
+shared pure `crossEntropyLoss` from `VeriTile.Triton.Math.Loss`. -/
+
+open VeriTile.Triton.TiledLoss in
+/-- In the full-vocab, no-transform regime the kernel's per-row stable LSE
+`fastCeLseSpec … id` is exactly the canonical `stableLSE` of the row logits. -/
+theorem fastCeLseSpec_id_eq_stableLSE
+    {n : Nat} (xs : Fin (n+1) → ℝ) (h_tail : 0 * (n+1) < (n+1)) :
+    fastCeLseSpec xs 0 h_tail (fun x => x) = stableLSE xs (Nat.succ_pos n) Bool.false 0 := by
+  have heq : fastCeLseSpec xs 0 h_tail (fun x => x)
+      = partialLSE_full (n := n) xs 0 (by simp) Bool.false 0 := by
+    unfold fastCeLseSpec partialLSE_full scaledLane_full
+    simp only [Bool.false_eq_true, reduceIte]
+  rw [heq, partialLSE_full_zero_self_eq_stableLSE]
+
+open VeriTile.Triton.TiledLoss in
+/-- **Bridge: textbook cross-entropy.** Under `DO_SOFTCAPPING = false`,
+`DO_LOGIT_SCALING = false`, and a block spanning the whole vocabulary
+(`VOCAB_SIZE = n+1`, label in range as `lbl : Fin (n+1)` with its underlying
+offset equal to the loaded `fceLabelNat`), the forward kernel's genuine loss
+spec value (the RHS of `cross_entropy_forward_loss_correct`) equals the
+canonical pure `crossEntropyLoss` of the row logits at the target class. -/
+theorem fastCeLoss_eq_crossEntropyLoss
+    (s : BlockState) (logits_ptr : RegionName) (labels_ptr : Region .int)
+    (logits_row_stride : Nat) (SOFTCAP LOGIT_SCALE : ℝ)
+    (n : Nat) (h_tail : 0 * (n+1) < (n+1))
+    (lbl : Fin (n+1))
+    (hlbl : (lbl : Nat) = fceLabelNat s labels_ptr) :
+    fastCeLseSpec (fastCeRowLogits s logits_ptr logits_row_stride (n+1))
+        0 h_tail (fun x => x)
+      - fceLabelLogit s logits_ptr labels_ptr logits_row_stride
+          SOFTCAP LOGIT_SCALE Bool.false Bool.false
+    = crossEntropyLoss (fastCeRowLogits s logits_ptr logits_row_stride (n+1))
+        lbl (Nat.succ_pos n) := by
+  unfold crossEntropyLoss
+  rw [fastCeLseSpec_id_eq_stableLSE]
+  -- the label logit equals the row-logits function evaluated at `lbl`
+  have hlabel : fceLabelLogit s logits_ptr labels_ptr logits_row_stride
+      SOFTCAP LOGIT_SCALE Bool.false Bool.false
+      = fastCeRowLogits s logits_ptr logits_row_stride (n+1) lbl := by
+    unfold fceLabelLogit fastCeTransform fastCeRowLogits
+    simp only [Bool.false_eq_true, reduceIte]
+    rw [hlbl]
+  rw [hlabel]
 
 end VeriTile.Bench.TritonBenchG.FastCeLoss
