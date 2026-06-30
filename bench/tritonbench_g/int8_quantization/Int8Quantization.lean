@@ -493,63 +493,6 @@ theorem k_kernel_per_block_int8_test2_scale_store_slice_compute_correct
   exact k_kernel_per_block_int8_scale_store_slice_compute_correct ScalePre
     Scale 8 s
 
-/-! ## Python test-shape wrappers
-
-The checked Python tests use 3D inputs. Case 1 has `B = 2`, `L = 256`,
-`C = 64`; q uses `BLKQ = 128` and `q_scale.stride(0) = 2`, while k uses
-`BLKK = 64` and `k_scale.stride(0) = 4`. Case 2 has `B = 1`, `L = 512`,
-`C = 128`; q uses scale stride `4`, and k uses scale stride `8`. These wrappers
-discharge the concrete row-major output injectivity assumptions for the
-real-valued pre-int8-cast store slices. -/
-
-theorem per_block_int8_python_q_case1_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [128, 64] => xOffset s 256 64 128 idx) := by
-  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
-  simp [xOffset, baseOffset, rowIndex, colIndex] at h
-  have hr : ra = rb := by omega
-  have hc : ca = cb := by omega
-  subst rb
-  subst cb
-  rfl
-
-theorem per_block_int8_python_k_case1_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [64, 64] => xOffset s 256 64 64 idx) := by
-  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
-  simp [xOffset, baseOffset, rowIndex, colIndex] at h
-  have hr : ra = rb := by omega
-  have hc : ca = cb := by omega
-  subst rb
-  subst cb
-  rfl
-
-theorem per_block_int8_python_q_case2_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [128, 128] => xOffset s 512 128 128 idx) := by
-  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
-  simp [xOffset, baseOffset, rowIndex, colIndex] at h
-  have hr : ra = rb := by omega
-  have hc : ca = cb := by omega
-  subst rb
-  subst cb
-  rfl
-
-theorem per_block_int8_python_k_case2_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [64, 128] => xOffset s 512 128 64 idx) := by
-  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
-  simp [xOffset, baseOffset, rowIndex, colIndex] at h
-  have hr : ra = rb := by omega
-  have hc : ca = cb := by omega
-  subst rb
-  subst cb
-  rfl
-
 /-- Proof-oriented scale-compute slice of `int8_quantization.py`'s per-block
 int8 kernels. This covers the real-valued Python path
 `scale = tl.max(tl.abs(preScale * x)) / 127.0` and the unmasked scalar

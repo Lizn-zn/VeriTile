@@ -13,8 +13,7 @@ full surface is recorded as **blocked** at algorithm projection (it stores CUDA
 `llrint`/int8 results, not the real-valued pre-rounding expression), while the
 checked store slice realizes the genuine pre-rounding quantity
 `scale127 * (x * absmax_inv)` (`quantizeGlobalScaledSpec`) at every in-range lane,
-leaving out-of-range lanes unchanged. The pinned
-`quantize_global_python_n<N>_bs<B>_blocked_output_summary` theorems are concrete
+leaving out-of-range lanes unchanged. Concrete Python benchmark shapes are
 instantiations of this (with `scale127 = 127.0`). No injectivity hypothesis is
 needed: the 1-D block offset map is injective by construction. The `llrint`
 rounding / int8 cast remain the honest, unmodeled blocker. -/
@@ -61,17 +60,3 @@ def quantize_global_surface
 
 ## Also present (pinned special-case summaries)
 - `quantize_global_scaled_store_slice_compute_correct`
-- `quantize_global_python_n1024_bs1024_compute_correct`
-- `quantize_global_python_n2048_bs1024_compute_correct`
-- `quantize_global_python_n2048_bs2048_compute_correct`
-- `quantize_global_python_n3072_bs1024_compute_correct`
-- `quantize_global_python_n3072_bs2048_compute_correct`
-- `quantize_global_python_n4096_bs1024_compute_correct`
-- `quantize_global_python_n4096_bs2048_compute_correct`
-- `quantize_global_python_n1024_bs1024_blocked_output_summary`
-- `quantize_global_python_n2048_bs1024_blocked_output_summary`
-- `quantize_global_python_n2048_bs2048_blocked_output_summary`
-- `quantize_global_python_n3072_bs1024_blocked_output_summary`
-- `quantize_global_python_n3072_bs2048_blocked_output_summary`
-- `quantize_global_python_n4096_bs1024_blocked_output_summary`
-- `quantize_global_python_n4096_bs2048_blocked_output_summary`

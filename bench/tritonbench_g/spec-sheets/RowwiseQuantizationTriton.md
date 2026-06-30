@@ -68,4 +68,3 @@ def quantize_rowwise_real_surface
 ## Also present (pinned special-case summaries)
 - `quantize_rowwise_scaled_store_slice_compute_correct`
 - `quantize_rowwise_max_store_slice_compute_correct`
-- `quantize_rowwise_python_output_maxs_compute_correct`

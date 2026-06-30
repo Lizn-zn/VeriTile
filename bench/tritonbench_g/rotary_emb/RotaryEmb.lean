@@ -35,10 +35,9 @@ rotary_emb_output_summary_general                     ← TOP THEOREM (dimension
        └─ rotary_emb_k1_block_compute_correct → rotary_emb_k1_block_correct   (K odd lanes)
 ```
 
-The interleaved even/odd offset families are shown collision-free (injective)
-by `rotary_emb_python_q_even/odd_offset_injective` and
-`rotary_emb_python_k_even/odd_offset_injective` (these prove within-family
-injectivity, not even-vs-odd disjointness). There are also
+The interleaved even/odd offset families being collision-free (within-family
+injectivity, not even-vs-odd disjointness) is taken as hypotheses of the main
+theorem. There are also
 `rotary_emb_q_surface_toAlgorithm_supported` / `rotary_emb_k_surface_toAlgorithm_supported`
 splits and `activeFullQ` full-tile scaffolding.
 
@@ -806,116 +805,6 @@ theorem rotary_emb_k1_block_compute_correct
     stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
     HEAD_K BLOCK_HALF s s' hOutInj hExec i
   simpa [hActive] using h
-
-/-! ## Python test-shape all-output wrappers
-
-The checked Python wrapper observes both mutated tensors `(q.clone(), k.clone())`.
-For each tested shape, the observable rotary writeback consists of four
-dimension-pair stores: Q even, Q odd, K even, and K odd. These wrappers keep the
-proofs local to this benchmark file per #118; they are still proof-slice
-summaries, while the full-kernel section below tracks the stronger #139 path. -/
-
-theorem rotary_emb_python_q_even_offset_injective
-    (s : BlockState) (stride_qbs stride_qh BLOCK_HALF : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_HALF => qOffset s stride_qbs stride_qh 1 (dimEven i)) := by
-  intro a b h
-  apply Fin.ext
-  simp [qOffset, seqIndex, headIndex, dimEven] at h
-  omega
-
-theorem rotary_emb_python_q_odd_offset_injective
-    (s : BlockState) (stride_qbs stride_qh BLOCK_HALF : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_HALF => qOffset s stride_qbs stride_qh 1 (dimOdd i)) := by
-  intro a b h
-  apply Fin.ext
-  simp [qOffset, seqIndex, headIndex, dimOdd] at h
-  omega
-
-theorem rotary_emb_python_k_even_offset_injective
-    (s : BlockState) (stride_kbs stride_kh BLOCK_HALF : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_HALF => kOffset s stride_kbs stride_kh 1 (dimEven i)) := by
-  intro a b h
-  apply Fin.ext
-  simp [kOffset, seqIndex, headIndex, dimEven] at h
-  omega
-
-theorem rotary_emb_python_k_odd_offset_injective
-    (s : BlockState) (stride_kbs stride_kh BLOCK_HALF : Nat) :
-    Function.Injective
-      (fun i : Fin BLOCK_HALF => kOffset s stride_kbs stride_kh 1 (dimOdd i)) := by
-  intro a b h
-  apply Fin.ext
-  simp [kOffset, seqIndex, headIndex, dimOdd] at h
-  omega
-
-/-- Python-shape all-output coverage for `rotary_emb_fwd` with `HEAD_Q = 8`,
-`HEAD_K = 8`, contiguous `(total_len, heads, head_dim)` Q/K tensors, and
-contiguous `(total_len, head_dim)` cos/sin tensors. -/
-theorem rotary_emb_python_shape_all_outputs_compute_correct
-    (Q K Cos Sin : RegionName) (max_total_len head_dim BLOCK_HALF : Nat)
-    (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := rotary_emb_q0_block Q Cos Sin (8 * head_dim) head_dim 1
-        head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin BLOCK_HALF => active s max_total_len 8)
-        (fun i => (Q, qOffset s (8 * head_dim) head_dim 1 (dimEven i))))
-      (expected := fun i =>
-        rotaryQ0Spec s Q Cos Sin (8 * head_dim) head_dim 1
-          head_dim 1 head_dim 1 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_emb_q1_block Q Cos Sin (8 * head_dim) head_dim 1
-        head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin BLOCK_HALF => active s max_total_len 8)
-        (fun i => (Q, qOffset s (8 * head_dim) head_dim 1 (dimOdd i))))
-      (expected := fun i =>
-        rotaryQ1Spec s Q Cos Sin (8 * head_dim) head_dim 1
-          head_dim 1 head_dim 1 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_emb_k0_block K Cos Sin (8 * head_dim) head_dim 1
-        head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin BLOCK_HALF => activeK s max_total_len 8)
-        (fun i => (K, kOffset s (8 * head_dim) head_dim 1 (dimEven i))))
-      (expected := fun i =>
-        rotaryK0Spec s K Cos Sin (8 * head_dim) head_dim 1
-          head_dim 1 head_dim 1 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := rotary_emb_k1_block K Cos Sin (8 * head_dim) head_dim 1
-        head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin BLOCK_HALF => activeK s max_total_len 8)
-        (fun i => (K, kOffset s (8 * head_dim) head_dim 1 (dimOdd i))))
-      (expected := fun i =>
-        rotaryK1Spec s K Cos Sin (8 * head_dim) head_dim 1
-          head_dim 1 head_dim 1 i)) := by
-  constructor
-  · exact rotary_emb_q0_block_compute_correct Q Cos Sin (8 * head_dim)
-      head_dim 1 head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF s
-      (rotary_emb_python_q_even_offset_injective s (8 * head_dim)
-        head_dim BLOCK_HALF)
-  constructor
-  · exact rotary_emb_q1_block_compute_correct Q Cos Sin (8 * head_dim)
-      head_dim 1 head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF s
-      (rotary_emb_python_q_odd_offset_injective s (8 * head_dim)
-        head_dim BLOCK_HALF)
-  constructor
-  · exact rotary_emb_k0_block_compute_correct K Cos Sin (8 * head_dim)
-      head_dim 1 head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF s
-      (rotary_emb_python_k_even_offset_injective s (8 * head_dim)
-        head_dim BLOCK_HALF)
-  · exact rotary_emb_k1_block_compute_correct K Cos Sin (8 * head_dim)
-      head_dim 1 head_dim 1 head_dim 1 max_total_len 8 BLOCK_HALF s
-      (rotary_emb_python_k_odd_offset_injective s (8 * head_dim)
-        head_dim BLOCK_HALF)
 
 /-- Active predicate for the full kernel's Q stores. -/
 def activeFullQ (s : BlockState) (max_total_len HEAD_Q

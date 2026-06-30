@@ -85,11 +85,3 @@ def dequantize_kernel
 
 ## Also present (pinned special-case summaries)
 - `dequantize_kernel_compute_correct`
-- `dequantize_matmul_python_128x128_compute_correct`
-- `dequantize_matmul_python_64x256_compute_correct`
-- `dequantize_matmul_python_32x256_compute_correct`
-- `dequantize_matmul_python_256x64_compute_correct`
-- `dequantize_matmul_python_128x128_output_summary`
-- `dequantize_matmul_python_64x256_output_summary`
-- `dequantize_matmul_python_32x256_output_summary`
-- `dequantize_matmul_python_256x64_output_summary`

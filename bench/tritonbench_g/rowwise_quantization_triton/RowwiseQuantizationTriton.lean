@@ -206,15 +206,6 @@ theorem quantize_rowwise_max_store_slice_compute_correct
   subst s'
   simp [ComputeCorrect.WriteMap.scalar, maxOffset, quantizeRowwiseMaxSpec]
 
-theorem quantize_rowwise_python_output_maxs_compute_correct
-    (MaxVals output_maxs : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
-      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals) := by
-  exact quantize_rowwise_max_store_slice_compute_correct MaxVals output_maxs s
-
 /-- **Dimension-general blocked output summary.** For arbitrary `_n_elements`,
 `BLOCK_SIZE`, padded width `P2`, and real scale `scale127` (and any program id in
 `s`), the faithful full surface is recorded as **blocked** at algorithm erasure

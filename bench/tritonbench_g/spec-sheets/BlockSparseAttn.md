@@ -881,6 +881,3 @@ def headGroups (num_heads num_kv_heads : Nat) : Nat := num_heads / num_kv_heads
 ## Also present (pinned special-case summaries)
 - `block_sparse_attn_output_store_slice_compute_correct`
 - `block_sparse_attn_output_store_second_slice_compute_correct`
-- `block_sparse_attn_python_first_output_compute_correct`
-- `block_sparse_attn_python_second_output_compute_correct`
-- `block_sparse_attn_python_output_pair_compute_correct`

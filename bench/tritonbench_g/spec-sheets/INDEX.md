@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 141 kernels, 266 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 249 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -8,11 +8,8 @@
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
 | 306 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 30 | 4 | 136 | 76 |  |
 | 300 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 10 | 0 | 246 | 24 |  |
-| 296 | [FlashAttn.md](FlashAttn.md) | 21 | 3 | 183 | 47 |  |
+| 275 | [FlashAttn.md](FlashAttn.md) | 21 | 3 | 162 | 47 |  |
 | 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 |  |
-| 267 | [ContextAttnLlama.md](ContextAttnLlama.md) | 43 | 4 | 115 | 19 |  |
-| 264 | [ContextAttnBloom.md](ContextAttnBloom.md) | 42 | 4 | 115 | 19 |  |
-| 261 | [ContextAttnFwd.md](ContextAttnFwd.md) | 41 | 4 | 115 | 19 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
 | 177 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
 | 172 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 3 | 79 | 15 |  |
@@ -28,8 +25,11 @@
 | 116 | [FusedRwkv6Kernel.md](FusedRwkv6Kernel.md) | 19 | 4 | 47 | 8 |  |
 | 114 | [CacheTransformTriton.md](CacheTransformTriton.md) | 11 | 0 | 76 | 5 |  |
 | 114 | [SoftmaxReducev.md](SoftmaxReducev.md) | 22 | 1 | 39 | 8 |  |
+| 112 | [ContextAttnBloom.md](ContextAttnBloom.md) | 26 | 2 | 26 | 6 |  |
 | 112 | [FastRopeEmbedding.md](FastRopeEmbedding.md) | 13 | 0 | 65 | 8 |  |
+| 109 | [ContextAttnLlama.md](ContextAttnLlama.md) | 25 | 2 | 26 | 6 |  |
 | 108 | [ChunkedCumsumFwd.md](ChunkedCumsumFwd.md) | 11 | 1 | 72 | 2 |  |
+| 106 | [ContextAttnFwd.md](ContextAttnFwd.md) | 24 | 2 | 26 | 6 |  |
 | 106 | [RotaryTransformOps.md](RotaryTransformOps.md) | 12 | 0 | 64 | 6 |  |
 | 103 | [FusedRecurrentHgrn.md](FusedRecurrentHgrn.md) | 16 | 0 | 52 | 3 |  |
 | 100 | [RotaryTransform.md](RotaryTransform.md) | 12 | 0 | 58 | 6 |  |

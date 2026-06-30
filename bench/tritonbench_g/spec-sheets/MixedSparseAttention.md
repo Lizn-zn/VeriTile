@@ -652,8 +652,3 @@ noncomputable def msaColLaneBGS (Cols : Region .nat) (ColCounts : Region .nat)
   else 0
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `mixed_sparse_attention_output_store_slice_compute_correct`
-- `mixed_sparse_attention_output_store_python_block64_compute_correct`
-- `mixed_sparse_attention_output_store_python_block32_compute_correct`

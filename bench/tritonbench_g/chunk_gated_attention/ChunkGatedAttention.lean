@@ -674,31 +674,6 @@ theorem chunk_gated_attention_final_state_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-theorem chunk_gated_attention_python_h_state_offset_injective
-    (s : BlockState) (i_t : Fin 4) :
-    Function.Injective
-      (fun idx : TileIndex [16, 16] =>
-        hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx) := by
-  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp [hStateOffset, kIndexState, vIndexState] at h
-  have hk : ka = kb := by omega
-  have hv : va = vb := by omega
-  subst kb
-  subst vb
-  rfl
-
-theorem chunk_gated_attention_python_final_state_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [16, 16] => finalStateOffset s 32 32 16 16 idx) := by
-  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
-  simp [finalStateOffset, kIndexFinal, vIndexFinal] at h
-  have hk : ka = kb := by omega
-  have hv : va = vb := by omega
-  subst kb
-  subst vb
-  rfl
-
 def cumSurfaceTIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
   s.pids 1 * BT + i.val
 

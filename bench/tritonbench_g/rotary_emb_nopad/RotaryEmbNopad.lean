@@ -44,9 +44,8 @@ fused-v2 KV-cache + Q writeback track:
   fused_rotary_v2_q_first/second_half_store_slice_compute_correct → *_correct
 ```
 
-Offset injectivity/disjointness is supplied by
-`rotary_nopad_python_q_first/second_offset_injective`,
-`rotary_nopad_python_q_offsets_disjoint`, and the matching `k_*` lemmas.
+Offset injectivity/disjointness (for both the `q_*` and `k_*` families) is
+taken as hypotheses of the main theorem.
 
 ## Modeling boundary
 
@@ -2100,70 +2099,13 @@ theorem rotary_embedding_k_surface_k1_compute_correct
     hOutDisjoint hExec idx
   simpa [hActive] using h
 
-/-! ## Python test-shape wrappers -/
-
-theorem rotary_nopad_python_q_first_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [4, 1, 32] =>
-        qFullFirstOffset s 512 64 1 4 idx) := by
-  intro a b h
-  simp [qFullFirstOffset] at h
-  ext <;> omega
-
-theorem rotary_nopad_python_q_second_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [4, 1, 32] =>
-        qFullSecondOffset s 512 64 1 4 32 idx) := by
-  intro a b h
-  simp [qFullSecondOffset] at h
-  ext <;> omega
-
-theorem rotary_nopad_python_q_offsets_disjoint
-    (s : BlockState) :
-    ∀ idx idx' : TileIndex [4, 1, 32],
-      qFullFirstOffset s 512 64 1 4 idx ≠
-        qFullSecondOffset s 512 64 1 4 32 idx' := by
-  intro idx idx' h
-  simp [qFullFirstOffset, qFullSecondOffset] at h
-  omega
-
-theorem rotary_nopad_python_k_first_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [4, 1, 32] =>
-        kFullFirstOffset s 256 64 1 2 4 idx) := by
-  intro a b h
-  simp [kFullFirstOffset] at h
-  ext <;> omega
-
-theorem rotary_nopad_python_k_second_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [4, 1, 32] =>
-        kFullSecondOffset s 256 64 1 2 4 32 idx) := by
-  intro a b h
-  simp [kFullSecondOffset] at h
-  ext <;> omega
-
-theorem rotary_nopad_python_k_offsets_disjoint
-    (s : BlockState) :
-    ∀ idx idx' : TileIndex [4, 1, 32],
-      kFullFirstOffset s 256 64 1 2 4 idx ≠
-        kFullSecondOffset s 256 64 1 2 4 32 idx' := by
-  intro idx idx' h
-  simp [kFullFirstOffset, kFullSecondOffset] at h
-  omega
-
 /-- **Dimension-general public output summary for `rotary_emb_nopad.py`**
 (genuine, not self-referential).
 
 Every token count, head count, KV-group count, head-dim half, block size, and
 stride is a `Nat` parameter rather than a pinned Python literal, and the per-lane
 output-offset injectivity / first-vs-second-half disjointness side-conditions
-are taken as hypotheses (`rotary_nopad_python_q/k_*_offset_injective` /
-`_offsets_disjoint` discharge them at concrete shapes).
+are taken as hypotheses of the main theorem.
 
 For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus
 the conditional GQA-leader K stores) lowers to the algorithm layer, and all

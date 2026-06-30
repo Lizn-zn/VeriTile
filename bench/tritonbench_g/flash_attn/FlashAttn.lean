@@ -56,7 +56,7 @@ flash_attn_l_store_slice_compute_correct           ← L store (max + log2 denom
   └─ flash_attn_l_store_slice_correct
 flash_attn_fwd_kernel_surface_toAlgorithm_supported      surface lowers to the algorithm layer
 ```
-(Offset injectivity discharged by `flash_attn_python_{output,l}_offset_injective`.)
+(Offset injectivity is taken as hypotheses of the main theorem.)
 
 ## Scope status
 
@@ -443,54 +443,6 @@ theorem flash_attn_l_store_slice_compute_correct
     stride_max_m stride_den_h stride_den_m SEQLEN BLOCK_M s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
-
-theorem flash_attn_python_output_offset_injective
-    (s : BlockState) :
-    Function.Injective
-      (fun idx : TileIndex [128, 64] => outOffset s 8192 64 1 128 idx) := by
-  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, mIndex, dIndex] at h
-  have hm : ma = mb := by omega
-  have hd : da = db := by omega
-  subst mb
-  subst db
-  rfl
-
-theorem flash_attn_python_l_offset_injective
-    (s : BlockState) :
-    Function.Injective (fun i : Fin 128 => lOffset s 128 128 i) := by
-  intro a b h
-  simp [lOffset, mIndex] at h
-  exact Fin.ext h
-
-theorem flash_attn_python_output_store_compute_correct
-    (OutBuffer O : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_output_store_slice OutBuffer O
-        8192 64 1 8192 64 1 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem OutBuffer
-              (bufferOffset s 8192 64 1 128 idx))))) := by
-  exact flash_attn_output_store_slice_compute_correct OutBuffer O
-    8192 64 1 8192 64 1 128 64 s
-    (flash_attn_python_output_offset_injective s)
-
-theorem flash_attn_python_l_store_compute_correct
-    (Max Denom L : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i =>
-        lStoreSpec s Max Denom 128 1 128 1 128 i) := by
-  exact flash_attn_l_store_slice_compute_correct Max Denom L
-    128 1 128 1 128 128 s
-    (flash_attn_python_l_offset_injective s)
 
 /-- The base-2 log-of-`e` constant the kernel folds into `qk_scale`
 (`q = (q · sm_scale · 1.44269504).to(fp16)`). This is the *exact decimal literal*
