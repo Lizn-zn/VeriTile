@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 141 kernels, 241 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 240 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -41,6 +41,7 @@
 | 88 | [LightningAttention.md](LightningAttention.md) | 12 | 6 | 42 | 4 |  |
 | 86 | [KvCacheFilling.md](KvCacheFilling.md) | 11 | 0 | 51 | 2 |  |
 | 82 | [RopeBackwardTransform.md](RopeBackwardTransform.md) | 13 | 0 | 41 | 2 |  |
+| 79 | [FastCeLoss.md](FastCeLoss.md) | 9 | 2 | 45 | 5 |  |
 | 78 | [TokenAttnMistral.md](TokenAttnMistral.md) | 14 | 0 | 31 | 5 |  |
 | 76 | [DestindexCopy.md](DestindexCopy.md) | 8 | 0 | 49 | 3 |  |
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
@@ -59,7 +60,6 @@
 | 65 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 2 | 34 | 5 |  |
 | 65 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 2 | 34 | 5 |  |
 | 63 | [ContextAttnNopad.md](ContextAttnNopad.md) | 14 | 0 | 15 | 6 |  |
-| 63 | [FastCeLoss.md](FastCeLoss.md) | 11 | 0 | 29 | 1 |  |
 | 60 | [MatmulLeakyrelu.md](MatmulLeakyrelu.md) | 13 | 2 | 15 | 4 |  |
 | 60 | [MatmulLeakyreluFp8.md](MatmulLeakyreluFp8.md) | 13 | 2 | 15 | 4 |  |
 | 59 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 3 | 21 | 5 |  |
