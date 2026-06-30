@@ -34,17 +34,17 @@ three separate dimension-general top results (each symbolic in the block sizes
 
 forward kernel:
   fwd_decay_cumsum_full_surface_closed_general              ← TOP THEOREM (forward)
-       └─ fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
+       └─ fwd_decay_cumsum_surface_toAlgorithm_supported
 
 prepare kernel:
   prepare_qg_kg_full_surface_qg_closed_general             ← TOP THEOREM (prepare, qg)
   prepare_qg_kg_full_surface_kg_closed_general             ← TOP THEOREM (prepare, kg)
-       └─ prepare_qg_kg_python_test_surface_toAlgorithm_supported
+       └─ prepare_qg_kg_surface_toAlgorithm_supported
 
 backward kernel:
-  decay_cumsum_backward_python_test_shape_closed_output_summary_general  ← TOP THEOREM (backward)
+  decay_cumsum_backward_closed_output_summary_general  ← TOP THEOREM (backward)
        (realizes genuine closed forms bwdDQInterClosed / bwdDKInterClosed / bwdDGClosed)
-       └─ bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
+       └─ bwd_decay_global_cumsum_surface_toAlgorithm_supported
 
 each top result is the symbolic statement; the concrete Python shape is a
 recovered special case.
@@ -76,7 +76,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `decay_cumsum_backward_python_test_shape_closed_output_summary_general` -/
+/-! **★ Main theorem:** `decay_cumsum_backward_closed_output_summary_general` -/
 
 section Correct
 
@@ -768,38 +768,6 @@ theorem bwd_decay_cumsum_dg_store_slice_compute_correct
         bwdDecayCumsumSpec s DGPre s_qk_h DK t_rel BT BK i) := by
   exact bwd_decay_cumsum_store_slice_compute_correct DGPre DG
     s_qk_h DK t_rel BT BK s
-
-/-! ## Python test-shape wrappers
-
-`decay_cumsum.py`'s checked test uses `B = 2`, `H = 2`, `T = 4`, `DK = 8`,
-`BT = 2`, and `BK = 4`. The Python launch helpers pass `s_qk_h = H * T * DK =
-64`. The wrappers below specialize the row slices to either loop row
-`t_rel : Fin 2`. -/
-
-theorem fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
-    (G GO : RegionName) :
-    ∃ alg, (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0
-      2 4 8).toAlgorithm? = Except.ok alg := by
-  exact fwd_decay_cumsum_surface_toAlgorithm_supported G GO
-    64 32 8 2 2 4 1.0 2 4 8
-
-theorem prepare_qg_kg_python_test_surface_toAlgorithm_supported
-    (Q K G QG KG : RegionName) :
-    ∃ alg, (prepare_qg_kg_surface Q K G QG KG 64 8 2 4
-      1.0).toAlgorithm? = Except.ok alg := by
-  exact prepare_qg_kg_surface_toAlgorithm_supported Q K G QG KG
-    64 8 2 4 1.0
-
-theorem bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
-    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) :
-    (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
-      64 8 2 4).toAlgorithm? =
-      Except.ok
-        (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
-          Q K G DG 64 8 2 4).toAlgKernel := by
-  exact bwd_decay_global_cumsum_surface_toAlgorithm_supported DQInner DQInter
-    DKInner DKInter Q K G DG 64 8 2 4
-
 
 /-- **Genuine forward closed form.** At chunk row `t_rel` and lane `i`, the
 forward decay-cumsum kernel writes the scaled prefix sum
@@ -2710,9 +2678,9 @@ The three genuine closed forms above (`bwdDQInterClosed`, `bwdDKInterClosed`,
 `bwdDGClosed`) are the honest, non self-referential specifications that replace
 the (now-deleted) `decayBackwardSurfaceValue`. They are connected to the executed
 `bwd_decay_global_cumsum_surface` in
-`decay_cumsum_backward_python_test_shape_closed_output_summary_general` (and its three
-faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct` /
-`bwd_decay_cumsum_dg_closed_compute_correct`) at the end of this file, following
+`decay_cumsum_backward_closed_output_summary_general` (and its three
+faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct_general` /
+`bwd_decay_cumsum_dg_closed_compute_correct_general`) at the end of this file, following
 the **forward** closed-form recipe (`fwd_decay_cumsum_full_surface_row{0,1}_closed`),
 but the backward
 loop body is ~25 statements with a conditional `last_g` capture and three masked
@@ -7004,7 +6972,7 @@ theorem bwd_decay_cumsum_dg_closed_compute_correct_general :
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General `output_summary`.** The executed backward surface realizes all three
 genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). -/
-theorem decay_cumsum_backward_python_test_shape_closed_output_summary_general :
+theorem decay_cumsum_backward_closed_output_summary_general :
     (ComputeCorrect.Realizes
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)

@@ -7,9 +7,8 @@
 <details><summary>docstring</summary>
 
 ```
-/-- **Dimension-general single-chunk output summary.** Subsumes the per-shape
-`reversed_cumsum_python_case{1,2,3}_output_summary` (which differ only in the
-concrete `s_s_h s_s_t s_s_d T S BT BS` numerals) at fully symbolic dimensions.
+/-- **Dimension-general single-chunk output summary.** Holds at fully symbolic
+dimensions (arbitrary `s_s_h s_s_t s_s_d T S BT BS`).
 For any single-chunk shape (`T ≤ BT`, so the reverse loop runs once with carry
 `b_z = 0`), the full reverse-traversal surface lowers to the algorithm layer, and
 the faithful single-chunk surface writes into every active lane `(i, j)` the
@@ -181,23 +180,3 @@ def sIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
 - `reversed_cumsum_cumsum_slice_compute_correct`
 - `reversed_cumsum_store_slice_active_compute_correct`
 - `reversed_cumsum_cumsum_slice_active_compute_correct`
-- `reversed_cumsum_store_python_case1_compute_correct`
-- `reversed_cumsum_cumsum_python_case1_compute_correct`
-- `reversed_cumsum_store_python_case2_compute_correct`
-- `reversed_cumsum_cumsum_python_case2_compute_correct`
-- `reversed_cumsum_store_python_case3_compute_correct`
-- `reversed_cumsum_cumsum_python_case3_compute_correct`
-- `reversed_cumsum_store_python_case4_compute_correct`
-- `reversed_cumsum_cumsum_python_case4_compute_correct`
-- `reversed_cumsum_python_case1_all_outputs_compute_correct`
-- `reversed_cumsum_python_case2_all_outputs_compute_correct`
-- `reversed_cumsum_python_case3_all_outputs_compute_correct`
-- `reversed_cumsum_python_case4_all_outputs_compute_correct`
-- `reversed_cumsum_python_case1_store_summary`
-- `reversed_cumsum_python_case1_output_summary`
-- `reversed_cumsum_python_case2_store_summary`
-- `reversed_cumsum_python_case2_output_summary`
-- `reversed_cumsum_python_case3_store_summary`
-- `reversed_cumsum_python_case3_output_summary`
-- `reversed_cumsum_python_case4_store_summary`
-- `reversed_cumsum_python_case4_output_summary`

@@ -10,8 +10,7 @@
 /-- **Dimension-general public output summary for `rotary_transform_ops.py`**
 (genuine, not self-referential).
 
-This is the symbolic-dimension companion of
-`rotary_transform_ops_python_output_summary`: every sequence length, rotary
+Every sequence length, rotary
 dimension, block size, and stride is a `Nat` parameter rather than a pinned
 Python literal, and the per-lane output-offset injectivity plus the
 `stride_out_headdim ≠ 0` / `BLOCK_HALF ≤ rotary_dim_half` disjointness
@@ -419,10 +418,6 @@ def x1Offset
 </details>
 
 ## Also present (pinned special-case summaries)
-- `rotary_kernel_o0_row_compute_correct`
-- `rotary_kernel_o1_row_compute_correct`
 - `rotary_kernel_o0o1_row_o0_compute_correct`
 - `rotary_kernel_o0o1_row_o1_compute_correct`
 - `rotary_kernel_o0o1_row_all_outputs_compute_correct`
-- `rotary_transform_ops_python_surfaces_store_summary`
-- `rotary_transform_ops_python_output_summary`

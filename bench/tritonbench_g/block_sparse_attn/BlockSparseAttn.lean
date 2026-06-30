@@ -30,7 +30,7 @@ grid.
 ## Proof architecture
 
 ```
-block_sparse_attn_python_case1_output_closed_form_summary                ← TOP (EVEN_M = EVEN_N = true)
+block_sparse_attn_output_closed_form_summary_general                     ← TOP (dimension-general; EVEN_M = EVEN_N = true)
   ├─ bsa_exec                                       full surface exec → streaming accumulators
   │    ├─ bsaPreLoop_eval                           prologue → bsaInvariant 0 (+ start_l/end_l regs)
   │    ├─ bsa_csr_loop (per-block bsaLoopBody step)  forRangeDyn driver: bsaInvariant c → c+1
@@ -54,9 +54,9 @@ two masked `out` stores) is unfolded statement-by-statement and proven to write
 active output lane. The CSR sparsity schedule itself — which key blocks the loop
 visits (`start_l`/`end_l`, the per-block selection/load alignment `hstep`, and
 first-key causal visibility `hVis0`) — is the trusted host boundary, supplied as
-hypotheses of the summary. The case-1 summary fixes the concrete layout
-`(B,H,M,D) = (2,4,16,32)` with `NUM_D_BLOCKS = 2` and `EVEN_M = EVEN_N = true`;
-the `EVEN_M = EVEN_N = false` masked-load variant (`test_case_2`) reuses a
+hypotheses of the summary. The general summary holds at arbitrary tile dims and
+strides with `NUM_D_BLOCKS = 2` and `EVEN_M = EVEN_N = true`;
+the `EVEN_M = EVEN_N = false` masked-load Python variant reuses a
 different lowered body and is out of scope here.
 
 ## Genuine closed-form spec
@@ -65,14 +65,12 @@ different lowered body and is out of scope here.
 for one program's output: the causal natural-exp softmax attention
 (`tl.exp`, not `exp2`) of the program's query tile against the key/value rows the
 CSR layout selects (`selKeyGlobal`), under grouped-query head mapping
-(`offHkv`). The top summary `block_sparse_attn_python_case1_output_closed_form_summary`
+(`offHkv`). The top summary `block_sparse_attn_output_closed_form_summary_general`
 proves **sorry-free** that the two masked `out` stores write this closed form to
-`Out` at every active lane, via `bsa_exec` (the full execution chain) composed
-with `bsa_streaming_eq_closedForm` (the streaming online-softmax recurrence over
+`Out` at every active lane, via `bsa_execG` (the full execution chain) composed
+with `bsa_streaming_eq_closedFormG` (the streaming online-softmax recurrence over
 the CSR-selected, causally-masked key blocks collapses to the gathered causal
-softmax). The store recipes `block_sparse_attn_{first,second}_output_closed_form`
-provide the same result from a precomputed accumulator under the loop-fill
-contract `hFill`. The self-referential `produced…Value` carriers are retired.
+softmax). The self-referential `produced…Value` carriers are retired.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
@@ -2728,114 +2726,6 @@ theorem bsa_streaming_eq_closedForm
     2048 512 32 1024 512 32 1024 512 32 (s.pids 1 % 4 % 1) 4 start_l numKVBlocks 32 16 16 16
     dBlockBase 1.0 i d
 
-set_option maxHeartbeats 4000000 in
-/-- `test_case_1` in `block_sparse_attn.py` (`EVEN_M = EVEN_N = true`, the
-contiguous/full-block case) at the Python shape `(B,H,M,D) = (2,4,16,32)`,
-`NUM_D_BLOCKS = 2`. The full faithful `block_sparse_attention_kernel` surface
-(prologue + the CSR `forRangeDyn` online-softmax loop + the two masked `out`
-stores) **realizes the genuine causal block-sparse softmax closed form**
-`blockSparseAttnClosedForm` at every active output lane — the natural-exp softmax
-attention of the program's query tile against the CSR-selected key/value rows
-(`selKeyGlobal`), causally masked on the global key position, under grouped-query
-head mapping. The two stores write the two D-blocks (`dBlockBase = 0` / `16`).
-
-This is **not** the self-referential executed value: the streaming
-`m_i`/`l_i`/`acc`/`acc2` recurrence is unfolded statement-by-statement
-(`bsa_exec`) and proven to collapse to the closed form (`bsa_streaming_eq_closedForm`,
-via `bsaStreaming_eq_bsaAttn` ∘ `bsaAttn_eq_blockSparseAttnClosedForm`). The CSR
-sparsity schedule (`start_l`/`end_l` row-pointer window, the per-block selection +
-load alignment `hstep`, and first-key causal visibility `hVis0`) is the trusted
-host boundary, supplied as hypotheses. -/
-theorem block_sparse_attn_python_case1_output_closed_form_summary
-    (Out Q K V : RegionName) (R C : Region .nat) (s : BlockState)
-    (hundef : ∀ rg o, s.undef rg o = 0)
-    (start_l end_l : Nat)
-    (hStartL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0) = start_l)
-    (hEndL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0 + 1) = end_l)
-    (hsle : start_l ≤ end_l) (hN : 0 < end_l - start_l)
-    (hVis0 : ∀ idx : TileIndex [16, 16], active s 16 16 idx →
-      selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 0 ≤ s.pids 0 * 16 + idx.1.val)
-    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
-      bsaInvariant Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
-          (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
-          (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
-          (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
-            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
-          (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
-          (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-            (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
-          1.0 s (i - start_l) st →
-      ∃ st', stepStmts (bsaLoopBody C) (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
-        ∧ bsaInvariant Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
-            (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
-            (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
-            (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
-              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
-            (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
-            (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-              (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
-            1.0 s (i - start_l + 1) st') :
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V R C
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
-          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 0 1.0 idx.1 idx.2.1.val)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := block_sparse_attention_kernel Out Q K V R C
-        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
-        4 2 16 16 16 16 2 Bool.true Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
-        (fun idx : TileIndex [16, 16] => (Out, out2Offset s 4 2048 512 32 16 16 idx)))
-      (expected := fun idx : TileIndex [16, 16] =>
-        blockSparseAttnClosedForm s Q K V C 4 2 2048 512 32 1024 512 32 1024 512 32
-          (s.pids 1 % 4 % 1) 4 start_l (end_l - start_l) 32 16 16 16 1.0 idx.1 idx.2.1.val)) := by
-  obtain ⟨sF, hstepK, hOut, hOut2⟩ :=
-    bsa_exec Out Q K V R C (s.pids 0 * 16) (end_l - start_l)
-      (fun r : Fin (16 * (end_l - start_l)) => selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 r.val)
-      (fun jx : TileIndex [16, 32] => qTileBSA s Q 4 2048 512 32 16 jx.1 jx.2.1.val)
-      (fun jx : TileIndex [16 * (end_l - start_l), 32] => kRowBSA s K 4 2 1024 512 32
-        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) jx.2.1.val)
-      (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (0 + jx.2.1.val))
-      (fun jx : TileIndex [16 * (end_l - start_l), 16] => vRowBSA s V 4 2 1024 512 32
-        (selKeyGlobal s C (s.pids 1 % 4 % 1) 4 start_l 16 jx.1.val) (16 + jx.2.1.val))
-      1.0 s hundef start_l end_l hStartL hEndL rfl hsle hstep
-  constructor
-  · -- first D-block store (dBlockBase = 0)
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hActive
-    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
-    obtain rfl : sF = s' := Option.some.inj hExec
-    simp only [ComputeCorrect.OutputReadable.read_real]
-    rw [hOut idx, if_pos (show s.pids 0 * 16 + idx.1.val < 16 from hActive)]
-    exact bsa_streaming_eq_closedForm s Q K V C (end_l - start_l) hN start_l 0 idx (hVis0 idx hActive)
-  · -- second D-block store (dBlockBase = 16)
-    rw [ComputeCorrect.realizes_writeIf_iff]
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro idx hActive
-    rw [show exec _ s = stepStmts _ s from rfl, hstepK] at hExec
-    obtain rfl : sF = s' := Option.some.inj hExec
-    simp only [ComputeCorrect.OutputReadable.read_real]
-    rw [hOut2 idx, if_pos (show s.pids 0 * 16 + idx.1.val < 16 from hActive)]
-    exact bsa_streaming_eq_closedForm s Q K V C (end_l - start_l) hN start_l 16 idx (hVis0 idx hActive)
-
 /-! ## Symbolic-dimension exec stack (`…G`)
 
 The pinned exec stack above (`bsaInvariant`/`bsaPreLoop_eval`/`bsa_csr_loop`/
@@ -4039,11 +3929,10 @@ online-softmax loop + the two masked `out` stores) **realizes the genuine causal
 block-sparse softmax closed form** `blockSparseAttnClosedForm` at every active
 output lane, for both D-blocks (`dBlockBase = 0` / `BLOCK_D`).
 
-This is the symbolic-dimension generalization of
-`block_sparse_attn_python_case1_output_closed_form_summary` (which is the instance
-`BLOCK_M=BLOCK_N=BLOCK_D=16`, `num_heads=4`, `num_kv_heads=2`, strides
-`2048/512/32/1024`, `num_layout=1`, row/col CSR strides `3`/`4`,
-`total_seq_len=16`).
+This is the symbolic-dimension generalization of the former case-1 Python-shape
+summary (the instance `BLOCK_M=BLOCK_N=BLOCK_D=16`, `num_heads=4`,
+`num_kv_heads=2`, strides `2048/512/32/1024`, `num_layout=1`, row/col CSR strides
+`3`/`4`, `total_seq_len=16`).
 
 Honest side-conditions: clean undef (`hundef`); the CSR row-pointer window
 (`hStartL`/`hEndL`/`hsle`) with a nonempty window (`hN`); positivity of the block

@@ -27,12 +27,10 @@ The genuine recurrence specs (`stateValue`, `vNewValue`, `hValue`, `finalValue`)
 are the closed forms over the **input** memory `k`/`v`/`d`/`initial_state`, never
 an exec-readback. The producer hypotheses are honest explicit hypotheses on the
 producer buffers (the same KIND of assumption as the `chunk_cumsum` carry
-invariant); for the two checked Python shapes they are *discharged end-to-end
-from the kernel `exec` with no producer hypotheses* by
-`chunk_delta_fwd_python_case{1,2}_output_summary` below (which call
-`chunk_delta_fwd_exec_genuine`). This headline statement carries **no concrete
-dimension literals**: it is the genuine dimension-generalization of the recurrence
-store faces. -/
+invariant); they are *discharged end-to-end from the kernel `exec` with no
+producer hypotheses* by `chunk_delta_fwd_exec_genuine`. This headline statement
+carries **no concrete dimension literals**: it is the genuine
+dimension-generalization of the recurrence store faces. -/
 ```
 </details>
 
@@ -516,7 +514,3 @@ noncomputable def dElem (s : BlockState) (d : RegionName)
   s.readMem d (s.pids 2 * s_qk_h + (i_t * BT + c) * s_qk_t + e * s_qk_d)
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `chunk_delta_fwd_python_case1_output_summary`
-- `chunk_delta_fwd_python_case2_output_summary`

@@ -19,9 +19,7 @@ realizes the genuine, self-reference-free PV-reduction closed form
 Honest side-conditions only: `0 < BLOCK_N`, the contiguous
 layout hyps `stride_pbs = 1` / `stride_req_to_tokens_s = 1` (faithful to the
 checked test's contiguous `Prob`/`Req_to_tokens`), output-offset injectivity
-`hOutInj`, and a clean `undef` state `hundef`. The four `python_case*` theorems
-below are thin corollaries instantiating the concrete (dims, sliding_window,
-stride_req_to_tokens_b). -/
+`hOutInj`, and a clean `undef` state `hundef`. -/
 ```
 </details>
 
@@ -333,14 +331,5 @@ def reqIdx (s : BlockState) (B_req_idx : RegionName) : Nat :=
 
 ## Also present (pinned special-case summaries)
 - `token_attn_mistral_final_store_slice_compute_correct`
-- `token_attn_mistral_final_store_python_test_shape_compute_correct`
 - `token_attn_mistral_closed_form_correct`
 - `token_attn_mistral_closed_form_compute_correct`
-- `token_attn_mistral_python_case1_output_surface_summary`
-- `token_attn_mistral_python_case2_output_surface_summary`
-- `token_attn_mistral_python_case3_output_surface_summary`
-- `token_attn_mistral_python_case4_output_surface_summary`
-- `token_attn_mistral_python_case1_output_summary`
-- `token_attn_mistral_python_case2_output_summary`
-- `token_attn_mistral_python_case3_output_summary`
-- `token_attn_mistral_python_case4_output_summary`

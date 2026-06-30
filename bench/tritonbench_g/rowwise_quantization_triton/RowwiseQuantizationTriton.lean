@@ -24,14 +24,11 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-quantize_rowwise_python_case{1,3}_blocked_output_summary       ← TOP THEOREMS
+quantize_rowwise_blocked_output_summary_general                ← TOP THEOREM (dimension-general)
   ├─ quantize_rowwise_real_surface_toAlgorithm_blocked         faithful surface blocked at erasure (llrint)
-  └─ quantize_rowwise_python_case{1,3}_all_outputs_compute_correct
-       ├─ quantize_rowwise_python_case{1,3}_scaled_output_compute_correct  scaled row output
-       │    └─ quantize_rowwise_scaled_store_slice_compute_correct   ← ComputeCorrect over the masked row store
-       │         └─ quantize_rowwise_scaled_store_slice_correct       ← algorithm-layer readback per lane
-       └─ quantize_rowwise_python_output_maxs_compute_correct    per-row max writeback
-            └─ quantize_rowwise_max_store_slice_compute_correct  ← ComputeCorrect over the output_maxs scalar store
+  ├─ quantize_rowwise_scaled_store_slice_compute_correct       ← ComputeCorrect over the masked row store (scaled row output)
+  │    └─ quantize_rowwise_scaled_store_slice_correct          ← algorithm-layer readback per lane
+  └─ quantize_rowwise_max_store_slice_compute_correct          ← ComputeCorrect over the output_maxs scalar store (per-row max)
 ```
 
 The pre-rounding spec is `scale127 · (x i / max_val)` per lane
@@ -209,39 +206,6 @@ theorem quantize_rowwise_max_store_slice_compute_correct
   subst s'
   simp [ComputeCorrect.WriteMap.scalar, maxOffset, quantizeRowwiseMaxSpec]
 
-/-- Python case 1: `x.shape=(2,3)`, `BLOCK_SIZE=3`, `P2=4`,
-`n_elements=6`. This proves the real-valued scaled row output before CUDA
-`llrint`/int8 casting. -/
-theorem quantize_rowwise_python_case1_scaled_output_compute_correct
-    (x_ptr output_ptr MaxVals : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        6 3 4 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 4 => i.val < 3)
-          (fun i => (output_ptr, offset s 3 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i) := by
-  exact quantize_rowwise_scaled_store_slice_compute_correct x_ptr output_ptr
-    MaxVals 6 3 4 127.0 s
-
-/-- Python case 3: `x.shape=(2,5)`, `BLOCK_SIZE=5`, `P2=8`,
-`n_elements=10`. -/
-theorem quantize_rowwise_python_case3_scaled_output_compute_correct
-    (x_ptr output_ptr MaxVals : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        10 5 8 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 8 => i.val < 5)
-          (fun i => (output_ptr, offset s 5 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i) := by
-  exact quantize_rowwise_scaled_store_slice_compute_correct x_ptr output_ptr
-    MaxVals 10 5 8 127.0 s
-
 theorem quantize_rowwise_python_output_maxs_compute_correct
     (MaxVals output_maxs : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -251,113 +215,6 @@ theorem quantize_rowwise_python_output_maxs_compute_correct
       (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals) := by
   exact quantize_rowwise_max_store_slice_compute_correct MaxVals output_maxs s
 
-/-- Python case 1 all-output coverage: scaled row output plus the per-row
-`output_maxs` writeback. -/
-theorem quantize_rowwise_python_case1_all_outputs_compute_correct
-    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        6 3 4 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 4 => i.val < 3)
-          (fun i => (output_ptr, offset s 3 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
-      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals)) := by
-  constructor
-  · exact quantize_rowwise_python_case1_scaled_output_compute_correct
-      x_ptr output_ptr MaxVals s
-  · exact quantize_rowwise_python_output_maxs_compute_correct
-      MaxVals output_maxs s
-
-/-- Python case 3 all-output coverage: scaled row output plus the per-row
-`output_maxs` writeback. -/
-theorem quantize_rowwise_python_case3_all_outputs_compute_correct
-    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        10 5 8 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 8 => i.val < 5)
-          (fun i => (output_ptr, offset s 5 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
-      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals)) := by
-  constructor
-  · exact quantize_rowwise_python_case3_scaled_output_compute_correct
-      x_ptr output_ptr MaxVals s
-  · exact quantize_rowwise_python_output_maxs_compute_correct
-      MaxVals output_maxs s
-
-/-- Public Python case 1 summary for rowwise quantization.
-
-The faithful surface is intentionally recorded as blocked at algorithm erasure
-by CUDA `llrint`. The accompanying proof slices cover the real-valued scaled
-output before backend rounding/cast and the per-row `output_maxs` writeback. -/
-theorem quantize_rowwise_python_case1_blocked_output_summary
-    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
-    (∃ err,
-      (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
-        6 3 4).toAlgorithm? = Except.error err) ∧
-    ((ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        6 3 4 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 4 => i.val < 3)
-          (fun i => (output_ptr, offset s 3 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
-      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals))) := by
-  constructor
-  · exact quantize_rowwise_real_surface_toAlgorithm_blocked
-      x_ptr output_ptr output_maxs 6 3 4
-  · exact quantize_rowwise_python_case1_all_outputs_compute_correct
-      x_ptr output_ptr MaxVals output_maxs s
-
-/-- Public Python case 3 summary for rowwise quantization.
-
-As in case 1, this keeps the faithful `llrint` blocker explicit while exposing
-the checked real-valued scaled output and `output_maxs` proof slices. -/
-theorem quantize_rowwise_python_case3_blocked_output_summary
-    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
-    (∃ err,
-      (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
-        10 5 8).toAlgorithm? = Except.error err) ∧
-    ((ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
-        10 5 8 127.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin 8 => i.val < 5)
-          (fun i => (output_ptr, offset s 5 i)))
-      (expected := fun i =>
-        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
-      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals))) := by
-  constructor
-  · exact quantize_rowwise_real_surface_toAlgorithm_blocked
-      x_ptr output_ptr output_maxs 10 5 8
-  · exact quantize_rowwise_python_case3_all_outputs_compute_correct
-      x_ptr output_ptr MaxVals output_maxs s
-
 /-- **Dimension-general blocked output summary.** For arbitrary `_n_elements`,
 `BLOCK_SIZE`, padded width `P2`, and real scale `scale127` (and any program id in
 `s`), the faithful full surface is recorded as **blocked** at algorithm erasure
@@ -365,9 +222,8 @@ theorem quantize_rowwise_python_case3_blocked_output_summary
 expression), while the checked proof slices realize the genuine pre-rounding
 scaled row output `scale127 * (x / max_val)` (`quantizeRowwiseScaledSpec`) at
 every in-range lane and the per-row `output_maxs` writeback
-(`quantizeRowwiseMaxSpec`). The pinned
-`quantize_rowwise_python_case{1,3}_blocked_output_summary` theorems are concrete
-instantiations of this (with `scale127 = 127.0`). The `max(|x|)` reduction is
+(`quantizeRowwiseMaxSpec`). This holds over arbitrary (symbolic) dimensions and
+`scale127`. The `max(|x|)` reduction is
 taken as the precomputed `MaxVals` input; the `llrint` rounding / int8 cast
 remain the honest, unmodeled blocker. -/
 theorem quantize_rowwise_blocked_output_summary_general

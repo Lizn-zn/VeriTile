@@ -325,7 +325,3 @@ def rowMod (s : BlockState) (seqlen : Nat) : Nat :=
 ## Also present (pinned special-case summaries)
 - `rope_embedding_q_first_half_compute_correct`
 - `rope_embedding_q_second_half_compute_correct`
-- `rope_embedding_python_test_shape_first_half_compute_correct`
-- `rope_embedding_python_test_shape_second_half_compute_correct`
-- `rope_embedding_python_test_shape_all_outputs_compute_correct`
-- `rope_embedding_python_test_shape_surface_output_summary`

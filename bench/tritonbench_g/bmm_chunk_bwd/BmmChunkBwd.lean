@@ -1442,49 +1442,51 @@ theorem bmm_chunk_bwd_closed_form_correct
   rw [hExec] at hmain
   exact hmain
 
-/-! ## Public Python test-shape summary (genuine spec)
+/-! ## Public dimension-general summary (genuine spec)
 
-Python test case 1 (ungrouped, no residual) is the pure batched-matmul-backward
-configuration. Layout: `a = (2,128,64)` fp16, `dout = (2,4,32,32)` fp16,
-`out = empty_like(a) = (2,128,64)`. So `chunk_size = 32`, `K = 64`, `ngroups = 1`,
-`seqlen = 128`, `nchunks = 4`. The contracted dimension is the chunk size: with
-`BLOCK_SIZE_CS = 32`, `numCSBlocks = 1` so `CSL = 32`.
-
-Strides (row-major):
-* `a`: `(8192, 64, _, 1)` → `stride_a_batch=8192, stride_a_seqlen=64, stride_ak=1`.
-* `dout = (2,4,32,32)`: strides `(4096, 1024, 32, 1)` →
-  `stride_dout_batch=4096, stride_dout_chunk=1024, stride_dout_csize_m=32,
-   stride_dout_csize_n=1`.
-* `out = (2,128,64)`: `(8192, 64, _, 1)` →
-  `stride_db_batch=8192, stride_db_seqlen=64, stride_db_k=1`. -/
-
-/-- **Python case 1 summary** (ungrouped, no residual: `chunk_size=32`, `K=64`,
-`ngroups=1`; `BLOCK_SIZE_CS=32`, `numCSBlocks=1`, `CSL=32`): the genuine batched
-matmul-backward surface lowers to the algorithm layer and realizes the
-per-program matrix-product backward `Σ_{cs<32} Dout[i,cs]·A[cs,j]` on every
+The single public correctness summary, stated over fully symbolic dimensions:
+arbitrary `chunk_size`, `K`, `ngroups`, tile dims `BM`/`BN`, all strides, the
+CS-block size `BCS` and CS-block count `numCSBlocks` (so the contracted bound is
+`CSL = BCS · numCSBlocks`). It bundles algorithm-layer lowering with the genuine
+per-program matrix-product backward `Σ_{cs<BCS·numCSBlocks} Dout[i,cs]·A[cs,j]`
+read from INPUT memory (never from the executed result), realized on every
 in-bounds output lane. -/
-theorem bmm_chunk_bwd_python_case1_summary
-    (A Dout Db : RegionName) (s : BlockState) (BM BN : Nat)
-    (hInj : Function.Injective (dbOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-      32 8192 64 0 1 (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN) BM BN))
-    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) 64 BN) BM i < 32)
-    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) 64 BN) BN j < 64)
+
+/-- **Dimension-general output summary** for `bmm_chunk_bwd` (batched
+matmul-backward). For arbitrary `chunk_size`, `K`, `ngroups`, tile dims `BM`/`BN`,
+strides, CS-block size `BCS` and count `numCSBlocks` (contracted bound
+`CSL = BCS·numCSBlocks`): the genuine surface lowers to the algorithm layer and
+realizes the per-program matrix-product backward
+`Σ_{cs<BCS·numCSBlocks} Dout[i,cs]·A[cs,j]` (read from input memory) on every
+in-bounds output lane. Preconditions: `0 < BCS`; tile rows/cols in-bounds
+(`PM·BM+i < CSL` and `< chunk_size`, `PN·BN+j < K`); output-address injectivity;
+clean initial `undef`. -/
+theorem bmm_chunk_bwd_output_summary_general
+    (A Dout Db : RegionName) (s : BlockState)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K : Nat) (hBCS : 0 < BCS)
+    (hInj : Function.Injective (dbOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+      chunk_size SOB SOS SOH SOK (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN))
+    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) K BN) BM i < BCS * numCSBlocks)
+    (hmlt' : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) K BN) BM i < chunk_size)
+    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) K BN) BN j < K)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (bbwd_matmul_surface A Dout Db 32 32 64 1 8192 64 0 1
-        4096 1024 0 32 1 8192 64 0 1 BM BN 32).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := bbwd_matmul_surface A Dout Db 32 32 64 1 8192 64 0 1
-        4096 1024 0 32 1 8192 64 0 1 BM BN 32)
+      (kernel := bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>
-        some (Db, dbOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          32 8192 64 0 1 (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN) BM BN idx))
+        some (Db, dbOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          chunk_size SOB SOS SOH SOK (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN idx))
       (expected := fun idx : TileIndex [BM, BN] =>
-        dbCell s Dout A (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN)
-          32 BM BN 4096 1024 0 1 32 8192 64 0 1 32 1 idx) := by
-  refine ⟨bbwd_matmul_surface_toAlgorithm_supported A Dout Db 32 32 64 1 8192 64 0 1 4096 1024 0 32 1 8192 64 0 1 BM BN 32, ?_⟩
-  exact bmm_chunk_bwd_closed_form_correct A Dout Db s 32 1 8192 64 0 1 4096 1024 0 32 1 8192 64 0 1 BM BN 32 1 64
-    (by norm_num) hInj hmlt hmlt hnlt hundef
+        dbCell s Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN)
+          chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks idx) := by
+  refine ⟨bbwd_matmul_surface_toAlgorithm_supported A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+    SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS, ?_⟩
+  exact bmm_chunk_bwd_closed_form_correct A Dout Db s chunk_size ngroups
+    SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K
+    hBCS hInj hmlt hmlt' hnlt hundef
 
 end VeriTile.Bench.TritonBenchG.BmmChunkBwd

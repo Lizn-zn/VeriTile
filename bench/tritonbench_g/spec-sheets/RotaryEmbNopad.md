@@ -10,14 +10,11 @@
 /-- **Dimension-general public output summary for `rotary_emb_nopad.py`**
 (genuine, not self-referential).
 
-Symbolic-dimension companion of
-`rotary_nopad_python_case1_all_outputs_surface_summary`: every token count,
-head count, KV-group count, head-dim half, block size, and stride is a `Nat`
-parameter rather than a pinned Python literal, and the per-lane
+Every token count, head count, KV-group count, head-dim half, block size, and
+stride is a `Nat` parameter rather than a pinned Python literal, and the per-lane
 output-offset injectivity / first-vs-second-half disjointness side-conditions
-are taken as hypotheses (the concrete-shape variants
-`rotary_nopad_python_q/k_*_offset_injective` / `_offsets_disjoint` discharge
-them at the Python case-1 shape).
+are taken as hypotheses (`rotary_nopad_python_q/k_*_offset_injective` /
+`_offsets_disjoint` discharge them at concrete shapes).
 
 For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus
 the conditional GQA-leader K stores) lowers to the algorithm layer, and all
@@ -569,4 +566,3 @@ def cosFullOffset
 - `rotary_embedding_q_surface_q1_compute_correct`
 - `rotary_embedding_k_surface_k0_compute_correct`
 - `rotary_embedding_k_surface_k1_compute_correct`
-- `rotary_nopad_python_case1_all_outputs_surface_summary`

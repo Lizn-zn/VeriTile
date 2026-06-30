@@ -8,8 +8,7 @@
 
 ```
 /-- **Dimension-general public Python summary for `rotary_emb_fwd`.**
-The pinned `rotary_emb_python_case{1,2,3,4}_output_summary` theorems are
-concrete-shape instantiations of this theorem: for arbitrary symbolic strides,
+For arbitrary symbolic strides,
 sequence length, head counts, and block sizes, the full `_rotary_kernel` surface
 lowers to the algorithm layer and each of the four Python-observable stores
 (Q even/odd, K even/odd) reads back, on every active lane, to the genuine
@@ -217,11 +216,3 @@ def headIndex (s : BlockState) : Nat :=
 - `rotary_emb_k0_block_compute_correct`
 - `rotary_emb_k1_block_compute_correct`
 - `rotary_emb_python_shape_all_outputs_compute_correct`
-- `rotary_emb_python_case1_all_outputs_compute_correct`
-- `rotary_emb_python_case2_all_outputs_compute_correct`
-- `rotary_emb_python_case3_all_outputs_compute_correct`
-- `rotary_emb_python_case4_all_outputs_compute_correct`
-- `rotary_emb_python_case1_output_summary`
-- `rotary_emb_python_case2_output_summary`
-- `rotary_emb_python_case3_output_summary`
-- `rotary_emb_python_case4_output_summary`

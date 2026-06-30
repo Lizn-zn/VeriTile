@@ -2,44 +2,51 @@
 
 **Python source:** `bench/tritonbench_g/bmm_chunk_bwd/bmm_chunk_bwd.py`
 
-## Public theorem: `bmm_chunk_bwd_python_case1_summary`
+## Public theorem: `bmm_chunk_bwd_output_summary_general`
 
 <details><summary>docstring</summary>
 
 ```
-/-- **Python case 1 summary** (ungrouped, no residual: `chunk_size=32`, `K=64`,
-`ngroups=1`; `BLOCK_SIZE_CS=32`, `numCSBlocks=1`, `CSL=32`): the genuine batched
-matmul-backward surface lowers to the algorithm layer and realizes the
-per-program matrix-product backward `Σ_{cs<32} Dout[i,cs]·A[cs,j]` on every
-in-bounds output lane. -/
+/-- **Dimension-general output summary** for `bmm_chunk_bwd` (batched
+matmul-backward). For arbitrary `chunk_size`, `K`, `ngroups`, tile dims `BM`/`BN`,
+strides, CS-block size `BCS` and count `numCSBlocks` (contracted bound
+`CSL = BCS·numCSBlocks`): the genuine surface lowers to the algorithm layer and
+realizes the per-program matrix-product backward
+`Σ_{cs<BCS·numCSBlocks} Dout[i,cs]·A[cs,j]` (read from input memory) on every
+in-bounds output lane. Preconditions: `0 < BCS`; tile rows/cols in-bounds
+(`PM·BM+i < CSL` and `< chunk_size`, `PN·BN+j < K`); output-address injectivity;
+clean initial `undef`. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-theorem bmm_chunk_bwd_python_case1_summary
-    (A Dout Db : RegionName) (s : BlockState) (BM BN : Nat)
-    (hInj : Function.Injective (dbOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-      32 8192 64 0 1 (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN) BM BN))
-    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) 64 BN) BM i < 32)
-    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) 64 BN) BN j < 64)
+theorem bmm_chunk_bwd_output_summary_general
+    (A Dout Db : RegionName) (s : BlockState)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K : Nat) (hBCS : 0 < BCS)
+    (hInj : Function.Injective (dbOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+      chunk_size SOB SOS SOH SOK (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN))
+    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) K BN) BM i < BCS * numCSBlocks)
+    (hmlt' : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) K BN) BM i < chunk_size)
+    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) K BN) BN j < K)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (bbwd_matmul_surface A Dout Db 32 32 64 1 8192 64 0 1
-        4096 1024 0 32 1 8192 64 0 1 BM BN 32).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := bbwd_matmul_surface A Dout Db 32 32 64 1 8192 64 0 1
-        4096 1024 0 32 1 8192 64 0 1 BM BN 32)
+      (kernel := bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>
-        some (Db, dbOffset (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          32 8192 64 0 1 (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN) BM BN idx))
+        some (Db, dbOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          chunk_size SOB SOS SOH SOK (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN idx))
       (expected := fun idx : TileIndex [BM, BN] =>
-        dbCell s Dout A (s.pids 1) (pidC (s.pids 2) 1) (pidH (s.pids 2) 1)
-          (pidM (s.pids 0) 64 BN) (pidN (s.pids 0) 64 BN)
-          32 BM BN 4096 1024 0 1 32 8192 64 0 1 32 1 idx)
+        dbCell s Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN)
+          chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks idx)
 ```
 
 **Assumptions / layout contracts:**
+- `hBCS : 0 < BCS`
 - `hundef : ∀ rg o, s.undef rg o = 0`
 
 **Closed-form spec defs (transitive):** `dbOffset`, `pidC`, `pidH`, `pidM`, `pidN`, `rowIndex`, `colIndex`, `bbwd_matmul_surface`, `dbCell`, `numPidN`, `cdiv`, `bbwdSpec`, `doutElem`, `aElem`, `doutOff`, `batchOff`

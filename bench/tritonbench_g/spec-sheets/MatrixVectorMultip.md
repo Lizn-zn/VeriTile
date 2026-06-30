@@ -61,7 +61,7 @@ Bundles the two genuine obligations at fully symbolic dimensions
 The single honest side-condition is output-offset injectivity
 (`hOutInj`): distinct block rows must map to distinct `C` slots, which
 holds for any nonzero `stride_cn` (and in particular the contiguous
-Python strides, via `mv_kernel_python_stride1_output_offset_injective`). -/
+Python strides). -/
 ```
 ```lean
 abbrev mv_kernel_general_prop
@@ -189,8 +189,3 @@ noncomputable def mvProdTile
 
 ## Also present (pinned special-case summaries)
 - `mv_kernel_one_block_compute_correct`
-- `mv_kernel_python_case2_one_block_compute_correct`
-- `mv_kernel_python_case3_one_block_compute_correct`
-- `mv_kernel_python_case2_output_summary`
-- `mv_kernel_python_case3_output_summary`
-- `mv_kernel_python_test_shape_complete_summary`

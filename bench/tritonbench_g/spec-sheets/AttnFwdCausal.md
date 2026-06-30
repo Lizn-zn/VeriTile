@@ -366,4 +366,3 @@ noncomputable def vTileAFCG (s : BlockState) (V : RegionName)
 
 ## Also present (pinned special-case summaries)
 - `attn_fwd_causal_final_store_slice_compute_correct`
-- `attn_fwd_causal_python_test_shape_output_summary`

@@ -54,8 +54,7 @@ flash_attn_output_store_slice_compute_correct      ← O store (out_buffer / den
   └─ flash_attn_output_store_slice_correct           algorithm-layer readback per lane
 flash_attn_l_store_slice_compute_correct           ← L store (max + log2 denom), genuine readback
   └─ flash_attn_l_store_slice_correct
-flash_attn_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
-flash_attn_python_case{i}_store_summary                   package the genuine store-only facts
+flash_attn_fwd_kernel_surface_toAlgorithm_supported      surface lowers to the algorithm layer
 ```
 (Offset injectivity discharged by `flash_attn_python_{output,l}_offset_injective`.)
 
@@ -492,120 +491,6 @@ theorem flash_attn_python_l_store_compute_correct
   exact flash_attn_l_store_slice_compute_correct Max Denom L
     128 1 128 1 128 128 s
     (flash_attn_python_l_offset_injective s)
-
-/-- Python case 1 full surface lowering: causal forward attention for
-`B=2,H=2,SEQLEN=128,DIM=64`, `BLOCK_M=128`, `BLOCK_N=64`. -/
-theorem flash_attn_python_case1_surface_toAlgorithm_supported
-    (Q K V L O : RegionName) :
-    ∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact flash_attn_fwd_kernel_surface_toAlgorithm_supported Q K V L O (1.0 : ℝ)
-    16384 8192 64 1
-    16384 8192 64 1
-    16384 8192 64 1
-    16384 8192 64 1
-    2 2 128 128 64 64 Bool.true
-
-/-- Python case 2 full surface lowering: non-causal forward attention for the
-same checked layout. -/
-theorem flash_attn_python_case2_surface_toAlgorithm_supported
-    (Q K V L O : RegionName) :
-    ∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact flash_attn_fwd_kernel_surface_toAlgorithm_supported Q K V L O (1.0 : ℝ)
-    16384 8192 64 1
-    16384 8192 64 1
-    16384 8192 64 1
-    16384 8192 64 1
-    2 2 128 128 64 64 Bool.false
-
-/-- Python case 1 store-slice coverage retained for the final-store proof. -/
-theorem flash_attn_python_case1_store_summary
-    (Q K V L O OutBuffer Max Denom : RegionName) (s : BlockState) :
-    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_output_store_slice OutBuffer O
-        8192 64 1 8192 64 1 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem OutBuffer
-              (bufferOffset s 8192 64 1 128 idx)))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i =>
-        lStoreSpec s Max Denom 128 1 128 1 128 i)) := by
-  constructor
-  · exact flash_attn_python_case1_surface_toAlgorithm_supported Q K V L O
-  constructor
-  · exact flash_attn_python_output_store_compute_correct OutBuffer O s
-  · exact flash_attn_python_l_store_compute_correct Max Denom L s
-
-/-- Python case 2 store-slice coverage retained for the final-store proof. -/
-theorem flash_attn_python_case2_store_summary
-    (Q K V L O OutBuffer Max Denom : RegionName) (s : BlockState) :
-    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_output_store_slice OutBuffer O
-        8192 64 1 8192 64 1 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem OutBuffer
-              (bufferOffset s 8192 64 1 128 idx)))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i =>
-        lStoreSpec s Max Denom 128 1 128 1 128 i)) := by
-  constructor
-  · exact flash_attn_python_case2_surface_toAlgorithm_supported Q K V L O
-  constructor
-  · exact flash_attn_python_output_store_compute_correct OutBuffer O s
-  · exact flash_attn_python_l_store_compute_correct Max Denom L s
-
-/-! ## Genuine closed-form output spec (replaces the self-referential summary)
-
-The kernel's online-softmax recurrence computes a base-2 attention closed form
-over the loaded Q/K/V tiles, with the scale `qk_scale = sm_scale · log2(e)`
-folded into `q`. These definitions give the genuine `expected` `O`-store value —
-defined over the loaded tiles, **not** the kernel's own executed output — for the
-two Python cases. The streaming-softmax math heart that justifies them
-(online-softmax fold == batch base-2 softmax, causal and non-causal) is proved
-sorry-free in `VeriTile/Triton/Math/Attention.lean`. -/
-
-open VeriTile.Triton (attentionRealBase2PerKeyScale attentionRealBase2PerKeyScaleCausal)
 
 /-- The base-2 log-of-`e` constant the kernel folds into `qk_scale`
 (`q = (q · sm_scale · 1.44269504).to(fp16)`). This is the *exact decimal literal*
@@ -3970,65 +3855,6 @@ theorem flash_attn_genuine_l_compute_correct
   simp only [ComputeCorrect.OutputReadable.read_real]
   rw [show lOffset s 128 128 i = s.pids 1 * 128 + (s.pids 0 * 128 + i.val) from rfl]
   exact hLrb i
-
-/-- **Python case 1 (causal) genuine closed-form correctness.** The full
-FlashAttention kernel's `O` store realizes the causal base-2 attention
-(`flashAttnOValueSpecCausal`) and its `L` store realizes the causal log-sum-exp,
-at the checked Python grid (`start_m = 0`). -/
-theorem flash_attn_python_case1_genuine_compute_correct
-    (Q K V L O : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] => some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-          (some (flashAttnOValueSpecCausal s Q K V (1.0 : ℝ) 8192 64 128 128 idx))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        Real.log
-          (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
-              (vTile s V 8192 64 128) (1.0 * log2e) Bool.true (s.pids 0 * 128) 128 i
-              ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2)) :=
-  ⟨flash_attn_genuine_output_compute_correct Q K V L O s Bool.true hpid0 hOL hundef,
-   flash_attn_genuine_l_compute_correct Q K V L O s Bool.true hpid0 hOL hundef⟩
-
-/-- **Python case 2 (non-causal) genuine closed-form correctness.** The `O` store
-realizes the full base-2 attention (`flashAttnOValueSpec`, every key contributes)
-and the `L` store realizes the full log-sum-exp. -/
-theorem flash_attn_python_case2_genuine_compute_correct
-    (Q K V L O : RegionName) (s : BlockState)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] => some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-          (some (flashAttnOValueSpec s Q K V (1.0 : ℝ) 8192 64 128 128 idx))))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        Real.log
-          (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
-              (vTile s V 8192 64 128) (1.0 * log2e) Bool.false (s.pids 0 * 128) 128 i
-              ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2)) :=
-  ⟨flash_attn_genuine_output_compute_correct Q K V L O s Bool.false hpid0 hOL hundef,
-   flash_attn_genuine_l_compute_correct Q K V L O s Bool.false hpid0 hOL hundef⟩
 
 /-! ## GENERAL (dimension-parameterized) exec-side closed-form correctness
 

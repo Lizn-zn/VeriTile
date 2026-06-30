@@ -450,7 +450,3 @@ noncomputable def h0Val (s : BlockState) (h0 : RegionName)
 - `fused_recurrent_rwkv6_state_step_slice_compute_correct`
 - `fused_recurrent_rwkv6_output_step_slice_compute_correct`
 - `fused_recurrent_rwkv6_final_state_store_slice_compute_correct`
-- `fused_recurrent_rwkv6_python_test_case1_output_summary`
-- `fused_recurrent_rwkv6_python_test_case2_output_summary`
-- `fused_recurrent_rwkv6_python_test_case3_output_summary`
-- `fused_recurrent_rwkv6_python_test_case4_output_summary`

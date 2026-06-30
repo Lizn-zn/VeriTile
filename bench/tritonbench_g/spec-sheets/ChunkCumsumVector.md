@@ -7,8 +7,8 @@
 <details><summary>docstring</summary>
 
 ```
-/-- **Dimension-general single-chunk output summary.** Subsumes the per-shape
-`chunk_cumsum_vector_python_case{1,2,3}_output_summary` (which differ only in the
+/-- **Dimension-general single-chunk output summary.** Subsumes the former
+per-shape Python-case summaries (which differed only in the
 concrete `s_s_h s_s_t s_s_d T S BT BS` numerals) at fully symbolic dimensions.
 For any single-Python-chunk shape (`T ≤ BT`, so the loop runs once with carry
 `= 0`), the single-block `S → Z` surface realizes the genuine per-column global
@@ -71,15 +71,3 @@ def sIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
 - `chunk_cumsum_vector_cumsum_slice_compute_correct`
 - `chunk_cumsum_vector_store_slice_active_compute_correct`
 - `chunk_cumsum_vector_cumsum_slice_active_compute_correct`
-- `chunk_cumsum_vector_single_block_python_case1_compute_correct`
-- `chunk_cumsum_vector_single_block_python_case2_compute_correct`
-- `chunk_cumsum_vector_single_block_python_case3_compute_correct`
-- `chunk_cumsum_vector_store_python_case1_compute_correct`
-- `chunk_cumsum_vector_cumsum_python_case1_compute_correct`
-- `chunk_cumsum_vector_store_python_case2_compute_correct`
-- `chunk_cumsum_vector_cumsum_python_case2_compute_correct`
-- `chunk_cumsum_vector_store_python_case3_compute_correct`
-- `chunk_cumsum_vector_cumsum_python_case3_compute_correct`
-- `chunk_cumsum_vector_python_case1_slice_summary`
-- `chunk_cumsum_vector_python_case2_slice_summary`
-- `chunk_cumsum_vector_python_case3_slice_summary`

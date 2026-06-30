@@ -12,8 +12,7 @@
 `sQ`/`sDY`), the forward surface lowers and both forward half-kernels realize the
 genuine rotary specs `ropeFirst/SecondSpec` on `Q`, and symmetrically the backward
 surface lowers and both backward half-kernels realize `ropeBackwardFirst/SecondSpec`
-on `dY` — under the honest offset-injectivity side conditions. The pinned
-`..._python_case{1,2,3,4}_*` summaries are concrete instantiations of this. -/
+on `dY` — under the honest offset-injectivity side conditions. -/
 ```
 </details>
 
@@ -136,25 +135,5 @@ def colIndex (i : Fin BLOCK_SIZE) : Nat :=
 - `rope_embedding_backward_second_half_compute_correct`
 - `rope_embedding_python_base_first_half_compute_correct`
 - `rope_embedding_python_base_second_half_compute_correct`
-- `rope_embedding_python_case1_first_half_compute_correct`
-- `rope_embedding_python_case1_second_half_compute_correct`
-- `rope_embedding_python_case2_first_half_compute_correct`
-- `rope_embedding_python_case2_second_half_compute_correct`
-- `rope_embedding_python_case3_first_half_compute_correct`
-- `rope_embedding_python_case3_second_half_compute_correct`
-- `rope_embedding_python_case4_first_half_compute_correct`
-- `rope_embedding_python_case4_second_half_compute_correct`
 - `rope_embedding_python_base_backward_first_half_compute_correct`
 - `rope_embedding_python_base_backward_second_half_compute_correct`
-- `rope_embedding_python_case1_backward_first_half_compute_correct`
-- `rope_embedding_python_case1_backward_second_half_compute_correct`
-- `rope_embedding_python_case2_backward_first_half_compute_correct`
-- `rope_embedding_python_case2_backward_second_half_compute_correct`
-- `rope_embedding_python_case3_backward_first_half_compute_correct`
-- `rope_embedding_python_case3_backward_second_half_compute_correct`
-- `rope_embedding_python_case4_backward_first_half_compute_correct`
-- `rope_embedding_python_case4_backward_second_half_compute_correct`
-- `rope_embedding_python_case1_forward_backward_summary`
-- `rope_embedding_python_case2_forward_backward_summary`
-- `rope_embedding_python_case3_forward_backward_summary`
-- `rope_embedding_python_case4_forward_backward_summary`

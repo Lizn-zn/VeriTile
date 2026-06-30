@@ -985,74 +985,34 @@ theorem matmul_triton2_closed_form_correct
   rw [hExec2, if_pos hActive] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_real] using hmain
 
-/-! ## Python test cases -/
+/-! ## Public dimension-general output summary -/
 
-/-- Python case 1 (`256×256 @ 256×256`, config `(128,256,64,8)`, `c.stride=(256,1)`)
-output-offset injectivity. -/
-theorem matmul_triton2_python_case1_cOffset_injective (s : BlockState) :
-    Function.Injective (cOffset s 256 256 128 256 8 256 1) := by
-  intro a b h
-  simp only [cOffset, rowIndex, colIndex] at h
-  ext <;> omega
-
-/-- Python case 2 (`64×64 @ 64×64`, config `(32,64,32,8)`, `c.stride=(64,1)`)
-output-offset injectivity. -/
-theorem matmul_triton2_python_case2_cOffset_injective (s : BlockState) :
-    Function.Injective (cOffset s 64 64 32 64 8 64 1) := by
-  intro a b h
-  simp only [cOffset, rowIndex, colIndex] at h
-  ext <;> omega
-
-/-- Python case 1 full surface lowering: `256×256 @ 256×256`. -/
-theorem matmul_triton2_python_case1_surface_toAlgorithm_supported (A B C : RegionName) :
-    ∃ alg, (matmul_triton2_surface A B C
-      256 256 256 256 1 256 1 256 1 128 256 64 8).toAlgorithm? = Except.ok alg :=
-  matmul_triton2_surface_toAlgorithm_supported A B C 256 256 256 256 1 256 1 256 1 128 256 64 8
-
-/-- Python case 2 full surface lowering: `64×64 @ 64×64`. -/
-theorem matmul_triton2_python_case2_surface_toAlgorithm_supported (A B C : RegionName) :
-    ∃ alg, (matmul_triton2_surface A B C
-      64 64 64 64 1 64 1 64 1 32 64 32 8).toAlgorithm? = Except.ok alg :=
-  matmul_triton2_surface_toAlgorithm_supported A B C 64 64 64 64 1 64 1 64 1 32 64 32 8
-
-/-- **Public Python case 1 summary**: the full `256×256` matmul surface realizes
-the genuine matrix product `Σ_{k<256} A[i,k]·B[k,j]` on every active output lane
-(`BLOCK_K = 64`, `numKBlocks = 4`, so `K = 256`). -/
-theorem matmul_triton2_python_case1_output_summary
-    (A B C : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_triton2_surface A B C 256 256 256 256 1 256 1 256 1 128 256 64 8).toAlgorithm?
-        = Except.ok alg) ∧
+/-- **Public dimension-general summary**: for arbitrary matrix dims `M`/`N`, tile
+dims `BM`/`BN`, group size `GM`, strides, K-block size `BK` (`0 < BK`), and
+K-block count `numKBlocks` (so `K = BK · numKBlocks`), the full `matmul_triton2`
+surface (1) lowers to the algorithm layer and (2) realizes the genuine matrix
+product `Σ_{k < BK·numKBlocks} A[i,k]·B[k,j]` (over ℝ, reading INPUT memory) on
+every active output lane. The `expected` is the closed-form `matmulSpec`, NOT the
+kernel's own executed value. -/
+theorem matmul_triton2_output_summary_general
+    (A B C : RegionName) (s : BlockState)
+    (M N BM BN GM SAM SAK SBK SBN SCM SCN BK numKBlocks : Nat) (hBK : 0 < BK)
+    (hInj : Function.Injective (cOffset s M N BM BN GM SCM SCN))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
+        BM BN BK GM).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := matmul_triton2_surface A B C 256 256 256 256 1 256 1 256 1 128 256 64 8)
+      (kernel := matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
+        BM BN BK GM)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (active s 256 256 128 256 8)
-        (fun idx => (C, cOffset s 256 256 128 256 8 256 1 idx)))
-      (expected := fun idx : TileIndex [128, 256] =>
-        matmulSpec s A B 256 256 128 256 8 256 1 256 1 64 4 idx.1 idx.2.1) := by
-  refine ⟨matmul_triton2_python_case1_surface_toAlgorithm_supported A B C, ?_⟩
-  have h := matmul_triton2_closed_form_correct A B C s 256 256 128 256 8 256 1 256 1 256 1 64 4
-    (by norm_num) (matmul_triton2_python_case1_cOffset_injective s) hundef
-  simpa using h
-
-/-- **Public Python case 2 summary**: the full `64×64` matmul surface realizes the
-genuine matrix product `Σ_{k<64} A[i,k]·B[k,j]` on every active output lane
-(`BLOCK_K = 32`, `numKBlocks = 2`, so `K = 64`). -/
-theorem matmul_triton2_python_case2_output_summary
-    (A B C : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (∃ alg, (matmul_triton2_surface A B C 64 64 64 64 1 64 1 64 1 32 64 32 8).toAlgorithm?
-        = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := matmul_triton2_surface A B C 64 64 64 64 1 64 1 64 1 32 64 32 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 64 64 32 64 8)
-        (fun idx => (C, cOffset s 64 64 32 64 8 64 1 idx)))
-      (expected := fun idx : TileIndex [32, 64] =>
-        matmulSpec s A B 64 64 32 64 8 64 1 64 1 32 2 idx.1 idx.2.1) := by
-  refine ⟨matmul_triton2_python_case2_surface_toAlgorithm_supported A B C, ?_⟩
-  have h := matmul_triton2_closed_form_correct A B C s 64 64 32 64 8 64 1 64 1 64 1 32 2
-    (by norm_num) (matmul_triton2_python_case2_cOffset_injective s) hundef
-  simpa using h
+        (active s M N BM BN GM)
+        (fun idx => (C, cOffset s M N BM BN GM SCM SCN idx)))
+      (expected := fun idx : TileIndex [BM, BN] =>
+        matmulSpec s A B M N BM BN GM SAM SAK SBK SBN BK numKBlocks idx.1 idx.2.1) :=
+  ⟨matmul_triton2_surface_toAlgorithm_supported A B C M N (BK * numKBlocks) SAM SAK SBK SBN
+      SCM SCN BM BN BK GM,
+   matmul_triton2_closed_form_correct A B C s M N BM BN GM SAM SAK SBK SBN SCM SCN BK numKBlocks
+      hBK hInj hundef⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulTriton2

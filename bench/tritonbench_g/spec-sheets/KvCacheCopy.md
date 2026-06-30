@@ -9,7 +9,7 @@
 ```
 /-- **Dimension-general** old-layout (`seqlen1`, single x-block) summary.
 
-Symbolic-dimension version of `kv_cache_copy_python_case1_all_outputs_summary`:
+Over arbitrary (symbolic) dimensions:
 the surface lowers, the legacy K-cache writeback covers the whole head in one
 x-block, and the V-cache writeback realizes its strides. Offset-injectivity for
 the K and V cache stores is supplied as hypotheses. -/
@@ -334,7 +334,7 @@ def seqlen1PastKvSeqLen (s : BlockState) (context_lengths : RegionName) : Nat :=
 ```
 /-- **Dimension-general** split-x (new layout) summary.
 
-Symbolic-dimension version of `kv_cache_copy_python_case2_all_outputs_summary`:
+Over arbitrary (symbolic) dimensions:
 the surface lowers, every `split_x` partition's K-cache writeback realizes its
 x-block, and the V-cache writeback realizes its strides. Per-`split_x`
 K-cache offset-injectivity and the V-cache offset-injectivity are hypotheses. -/
@@ -666,5 +666,3 @@ def seqlen1PastKvSeqLen (s : BlockState) (context_lengths : RegionName) : Nat :=
 - `copy_to_kcache_new_layout_xblock_compute_correct`
 - `copy_to_vcache_seqlen1_dblock_compute_correct`
 - `copy_to_vcache_one_dblock_compute_correct`
-- `kv_cache_copy_python_case1_all_outputs_summary`
-- `kv_cache_copy_python_case2_all_outputs_summary`

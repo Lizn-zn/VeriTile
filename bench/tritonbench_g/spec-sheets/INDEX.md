@@ -1,18 +1,19 @@
 # Spec-sheet index
 
-- 141 kernels, 279 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 141 kernels, 266 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first).
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
 | 306 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 30 | 4 | 136 | 76 |  |
+| 300 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 10 | 0 | 246 | 24 |  |
+| 296 | [FlashAttn.md](FlashAttn.md) | 21 | 3 | 183 | 47 |  |
 | 273 | [TritonAttention.md](TritonAttention.md) | 36 | 7 | 123 | 35 |  |
 | 267 | [ContextAttnLlama.md](ContextAttnLlama.md) | 43 | 4 | 115 | 19 |  |
 | 264 | [ContextAttnBloom.md](ContextAttnBloom.md) | 42 | 4 | 115 | 19 |  |
 | 261 | [ContextAttnFwd.md](ContextAttnFwd.md) | 41 | 4 | 115 | 19 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
-| 201 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 15 | 0 | 136 | 20 |  |
 | 177 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
 | 172 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 3 | 79 | 15 |  |
 | 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
@@ -29,8 +30,6 @@
 | 114 | [SoftmaxReducev.md](SoftmaxReducev.md) | 22 | 1 | 39 | 8 |  |
 | 112 | [FastRopeEmbedding.md](FastRopeEmbedding.md) | 13 | 0 | 65 | 8 |  |
 | 108 | [ChunkedCumsumFwd.md](ChunkedCumsumFwd.md) | 11 | 1 | 72 | 2 |  |
-| 108 | [TokenSoftmaxBloom.md](TokenSoftmaxBloom.md) | 12 | 0 | 64 | 8 |  |
-| 108 | [TokenSoftmaxLlama.md](TokenSoftmaxLlama.md) | 12 | 0 | 64 | 8 |  |
 | 106 | [RotaryTransformOps.md](RotaryTransformOps.md) | 12 | 0 | 64 | 6 |  |
 | 103 | [FusedRecurrentHgrn.md](FusedRecurrentHgrn.md) | 16 | 0 | 52 | 3 |  |
 | 100 | [RotaryTransform.md](RotaryTransform.md) | 12 | 0 | 58 | 6 |  |
@@ -39,11 +38,8 @@
 | 93 | [KldivOps.md](KldivOps.md) | 9 | 0 | 58 | 8 |  |
 | 92 | [AttnFwdCausal.md](AttnFwdCausal.md) | 17 | 2 | 30 | 9 |  |
 | 92 | [AttnFwdTriton.md](AttnFwdTriton.md) | 17 | 2 | 30 | 9 |  |
-| 92 | [ChunkGlaSimple.md](ChunkGlaSimple.md) | 13 | 5 | 44 | 4 |  |
-| 89 | [BmmChunkFwd.md](BmmChunkFwd.md) | 15 | 2 | 40 | 2 |  |
 | 88 | [LightningAttention.md](LightningAttention.md) | 12 | 6 | 42 | 4 |  |
 | 86 | [KvCacheFilling.md](KvCacheFilling.md) | 11 | 0 | 51 | 2 |  |
-| 85 | [FlashAttn.md](FlashAttn.md) | 11 | 0 | 52 | 0 |  |
 | 82 | [RopeBackwardTransform.md](RopeBackwardTransform.md) | 13 | 0 | 41 | 2 |  |
 | 78 | [TokenAttnMistral.md](TokenAttnMistral.md) | 14 | 0 | 31 | 5 |  |
 | 77 | [CrossEntropy2.md](CrossEntropy2.md) | 13 | 0 | 37 | 1 |  |
@@ -51,22 +47,23 @@
 | 76 | [DestindexCopy.md](DestindexCopy.md) | 8 | 0 | 49 | 3 |  |
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
 | 75 | [LayerNormLiger.md](LayerNormLiger.md) | 10 | 0 | 38 | 7 |  |
+| 74 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 2 | 22 | 2 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 10 | 1 | 34 | 7 |  |
-| 71 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 2 | 20 | 1 |  |
+| 71 | [BmmChunkFwd.md](BmmChunkFwd.md) | 15 | 2 | 22 | 2 |  |
 | 70 | [QuantizeCopyKv.md](QuantizeCopyKv.md) | 12 | 1 | 29 | 4 |  |
 | 70 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 12 | 1 | 29 | 4 |  |
 | 68 | [ContextAttnMistral.md](ContextAttnMistral.md) | 16 | 0 | 14 | 6 |  |
 | 68 | [MatmulTritonAutotune.md](MatmulTritonAutotune.md) | 15 | 2 | 17 | 4 |  |
-| 67 | [MatmulTriton2.md](MatmulTriton2.md) | 13 | 2 | 24 | 2 |  |
+| 66 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 12 | 0 | 27 | 3 |  |
 | 66 | [TokenAttnReduceV.md](TokenAttnReduceV.md) | 11 | 0 | 27 | 6 |  |
 | 65 | [AttentionScore.md](AttentionScore.md) | 12 | 2 | 23 | 4 |  |
+| 65 | [ChunkGlaSimple.md](ChunkGlaSimple.md) | 13 | 5 | 16 | 5 |  |
 | 63 | [ContextAttnNopad.md](ContextAttnNopad.md) | 14 | 0 | 15 | 6 |  |
 | 63 | [FastCeLoss.md](FastCeLoss.md) | 11 | 0 | 29 | 1 |  |
 | 62 | [CrossEntropy1.md](CrossEntropy1.md) | 11 | 0 | 28 | 1 |  |
 | 60 | [MatmulLeakyrelu.md](MatmulLeakyrelu.md) | 13 | 2 | 15 | 4 |  |
 | 60 | [MatmulLeakyreluFp8.md](MatmulLeakyreluFp8.md) | 13 | 2 | 15 | 4 |  |
 | 59 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 3 | 21 | 5 |  |
-| 59 | [DequantizeRowwise.md](DequantizeRowwise.md) | 2 | 1 | 48 | 4 |  |
 | 58 | [AttentionFwdTriton1.md](AttentionFwdTriton1.md) | 7 | 0 | 32 | 5 |  |
 | 58 | [GegluTanhTriton.md](GegluTanhTriton.md) | 3 | 0 | 40 | 9 |  |
 | 58 | [SwigluTriton.md](SwigluTriton.md) | 3 | 0 | 40 | 9 |  |
@@ -77,10 +74,12 @@
 | 53 | [KcacheCopyTriton.md](KcacheCopyTriton.md) | 8 | 0 | 27 | 2 |  |
 | 53 | [LayernormFwdTriton.md](LayernormFwdTriton.md) | 8 | 0 | 25 | 4 |  |
 | 52 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 25 | 0 |  |
+| 52 | [TokenSoftmaxLlama.md](TokenSoftmaxLlama.md) | 9 | 0 | 22 | 3 |  |
 | 51 | [AttentionForwardTriton.md](AttentionForwardTriton.md) | 8 | 0 | 24 | 3 |  |
 | 51 | [EmbeddingTritonKernel.md](EmbeddingTritonKernel.md) | 10 | 0 | 17 | 4 |  |
 | 50 | [ApplyPenalty.md](ApplyPenalty.md) | 8 | 1 | 23 | 2 |  |
 | 50 | [RmsnormImplementation.md](RmsnormImplementation.md) | 6 | 2 | 25 | 5 |  |
+| 50 | [TokenSoftmaxBloom.md](TokenSoftmaxBloom.md) | 9 | 0 | 21 | 2 |  |
 | 47 | [L2NormTriton2.md](L2NormTriton2.md) | 6 | 1 | 26 | 2 |  |
 | 46 | [DestindexCopyKv1.md](DestindexCopyKv1.md) | 7 | 0 | 22 | 3 |  |
 | 46 | [DestindexCopyKv2.md](DestindexCopyKv2.md) | 7 | 0 | 22 | 3 |  |
@@ -97,6 +96,7 @@
 | 40 | [TritonConv2dFwd.md](TritonConv2dFwd.md) | 8 | 0 | 13 | 3 |  |
 | 40 | [VarLenCopy.md](VarLenCopy.md) | 1 | 0 | 32 | 5 |  |
 | 39 | [FifthOrderSphHarmonics.md](FifthOrderSphHarmonics.md) | 6 | 0 | 18 | 3 |  |
+| 39 | [MatmulTriton2.md](MatmulTriton2.md) | 9 | 0 | 9 | 3 |  |
 | 39 | [ReversedCumsum.md](ReversedCumsum.md) | 6 | 0 | 18 | 3 |  |
 | 38 | [AdamUpdateTriton.md](AdamUpdateTriton.md) | 3 | 0 | 26 | 3 |  |
 | 38 | [LogSoftmax.md](LogSoftmax.md) | 7 | 0 | 15 | 2 |  |
@@ -144,5 +144,5 @@
 | 18 | [ChunkCumsumVector.md](ChunkCumsumVector.md) | 3 | 0 | 8 | 1 |  |
 | 17 | [DequantizeMatmul.md](DequantizeMatmul.md) | 2 | 0 | 10 | 1 |  |
 | 11 | [RowwiseQuantizationTriton.md](RowwiseQuantizationTriton.md) | 1 | 0 | 8 | 0 |  |
+| 10 | [DequantizeRowwise.md](DequantizeRowwise.md) | 1 | 0 | 7 | 0 |  |
 | 10 | [QuantizeGlobal.md](QuantizeGlobal.md) | 1 | 0 | 7 | 0 |  |
-| 9 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 2 | 0 | 3 | 0 |  |

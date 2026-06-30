@@ -2,7 +2,7 @@
 
 **Python source:** `bench/tritonbench_g/decay_cumsum/decay_cumsum.py`
 
-## Public theorem: `decay_cumsum_backward_python_test_shape_closed_output_summary_general`
+## Public theorem: `decay_cumsum_backward_closed_output_summary_general`
 
 <details><summary>docstring</summary>
 
@@ -14,7 +14,7 @@ genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). 
 
 **Statement:**
 ```lean
-theorem decay_cumsum_backward_python_test_shape_closed_output_summary_general :
+theorem decay_cumsum_backward_closed_output_summary_general :
     (ComputeCorrect.Realizes
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
@@ -181,9 +181,9 @@ The three genuine closed forms above (`bwdDQInterClosed`, `bwdDKInterClosed`,
 `bwdDGClosed`) are the honest, non self-referential specifications that replace
 the (now-deleted) `decayBackwardSurfaceValue`. They are connected to the executed
 `bwd_decay_global_cumsum_surface` in
-`decay_cumsum_backward_python_test_shape_closed_output_summary_general` (and its three
-faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct` /
-`bwd_decay_cumsum_dg_closed_compute_correct`) at the end of this file, following
+`decay_cumsum_backward_closed_output_summary_general` (and its three
+faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct_general` /
+`bwd_decay_cumsum_dg_closed_compute_correct_general`) at the end of this file, following
 the **forward** closed-form recipe (`fwd_decay_cumsum_full_surface_row{0,1}_closed`),
 but the backward
 loop body is ~25 statements with a conditional `last_g` capture and three masked

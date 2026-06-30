@@ -24,8 +24,7 @@ Honest side-conditions only: offset injectivity of each store footprint (a
 contiguity/aliasing-freedom hypothesis on the strides) and the
 buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
 the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
-trusted runtime boundary, as in #290). No dimension is pinned. The pinned
-`chunk_gated_attention_python_test_shape_output_summary` is a thin instantiation. -/
+trusted runtime boundary, as in #290). No dimension is pinned. -/
 ```
 </details>
 
@@ -454,10 +453,3 @@ noncomputable def sourceTile
 - `chunk_gated_attention_cum_compute_slice_compute_correct`
 - `chunk_gated_attention_h_state_store_slice_compute_correct`
 - `chunk_gated_attention_final_state_store_slice_compute_correct`
-- `chunk_gated_attention_cum_python_bs16_compute_correct`
-- `chunk_gated_attention_cum_python_bs32_compute_correct`
-- `chunk_gated_attention_cum_python_bs64_compute_correct`
-- `chunk_gated_attention_h_state_python_test_shape_compute_correct`
-- `chunk_gated_attention_final_state_python_test_shape_compute_correct`
-- `chunk_gated_attention_python_test_shape_all_outputs_compute_correct`
-- `chunk_gated_attention_python_test_shape_output_summary`

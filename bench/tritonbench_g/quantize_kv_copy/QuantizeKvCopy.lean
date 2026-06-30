@@ -28,16 +28,16 @@ destination-index injectivity is supplied as a no-collision lemma.
 ## Proof architecture
 
 ```
-destindex_copy_quantize_kv_group_python_output_summary        ← TOP THEOREM
+destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOREM (symbolic dims/strides)
   ├─ ..._group_real_surface_toAlgorithm_supported             surface lowers to the algorithm layer
   ├─ ..._group_real_surface_value_output_compute_correct      genuine int8 value readback
   │    ├─ scatter_readback_int_prop_masked_nd                 per-lane int store readback
   │    ├─ foldl_writeMem_prop_masked_readMemValue_int_other    peel trailing scale store
-  │    └─ ..._group_python_value_offset_injective             no-collision lemma
+  │    └─ (value destination-offset injectivity — theorem hypothesis)
   └─ ..._group_real_surface_scale_output_compute_correct      genuine scale readback
        ├─ BlockState.scatter_readback_prop_masked_nd          per-group scale store readback
        ├─ foldl_writeMemTyped_int_prop_masked_readMem_other   peel prior int store
-       └─ ..._group_python_scale_offset_injective             no-collision lemma
+       └─ (scale destination-offset injectivity — theorem hypothesis)
 ```
 
 The genuine value spec (`quantizeKvCopyGroupSurfaceIntValue`) is the int8 cast of
@@ -609,34 +609,6 @@ theorem destindex_copy_quantize_kv_group_scale_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-! ## Python test-shape wrappers
-
-The checked Python tests use `head_num = 4`, `head_dim = 16`, and
-`quant_group_dim = 8`, so the grouped view has shape `(seq, 4, 2, 8)`.
-`K/Out` grouped strides are `(64, 16, 8, 1)`, and `Out_scale` strides are
-`(8, 2, 1)` across the normal, small-batch, and varied-destination cases. -/
-
-theorem destindex_copy_quantize_kv_group_python_value_offset_injective
-    (s : BlockState) (DestLoc : RegionName) :
-    Function.Injective
-      (fun idx : TileIndex [2, 8] =>
-        outOffset s DestLoc 64 16 8 1 idx) := by
-  rintro ⟨⟨ga, hga⟩, ⟨da, hda⟩, _⟩ ⟨⟨gb, hgb⟩, ⟨db, hdb⟩, _⟩ h
-  simp [outOffset, destIndex, groupIndex, dimIndex] at h
-  have hg : ga = gb := by omega
-  have hd : da = db := by omega
-  subst gb
-  subst db
-  rfl
-
-theorem destindex_copy_quantize_kv_group_python_scale_offset_injective
-    (s : BlockState) (DestLoc : RegionName) :
-    Function.Injective
-      (fun i : Fin 2 => scaleOutOffset s DestLoc 8 2 i) := by
-  intro a b h
-  simp [scaleOutOffset, destIndex] at h
-  exact Fin.ext (by omega)
-
 /-! ## Genuine value/scale specs for the full grouped real surface
 
 The specs below are computed entirely from the kernel **inputs** (`K`,
@@ -817,58 +789,8 @@ theorem destindex_copy_quantize_kv_group_real_surface_scale_output_compute_corre
     subst h1
     rfl
 
-/-- **Public Python grouped summary (genuine, gap-free).** The checked Python
-shape (`head_num = 4`, `head_dim = 16`, `quant_group_dim = 8`, hence
-`group_size = 2`, `BLOCK_GROUP_NUM = 2`, `BLOCK_GROUP_DIM = 8`; `K/Out` grouped
-strides `(64, 16, 8, 1)`, `Out_scale` strides `(8, 2, 1)`) covers the full
-faithful surface syntax (`tl.abs`, `tl.max(..., axis=1)`, the output-dtype scale
-cast, the int8 quotient cast, the destination-indexed grouped masked stores) and
-the two externally visible outputs:
-
-* **value**: `Out[dest_index, cur_head, g, d]` (read back via `readMemValue
-  .int`) equals `(K[cur_index, cur_head, g, d] /
-  (max(|K[cur_index,cur_head,g,·]|)/127)).to(int8)` on active groups
-  (`g < group_size`), and is unchanged otherwise;
-* **scale**: `Out_scale[dest_index, cur_head, g]` (read back via `readMem`)
-  equals the stored real cell of `max(|K[cur_index,cur_head,g,·]|)/127` on active
-  groups, unchanged otherwise.
-
-Both expected values are computed from the kernel **inputs**, so this summary is
-not self-referential. `hOut : Out ≠ OutScale` is the region-distinctness
-no-aliasing hypothesis. -/
-theorem destindex_copy_quantize_kv_group_python_output_summary
-    (K DestLoc Out OutScale : RegionName) (s : BlockState) (hOut : Out ≠ OutScale) :
-    (∃ alg,
-      (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
-        64 16 8 1 64 16 8 1 8 2 1 2 2 8).toAlgorithm? =
-          Except.ok alg) ∧
-    (∀ idx : TileIndex [2, 8],
-      (exec (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
-            64 16 8 1 64 16 8 1 8 2 1 2 2 8) s).map
-          (·.readMemValue .int Out (outOffset s DestLoc 64 16 8 1 idx))
-        = some (if active s 2 2 8 idx then
-            quantizeKvCopyGroupSurfaceIntValue s K 64 16 8 2 8 (by norm_num) idx
-          else s.readMemValue .int Out (outOffset s DestLoc 64 16 8 1 idx))) ∧
-    (∀ i : Fin 2,
-      (exec (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
-            64 16 8 1 64 16 8 1 8 2 1 2 2 8) s).map
-          (·.readMem OutScale (scaleOutOffset s DestLoc 8 2 i))
-        = some (if scaleActive 2 2 i then
-            quantizeKvCopyGroupScaleCell s K 64 16 8 2 8 (by norm_num) i.val
-          else s.readMem OutScale (scaleOutOffset s DestLoc 8 2 i))) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported K
-      DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8
-  · exact destindex_copy_quantize_kv_group_real_surface_value_output_compute_correct K
-      DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8 s (by norm_num) hOut
-      (destindex_copy_quantize_kv_group_python_value_offset_injective s DestLoc)
-  · exact destindex_copy_quantize_kv_group_real_surface_scale_output_compute_correct K
-      DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8 s (by norm_num)
-      (fun h => hOut h.symm)
-      (destindex_copy_quantize_kv_group_python_scale_offset_injective s DestLoc)
-
 /-- **Dimension-general grouped summary (genuine, gap-free).** The symbolic
-generalization of `destindex_copy_quantize_kv_group_python_output_summary`: all
+generalization of the former pinned Python-shape grouped summary: all
 strides, `group_size`, `BLOCK_GROUP_NUM`, and `BLOCK_GROUP_DIM` are arbitrary
 `Nat` parameters. Bundles the three already-general building blocks
 (`..._toAlgorithm_supported`, `..._value_output_compute_correct`,

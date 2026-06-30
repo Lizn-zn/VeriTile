@@ -17,9 +17,7 @@ first-half (`o0`) store equals `rotaryO0Spec` (`x0·cos − x1·sin`) and every
 active lane of the second-half (`o1`) store equals `rotaryO1Spec`
 (`x0·sin + x1·cos`) — the genuine rotary form read from `COS`/`SIN`, NOT the
 kernel's re-executed value — under the honest offset-injectivity,
-`stride_out_headdim ≠ 0`, and `BLOCK_HALF ≤ rotary_dim_half` side conditions.
-The pinned `rotary_transform_python_output_summary` is the concrete
-instantiation of this at the Python case-1 shape. -/
+`stride_out_headdim ≠ 0`, and `BLOCK_HALF ≤ rotary_dim_half` side conditions. -/
 ```
 </details>
 
@@ -403,10 +401,6 @@ def x1Offset
 </details>
 
 ## Also present (pinned special-case summaries)
-- `rotary_kernel_o0_row_compute_correct`
-- `rotary_kernel_o1_row_compute_correct`
 - `rotary_kernel_o0o1_row_o0_compute_correct`
 - `rotary_kernel_o0o1_row_o1_compute_correct`
 - `rotary_kernel_o0o1_row_all_outputs_compute_correct`
-- `rotary_transform_python_surfaces_store_summary`
-- `rotary_transform_python_output_summary`

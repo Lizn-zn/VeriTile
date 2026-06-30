@@ -14,9 +14,8 @@
 expression), while the checked proof slices realize the genuine pre-rounding
 scaled row output `scale127 * (x / max_val)` (`quantizeRowwiseScaledSpec`) at
 every in-range lane and the per-row `output_maxs` writeback
-(`quantizeRowwiseMaxSpec`). The pinned
-`quantize_rowwise_python_case{1,3}_blocked_output_summary` theorems are concrete
-instantiations of this (with `scale127 = 127.0`). The `max(|x|)` reduction is
+(`quantizeRowwiseMaxSpec`). This holds over arbitrary (symbolic) dimensions and
+`scale127`. The `max(|x|)` reduction is
 taken as the precomputed `MaxVals` input; the `llrint` rounding / int8 cast
 remain the honest, unmodeled blocker. -/
 ```
@@ -69,10 +68,4 @@ def quantize_rowwise_real_surface
 ## Also present (pinned special-case summaries)
 - `quantize_rowwise_scaled_store_slice_compute_correct`
 - `quantize_rowwise_max_store_slice_compute_correct`
-- `quantize_rowwise_python_case1_scaled_output_compute_correct`
-- `quantize_rowwise_python_case3_scaled_output_compute_correct`
 - `quantize_rowwise_python_output_maxs_compute_correct`
-- `quantize_rowwise_python_case1_all_outputs_compute_correct`
-- `quantize_rowwise_python_case3_all_outputs_compute_correct`
-- `quantize_rowwise_python_case1_blocked_output_summary`
-- `quantize_rowwise_python_case3_blocked_output_summary`
