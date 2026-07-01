@@ -313,6 +313,3 @@ noncomputable def ctxVTileG
       ((startLoc s B_Start_Loc + j.val) * rs + s.pids 1 * hs + d.val)
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `context_attn_nopad_final_store_slice_compute_correct`
