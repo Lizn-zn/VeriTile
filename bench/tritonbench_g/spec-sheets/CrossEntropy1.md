@@ -36,27 +36,31 @@ theorem cross_entropy_fwd_output_summary
     (total_classes : Nat) (class_start_idx : Int)
     (n_cols n_rows logits_row_stride : Nat) (n : Nat)
     (HAS_SMOOTHING SPLIT : Bool)
-    (s s' : BlockState)
+    (s : BlockState)
     (h_tail : s.pids 1 * (n+1) < n_cols)
     (hne : lse_ptr ≠ loss_ptr)
-    (hLL : lse_ptr ≠ logits_ptr)
-    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
-      smoothing lse_square_scale ignored_index total_classes class_start_idx
-      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
-    (∃ alg,
-      (cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr smoothing
-        lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
-        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgorithm? =
-        Except.ok alg) ∧
-    (s'.readMem lse_ptr (lseOutOffset s n_rows) =
-      partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-        (s.pids 1) h_tail Bool.false 0) ∧
-    (s'.readMem loss_ptr (lseOutOffset s n_rows) =
-      crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing
-        lse_square_scale ignored_index total_classes class_start_idx n_cols
-        logits_row_stride n HAS_SMOOTHING SPLIT
-        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-          (s.pids 1) h_tail Bool.false 0))
+    (hLL : lse_ptr ≠ logits_ptr) :
+    (ComputeCorrect.Realizes
+      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
+        smoothing lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
+      (initialState := s)
+      (write := fun _ : PUnit => some (lse_ptr, lseOutOffset s n_rows))
+      (expected := fun _ =>
+        partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.false 0)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
+        smoothing lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
+      (initialState := s)
+      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
+      (expected := fun _ =>
+        crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing
+          lse_square_scale ignored_index total_classes class_start_idx n_cols
+          logits_row_stride n HAS_SMOOTHING SPLIT
+          (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+            (s.pids 1) h_tail Bool.false 0)))
 ```
 
 **Assumptions / layout contracts:**
