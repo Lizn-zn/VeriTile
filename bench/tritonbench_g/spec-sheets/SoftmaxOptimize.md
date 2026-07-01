@@ -100,5 +100,141 @@ noncomputable def softmaxOptimizeInputTile
 ```
 </details>
 
+## Public theorem: `softmax_kernel_online_v2_output_summary`
+
+<details><summary>docstring</summary>
+
+```
+/-- **Public output summary (headline theorem).** The full online-softmax
+surface `softmax_kernel_online_v2_surface` realizes the genuine full-row softmax
+`softmaxOptimizeFullSpec` at every output column `j < N` of row `pid`: the total
+write map sends column `j` to `output_ptr` at `linearOffset s N j`, and the
+value read back there after any successful run is exactly the numerically
+stabilized full-row softmax of the loaded input row. Stated via
+`ComputeCorrect.Realizes` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
+the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
+```
+</details>
+
+**Statement:**
+```lean
+theorem softmax_kernel_online_v2_output_summary
+    (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
+    (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel_online_v2_surface output_ptr input_ptr M N TILE_N)
+      (initialState := s)
+      (write := fun j : Fin N => some (output_ptr, linearOffset s N j))
+      (expected := fun j : Fin N => softmaxOptimizeFullSpec s input_ptr N j)
+```
+
+**Assumptions / layout contracts:**
+- `hN : 0 < N`
+- `hT : 0 < TILE_N`
+- `hne : output_ptr ≠ input_ptr`
+
+**Closed-form spec defs (transitive):** `softmax_kernel_online_v2_surface`, `softmaxOptimizeFullSpec`, `softmaxOptimizeRow`
+
+<details><summary><code>softmax_kernel_online_v2_surface</code></summary>
+
+```
+/-- Faithful transcription of `softmax_optimize.py`'s
+`softmax_kernel_online_v2`.
+
+This keeps the online max/sum recurrence over full tiles, the masked tail pass,
+the final scalar normalization, and the two writeback loops. -/
+```
+```lean
+def softmax_kernel_online_v2_surface
+    (output_ptr input_ptr : RegionName)
+    (M N TILE_N : Nat) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  m = tl.full([$(TILE_N)], value=-float("inf"), dtype=output_ptr.dtype.element_ty)
+  z = tl.full([$(TILE_N)], value=0, dtype=output_ptr.dtype.element_ty)
+  prev_multiple = $((N + TILE_N - 1)) // $(TILE_N) * $(TILE_N) - $(TILE_N)
+  for start_n in range($(0), prev_multiple, $(TILE_N)) {
+    n_offsets = start_n + tl.arange(0, $(TILE_N))
+    offset = pid_m * $(N) + n_offsets
+    input_ptrs = input_ptr + offset
+    inp = (tl.load(input_ptrs)).to(output_ptr.dtype.element_ty)
+    new_m = tl.maximum(m, inp)
+    new_z = tl.exp(m - new_m) * z + tl.exp(inp - new_m)
+    m = new_m
+    z = new_z
+  }
+  for start_n in range(prev_multiple, $(N), $(TILE_N)) {
+    n_offsets = start_n + tl.arange(0, $(TILE_N))
+    offset = pid_m * $(N) + n_offsets
+    input_ptrs = input_ptr + offset
+    mask = n_offsets < $(N)
+    inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
+    new_m = tl.maximum(m, inp)
+    new_z = tl.exp(m - new_m) * z + tl.exp(inp - new_m)
+    m = new_m
+    z = new_z
+  }
+  final_m = tl.max(m, 0)
+  z = tl.sum(tl.exp(m - final_m) * z)
+  m = final_m
+
+  prev_multiple = $((N + TILE_N - 1)) // $(TILE_N) * $(TILE_N) - $(TILE_N)
+  for start_n in range($(0), prev_multiple, $(TILE_N)) {
+    n_offsets = start_n + tl.arange(0, $(TILE_N))
+    offset = pid_m * $(N) + n_offsets
+    input_ptrs = input_ptr + offset
+    inp = (tl.load(input_ptrs)).to(output_ptr.dtype.element_ty)
+    e = tl.exp(inp - m)
+    out = e / z
+    output_ptrs = output_ptr + offset
+    tl.store(output_ptrs, out)
+  }
+  for start_n in range(prev_multiple, $(N), $(TILE_N)) {
+    n_offsets = start_n + tl.arange(0, $(TILE_N))
+    offset = pid_m * $(N) + n_offsets
+    input_ptrs = input_ptr + offset
+    mask = n_offsets < $(N)
+    inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
+    e = tl.exp(inp - m)
+    out = e / z
+    output_ptrs = output_ptr + offset
+    tl.store(output_ptrs, out, mask=mask)
+  }
+}
+```
+</details>
+
+<details><summary><code>softmaxOptimizeFullSpec</code></summary>
+
+```
+/-- **Genuine full-row softmax closed form.** For column `j < N`, the standard
+numerically-stabilized softmax over the `N` loaded inputs:
+`exp(input[j] - rowMax) / Σ_{j'<N} exp(input[j'] - rowMax)`, where
+`rowMax = max_{j'<N} input[j']`. This is exactly `TiledSoftmax.naiveSpec`
+(`= stableSpec`, the numerically stabilized form). It is a function of the
+loaded `input` memory, not of the kernel's own output. -/
+```
+```lean
+noncomputable def softmaxOptimizeFullSpec
+    (s : BlockState) (input_ptr : RegionName) (N : Nat) (j : Fin N) : ℝ :=
+  Real.exp (softmaxOptimizeRow s input_ptr N j)
+    / ∑ j' : Fin N, Real.exp (softmaxOptimizeRow s input_ptr N j')
+```
+</details>
+
+<details><summary><code>softmaxOptimizeRow</code></summary>
+
+```
+/-- The loaded input row as a function of the genuine column index `j : Fin N`:
+`input[pid_m, j]` at memory address `linearOffset s N j = s.pid·N + j`. -/
+```
+```lean
+noncomputable def softmaxOptimizeRow
+    (s : BlockState) (input_ptr : RegionName) (N : Nat) (j : Fin N) : ℝ :=
+  s.readMem input_ptr (linearOffset s N j)
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `softmax_kernel_online_v2_one_tile_compute_correct`
