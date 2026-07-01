@@ -84,84 +84,11 @@ set_option linter.unusedSimpArgs false
 
 /-! ## Memory-frame helper
 
-The forward loss computation is a sequence of register assignments and nested
-`if`/`else` blocks that contain only assignments (one data-dependent scalar load,
-and the branch-selected `loss`/`z_loss` formulas) before the stores. Such
-statements never touch memory, so they preserve every memory cell. We make this
-precise with a structural `StoreFree` predicate and a `mem`-preservation frame
-lemma, used to show the genuine `lse` store survives the loss/zloss branches. -/
-
-/-- A statement that performs no memory writes (no `store`/`atomicAdd`/
-`atomicRMW`), recursively through `if`/`else`/loop bodies. -/
-def storeFree : Stmt → Bool
-  | .assign _ _ _ _ => Bool.true
-  | .store _ _ _ _ _ => Bool.false
-  | .atomicAdd _ _ _ _ _ => Bool.false
-  | .atomicRMW _ _ _ _ _ _ _ _ => Bool.false
-  | .forLoop _ _ _ => Bool.false
-  | .forRange _ _ _ _ _ => Bool.false
-  | .forRangeDyn _ _ _ _ _ => Bool.false
-  | .ifThen _ body => body.attach.all (fun ⟨st, _⟩ => storeFree st)
-  | .ifThenElse _ t e =>
-      t.attach.all (fun ⟨st, _⟩ => storeFree st) &&
-      e.attach.all (fun ⟨st, _⟩ => storeFree st)
-
-mutual
-/-- A store-free statement preserves all of memory. -/
-theorem storeFree_stepStmt_mem (st : Stmt) (s s' : BlockState)
-    (hsf : storeFree st = Bool.true) (h : stepStmt st s = some s') :
-    s'.mem = s.mem := by
-  match st with
-  | .assign dtype shape name e =>
-      cases hv : evalOp e s with
-      | none => simp [stepStmt, hv] at h
-      | some v => simp [stepStmt, hv] at h; subst h; rfl
-  | .store _ _ _ _ _ => simp [storeFree] at hsf
-  | .atomicAdd _ _ _ _ _ => simp [storeFree] at hsf
-  | .atomicRMW _ _ _ _ _ _ _ _ => simp [storeFree] at hsf
-  | .ifThen cond body =>
-      cases hc : evalOp cond s with
-      | none => simp [stepStmt, hc] at h
-      | some c =>
-          by_cases hb : c.data PUnit.unit
-          · simp [stepStmt, hc, hb] at h
-            exact storeFree_stepStmts_mem body s s' (by simpa [storeFree] using hsf) h
-          · simp [stepStmt, hc, hb] at h; subst h; rfl
-  | .ifThenElse cond t e =>
-      cases hc : evalOp cond s with
-      | none => simp [stepStmt, hc] at h
-      | some c =>
-          simp only [storeFree, Bool.and_eq_true] at hsf
-          by_cases hb : c.data PUnit.unit
-          · simp [stepStmt, hc, hb] at h
-            exact storeFree_stepStmts_mem t s s' (by simpa using hsf.1) h
-          · simp [stepStmt, hc, hb] at h
-            exact storeFree_stepStmts_mem e s s' (by simpa using hsf.2) h
-  | .forLoop _ _ _ => simp [storeFree] at hsf
-  | .forRange _ _ _ _ _ => simp [storeFree] at hsf
-  | .forRangeDyn _ _ _ _ _ => simp [storeFree] at hsf
-
-/-- A list of store-free statements preserves all of memory. -/
-theorem storeFree_stepStmts_mem (stmts : List Stmt) (s s' : BlockState)
-    (hsf : stmts.all (fun st => storeFree st) = Bool.true)
-    (h : stepStmts stmts s = some s') :
-    s'.mem = s.mem := by
-  match stmts with
-  | [] => rw [stepStmts.nil] at h; injection h with h; subst h; rfl
-  | st :: rest =>
-      simp only [List.all_cons, Bool.and_eq_true] at hsf
-      cases hstep : stepStmt st s with
-      | none =>
-          rw [show stepStmts (st :: rest) s = none from by
-            conv_lhs => unfold stepStmts
-            rw [hstep]] at h
-          exact absurd h (by simp)
-      | some smid =>
-          rw [stepStmts.cons_some hstep] at h
-          have h1 := storeFree_stepStmt_mem st s smid hsf.1 hstep
-          have h2 := storeFree_stepStmts_mem rest smid s' hsf.2 h
-          rw [h2, h1]
-end
+The forward loss/scale tail is a sequence of register assignments and nested
+`if`/`else` blocks (only assignments before the stores), so it writes no memory
+and preserves every cell. We use the shared generic frame `storeFree` /
+`storeFree_stepStmts_mem` (in `VeriTile.Triton`, `VeriTile/Triton/Semantics/Step.lean`)
+to show the genuine `lse` store survives the loss branches. -/
 
 /-- Faithful transcription of `cross_entropy2.py`'s
 `cross_entropy_fwd_kernel`.
