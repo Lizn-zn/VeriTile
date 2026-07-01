@@ -184,17 +184,17 @@ the (now-deleted) `decayBackwardSurfaceValue`. They are connected to the execute
 `decay_cumsum_backward_closed_output_summary_general` (and its three
 faces `bwd_decay_cumsum_d{q,k}_inter_closed_compute_correct_general` /
 `bwd_decay_cumsum_dg_closed_compute_correct_general`) at the end of this file, following
-the **forward** closed-form recipe (`fwd_decay_cumsum_full_surface_row{0,1}_closed`),
+the same closed-form recipe as the forward/prepare general stacks,
 but the backward
 loop body is ~25 statements with a conditional `last_g` capture and three masked
-stores per iteration, traversed over two `range(BT-1,-1,-1)` rows (lowered to a
-forward `forRangeDyn "__rev_t" 0 2 1` with `t := 1 - __rev_t`). A single
+stores per iteration, traversed over the reverse `range(BT-1,-1,-1)` rows (lowered to a
+forward `forRangeDyn "__rev_t" 0 BT 1` with `t := BT-1 - __rev_t`). A single
 `simp [exec, …, evalOp.eq_def, stepForRangeAux.*]` blast does *not* scale to this
 body (it does not terminate within ~9 min even at 8M heartbeats), so the
 mandated per-statement architecture is required:
 
-1. `exec → stepStmts toAlgKernel.body` via
-   `bwd_decay_global_cumsum_surface_toAlgorithm_supported`.
+1. `exec → stepStmts toAlgKernel.body`, with the surface body decomposed by
+   `bwd_body_decomp_general` into the 15-stmt prologue + the `forRangeDyn` reverse loop.
 2. Drive the `forRangeDyn` loop with `forRangeAux_inv` /
    `VeriTile.Triton.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
    partial reverse prefix sum), *not* a `simp` over the whole loop.
@@ -208,10 +208,12 @@ mandated per-statement architecture is required:
 5. Bridge to `ComputeCorrect.Realizes` via `realizes_writeIf_iff` +
    `computeCorrect_of_toAlgKernel` (done; `decayBackwardSurfaceValue` deleted).
 
-This plan is now fully realized: `bwd_iter_core` chains the 22-statement body,
-`bwd_iter0_eval` / `bwd_iter1_eval` add the head + conditional `last_g` capture,
-`bwd_full_exec` assembles prologue + 2-iteration loop, and the three readback
-theorems certify the closed forms (the `dg` face uses the genuine reverse cumsum).
+This plan is now fully realized dimension-generally: `bwd_prologue_eval_general`
+runs the 15-stmt prologue, `bwd_decay_cumsum_step_general` advances the reverse-loop
+invariant `bwdInvG` (one iteration, head + conditional `last_g` capture + three
+masked stores), `bwd_loop_drive_general` assembles prologue + the full `range(BT)`
+reverse loop, and the three `_general` readback theorems certify the closed forms
+(the `dg` face uses the genuine reverse cumsum via `bwdCumPartialG`).
 
 The `dq_inter`/`dk_inter` faces are pointwise (no carry); only `dg` needs the
 reverse-scan invariant. Region-distinctness side hypotheses (`DQInter ≠ DKInter`
@@ -261,23 +263,9 @@ noncomputable def bwdDGSummand
 </details>
 
 ## Also present (pinned special-case summaries)
-- `prepare_qg_decay_store_slice_compute_correct`
-- `prepare_kg_decay_store_slice_compute_correct`
-- `fwd_decay_cumsum_store_slice_compute_correct`
-- `fwd_decay_cumsum_step_store_slice_compute_correct`
-- `bwd_decay_cumsum_store_slice_compute_correct`
-- `bwd_decay_dg_step_store_slice_compute_correct`
-- `bwd_decay_cumsum_dq_inter_store_slice_compute_correct`
-- `bwd_decay_cumsum_dk_inter_store_slice_compute_correct`
-- `bwd_decay_cumsum_dg_store_slice_compute_correct`
-- `fwd_decay_cumsum_surface_closed_compute_correct`
 - `fwd_decay_cumsum_surface_closed_compute_correct_general`
-- `prepare_qg_kg_surface_qg_closed_compute_correct`
 - `prepare_qg_kg_surface_qg_closed_compute_correct_general`
 - `prepare_qg_kg_surface_kg_closed_compute_correct_general`
-- `bwd_decay_cumsum_dq_inter_closed_compute_correct`
-- `bwd_decay_cumsum_dk_inter_closed_compute_correct`
-- `bwd_decay_cumsum_dg_closed_compute_correct`
 - `bwd_decay_cumsum_dq_inter_closed_compute_correct_general`
 - `bwd_decay_cumsum_dk_inter_closed_compute_correct_general`
 - `bwd_decay_cumsum_dg_closed_compute_correct_general`
