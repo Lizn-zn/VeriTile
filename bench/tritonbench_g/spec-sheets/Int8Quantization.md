@@ -181,16 +181,5 @@ def colIndex (_s : BlockState) (j : Fin C) : Nat :=
 
 ## Also present (pinned special-case summaries)
 - `per_block_int8_scaled_store_slice_compute_correct`
-- `q_kernel_per_block_int8_scaled_store_slice_compute_correct`
-- `k_kernel_per_block_int8_scaled_store_slice_compute_correct`
-- `q_kernel_per_block_int8_test1_scaled_store_slice_compute_correct`
-- `k_kernel_per_block_int8_test1_scaled_store_slice_compute_correct`
-- `q_kernel_per_block_int8_test2_scaled_store_slice_compute_correct`
-- `k_kernel_per_block_int8_test2_scaled_store_slice_compute_correct`
 - `per_block_int8_scale_store_slice_compute_correct`
-- `q_kernel_per_block_int8_scale_store_slice_compute_correct`
-- `k_kernel_per_block_int8_scale_store_slice_compute_correct`
-- `q_kernel_per_block_int8_test1_scale_store_slice_compute_correct`
-- `per_block_int8_test_scale_stride4_store_slice_compute_correct`
-- `k_kernel_per_block_int8_test2_scale_store_slice_compute_correct`
 - `per_block_int8_closed_form_correct`
