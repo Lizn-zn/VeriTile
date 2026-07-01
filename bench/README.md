@@ -4,6 +4,11 @@ This folder is the home for VeriTile's kernel-verification benchmark — the set
 of Triton kernels VeriTile commits to verifying, with source, tier, masking
 variant, and proof-status tracked.
 
+> **Every per-kernel main theorem must meet the standard in
+> [`MAIN_THEOREM_CONVENTIONS.md`](./MAIN_THEOREM_CONVENTIONS.md)** (dimension-general,
+> non-self-referential, `ComputeCorrect.Realizes` form, axiom-clean, honest
+> hypotheses; no test-shape/dead code). Read it before adding or reviewing a kernel.
+
 > Status (2026-05-05): **TritonBench-G v1** picked as the external anchor.
 > Static coverage analysis landed at
 > [`tritonbench_coverage.md`](./tritonbench_coverage.md). Imported upstream
