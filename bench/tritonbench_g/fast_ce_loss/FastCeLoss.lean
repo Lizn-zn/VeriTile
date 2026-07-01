@@ -656,72 +656,6 @@ theorem chunked_cross_entropy_forward_loss_correct
     unfold fceLabelNat
     norm_num
 
-/-- **Per-kernel chunked-forward output summary for
-`chunked_cross_entropy_forward_surface` (genuine, end-to-end, chunk 0, no
-softcapping).**
-
-The chunked surface stores both side outputs only under `chunk_idx == 0`. Stated
-as a conjunction of `ComputeCorrect.Realizes` claims for chunk `0` with
-`DO_SOFTCAPPING = false`, at least one valid lane, and `logsumexp_ptr ≠ loss_ptr`,
-bundling:
-1. **genuine per-chunk LSE output**: `logsumexp_ptr[row * N_CHUNKS + 0]` holds
-   exactly `fastCeLseSpec` of the per-lane transformed INPUT chunk-0 logits;
-2. **genuine chunk-0 partial loss output**: `loss_ptr[row]` holds exactly
-   `-1 * transform(label logit)`, read from INPUT memory.
-
-Each `ComputeCorrect.Realizes` internalizes the execution (`exec ... = some s'`)
-and the lowering to the algorithm layer. All value specs read INPUT memory;
-non-self-referential. The softcapping branch is out of scope; the `-100` ignore
-label is dead under cast-to-`Nat` erasure. -/
-theorem chunked_cross_entropy_forward_output_summary
-    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
-    (VOCAB_SIZE N_CHUNKS logits_row_stride : Nat)
-    (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)
-    (n : Nat)
-    (s : BlockState)
-    (hchunk : s.pids 1 = 0)
-    (h_tail : 0 * (n+1) < VOCAB_SIZE)
-    (hne : logsumexp_ptr ≠ loss_ptr) :
-    (ComputeCorrect.Realizes
-      (kernel := chunked_cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
-        labels_ptr VOCAB_SIZE N_CHUNKS logits_row_stride (n+1) SOFTCAP LOGIT_SCALE
-        Bool.false DO_LOGIT_SCALING)
-      (initialState := s)
-      (write := fun _ : PUnit => some (logsumexp_ptr, fceChunkLseOffset s N_CHUNKS))
-      (expected := fun _ =>
-        fastCeLseSpec (fastCeRowLogits s logits_ptr logits_row_stride VOCAB_SIZE)
-          0 h_tail (fun x => if DO_LOGIT_SCALING then LOGIT_SCALE * x else x))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunked_cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
-        labels_ptr VOCAB_SIZE N_CHUNKS logits_row_stride (n+1) SOFTCAP LOGIT_SCALE
-        Bool.false DO_LOGIT_SCALING)
-      (initialState := s)
-      (write := fun _ : PUnit => some (loss_ptr, fceOutOffset s))
-      (expected := fun _ =>
-        (-1 : ℝ) * fceLabelLogit s logits_ptr labels_ptr logits_row_stride
-          SOFTCAP LOGIT_SCALE Bool.false DO_LOGIT_SCALING)) := by
-  refine ⟨?_, ?_⟩
-  · unfold ComputeCorrect.Realizes
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [chunked_cross_entropy_forward_surface, ComputeExpr.toAlgorithm?,
-        ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro _
-    exact chunked_cross_entropy_forward_lse_correct logits_ptr loss_ptr logsumexp_ptr labels_ptr
-      VOCAB_SIZE N_CHUNKS logits_row_stride SOFTCAP LOGIT_SCALE DO_LOGIT_SCALING n s s'
-      hchunk h_tail hne hExec
-  · unfold ComputeCorrect.Realizes
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [chunked_cross_entropy_forward_surface, ComputeExpr.toAlgorithm?,
-        ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro _
-    exact chunked_cross_entropy_forward_loss_correct logits_ptr loss_ptr logsumexp_ptr labels_ptr
-      VOCAB_SIZE N_CHUNKS logits_row_stride SOFTCAP LOGIT_SCALE DO_LOGIT_SCALING n s s'
-      hchunk h_tail hne.symm hExec
-
 /-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_backward`.
 
 This preserves the block logits load, optional logit scaling, optional softcap
@@ -950,5 +884,73 @@ theorem fastCeLoss_eq_crossEntropyLoss
     simp only [Bool.false_eq_true, reduceIte]
     rw [hlbl]
   rw [hlabel]
+
+
+
+/-- **Per-kernel chunked-forward output summary for
+`chunked_cross_entropy_forward_surface` (genuine, end-to-end, chunk 0, no
+softcapping).**
+
+The chunked surface stores both side outputs only under `chunk_idx == 0`. Stated
+as a conjunction of `ComputeCorrect.Realizes` claims for chunk `0` with
+`DO_SOFTCAPPING = false`, at least one valid lane, and `logsumexp_ptr ≠ loss_ptr`,
+bundling:
+1. **genuine per-chunk LSE output**: `logsumexp_ptr[row * N_CHUNKS + 0]` holds
+   exactly `fastCeLseSpec` of the per-lane transformed INPUT chunk-0 logits;
+2. **genuine chunk-0 partial loss output**: `loss_ptr[row]` holds exactly
+   `-1 * transform(label logit)`, read from INPUT memory.
+
+Each `ComputeCorrect.Realizes` internalizes the execution (`exec ... = some s'`)
+and the lowering to the algorithm layer. All value specs read INPUT memory;
+non-self-referential. The softcapping branch is out of scope; the `-100` ignore
+label is dead under cast-to-`Nat` erasure. -/
+theorem chunked_cross_entropy_forward_output_summary
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE N_CHUNKS logits_row_stride : Nat)
+    (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)
+    (n : Nat)
+    (s : BlockState)
+    (hchunk : s.pids 1 = 0)
+    (h_tail : 0 * (n+1) < VOCAB_SIZE)
+    (hne : logsumexp_ptr ≠ loss_ptr) :
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
+        labels_ptr VOCAB_SIZE N_CHUNKS logits_row_stride (n+1) SOFTCAP LOGIT_SCALE
+        Bool.false DO_LOGIT_SCALING)
+      (initialState := s)
+      (write := fun _ : PUnit => some (logsumexp_ptr, fceChunkLseOffset s N_CHUNKS))
+      (expected := fun _ =>
+        fastCeLseSpec (fastCeRowLogits s logits_ptr logits_row_stride VOCAB_SIZE)
+          0 h_tail (fun x => if DO_LOGIT_SCALING then LOGIT_SCALE * x else x))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
+        labels_ptr VOCAB_SIZE N_CHUNKS logits_row_stride (n+1) SOFTCAP LOGIT_SCALE
+        Bool.false DO_LOGIT_SCALING)
+      (initialState := s)
+      (write := fun _ : PUnit => some (loss_ptr, fceOutOffset s))
+      (expected := fun _ =>
+        (-1 : ℝ) * fceLabelLogit s logits_ptr labels_ptr logits_row_stride
+          SOFTCAP LOGIT_SCALE Bool.false DO_LOGIT_SCALING)) := by
+  refine ⟨?_, ?_⟩
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [chunked_cross_entropy_forward_surface, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro _
+    exact chunked_cross_entropy_forward_lse_correct logits_ptr loss_ptr logsumexp_ptr labels_ptr
+      VOCAB_SIZE N_CHUNKS logits_row_stride SOFTCAP LOGIT_SCALE DO_LOGIT_SCALING n s s'
+      hchunk h_tail hne hExec
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [chunked_cross_entropy_forward_surface, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0
+    subst s0
+    intro _
+    exact chunked_cross_entropy_forward_loss_correct logits_ptr loss_ptr logsumexp_ptr labels_ptr
+      VOCAB_SIZE N_CHUNKS logits_row_stride SOFTCAP LOGIT_SCALE DO_LOGIT_SCALING n s s'
+      hchunk h_tail hne.symm hExec
 
 end VeriTile.Bench.TritonBenchG.FastCeLoss
