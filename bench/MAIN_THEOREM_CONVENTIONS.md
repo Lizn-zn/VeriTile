@@ -51,11 +51,14 @@ ComputeCorrect.Realizes
   (expected := <input-memory closed form>)
 ```
 
-A multi-output kernel is a **conjunction of `Realizes`**, one per stored output
-(scalar outputs use `fun _ : PUnit => some (region, offset)`; masked tile outputs
-use `ComputeCorrect.WriteMap.writeIf mask addr`). Do **not** leave the summary in
-the raw `(hExec : exec … = some s') → s'.readMem … = expected` form — that is a
-proof artifact, not the public surface. (`Realizes` internalizes the `exec`
+A multi-output kernel is stated as a **single headline theorem whose conclusion
+is a conjunction of `Realizes`**, one conjunct per stored output (scalar outputs
+use `fun _ : PUnit => some (region, offset)`; masked tile outputs use
+`ComputeCorrect.WriteMap.writeIf mask addr`). Keep the conjunction — do **not**
+split the outputs into separate top-level theorems; the file ends on one bundled
+headline. Do **not** leave the summary in the raw
+`(hExec : exec … = some s') → s'.readMem … = expected` form — that is a proof
+artifact, not the public surface. (`Realizes` internalizes the `exec`
 quantification, so the `s'`/`hExec` binders drop out of the statement.)
 
 ## 5. Axiom-clean
@@ -76,6 +79,27 @@ Quot.sound]`**. No `sorry` / `admit` / `native_decide` / `ofReduceBool`, and no
   makes a masked-lane argument fail), **narrow the theorem's scope and document
   it** — do not fake a spec that does not hold. Prefer *genuine-but-scoped* over
   *pinned-but-annotated*.
+
+### Never lie, never silently ignore
+
+If a kernel (or a path/output of it) **cannot be dimension-generalized or proved
+genuinely**, that is a **reported failure — surface it as an explicit ERROR /
+blocker**, with the exact goal or the exact obstacle. It is **forbidden** to:
+
+- **mis-report** it — claim a theorem is general / genuine / axiom-clean when it
+  is not (e.g. calling a pinned theorem `_general`, or an `exec`-readback spec
+  "genuine");
+- **silently ignore / drop** it — leave the shape pinned with no signal, quietly
+  weaken the spec, or omit the output from the summary without saying so;
+- **paper over** it with `sorry`/`admit`/`native_decide` or a vacuous/trivially-
+  true statement.
+
+The honest outcomes are exactly two: **(a)** a headline meeting §1–§6 in full, or
+**(b)** a clearly-reported blocker (the specific goal that won't close, or the
+specific reason generalization is impossible) plus, if partial progress is
+landed, an explicitly-scoped theorem whose narrowed scope is stated in its own
+hypotheses/docstring. Partial-but-honest is acceptable; anything that reads as
+"done" when it isn't is not.
 
 ## 7. Shared pure math lives in `VeriTile/Triton/Math/*`
 
@@ -143,6 +167,8 @@ Notes:
 ---
 
 *One line:* the last theorem is a **dimension-general, non-self-referential,
-`ComputeCorrect.Realizes`-form, axiom-clean** main theorem with honest
-hypotheses; pure math is factored into `Math/*`; the file carries no dead code or
-stale docstrings.
+`ComputeCorrect.Realizes`-form (conjunction for multi-output), axiom-clean** main
+theorem with honest hypotheses; pure math is factored into `Math/*`; the file
+carries no dead code or stale docstrings — and if any of this genuinely cannot be
+achieved, that is **reported as an explicit blocker, never faked or silently
+ignored**.
