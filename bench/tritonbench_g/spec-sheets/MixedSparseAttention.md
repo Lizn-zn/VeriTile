@@ -13,11 +13,24 @@ conditions `0 < BLOCK_N`, `16 ≤ BLOCK_N` — so the kernel's single column blo
 `max_num_cols = 16` covers all visited columns — and `BLOCK_DMODEL ≤ 64` — so the
 fixed output strides `(stride_om, stride_ok) = (64, 1)` stay injective), the
 executed surface kernel writes the genuine non-self-referential mixed-sparse
-closed form `mixedSparseAttnClosedForm` to every active `Out` lane. Same
-value-equality style as the pinned per-case summaries; the case `64/64/64` and
-`32/32/64` summaries are instances of this theorem. Side conditions
+closed form `mixedSparseAttnClosedForm` to every active `Out` lane (the concrete
+`64/64/64` and `32/32/64` shapes are instances obtained by specializing the
+symbolic block dims). Side conditions
 (`num_cols ≤ BLOCK_N`, per-active-lane positive online-softmax denominator,
-clean `undef`) are honest hypotheses; the spec reads INPUT memory only. -/
+clean `undef`) are honest hypotheses; the spec reads INPUT memory only.
+
+**Why the raw `∃ sF, exec … ∧ …` form (not `ComputeCorrect.Realizes`) — honest
+framework blocker, not a proof gap.** The `Out` cell is compared as a *decoded
+fp16 value* `sF.readMemValue .fp16 Out … = (some … : WithBot ℝ)`. `Realizes`
+requires an `OutputReadable` carrier for the readback type, and the framework
+provides carriers only for `MemCell`/`ℝ`/`Nat`/`Int` — there is no
+decoded-fp16-value (`TileCarrier .fp16 = WithBot ℝ`) carrier. The engine
+(`msa_execGS`) yields a *value*-level equality, so it cannot be wrapped by
+`Realizes` without a framework-level `ReadsAsValue`-style carrier. The statement
+is nonetheless genuine and non-self-referential (`mixedSparseAttnClosedForm`
+reads INPUT memory only), and the `∃ sF, exec … = some sF` conjunct is strictly
+stronger than `Realizes` (it asserts execution actually succeeds). See
+`bench/MAIN_THEOREM_CONVENTIONS.md` §4/§6. -/
 ```
 </details>
 

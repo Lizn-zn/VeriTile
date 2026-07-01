@@ -16,9 +16,13 @@ output-offset-injective side conditions), the full simple-GLA forward surface
   form `glaOutput` (read off the kernel's actual store; the `glaOutput` spec reads
   the *input* memory `q/k/v/h/g`, NOT a self-referential exec read-back).
 
-Both conjuncts are discharged via `chunk_gla_simple_fwd_surface_toAlgorithm_supported`
-and `chunk_gla_simple_exec_glaOutput`. The pinned per-Python-case summaries are
-specializations of this theorem at their literal dimensions. -/
+The masked write map matches the kernel's store mask (`active`), and every active
+output lane of `o` equals the genuine GLA closed form `glaOutput` (read off the
+kernel's actual store; the `glaOutput` spec reads the *input* memory `q/k/v/h/g`,
+NOT a self-referential exec read-back). Discharged via
+`chunk_gla_simple_fwd_surface_toAlgorithm_supported` (lowering) and
+`chunk_gla_simple_exec_glaOutput` (per-lane readback). The pinned per-Python-case
+summaries are specializations of this theorem at their literal dimensions. -/
 ```
 </details>
 
@@ -32,14 +36,16 @@ theorem chunk_gla_simple_output_summary_general
     (hundef : ∀ rg off, s.undef rg off = 0)
     (hInj : Function.Injective
       (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)) :
-    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
-        s_h_h s_h_t scale T K V BT BK BV).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [BT, BV], active s T V BT BV idx →
-      (exec (chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
-          s_h_h s_h_t scale T K V BT BK BV) s).map
-          (·.readMem o (outOffset s s_v_h s_v_t BT BV idx))
-        = some (glaOutput s q k v h g s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
-            scale T K V BT BK BV idx.1 idx.2.1))
+    ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
+        s_h_h s_h_t scale T K V BT BK BV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BV] => active s T V BT BV idx)
+        (fun idx => (o, outOffset s s_v_h s_v_t BT BV idx)))
+      (expected := fun idx : TileIndex [BT, BV] =>
+        glaOutput s q k v h g s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          scale T K V BT BK BV idx.1 idx.2.1)
 ```
 
 **Assumptions / layout contracts:**
@@ -49,6 +55,7 @@ theorem chunk_gla_simple_output_summary_general
 - `hundef : ∀ rg off, s.undef rg off = 0`
 - `hInj : Function.Injective
       (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)`
+- `fun idx : TileIndex [BT, BV] => active s T V BT BV idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `chunk_gla_simple_fwd_surface`, `active`, `glaOutput`, `tIndex`, `vIndex`, `interTerm`, `scoreTerm`, `vElem`, `qElem`, `hElem`, `gElem`, `kElem`
 

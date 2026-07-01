@@ -24,10 +24,11 @@ quantified, the per-program statement covers every row of the grid.
 ## Proof architecture
 
 ```
-softmax_kernel_online_v2_surface_exec_correct          ← TOP THEOREM (full multi-tile surface)
-  ├─ pass1LoopA_run / pass1LoopB_run                    pass-1 online recurrence over all tiles
-  ├─ reduction_step                                     cross-lane (max, denom) collapse
-  └─ pass2LoopA_run / pass2LoopB_run                    pass-2 stores `softmaxOptimizeFullSpec`
+softmax_kernel_online_v2_output_summary                ★ MAIN THEOREM (ComputeCorrect.Realizes headline)
+  └─ softmax_kernel_online_v2_surface_exec_correct      internal engine lemma (full multi-tile surface)
+       ├─ pass1LoopA_run / pass1LoopB_run               pass-1 online recurrence over all tiles
+       ├─ reduction_step                                cross-lane (max, denom) collapse
+       └─ pass2LoopA_run / pass2LoopB_run               pass-2 stores `softmaxOptimizeFullSpec`
 
 softmax_kernel_online_v2_one_tile_output_summary       slice corollary (one-tile `N ≤ TILE_N` regime)
   ├─ (toAlgorithm? = Except.ok _)                       slice lowers to the algorithm layer
@@ -43,8 +44,10 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is no
 modeled. Full-surface exec-level value correctness **is** established: the full
 online-recurrence surface `softmax_kernel_online_v2_surface` is proved to write
 the genuine full-row softmax `softmaxOptimizeFullSpec` to every active output
-column via `softmax_kernel_online_v2_surface_exec_correct` (the lowering fact
-`..._surface_toAlgorithm_supported` is a supporting layer). Cellwise value
+column. The public headline is `softmax_kernel_online_v2_output_summary`, stated
+via `ComputeCorrect.Realizes` over the total output write map; it wraps the
+exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct` (the
+lowering fact `..._surface_toAlgorithm_supported` is a supporting layer). Cellwise value
 correctness is also proved against the one-tile
 specialization `softmax_kernel_online_v2_one_tile` (the `N ≤ TILE_N` regime where
 the online loops collapse to a single masked tile), whose `softmaxOptimizeSpec`
@@ -2513,6 +2516,33 @@ theorem softmax_kernel_online_v2_surface_exec_correct
         rw [linearOffset, hP0_pidEq]]
   rw [hread, hP0_readInp, hP0_pidEq]
   rw [softmaxOptimizeFullSpec_eq_div, hS_over_s]
+
+/-- **Public output summary (headline theorem).** The full online-softmax
+surface `softmax_kernel_online_v2_surface` realizes the genuine full-row softmax
+`softmaxOptimizeFullSpec` at every output column `j < N` of row `pid`: the total
+write map sends column `j` to `output_ptr` at `linearOffset s N j`, and the
+value read back there after any successful run is exactly the numerically
+stabilized full-row softmax of the loaded input row. Stated via
+`ComputeCorrect.Realizes` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
+the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
+theorem softmax_kernel_online_v2_output_summary
+    (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
+    (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel_online_v2_surface output_ptr input_ptr M N TILE_N)
+      (initialState := s)
+      (write := fun j : Fin N => some (output_ptr, linearOffset s N j))
+      (expected := fun j : Fin N => softmaxOptimizeFullSpec s input_ptr N j) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_kernel_online_v2_surface, ComputeExpr.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro j
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  exact softmax_kernel_online_v2_surface_exec_correct output_ptr input_ptr M N TILE_N
+    hN hT hne s s' hExec j
 
 end VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 

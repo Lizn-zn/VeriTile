@@ -10,12 +10,16 @@
 /-- **Dimension-general public Python forward summary for `rope_transform.py`.**
 For arbitrary symbolic
 row strides, sequence length, head counts, head dim, and `next_power_of_2`
-padding, the full `BACKWARD_PASS = false` surface lowers to the algorithm layer
-and each of the four Python-observable forward stores — Q/K first and second
-halves — reads back, on every active lane, to the genuine rotary closed form
-(`ropeForwardKernel{Q0,Q1,K0,K1}Spec`), NOT the kernel's own executed value.
-The general building-block lemmas (`rope_transform_q0/q1/k0/k1_forward_correct`)
-are already symbolic, so the bundle is a plain anonymous constructor. -/
+padding, each of the four Python-observable forward stores — Q/K first and
+second halves — reads back, on every active lane, to the genuine rotary closed
+form (`ropeForwardKernel{Q0,Q1,K0,K1}Spec`), NOT the kernel's own executed
+value. Stated on the public `ComputeCorrect.Realizes` trust surface (one
+conjunct per stored output half; the store mask is the per-half `activeQ/KFull`
+active-lane predicate, so a masked `WriteMap.writeIf` records exactly the cells
+the kernel writes). `Realizes` internalizes the `exec`/projection quantification,
+so the `s'`/`hExec` binders drop out of the headline. The general building-block
+lemmas (`rope_transform_q0/q1/k0/k1_forward_correct`) supply each per-lane store
+value once the surface is lowered and executed. -/
 ```
 </details>
 
@@ -26,19 +30,73 @@ theorem rope_transform_output_summary_general
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
-    (∃ alg, (triton_rope_surface Q K COS SIN
-      q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE
-      Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (∀ idx : TileIndex [pad_n_qh, pad_hd/2],
-      activeQFull (pad_n_qh
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
+          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx)
+        (fun idx => (Q,
+          qFullFirstOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)))
+      (expected := fun idx =>
+        ropeForwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
+          s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
+          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx)
+        (fun idx => (Q,
+          qFullSecondOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)))
+      (expected := fun idx =>
+        ropeForwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
+          s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
+          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx)
+        (fun idx => (K,
+          kFullFirstOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)))
+      (expected := fun idx =>
+        ropeForwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
+          s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
+          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx)
+        (fun idx => (K,
+          kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)))
+      (expected := fun idx =>
+        ropeForwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
+          s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx))
 ```
 
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hqk : Q ≠ K`
+- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
+          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
+- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
+          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
+- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
+          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
+- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
+          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
 
-**Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`
+**Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeForwardKernelQ0Spec`, `qFullSecondOffset`, `ropeForwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeForwardKernelK0Spec`, `kFullSecondOffset`, `ropeForwardKernelK1Spec`, `cosFullFirstOffset`, `sinFullFirstOffset`
 
 <details><summary><code>triton_rope_surface</code></summary>
 
@@ -114,6 +172,168 @@ def triton_rope_surface
 def activeQFull (n_qh hd : Nat)
     (idx : TileIndex [pad_n_qh, pad_hd_half]) : Prop :=
   idx.1.val < n_qh ∧ idx.2.1.val < hd / 2
+```
+</details>
+
+<details><summary><code>qFullFirstOffset</code></summary>
+
+```
+/-- Tile-level Q first-half offset (target of store #1 in the foldl chain). -/
+```
+```lean
+def qFullFirstOffset
+    (s : BlockState) (q_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_qh, pad_hd_half]) : Nat :=
+  s.pids 0 * q_row_stride + idx.1.val * hd + idx.2.1.val
+```
+</details>
+
+<details><summary><code>ropeForwardKernelQ0Spec</code></summary>
+
+```
+/-- Spec for the Q first-half output under `BACKWARD_PASS = false`:
+`new_q_tile_1 = q_tile_1 * cos - q_tile_2 * sin`. -/
+```
+```lean
+noncomputable def ropeForwardKernelQ0Spec
+    (s : BlockState) (q_ptr cos sin : RegionName)
+    (q_row_stride sl cos_row_stride sin_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_qh, pad_hd_half]) : ℝ :=
+  s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) *
+    s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) -
+  s.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) *
+    s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
+```
+</details>
+
+<details><summary><code>qFullSecondOffset</code></summary>
+
+```
+/-- Tile-level Q second-half offset (target of store #2). -/
+```
+```lean
+def qFullSecondOffset
+    (s : BlockState) (q_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_qh, pad_hd_half]) : Nat :=
+  s.pids 0 * q_row_stride + idx.1.val * hd + idx.2.1.val + hd / 2
+```
+</details>
+
+<details><summary><code>ropeForwardKernelQ1Spec</code></summary>
+
+```
+/-- Spec for the Q second-half output under `BACKWARD_PASS = false`:
+`new_q_tile_2 = q_tile_2 * cos + q_tile_1 * sin`. -/
+```
+```lean
+noncomputable def ropeForwardKernelQ1Spec
+    (s : BlockState) (q_ptr cos sin : RegionName)
+    (q_row_stride sl cos_row_stride sin_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_qh, pad_hd_half]) : ℝ :=
+  s.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) *
+    s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) +
+  s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) *
+    s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
+```
+</details>
+
+<details><summary><code>activeKFull</code></summary>
+
+```
+/-- Active predicate for the K-side stores of the full kernel. -/
+```
+```lean
+def activeKFull (n_kh hd : Nat)
+    (idx : TileIndex [pad_n_kh, pad_hd_half]) : Prop :=
+  idx.1.val < n_kh ∧ idx.2.1.val < hd / 2
+```
+</details>
+
+<details><summary><code>kFullFirstOffset</code></summary>
+
+```
+/-- Tile-level K first-half offset (target of store #3). -/
+```
+```lean
+def kFullFirstOffset
+    (s : BlockState) (k_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_kh, pad_hd_half]) : Nat :=
+  s.pids 0 * k_row_stride + idx.1.val * hd + idx.2.1.val
+```
+</details>
+
+<details><summary><code>ropeForwardKernelK0Spec</code></summary>
+
+```
+/-- Spec for the K first-half output under `BACKWARD_PASS = false`:
+`new_k_tile_1 = k_tile_1 * cos - k_tile_2 * sin`. -/
+```
+```lean
+noncomputable def ropeForwardKernelK0Spec
+    (s : BlockState) (k_ptr cos sin : RegionName)
+    (k_row_stride sl cos_row_stride sin_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_kh, pad_hd_half]) : ℝ :=
+  s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) *
+    s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) -
+  s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) *
+    s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
+```
+</details>
+
+<details><summary><code>kFullSecondOffset</code></summary>
+
+```
+/-- Tile-level K second-half offset (target of store #4). -/
+```
+```lean
+def kFullSecondOffset
+    (s : BlockState) (k_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_kh, pad_hd_half]) : Nat :=
+  s.pids 0 * k_row_stride + idx.1.val * hd + idx.2.1.val + hd / 2
+```
+</details>
+
+<details><summary><code>ropeForwardKernelK1Spec</code></summary>
+
+```
+/-- Spec for the K second-half output under `BACKWARD_PASS = false`:
+`new_k_tile_2 = k_tile_2 * cos + k_tile_1 * sin`. -/
+```
+```lean
+noncomputable def ropeForwardKernelK1Spec
+    (s : BlockState) (k_ptr cos sin : RegionName)
+    (k_row_stride sl cos_row_stride sin_row_stride hd : Nat)
+    (idx : TileIndex [pad_n_kh, pad_hd_half]) : ℝ :=
+  s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) *
+    s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) +
+  s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) *
+    s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
+```
+</details>
+
+<details><summary><code>cosFullFirstOffset</code></summary>
+
+```
+/-- Cos offset for the full kernel's Q stores. -/
+```
+```lean
+def cosFullFirstOffset
+    (s : BlockState) (sl cos_row_stride : Nat)
+    (idx : TileIndex [pad_hd_half]) : Nat :=
+  s.pids 0 % sl * cos_row_stride + idx.1.val
+```
+</details>
+
+<details><summary><code>sinFullFirstOffset</code></summary>
+
+```
+/-- Sin offset for the full kernel's Q stores. -/
+```
+```lean
+def sinFullFirstOffset
+    (s : BlockState) (sl sin_row_stride : Nat)
+    (idx : TileIndex [pad_hd_half]) : Nat :=
+  s.pids 0 % sl * sin_row_stride + idx.1.val
 ```
 </details>
 

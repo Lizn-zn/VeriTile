@@ -28,7 +28,7 @@ destination-index injectivity is supplied as a no-collision lemma.
 ## Proof architecture
 
 ```
-destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOREM (symbolic dims/strides)
+destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOREM (ComputeCorrect.Realizes conjunction, symbolic dims/strides)
   ├─ ..._group_real_surface_toAlgorithm_supported             surface lowers to the algorithm layer
   ├─ ..._group_real_surface_value_output_compute_correct      genuine int8 value readback
   │    ├─ scatter_readback_int_prop_masked_nd                 per-lane int store readback
@@ -42,11 +42,12 @@ destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOR
 
 The genuine value spec (`quantizeKvCopyGroupSurfaceIntValue`) is the int8 cast of
 `src / fp16(max(|src|, axis=1)/127)` read back through `readMemValue .int Out`;
-the genuine scale spec (`quantizeKvCopyGroupScaleCell`) is the stored fp16 cell
-of `max(|src|, axis=1)/127` read back through `readMemValue .fp16 OutScale`. Both
-are computed from the kernel **inputs**, so the top summary is not
-self-referential. The slice-based `quantizeKvCopyGroupValueSpec` /
-`quantizeKvCopyScaleSpec` (with precomputed scale) remain as supporting coverage.
+the genuine scale spec (`quantizeKvCopyGroupScaleCell`) is the stored real cell
+of `max(|src|, axis=1)/127` read back through `readMem OutScale` (the
+`.to(Out_scale.dtype.element_ty)` cast lowers to the real identity). Both are
+computed from the kernel **inputs**, so the top summary is not self-referential.
+The slice-based `quantizeKvCopyGroupValueSpec` / `quantizeKvCopyScaleSpec` (with
+precomputed scale) remain as supporting coverage.
 
 ## Modeling boundary
 
@@ -790,15 +791,17 @@ theorem destindex_copy_quantize_kv_group_real_surface_scale_output_compute_corre
     rfl
 
 /-- **Dimension-general grouped summary (genuine, gap-free).** The symbolic
-generalization of the former pinned Python-shape grouped summary: all
-strides, `group_size`, `BLOCK_GROUP_NUM`, and `BLOCK_GROUP_DIM` are arbitrary
-`Nat` parameters. Bundles the three already-general building blocks
-(`..._toAlgorithm_supported`, `..._value_output_compute_correct`,
-`..._scale_output_compute_correct`) under honest hypotheses: `hD : 0 <
-BLOCK_GROUP_DIM` (nonempty reduce axis), `hOut : Out ≠ OutScale` (no aliasing),
-and the value/scale destination-offset injectivity (no-collision) hypotheses the
-genuine readbacks need. Both expected values are computed from the kernel
-**inputs**, so this summary is not self-referential. -/
+grouped summary: all strides, `group_size`, `BLOCK_GROUP_NUM`, and
+`BLOCK_GROUP_DIM` are arbitrary `Nat` parameters. Stated on the standard
+`ComputeCorrect.Realizes` trust surface: the lowering conjunct plus one
+`Realizes` per stored output (the int8 value store and the real scale store),
+each with a **total** write map so the inactive-lane guarantee lives inside
+`expected` (active lanes get the genuine input-derived spec, inactive lanes keep
+their prior memory). Honest hypotheses: `hD : 0 < BLOCK_GROUP_DIM` (nonempty
+reduce axis), `hOut : Out ≠ OutScale` (no aliasing), and the value/scale
+destination-offset injectivity (no-collision) hypotheses the genuine readbacks
+need. Both expected values are computed from the kernel **inputs**, so this
+summary is not self-referential. -/
 theorem destindex_copy_quantize_kv_group_output_summary_general
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
@@ -818,39 +821,61 @@ theorem destindex_copy_quantize_kv_group_output_summary_general
         stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
         BLOCK_GROUP_NUM BLOCK_GROUP_DIM).toAlgorithm? =
           Except.ok alg) ∧
-    (∀ idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM],
-      let outAddr := outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx
-      (exec (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
-            stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
-            stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
-            BLOCK_GROUP_NUM BLOCK_GROUP_DIM) s).map
-          (·.readMemValue .int Out outAddr)
-        = some (if active s group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM idx then
-            quantizeKvCopyGroupSurfaceIntValue s K stride_k_bs stride_k_h
-              stride_k_g group_size BLOCK_GROUP_DIM hD idx
-          else s.readMemValue .int Out outAddr)) ∧
-    (∀ i : Fin BLOCK_GROUP_NUM,
-      let outAddr := scaleOutOffset s DestLoc stride_os_bs stride_os_h i
-      (exec (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
-            stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
-            stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
-            BLOCK_GROUP_NUM BLOCK_GROUP_DIM) s).map
-          (·.readMem OutScale outAddr)
-        = some (if scaleActive group_size BLOCK_GROUP_NUM i then
-            quantizeKvCopyGroupScaleCell s K stride_k_bs stride_k_h stride_k_g
-              group_size BLOCK_GROUP_DIM hD i.val
-          else s.readMem OutScale outAddr)) :=
-  ⟨destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported K
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+        stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+        BLOCK_GROUP_NUM BLOCK_GROUP_DIM)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] =>
+        some (Out, outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx))
+      (expected := fun idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] =>
+        if active s group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM idx then
+          quantizeKvCopyGroupSurfaceIntValue s K stride_k_bs stride_k_h
+            stride_k_g group_size BLOCK_GROUP_DIM hD idx
+        else s.readMemValue .int Out
+          (outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+        stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+        BLOCK_GROUP_NUM BLOCK_GROUP_DIM)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_GROUP_NUM =>
+        some (OutScale, scaleOutOffset s DestLoc stride_os_bs stride_os_h i))
+      (expected := fun i : Fin BLOCK_GROUP_NUM =>
+        if scaleActive group_size BLOCK_GROUP_NUM i then
+          quantizeKvCopyGroupScaleCell s K stride_k_bs stride_k_h stride_k_g
+            group_size BLOCK_GROUP_DIM hD i.val
+        else s.readMem OutScale
+          (scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) := by
+  refine ⟨destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported K
       DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
       stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
-      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM,
-   destindex_copy_quantize_kv_group_real_surface_value_output_compute_correct K
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM, ?_, ?_⟩
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [destindex_copy_quantize_kv_group_real_surface,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0; subst s0; intro idx
+    simp only [ComputeCorrect.OutputReadable.read_int]
+    have h := destindex_copy_quantize_kv_group_real_surface_value_output_compute_correct K
       DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
       stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
-      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s hD hOut hOutInj,
-   destindex_copy_quantize_kv_group_real_surface_scale_output_compute_correct K
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s hD hOut hOutInj idx
+    rw [hExec] at h
+    simpa using Option.some.inj h
+  · unfold ComputeCorrect.Realizes
+    apply ComputeKernel.computeCorrect_of_toAlgKernel
+    · simp [destindex_copy_quantize_kv_group_real_surface,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    intro s0 s' hExec hs0; subst s0; intro i
+    simp only [ComputeCorrect.OutputReadable.read_real]
+    have h := destindex_copy_quantize_kv_group_real_surface_scale_output_compute_correct K
       DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
       stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
-      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s hD (fun h => hOut h.symm) hScaleInj⟩
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s hD (fun h => hOut h.symm) hScaleInj i
+    rw [hExec] at h
+    simpa using Option.some.inj h
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy
