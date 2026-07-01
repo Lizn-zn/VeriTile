@@ -10,22 +10,23 @@
 /-- **Per-kernel forward output summary for `cross_entropy_fwd_surface`
 (genuine, end-to-end).**
 
-For any execution `exec ... s = some s'` (with the side outputs and the logits
-buffer pairwise-distinct as needed, and at least one valid lane), bundles:
-1. the full forward surface lowers to the algorithm layer (`toAlgorithm? = ok`);
-2. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
+Stated as a conjunction of `ComputeCorrect.Realizes` claims (with the side
+outputs and the logits buffer pairwise-distinct as needed, and at least one valid
+lane), bundling:
+1. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
    masked-lane stable log-sum-exp `partialLSE_full` of the INPUT block logits,
    *scaled by `logit_scale`*;
-3. **genuine loss output**: `loss_ptr[col_block·n_rows + row]` holds exactly the
+2. **genuine loss output**: `loss_ptr[col_block·n_rows + row]` holds exactly the
    faithful five-way cross-entropy `crossEntropyLossSpec`, every logit sub-term
    scaled by `logit_scale` and read from INPUT memory;
-4. **genuine z-loss output (¬SPLIT)**: when `SPLIT = false`,
+3. **genuine z-loss output (¬SPLIT)**: when `SPLIT = false`,
    `z_loss_ptr[col_block·n_rows + row]` holds exactly `zLossSpec`
    (`lse_square_scale·lse²`, or `0` when the label is ignored).
 
-All value specs read INPUT memory, never `exec(...).readMem`, so this summary is
-non-self-referential. The region-distinctness hypotheses are the only framing
-side-conditions. -/
+Each `ComputeCorrect.Realizes` internalizes the execution (`exec ... = some s'`)
+and the lowering to the algorithm layer. All value specs read INPUT memory, never
+`exec(...).readMem`, so this summary is non-self-referential. The
+region-distinctness hypotheses are the only framing side-conditions. -/
 ```
 </details>
 
@@ -37,34 +38,44 @@ theorem cross_entropy_fwd_output_summary
     (total_classes : Nat) (class_start_idx : Int)
     (n_cols n_rows logits_row_stride : Nat) (n : Nat)
     (HAS_SMOOTHING SPLIT : Bool)
-    (s s' : BlockState)
+    (s : BlockState)
     (h_tail : s.pids 1 * (n+1) < n_cols)
     (hne : lse_ptr ≠ loss_ptr)
     (hneZ : lse_ptr ≠ z_loss_ptr)
     (hLL : lse_ptr ≠ logits_ptr)
-    (hLZ : loss_ptr ≠ z_loss_ptr)
-    (hExec : exec (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT) s = some s') :
-    (∃ alg,
-      (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing
-        logit_scale lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
-        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgorithm? =
-        Except.ok alg) ∧
-    (s'.readMem lse_ptr (lseOutOffset s n_rows) =
-      partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-        (s.pids 1) h_tail Bool.true logit_scale) ∧
-    (s'.readMem loss_ptr (lseOutOffset s n_rows) =
-      crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
-        lse_square_scale ignored_index total_classes class_start_idx n_cols
-        logits_row_stride n HAS_SMOOTHING SPLIT
-        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+    (hLZ : loss_ptr ≠ z_loss_ptr) :
+    (ComputeCorrect.Realizes
+      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+        smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
+      (initialState := s)
+      (write := fun _ : PUnit => some (lse_ptr, lseOutOffset s n_rows))
+      (expected := fun _ =>
+        partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
           (s.pids 1) h_tail Bool.true logit_scale)) ∧
-    (SPLIT = Bool.false →
-      s'.readMem z_loss_ptr (lseOutOffset s n_rows) =
-        zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
+    (ComputeCorrect.Realizes
+      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+        smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
+      (initialState := s)
+      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
+      (expected := fun _ =>
+        crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
+          lse_square_scale ignored_index total_classes class_start_idx n_cols
+          logits_row_stride n HAS_SMOOTHING SPLIT
           (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-            (s.pids 1) h_tail Bool.true logit_scale))
+            (s.pids 1) h_tail Bool.true logit_scale))) ∧
+    (SPLIT = Bool.false →
+      ComputeCorrect.Realizes
+        (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+          smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+          n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
+        (initialState := s)
+        (write := fun _ : PUnit => some (z_loss_ptr, lseOutOffset s n_rows))
+        (expected := fun _ =>
+          zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
+            (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+              (s.pids 1) h_tail Bool.true logit_scale)))
 ```
 
 **Assumptions / layout contracts:**

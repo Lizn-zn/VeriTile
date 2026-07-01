@@ -39,12 +39,14 @@
 | 92 | [AttnFwdCausal.md](AttnFwdCausal.md) | 17 | 2 | 30 | 9 |  |
 | 92 | [AttnFwdTriton.md](AttnFwdTriton.md) | 17 | 2 | 30 | 9 |  |
 | 88 | [LightningAttention.md](LightningAttention.md) | 12 | 6 | 42 | 4 |  |
+| 87 | [FastCeLoss.md](FastCeLoss.md) | 9 | 2 | 53 | 5 |  |
 | 86 | [KvCacheFilling.md](KvCacheFilling.md) | 11 | 0 | 51 | 2 |  |
 | 82 | [RopeBackwardTransform.md](RopeBackwardTransform.md) | 13 | 0 | 41 | 2 |  |
-| 79 | [FastCeLoss.md](FastCeLoss.md) | 9 | 2 | 45 | 5 |  |
 | 78 | [TokenAttnMistral.md](TokenAttnMistral.md) | 14 | 0 | 31 | 5 |  |
 | 76 | [DestindexCopy.md](DestindexCopy.md) | 8 | 0 | 49 | 3 |  |
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
+| 75 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 2 | 44 | 5 |  |
+| 75 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 2 | 44 | 5 |  |
 | 75 | [LayerNormLiger.md](LayerNormLiger.md) | 10 | 0 | 38 | 7 |  |
 | 74 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 2 | 22 | 2 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 10 | 1 | 34 | 7 |  |
@@ -57,8 +59,6 @@
 | 66 | [TokenAttnReduceV.md](TokenAttnReduceV.md) | 11 | 0 | 27 | 6 |  |
 | 65 | [AttentionScore.md](AttentionScore.md) | 12 | 2 | 23 | 4 |  |
 | 65 | [ChunkGlaSimple.md](ChunkGlaSimple.md) | 13 | 5 | 16 | 5 |  |
-| 65 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 2 | 34 | 5 |  |
-| 65 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 2 | 34 | 5 |  |
 | 63 | [ContextAttnNopad.md](ContextAttnNopad.md) | 14 | 0 | 15 | 6 |  |
 | 60 | [MatmulLeakyrelu.md](MatmulLeakyrelu.md) | 13 | 2 | 15 | 4 |  |
 | 60 | [MatmulLeakyreluFp8.md](MatmulLeakyreluFp8.md) | 13 | 2 | 15 | 4 |  |
@@ -67,10 +67,10 @@
 | 58 | [GegluTanhTriton.md](GegluTanhTriton.md) | 3 | 0 | 40 | 9 |  |
 | 58 | [SwigluTriton.md](SwigluTriton.md) | 3 | 0 | 40 | 9 |  |
 | 57 | [AttentionKernel.md](AttentionKernel.md) | 11 | 1 | 18 | 5 |  |
+| 57 | [CrossEntropy1.md](CrossEntropy1.md) | 7 | 2 | 31 | 3 |  |
 | 54 | [IvDependentMatmul.md](IvDependentMatmul.md) | 11 | 2 | 15 | 4 |  |
 | 54 | [MatmulTma.md](MatmulTma.md) | 6 | 2 | 30 | 4 |  |
 | 54 | [SwigluBackward.md](SwigluBackward.md) | 2 | 0 | 41 | 7 |  |
-| 53 | [CrossEntropy1.md](CrossEntropy1.md) | 7 | 2 | 27 | 3 |  |
 | 53 | [KcacheCopyTriton.md](KcacheCopyTriton.md) | 8 | 0 | 27 | 2 |  |
 | 53 | [LayernormFwdTriton.md](LayernormFwdTriton.md) | 8 | 0 | 25 | 4 |  |
 | 52 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 25 | 0 |  |
