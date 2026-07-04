@@ -200,6 +200,13 @@ noncomputable def rmsStdCarrier
       (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
         N_SIZE BLOCK_N_SIZE))
 
+/-- Algebraic offset into `x_ptr` for an arbitrary column index `col : Nat`:
+row `(batch, m) = (pids 0, pids 1)` at strides `(stride_x_batch, stride_x_m)`,
+column `col` at stride `stride_x_k`. -/
+def xColOffset
+    (s : BlockState) (stride_x_batch stride_x_m stride_x_k col : Nat) : Nat :=
+  s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + col * stride_x_k
+
 /-- Multi-block full-N variance carrier: the algebraic ground truth for
 `Σ_{j < N_SIZE} (x[j])²`, independent of any block decomposition. -/
 noncomputable def rmsVarFullNCarrier
@@ -207,7 +214,7 @@ noncomputable def rmsVarFullNCarrier
     (stride_x_batch stride_x_m stride_x_k N_SIZE _BLOCK_N_SIZE : Nat) : ℝ :=
   ∑ j : Fin N_SIZE,
     (s.readMem x_ptr
-        (s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + j.val * stride_x_k))^2
+        (xColOffset s stride_x_batch stride_x_m stride_x_k j.val))^2
 
 /-- Multi-block full-N reciprocal-standard-deviation:
 `1 / sqrt(Σ x_j² / N_SIZE + eps)`. -/
@@ -989,11 +996,6 @@ theorem rmsnorm_implementation_compute_correct
 We isolate the first `for block_n_strart_ptr in range(0, N_SIZE, BLOCK_N_SIZE)`
 loop and prove that its `var` register holds the per-lane prefix sum of
 squares carrier indexed by `Fin BLOCK_N_SIZE`. -/
-
-/-- Algebraic offset into `x_ptr` for an arbitrary column index `col : Nat`. -/
-def xColOffset
-    (s : BlockState) (stride_x_batch stride_x_m stride_x_k col : Nat) : Nat :=
-  s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + col * stride_x_k
 
 /-- Per-lane partial sum of squares after columns `0..off`. -/
 noncomputable def rmsVarLanePrefix

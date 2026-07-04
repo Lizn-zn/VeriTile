@@ -2151,6 +2151,12 @@ noncomputable def bwdKernelDiG (s : BlockState) (Delta : RegionName) (NCTX : Nat
     (I : Nat) : ℝ :=
   s.readMem Delta (s.pids 0 * NCTX + I)
 
+/-- Prior (pre-accumulation) `dq[I,e] = DQ[base + I·BD + e]` — the `DQ` buffer
+value the kernel's `+=` accumulates onto (same tile layout as `Q`/`DO`). -/
+noncomputable def bwdKernelDQ0G (s : BlockState) (DQ : RegionName) (BD : Nat)
+    (I : Nat) (e : Nat) : ℝ :=
+  s.readMem DQ (bwdKBase s + I * BD + e)
+
 /-- `qk[I,J] = Σ_e q[I,e]·k[J,e]` (the `tl.dot(q, trans(k))` score). -/
 noncomputable def bwdKernelQKG (s : BlockState) (Q K : RegionName) (BD : Nat)
     (I J : Nat) : ℝ :=
@@ -2181,7 +2187,7 @@ summed over **all** global key rows `J ∈ [0, N_CTX)` (causal `p ⇒ ds` zeroes
 noncomputable def bwdKernelDQSpecG
     (s : BlockState) (Q K V DO M Delta DQ : RegionName) (BD NCTX : Nat) (sc : ℝ)
     (I e : Nat) : ℝ :=
-  s.readMem DQ (bwdKBase s + I * BD + e) +
+  bwdKernelDQ0G s DQ BD I e +
     ∑ J : Fin NCTX,
       bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J.val) *
         bwdKernelKG s K BD J.val e
@@ -2228,7 +2234,7 @@ theorem bwdKernelDQSpecG_blockSum (s : BlockState) (Q K V DO M Delta DQ : Region
         ∑ n : Fin nb, ∑ jL : Fin BM,
           bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I (n.val * BM + jL.val)) *
             bwdKernelKG s K BD (n.val * BM + jL.val) e := by
-  simp only [bwdKernelDQSpecG]
+  simp only [bwdKernelDQSpecG, bwdKernelDQ0G]
   refine congrArg (s.readMem DQ (bwdKBase s + I * BD + e) + ·) ?_
   rw [bwd_flatSum_eq_blockSum
     (fun J : Fin (BM * nb) =>

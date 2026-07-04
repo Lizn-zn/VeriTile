@@ -131,12 +131,19 @@ def layernorm_backward
   tl.store(dY + col_offsets, dX_row, mask=mask)
 }
 
+/-- Element `j` of **this program's row** of a row-major matrix region `R`
+(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
+`dY` row loads all use this layout. -/
+noncomputable def rowElem (s : BlockState) (R : RegionName)
+    (row_stride j : Nat) : ℝ :=
+  s.readMem R (s.pid * row_stride + j)
+
 noncomputable def layernormInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      else some (0 : ℝ) }
 
 noncomputable def layernormMeanCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -178,7 +185,7 @@ noncomputable def layernormYSpec
       (Option.map₂ (fun scaled w => scaled * w)
         (Option.map₂ (fun centered inv => centered * inv)
           (Option.map₂ (fun x mean => x - mean)
-            (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+            (some (rowElem s X X_row_stride idx.val))
             (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))
           (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
         (some (s.readMem W idx.val)))
@@ -217,7 +224,7 @@ theorem layernorm_forward_y_correct
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, layernormYSpec, layernormInvVarCarrier, layernormVarCarrier,
-            layernormCenteredTile, layernormMeanCarrier, layernormInputTile,
+            layernormCenteredTile, layernormMeanCarrier, layernormInputTile, rowElem,
             Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
             TileShape.eraseAxis, TileShape.insertAxisIndex,
             WithBot.realRsqrt, NumericDType.mul]
@@ -307,9 +314,9 @@ noncomputable def layernormDXSpec
     (s : BlockState) (dY X W r mu : RegionName)
     (dY_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
     (i : Fin BLOCK_SIZE) : ℝ :=
-  let dyw_i := s.readMem dY (s.pid * dY_row_stride + i.val) *
+  let dyw_i := rowElem s dY dY_row_stride i.val *
     s.readMem W i.val
-  let normed_i_inv := (s.readMem X (s.pid * X_row_stride + i.val) -
+  let normed_i_inv := (rowElem s X X_row_stride i.val -
     s.readMem mu s.pid) * s.readMem r s.pid
   WithBot.unbotD 0
     (Option.map (fun v => v * s.readMem r s.pid)
@@ -365,7 +372,7 @@ theorem layernorm_backward_dx_correct
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
-    · simp [hi, layernormDXSpec, layernormBackwardDYWTile,
+    · simp [hi, layernormDXSpec, rowElem, layernormBackwardDYWTile,
             layernormBackwardDYTile, layernormBackwardWTile,
             layernormBackwardNormedTile, layernormBackwardSumDYWMean,
             layernormBackwardSumDYWNormedMean, layernormBackwardInvVar,
@@ -479,7 +486,7 @@ theorem layernorm_forward_inv_var_correct
   rw [BlockState.writeMem_readMem]
   simp only [BlockState.pid_eq, and_self, if_true]
   simp [invVarFullSpec, layernormInvVarCarrier, layernormVarCarrier,
-        layernormCenteredTile, layernormMeanCarrier, layernormInputTile,
+        layernormCenteredTile, layernormMeanCarrier, layernormInputTile, rowElem,
         Tile.bop, Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.mul,
         WithBot.realRsqrt]
@@ -534,7 +541,7 @@ theorem layernorm_forward_mean_correct
   simp only [BlockState.setReg_readMem]
   rw [BlockState.writeMem_readMem]
   simp only [BlockState.pid_eq, and_self, if_true]
-  simp only [meanFullSpec, layernormMeanCarrier, layernormInputTile,
+  simp only [meanFullSpec, layernormMeanCarrier, layernormInputTile, rowElem,
         Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex]
   rfl

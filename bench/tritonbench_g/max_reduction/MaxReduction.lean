@@ -146,6 +146,12 @@ noncomputable def maxKernel2Spec
   | some out => WithBot.unbotD 0 (out.data PUnit.unit)
   | none => 0
 
+/-- Input element `inp[m, n, pid1]` of the row-major `[M, N, K]` input tensor
+(this program reduces along `n` at fixed trailing index `k = pids 1`). -/
+noncomputable def maxInpElem (s : BlockState) (inp : RegionName)
+    (N K m n : Nat) : ℝ :=
+  s.readMem inp (m * N * K + n * K + s.pids 1)
+
 /-- Input tile for the 2D value/index max kernel. Masked lanes are `⊥`,
 matching `other=-float("inf")`. -/
 noncomputable def maxKernelInputTile
@@ -156,7 +162,7 @@ noncomputable def maxKernelInputTile
       let m := s.pids 0 * BLOCK_M + idx.1.val
       let n := idx.2.1.val
       if m < M ∧ n < N then
-        some (s.readMem inp (m * N * K + n * K + s.pids 1))
+        some (maxInpElem s inp N K m n)
       else none }
 
 /-- Output offset for the 2D value/index max kernel at row lane `i`. -/
@@ -293,7 +299,7 @@ theorem max_kernel_compute_correct
         · simp only [maxKernelOutOffset]
           rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
           simp [hActive, maxKernelValueSpec,
-            maxKernelInputTile, Tile.reduceMax, Tile.reduceMaxDrop,
+            maxKernelInputTile, maxInpElem, Tile.reduceMax, Tile.reduceMaxDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hBN]
           congr
         · intro k _hk _hPk hEq
@@ -301,7 +307,7 @@ theorem max_kernel_compute_correct
       · simp only [maxKernelOutOffset]
         rw [BlockState.scatter_readback_nat_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
         simp [hActive, maxKernelIndexSpec,
-          maxKernelInputTile, Tile.argMaxDrop, Tile.argBestDrop,
+          maxKernelInputTile, maxInpElem, Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hBN]
     · simp [exec, max_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
