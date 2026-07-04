@@ -207,6 +207,13 @@ theorem lightning_attention_forward_kv_step_slice_toAlgorithm_supported
 def kvOffset (BLOCK_MODEL : Nat) (idx : TileIndex [D, BLOCK_MODEL]) : Nat :=
   idx.1.val * BLOCK_MODEL + idx.2.1.val
 
+/-- Row-major staged-tile element `R[i, j]` of a flat `[rows, width]` scratch
+region (offset `i·width + j`): the layout of every materialized per-block tile
+(`Q`, `KTrans`, `V`, `KVPrev`) that the proof slices exchange. -/
+noncomputable def tileElem (s : BlockState) (R : RegionName)
+    (width i j : Nat) : ℝ :=
+  s.readMem R (i * width + j)
+
 /-- The arithmetic spec of one `kv`-update body: `KVPrev[a,c] + Σ_j
 k_trans[a,j]·v[j,c]`, i.e. the materialized previous state plus the block's
 `tl.dot(k_trans, v)` outer product. -/
@@ -214,8 +221,8 @@ noncomputable def kvStepSpec (s : BlockState) (KVPrev KTrans V : RegionName)
     (D BLOCK BLOCK_MODEL : Nat) (idx : TileIndex [D, BLOCK_MODEL]) : ℝ :=
   s.readMem KVPrev (kvOffset BLOCK_MODEL idx) +
     ∑ j : Fin BLOCK,
-      s.readMem KTrans (idx.1.val * BLOCK + j.val) *
-        s.readMem V (j.val * BLOCK_MODEL + idx.2.1.val)
+      tileElem s KTrans BLOCK idx.1.val j.val *
+        tileElem s V BLOCK_MODEL j.val idx.2.1.val
 
 theorem lightning_attention_forward_kv_step_slice_correct
     (KVPrev KTrans V KVOut : RegionName) (D BLOCK BLOCK_MODEL : Nat)
@@ -231,7 +238,8 @@ theorem lightning_attention_forward_kv_step_slice_correct
   simp [exec, lightning_attention_forward_kv_step_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, Tile.dot, NumericDType.add,
-        NumericDType.mul, kvOffset, kvStepSpec, TileShape.dropInsertedIndex]
+        NumericDType.mul, kvOffset, kvStepSpec, tileElem,
+        TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [D, BLOCK_MODEL] → Nat :=
     fun idx => idx.1.val * BLOCK_MODEL + idx.2.1.val
   let valueFn : TileIndex [D, BLOCK_MODEL] → ℝ :=
@@ -296,7 +304,7 @@ theorem kvStepSpec_eq_kvClosed_succ
     kvStepSpec s KVPrev KTrans V d BLOCK BLOCK_MODEL idx
       = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val := by
   rw [kvClosed_succ]
-  unfold kvStepSpec
+  unfold kvStepSpec tileElem
   rw [hPrev idx]
   congr 1
   rw [Fin.sum_univ_eq_sum_range
@@ -343,8 +351,8 @@ materialized previous-state tile `KVPrev`: `Σ_a q[r,a]·KVPrev[a,c]`. -/
 noncomputable def oInterDotSpec (s : BlockState) (Q KVPrev : RegionName)
     (BLOCK D BLOCK_MODEL : Nat) (idx : TileIndex [BLOCK, BLOCK_MODEL]) : ℝ :=
   ∑ a : Fin D,
-    s.readMem Q (idx.1.val * D + a.val) *
-      s.readMem KVPrev (a.val * BLOCK_MODEL + idx.2.1.val)
+    tileElem s Q D idx.1.val a.val *
+      tileElem s KVPrev BLOCK_MODEL a.val idx.2.1.val
 
 theorem lightning_attention_forward_o_inter_dot_slice_correct
     (Q KVPrev OInter : RegionName) (BLOCK D BLOCK_MODEL : Nat) (s : BlockState)
@@ -359,7 +367,8 @@ theorem lightning_attention_forward_o_inter_dot_slice_correct
   simp [exec, lightning_attention_forward_o_inter_dot_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, Tile.dot, NumericDType.add,
-        NumericDType.mul, oInterOffset, oInterDotSpec, TileShape.dropInsertedIndex]
+        NumericDType.mul, oInterOffset, oInterDotSpec, tileElem,
+        TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK, BLOCK_MODEL] → Nat :=
     fun idx => idx.1.val * BLOCK_MODEL + idx.2.1.val
   have hInj : Function.Injective offsetFn := by
