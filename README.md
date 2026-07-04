@@ -29,8 +29,9 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
 - **CI gate**: `lake build` + `scripts/check-artifact.sh` (no `sorry`,
-  axiom whitelist, manifest schema, doc-drift checks) +
-  `bench/check_ports.sh`.
+  axiom whitelist, manifest schema, doc-drift checks).
+  `bench/check_ports.sh` is a separate local check (not run in CI) that
+  builds the TritonBench-G ports one by one.
 
 Out of scope: IEEE-754 floating-point semantics, PTX-level codegen,
 detailed concurrency (atomics / async-copy serialization, beyond the
@@ -141,6 +142,7 @@ verso/                     Slide deck / overview
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
 - `bench/check_ports.sh` — per-port build of the TritonBench-G ports
+  (local / manual; not part of the CI gate)
 
 ## Environment
 
