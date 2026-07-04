@@ -76,6 +76,11 @@ noncomputable def l2Spec
 
 <details><summary><code>l2Load</code></summary>
 
+```
+/-- Masked row element `X[pid, idx]`: lane `idx` of **this program's row**
+(row = `pid`, row stride `stride_x_row`, unit column stride), `0` beyond the
+`N` bound (`mask=cols < N, other=0.0`). -/
+```
 ```lean
 noncomputable def l2Load
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat)

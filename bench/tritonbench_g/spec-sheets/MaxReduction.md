@@ -43,7 +43,7 @@ theorem max_kernel_output_summary
 - `hOutRegions : out_value ≠ out_index`
 - `fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M`
 
-**Closed-form spec defs (transitive):** `maxKernelOutOffset`, `max_kernel`, `maxKernelValueSpec`, `maxKernelIndexSpec`, `maxKernelInputTile`
+**Closed-form spec defs (transitive):** `maxKernelOutOffset`, `max_kernel`, `maxKernelValueSpec`, `maxKernelIndexSpec`, `maxKernelInputTile`, `maxInpElem`
 
 <details><summary><code>maxKernelOutOffset</code></summary>
 
@@ -136,8 +136,21 @@ noncomputable def maxKernelInputTile
       let m := s.pids 0 * BLOCK_M + idx.1.val
       let n := idx.2.1.val
       if m < M ∧ n < N then
-        some (s.readMem inp (m * N * K + n * K + s.pids 1))
+        some (maxInpElem s inp N K m n)
       else none }
+```
+</details>
+
+<details><summary><code>maxInpElem</code></summary>
+
+```
+/-- Input element `inp[m, n, pid1]` of the row-major `[M, N, K]` input tensor
+(this program reduces along `n` at fixed trailing index `k = pids 1`). -/
+```
+```lean
+noncomputable def maxInpElem (s : BlockState) (inp : RegionName)
+    (N K m n : Nat) : ℝ :=
+  s.readMem inp (m * N * K + n * K + s.pids 1)
 ```
 </details>
 

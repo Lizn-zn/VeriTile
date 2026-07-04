@@ -138,7 +138,7 @@ noncomputable def penaltyValue
     (stride_logit_b : Nat) (i : Fin BLOCK_P) : ℝ :=
   TiledOptimizer.lionPenalty
     (s.readMem Logits
-      (s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i))
+      (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
     (s.readMemValue .nat p_token_counts (tokenOffset s p_cumsum_seq_len i) : ℝ)
     (s.readMem repetition_penalty (s.pids 0))
     (s.readMem freqency_penalty (s.pids 0))

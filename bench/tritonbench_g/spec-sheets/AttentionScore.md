@@ -47,7 +47,7 @@ theorem attention_score_python_case1_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun i : Fin BN => case1OutActiveG s BN NKV_CTX i`
 
-**Closed-form spec defs (transitive):** `attention_score_kernel`, `case1OutActiveG`, `case1OutStoreOffsetG`, `case1OutClosedFormG`, `case1ColSumG`, `case1MaskG`, `case1WeightG`, `case1DistG`, `case1RawScoreG`, `case1QKOffsetQG`, `case1QKOffsetKG`, `case1MOffsetG`
+**Closed-form spec defs (transitive):** `attention_score_kernel`, `case1OutActiveG`, `case1OutStoreOffsetG`, `case1OutClosedFormG`, `case1ColSumG`, `case1MaskG`, `case1WeightG`, `case1DistG`, `case1RawScoreG`, `case1QKOffsetQG`, `case1QKOffsetKG`, `case1MOffsetG`, `case1QElemG`, `case1KElemG`
 
 <details><summary><code>attention_score_kernel</code></summary>
 
@@ -268,8 +268,7 @@ def case1DistG (s : BlockState) (BLOCK_M BLOCK_N sliding_window_offset c i j : N
 
 ```
 /-- General raw, unscaled QK dot for query row `r`, global key column `n`:
-`Σ_{d<BLOCK_DMODEL} Q[r,d]·K[d,n]` with `Q[r,d] @ qoff + r·stride_qm + d·stride_qk`,
-`K[d,n] @ koff + d·stride_kk + n·stride_kn`. -/
+`Σ_{d<BLOCK_DMODEL} Q[r,d]·K[d,n]` (elements via `case1QElemG`/`case1KElemG`). -/
 ```
 ```lean
 noncomputable def case1RawScoreG
@@ -277,8 +276,8 @@ noncomputable def case1RawScoreG
     (BLOCK_DMODEL stride_qm stride_qk stride_kk stride_kn : Nat)
     (qoff koff : Nat) (r n : Nat) : ℝ :=
   Finset.univ.sum (fun d : Fin BLOCK_DMODEL =>
-    s.readMem Q (qoff + r * stride_qm + d.val * stride_qk)
-      * s.readMem K (koff + d.val * stride_kk + n * stride_kn))
+    case1QElemG s Q stride_qm stride_qk qoff r d.val
+      * case1KElemG s K stride_kk stride_kn koff d.val n)
 ```
 </details>
 
@@ -313,6 +312,33 @@ def case1QKOffsetKG (s : BlockState) (H H_KV stride_kz stride_kh : Nat) : Nat :=
 ```
 ```lean
 def case1MOffsetG (s : BlockState) (ROUND_CTX r : Nat) : Nat := s.pids 1 * ROUND_CTX + r
+```
+</details>
+
+<details><summary><code>case1QElemG</code></summary>
+
+```
+/-- Query element `Q[r, d]` at `qoff + r·stride_qm + d·stride_qk` (the `Q`
+block-ptr `[ROUND_CTX, BLOCK_DMODEL]` layout; base `qoff = case1QKOffsetQG`). -/
+```
+```lean
+noncomputable def case1QElemG (s : BlockState) (Q : RegionName)
+    (stride_qm stride_qk qoff r d : Nat) : ℝ :=
+  s.readMem Q (qoff + r * stride_qm + d * stride_qk)
+```
+</details>
+
+<details><summary><code>case1KElemG</code></summary>
+
+```
+/-- Key element `K[d, n]` at `koff + d·stride_kk + n·stride_kn` (the `K`
+block-ptr `[BLOCK_DMODEL, NKV_CTX]` layout; base `koff = case1QKOffsetKG`,
+global key column `n`). -/
+```
+```lean
+noncomputable def case1KElemG (s : BlockState) (K : RegionName)
+    (stride_kk stride_kn koff d n : Nat) : ℝ :=
+  s.readMem K (koff + d * stride_kk + n * stride_kn)
 ```
 </details>
 

@@ -1359,7 +1359,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
 - `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
 - `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
-**Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case4OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case4MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `aft3Case4Seed`, `natSlidingWindowKeepG`, `aft3StateSeededG`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `natDist3G`, `aft3KeysUptoG`, `aft3OsStepBot`
+**Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case4OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case4MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `aft3Case4Seed`, `natSlidingWindowKeepG`, `aft3StateSeededG`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `mlRow3G`, `outLane3G`, `natDist3G`, `aft3KeysUptoG`, `aft3OsStepBot`
 
 <details><summary><code>attention_fwd_triton3_surface</code></summary>
 
@@ -1590,22 +1590,15 @@ def offH (s : BlockState) (H : Nat) : Nat :=
 
 <details><summary><code>aft3Case4Seed</code></summary>
 
-```
-/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
-`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
-`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
-state `s` (these are the running results of prior chunk launches, i.e. genuine
-INPUT memory to this program, not this program's own executed output). -/
-```
 ```lean
 noncomputable def aft3Case4Seed
     (s : BlockState) (M Out L : RegionName)
     (base BM ND som son ROUND_CTX : Nat) :
     Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
   fun i d =>
-    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
-     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
-     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
+    (((mlRow3G s M ROUND_CTX BM i.val : ℝ) : WithBot ℝ),
+     mlRow3G s L ROUND_CTX BM i.val,
+     outLane3G s Out base BM som son i.val d.val)
 ```
 </details>
 
@@ -1685,6 +1678,32 @@ noncomputable def vTile3G (s : BlockState) (V : RegionName)
 ```
 ```lean
 noncomputable def keyScale3G (sc : ℝ) (NC : Nat) : Fin NC → ℝ := fun _ => sc
+```
+</details>
+
+<details><summary><code>mlRow3G</code></summary>
+
+```
+/-- Per-row running-stat entry `R[off_hz·ROUND_CTX + start_m·BM + i]` — the
+shared row layout of the `M` (running max) and `L` (running denom) buffers. -/
+```
+```lean
+noncomputable def mlRow3G (s : BlockState) (R : RegionName)
+    (ROUND_CTX BM : Nat) (i : Nat) : ℝ :=
+  s.readMem R (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i))
+```
+</details>
+
+<details><summary><code>outLane3G</code></summary>
+
+```
+/-- Output-buffer lane `Out[base + (start_m·BM + i)·som + d·son]` — the `Out`
+block-pointer layout at row stride `som`, lane stride `son`. -/
+```
+```lean
+noncomputable def outLane3G (s : BlockState) (Out : RegionName)
+    (base BM som son : Nat) (i d : Nat) : ℝ :=
+  s.readMem Out (base + (s.pids 0 * BM + i) * som + d * son)
 ```
 </details>
 

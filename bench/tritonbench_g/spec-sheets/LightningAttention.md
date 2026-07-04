@@ -91,7 +91,7 @@ theorem lightning_attention_output_summary_general
       kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
         = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val`
 
-**Closed-form spec defs (transitive):** `kvOffset`, `kvClosed`, `fwdKVal`, `fwdVVal`, `lightning_attention_forward_surface`, `lightning_attention_bwd_intra_surface`, `lightning_attention_bwd_inter_surface`, `lightning_attention_forward_kv_step_slice`, `kvStepSpec`, `lightning_attention_forward_o_inter_dot_slice`, `oInterOffset`, `oInterDotSpec`
+**Closed-form spec defs (transitive):** `kvOffset`, `kvClosed`, `fwdKVal`, `fwdVVal`, `lightning_attention_forward_surface`, `lightning_attention_bwd_intra_surface`, `lightning_attention_bwd_inter_surface`, `lightning_attention_forward_kv_step_slice`, `kvStepSpec`, `lightning_attention_forward_o_inter_dot_slice`, `oInterOffset`, `oInterDotSpec`, `tileElem`
 
 <details><summary><code>kvOffset</code></summary>
 
@@ -422,8 +422,8 @@ noncomputable def kvStepSpec (s : BlockState) (KVPrev KTrans V : RegionName)
     (D BLOCK BLOCK_MODEL : Nat) (idx : TileIndex [D, BLOCK_MODEL]) : ℝ :=
   s.readMem KVPrev (kvOffset BLOCK_MODEL idx) +
     ∑ j : Fin BLOCK,
-      s.readMem KTrans (idx.1.val * BLOCK + j.val) *
-        s.readMem V (j.val * BLOCK_MODEL + idx.2.1.val)
+      tileElem s KTrans BLOCK idx.1.val j.val *
+        tileElem s V BLOCK_MODEL j.val idx.2.1.val
 ```
 </details>
 
@@ -474,8 +474,22 @@ materialized previous-state tile `KVPrev`: `Σ_a q[r,a]·KVPrev[a,c]`. -/
 noncomputable def oInterDotSpec (s : BlockState) (Q KVPrev : RegionName)
     (BLOCK D BLOCK_MODEL : Nat) (idx : TileIndex [BLOCK, BLOCK_MODEL]) : ℝ :=
   ∑ a : Fin D,
-    s.readMem Q (idx.1.val * D + a.val) *
-      s.readMem KVPrev (a.val * BLOCK_MODEL + idx.2.1.val)
+    tileElem s Q D idx.1.val a.val *
+      tileElem s KVPrev BLOCK_MODEL a.val idx.2.1.val
+```
+</details>
+
+<details><summary><code>tileElem</code></summary>
+
+```
+/-- Row-major staged-tile element `R[i, j]` of a flat `[rows, width]` scratch
+region (offset `i·width + j`): the layout of every materialized per-block tile
+(`Q`, `KTrans`, `V`, `KVPrev`) that the proof slices exchange. -/
+```
+```lean
+noncomputable def tileElem (s : BlockState) (R : RegionName)
+    (width i j : Nat) : ℝ :=
+  s.readMem R (i * width + j)
 ```
 </details>
 

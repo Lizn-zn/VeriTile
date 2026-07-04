@@ -38,7 +38,7 @@ theorem rms_norm_kernel_output_summary
       (fun i : Fin BLOCK_SIZE => rmsOutOffset s y_stride_r y_stride_c i)`
 - `fun i : Fin BLOCK_SIZE => i.val < N`
 
-**Closed-form spec defs (transitive):** `rmsOutOffset`, `rms_norm_kernel`, `rmsNormSpec`, `rmsRrmsCarrier`, `rmsSumCarrier`, `rmsInputTile`
+**Closed-form spec defs (transitive):** `rmsOutOffset`, `rms_norm_kernel`, `rmsNormSpec`, `xElem`, `rmsRrmsCarrier`, `rmsSumCarrier`, `rmsInputTile`
 
 <details><summary><code>rmsOutOffset</code></summary>
 
@@ -88,9 +88,22 @@ noncomputable def rmsNormSpec
   WithBot.unbotD 0
     (Option.map₂ (fun x w => x * w)
       (Option.map₂ (fun x rrms => x * rrms)
-        (some (s.readMem X (s.pids 0 * x_stride_r + idx.val * x_stride_c)))
+        (some (xElem s X x_stride_r x_stride_c idx.val))
         (rmsRrmsCarrier s X x_stride_r x_stride_c N BLOCK_SIZE eps))
       (some (s.readMem W idx.val)))
+```
+</details>
+
+<details><summary><code>xElem</code></summary>
+
+```
+/-- Input element `X[pid0, j]`: this program's row (`pids 0`, row stride
+`x_stride_r`) at column `j` (column stride `x_stride_c`). -/
+```
+```lean
+noncomputable def xElem (s : BlockState) (X : RegionName)
+    (x_stride_r x_stride_c j : Nat) : ℝ :=
+  s.readMem X (s.pids 0 * x_stride_r + j * x_stride_c)
 ```
 </details>
 
@@ -126,8 +139,8 @@ noncomputable def rmsInputTile
     (s : BlockState) (X : RegionName) (x_stride_r x_stride_c N BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pids 0 * x_stride_r + idx.1.val * x_stride_c
-      if idx.1.val < N then some (s.readMem X off) else some (0.0 : ℝ) }
+      if idx.1.val < N then some (xElem s X x_stride_r x_stride_c idx.1.val)
+      else some (0.0 : ℝ) }
 ```
 </details>
 
