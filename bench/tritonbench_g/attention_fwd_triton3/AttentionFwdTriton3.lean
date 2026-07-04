@@ -1125,11 +1125,6 @@ noncomputable def aft3StateSeededG {BM ND NC : Nat}
     (hi : Nat) (i : Fin BM) (d : Fin ND) : WithBot ℝ × ℝ × ℝ :=
   (aft3KeysUptoG qT kT vT keyScale keep hi i d).foldl aft3OsStepBot (init i d)
 
-/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
-`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
-`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
-state `s` (these are the running results of prior chunk launches, i.e. genuine
-INPUT memory to this program, not this program's own executed output). -/
 /-- Per-row running-stat entry `R[off_hz·ROUND_CTX + start_m·BM + i]` — the
 shared row layout of the `M` (running max) and `L` (running denom) buffers. -/
 noncomputable def mlRow3G (s : BlockState) (R : RegionName)
@@ -1142,6 +1137,11 @@ noncomputable def outLane3G (s : BlockState) (Out : RegionName)
     (base BM som son : Nat) (i d : Nat) : ℝ :=
   s.readMem Out (base + (s.pids 0 * BM + i) * som + d * son)
 
+/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
+`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
+`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
+state `s` (these are the running results of prior chunk launches, i.e. genuine
+INPUT memory to this program, not this program's own executed output). -/
 noncomputable def aft3Case4Seed
     (s : BlockState) (M Out L : RegionName)
     (base BM ND som son ROUND_CTX : Nat) :

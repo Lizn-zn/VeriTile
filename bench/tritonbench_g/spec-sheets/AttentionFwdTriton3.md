@@ -1590,6 +1590,13 @@ def offH (s : BlockState) (H : Nat) : Nat :=
 
 <details><summary><code>aft3Case4Seed</code></summary>
 
+```
+/-- The `INIT=False` resume seed loaded from input memory: per row `i`,
+`m_i = M[off_hz·ROUND_CTX + start_m·BM + i]`, `l_i = L[…]`, and per lane `(i,d)`,
+`acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
+state `s` (these are the running results of prior chunk launches, i.e. genuine
+INPUT memory to this program, not this program's own executed output). -/
+```
 ```lean
 noncomputable def aft3Case4Seed
     (s : BlockState) (M Out L : RegionName)
