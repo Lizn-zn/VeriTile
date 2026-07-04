@@ -1130,14 +1130,26 @@ noncomputable def aft3StateSeededG {BM ND NC : Nat}
 `acc = Out[base + (start_m·BM + i)·som + d·son]` — all read from the **initial**
 state `s` (these are the running results of prior chunk launches, i.e. genuine
 INPUT memory to this program, not this program's own executed output). -/
+/-- Per-row running-stat entry `R[off_hz·ROUND_CTX + start_m·BM + i]` — the
+shared row layout of the `M` (running max) and `L` (running denom) buffers. -/
+noncomputable def mlRow3G (s : BlockState) (R : RegionName)
+    (ROUND_CTX BM : Nat) (i : Nat) : ℝ :=
+  s.readMem R (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i))
+
+/-- Output-buffer lane `Out[base + (start_m·BM + i)·som + d·son]` — the `Out`
+block-pointer layout at row stride `som`, lane stride `son`. -/
+noncomputable def outLane3G (s : BlockState) (Out : RegionName)
+    (base BM som son : Nat) (i d : Nat) : ℝ :=
+  s.readMem Out (base + (s.pids 0 * BM + i) * som + d * son)
+
 noncomputable def aft3Case4Seed
     (s : BlockState) (M Out L : RegionName)
     (base BM ND som son ROUND_CTX : Nat) :
     Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
   fun i d =>
-    ((((s.readMem M (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val))) : ℝ) : WithBot ℝ),
-     s.readMem L (s.pids 1 * ROUND_CTX + (s.pids 0 * BM + i.val)),
-     s.readMem Out (base + (s.pids 0 * BM + i.val) * som + d.val * son))
+    (((mlRow3G s M ROUND_CTX BM i.val : ℝ) : WithBot ℝ),
+     mlRow3G s L ROUND_CTX BM i.val,
+     outLane3G s Out base BM som son i.val d.val)
 
 /-- **Genuine closed form, case 4** (`INIT=False` cross-launch resume, sliding
 window). The output lane `(i,d)` is the normalized resume-seeded online softmax:
@@ -4989,19 +5001,19 @@ theorem aft3PreLoop_evalG_init0
       BlockState.setReg_same]
     refine congrArg some ?_
     refine Tile.ext (fun r => ?_)
-    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, mlRow3G, outLane3G, hpids, hrm]
     rfl
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
     refine congrArg some ?_
     refine Tile.ext (fun r => ?_)
-    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, mlRow3G, outLane3G, hpids, hrm]
     rfl
   · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
       BlockState.setReg_same]
     refine congrArg some ?_
     refine Tile.ext (fun idx => ?_)
-    simp only [aft3StateSeededG_zero, aft3Case4Seed, hpids, hrm]
+    simp only [aft3StateSeededG_zero, aft3Case4Seed, mlRow3G, outLane3G, hpids, hrm]
     rfl
   · simp only [BlockState.setReg_same]
     refine congrArg some ?_
