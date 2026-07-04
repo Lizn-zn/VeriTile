@@ -253,11 +253,16 @@ theorem body_decomp
 set_option linter.unusedVariables false
 open Finset
 
--- read input vector A[k]
+/-- Input-vector element `A[cur_batch, k]`: this program's batch row
+(`cur_batch = pid1`, row stride `xm_stride`) at rank lane `k` (lane stride
+`xk_stride`). -/
 noncomputable def aElem (s0 : BlockState) (input_ptr : RegionName) (xm_stride xk_stride : Nat) (k : Nat) : ℝ :=
   s0.readMem input_ptr (s0.pids 1 * xm_stride + k * xk_stride)
 
--- read lora B[g,k] for global lane g
+/-- LoRA-B weight element `B[li][pid_sn·split_n_length + g, k]`: LoRA index
+`li` selects the `l0_stride` slab, the split (`pid_sn = pid0`) plus in-split
+output lane `g` select the row (stride `lora_k_stride`), rank lane `k` the
+column (stride `lora_n_stride`). -/
 noncomputable def bElem (s0 : BlockState) (lora_ptr : RegionName) (li : Nat)
     (split_n_length l0_stride lora_k_stride lora_n_stride : Nat) (g k : Nat) : ℝ :=
   s0.readMem lora_ptr (l0_stride * li + s0.pids 0 * split_n_length * lora_k_stride + g * lora_k_stride + k * lora_n_stride)
