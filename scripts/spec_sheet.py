@@ -375,7 +375,7 @@ def main():
     if not files:
         files = sorted(glob.glob(os.path.join(BENCH, "*", "*.lean")))
         if outdir is None:
-            outdir = os.path.join(BENCH, "spec-sheets")
+            outdir = os.path.join(BENCH, "_spec-sheets")
     manifest = load_manifest()
     stats = []
     for f in files:
