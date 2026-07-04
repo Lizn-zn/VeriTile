@@ -74,6 +74,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .constBool b => .constBool b
   | .negInf => .negInf
   | .programId axis => .programId axis
+  | .numPrograms axis => .numPrograms axis
   | .ref dtype shape name => .ref (VeriTile.Triton.eraseDType dtype) shape name
   | .arange n => .arange n
   | .broadcast e shape => .broadcast e.eraseDType shape

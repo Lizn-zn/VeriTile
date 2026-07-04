@@ -16,6 +16,7 @@ namespace VeriTile.Triton
       | some a, f => f a) = x.bind f := by
   cases x <;> rfl
 
+set_option maxHeartbeats 800000 in
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constFloat h c, _ => some (Tile.scalar (h.ofReal c))
@@ -24,6 +25,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .constBool b, _ => some (Tile.scalar b)
   | .negInf, _ => some (Tile.scalar (none : WithBot ℝ))
   | .programId axis, s => some (Tile.scalar (s.pids axis))
+  | .numPrograms axis, s => some (Tile.scalar (s.numPids axis))
   | .ref dtype shape name, s => s.regs dtype shape name
   | .arange n, _ => some (Tile.vec (fun i => i.val))
   | .broadcast e shape, s => do
@@ -224,6 +226,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
 
 @[simp] theorem evalOp_programId (axis : Nat) (s : BlockState) :
     evalOp (.programId axis) s = some (Tile.scalar (s.pids axis)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_numPrograms (axis : Nat) (s : BlockState) :
+    evalOp (.numPrograms axis) s = some (Tile.scalar (s.numPids axis)) := by
   simp [evalOp]
 
 @[simp] theorem evalOp_const (c : ℝ) (s : BlockState) :

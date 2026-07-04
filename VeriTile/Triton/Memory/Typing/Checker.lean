@@ -125,6 +125,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .constBool _ => .ok ()
   | .negInf => .ok ()
   | .programId _ => .ok ()
+  | .numPrograms _ => .ok ()
   | .ref dtype shape name => do
       let _ ← ctx.checkRegRef name dtype shape
       .ok ()

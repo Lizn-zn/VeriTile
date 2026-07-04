@@ -2054,6 +2054,7 @@ theorem flash_setReg_shadow (s : BlockState) (name : RegName)
   exact BlockState.ext (fun _ _ => by simp only [BlockState.setReg_mem]) hregs
     (fun _ => by simp only [BlockState.setReg_pids])
     (fun _ _ => by simp only [BlockState.setReg_undef])
+    (fun _ => by simp only [BlockState.setReg_numPids])
 
 set_option maxHeartbeats 1000000 in
 /-- **L10 (out_buffer accumulate, inline double cast)**: `out_buffer += dot(

@@ -1332,7 +1332,7 @@ theorem mistral_loop_step
   -- the start_n no-op re-sets start_n to k, leaving the state unchanged
   have hidem : sin.setReg "start_n" .nat [] (Tile.scalar k) = sin := by
     refine BlockState.ext (fun r o => rfl) (fun dtype shape name => ?_)
-      (fun a => ?_) (fun r o => rfl)
+      (fun a => ?_) (fun r o => rfl) (fun a => rfl)
     · conv_rhs => rw [hsin]
       by_cases hname : name = "start_n"
       · subst hname

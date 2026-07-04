@@ -342,6 +342,32 @@ example (xReg outReg : RegionName) (N : Nat) :
     ∃ alg, (reverseScanOpsSmoke xReg outReg N).toAlgorithm? = Except.ok alg := by
   simp [reverseScanOpsSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
+/-- Launch-grid query smoke (#92): `tl.num_programs(axis)` in offset
+arithmetic — the canonical grid-stride pattern `base = pid + i·num_programs`.
+Both the positional and `axis=` spellings are accepted. -/
+def numProgramsSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  pid  := tl.program_id(0)
+  np   := tl.num_programs(0)
+  np1  := tl.num_programs(axis=1)
+  offs := pid + tl.arange(0, $(N)) * np * np1
+  x    := tl.load($(xReg) + offs)
+  tl.store($(outReg) + offs, x)
+}
+
+/-- The num_programs surface lowers to the algorithm layer. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    ∃ alg, (numProgramsSmoke xReg outReg N).toAlgorithm? = Except.ok alg := by
+  simp [numProgramsSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
+/-- Semantics smoke: `tl.num_programs(axis)` reads the launch-grid dimension
+field, and an unlaunched (default) state answers `1` on every axis. (`ax`
+binder name because `axis` is a DSL kwarg token.) -/
+example (ax : Nat) (s : BlockState) :
+    evalOp (.numPrograms ax) s = some (Tile.scalar (s.numPids ax)) :=
+  evalOp_numPrograms ax s
+
+example (ax : Nat) : (default : BlockState).numPids ax = 1 := rfl
+
 /-- Semantics smoke: the reverse scan is the **suffix** fold — at each index it
 folds exactly the lanes whose axis coordinate is `≥` the output coordinate
 (compare `Tile.scan_data`, whose kept set is the `≤` prefix). -/

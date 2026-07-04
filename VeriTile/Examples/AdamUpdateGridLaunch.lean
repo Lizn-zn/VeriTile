@@ -534,7 +534,7 @@ theorem update_fn_kernel_grid_merged_correct
   have hoff : linearOffset (s.withGridIndex owner) BLOCK_SIZE lane = k :=
     adamOwner_linearOffset BLOCK_SIZE hB k (hcover k hk) s
   -- `s.withGridIndex owner` reads the same memory as `s`.
-  have hmemEq : (s.withGridIndex owner).mem = s.mem := BlockState.withPids_mem _ _
+  have hmemEq : (s.withGridIndex owner).mem = s.mem := BlockState.withGridIndex_mem _ _
   have hread : ∀ (X : RegionName) (o : Nat),
       (s.withGridIndex owner).readMem X o = s.readMem X o := by
     intro X o; unfold BlockState.readMem; rw [hmemEq]

@@ -29,6 +29,9 @@ Notes on individual constructors:
 * `programId axis` returns the current `tl.program_id(axis)` as a `Nat`
                     scalar. Out-of-range axes evaluate to `0` per the
                     `BlockState.pids` total-function model.
+* `numPrograms axis` returns the launch-grid dimension `tl.num_programs(axis)`
+                    as a `Nat` scalar. Out-of-rank axes evaluate to `1` per
+                    the `BlockState.numPids` total-function model (#92).
 * `arange n` produces a length-`n` `Nat`-valued tile `[0, 1, ..., n-1]`.
 * `broadcast e n` lifts a scalar to a length-`n` tile.
 * `full n e` fills a length-`n` tile with the scalar value of `e`.
@@ -89,6 +92,10 @@ inductive Op : TileDType → TileShape → Type where
   | constBool : Bool → Op .bool []
   | negInf    : Op .real []
   | programId : (axis : Nat) → Op .nat []
+  /-- `tl.num_programs(axis)`: the launch-grid dimension along `axis` (#92).
+  Reads `BlockState.numPids`, the grid-dimension counterpart of `pids`
+  (out-of-rank axes are `1`). -/
+  | numPrograms : (axis : Nat) → Op .nat []
   | ref       : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape
   | arange    : (n : Nat) → Op .nat [n]
   | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape

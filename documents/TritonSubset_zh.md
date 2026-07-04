@@ -24,6 +24,11 @@ Stmt : Type
 
 - `tl.program_id(axis)` 与 `tl.program_id(axis=axis)`,其中 `axis` 是数字字面量或 `$(n)`。
   运行时状态保存 `pids : Nat → Nat`,所以任意 axis 都有定义。
+- `tl.num_programs(axis)` 与 `tl.num_programs(axis=axis)`(#92):`axis` 方向的
+  launch 网格维度。运行时状态保存 `numPids : Nat → Nat`(默认每个 axis 为 `1`,
+  即未展开的 axis 上恰有一个 program);`BlockState.withGridIndex` 在实例化
+  per-program 状态时把它设为真实网格维度,所以在 ND launch(#88 / `Launch.Grid`)
+  下 `tl.num_programs` 读到真实网格大小。
 - `tl.for i in $(n) { ... }` 与 `tl.for i in N { ... }`。
   loop 有操作语义,证明通过 `forLoop_inv`。
 - `tl.static_range i in $(n) { ... }` 与 `tl.static_range i in N { ... }`
@@ -338,6 +343,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | --- | --- | --- |
 | scalar/tile 常量 | Supported | 实数字面量、context-sensitive `$(x)`、`-inf` / `-float("inf")`、register ref |
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)` 与 `tl.program_id(axis=axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
+| 网格维度 | Limited | `tl.num_programs(axis)` / `tl.num_programs(axis=axis)`,读 `BlockState.numPids`(默认 `1`);`withGridIndex` 会按 launch 网格设置它 |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
 | conditional | Limited | scalar `if cond { ... }` 与 `tl.if cond { ... }`(及 `... else { ... }`);没有 `break`、`continue` |
 | 多重赋值 | Supported | `x, y = e1, e2` 并行绑定;`value, index = tl.max(..., return_indices=True)` 多返回 op 解构 |

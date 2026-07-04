@@ -112,6 +112,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .constBool _ => True
   | .negInf => True
   | .programId _ => True
+  | .numPrograms _ => True
   | .ref _ _ _ => True
   | .arange _ => True
   | .broadcast e _ => e.RespectsRegionTyping Γ

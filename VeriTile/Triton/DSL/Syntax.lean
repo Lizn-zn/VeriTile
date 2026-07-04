@@ -30,6 +30,8 @@ syntax "$(" term ")" : tritonExpr
 syntax "(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(axis=" tritonExpr ")" : tritonExpr
+syntax "tl.num_programs(" tritonExpr ")" : tritonExpr
+syntax "tl.num_programs(axis=" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr

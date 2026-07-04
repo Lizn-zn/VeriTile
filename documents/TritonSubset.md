@@ -28,6 +28,12 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `tl.program_id(axis)` and `tl.program_id(axis=axis)` where `axis` is a
   numeric literal or `$(n)`. The runtime state stores `pids : Nat → Nat`,
   so every axis is total.
+- `tl.num_programs(axis)` and `tl.num_programs(axis=axis)` (#92): the
+  launch-grid dimension along `axis`. The runtime state stores
+  `numPids : Nat → Nat` (default `1` on every axis — one program per
+  unspanned axis); `BlockState.withGridIndex` sets it to the actual grid
+  dimensions when instantiating per-program states, so under an ND launch
+  (#88 / `Launch.Grid`) `tl.num_programs` reads the true grid extent.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
 - `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
@@ -381,6 +387,7 @@ current semantic contract.
 | --- | --- | --- |
 | Scalar/tile constants | Supported | Real literals, context-sensitive `$(x)`, `-inf` / `-float("inf")`, register refs |
 | Program IDs | Limited | `tl.program_id(axis)` and `tl.program_id(axis=axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
+| Grid dims | Limited | `tl.num_programs(axis)` / `tl.num_programs(axis=axis)` reading `BlockState.numPids` (default `1`); `withGridIndex` sets it from the launch grid |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | Scalar `if cond { ... }` and `tl.if cond { ... }` (and `... else { ... }`); no `break` or `continue` |
 | Multi-assign | Supported | `x, y = e1, e2` parallel binding; `value, index = tl.max(..., return_indices=True)` tuple-op binding |
