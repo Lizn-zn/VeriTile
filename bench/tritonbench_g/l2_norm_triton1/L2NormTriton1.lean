@@ -85,6 +85,9 @@ noncomputable def l2InputTile
       else
         some (0.0 : ℝ) }
 
+/-- Masked row element `X[pid, idx]`: lane `idx` of **this program's row**
+(row = `pid`, row stride `stride_x_row`, unit column stride), `0` beyond the
+`N` bound (`mask=cols < N, other=0.0`). -/
 noncomputable def l2Load
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat)
     (idx : Fin BLOCK_N) : ℝ :=

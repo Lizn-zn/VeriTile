@@ -90,6 +90,9 @@ noncomputable def l2BwdInputTile
       else
         some (0.0 : ℝ) }
 
+/-- Masked row element `R[pid0, idx]`: lane `idx` of **this program's row**
+(row = `pids 0`, row stride `stride_x_row`, unit column stride), `0` beyond
+the `N` bound (`mask=cols < N, other=0.0`). Shared by the `X` and `dY` loads. -/
 noncomputable def l2BwdLoad
     (s : BlockState) (R : RegionName) (stride_x_row N BLOCK_N : Nat)
     (idx : Fin BLOCK_N) : ℝ :=

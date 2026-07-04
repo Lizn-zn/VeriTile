@@ -178,7 +178,7 @@ noncomputable def penaltyValue
     (stride_logit_b : Nat) (i : Fin BLOCK_P) : ℝ :=
   TiledOptimizer.lionPenalty
     (s.readMem Logits
-      (s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i))
+      (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
     (s.readMemValue .nat p_token_counts (tokenOffset s p_cumsum_seq_len i) : ℝ)
     (s.readMem repetition_penalty (s.pids 0))
     (s.readMem freqency_penalty (s.pids 0))
@@ -440,7 +440,7 @@ theorem apply_penalty_correct
             s.readMemValue .nat p_token_ids.cast
               (s.readMemValue .nat p_cumsum_seq_len.cast (s.pids 0) + k.1.val)) <;>
         · simp only [penaltyValue, TiledOptimizer.lionPenalty, storeOffset,
-            tokenId, tokenOffset, batchStart, batchEnd, NumericDType.div,
+            activeStoreAddr, tokenId, tokenOffset, batchStart, batchEnd, NumericDType.div,
             NumericDType.mul, WithBot.realDiv, WithBot.realMul, Option.map₂,
             Option.map, Option.bind, Option.bind_some, Function.comp, hAct,
             if_true, if_false, WithBot.coe_lt_coe, WithBot.unbotD_coe,

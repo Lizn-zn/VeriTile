@@ -93,17 +93,25 @@ instance meanRowActiveDecidable
   unfold meanRowActive
   infer_instance
 
+/-- Input element `X[row, col]` of the row-major `[M, N]` input, at global row
+`meanOutOffset s BLOCK_M i = pid0·BLOCK_M + i` (row stride `N`, unit column
+stride). -/
+noncomputable def meanInpElem
+    (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (col : Nat) : ℝ :=
+  s.readMem X (meanOutOffset s BLOCK_M i * N + col)
+
 noncomputable def meanSpec
     (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
     (i : Fin BLOCK_M) : ℝ :=
   ((Finset.univ : Finset (Fin N)).sum fun j =>
-    s.readMem X (meanOutOffset s BLOCK_M i * N + j.val)) / (N : ℝ)
+    meanInpElem s X N BLOCK_M i j.val) / (N : ℝ)
 
 noncomputable def meanLanePrefix
     (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
     (i : Fin BLOCK_M) (j : Fin BLOCK_N) : ℝ :=
   ((Finset.range off).filter fun col => col < N ∧ col % BLOCK_N = j.val).sum
-    fun col => s.readMem X (meanOutOffset s BLOCK_M i * N + col)
+    fun col => meanInpElem s X N BLOCK_M i col
 
 noncomputable def meanMaskedAccumulatorSpec
     (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat) :
@@ -121,8 +129,7 @@ noncomputable def meanChunkLoadSpec
   { data := fun idx =>
       some
         (if meanRowActive s M BLOCK_M idx.1 ∧ off + idx.2.1.val < N then
-          s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
-            (off + idx.2.1.val))
+          meanInpElem s X N BLOCK_M idx.1 (off + idx.2.1.val)
         else
           0) }
 
@@ -180,12 +187,12 @@ theorem meanLanePrefix_step
     meanLanePrefix s X N BLOCK_M BLOCK_N (off + BLOCK_N) i j =
       meanLanePrefix s X N BLOCK_M BLOCK_N off i j +
         if off + j.val < N then
-          s.readMem X (meanOutOffset s BLOCK_M i * N + (off + j.val))
+          meanInpElem s X N BLOCK_M i (off + j.val)
         else
           0 := by
   classical
   let pred : Nat → Prop := fun col => col < N ∧ col % BLOCK_N = j.val
-  let f : Nat → ℝ := fun col => s.readMem X (meanOutOffset s BLOCK_M i * N + col)
+  let f : Nat → ℝ := fun col => meanInpElem s X N BLOCK_M i col
   have hunique :
       ∀ col, off ≤ col → col < off + BLOCK_N → col % BLOCK_N = j.val →
         col = off + j.val := by
@@ -553,13 +560,13 @@ theorem meanLoopBody_step_accumulator_update
           s0.readMem X ((s0.pids 0 * BLOCK_M + idx.1.val) * N +
             (off + idx.2.1.val)) :=
       hRead _
-    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanRowActive, hcol,
-      hrow', hread', meanOutOffset]
+    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanInpElem,
+      meanRowActive, hcol, hrow', hread', meanOutOffset]
   · have hmask' :
         ¬(s0.pids 0 * BLOCK_M + idx.1.val < M ∧ off + idx.2.1.val < N) := by
       simpa [meanOutOffset] using hmask
-    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanRowActive, hmask',
-      meanOutOffset]
+    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanInpElem,
+      meanRowActive, hmask', meanOutOffset]
     norm_num
     rfl
 
