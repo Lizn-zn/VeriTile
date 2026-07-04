@@ -950,6 +950,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandProgramId e
   | `(tritonExpr| tl.program_id(axis=$e:tritonExpr)) =>
       expandProgramId e
+  | `(tritonExpr| tl.num_programs($e:tritonExpr)) =>
+      expandNumPrograms e
+  | `(tritonExpr| tl.num_programs(axis=$e:tritonExpr)) =>
+      expandNumPrograms e
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       expandArange e
   | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do

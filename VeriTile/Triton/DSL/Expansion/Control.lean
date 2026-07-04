@@ -14,6 +14,10 @@ partial def expandProgramId (e : TSyntax `tritonExpr) : MacroM EOut := do
   let axisTerm ← natDimTerm "tl.program_id(axis)" e
   pure ⟨← `(Op.programId $axisTerm), .nat, SInfo.scalar, none, none⟩
 
+partial def expandNumPrograms (e : TSyntax `tritonExpr) : MacroM EOut := do
+  let axisTerm ← natDimTerm "tl.num_programs(axis)" e
+  pure ⟨← `(Op.numPrograms $axisTerm), .nat, SInfo.scalar, none, none⟩
+
 partial def expandArange (e : TSyntax `tritonExpr) : MacroM EOut := do
   let eTerm ← natDimTerm "tl.arange(...)" e
   pure ⟨← `(Op.arange $eTerm), .nat, SInfo.vec eTerm, none, none⟩

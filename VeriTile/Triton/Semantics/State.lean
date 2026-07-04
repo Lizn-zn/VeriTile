@@ -232,6 +232,13 @@ structure BlockState where
   axes 0/1/2 for `(q_block, head, batch)`. -/
   pids  : Nat → Nat
   undef : RegionName → Nat → ℝ := fun _ _ => 0
+  /-- Per-axis launch-grid dimensions (#92). `numPids axis` is the value of
+  `tl.num_programs(axis)`. Total over `Nat`; unspecified/out-of-rank axes are
+  `1` (a launch runs exactly one program along any axis it does not span),
+  mirroring the `pids` total-function style. Launchers are responsible for
+  setting this to the actual grid dimensions when instantiating per-program
+  states (see `BlockState.withGridIndex` / #88). -/
+  numPids : Nat → Nat := fun _ => 1
 
 instance : Inhabited BlockState :=
   ⟨{ mem := fun _ _ => MemCell.real 0
@@ -250,16 +257,18 @@ namespace BlockState
     (hmem : ∀ region offset, s.mem region offset = t.mem region offset)
     (hregs : ∀ dtype shape name, s.regs dtype shape name = t.regs dtype shape name)
     (hpids : ∀ axis, s.pids axis = t.pids axis)
-    (hundef : ∀ region offset, s.undef region offset = t.undef region offset) :
+    (hundef : ∀ region offset, s.undef region offset = t.undef region offset)
+    (hnum : ∀ axis, s.numPids axis = t.numPids axis) :
     s = t := by
   cases s
   cases t
-  simp only at hmem hregs hpids hundef
+  simp only at hmem hregs hpids hundef hnum
   congr
   · exact funext fun region => funext fun offset => hmem region offset
   · exact funext fun dtype => funext fun shape => funext fun name => hregs dtype shape name
   · exact funext hpids
   · exact funext fun region => funext fun offset => hundef region offset
+  · exact funext hnum
 
 /-- Update a register binding.
 
@@ -318,6 +327,10 @@ def setReg (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
     (region : RegionName) (offset : Nat) :
     (s.setReg name dtype shape v).undef region offset = s.undef region offset := rfl
+
+@[simp] theorem setReg_numPids (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).numPids = s.numPids := rfl
 
 /-- Write a single scalar to memory. -/
 def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : BlockState :=
@@ -398,6 +411,10 @@ def writeCell (s : BlockState) (region : RegionName) (offset : Nat)
     (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
     (s.writeMem region offset v).undef r o = s.undef r o := rfl
 
+@[simp] theorem writeMem_numPids (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) :
+    (s.writeMem region offset v).numPids = s.numPids := rfl
+
 @[simp] theorem writeMemAs_regs (s : BlockState) (dtype : FloatDType)
     (region : RegionName) (offset : Nat) (v : TileCarrier dtype.toTileDType)
     (dtype' : TileDType) (shape : TileShape) (name : RegName) :
@@ -416,6 +433,10 @@ def writeCell (s : BlockState) (region : RegionName) (offset : Nat)
     (region : RegionName) (offset : Nat) (v : TileCarrier dtype.toTileDType)
     (r : RegionName) (o : Nat) :
     (s.writeMemAs dtype region offset v).undef r o = s.undef r o := rfl
+
+@[simp] theorem writeMemAs_numPids (s : BlockState) (dtype : FloatDType)
+    (region : RegionName) (offset : Nat) (v : TileCarrier dtype.toTileDType) :
+    (s.writeMemAs dtype region offset v).numPids = s.numPids := rfl
 
 @[simp] theorem writeMemTyped_regs (s : BlockState) (dtype : TileDType)
     (region : RegionName) (offset : Nat) (v : TileCarrier dtype)
@@ -438,6 +459,11 @@ def writeCell (s : BlockState) (region : RegionName) (offset : Nat)
     (region : RegionName) (offset : Nat) (v : TileCarrier dtype)
     (r : RegionName) (o : Nat) :
     (s.writeMemTyped dtype region offset v).undef r o = s.undef r o := by
+  cases dtype <;> rfl
+
+@[simp] theorem writeMemTyped_numPids (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) (v : TileCarrier dtype) :
+    (s.writeMemTyped dtype region offset v).numPids = s.numPids := by
   cases dtype <;> rfl
 
 /-- Read a single scalar from memory. -/
