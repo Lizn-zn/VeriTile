@@ -130,6 +130,8 @@ syntax "keep_dims" "=" "false" : tritonReduceKwarg
 syntax "keep_dims" "=" "true" : tritonReduceKwarg
 syntax "return_indices=True" : tritonReduceKwarg
 syntax "return_indices=False" : tritonReduceKwarg
+syntax "reverse=True" : tritonReduceKwarg
+syntax "reverse=False" : tritonReduceKwarg
 syntax "out_dtype=" tritonDType : tritonReduceKwarg
 syntax ident "=" tritonExpr : tritonReduceKwarg
 

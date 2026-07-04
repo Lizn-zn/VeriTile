@@ -177,7 +177,9 @@ is well-defined and would need a typed lift.
 
 ### Reverse-direction scan (1)
 
-VeriTile's `tl.cumsum` / `tl.associative_scan` is forward-axis only.
+RESOLVED (#94): `tl.cumsum` / `tl.cumprod` / `tl.associative_scan` now accept
+`reverse=True/False`, lowering to the directed scan node (`ScanDirection`,
+suffix fold). The kernel below is unblocked but not yet ported.
 
 - `reversed_cumsum_scalar.py` (Recurrent)
 

@@ -619,29 +619,53 @@ noncomputable def Tile.reduceMaxNat {shape : TileShape}
   · exact Tile.reduceMaxNatDrop axis x
   · exact Tile.reduceMaxNatKeep axis x
 
-/-- Prefix scan along an axis. At each output index, folds all input lanes
-whose coordinate on `axis` is less than or equal to the output coordinate. -/
+/-- Directed scan along an axis. At each output index, folds all input lanes
+whose coordinate on `axis` is `≤` the output coordinate (`.forward`, a prefix
+scan) or `≥` it (`.reverse`, a suffix scan — `reverse=True`). Every `ScanOp`
+is commutative and associative, so the fold order within the kept lane set is
+immaterial. -/
 noncomputable def Tile.scan {shape : TileShape}
-    (op : ScanOp) (axis : Fin shape.length) (x : Tile .real shape) :
-    Tile .real shape :=
-  ⟨fun idx =>
-    let coord := TileShape.axisCoord shape axis idx
-    let vals :=
-      ((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
-        (fun k => k.val ≤ coord.val)).toList.map
-        (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
-    op.eval vals⟩
+    (op : ScanOp) (axis : Fin shape.length) (dir : ScanDirection)
+    (x : Tile .real shape) : Tile .real shape :=
+  match dir with
+  | .forward =>
+    ⟨fun idx =>
+      let coord := TileShape.axisCoord shape axis idx
+      let vals :=
+        ((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
+          (fun k => k.val ≤ coord.val)).toList.map
+          (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
+      op.eval vals⟩
+  | .reverse =>
+    ⟨fun idx =>
+      let coord := TileShape.axisCoord shape axis idx
+      let vals :=
+        ((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
+          (fun k => coord.val ≤ k.val)).toList.map
+          (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
+      op.eval vals⟩
 
-/-- Direct unfolding of `Tile.scan.data` to a list-folded `op.eval` over the
-prefix of lanes at most the output coordinate on `axis`. Useful as a simp
-lemma when proving cumsum/recurrent kernel correctness. -/
+/-- Direct unfolding of forward `Tile.scan.data` to a list-folded `op.eval`
+over the prefix of lanes at most the output coordinate on `axis`. Useful as a
+simp lemma when proving cumsum/recurrent kernel correctness. -/
 @[simp] theorem Tile.scan_data {shape : TileShape}
     (op : ScanOp) (axis : Fin shape.length) (x : Tile .real shape)
     (idx : TileIndex shape) :
-    (Tile.scan op axis x).data idx =
+    (Tile.scan op axis .forward x).data idx =
       op.eval
         (((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
           (fun k => k.val ≤ (TileShape.axisCoord shape axis idx).val)).toList.map
+          (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))) := rfl
+
+/-- Direct unfolding of reverse `Tile.scan.data` to a list-folded `op.eval`
+over the suffix of lanes at least the output coordinate on `axis`. -/
+@[simp] theorem Tile.scan_reverse_data {shape : TileShape}
+    (op : ScanOp) (axis : Fin shape.length) (x : Tile .real shape)
+    (idx : TileIndex shape) :
+    (Tile.scan op axis .reverse x).data idx =
+      op.eval
+        (((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
+          (fun k => (TileShape.axisCoord shape axis idx).val ≤ k.val)).toList.map
           (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))) := rfl
 
 noncomputable def Tile.argBestDrop {shape : TileShape}

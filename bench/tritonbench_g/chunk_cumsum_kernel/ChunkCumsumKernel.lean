@@ -113,7 +113,7 @@ private theorem scan_prefix_eq (BT : Nat) (g : Fin BT → ℝ) (L : List (Fin BT
 /-- **1D cumsum = prefix sum.** The `Tile.scan .sum` of a `some`-valued 1D tile
 at lane `i` is `some (Σ_{k ≤ i} g k)`. -/
 theorem scan1d_sum (BT : Nat) (g : Fin BT → ℝ) (i : Fin BT) :
-    (Tile.scan .sum ⟨0, by simp⟩
+    (Tile.scan .sum ⟨0, by simp⟩ .forward
       (⟨fun idx => some (g idx.1)⟩ : Tile .real [BT])).data (i, PUnit.unit)
       = some (∑ k ∈ (Finset.univ.filter (fun k : Fin BT => k.val ≤ i.val)), g k) := by
   rw [Tile.scan_data]
@@ -128,7 +128,7 @@ sum of `h` over `{k : k ≤ i ∧ P k}`. -/
 theorem scan1d_sum_if (BT : Nat) (h : Fin BT → ℝ) (P : Fin BT → Prop)
     [DecidablePred P] (i : Fin BT) :
     WithBot.unbotD 0
-      ((Tile.scan .sum ⟨0, by simp⟩
+      ((Tile.scan .sum ⟨0, by simp⟩ .forward
         (⟨fun idx => some (if P idx.1 then h idx.1 else 0)⟩ :
           Tile .real [BT])).data (i, PUnit.unit))
       = ∑ k ∈ (Finset.univ.filter
@@ -298,7 +298,7 @@ noncomputable def cumsumStoreValue
     (s : BlockState) (S Carry : RegionName) (T BT : Nat) (i : Fin BT) : ℝ :=
   WithBot.unbotD 0
     (Option.map₂ (fun a b : ℝ => a + b)
-      ((Tile.scan .sum ⟨0, by simp⟩ (cumsumInputTile s S T BT)).data (i, PUnit.unit))
+      ((Tile.scan .sum ⟨0, by simp⟩ .forward (cumsumInputTile s S T BT)).data (i, PUnit.unit))
       (some (s.readMem Carry (s.pids 0))))
 
 /-! ## Genuine chunked-cumsum closed form
@@ -504,7 +504,7 @@ noncomputable def singleBlockCumsumInputTile
 noncomputable def singleBlockCumsumStoreValue
     (s : BlockState) (S : RegionName) (T BT : Nat) (i : Fin BT) : ℝ :=
   WithBot.unbotD 0
-    ((Tile.scan .sum ⟨0, by simp⟩
+    ((Tile.scan .sum ⟨0, by simp⟩ .forward
       (singleBlockCumsumInputTile s S T BT)).data (i, PUnit.unit))
 
 /-- Genuine closed form for the single-Python-chunk path (`i_t = 0`, carry `= 0`):
@@ -927,7 +927,7 @@ theorem surface_step (S O : RegionName) (T BT : Nat) (s : BlockState)
               MaskOpt.none),
           Stmt.assign TileDType.real [BT] "b_o"
             (Op.add NumericDType.real Broadcast.nil.consR
-              (Op.scan ScanOp.sum ⟨0, by simp⟩ (Op.ref TileDType.real [BT] "b_s"))
+              (Op.scan ScanOp.sum ⟨0, by simp⟩ .forward (Op.ref TileDType.real [BT] "b_s"))
               (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [] "b_z"))),
           Stmt.assign TileDType.real [] "b_zz" (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [BT] "b_s")),
           Stmt.assign TileDType.real [] "b_z"
@@ -999,7 +999,7 @@ theorem surface_step (S O : RegionName) (T BT : Nat) (s : BlockState)
     · rw [if_pos hi, if_pos hi]
     · rw [if_neg hi, if_neg hi]
   -- scan value at lane i
-  have hscan : ∀ i : Fin BT, (Tile.scan .sum ⟨0, by simp⟩ bsT).data (i, PUnit.unit)
+  have hscan : ∀ i : Fin BT, (Tile.scan .sum ⟨0, by simp⟩ .forward bsT).data (i, PUnit.unit)
       = some (∑ k ∈ Finset.univ.filter (fun k : Fin BT => k.val ≤ i.val), g k) := by
     intro i; rw [hbsTg]; exact scan1d_sum BT g i
   -- (placeholder)
@@ -1066,16 +1066,16 @@ theorem surface_step (S O : RegionName) (T BT : Nat) (s : BlockState)
   have hb_s3 : s3.regs .real [BT] "b_s" = some bsT := by rw [hs3]; simp
   have hb_z3 : s3.regs .real [] "b_z" = some (Tile.scalar (some (surfaceCarry s S T BT c))) := by
     rw [hs3, hs2, hs1, hsloop]; simp; rw [hbz]
-  have hscaneval : evalOp (Op.scan ScanOp.sum ⟨0, by simp⟩ (Op.ref TileDType.real [BT] "b_s")) s3
-      = some (Tile.scan .sum ⟨0, by simp⟩ bsT) := by simp only [evalOp, hb_s3]; rfl
+  have hscaneval : evalOp (Op.scan ScanOp.sum ⟨0, by simp⟩ .forward (Op.ref TileDType.real [BT] "b_s")) s3
+      = some (Tile.scan .sum ⟨0, by simp⟩ .forward bsT) := by simp only [evalOp, hb_s3]; rfl
   have hboeval : evalOp (Op.add NumericDType.real Broadcast.nil.consR
-      (Op.scan ScanOp.sum ⟨0, by simp⟩ (Op.ref TileDType.real [BT] "b_s"))
+      (Op.scan ScanOp.sum ⟨0, by simp⟩ .forward (Op.ref TileDType.real [BT] "b_s"))
       (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [] "b_z"))) s3 = some boT := by
     have hadd : evalOp (Op.add NumericDType.real Broadcast.nil.consR
-        (Op.scan ScanOp.sum ⟨0, by simp⟩ (Op.ref TileDType.real [BT] "b_s"))
+        (Op.scan ScanOp.sum ⟨0, by simp⟩ .forward (Op.ref TileDType.real [BT] "b_s"))
         (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [] "b_z"))) s3
         = some (Tile.bop NumericDType.real.add Broadcast.nil.consR
-            (Tile.scan .sum ⟨0, by simp⟩ bsT)
+            (Tile.scan .sum ⟨0, by simp⟩ .forward bsT)
             (Tile.expandDim ⟨0, by simp⟩ (Tile.scalar (some (surfaceCarry s S T BT c))))) := by
       rw [evalOp_add, hscaneval]
       simp only [Option.bind_eq_bind, Option.bind_some]
@@ -1088,7 +1088,7 @@ theorem surface_step (S O : RegionName) (T BT : Nat) (s : BlockState)
     obtain ⟨i, u⟩ := idx
     simp only [hboT, hboVal, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
       NumericDType.add]
-    rw [show (Tile.scan ScanOp.sum ⟨0, by simp⟩ bsT).data (i, u) = _ from hscan i]
+    rw [show (Tile.scan ScanOp.sum ⟨0, by simp⟩ .forward bsT).data (i, u) = _ from hscan i]
     simp only [Tile.expandDim_data, Tile.scalar, WithBot.realAdd]
     rfl
   -- b_zz eval on s4

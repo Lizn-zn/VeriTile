@@ -116,10 +116,11 @@ Supported channels:
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
   scalar-to-tile lifting, matching `tl.where`.
-- Prefix scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
-  axis=N)` on `.real` tiles. The supported associative op names are the closed
-  enum `sum`, `prod`, `max`, `min`; arbitrary user functions are not embedded
-  in the AST.
+- Directed scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
+  axis=N)` on `.real` tiles, each accepting `reverse=True/False` (#94):
+  `forward` is the prefix fold, `reverse` the suffix fold along the scanned
+  axis. The supported associative op names are the closed enum `sum`, `prod`,
+  `max`, `min`; arbitrary user functions are not embedded in the AST.
 - Index/order ops: `tl.argmax`, `tl.argmin`, and `tl.sort` on `.real` tiles
   with static `axis=N`. Arg ties return the smallest axis index; sort is
   ascending along the selected axis.
@@ -390,7 +391,7 @@ current semantic contract.
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf`; floating dtype tags project to `.real` for algorithm proofs |
 | Reductions | Supported | `tl.sum`, `tl.max` with optional `axis=` (or positional axis) and `keep_dims` over `.real` or floating-tagged tiles; floating tags project to `.real`; `tl.max(..., return_indices=True)` returns a value/index tuple via multi-assign |
-| Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` or floating-tagged tiles; no arbitrary combine functions |
+| Directed scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` with optional `reverse=True/False` (prefix/suffix fold) over `.real` or floating-tagged tiles; no arbitrary combine functions |
 | Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` or floating-tagged tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
