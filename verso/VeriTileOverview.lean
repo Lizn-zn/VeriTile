@@ -901,7 +901,7 @@ deep-mode escalation, tactic cascades, repair patterns.
 :::cardPurple
 *4 · CI gate: `lake build`*
 
-Whole library 0 sorry (except FA-1 backward × 1). Artifact gate: `lake build`,
+Whole library 0 sorry. Artifact gate: `lake build`,
 no sorry, axiom whitelist, surface check.
 
 :::
@@ -941,7 +941,6 @@ Tier: API calls, tokens, wall-clock, dollars.
 :::cardBlue
 *Near-term*
 
-* Close FA-1 backward stripped (last sorry).
 * Maintain `v0.3-tier3a` as the Tier 3-A checkpoint tag.
 * Add mask to FA-1 backward.
 * Wire FA-1 backward to multi-block.
