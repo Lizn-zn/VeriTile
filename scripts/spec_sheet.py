@@ -126,6 +126,22 @@ def body_of(decl):
     return strip_comments(sig)  # theorems: scan the statement only
 
 
+def is_documented_accessor(decl):
+    """A docstring'd `def` whose body is a single plain `readMem` — a named
+    element accessor (`ktElem`-style, PR #435). Its docstring states the
+    logical tensor indexing, so its one flat read *is* the layout
+    documentation rather than a readability tax. Reductions, branches,
+    value arithmetic, or a second read disqualify (address arithmetic
+    inside the single read is fine)."""
+    if decl["kind"] != "def" or not decl.get("doc"):
+        return False
+    body = body_of(decl)
+    if len(re.findall(r"\breadMem\b", body)) != 1:
+        return False
+    return not re.search(r"[∑∏]|\bif\b|\blet\b|\bmatch\b|WithBot|Real\.|Tile\.",
+                         body)
+
+
 MANI = os.path.join(BENCH, "proof_gap_manifest.tsv")
 
 
@@ -329,11 +345,18 @@ def make_sheet(file_path, manifest):
             out.append(f"- `{d['name']}`{tag}")
         out.append("")
     # review-cost proxy: how hard is this spec to read?
-    spec_text = "\n".join(defmap[n]["text"] for n in all_defs)
+    # A **documented element accessor** — a def with a docstring whose body is
+    # a single readMem (its address arithmetic IS the documented layout
+    # statement) — is a readability *aid*, not a tax: its read is exempt from
+    # flat_reads and it scores 1 instead of 3 in the defs term. Otherwise
+    # one-line accessor layers (PR #435) would *raise* the review-cost score.
+    accessors = {n for n in all_defs if is_documented_accessor(defmap[n])}
+    spec_text = "\n".join(defmap[n]["text"] for n in all_defs - accessors)
     flat_reads = len(re.findall(r"readMem\s+\w+\s*\([^()]*\*[^()]*\+", spec_text))
     stmt_lines = sum(len(split_statement(t["text"])[0].split("\n")) for t in headline)
     n_hyps = sum(len(hypotheses(split_statement(t["text"])[0])) for t in headline)
-    score = len(all_defs) * 3 + flat_reads + stmt_lines + n_hyps
+    score = (len(all_defs) - len(accessors)) * 3 + len(accessors) \
+        + flat_reads + stmt_lines + n_hyps
     stat = {"file": rel, "headline": len(headline), "selfref": sorted(all_selfref),
             "defs": len(all_defs), "flat_reads": flat_reads,
             "stmt_lines": stmt_lines, "hyps": n_hyps, "score": score}
@@ -372,7 +395,10 @@ def main():
                    f"{len(nohit)} with no summary theorem found.")
         idx.append("- Ranked by **review-cost** proxy "
                    "`score = 3·defs + flat_offset_reads + stmt_lines + hyps` "
-                   "(hardest specs to audit first).\n")
+                   "(hardest specs to audit first). Documented single-read "
+                   "element accessors (docstring + body = one `readMem`) are "
+                   "exempt from `flat_offset_reads` and count 1 (not 3) in "
+                   "the `defs` term — they are readability aids, not tax.\n")
         idx.append("| score | kernel | defs | flat-reads | stmt-lines | hyps | flags |")
         idx.append("|---:|---|---:|---:|---:|---:|---|")
         for s in sorted(stats, key=lambda x: (-x["score"], x["file"])):
