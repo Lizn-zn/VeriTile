@@ -17,7 +17,7 @@
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
 | 148 | [RotaryEmbNopad.md](RotaryEmbNopad.md) | 14 | 0 | 96 | 10 |  |
 | 146 | [FlashDecode2Phi.md](FlashDecode2Phi.md) | 19 | 0 | 85 | 4 |  |
-| 140 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 22 | 8 | 57 | 11 |  |
+| 142 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 28 | 0 | 57 | 11 |  |
 | 136 | [MixedSparseAttention.md](MixedSparseAttention.md) | 32 | 0 | 33 | 13 |  |
 | 131 | [ChunkDeltaFwd.md](ChunkDeltaFwd.md) | 21 | 0 | 64 | 12 |  |
 | 119 | [SoftmaxFlaggems.md](SoftmaxFlaggems.md) | 19 | 0 | 57 | 7 |  |
