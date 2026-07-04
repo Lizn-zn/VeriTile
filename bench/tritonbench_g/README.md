@@ -41,9 +41,13 @@ proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
 The stronger #146 proof-status audit is tracked in
 [`proof_gap_manifest.tsv`](./proof_gap_manifest.tsv) and checked by
 [`../check_proof_gap_manifest.py`](../check_proof_gap_manifest.py). That
-manifest classifies every current `output_summary` as either a conservative
-`full_value_candidate`, a `public_summary_with_proof_gap` linked to a specific
-follow-up issue and blocker family, or an explicit `blocked_summary`.
+manifest classifies every public headline theorem (each `*output_summary*`
+declaration plus the spec-sheet-style headline tier per file, so all 142
+kernels are covered) as either a conservative `full_value_candidate`, a
+`public_summary_with_proof_gap` linked to a specific follow-up issue and
+blocker family, or an explicit `blocked_summary`. Classification uses hard
+signals only (explicit `coverage:` docstring annotations, `blocked_*` names,
+self-referential `expected`); docstring prose is not keyword-sniffed.
 
 ## Build
 
