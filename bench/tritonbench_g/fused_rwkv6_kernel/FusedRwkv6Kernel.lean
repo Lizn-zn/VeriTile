@@ -191,27 +191,37 @@ instance activeDecidable (s : BlockState) (V BV : Nat) (jv : Fin BV) :
 `qVal/kVal/vVal/uVal/h0Val` read the kernel's exact block-pointer layouts at
 time row `t`. The decay gate is the per-channel `decay s w t j_k = exp(w_t[j_k])`. -/
 
-/-- `q[t][j_k]·scale` — the kernel multiplies the loaded `q` row by `scale`. -/
-noncomputable def qVal (s : BlockState) (q : RegionName)
-    (s_k_h K BK : Nat) (scale : ℝ) (t : Nat) (jk : Fin BK) : ℝ :=
-  scale * s.readMem q (s.pids 2 * s_k_h + s.pids 1 * BK + jk.val + t * K)
-
+/-- Element `R[i_bh][t, j_k]` of the shared `[T, K]` **k-layout** at time row
+`t`, key channel `j_k` (offset `i_bh·s_k_h + t·K + (i_k·BK + j_k)`). The `q`,
+`k`, and `w` block pointers all use this layout — `qVal` and `decay` read
+through it. -/
 noncomputable def kVal (s : BlockState) (k : RegionName)
     (s_k_h K BK : Nat) (t : Nat) (jk : Fin BK) : ℝ :=
   s.readMem k (s.pids 2 * s_k_h + s.pids 1 * BK + jk.val + t * K)
 
+/-- `q[t][j_k]·scale` — the kernel multiplies the loaded `q` row (k-layout)
+by `scale`. -/
+noncomputable def qVal (s : BlockState) (q : RegionName)
+    (s_k_h K BK : Nat) (scale : ℝ) (t : Nat) (jk : Fin BK) : ℝ :=
+  scale * kVal s q s_k_h K BK t jk
+
+/-- Element `v[i_bh][t, j_v]` of the `[T, V]` **v-layout** at time row `t`,
+value channel `j_v` (offset `i_bh·s_v_h + t·V + (i_v·BV + j_v)`). -/
 noncomputable def vVal (s : BlockState) (v : RegionName)
     (s_v_h V BV : Nat) (t : Nat) (jv : Fin BV) : ℝ :=
   s.readMem v (s.pids 2 * s_v_h + s.pids 0 * BV + jv.val + t * V)
 
+/-- Per-head bonus row element `u[i_bh % H][j_k]` of the `[H, K]` row-major
+`u` matrix (time-independent). -/
 noncomputable def uVal (s : BlockState) (u : RegionName)
     (H K BK : Nat) (jk : Fin BK) : ℝ :=
   s.readMem u ((s.pids 2 % H) * K + jk.val + s.pids 1 * BK)
 
-/-- Per-channel decay gate at time `t`, key channel `j_k`: `exp(w_t[j_k])`. -/
+/-- Per-channel decay gate at time `t`, key channel `j_k`: `exp(w_t[j_k])`
+(the `w` row read through the shared k-layout). -/
 noncomputable def decay (s : BlockState) (w : RegionName)
     (s_k_h K BK : Nat) (t : Nat) (jk : Fin BK) : ℝ :=
-  Real.exp (s.readMem w (s.pids 2 * s_k_h + s.pids 1 * BK + jk.val + t * K))
+  Real.exp (kVal s w s_k_h K BK t jk)
 
 noncomputable def h0Val (s : BlockState) (h0 : RegionName)
     (K V BK BV : Nat) (idx : TileIndex [BV, BK]) : ℝ :=
