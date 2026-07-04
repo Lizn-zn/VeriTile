@@ -63,7 +63,7 @@ theorem layernorm_forward_output_summary
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
-**Closed-form spec defs (transitive):** `yOutOffset`, `layernorm_forward`, `layernormYSpec`, `invVarFullSpec`, `meanFullSpec`, `layernormMeanCarrier`, `layernormInvVarCarrier`, `layernormInputTile`, `layernormVarCarrier`, `layernormCenteredTile`
+**Closed-form spec defs (transitive):** `yOutOffset`, `layernorm_forward`, `layernormYSpec`, `invVarFullSpec`, `meanFullSpec`, `rowElem`, `layernormMeanCarrier`, `layernormInvVarCarrier`, `layernormInputTile`, `layernormVarCarrier`, `layernormCenteredTile`
 
 <details><summary><code>yOutOffset</code></summary>
 
@@ -124,7 +124,7 @@ noncomputable def layernormYSpec
       (Option.map₂ (fun scaled w => scaled * w)
         (Option.map₂ (fun centered inv => centered * inv)
           (Option.map₂ (fun x mean => x - mean)
-            (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+            (some (rowElem s X X_row_stride idx.val))
             (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))
           (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
         (some (s.readMem W idx.val)))
@@ -168,6 +168,20 @@ noncomputable def meanFullSpec
 ```
 </details>
 
+<details><summary><code>rowElem</code></summary>
+
+```
+/-- Element `j` of **this program's row** of a row-major matrix region `R`
+(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
+`dY` row loads all use this layout. -/
+```
+```lean
+noncomputable def rowElem (s : BlockState) (R : RegionName)
+    (row_stride j : Nat) : ℝ :=
+  s.readMem R (s.pid * row_stride + j)
+```
+</details>
+
 <details><summary><code>layernormMeanCarrier</code></summary>
 
 ```lean
@@ -199,8 +213,8 @@ noncomputable def layernormInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      else some (0 : ℝ) }
 ```
 </details>
 

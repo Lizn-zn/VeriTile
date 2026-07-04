@@ -28,7 +28,7 @@ theorem mean_dim_kernel_output_summary
 **Assumptions / layout contracts:**
 - `hStepNe : BLOCK_N ≠ 0`
 
-**Closed-form spec defs (transitive):** `mean_dim_kernel`, `mean_dim_kernel_correct_target`, `meanOutOffset`, `meanSpec`
+**Closed-form spec defs (transitive):** `mean_dim_kernel`, `mean_dim_kernel_correct_target`, `meanOutOffset`, `meanSpec`, `meanInpElem`
 
 <details><summary><code>mean_dim_kernel</code></summary>
 
@@ -98,7 +98,22 @@ noncomputable def meanSpec
     (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
     (i : Fin BLOCK_M) : ℝ :=
   ((Finset.univ : Finset (Fin N)).sum fun j =>
-    s.readMem X (meanOutOffset s BLOCK_M i * N + j.val)) / (N : ℝ)
+    meanInpElem s X N BLOCK_M i j.val) / (N : ℝ)
+```
+</details>
+
+<details><summary><code>meanInpElem</code></summary>
+
+```
+/-- Input element `X[row, col]` of the row-major `[M, N]` input, at global row
+`meanOutOffset s BLOCK_M i = pid0·BLOCK_M + i` (row stride `N`, unit column
+stride). -/
+```
+```lean
+noncomputable def meanInpElem
+    (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (col : Nat) : ℝ :=
+  s.readMem X (meanOutOffset s BLOCK_M i * N + col)
 ```
 </details>
 

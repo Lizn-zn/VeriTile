@@ -51,7 +51,7 @@ theorem rms_layernorm_forward_output_summary
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
-**Closed-form spec defs (transitive):** `yOutOffset`, `rms_layernorm_forward`, `rmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
+**Closed-form spec defs (transitive):** `yOutOffset`, `rms_layernorm_forward`, `rmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rowElem`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
 
 <details><summary><code>yOutOffset</code></summary>
 
@@ -108,7 +108,7 @@ noncomputable def rmsLayernormYSpec
   WithBot.unbotD 0
     (Option.map₂ (fun x w => x * w)
       (Option.map₂ (fun x inv => x * inv)
-        (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+        (some (rowElem s X X_row_stride idx.val))
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W (idx.val * W_row_stride))))
 ```
@@ -129,6 +129,20 @@ noncomputable def rmsInvVarSpec
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) : ℝ :=
   WithBot.unbotD 0 (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
+```
+</details>
+
+<details><summary><code>rowElem</code></summary>
+
+```
+/-- Element `j` of **this program's row** of a row-major matrix region `R`
+(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
+`dY` row loads all use this layout. -/
+```
+```lean
+noncomputable def rowElem (s : BlockState) (R : RegionName)
+    (row_stride j : Nat) : ℝ :=
+  s.readMem R (s.pid * row_stride + j)
 ```
 </details>
 
@@ -164,8 +178,8 @@ noncomputable def rmsInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      else some (0 : ℝ) }
 ```
 </details>
 
@@ -217,7 +231,7 @@ theorem gemma_rms_layernorm_forward_output_summary
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
 - `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
-**Closed-form spec defs (transitive):** `yOutOffset`, `gemma_rms_layernorm_forward`, `gemmaRmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
+**Closed-form spec defs (transitive):** `yOutOffset`, `gemma_rms_layernorm_forward`, `gemmaRmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rowElem`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
 
 <details><summary><code>yOutOffset</code></summary>
 
@@ -274,7 +288,7 @@ noncomputable def gemmaRmsLayernormYSpec
   WithBot.unbotD 0
     (Option.map₂ (fun scaled w => scaled * (w + 1.0))
       (Option.map₂ (fun x inv => x * inv)
-        (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+        (some (rowElem s X X_row_stride idx.val))
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W idx.val)))
 ```
@@ -295,6 +309,20 @@ noncomputable def rmsInvVarSpec
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) : ℝ :=
   WithBot.unbotD 0 (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
+```
+</details>
+
+<details><summary><code>rowElem</code></summary>
+
+```
+/-- Element `j` of **this program's row** of a row-major matrix region `R`
+(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
+`dY` row loads all use this layout. -/
+```
+```lean
+noncomputable def rowElem (s : BlockState) (R : RegionName)
+    (row_stride j : Nat) : ℝ :=
+  s.readMem R (s.pid * row_stride + j)
 ```
 </details>
 
@@ -330,8 +358,8 @@ noncomputable def rmsInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      else some (0 : ℝ) }
 ```
 </details>
 

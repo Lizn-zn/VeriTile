@@ -580,7 +580,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
 - `fun idx : TileIndex [BM * nb, BD] => (DK, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
 
-**Closed-form spec defs (transitive):** `bwdKBase`, `triton_attention_bwd_kernel`, `bwdKernelDQSpecG`, `bwdFp16`, `bwdKernelPG`, `bwdKernelDOG`, `bwdKernelDSG`, `bwdKernelQG`, `bwdKernelKG`, `storeValue`, `bwdKernelQKG`, `bwdKernelMG`, `bwdKernelDPG`, `active`, `accOffset`, `bwdKernelVG`, `bwdKernelDiG`, `rowIndex`, `dIndex`
+**Closed-form spec defs (transitive):** `bwdKBase`, `triton_attention_bwd_kernel`, `bwdKernelDQSpecG`, `bwdFp16`, `bwdKernelPG`, `bwdKernelDOG`, `bwdKernelDSG`, `bwdKernelQG`, `bwdKernelDQ0G`, `bwdKernelKG`, `storeValue`, `bwdKernelQKG`, `bwdKernelMG`, `bwdKernelDPG`, `active`, `accOffset`, `bwdKernelVG`, `bwdKernelDiG`, `rowIndex`, `dIndex`
 
 <details><summary><code>bwdKBase</code></summary>
 
@@ -729,7 +729,7 @@ summed over **all** global key rows `J ∈ [0, N_CTX)` (causal `p ⇒ ds` zeroes
 noncomputable def bwdKernelDQSpecG
     (s : BlockState) (Q K V DO M Delta DQ : RegionName) (BD NCTX : Nat) (sc : ℝ)
     (I e : Nat) : ℝ :=
-  s.readMem DQ (bwdKBase s + I * BD + e) +
+  bwdKernelDQ0G s DQ BD I e +
     ∑ J : Fin NCTX,
       bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J.val) *
         bwdKernelKG s K BD J.val e
@@ -795,6 +795,19 @@ noncomputable def bwdKernelDSG (s : BlockState) (Q K V DO M Delta : RegionName)
 noncomputable def bwdKernelQG (s : BlockState) (Q : RegionName) (BD : Nat)
     (I : Nat) (e : Nat) : ℝ :=
   s.readMem Q (bwdKBase s + I * BD + e)
+```
+</details>
+
+<details><summary><code>bwdKernelDQ0G</code></summary>
+
+```
+/-- Prior (pre-accumulation) `dq[I,e] = DQ[base + I·BD + e]` — the `DQ` buffer
+value the kernel's `+=` accumulates onto (same tile layout as `Q`/`DO`). -/
+```
+```lean
+noncomputable def bwdKernelDQ0G (s : BlockState) (DQ : RegionName) (BD : Nat)
+    (I : Nat) (e : Nat) : ℝ :=
+  s.readMem DQ (bwdKBase s + I * BD + e)
 ```
 </details>
 

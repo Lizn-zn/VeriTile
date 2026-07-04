@@ -104,7 +104,7 @@ theorem chunked_cumsum_fwd_summary_general
         dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
           stride_dA_cs_csize BLOCK_SIZE_H idx)`
 
-**Closed-form spec defs (transitive):** `dtOutOffset`, `dACsOutOffset`, `chunked_cumsum_fwd_surface`, `chunked_cumsum_dt_out_store_slice`, `active`, `dtPreparedOffset`, `chunked_cumsum_dA_cs_store_slice`, `chunked_cumsum_dA_cs_compute_slice`, `dAClosed`, `headIndex`, `chunkIndex`
+**Closed-form spec defs (transitive):** `dtOutOffset`, `dACsOutOffset`, `chunked_cumsum_fwd_surface`, `chunked_cumsum_dt_out_store_slice`, `active`, `dtPreparedOffset`, `chunked_cumsum_dA_cs_store_slice`, `chunked_cumsum_dA_cs_compute_slice`, `dAClosed`, `headIndex`, `chunkIndex`, `dtElem`
 
 <details><summary><code>dtOutOffset</code></summary>
 
@@ -333,16 +333,6 @@ def chunked_cumsum_dA_cs_compute_slice
 
 <details><summary><code>dAClosed</code></summary>
 
-```
-/-! ## Genuine within-chunk closed form for `dA_cumsum`
-
-`dAClosed` is the genuine mathematical specification of the `dA_cumsum` output:
-a `Finset.sum` over all *active* chunk positions `k ≤ idx.chunk` (with the head
-in range and `k < chunk_size`) of the prepared `dt` value at `(head, k)` times
-the per-head scaling `A[head]`. It is **not** a read-back of the kernel's own
-output, so realizing it is a true correctness statement. There is no cross-chunk
-carry: each chunk is summed independently along its own axis. -/
-```
 ```lean
 noncomputable def dAClosed
     (s : BlockState) (DtPrepared A : RegionName)
@@ -353,10 +343,8 @@ noncomputable def dAClosed
       (fun k : Fin BLOCK_SIZE_CHUNK =>
         k.val ≤ idx.2.1.val ∧
           (headIndex s BLOCK_SIZE_H idx.1 < nheads ∧ k.val < chunk_size))),
-    s.readMem DtPrepared
-        (s.pids 0 * stride_dt_batch +
-          (s.pids 1 * chunk_size + k.val) * stride_dt_seqlen +
-          headIndex s BLOCK_SIZE_H idx.1 * stride_dt_head)
+    dtElem s DtPrepared stride_dt_batch stride_dt_seqlen stride_dt_head
+        chunk_size k.val (headIndex s BLOCK_SIZE_H idx.1)
       * s.readMem A (headIndex s BLOCK_SIZE_H idx.1 * stride_A_head)
 ```
 </details>
@@ -374,6 +362,24 @@ def headIndex (s : BlockState) (BLOCK_SIZE_H : Nat) (i : Fin BLOCK_SIZE_H) : Nat
 ```lean
 def chunkIndex (_s : BlockState) (j : Fin BLOCK_SIZE_CHUNK) : Nat :=
   j.val
+```
+</details>
+
+<details><summary><code>dtElem</code></summary>
+
+```
+/-- Prepared-`dt` element `dt[batch, seqpos, head]`: batch `pids 0` (stride
+`stride_dt_batch`), sequence position `pid_chunk·chunk_size + k` (stride
+`stride_dt_seqlen`), head `h` (stride `stride_dt_head`). -/
+```
+```lean
+noncomputable def dtElem
+    (s : BlockState) (DtPrepared : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head chunk_size : Nat)
+    (k h : Nat) : ℝ :=
+  s.readMem DtPrepared
+    (s.pids 0 * stride_dt_batch + (s.pids 1 * chunk_size + k) * stride_dt_seqlen +
+      h * stride_dt_head)
 ```
 </details>
 

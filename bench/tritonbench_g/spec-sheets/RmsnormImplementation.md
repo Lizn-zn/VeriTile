@@ -52,7 +52,7 @@ theorem rmsnorm_implementation_output_summary
 - `hWOutNe : rms_w_ptr ≠ out_ptr`
 - `fun _ : Fin N_SIZE => True`
 
-**Closed-form spec defs (transitive):** `rmsnorm_implementation`, `outColOffset`, `rmsnormWeightedYFullNSpec`, `rmsnormYFullNSpec`, `rmsInvVarFullN`, `rmsVarFullNCarrier`
+**Closed-form spec defs (transitive):** `rmsnorm_implementation`, `outColOffset`, `rmsnormWeightedYFullNSpec`, `rmsnormYFullNSpec`, `rmsInvVarFullN`, `rmsVarFullNCarrier`, `xColOffset`
 
 <details><summary><code>rmsnorm_implementation</code></summary>
 
@@ -172,7 +172,21 @@ noncomputable def rmsVarFullNCarrier
     (stride_x_batch stride_x_m stride_x_k N_SIZE _BLOCK_N_SIZE : Nat) : ℝ :=
   ∑ j : Fin N_SIZE,
     (s.readMem x_ptr
-        (s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + j.val * stride_x_k))^2
+        (xColOffset s stride_x_batch stride_x_m stride_x_k j.val))^2
+```
+</details>
+
+<details><summary><code>xColOffset</code></summary>
+
+```
+/-- Algebraic offset into `x_ptr` for an arbitrary column index `col : Nat`:
+row `(batch, m) = (pids 0, pids 1)` at strides `(stride_x_batch, stride_x_m)`,
+column `col` at stride `stride_x_k`. -/
+```
+```lean
+def xColOffset
+    (s : BlockState) (stride_x_batch stride_x_m stride_x_k col : Nat) : Nat :=
+  s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + col * stride_x_k
 ```
 </details>
 
