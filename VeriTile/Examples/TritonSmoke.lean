@@ -323,6 +323,36 @@ def scanOpsSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKernel := triton 
   tl.store($(outReg) + offs, y)
 }
 
+/-- Reverse (suffix) scan surface smoke (#94): `reverse=True` lowers to the
+same scan node with `ScanDirection.reverse`; `reverse=False` is the explicit
+forward spelling. -/
+def reverseScanOpsSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  r    := tl.cumsum(x, axis = 0, reverse=True)
+  f    := tl.cumsum(x, axis = 0, reverse=False)
+  q    := tl.cumprod(x, reverse=True, axis = 0)
+  m    := tl.associative_scan(x, max, axis = 0, reverse=True)
+  y    := r + f + q + m
+  tl.store($(outReg) + offs, y)
+}
+
+/-- The reverse-scan surface lowers to the algorithm layer. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    ∃ alg, (reverseScanOpsSmoke xReg outReg N).toAlgorithm? = Except.ok alg := by
+  simp [reverseScanOpsSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
+/-- Semantics smoke: the reverse scan is the **suffix** fold — at each index it
+folds exactly the lanes whose axis coordinate is `≥` the output coordinate
+(compare `Tile.scan_data`, whose kept set is the `≤` prefix). -/
+example (op : ScanOp) (x : Tile .real [8]) (idx : TileIndex [8]) :
+    (Tile.scan op ⟨0, by simp⟩ .reverse x).data idx
+      = op.eval
+          (((Finset.univ : Finset (Fin (TileShape.axisDim [8] ⟨0, by simp⟩))).filter
+            (fun k => (TileShape.axisCoord [8] ⟨0, by simp⟩ idx).val ≤ k.val)).toList.map
+            (fun k => x.data (TileShape.replaceAxisCoord [8] ⟨0, by simp⟩ idx k))) :=
+  Tile.scan_reverse_data ..
+
 /-- Arg/indexing and sort surface smoke. Arg ties are specified to keep the
 smallest axis index; sort is ascending along the static axis. -/
 def argSortOpsSmoke (xReg idxReg outReg : RegionName) (N : Nat) : ComputeKernel := triton {

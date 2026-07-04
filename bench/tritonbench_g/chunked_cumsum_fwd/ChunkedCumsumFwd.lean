@@ -119,7 +119,7 @@ axis 1 of a `some`-valued `[H, CH]` tile, evaluated at index `idx`, is
 at fixed head. -/
 theorem scan2d_axis1_sum (H CH : Nat) (g : Fin H → Fin CH → ℝ)
     (idx : TileIndex [H, CH]) :
-    (Tile.scan .sum ⟨1, by simp⟩
+    (Tile.scan .sum ⟨1, by simp⟩ .forward
       (⟨fun idx => some (g idx.1 idx.2.1)⟩ : Tile .real [H, CH])).data idx
       = some (∑ k ∈ (Finset.univ.filter
           (fun k : Fin CH => k.val ≤ idx.2.1.val)), g idx.1 k) := by
@@ -137,7 +137,7 @@ theorem scan2d_axis1_sum_if (H CH : Nat) (h : Fin H → Fin CH → ℝ)
     (P : Fin H → Fin CH → Prop) [∀ a, DecidablePred (P a)]
     (idx : TileIndex [H, CH]) :
     WithBot.unbotD 0
-      ((Tile.scan .sum ⟨1, by simp⟩
+      ((Tile.scan .sum ⟨1, by simp⟩ .forward
         (⟨fun idx => some (if P idx.1 idx.2.1 then h idx.1 idx.2.1 else 0)⟩ :
           Tile .real [H, CH])).data idx)
       = ∑ k ∈ (Finset.univ.filter
@@ -582,7 +582,7 @@ noncomputable def dAComputedCumsumSpec
       nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
     (idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]) : ℝ :=
   WithBot.unbotD 0
-    ((Tile.scan .sum ⟨1, by simp⟩
+    ((Tile.scan .sum ⟨1, by simp⟩ .forward
       (dATile s DtPrepared A stride_dt_batch stride_dt_seqlen
         stride_dt_head stride_A_head nheads chunk_size BLOCK_SIZE_H
         BLOCK_SIZE_CHUNK)).data idx)

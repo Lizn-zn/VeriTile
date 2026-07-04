@@ -57,7 +57,7 @@ attribute [tile_elementwise]
 /-! ## Tile scans (cumsum / associative_scan) -/
 
 attribute [tile_elementwise]
-  Tile.scan Tile.scan_data
+  Tile.scan Tile.scan_data Tile.scan_reverse_data
   Tile.argMaxDrop Tile.argMinDrop Tile.argBestDrop
   Tile.argMaxDrop_unfold Tile.argMinDrop_unfold
   ScanOp.eval ScanOp.eval_sum ScanOp.eval_prod ScanOp.eval_max

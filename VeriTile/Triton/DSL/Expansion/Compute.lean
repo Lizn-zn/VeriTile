@@ -282,8 +282,13 @@ partial def expandScan (expandExpr : ExprExpander) (env : Env) (ctx : String) (o
     Macro.throwError (ctx ++ ": rank-≥ 1 input required")
   let mut seenAxis : Bool := Bool.false
   let mut axisIdx : Nat := 0
+  let mut dirTerm : TSyntax `term ← `(ScanDirection.forward)
   for kw in kwargs do
     match kw with
+    | `(tritonReduceKwarg| reverse=True) =>
+        dirTerm ← `(ScanDirection.reverse)
+    | `(tritonReduceKwarg| reverse=False) =>
+        dirTerm ← `(ScanDirection.forward)
     | `(tritonReduceKwarg| $n:num) =>
         if seenAxis then
           Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
@@ -309,11 +314,11 @@ partial def expandScan (expandExpr : ExprExpander) (env : Env) (ctx : String) (o
     | `(tritonReduceKwarg| $name:ident = $_) =>
         Macro.throwError
           (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
-           "`. Only `axis = N` is supported.")
+           "`. Only `axis = N` and `reverse=True/False` are supported.")
     | _ =>
         Macro.throwUnsupported
   let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-  pure ⟨← `(Op.scan $op (⟨$axisLit, by simp⟩) $eTerm), .real, e'.shape, none, none⟩
+  pure ⟨← `(Op.scan $op (⟨$axisLit, by simp⟩) $dirTerm $eTerm), .real, e'.shape, none, none⟩
 
 partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do

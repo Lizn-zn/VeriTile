@@ -60,6 +60,16 @@ inductive ScanOp where
   | min
   deriving Repr, BEq
 
+/-- Direction of a scan (#94). `forward` folds the lanes at coordinates `≤`
+the output coordinate on the scanned axis (Triton's default, a prefix scan);
+`reverse` folds the lanes at coordinates `≥` it (`reverse=True`, a suffix
+scan). Every `ScanOp` is commutative and associative, so a direction is the
+only order information a scan needs. -/
+inductive ScanDirection where
+  | forward
+  | reverse
+  deriving Repr, BEq
+
 /-- Read-modify-write operation tag shared by algorithm AST and traces. -/
 inductive RMWOp where
   | add
@@ -152,10 +162,11 @@ inductive Op : TileDType → TileShape → Type where
   | reduceSum : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →
                 Op .real (TileShape.reduceShape shape axis keepDims)
-  /-- Prefix scan along an axis. `tl.cumsum` and `tl.cumprod` lower to this
-  node with `.sum` / `.prod`; `tl.associative_scan` accepts the closed
-  `ScanOp` enum rather than arbitrary functions. -/
-  | scan      : (op : ScanOp) → (axis : Fin shape.length) →
+  /-- Directed scan along an axis: prefix fold when `dir = .forward`, suffix
+  fold when `dir = .reverse` (`reverse=True`). `tl.cumsum` and `tl.cumprod`
+  lower to this node with `.sum` / `.prod`; `tl.associative_scan` accepts the
+  closed `ScanOp` enum rather than arbitrary functions. -/
+  | scan      : (op : ScanOp) → (axis : Fin shape.length) → (dir : ScanDirection) →
                 Op .real shape → Op .real shape
   /-- Axis index of the maximum value, with ties resolved toward the smallest
   axis coordinate. -/
