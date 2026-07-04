@@ -179,9 +179,13 @@ is well-defined and would need a typed lift.
 
 RESOLVED (#94): `tl.cumsum` / `tl.cumprod` / `tl.associative_scan` now accept
 `reverse=True/False`, lowering to the directed scan node (`ScanDirection`,
-suffix fold). The kernel below is unblocked but not yet ported.
+suffix fold). The kernel below is now ported and proven
+(`reversed_cumsum_scalar/ReversedCumsumScalar.lean`); its faithful
+transcription actually needs the reverse-range loop (already supported) plus a
+forward `tl.cumsum` — the original `reverse_scan` blocker label was a
+misclassification.
 
-- `reversed_cumsum_scalar.py` (Recurrent)
+- `reversed_cumsum_scalar.py` (Recurrent) — PORTED
 
 ## Hint-only port-strip tally (informational)
 
@@ -455,7 +459,7 @@ at hand-port time.
 | `chunk_gla_fwd.py` | Soft | num_programs | autotune, tf32_hint, contig_hint |
 | `chunk_retention.py` | Soft | num_programs | num_stages, tf32_hint |
 | `chunk_retention_ops.py` | Soft | num_programs | autotune, tf32_hint |
-| `reversed_cumsum_scalar.py` | Soft | reverse_scan | autotune |
+| `reversed_cumsum_scalar.py` | OK | — | autotune |
 | `chunk_cumsum_kernel.py` | OK | — | autotune |
 | `chunk_cumsum_vector.py` | OK | — | autotune, tf32_hint |
 | `chunk_delta_fwd.py` | OK | — | autotune, tf32_hint |
