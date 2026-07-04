@@ -445,16 +445,28 @@ BLOCK_N = 64`, `stride_qm = stride_kn = 64`, `stride_qk = stride_kk = 1`,
 `ROUND_CTX = NKV_CTX = N_CTX = 128`, `H = H_KV = 4`, `sliding_window_offset = 0`,
 `sliding_window_size = 64` instance. -/
 
+/-- Query element `Q[r, d]` at `qoff + r·stride_qm + d·stride_qk` (the `Q`
+block-ptr `[ROUND_CTX, BLOCK_DMODEL]` layout; base `qoff = case1QKOffsetQG`). -/
+noncomputable def case1QElemG (s : BlockState) (Q : RegionName)
+    (stride_qm stride_qk qoff r d : Nat) : ℝ :=
+  s.readMem Q (qoff + r * stride_qm + d * stride_qk)
+
+/-- Key element `K[d, n]` at `koff + d·stride_kk + n·stride_kn` (the `K`
+block-ptr `[BLOCK_DMODEL, NKV_CTX]` layout; base `koff = case1QKOffsetKG`,
+global key column `n`). -/
+noncomputable def case1KElemG (s : BlockState) (K : RegionName)
+    (stride_kk stride_kn koff d n : Nat) : ℝ :=
+  s.readMem K (koff + d * stride_kk + n * stride_kn)
+
 /-- General raw, unscaled QK dot for query row `r`, global key column `n`:
-`Σ_{d<BLOCK_DMODEL} Q[r,d]·K[d,n]` with `Q[r,d] @ qoff + r·stride_qm + d·stride_qk`,
-`K[d,n] @ koff + d·stride_kk + n·stride_kn`. -/
+`Σ_{d<BLOCK_DMODEL} Q[r,d]·K[d,n]` (elements via `case1QElemG`/`case1KElemG`). -/
 noncomputable def case1RawScoreG
     (s : BlockState) (Q K : RegionName)
     (BLOCK_DMODEL stride_qm stride_qk stride_kk stride_kn : Nat)
     (qoff koff : Nat) (r n : Nat) : ℝ :=
   Finset.univ.sum (fun d : Fin BLOCK_DMODEL =>
-    s.readMem Q (qoff + r * stride_qm + d.val * stride_qk)
-      * s.readMem K (koff + d.val * stride_kk + n * stride_kn))
+    case1QElemG s Q stride_qm stride_qk qoff r d.val
+      * case1KElemG s K stride_kk stride_kn koff d.val n)
 
 /-- General `Q` base offset `off_z·stride_qz + off_h·stride_qh`
 (`off_z = off_hz / H`, `off_h = off_hz % H`, `off_hz = s.pids 1`). -/
