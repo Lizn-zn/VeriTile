@@ -14,12 +14,12 @@
 | 177 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
 | 172 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 3 | 79 | 15 |  |
 | 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
+| 157 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 28 | 5 | 57 | 11 |  |
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
 | 148 | [RotaryEmbNopad.md](RotaryEmbNopad.md) | 14 | 0 | 96 | 10 |  |
 | 146 | [FlashDecode2Phi.md](FlashDecode2Phi.md) | 19 | 0 | 85 | 4 |  |
 | 145 | [MixedSparseAttention.md](MixedSparseAttention.md) | 32 | 3 | 33 | 13 |  |
 | 143 | [ChunkDeltaFwd.md](ChunkDeltaFwd.md) | 21 | 4 | 64 | 12 |  |
-| 143 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 22 | 9 | 57 | 11 |  |
 | 121 | [SoftmaxFlaggems.md](SoftmaxFlaggems.md) | 19 | 0 | 57 | 7 |  |
 | 117 | [KldivTriton.md](KldivTriton.md) | 9 | 0 | 70 | 20 |  |
 | 116 | [FusedRwkv6Kernel.md](FusedRwkv6Kernel.md) | 19 | 4 | 47 | 8 |  |

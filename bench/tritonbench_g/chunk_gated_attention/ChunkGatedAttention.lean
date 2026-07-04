@@ -56,6 +56,10 @@ regions**, never read-backs of the kernel's own output:
   matmul. `producedChunkGatedAttentionHStateValue := hClosed i_t` (loop-row store),
   `producedChunkGatedAttentionFinalStateValue := hClosed 4` (final state).
 
+All closed-form input reads go through named element accessors (`ktElem`,
+`tvElem`, `gnkElem`, `gnvElem`, `h0Elem`) that state the logical tensor
+indexing and the block-pointer footprint they mirror.
+
 The carry-fold satisfied by `hClosed` — `hClosed (m+1) = hClosed m ⊙ G_m + S_m`
 with base case `hClosed 0 = hSeed` — is the exact closed-form counterpart of the
 Python loop body `b_h = b_h * exp(b_gn) [gate] ; b_h += b_k @ b_v`. This generalizes the scalar
@@ -706,7 +710,54 @@ output `H`/`HT`):
 generalizing the scalar gated carry-fold of `chunk_gate_recurrence` (#290) and
 the per-channel decay outer-product of `fused_rwkv6` (#291) to a chunk-level
 **matrix** gate (`G_m`, per-row `k` when `GATEK`, per-column `v` otherwise) and a
-full gated `b_k @ b_v` accumulation term `S_m`. -/
+full gated `b_k @ b_v` accumulation term `S_m`.
+
+All input reads below go through **named element accessors** (`ktElem`,
+`tvElem`, `gnkElem`, `gnvElem`, `h0Elem`), each of which states the logical
+tensor indexing and the block-pointer footprint it mirrors, so the closed form
+can be reviewed without decoding flat offset arithmetic. -/
+
+/-- Global time index of the **last lane of chunk `m`** (`i_t*BT + BT - 1`) —
+the row whose cumulative gate `b_gn` normalizes the whole chunk. -/
+def chunkLastTime (BT m : Nat) : Nat := m * BT + BT - 1
+
+/-- `[k, t]`-layout element `R[i_bh][k, t]` at batch-head `s.pids 2`: mirrors
+the `p_k`-shaped block pointers (`base = R + i_bh*s_k_h`, `shape = (K, T)`,
+`strides = (s_k_d, s_k_t)`) — used for `K` itself and, under `GATEK`, for the
+per-time gate read `b_g` on `G`. -/
+noncomputable def ktElem (s : BlockState) (R : RegionName)
+    (s_k_h s_k_t s_k_d k t : Nat) : ℝ :=
+  s.readMem R (s.pids 2 * s_k_h + k * s_k_d + t * s_k_t)
+
+/-- `[t, v]`-layout element `R[i_bh][t, v]` at batch-head `s.pids 2`: mirrors
+the `p_v`-shaped block pointers (`base = R + i_bh*s_v_h`, `shape = (T, V)`,
+`strides = (s_v_t, s_v_d)`) — used for `V` itself and, under `¬GATEK`, for the
+per-time gate read `b_g` on `G`. -/
+noncomputable def tvElem (s : BlockState) (R : RegionName)
+    (s_v_h s_v_t s_v_d t v : Nat) : ℝ :=
+  s.readMem R (s.pids 2 * s_v_h + t * s_v_t + v * s_v_d)
+
+/-- Last-lane cumulative gate `b_gn[k]` under `GATEK`: lane `tLast*KSize + k` of
+`p_gn`'s flattened `(T*K,)` view of `G` at batch-head `s.pids 2`. NOTE: the
+port's `p_gn` carries element stride `s_k_d`; this closed form reads the lane at
+**unit element stride** (i.e. it is the `s_k_d = 1` footprint). -/
+noncomputable def gnkElem (s : BlockState) (G : RegionName)
+    (s_k_h KSize tLast k : Nat) : ℝ :=
+  s.readMem G (s.pids 2 * s_k_h + (tLast * KSize + k))
+
+/-- Last-lane cumulative gate `b_gn[v]` under `¬GATEK`: lane `tLast*VSize + v` of
+`p_gn`'s flattened `(T*V,)` view of `G` at batch-head `s.pids 2`. NOTE: the
+port's `p_gn` carries element stride `s_v_d`; this closed form reads the lane at
+**unit element stride** (i.e. it is the `s_v_d = 1` footprint). -/
+noncomputable def gnvElem (s : BlockState) (G : RegionName)
+    (s_v_h VSize tLast v : Nat) : ℝ :=
+  s.readMem G (s.pids 2 * s_v_h + (tLast * VSize + v))
+
+/-- Initial-state element `h0[i_bh][k, v]`: mirrors the `h0` block pointer
+(`base = h0 + i_bh*K*V`, `shape = (K, V)`, `strides = (V, 1)`). -/
+noncomputable def h0Elem (s : BlockState) (H0 : RegionName)
+    (KSize VSize k v : Nat) : ℝ :=
+  s.readMem H0 (s.pids 2 * KSize * VSize + k * VSize + v)
 
 /-- Per-chunk gate factor `G_m[k,v]` at the bench shape. `GATEK` ⇒ per-key-row
 `exp(b_gn_m[k])`; otherwise per-value-column `exp(b_gn_m[v])`. `b_gn` is the
@@ -716,13 +767,11 @@ noncomputable def hGate
     (s_k_h s_v_h KSize VSize BT BK BV m : Nat)
     (idx : TileIndex [BK, BV]) : ℝ :=
   if GATEK then
-    Real.exp (s.readMem G
-      (s.pids 2 * s_k_h +
-        ((m * BT + BT - 1) * KSize + (s.pids 1 * BK + idx.1.val))))
+    Real.exp (gnkElem s G s_k_h KSize (chunkLastTime BT m)
+      (kIndexState s BK idx.1))
   else
-    Real.exp (s.readMem G
-      (s.pids 2 * s_v_h +
-        ((m * BT + BT - 1) * VSize + (s.pids 0 * BV + idx.2.1.val))))
+    Real.exp (gnvElem s G s_v_h VSize (chunkLastTime BT m)
+      (vIndexState s BV idx.2.1))
 
 /-- Per-chunk gated matmul accumulation `S_m[k,v] = (gated b_k) @ (gated b_v)`,
 summed over the `BT` intra-chunk time lanes. `GATEK` gates `b_k` by
@@ -732,27 +781,21 @@ noncomputable def hStepTerm
     (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
     (idx : TileIndex [BK, BV]) : ℝ :=
   ∑ t : Fin BT,
-    let kVal := s.readMem K
-      (s.pids 2 * s_k_h + (s.pids 1 * BK + idx.1.val) * s_k_d +
-        (m * BT + t.val) * s_k_t)
-    let vVal := s.readMem V
-      (s.pids 2 * s_v_h + (m * BT + t.val) * s_v_t +
-        (s.pids 0 * BV + idx.2.1.val) * s_v_d)
+    let kVal := ktElem s K s_k_h s_k_t s_k_d
+      (kIndexState s BK idx.1) (m * BT + t.val)
+    let vVal := tvElem s V s_v_h s_v_t s_v_d
+      (m * BT + t.val) (vIndexState s BV idx.2.1)
     if GATEK then
-      let gnVal := s.readMem G
-        (s.pids 2 * s_k_h +
-          ((m * BT + BT - 1) * KSize + (s.pids 1 * BK + idx.1.val)))
-      let gVal := s.readMem G
-        (s.pids 2 * s_k_h + (s.pids 1 * BK + idx.1.val) * s_k_d +
-          (m * BT + t.val) * s_k_t)
+      let gnVal := gnkElem s G s_k_h KSize (chunkLastTime BT m)
+        (kIndexState s BK idx.1)
+      let gVal := ktElem s G s_k_h s_k_t s_k_d
+        (kIndexState s BK idx.1) (m * BT + t.val)
       (kVal * Real.exp (gnVal - gVal)) * vVal
     else
-      let gnVal := s.readMem G
-        (s.pids 2 * s_v_h +
-          ((m * BT + BT - 1) * VSize + (s.pids 0 * BV + idx.2.1.val)))
-      let gVal := s.readMem G
-        (s.pids 2 * s_v_h + (m * BT + t.val) * s_v_t +
-          (s.pids 0 * BV + idx.2.1.val) * s_v_d)
+      let gnVal := gnvElem s G s_v_h VSize (chunkLastTime BT m)
+        (vIndexState s BV idx.2.1)
+      let gVal := tvElem s G s_v_h s_v_t s_v_d
+        (m * BT + t.val) (vIndexState s BV idx.2.1)
       kVal * (vVal * Real.exp (gnVal - gVal))
 
 /-- Seed state `b_h^(0)[k,v]`: `h0[k,v]` when `USE_INITIAL_STATE`, else `0`. -/
@@ -760,9 +803,7 @@ noncomputable def hSeed
     (s : BlockState) (H0 : RegionName) (USE_INITIAL_STATE : Bool)
     (KSize VSize BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
   if USE_INITIAL_STATE then
-    s.readMem H0
-      (s.pids 2 * KSize * VSize +
-        (s.pids 1 * BK + idx.1.val) * VSize + (s.pids 0 * BV + idx.2.1.val))
+    h0Elem s H0 KSize VSize (kIndexState s BK idx.1) (vIndexState s BV idx.2.1)
   else 0
 
 /-- **Genuine closed form** for the folded gated-recurrence state at chunk `m`
@@ -790,7 +831,10 @@ noncomputable def producedChunkGatedAttentionHStateValue
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (i_t : Fin 4) (idx : TileIndex [16, 16]) : ℝ :=
   hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    4096 1 128 4096 32 1 32 32 32 16 16 i_t.val idx
+    (s_k_h := 4096) (s_k_t := 1) (s_k_d := 128)
+    (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
+    (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
+    (m := i_t.val) idx
 
 /-- **Genuine closed form** for the optional final-state store `ht`: the folded
 gated state after all `NT = 4` chunks, `hClosed 4`. -/
@@ -799,7 +843,10 @@ noncomputable def producedChunkGatedAttentionFinalStateValue
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (idx : TileIndex [16, 16]) : ℝ :=
   hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    4096 1 128 4096 32 1 32 32 32 16 16 4 idx
+    (s_k_h := 4096) (s_k_t := 1) (s_k_d := 128)
+    (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
+    (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
+    (m := 4) idx
 
 /-- Swap the `expected` value of a `writeIf`-`Realizes` when the two `expected`
 functions agree on every active (`mask`-satisfying) index. -/
