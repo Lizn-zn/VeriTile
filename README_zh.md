@@ -26,7 +26,9 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   (见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
   FlashAttention-1 forward、online softmax、Welford、LayerNorm、log-sum-exp。
 - **CI gate**:`lake build` + `scripts/check-artifact.sh`(无 `sorry`、
-  公理白名单、manifest schema、文档漂移检查)+ `bench/check_ports.sh`。
+  公理白名单、manifest schema、文档漂移检查)。
+  `bench/check_ports.sh` 是独立的本地检查(不在 CI 中运行),
+  逐个构建 TritonBench-G 端口。
 
 不在范围内:IEEE-754 浮点语义、PTX 级 codegen、详细并发(原子操作 /
 async-copy 序列化,投影边界以外)、Python wrapper 执行。
@@ -133,6 +135,7 @@ verso/                     幻灯片 / 概览
 - `scripts/check-artifact.sh` —— `lake build` ∧ 无 `sorry` ∧ 公理白名单 ∧
   kernel-manifest schema ∧ README/文档术语漂移检查
 - `bench/check_ports.sh` —— TritonBench-G 端口逐个构建
+  (本地手动运行;不属于 CI gate)
 
 ## 环境
 
