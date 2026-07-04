@@ -1,7 +1,7 @@
 # Spec-sheet index
 
 - 141 kernels, 241 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
-- Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
+- Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`, optionally boundary-masked) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
@@ -17,10 +17,10 @@
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
 | 148 | [RotaryEmbNopad.md](RotaryEmbNopad.md) | 14 | 0 | 96 | 10 |  |
 | 146 | [FlashDecode2Phi.md](FlashDecode2Phi.md) | 19 | 0 | 85 | 4 |  |
-| 143 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 22 | 9 | 57 | 11 |  |
+| 140 | [ChunkGatedAttention.md](ChunkGatedAttention.md) | 22 | 8 | 57 | 11 |  |
 | 136 | [MixedSparseAttention.md](MixedSparseAttention.md) | 32 | 0 | 33 | 13 |  |
 | 131 | [ChunkDeltaFwd.md](ChunkDeltaFwd.md) | 21 | 0 | 64 | 12 |  |
-| 121 | [SoftmaxFlaggems.md](SoftmaxFlaggems.md) | 19 | 0 | 57 | 7 |  |
+| 119 | [SoftmaxFlaggems.md](SoftmaxFlaggems.md) | 19 | 0 | 57 | 7 |  |
 | 117 | [KldivTriton.md](KldivTriton.md) | 9 | 0 | 70 | 20 |  |
 | 114 | [CacheTransformTriton.md](CacheTransformTriton.md) | 11 | 0 | 76 | 5 |  |
 | 113 | [FusedRwkv6Kernel.md](FusedRwkv6Kernel.md) | 19 | 3 | 47 | 8 |  |
@@ -32,31 +32,31 @@
 | 102 | [RopeTransform.md](RopeTransform.md) | 13 | 0 | 57 | 6 |  |
 | 101 | [ContextAttnLlama.md](ContextAttnLlama.md) | 25 | 0 | 26 | 6 |  |
 | 100 | [RotaryTransform.md](RotaryTransform.md) | 12 | 0 | 58 | 6 |  |
-| 99 | [FusedRecurrentHgrn.md](FusedRecurrentHgrn.md) | 16 | 0 | 52 | 3 |  |
 | 98 | [ContextAttnFwd.md](ContextAttnFwd.md) | 24 | 0 | 26 | 6 |  |
+| 97 | [FusedRecurrentHgrn.md](FusedRecurrentHgrn.md) | 16 | 0 | 52 | 3 |  |
 | 97 | [TritonArgmax.md](TritonArgmax.md) | 14 | 0 | 49 | 6 |  |
 | 94 | [RopeBackwardTransform.md](RopeBackwardTransform.md) | 13 | 0 | 49 | 6 |  |
 | 93 | [FastRmsLayernorm.md](FastRmsLayernorm.md) | 10 | 2 | 53 | 8 |  |
 | 93 | [KldivOps.md](KldivOps.md) | 9 | 0 | 58 | 8 |  |
-| 88 | [QuantizeKvCopy.md](QuantizeKvCopy.md) | 12 | 1 | 47 | 4 |  |
 | 86 | [KvCacheFilling.md](KvCacheFilling.md) | 11 | 0 | 51 | 2 |  |
+| 85 | [QuantizeKvCopy.md](QuantizeKvCopy.md) | 12 | 0 | 47 | 4 |  |
 | 84 | [AttnFwdCausal.md](AttnFwdCausal.md) | 17 | 0 | 30 | 9 |  |
 | 84 | [AttnFwdTriton.md](AttnFwdTriton.md) | 17 | 0 | 30 | 9 |  |
 | 82 | [LightningAttention.md](LightningAttention.md) | 12 | 4 | 42 | 4 |  |
 | 81 | [FastCeLoss.md](FastCeLoss.md) | 9 | 0 | 53 | 5 |  |
 | 78 | [TokenAttnMistral.md](TokenAttnMistral.md) | 14 | 0 | 31 | 5 |  |
-| 77 | [QuantizeCopyKv.md](QuantizeCopyKv.md) | 12 | 1 | 36 | 4 |  |
 | 76 | [DestindexCopy.md](DestindexCopy.md) | 8 | 0 | 49 | 3 |  |
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
-| 76 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 12 | 1 | 35 | 4 |  |
 | 75 | [LayerNormLiger.md](LayerNormLiger.md) | 10 | 0 | 38 | 7 |  |
+| 74 | [QuantizeCopyKv.md](QuantizeCopyKv.md) | 12 | 0 | 36 | 4 |  |
+| 73 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 12 | 0 | 35 | 4 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 10 | 1 | 34 | 7 |  |
 | 69 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 0 | 44 | 5 |  |
 | 69 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 0 | 44 | 5 |  |
 | 68 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 0 | 22 | 2 |  |
-| 66 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 12 | 0 | 27 | 3 |  |
 | 66 | [TokenAttnReduceV.md](TokenAttnReduceV.md) | 11 | 0 | 27 | 6 |  |
 | 65 | [BmmChunkFwd.md](BmmChunkFwd.md) | 15 | 0 | 22 | 2 |  |
+| 64 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 12 | 0 | 27 | 3 |  |
 | 63 | [AttentionScore.md](AttentionScore.md) | 12 | 2 | 23 | 4 |  |
 | 62 | [ContextAttnMistral.md](ContextAttnMistral.md) | 16 | 0 | 14 | 6 |  |
 | 62 | [MatmulTritonAutotune.md](MatmulTritonAutotune.md) | 15 | 0 | 17 | 4 |  |
@@ -71,15 +71,15 @@
 | 53 | [KcacheCopyTriton.md](KcacheCopyTriton.md) | 8 | 0 | 27 | 2 |  |
 | 53 | [LayernormFwdTriton.md](LayernormFwdTriton.md) | 8 | 0 | 25 | 4 |  |
 | 52 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 25 | 0 |  |
-| 52 | [TokenSoftmaxLlama.md](TokenSoftmaxLlama.md) | 9 | 0 | 22 | 3 |  |
 | 51 | [AttentionForwardTriton.md](AttentionForwardTriton.md) | 8 | 0 | 24 | 3 |  |
 | 51 | [CrossEntropy1.md](CrossEntropy1.md) | 7 | 0 | 31 | 3 |  |
 | 51 | [EmbeddingTritonKernel.md](EmbeddingTritonKernel.md) | 10 | 0 | 17 | 4 |  |
 | 50 | [ApplyPenalty.md](ApplyPenalty.md) | 8 | 1 | 23 | 2 |  |
 | 50 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 0 | 21 | 5 |  |
-| 50 | [TokenSoftmaxBloom.md](TokenSoftmaxBloom.md) | 9 | 0 | 21 | 2 |  |
+| 50 | [TokenSoftmaxLlama.md](TokenSoftmaxLlama.md) | 9 | 0 | 22 | 3 |  |
 | 48 | [IvDependentMatmul.md](IvDependentMatmul.md) | 11 | 0 | 15 | 4 |  |
 | 48 | [MatmulTma.md](MatmulTma.md) | 6 | 0 | 30 | 4 |  |
+| 48 | [TokenSoftmaxBloom.md](TokenSoftmaxBloom.md) | 9 | 0 | 21 | 2 |  |
 | 47 | [L2NormTriton2.md](L2NormTriton2.md) | 6 | 1 | 26 | 2 |  |
 | 46 | [AttentionKernel.md](AttentionKernel.md) | 11 | 0 | 18 | 5 |  |
 | 46 | [DestindexCopyKv1.md](DestindexCopyKv1.md) | 7 | 0 | 22 | 3 |  |

@@ -127,19 +127,22 @@ def body_of(decl):
 
 
 def is_documented_accessor(decl):
-    """A docstring'd `def` whose body is a single plain `readMem` — a named
-    element accessor (`ktElem`-style, PR #435). Its docstring states the
-    logical tensor indexing, so its one flat read *is* the layout
-    documentation rather than a readability tax. Reductions, branches,
-    value arithmetic, or a second read disqualify (address arithmetic
-    inside the single read is fine)."""
+    """A docstring'd `def` whose body is a single `readMem`, optionally under
+    a boundary mask (`if in-bounds then read else 0`) — a named element
+    accessor (`ktElem`/`l2Load`-style, PRs #435/#443). Its docstring states
+    the logical tensor indexing, so its one flat read *is* the layout
+    documentation rather than a readability tax. Reductions (symbol or word
+    form), `let`-bound addresses, value arithmetic wrappers (`Real.exp` etc.),
+    or a second read disqualify (address arithmetic inside the single read
+    and a trivial mask are fine)."""
     if decl["kind"] != "def" or not decl.get("doc"):
         return False
     body = body_of(decl)
     if len(re.findall(r"\breadMem\b", body)) != 1:
         return False
-    return not re.search(r"[∑∏]|\bif\b|\blet\b|\bmatch\b|WithBot|Real\.|Tile\.",
-                         body)
+    return not re.search(
+        r"[∑∏]|\blet\b|\bmatch\b|WithBot|Real\.|Tile\.|Finset\.|\.sum\b|\.prod\b",
+        body)
 
 
 MANI = os.path.join(BENCH, "proof_gap_manifest.tsv")
@@ -396,9 +399,10 @@ def main():
         idx.append("- Ranked by **review-cost** proxy "
                    "`score = 3·defs + flat_offset_reads + stmt_lines + hyps` "
                    "(hardest specs to audit first). Documented single-read "
-                   "element accessors (docstring + body = one `readMem`) are "
-                   "exempt from `flat_offset_reads` and count 1 (not 3) in "
-                   "the `defs` term — they are readability aids, not tax.\n")
+                   "element accessors (docstring + body = one `readMem`, "
+                   "optionally boundary-masked) are exempt from "
+                   "`flat_offset_reads` and count 1 (not 3) in the `defs` "
+                   "term — they are readability aids, not tax.\n")
         idx.append("| score | kernel | defs | flat-reads | stmt-lines | hyps | flags |")
         idx.append("|---:|---|---:|---:|---:|---:|---|")
         for s in sorted(stats, key=lambda x: (-x["score"], x["file"])):
