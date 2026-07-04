@@ -218,12 +218,19 @@ def gemma_rms_layernorm_backward
   tl.store(dY + col_offsets, output, mask=mask)
 }
 
+/-- Element `j` of **this program's row** of a row-major matrix region `R`
+(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
+`dY` row loads all use this layout. -/
+noncomputable def rowElem (s : BlockState) (R : RegionName)
+    (row_stride j : Nat) : ℝ :=
+  s.readMem R (s.pid * row_stride + j)
+
 noncomputable def rmsInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      else some (0 : ℝ) }
 
 noncomputable def rmsSumCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -252,7 +259,7 @@ noncomputable def rmsLayernormYSpec
   WithBot.unbotD 0
     (Option.map₂ (fun x w => x * w)
       (Option.map₂ (fun x inv => x * inv)
-        (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+        (some (rowElem s X X_row_stride idx.val))
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W (idx.val * W_row_stride))))
 
@@ -263,7 +270,7 @@ noncomputable def gemmaRmsLayernormYSpec
   WithBot.unbotD 0
     (Option.map₂ (fun scaled w => scaled * (w + 1.0))
       (Option.map₂ (fun x inv => x * inv)
-        (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+        (some (rowElem s X X_row_stride idx.val))
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W idx.val)))
 
@@ -274,7 +281,7 @@ noncomputable def rmsBackwardDYTilePlain
   { data := fun idx =>
       Option.map₂ (fun dy w => dy * w)
         (if idx.1.val < n_cols then
-          some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
+          some (rowElem s dY dY_row_stride idx.1.val)
         else some (0 : ℝ))
         (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
         else some (0 : ℝ)) }
@@ -286,7 +293,7 @@ noncomputable def rmsBackwardDYTileGemma
   { data := fun idx =>
       Option.map₂ (fun dy w => dy * w)
         (if idx.1.val < n_cols then
-          some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
+          some (rowElem s dY dY_row_stride idx.1.val)
         else some (0 : ℝ))
         (Option.map (fun w => w + 1.0)
           (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
@@ -299,7 +306,7 @@ noncomputable def rmsBackwardNormedTile
   { data := fun idx =>
       Option.map (fun x => x * s.readMem r (s.pid * r_row_stride))
         (if idx.1.val < n_cols then
-          some (s.readMem X (s.pid * X_row_stride + idx.1.val))
+          some (rowElem s X X_row_stride idx.1.val)
         else some (0 : ℝ)) }
 
 noncomputable def rmsBackwardRowSumCarrierPlain
@@ -390,7 +397,7 @@ theorem rms_layernorm_forward_y_correct
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
-            rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+            rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             WithBot.realRsqrt, NumericDType.mul]
       rfl
@@ -455,7 +462,7 @@ theorem gemma_rms_layernorm_forward_y_correct
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, gemmaRmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
-            rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+            rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             WithBot.realRsqrt, NumericDType.mul]
       rfl
@@ -522,7 +529,7 @@ theorem rms_layernorm_backward_dy_correct
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsBackwardDYSpecPlain, rmsBackwardRowSumCarrierPlain,
-            rmsBackwardDYTilePlain, rmsBackwardNormedTile, Tile.reduceSum,
+            rmsBackwardDYTilePlain, rmsBackwardNormedTile, rowElem, Tile.reduceSum,
             Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
             TileShape.insertAxisIndex, NumericDType.mul]
       rfl
@@ -591,7 +598,7 @@ theorem gemma_rms_layernorm_backward_dy_correct
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsBackwardDYSpecGemma, rmsBackwardRowSumCarrierGemma,
-            rmsBackwardDYTileGemma, rmsBackwardNormedTile, Tile.reduceSum,
+            rmsBackwardDYTileGemma, rmsBackwardNormedTile, rowElem, Tile.reduceSum,
             Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
             TileShape.insertAxisIndex, NumericDType.mul]
       rfl
@@ -705,7 +712,7 @@ theorem rms_layernorm_forward_inv_var_correct
     rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
           Y _ _ _ _ _ _ _ hRegions]
     simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
-          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
     rfl
@@ -721,7 +728,7 @@ theorem rms_layernorm_forward_inv_var_correct
     subst hB'
     simp [TileShape.allIndices, List.finRange,
           rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
-          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
 
@@ -771,7 +778,7 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
     rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
           Y _ _ _ _ _ _ _ hRegions]
     simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
-          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
     rfl
@@ -787,7 +794,7 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
     subst hB'
     simp [TileShape.allIndices, List.finRange,
           rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
-          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          rmsInputTile, rowElem, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
 
