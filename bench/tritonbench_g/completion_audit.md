@@ -155,9 +155,11 @@ The current documented blocker set is:
 - `matmul_tma` — `OUTPUT_F16` branch split into two surfaces.
 - `softmax_flaggems` — `ONE_TILE_PER_CTA = true` single-tile specializations
   only (genuine partial-coverage scope restriction).
+
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #154 has 13 fixed-width int8 blocked
-summaries, and #167 has 1 context-attention accumulator-store row.
+`proof_gap_manifest.tsv`: 3 fixed-width int8 blocked summaries
+(`quant_transpose_kernel`, `quantize_global`, `rowwise_quantization_triton`),
+all under the open #154 family.
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
 this audit must continue to run the translation-consistency gates above and the
