@@ -1,0 +1,51 @@
+name: Bench audit
+
+# TritonBench-G completion gates: port elaboration (bench/check_ports.sh),
+# proof-gap manifest exact-match (bench/check_proof_gap_manifest.py), and the
+# textual py<->lean faithfulness scans (bench/audit_tritonbench_g.sh).
+#
+# The elaboration pass compiles all 142 ports sequentially and dominates the
+# runtime, so this workflow is scoped to bench/ changes rather than every
+# .lean touch; the weekly scheduled run catches drift introduced by library
+# changes that never touch bench/.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'bench/**'
+      - '.github/workflows/bench-audit.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'bench/**'
+      - '.github/workflows/bench-audit.yml'
+  schedule:
+    # Weekly drift check (Monday 03:17 UTC) so library-only changes that
+    # break bench ports or scans still surface within a week.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: TritonBench-G audit gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Lean project
+        uses: leanprover/lean-action@v1
+        with:
+          build: true
+          build-args: "VeriTile VeriTileFull"
+          test: false
+          lint: false
+          use-mathlib-cache: auto
+
+      - name: Run TritonBench-G audit
+        run: bench/audit_tritonbench_g.sh
