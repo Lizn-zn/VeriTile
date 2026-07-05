@@ -34,11 +34,80 @@ else
   failures=$((failures + 1))
 fi
 
-if rg -n 'True := by|trivial|sorry|admit' bench/tritonbench_g -g '*.lean'; then
+# Placeholder-proof scan. Operates on comment-stripped Lean source so prose
+# like "sorry-free" in docstrings cannot mask or fake a hit, and matches
+# `trivial` only where it is the entire proof (`:= trivial`, `:= by trivial`),
+# not where it appears as a proof term inside a larger tactic application.
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+
+def strip_lean_comments(text: str) -> str:
+    """Blank out `--` line comments and (nested) `/- ... -/` block comments,
+    preserving line structure so reported line numbers stay accurate."""
+    out = []
+    i = 0
+    n = len(text)
+    depth = 0
+    while i < n:
+        two = text[i:i + 2]
+        if depth == 0 and two == "--":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/-":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0 and two == "-/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth == 0:
+            out.append(text[i])
+        else:
+            out.append(text[i] if text[i] == "\n" else " ")
+        i += 1
+    return "".join(out)
+
+# `sorry` / `admit` as code tokens; `True := by` placeholder goals; `trivial`
+# standing alone as the entire proof (term-mode `:= trivial`, one-line
+# `:= by trivial`, or the two-line `:= by` / lone indented `trivial` form).
+line_patterns = (
+    re.compile(r"\bsorry\b"),
+    re.compile(r"\badmit\b"),
+    re.compile(r"True\s*:=\s*by\b"),
+    re.compile(r":=\s*(?:by\s+)?trivial\s*$"),
+)
+whole_proof_trivial = re.compile(r":=\s*by[ \t]*\n\s*trivial[ \t]*\n(?![ \t])")
+
+matches = []
+for lean_file in sorted(root.glob("*/*.lean")):
+    code = strip_lean_comments(lean_file.read_text())
+    for lineno, line in enumerate(code.splitlines(), 1):
+        for pattern in line_patterns:
+            if pattern.search(line):
+                matches.append(f"{lean_file}:{lineno}:{line.strip()}")
+                break
+    for m in whole_proof_trivial.finditer(code):
+        lineno = code.count("\n", 0, m.start()) + 1
+        matches.append(f"{lean_file}:{lineno}:whole-proof `by trivial`")
+
+if matches:
+    for entry in sorted(set(matches)):
+        print(entry)
+    sys.exit(1)
+PY
+then
+  printf 'ok placeholder proof scan\n'
+else
   printf 'FAIL placeholder proof scan found matches\n'
   failures=$((failures + 1))
-else
-  printf 'ok placeholder proof scan\n'
 fi
 
 missing_surface=()
