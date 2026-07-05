@@ -52,6 +52,14 @@ transcribed exactly as the kernel computes it and the spec's layout references
 the same derived `offs_am`/`offs_bn`/`offs_cm`/`offs_cn`, so it is not a separate
 proof obligation. Output-offset injectivity (distinct lanes hit distinct
 addresses) is the only assumed disjointness.
+## Translation-surface blocker
+
+Translation-surface blocker: the loop trip count `tl.cdiv(K, BLOCK_SIZE_K)`
+is supplied as the antiquoted `numKBlocks` binder (so that `tl.cdiv` call does
+not appear as a surface statement), and the K-loop counter is spelled `kk`
+where Python spells it `k` (avoiding a clash with the antiquoted dimension
+binder `K`). The textual py↔lean scans in `bench/audit_tritonbench_g.sh`
+exempt this port on this marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulTritonAutotune

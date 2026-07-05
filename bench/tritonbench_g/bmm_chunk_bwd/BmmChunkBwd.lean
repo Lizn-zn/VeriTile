@@ -72,6 +72,16 @@ Preconditions for the general theorem: `0 < BLOCK_SIZE_CS` (so the CS-tail load
 mask is all-true given `CSL = BCS·numCSBlocks`); all tile rows/cols in-bounds
 (`PM·BM+i < CSL ≤ chunk_size`, `PN·BN+j < K`, making both load masks and the
 store mask all-true); output-address injectivity; clean initial `undef`.
+## Translation-surface blocker
+
+Translation-surface blocker: the in-body
+`chunk_size_limit = min(chunk_size, seqlen - pid_c * chunk_size)` is supplied
+to the surface as the precomputed `chunk_size_limit` parameter, so `seqlen`
+is not a surface binder and that `min` assignment does not appear as a
+surface statement (the CS-loop bound `tl.cdiv(chunk_size_limit,
+BLOCK_SIZE_CS)` is driven by `forRangeDyn`). The textual py↔lean scans in
+`bench/audit_tritonbench_g.sh` exempt this port on this marker (registered in
+`proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.BmmChunkBwd

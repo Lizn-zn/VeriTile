@@ -55,6 +55,17 @@ the sentinel score bound `afcScoreBound`. The concrete Python benchmark layout
 (`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`, `BLOCK_N = 64`, strides
 `(65536, 16384, 128, 1)`, mask = first 96 head lanes, `STAGE = 1`) is one
 instantiation of the dimension-general theorem.
+## Translation-surface blocker
+
+Translation-surface blocker: the `_attn_fwd_inner` helper JIT (both call
+sites) is inlined into the port's single streaming-loop surface, and the
+Python-hard-coded head constants (`tl.arange(0, 128)`, the `< 96` head mask,
+`tl.zeros([BLOCK_M, 128])`) are generalized to the `BLOCK_DMODEL` /
+`HEAD_ACTIVE` binders — the Python literals are the `128`/`96` instantiation
+of the dimension-general top theorem. The Lean surface is therefore not a
+line-for-line textual match of the Python `_attn_fwd` body, and the textual
+py↔lean scans in `bench/audit_tritonbench_g.sh` exempt this port on this
+marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal

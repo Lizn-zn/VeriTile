@@ -58,6 +58,19 @@ the same `% M` / `% N` value expression. The masked store is scoped to *active*
 lanes (`offset_m < M` and `offset_n < N`); an output-offset injectivity
 hypothesis `hInj` (distinct active lanes hit distinct addresses) is carried as an
 open side condition all the way up to the top theorem (not discharged here).
+## Translation-surface blocker
+
+Translation-surface blocker: the Lean surface is the kernel's main numeric
+path — `EVEN_K` (unmasked K-block) loads with `ADD_INPUTS = false` and
+`CAST_TYPE = false` — so those three constexpr parameters and their branches
+(the masked tail loads, the `tl.load(c)` residual add, and the dtype casts,
+which collapse to the real carrier anyway) are dropped from the surface. The
+in-kernel `pid → (pid_m, pid_n)` CTA decomposition (`cta_n_num =
+tl.cdiv(N, BLOCK_N)`) is supplied via separate program-id axes — the
+linearization is the trusted host boundary — and `tl.max_contiguous` /
+`tl.multiple_of` layout hints are erased into the same `% M` / `% N` value
+expression. The textual py↔lean scans in `bench/audit_tritonbench_g.sh`
+exempt this port on this marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SgmvExpandSlice

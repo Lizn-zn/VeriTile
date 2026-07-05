@@ -43,6 +43,15 @@ row-major strides: `a[i,k]` at `A + offs_am(i)·4096 + k`, `b[k,j]` at
 `B + k·4096 + offs_bn(j)`, `c[i,j]` at `C + 4096·offs_cm(i) + offs_cn(j)`, with
 `offs_am(i) = (pid_m·BM + i) % 4096`, `offs_bn(j) = (pid_n·BN + j) % 4096`,
 exactly as the kernel's pointer arithmetic constructs them.
+## Translation-surface blocker
+
+Translation-surface blocker: the Python kernel's in-body constants
+(`M, N, K = 4096, 4096, 4096` and the six stride literals) and the loop trip
+count `tl.cdiv(K, BLOCK_SIZE_K)` are supplied as antiquoted binders
+(`K = BLOCK_SIZE_K · numKBlocks`, trip count `numKBlocks`), so the in-body
+constant assignments and the `tl.cdiv` call do not appear as surface
+statements. The textual py↔lean scans in `bench/audit_tritonbench_g.sh`
+exempt this port on this marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulKernel

@@ -58,6 +58,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 
+/-- Faithful 1:1 transcription of `adam_update_triton.py`'s `update_fn_kernel`. -/
 def update_fn_kernel
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :

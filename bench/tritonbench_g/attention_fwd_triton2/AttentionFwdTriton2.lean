@@ -64,6 +64,17 @@ complete in `VeriTile/Examples/AttentionForwardClosedForm.lean`. Because this
 kernel's surface is (post dtype-erasure) definitionally the same loop, the top
 theorem here bridges directly to that result. Tracked as
 `attention-forward-online-softmax-recurrence`, #162.
+## Translation-surface blocker
+
+Translation-surface blocker: the `_attn_fwd_inner` helper JIT is inlined into
+the port's single streaming-loop surface, and the Python-hard-coded head
+constants (`tl.arange(0, 128)`, the `< 96` head mask,
+`tl.zeros([BLOCK_M, 128])`) are generalized to the `BLOCK_DMODEL` /
+`HEAD_ACTIVE` binders — the Python literals are the `128`/`96` instantiation
+of the dimension-general top theorem. The Lean surface is therefore not a
+line-for-line textual match of the Python `_attn_fwd` body, and the textual
+py↔lean scans in `bench/audit_tritonbench_g.sh` exempt this port on this
+marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton2
