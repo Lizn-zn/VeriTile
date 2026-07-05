@@ -47,6 +47,7 @@ region (`A`: `i·stride_am + e·stride_ak`, `B`: `e·stride_bk + j·stride_bn`,
 lane is in-bounds. The output-offset map is assumed injective (distinct lanes
 hit distinct addresses), exactly as the contiguous `128×128` Python test tiles
 satisfy.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the `OUTPUT_F16` constexpr branch is split into

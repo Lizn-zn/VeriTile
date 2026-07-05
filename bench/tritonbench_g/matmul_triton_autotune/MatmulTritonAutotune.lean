@@ -52,6 +52,7 @@ transcribed exactly as the kernel computes it and the spec's layout references
 the same derived `offs_am`/`offs_bn`/`offs_cm`/`offs_cn`, so it is not a separate
 proof obligation. Output-offset injectivity (distinct lanes hit distinct
 addresses) is the only assumed disjointness.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the loop trip count `tl.cdiv(K, BLOCK_SIZE_K)`

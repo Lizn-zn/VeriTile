@@ -58,6 +58,7 @@ the same `% M` / `% N` value expression. The masked store is scoped to *active*
 lanes (`offset_m < M` and `offset_n < N`); an output-offset injectivity
 hypothesis `hInj` (distinct active lanes hit distinct addresses) is carried as an
 open side condition all the way up to the top theorem (not discharged here).
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the Lean surface is the kernel's main numeric

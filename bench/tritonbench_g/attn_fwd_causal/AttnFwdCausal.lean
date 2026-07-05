@@ -55,6 +55,7 @@ the sentinel score bound `afcScoreBound`. The concrete Python benchmark layout
 (`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`, `BLOCK_N = 64`, strides
 `(65536, 16384, 128, 1)`, mask = first 96 head lanes, `STAGE = 1`) is one
 instantiation of the dimension-general theorem.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the `_attn_fwd_inner` helper JIT (both call

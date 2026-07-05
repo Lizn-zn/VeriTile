@@ -43,6 +43,7 @@ row-major strides: `a[i,k]` at `A + offs_am(i)·4096 + k`, `b[k,j]` at
 `B + k·4096 + offs_bn(j)`, `c[i,j]` at `C + 4096·offs_cm(i) + offs_cn(j)`, with
 `offs_am(i) = (pid_m·BM + i) % 4096`, `offs_bn(j) = (pid_n·BN + j) % 4096`,
 exactly as the kernel's pointer arithmetic constructs them.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the Python kernel's in-body constants

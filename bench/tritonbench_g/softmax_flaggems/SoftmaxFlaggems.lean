@@ -58,6 +58,7 @@ Offset injectivity is an explicit hypothesis (`nonInnerOffset_injective` require
 `pid_k·TILE_K + TILE_K ≤ K`; the inner backward takes injectivity as a
 hypothesis, which holds when `TILE_N ≤ N`). The specs reference
 `Tile.reduceMax` / `Tile.reduceSum` directly, not `VeriTile.Triton.Math.*`.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: value correctness targets the

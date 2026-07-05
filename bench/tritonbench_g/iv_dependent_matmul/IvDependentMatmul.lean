@@ -76,6 +76,7 @@ every loaded lane); tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`
 making `% M`/`% N` the identity and the store mask all-true); output-address
 injectivity, discharged here from the concrete contract `stride_cn = 1` and
 `BN ≤ stride_cm` (row-major C tile); clean initial `undef`.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: only the canonical `type == "pre_load"`

@@ -64,6 +64,7 @@ complete in `VeriTile/Examples/AttentionForwardClosedForm.lean`. Because this
 kernel's surface is (post dtype-erasure) definitionally the same loop, the top
 theorem here bridges directly to that result. Tracked as
 `attention-forward-online-softmax-recurrence`, #162.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the `_attn_fwd_inner` helper JIT is inlined into

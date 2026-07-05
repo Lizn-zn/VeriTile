@@ -60,6 +60,7 @@ theorem's banner) are: positive blocks (`BLOCK_DMODEL`, `BLOCK_N`, `BLOCK_M > 0`
 The Python test-shape layout (`Z = 2`, `H = 4`,
 `N_CTX = HEAD_DIM = BLOCK_M = BLOCK_DMODEL = 128`, `BLOCK_N = 64`,
 `HEAD_ACTIVE = 96`, `STAGE = 3`) is only one instance of this general theorem.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the `_attn_fwd_inner` helper JIT (both call

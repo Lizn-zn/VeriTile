@@ -104,6 +104,7 @@ reuse case 1's masked-block machinery via the generic-normalizer sum lemmas.
 
 Arithmetic is over `ℝ`. There is no remaining trusted host boundary in case 4 — the
 resume state is read as genuine input memory.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the `_attn_fwd_inner` helper JIT is inlined into

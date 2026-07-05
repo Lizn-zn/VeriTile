@@ -72,6 +72,7 @@ Preconditions for the general theorem: `0 < BLOCK_SIZE_CS` (so the CS-tail load
 mask is all-true given `CSL = BCS·numCSBlocks`); all tile rows/cols in-bounds
 (`PM·BM+i < CSL ≤ chunk_size`, `PN·BN+j < K`, making both load masks and the
 store mask all-true); output-address injectivity; clean initial `undef`.
+
 ## Translation-surface blocker
 
 Translation-surface blocker: the in-body
