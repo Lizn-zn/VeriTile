@@ -47,6 +47,16 @@ region (`A`: `i·stride_am + e·stride_ak`, `B`: `e·stride_bk + j·stride_bn`,
 lane is in-bounds. The output-offset map is assumed injective (distinct lanes
 hit distinct addresses), exactly as the contiguous `128×128` Python test tiles
 satisfy.
+
+## Translation-surface blocker
+
+Translation-surface blocker: the `OUTPUT_F16` constexpr branch is split into
+two Lean surfaces (`matmul_tma_f32_surface` and `matmul_tma_f16_surface`), so
+the `OUTPUT_F16` parameter, the `if OUTPUT_F16:` branch, and the
+`.to(tl.float16)` cast do not appear in the first (f32) surface the scans
+compare against. The textual py↔lean scans in
+`bench/audit_tritonbench_g.sh` exempt this port on this marker (registered in
+`proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulTma

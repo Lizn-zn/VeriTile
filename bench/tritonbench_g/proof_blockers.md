@@ -103,12 +103,55 @@ and now track under the open #154 `fixed-width-int8-cast-semantics` family.
 
 ## Translation-Surface Blockers
 
-No current TritonBench-G port has an active documented translation-surface
-blocker.
+A port whose Lean `triton { }` surface deliberately deviates from a literal
+transcription of the upstream Python kernel body declares that with an
+explicit `Translation-surface blocker:` line in its module preamble.
+`bench/audit_tritonbench_g.sh` keys the textual py↔lean surface-scan
+exemptions on that marker only, and requires every marker to be registered
+here and in `completion_audit.md`. The current registered set — each entry is
+a documented, deliberate surface deviation, not an unproven correctness gap
+unless stated:
+
+- `attn_fwd_triton` — the `_attn_fwd_inner` helper JIT (both call sites) is
+  inlined into the single streaming loop; the hard-coded `tl.arange(0, 128)` /
+  `< 96` head constants are generalized to the `BLOCK_DMODEL` / `HEAD_ACTIVE`
+  binders (the Python literals are the `128`/`96` instantiation of the
+  dimension-general top theorem).
+- `attn_fwd_causal` — same helper inlining and `128`/`96` → `BLOCK_DMODEL` /
+  `HEAD_ACTIVE` generalization as `attn_fwd_triton`.
+- `attention_fwd_triton2` — same helper inlining and `128`/`96` →
+  `BLOCK_DMODEL` / `HEAD_ACTIVE` generalization.
+- `attention_fwd_triton3` — the `_attn_fwd_inner` helper JIT is inlined into
+  the single streaming loop (its loads/`tl.where`/`tl.advance` appear in the
+  Lean surface but not in the Python `_attn_fwd` body).
+- `sgmv_expand_slice` — proven path is `EVEN_K` loads with
+  `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
+  branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is
+  supplied via program-id axes (trusted host boundary);
+  `tl.max_contiguous`/`tl.multiple_of` hints erased.
+- `matmul_kernel` — in-body constants (`M = N = K = 4096`, stride literals)
+  and the `tl.cdiv(K, BLOCK_SIZE_K)` trip count are supplied as antiquoted
+  binders (`K = BLOCK_SIZE_K · numKBlocks`).
+- `matmul_triton_autotune` — the `tl.cdiv(K, BLOCK_SIZE_K)` trip count is the
+  antiquoted `numKBlocks` binder; the K-loop counter is spelled `kk`.
+- `bmm_chunk_bwd` — the in-body `chunk_size_limit = min(chunk_size, seqlen -
+  pid_c·chunk_size)` is supplied as the precomputed `chunk_size_limit`
+  parameter (`seqlen` is not a surface binder).
+- `iv_dependent_matmul` — only the canonical `type == "pre_load"` scheduling
+  mode is mechanized; the string constexpr `type` and the four other mode
+  branches are described informally, not transcribed.
+- `matmul_tma` — the `OUTPUT_F16` constexpr branch is split into two Lean
+  surfaces (f32 and f16), so that parameter/branch/cast is absent from the
+  first surface.
+- `softmax_flaggems` — value correctness targets the `ONE_TILE_PER_CTA = true`
+  single-tile specializations; the multi-tile fallback branches (pointer `+=`
+  advances, online recurrences) are not transcribed. This one is a genuine
+  partial-coverage scope restriction, not just a notational rewrite.
 
 ### Required VeriTile surface extensions
 
-The attention helper-call surfaces are currently modeled as opaque outer-kernel
-statements for translation coverage. Future proof work may add executable
-semantics for projecting those helper calls, but that is no longer a
-translation-surface blocker.
+The attention helper-call surfaces are inlined into the outer-kernel streaming
+loops for translation coverage (see the `attn_fwd_*` / `attention_fwd_*`
+entries above). Future work may add executable semantics for projecting
+helper calls as calls, but that is a surface-notation concern, not a proof
+gap.

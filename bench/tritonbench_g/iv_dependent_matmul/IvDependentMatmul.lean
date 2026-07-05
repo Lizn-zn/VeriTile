@@ -76,6 +76,17 @@ every loaded lane); tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`
 making `% M`/`% N` the identity and the store mask all-true); output-address
 injectivity, discharged here from the concrete contract `stride_cn = 1` and
 `BN ≤ stride_cm` (row-major C tile); clean initial `undef`.
+
+## Translation-surface blocker
+
+Translation-surface blocker: only the canonical `type == "pre_load"`
+scheduling mode is mechanized as a surface; the string constexpr `type` and
+the four other mode branches (`post_load`, `post_pre_mixed`,
+`post_load_two_iters`, `post_load_three_iters`) are described informally
+above and are not transcribed, so the `type` parameter and those `if`
+branches do not appear in the Lean surface. The textual py↔lean scans in
+`bench/audit_tritonbench_g.sh` exempt this port on this marker (registered in
+`proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.IvDependentMatmul

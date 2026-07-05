@@ -58,6 +58,16 @@ Offset injectivity is an explicit hypothesis (`nonInnerOffset_injective` require
 `pid_k·TILE_K + TILE_K ≤ K`; the inner backward takes injectivity as a
 hypothesis, which holds when `TILE_N ≤ N`). The specs reference
 `Tile.reduceMax` / `Tile.reduceSum` directly, not `VeriTile.Triton.Math.*`.
+
+## Translation-surface blocker
+
+Translation-surface blocker: value correctness targets the
+`ONE_TILE_PER_CTA = true` single-tile specializations, so the multi-tile
+fallback branches — the `input_ptr += pid_m * N` / `output_ptr += pid_m * N`
+pointer advances and online `m`/`z` (forward) and `scale`/offset (backward)
+`+=` recurrences — are not transcribed into the verified surfaces. The
+textual py↔lean scans in `bench/audit_tritonbench_g.sh` exempt this port on
+this marker (registered in `proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems

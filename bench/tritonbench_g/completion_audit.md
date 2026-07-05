@@ -13,11 +13,11 @@ surface.
 | Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 142; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
 | Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 142 ok, 0 fail`; the audit script reruns this gate. | Passing. |
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
-| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch and no documented translation-surface blocker remains. |
+| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No unannotated mechanical mismatch remains; the eleven deliberate surface deviations carry explicit `Translation-surface blocker:` markers registered below and in `proof_blockers.md`. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every `output_summary` declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 181 summaries are classified across 76 files. |
-| Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers and no stale translation-surface blocker entries. | Passing; no algorithm-layer or translation-surface blocker remains. |
+| Do not count placeholder proofs as complete. | Placeholder scan (comment-stripped Lean source) for `sorry`, `admit`, `True := by` goals, and whole-proof `trivial` reports no matches. | Passing. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers and that the documented translation-surface blocker list matches the active marker set with no stale entries. | Passing; no algorithm-layer blocker remains, and every translation-surface marker is registered. |
 
 ## Evidence Checked
 
@@ -41,15 +41,17 @@ surface.
   entry. It rejects Lean-only `tl.load(..., dtype=...)`
   annotations and `keep_dims` reduction substitutions, both of which are
   must-fix deviations under
-  `review_criteria.md`. It also flags Python `+=` statements missing from Lean
-  unless the Lean port documents that the update is outside a proof slice or
-  branch/surface specialization; this includes a normalized left-hand-side
+  `review_criteria.md`. It also flags Python `+=` statements (scoped to
+  `@triton.jit` kernel bodies) missing from Lean unless the port carries an
+  explicit `Translation-surface blocker:` preamble marker; this includes a
+  normalized left-hand-side
   check that treats names like `a_ptr` and `A` as the same pointer. It checks
   that upstream `rsqrt` calls are preserved rather than rewritten as reciprocal
   square roots. It also rejects Lean-only `tl.where` statements, another
   must-fix "extra statement" pattern in `review_criteria.md`. Finally, it
   compares the Python and Lean `tl.*(...)` call surfaces and requires any
-  missing or extra call to be covered by an explicit slice/specialization note.
+  missing or extra call to be covered by an explicit
+  `Translation-surface blocker:` preamble marker.
   It also compares `for` / `while` / `if` counts inside the Python
   `@triton.jit` kernel body and Lean `triton { ... }` body to catch
   unannotated control-flow rewrites, and compares the ordered `tl.*(...)` call
@@ -59,9 +61,10 @@ surface.
   statements are also checked mechanically. The audit also compares the
   explicit `completion_audit.md` Remaining Blockers list against the active
   Lean preamble marker set, so stale or missing blocker entries fail the gate.
-- Placeholder scan:
-  `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
-  currently reports no matches.
+- Placeholder scan: the comment-stripped Lean sources contain no `sorry` /
+  `admit` code tokens, no `True := by` placeholder goals, and no whole-proof
+  `trivial` (`:= trivial` / `:= by trivial`); prose such as "sorry-free" in
+  docstrings is excluded by comment stripping.
 - Correctness-surface scan:
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
@@ -124,13 +127,39 @@ surface.
 
 ## Remaining Blockers
 
-No explicit TritonBench-G `hAlg` blocker remains, and no documented
-translation-surface blocker remains. If a future Lean port reintroduces a
-translation-scope marker, it must be covered by `proof_blockers.md`, and
-`bench/audit_tritonbench_g.sh` enforces that coverage.
+No explicit TritonBench-G `hAlg` blocker remains. Eleven ports carry an
+explicit `Translation-surface blocker:` preamble marker — a documented,
+deliberate deviation of the Lean `triton { }` surface from a literal
+transcription of the upstream Python body (helper-JIT inlining, constexpr-path
+specialization, antiquoted in-body constants); see `proof_blockers.md` for the
+per-port descriptions. `bench/audit_tritonbench_g.sh` keys the textual
+py↔lean surface-scan exemptions on that marker only and requires this list to
+match the active marker set exactly.
+
+The current documented blocker set is:
+
+- `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
+  generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
+- `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
+- `attention_fwd_triton2` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
+- `attention_fwd_triton3` — `_attn_fwd_inner` inlined.
+- `sgmv_expand_slice` — `EVEN_K`/`ADD_INPUTS=false`/`CAST_TYPE=false` path;
+  CTA linearization via program-id axes; layout hints erased.
+- `matmul_kernel` — in-body `4096` constants and `tl.cdiv` trip count as
+  antiquoted binders.
+- `matmul_triton_autotune` — `tl.cdiv` trip count as antiquoted `numKBlocks`;
+  loop counter spelled `kk`.
+- `bmm_chunk_bwd` — in-body `chunk_size_limit = min(...)` supplied as a
+  precomputed parameter (no `seqlen` binder).
+- `iv_dependent_matmul` — only the `type == "pre_load"` mode mechanized.
+- `matmul_tma` — `OUTPUT_F16` branch split into two surfaces.
+- `softmax_flaggems` — `ONE_TILE_PER_CTA = true` single-tile specializations
+  only (genuine partial-coverage scope restriction).
+
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #154 has 13 fixed-width int8 blocked
-summaries, and #167 has 1 context-attention accumulator-store row.
+`proof_gap_manifest.tsv`: 3 fixed-width int8 blocked summaries
+(`quant_transpose_kernel`, `quantize_global`, `rowwise_quantization_triton`),
+all under the open #154 family.
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
 this audit must continue to run the translation-consistency gates above and the

@@ -104,6 +104,17 @@ reuse case 1's masked-block machinery via the generic-normalizer sum lemmas.
 
 Arithmetic is over `ℝ`. There is no remaining trusted host boundary in case 4 — the
 resume state is read as genuine input memory.
+
+## Translation-surface blocker
+
+Translation-surface blocker: the `_attn_fwd_inner` helper JIT is inlined into
+the port's single streaming-loop surface, so its statements (the K/V
+block-pointer loads, `tl.where` masking, `tl.dot`/`exp2` recurrence, and
+`tl.advance` pointer stepping) appear in this surface but not in the Python
+`_attn_fwd` body the scans compare against. The Lean surface is therefore not
+a line-for-line textual match, and the textual py↔lean scans in
+`bench/audit_tritonbench_g.sh` exempt this port on this marker (registered in
+`proof_blockers.md`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
