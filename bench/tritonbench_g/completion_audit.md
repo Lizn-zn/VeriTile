@@ -9,9 +9,9 @@ surface.
 
 | Requirement | Evidence | Current status |
 |---|---|---|
-| Check every `bench/tritonbench_g` problem. | 184 work directories are present; 141 currently have `.py` / `.lean` port pairs, and 43 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
-| Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 141; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
-| Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 141 ok, 0 fail`; the audit script reruns this gate. | Passing. |
+| Check every `bench/tritonbench_g` problem. | 184 work directories are present; 142 currently have `.py` / `.lean` port pairs, and 42 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
+| Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 142; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
+| Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 142 ok, 0 fail`; the audit script reruns this gate. | Passing. |
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch and no documented translation-surface blocker remains. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
@@ -22,11 +22,11 @@ surface.
 ## Evidence Checked
 
 - Directory coverage: `find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d`
-  reports 184 work directories. Of these, 141 currently contain a `.py` /
+  reports 184 work directories. Of these, 142 currently contain a `.py` /
   `.lean` port pair; the remaining 43 are README-only scaffolds and are not
   counted as completed ports by this audit.
 - Python/Lean file coverage: `find bench/tritonbench_g -maxdepth 2 -name '*.py'`
-  and the matching Lean query both report 141 files.
+  and the matching Lean query both report 142 files.
 - Build gate: `lake build` succeeds.
 - Per-port source elaboration gate: `bench/check_ports.sh` reports
   `TritonBench-G ports: 141 ok, 0 fail`.

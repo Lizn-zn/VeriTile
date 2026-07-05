@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 141 kernels, 241 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 142 kernels, 242 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`, optionally boundary-masked) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -58,6 +58,7 @@
 | 65 | [BmmChunkFwd.md](BmmChunkFwd.md) | 15 | 0 | 22 | 2 |  |
 | 64 | [TokenAttnLlama2.md](TokenAttnLlama2.md) | 12 | 0 | 27 | 3 |  |
 | 63 | [AttentionScore.md](AttentionScore.md) | 14 | 0 | 23 | 4 |  |
+| 63 | [ReversedCumsumScalar.md](ReversedCumsumScalar.md) | 11 | 0 | 27 | 5 |  |
 | 62 | [ContextAttnMistral.md](ContextAttnMistral.md) | 16 | 0 | 14 | 6 |  |
 | 62 | [MatmulTritonAutotune.md](MatmulTritonAutotune.md) | 15 | 0 | 17 | 4 |  |
 | 58 | [AttentionFwdTriton1.md](AttentionFwdTriton1.md) | 7 | 0 | 32 | 5 |  |
