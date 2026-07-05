@@ -162,6 +162,12 @@ unless stated:
   rank-1 stride-order constexprs (`= 0`) are instantiated in the
   `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
   value-verified.
+- `layer_norm_welfold` — mechanical spellings only (no helper inlining, no
+  scope restriction): `tl.full` positional dtype spelled `dtype=tl.float32`;
+  `tl.broadcast_to` via the tuple `tl.broadcast` form; the fused
+  `tmpN = tl.sum(_tmpN, 1)[:, None]` split into two statements;
+  `tl.store(..., None)` as the unmasked `tl.store`; `libdevice.rsqrt`
+  spelled `tl.rsqrt`; register casts parenthesized `(tmpM).to(tl.float32)`.
 - `fused_layernorm_triton` — the inductor `triton_helpers.welford_reduce` /
   `triton_helpers.welford(…, 1)` helper calls are inlined as their exact-ℝ
   closed forms (general-branch Welford update; combine as the
