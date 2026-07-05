@@ -33,6 +33,32 @@ The 77% OK figure is **after** assuming two trivially-buildable adapters land:
 
 Without those adapters: 121 OK / 31 Soft / 32 Hard.
 
+## Status update (2026-07-05) — stale-blocker sweep
+
+The tables below are the archived 2026-05-05 static snapshot. Several
+capability gaps they cite have since landed in the DSL, and the first batch
+of formerly-blocked kernels is now ported **and proven** (see
+`proof_gap_manifest.tsv` for the authoritative per-kernel status):
+
+- `tl.num_programs` (#92), `tl.atomic_add` value proofs, `tl.debug_barrier`
+  (erases to a no-op at the algorithm layer), the `tl.math.*` /
+  `tl.extra.cuda.libdevice.*` adapters (including exact `erf`), and a general
+  `tl.extra.cuda.libdevice.pow` (`Op.pow` / `Real.rpow`, scalar-base ×
+  tensor-exponent) are all implemented — the `num_programs`, `atomic_add`,
+  `debug_barrier`, and `tl.extra` blocker annotations below are obsolete.
+- Ported + proven in the 2026-07-05 batch (9): `relu_strided_buffer`,
+  `pow_scalar_tensor`, `fused_layernorm_triton`, `layer_norm_welfold`,
+  `bgmv_shrink_kernel`, `rbe_triton_transform`, `triton_linear_activation`,
+  `fused_recurrent_delta`, `fused_recurrent_retention`.
+- **Reclassification**: `isfinite_kernel` is listed as Soft/`num_programs`
+  below, but its actual blocker is the `isfinited`/`finitef` libdevice
+  fp-classification intrinsics, which are degenerate under exact-ℝ semantics
+  (everything is finite in ℝ) — it belongs to the #447 floating-point
+  modeling family, not to any surface-adapter gap.
+- Still open as of this update: `int_dot` (#93), `int4_packed` (#95), `fp8`
+  and `fp4` (#447/#52 family), `RNG` (#41), `atomic(cas,xchg)` concurrency
+  (#12/#84).
+
 ## Per-family verdict matrix
 
 | Family | Total | OK | Soft | Hard |
