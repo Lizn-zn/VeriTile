@@ -17,6 +17,15 @@ cd "${PROJECT_ROOT}"
 
 failures=0
 
+# Hard dependency check: a missing rg/python3 makes `if rg ...` conditions
+# read as "no match", silently turning scans into false passes.
+for dep in rg python3; do
+  if ! command -v "${dep}" >/dev/null 2>&1; then
+    printf 'FAIL required tool not installed: %s\n' "${dep}"
+    exit 1
+  fi
+done
+
 py_count=$(find "${PORTS_ROOT}" -maxdepth 2 -name '*.py' | wc -l | tr -d ' ')
 lean_count=$(find "${PORTS_ROOT}" -maxdepth 2 -name '*.lean' | wc -l | tr -d ' ')
 
