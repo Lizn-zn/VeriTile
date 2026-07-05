@@ -147,6 +147,29 @@ unless stated:
   single-tile specializations; the multi-tile fallback branches (pointer `+=`
   advances, online recurrences) are not transcribed. This one is a genuine
   partial-coverage scope restriction, not just a notational rewrite.
+- `relu_strided_buffer` — the `one_tile_per_cta` constexpr branch is split
+  into two Lean surfaces (one-tile and grid-stride); the `relu_forward`
+  helper JIT (`tl.where(x > 0, x, 0)`) is inlined at its call site; the
+  rank-1 stride-order constexprs (`in0_stride_order0 = out0_stride_order0
+  = 0`, their only rank-1 value) are instantiated in the
+  `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
+  value-verified (including the multi-iteration grid-stride loop).
+- `pow_scalar_tensor` — the `one_tile_per_cta` constexpr branch is split
+  into two Lean surfaces (one-tile and grid-stride); the
+  `pow_func_scalar_tensor` helper JIT (`_pow(x.to(tl.float32), exponent)`)
+  is inlined at its single call site per branch as
+  `tl.extra.cuda.libdevice.pow($((val0 : ℝ)).to(tl.float32), in0)`; the
+  rank-1 stride-order constexprs (`= 0`) are instantiated in the
+  `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
+  value-verified.
+- `fused_layernorm_triton` — the inductor `triton_helpers.welford_reduce` /
+  `triton_helpers.welford(…, 1)` helper calls are inlined as their exact-ℝ
+  closed forms (general-branch Welford update; combine as the
+  `(Σw, Σ(w·m)/Σw, Σ(m2 + w·m²) − Σw·mean²)` moment identity);
+  `tl.broadcast_to` is spelled via the tuple `tl.broadcast` form;
+  `tl.store(..., None)` is the unmasked `tl.store`; `libdevice.rsqrt` is
+  spelled `tl.rsqrt` (rmsnorm_triton / layer_norm_liger precedent); register
+  casts are parenthesized `(tmpN).to(tl.float32)`.
 
 ### Required VeriTile surface extensions
 
