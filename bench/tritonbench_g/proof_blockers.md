@@ -162,6 +162,25 @@ unless stated:
   rank-1 stride-order constexprs (`= 0`) are instantiated in the
   `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
   value-verified.
+- `rbe_triton_transform` — the helper `get_freq_multi_tokens` JIT is inlined
+  at its single call site; the helper-local `DIM: tl.constexpr = 128` is
+  generalized to a `DIM : Nat` binder (`NB_TOKENS` instantiated to
+  `BLOCK_SIZE_M` as at the call site); Python's dtype/shape-changing `freqs`
+  rebindings get fresh names (`freqs`/`freqs_f`/`freqs_p`/`freqs_mn`);
+  `.to(tl.float32)` on the int tile is spelled `tl.toReal`; the implicit
+  int→float promotion of `tl.arange(0, NB_TOKENS) + starting_idx` is the
+  explicit `tks`/`tks_f` binding pair. Fully value-verified on the full 2-D
+  tile.
+- `bgmv_shrink_kernel` — the Python early `return` on the signed sentinel
+  (`lora_index == -1`) is an `if lora_index != -1 { ... }` guard in the
+  faithful surface (DSL has no early exit); the guard-false path is proven
+  write-free, and the proof surfaces verify the active body with a
+  `Region .nat`-typed `lora_indices` (sentinel skip = trusted host boundary,
+  `lora_expand_gemv`/`sgmv_expand_slice` precedent). The constexpr tail
+  `if SPLIT_K == 1: tl.store else: tl.atomic_add` is split into two proof
+  surfaces (`matmul_tma` precedent), gated by `SPLIT_K_ONE : Bool` in the
+  faithful surface. `tl.max_contiguous` erased to its value argument; the
+  upstream unused `xk_stride` parameter dropped.
 - `layer_norm_welfold` — mechanical spellings only (no helper inlining, no
   scope restriction): `tl.full` positional dtype spelled `dtype=tl.float32`;
   `tl.broadcast_to` via the tuple `tl.broadcast` form; the fused
