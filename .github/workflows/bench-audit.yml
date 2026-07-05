@@ -38,6 +38,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Not preinstalled on ubuntu-latest; the audit script hard-fails
+      # without it.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Build Lean project
         uses: leanprover/lean-action@v1
         with:
