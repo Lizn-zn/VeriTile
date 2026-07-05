@@ -9,6 +9,15 @@ precomputed values, or explicit semantic blockers.
 This script derives a conservative classification from the Lean source and
 compares it with `bench/tritonbench_g/proof_gap_manifest.tsv`.  Use
 `--write` after intentionally changing Lean summaries.
+
+Classification uses hard signals only, in priority order: an explicit
+`coverage:` annotation in the summary docstring, an explicit
+`blocked_output_summary` declaration name, and a genuinely self-referential
+`expected` (shared detector with `scripts/spec_sheet.py`).  Docstring prose is
+deliberately not keyword-sniffed: it misfiled genuine summaries whose
+docstrings merely describe slices, precomputed input caches, or trusted carry
+boundaries.  Headline discovery mirrors `scripts/spec_sheet.py`'s tiers so
+every kernel file contributes rows.
 """
 
 from __future__ import annotations
@@ -77,6 +86,34 @@ ISSUE_BY_FAMILY = {
 
 SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
 
+# Public-headline discovery tiers, mirroring scripts/spec_sheet.py: the first
+# non-empty tier in a file is that file's public spec surface. This closes the
+# blind spot where a kernel's headline is named `*_closed_form_correct` /
+# `*_compute_correct` rather than `*output_summary*` (24 of 142 files).
+HEADLINE_TIERS = (
+    lambda n: "summary" in n and "_general" in n,
+    lambda n: "summary" in n,
+    lambda n: bool(re.search(r"_compute_correct(_general)?$", n)),
+    lambda n: bool(re.search(r"_closed_form_correct(_general)?$", n)),
+    lambda n: bool(re.search(r"_correct_general$", n)),
+)
+
+DECL_LINE_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*(?:theorem|abbrev)\s+([A-Za-z0-9_'.]+)")
+
+# Explicit per-summary coverage annotation, written in the summary docstring:
+#   coverage: public_summary_with_proof_gap family=<blocker-family> -- <evidence>
+#   coverage: blocked_summary family=<blocker-family> -- <evidence>
+#   coverage: full_value_candidate -- <evidence>
+# An explicit annotation takes priority over every heuristic. Use it when a
+# summary is genuinely partial (slice-/tile-scoped) or when the default
+# classification is wrong; prose in docstrings is otherwise NOT sniffed for
+# gap keywords (that heuristic misfiled genuine summaries whose docstrings
+# merely *describe* slices or trusted boundaries).
+COVERAGE_ANNOTATION_RE = re.compile(
+    r"coverage:\s*(full_value_candidate|public_summary_with_proof_gap|blocked_summary)"
+    r"(?:\s+family=([A-Za-z0-9_-]+))?"
+    r"(?:\s*--\s*([^\n]*))?")
+
 # A "self-referential" output value is a `def` whose body re-executes the kernel
 # and reads the kernel's own store back out (`match exec ... | some s' => s'.readMem ...`).
 # When a summary's `expected` is such a value, the value half of its
@@ -142,32 +179,6 @@ def summary_expected_is_self_ref(text: str, self_ref_names: set[str]) -> bool:
     region = text[marker:] if marker != -1 else text
     return any(re.search(r"\b" + re.escape(n) + r"\b", region) for n in self_ref_names)
 
-GAP_MARKERS = (
-    "proof-oriented",
-    "precomputed",
-    "outside this slice",
-    "outside the current",
-    "outside this triton",
-    "outside this proof",
-    "outside this coverage",
-    "not claimed",
-    "not overclaimed",
-    "represented by",
-    "slice",
-    "store slice",
-    "final-store",
-    "final store",
-    "one-row",
-    "one-block",
-    "one-tile",
-    "single-tile",
-    "single-iteration",
-    "current arithmetic layer",
-    "llrint",
-    "rounding",
-    "packing",
-)
-
 FULL_VALUE_MARKERS = (
     "end-to-end",
     "without a precomputed",
@@ -191,7 +202,7 @@ class Summary:
 def context_for(lines: list[str], idx: int) -> str:
     start = max(0, idx - 18)
     for j in range(idx - 1, start - 1, -1):
-        if SUMMARY_RE.search(lines[j]):
+        if DECL_LINE_RE.match(lines[j]):
             start = j + 1
             break
     for j in range(idx - 1, start - 1, -1):
@@ -200,7 +211,7 @@ def context_for(lines: list[str], idx: int) -> str:
             break
     end = min(len(lines), idx + 38)
     for j in range(idx + 1, end):
-        if SUMMARY_RE.search(lines[j]):
+        if DECL_LINE_RE.match(lines[j]):
             end = j
             break
     return "\n".join(lines[start:end])
@@ -341,29 +352,50 @@ def family_for(name: str, text: str) -> str:
 def evidence_for(text: str, level: str, self_ref: bool = False) -> str:
     lower = text.lower()
     if level == "blocked_summary":
-        for marker in ("blocked_output_summary", "blocked", "current arithmetic layer", "llrint"):
+        for marker in ("blocked_output_summary", "current arithmetic layer", "llrint"):
             if marker in lower:
                 return marker
         return "explicit blocked summary"
     if level == "public_summary_with_proof_gap":
-        for marker in GAP_MARKERS:
-            if marker in lower:
-                return marker
         if self_ref:
             return "self-referential expected (= executed kernel output)"
-        return "summary lacks full-value marker"
+        return "explicit coverage annotation"
     for marker in FULL_VALUE_MARKERS:
         if marker in lower:
             return marker
     return "no proof-gap marker in summary context"
 
 
-def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, str]:
-    lower_name = name.lower()
-    lower = text.lower()
-    if "blocked_output_summary" in lower_name or re.search(r"\bblocked\b", lower):
+def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, str, str | None]:
+    """Classify a public summary. Signals, in priority order:
+
+    1. an explicit `coverage:` annotation in the summary docstring;
+    2. an explicit `blocked_output_summary` declaration name;
+    3. a genuinely self-referential `expected` (the one hard value-gap signal,
+       shared with `scripts/spec_sheet.py`);
+    4. otherwise `full_value_candidate`.
+
+    Docstring prose is deliberately NOT sniffed for gap keywords: honest
+    docstrings of genuine summaries routinely *describe* proof slices,
+    precomputed input caches, or trusted carry boundaries, and keyword
+    matching misfiled 17 genuine summaries (e.g. `slice` matching the kernel
+    *name* `bgmv_expand_slice`, `precomputed` matching "without a
+    precomputed"). Genuinely partial summaries must say so explicitly via
+    `coverage:`. Returns `(level, family, issue, explicit_evidence)`.
+    """
+    ann = COVERAGE_ANNOTATION_RE.search(text)
+    if ann:
+        level = ann.group(1)
+        if level == "full_value_candidate":
+            family = "none"
+        else:
+            family = ann.group(2) or family_for(name, text)
+        issue = ISSUE_BY_FAMILY.get(family, "") if level != "full_value_candidate" else ""
+        return level, family, issue, (ann.group(3) or "").strip() or "explicit coverage annotation"
+
+    if "blocked_output_summary" in name.lower():
         level = "blocked_summary"
-    elif self_ref or any(marker in lower for marker in GAP_MARKERS):
+    elif self_ref:
         level = "public_summary_with_proof_gap"
     else:
         level = "full_value_candidate"
@@ -373,13 +405,28 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     else:
         family = family_for(name, text)
         if family == "none" and self_ref:
-            # A self-referential summary with no domain-specific family still
-            # has a genuine value gap; record it under the generic family.
-            # (Only for genuine self-refs — leaving family="none" for any other
-            # unrecognized gap lets `validate_rows` flag missing family coverage.)
             family = "self-referential-output-value"
     issue = ISSUE_BY_FAMILY.get(family, "") if level != "full_value_candidate" else ""
-    return level, family, issue
+    return level, family, issue, None
+
+
+def headline_names(full_text: str) -> set[str]:
+    """Per-file public headline declarations: every `*output_summary*` decl,
+    plus the first non-empty `HEADLINE_TIERS` hit (spec_sheet.py's discovery),
+    so files whose headline is `*_closed_form_correct` / `*_compute_correct`
+    are not invisible to the manifest."""
+    decls: list[str] = []
+    for raw in full_text.splitlines():
+        m = DECL_LINE_RE.match(raw)
+        if m:
+            decls.append(m.group(1))
+    picked: set[str] = {n for n in decls if SUMMARY_RE.search(f"theorem {n} ")}
+    for tier in HEADLINE_TIERS:
+        hits = [n for n in decls if tier(n)]
+        if hits:
+            picked.update(hits)
+            break
+    return picked
 
 
 def collect() -> list[Summary]:
@@ -390,18 +437,21 @@ def collect() -> list[Summary]:
         self_ref_names = find_self_ref_value_defs(full_text)
         decl_blocks = build_decl_blocks(full_text)
         lines = full_text.splitlines()
+        wanted = headline_names(full_text)
+        emitted: set[str] = set()
         for i, line in enumerate(lines):
-            match = SUMMARY_RE.search(line)
-            if not match:
+            match = DECL_LINE_RE.match(line)
+            if not match or match.group(1) not in wanted or match.group(1) in emitted:
                 continue
             name = match.group(1)
+            emitted.add(name)
             ctx = context_for(lines, i)
             # Resolve `abbrev` aliases to the underlying theorem so a summary that
             # merely aliases a `…_compute_correct` is checked against that target's
             # `expected :=` clause, not just the alias line.
             self_ref = summary_expected_is_self_ref(
                 ctx + "\n" + resolved_summary_text(name, decl_blocks), self_ref_names)
-            level, family, issue = classify(name, ctx, self_ref)
+            level, family, issue, explicit_evidence = classify(name, ctx, self_ref)
             rows.append(
                 Summary(
                     file=rel,
@@ -409,7 +459,9 @@ def collect() -> list[Summary]:
                     coverage_level=level,
                     blocker_family=family,
                     issue=issue,
-                    evidence=evidence_for(ctx, level, self_ref),
+                    evidence=explicit_evidence
+                        if explicit_evidence is not None
+                        else evidence_for(ctx, level, self_ref),
                 )
             )
     return rows
