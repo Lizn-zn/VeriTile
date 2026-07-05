@@ -141,6 +141,16 @@ inductive Op : TileDType → TileShape → Type where
   | boolNot   : Op .bool shape → Op .bool shape
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
   /--
+  Element-wise power (`tl.extra.cuda.libdevice.pow(base, exponent)`) on the
+  ℝ channel, modeled by Mathlib's `Real.rpow`. For base > 0 this matches
+  CUDA `pow` exactly; for a negative base with non-integer exponent
+  Mathlib's `rpow` returns its junk-value convention where CUDA returns
+  NaN — the usual real-semantics modeling boundary, consistent with how
+  the rest of VeriTile models floats as ℝ. Shapes broadcast like the other
+  binary arithmetic ops, so the common scalar-base × tensor-exponent form
+  (e.g. RoPE's `pow(theta, freqs)`) is a `Broadcast [] s s` instance. -/
+  | pow       : Broadcast a b out → Op .real a → Op .real b → Op .real out
+  /--
   Element-wise select (`tl.where(cond, a, b)`): pick `a` where the bool
   tile `cond` is `true`, else pick `b`. All three arguments share the
   same shape; broadcasting (e.g., scalar `-inf`) is handled at the DSL
@@ -625,7 +635,16 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
         | some extra => Except.ok (some (← extra.toAlgorithm?))
       Except.ok (.atomicRMW op dtype shape mem input' extraInput' mask dest)
   | .effectMarker op =>
-      Except.error (.requiresEffectProjection op)
+      -- `tl.debug_barrier` is an intra-program memory fence. VeriTile's
+      -- algorithm layer executes one program's statements **sequentially**,
+      -- so the fence imposes no ordering beyond what the semantics already
+      -- guarantee: it erases to a no-op statement. Every other effect
+      -- marker (`tl.async_copy`, `tl.async_wait`, …) still requires an
+      -- explicit effect projection before lowering.
+      if op = "tl.debug_barrier" then
+        Except.ok (.ifThen (Op.constBool Bool.false) [])
+      else
+        Except.error (.requiresEffectProjection op)
   | .forLoop idx n body => do
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .forRange idx start stop step body => do
@@ -681,8 +700,28 @@ end
       Except.ok (Stmt.atomicRMW op dtype shape mem input extraInput mask dest) := by
   cases extraInput <;> rfl
 
+/-- `tl.debug_barrier` erases to a no-op at the algorithm layer (see the
+`effectMarker` case of `toAlgorithm?`). -/
+@[simp] theorem toAlgorithm?_effectMarker_debug_barrier :
+    ComputeStmt.toAlgorithm? (ComputeStmt.effectMarker "tl.debug_barrier") =
+      Except.ok (Stmt.ifThen (Op.constBool Bool.false) []) := rfl
+
 @[simp] theorem listToAlgorithm?_nil :
     ComputeStmt.listToAlgorithm? [] = Except.ok [] := rfl
+
+@[simp] theorem listToAlgorithm?_cons_effectMarker_debug_barrier
+    (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm? (ComputeStmt.effectMarker "tl.debug_barrier" :: rest) =
+      match ComputeStmt.listToAlgorithm? rest with
+      | Except.ok rest' => Except.ok (Stmt.ifThen (Op.constBool Bool.false) [] :: rest')
+      | Except.error e => Except.error e := by
+  change Except.bind (Except.ok (Stmt.ifThen (Op.constBool Bool.false) []))
+      (fun st' => Except.bind (ComputeStmt.listToAlgorithm? rest)
+        (fun rest' => Except.ok (st' :: rest'))) =
+    match ComputeStmt.listToAlgorithm? rest with
+    | Except.ok rest' => Except.ok (Stmt.ifThen (Op.constBool Bool.false) [] :: rest')
+    | Except.error e => Except.error e
+  cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
 @[simp] theorem listToAlgorithm?_cons_alg (st : Stmt) (rest : List ComputeStmt) :
     ComputeStmt.listToAlgorithm? (ComputeStmt.alg st :: rest) =

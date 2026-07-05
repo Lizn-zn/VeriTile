@@ -970,10 +970,19 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.math.exp2" e'
       pure ⟨← `(Op.exp2 $eTerm), .real, e'.shape, none, none⟩
-  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $n:num)) => do
-      unless n.getNat == 2 do
-        Macro.throwError "tl.extra.cuda.libdevice.pow: only exponent 2 is modeled"
-      expandArith expandExpr env "tl.extra.cuda.libdevice.pow" (← `(Op.mul)) e e
+  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $b:tritonExpr)) => do
+      -- A literal exponent `2` keeps its historical `x * x` (`Op.mul`)
+      -- lowering so existing squared-magnitude ports (e.g. rmsnorm_triton)
+      -- elaborate unchanged; every other exponent — including the
+      -- scalar-base × tensor-exponent form — lowers to the general
+      -- `Op.pow` (`Real.rpow`) node via `expandPow`.
+      match b with
+      | `(tritonExpr| $n:num) =>
+          if n.getNat == 2 then
+            expandArith expandExpr env "tl.extra.cuda.libdevice.pow" (← `(Op.mul)) e e
+          else
+            expandPow expandExpr env "tl.extra.cuda.libdevice.pow" e b
+      | _ => expandPow expandExpr env "tl.extra.cuda.libdevice.pow" e b
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.log" e'

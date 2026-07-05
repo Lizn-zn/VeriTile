@@ -120,6 +120,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .boolOr bc a b => .boolOr bc a.eraseDType b.eraseDType
   | .boolNot a => .boolNot a.eraseDType
   | .max2 bc a b => .max2 bc a.eraseDType b.eraseDType
+  | .pow bc a b => .pow bc a.eraseDType b.eraseDType
   | .where c a b => .where c.eraseDType a.eraseDType b.eraseDType
   | .ite c a b => .ite c.eraseDType a.eraseDType b.eraseDType
   | .reduceMax axis keepDims a => .reduceMax axis keepDims a.eraseDType

@@ -157,6 +157,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .boolOr _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .boolNot a => a.RespectsRegionTyping Γ
   | .max2 _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .pow _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .where c a b =>
       c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .ite c a b =>

@@ -111,6 +111,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop max bc va vb)
+  | .pow bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop WithBot.realPow bc va vb)
   | .reduceMax axis keepDims a, s => do
       let va ← evalOp a s
       Tile.reduceMax axis keepDims va
@@ -378,6 +382,15 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let vx ← evalOp x s
       let vy ← evalOp y s
       some (Tile.bop max bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_pow
+    (bc : Broadcast a b shape) (x : Op .real a) (y : Op .real b)
+    (s : BlockState) :
+    evalOp (.pow bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop WithBot.realPow bc vx vy)) := by
   simp [evalOp]
 
 @[simp] theorem evalOp_reduceMax

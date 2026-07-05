@@ -238,14 +238,16 @@ def debugBarrierSurfaceSmoke : ComputeKernel := triton {
   tl.debug_barrier()
 }
 
+/-- `tl.debug_barrier` is an intra-program fence: a semantic no-op under the
+sequential per-program semantics, so (unlike the async effects above) it
+**erases** at the algorithm layer instead of demanding an effect projection. -/
 example :
     debugBarrierSurfaceSmoke.toAlgorithm? =
-      Except.error (.requiresEffectProjection "tl.debug_barrier") := by
+      Except.ok
+        { inputs := []
+        , outputs := []
+        , body := [ Stmt.ifThen (Op.constBool Bool.false) [] ] } := by
   rfl
-
-example (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeCorrect.General debugBarrierSurfaceSmoke post :=
-  ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
@@ -1806,5 +1808,47 @@ def reverseRangeKernel (outReg : Region .nat) (N : Nat) : ComputeKernel := trito
 }
 
 #check reverseRangeKernel
+
+/-! ### libdevice.pow: general elementwise power (`Op.pow` / `Real.rpow`) -/
+
+/-- Scalar-base × tensor-exponent `tl.extra.cuda.libdevice.pow` (the RoPE
+`pow(theta, freqs)` shape): the scalar binder base broadcasts against the
+loaded tile exponent through the general `Op.pow` node. -/
+def powScalarTensorSmoke (xReg outReg : RegionName) (theta : ℝ) (N : Nat) :
+    ComputeKernel := triton {
+  offs := tl.arange(0, $(N))
+  t := tl.load($(xReg) + offs)
+  freqs := tl.extra.cuda.libdevice.pow($((theta : ℝ)), t)
+  tl.store($(outReg) + offs, freqs)
+}
+
+#check powScalarTensorSmoke
+
+/-- The literal-2 exponent keeps its historical `x * x` (`Op.mul`) lowering. -/
+def powSquareSmoke (xReg outReg : RegionName) : ComputeKernel := triton {
+  x := tl.load($(xReg))
+  y := tl.extra.cuda.libdevice.pow(x, 2)
+  tl.store($(outReg), y)
+}
+
+#check powSquareSmoke
+
+/-- `evalOp` unfolds `Op.pow` to `Real.rpow` on finite lanes. -/
+example (a b : ℝ) (s : BlockState) :
+    evalOp (Op.pow Broadcast.nil (Op.const a) (Op.const b)) s =
+      some (Tile.scalar ((Real.rpow a b : ℝ) : WithBot ℝ)) := by
+  simp
+  ext i
+  simp [Tile.bop_data]
+  rfl
+
+/-- Scalar-base broadcast: every lane of `pow(theta, full(t))` is
+`Real.rpow theta t`. -/
+example (theta t : ℝ) (N : Nat) (s : BlockState) (i : TileIndex [N]) :
+    (evalOp (Op.pow Broadcast.scalarL (Op.const theta)
+        (Op.full [N] (Op.const t))) s).map (fun v => v.data i) =
+      some (((Real.rpow theta t : ℝ) : WithBot ℝ)) := by
+  simp [Tile.bop_data]
+  rfl
 
 end VeriTile.Examples.TritonSmoke

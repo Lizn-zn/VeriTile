@@ -295,8 +295,8 @@ private partial def cmpDepsFromExpr :
       cmpDepsFromExpr a ++ cmpDepsFromExpr b
   | `(tritonExpr| tl.where($c:tritonExpr, $t:tritonExpr, $f:tritonExpr)) =>
       cmpDepsFromExpr c ++ cmpDepsFromExpr t ++ cmpDepsFromExpr f
-  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $_:num)) =>
-      cmpDepsFromExpr e
+  | `(tritonExpr| tl.extra.cuda.libdevice.pow($a:tritonExpr, $b:tritonExpr)) =>
+      cmpDepsFromExpr a ++ cmpDepsFromExpr b
   | _ => []
 
 private partial def directPinsFromExpr (assigned : Assigned) :
@@ -349,8 +349,8 @@ private partial def directPinsFromExpr (assigned : Assigned) :
       pinsFromPtrExpr assigned p
   | `(tritonExpr| tl.where($c:tritonExpr, $t:tritonExpr, $f:tritonExpr)) =>
       directPinsFromExpr assigned c ++ directPinsFromExpr assigned t ++ directPinsFromExpr assigned f
-  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $_:num)) =>
-      directPinsFromExpr assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.pow($a:tritonExpr, $b:tritonExpr)) =>
+      directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
