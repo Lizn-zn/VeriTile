@@ -162,6 +162,16 @@ unless stated:
   rank-1 stride-order constexprs (`= 0`) are instantiated in the
   `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
   value-verified.
+- `triton_linear_activation` — the `K_LOAD_MASK_NEEDED` constexpr branch is
+  specialized to its `@triton.heuristics` value `True` (exact-multiple `K`;
+  `SPLIT_K = 1` is the only launched value), so the descending
+  `for k in range(K, 0, -BLOCK_K)` is the ascending trip-count loop with
+  `K = BLOCK_K · numKBlocks` as the antiquoted binder (loop variable dead in
+  the unmasked arm). The `tanh`/`relu`/`gelu`/`fast_gelu` helper JITs are
+  inlined at call sites; module constants `sqrt2`/`sqrt2pi` are antiquoted
+  reals; unused `CACHE_KEY_M/N/K` and `SPLIT_K` parameters dropped; the
+  string constexpr `ACTIVATION` is a Lean `String` parameter with all four
+  `==` gates transcribed verbatim.
 - `rbe_triton_transform` — the helper `get_freq_multi_tokens` JIT is inlined
   at its single call site; the helper-local `DIM: tl.constexpr = 128` is
   generalized to a `DIM : Nat` binder (`NB_TOKENS` instantiated to
