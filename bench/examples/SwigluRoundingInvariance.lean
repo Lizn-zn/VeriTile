@@ -77,7 +77,7 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 namespace VeriTile.Bench.Examples.SwigluRounding
 
 open VeriTile.Triton
-open VeriTile.Examples (InputLoadedAt)
+open VeriTile.Examples (InputLoadedAt outWritesTo)
 
 /-! ## Kernels -/
 
@@ -122,7 +122,7 @@ def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKerne
     (mul_step S Y OUT ncols BLOCK_N).body
   ComputeKernel.fromKernelBody [X, Y] [OUT] body
 
-/- -/
+/- Pre-defined variables used in the following -/
 variable (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState)
 variable (xs ys : Fin BLOCK_N → ℝ)
 
@@ -155,25 +155,19 @@ theorem exec_swiglu_unfusedR (R : RoundingModel)
 /-! ## Lane addressing, readback carrier, and the shared write map
 
 Input hypotheses use the shared `VeriTile.Examples.InputLoadedAt` contract
-(region holds `xs` at `s.pid * N + i` — the canonical per-program 1-D tile).
-`laneOffset` is the same address, spelled out for the write side. -/
+(region holds `xs` at `s.pid * N + i` — the canonical per-program 1-D tile);
+output claims use its write-side counterpart `VeriTile.Examples.outWritesTo`
+(the same lanes, masked by `< ncols`). `laneOffset` is that same address,
+named for the proofs. -/
 
 /-- Lane address for this example's 1-D launch (`= s.pid * BLOCK_N + i.val`,
-the `InputLoadedAt` addressing). -/
+the `InputLoadedAt`/`outWritesTo` addressing). -/
 def laneOffset (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pids 0 * BLOCK_N + i.val
 
 /-- Each `R⟦v⟧` is ONE bf16 rounding event — count the brackets to count
 the events. -/
 local notation:max R "⟦" v "⟧" => RoundingModel.round R FloatDType.bf16 v
-
-/-- The output write map shared by every theorem: this program's active
-lanes (`col < ncols`) of `reg`. -/
-def outWrites (s : BlockState) (reg : RegionName) (ncols BLOCK_N : Nat) :
-    ComputeCorrect.WriteMap (Fin BLOCK_N) :=
-  ComputeCorrect.WriteMap.writeIf
-    (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
-    (fun i => (reg, laneOffset s BLOCK_N i))
 
 /-- A bf16 output cell holding `v`. -/
 def bf16Cell (v : ℝ) : MemCell := MemCell.of .bf16 (some v : WithBot ℝ)
@@ -244,10 +238,10 @@ theorem fusedSpec_ne_unfusedSpec :
 theorem swiglu_fused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (swiglu_fused X Y OUT ncols BLOCK_N) s
-      (outWrites s OUT ncols BLOCK_N)
+      (outWritesTo s OUT ncols BLOCK_N)
       (fun R i => bf16Cell (fusedSpec xs ys R i)) := by
   unfold InputLoadedAt at h_x h_y
-  unfold outWrites
+  unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
   intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
@@ -265,7 +259,7 @@ theorem swiglu_fused_realizesR
   simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
   subst s'
-  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  simp only [ComputeCorrect.OutputReadable.read_memcell, BlockState.pid_eq]
   rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
   have hx := h_x i
   have hy := h_y i
@@ -278,10 +272,10 @@ theorem swiglu_fused_realizesR
 of `S` receive `aSpec(x)` as bf16 cells. -/
 theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
     ComputeRefine.RealizesR (silu_step X S ncols BLOCK_N) s
-      (outWrites s S ncols BLOCK_N)
+      (outWritesTo s S ncols BLOCK_N)
       (fun R i => bf16Cell (aSpec R (xs i))) := by
   unfold InputLoadedAt at h_x
-  unfold outWrites
+  unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
   intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
@@ -299,7 +293,7 @@ theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
   simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
   subst s'
-  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  simp only [ComputeCorrect.OutputReadable.read_memcell, BlockState.pid_eq]
   rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
   have hx := h_x i
   simp only [BlockState.pid_eq] at hx
@@ -337,11 +331,11 @@ payloads `zs`, the active lanes of `OUT` receive `R⟦R⟦z·y⟧⟧`. -/
 theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
     (h_z : LoadedCells s S ncols BLOCK_N zs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (mul_step S Y OUT ncols BLOCK_N) s
-      (outWrites s OUT ncols BLOCK_N)
+      (outWritesTo s OUT ncols BLOCK_N)
       (fun R i => bf16Cell R⟦R⟦zs i * ys i⟧⟧) := by
   unfold LoadedCells bf16Cell at h_z
   unfold InputLoadedAt at h_y
-  unfold outWrites
+  unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
   intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
@@ -359,7 +353,7 @@ theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
   simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
   subst s'
-  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  simp only [ComputeCorrect.OutputReadable.read_memcell, BlockState.pid_eq]
   rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
   have hz := h_z i hActive
   have hy := h_y i
@@ -397,9 +391,9 @@ theorem swiglu_unfused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ComputeRefine.RealizesR (swiglu_unfused X Y S OUT ncols BLOCK_N) s
-      (outWrites s OUT ncols BLOCK_N)
+      (outWritesTo s OUT ncols BLOCK_N)
       (fun R i => bf16Cell (unfusedSpec xs ys R i)) := by
-  unfold outWrites
+  unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
   intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
@@ -423,7 +417,7 @@ theorem swiglu_unfused_realizesR
         intro j hj
         have hj' : s.pids 0 * BLOCK_N + j.val < ncols := by rwa [hpids] at hj
         have hout := hAout j
-        simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hj', if_true] at hout
+        simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hj', if_true] at hout
         simpa [laneOffset, hpids] using hout
       -- `Y` survives step A (frame lemma; `S ≠ Y`)
       have h_y1 : InputLoadedAt s1 Y BLOCK_N ys := by
@@ -444,7 +438,7 @@ theorem swiglu_unfused_realizesR
         R (by simp [mul_step, ComputeExpr.toAlgorithm?]) hExecB
       have hAct1 : s1.pids 0 * BLOCK_N + i.val < ncols := by rw [hpids]; exact hActive
       have hout := hBout i
-      simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hAct1, if_true] at hout
+      simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct1, if_true] at hout
       simpa [laneOffset, hpids, unfusedSpec] using hout
 
 /-! ## Frame lemmas (the writes each kernel does NOT perform) -/
@@ -518,7 +512,7 @@ theorem swiglu_refinesR
       ComputeRefine.RefinesAtR R
         (swiglu_fused X Y OUT ncols BLOCK_N)
         (swiglu_unfused X Y S OUT ncols BLOCK_N) s
-        (outWrites s OUT ncols BLOCK_N) (outWrites s OUT ncols BLOCK_N)
+        (outWritesTo s OUT ncols BLOCK_N) (outWritesTo s OUT ncols BLOCK_N)
         (fun i lhs rhs =>
           lhs = bf16Cell (fusedSpec xs ys R i) ∧
           rhs = bf16Cell (unfusedSpec xs ys R i)) := by
@@ -538,9 +532,9 @@ theorem swiglu_refinesR
   by_cases hi : s.pids 0 * BLOCK_N + i.val < ncols
   · have hF := hFout i
     have hU := hUout i
-    simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hi, if_true] at hF hU ⊢
+    simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hi, if_true] at hF hU ⊢
     exact ⟨hF, hU⟩
-  · simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hi, if_false]
+  · simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hi, if_false]
 
 /-- **"fused = unfused"** — the headline writes-equality theorem
 (`ComputeRefine.RefinesR`, scratch `[S]`): when the intermediate `silu(x)` is
@@ -592,8 +586,9 @@ theorem swiglu_fused_eq_unfused_of_representable
             (by simp [swiglu_unfused]) hR
           have hF := hFout i
           have hU := hUout i
-          simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hAct, if_true,
+          simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct, if_true,
             ComputeCorrect.OutputReadable.read_memcell] at hF hU
+          simp only [laneOffset]
           rw [hF, hU, fusedSpec_eq_unfusedSpec_of_representable xs ys R i (hRep i)]
         · -- no active lane hits this `OUT` cell: preserved on both sides
           have hmiss : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →

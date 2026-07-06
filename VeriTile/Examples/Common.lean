@@ -10,6 +10,7 @@ ergonomic shorthands used by worked examples.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory
+import VeriTile.Triton.Float.Correctness
 
 namespace VeriTile.Examples
 
@@ -26,6 +27,16 @@ def castFin {n k : Nat} (h : k ≤ n) (i : Fin k) : Fin n :=
 def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.readMem region (s.pid * N + i.val) = xs i
+
+/-- Write map for the current program's masked 1-D output tile: lane `i`
+writes `region` at `s.pid * N + i.val`, active exactly when the column bound
+admits it (`s.pid * N + i.val < cols`). The output-side counterpart of
+`InputLoadedAt`. -/
+def outWritesTo (s : BlockState) (region : RegionName)
+    (cols N : Nat) : ComputeCorrect.WriteMap (Fin N) :=
+  ComputeCorrect.WriteMap.writeIf
+    (fun i : Fin N => s.pid * N + i.val < cols)
+    (fun i => (region, s.pid * N + i.val))
 
 /-- Transfer a one-dimensional loaded tile across states when the consumer
 state has the same `pid` and agrees with the producer on the loaded region. -/
