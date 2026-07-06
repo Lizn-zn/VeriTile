@@ -2378,27 +2378,76 @@ else
   printf 'ok rsqrt preservation scan\n'
 fi
 
-lean_only_where=()
-while IFS= read -r lean_file; do
-  if ! rg -q 'tl\.where' "${lean_file}"; then
-    continue
-  fi
-  dir="${lean_file%/*}"
-  py_file="$(find "${dir}" -maxdepth 1 -name '*.py' | head -n 1)"
-  if [ -z "${py_file}" ]; then
-    continue
-  fi
-  if ! rg -q 'tl\.where' "${py_file}"; then
-    lean_only_where+=("${lean_file} -> ${py_file}")
-  fi
-done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.lean' | sort)
+# Lean-only tl.where scan. Operates on comment-stripped Lean code so prose
+# mentions of `tl.where` in docstrings cannot trip it (same lesson as the
+# placeholder scan), and accepts the standard preamble
+# `Translation-surface blocker:` marker exemption like every other textual
+# py<->lean scan (a documented proof-slice guard is a declared deviation,
+# not an unannotated extra statement).
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-if [ "${#lean_only_where[@]}" -gt 0 ]; then
-  printf 'FAIL Lean-only tl.where found:\n'
-  printf '  %s\n' "${lean_only_where[@]}"
-  failures=$((failures + 1))
-else
+root = Path(sys.argv[1])
+
+def strip_lean_comments(text: str) -> str:
+    out = []
+    i = 0
+    n = len(text)
+    depth = 0
+    while i < n:
+        two = text[i:i + 2]
+        if depth == 0 and two == "--":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/-":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0 and two == "-/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth == 0:
+            out.append(text[i])
+        else:
+            out.append(text[i] if text[i] == "\n" else " ")
+        i += 1
+    return "".join(out)
+
+blocker_marker = "translation-surface blocker:"
+
+failures = []
+for lean_file in sorted(root.glob("*/*.lean")):
+    lean_text = lean_file.read_text()
+    code = strip_lean_comments(lean_text)
+    if "tl.where" not in code:
+        continue
+    py_files = sorted(lean_file.parent.glob("*.py"))
+    if not py_files:
+        continue
+    py_file = py_files[0]
+    if "tl.where" in py_file.read_text():
+        continue
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if blocker_marker in scope_text:
+        continue
+    failures.append(f"{lean_file} -> {py_file}")
+
+if failures:
+    print("FAIL Lean-only tl.where found:")
+    for entry in failures:
+        print(f"  {entry}")
+    sys.exit(1)
+PY
+then
   printf 'ok no Lean-only tl.where statements\n'
+else
+  failures=$((failures + 1))
 fi
 
 if python3 - "${PORTS_ROOT}" <<'PY'

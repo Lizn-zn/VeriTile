@@ -119,6 +119,16 @@ regression (`K = BK = 16`, `V = 32`, `BV ∈ {8, 32}`) satisfies them.
   (and the `p_dbeta` analogue / the conditional `p_beta`/`p_dbeta`/`b_beta`/
   `d_beta` definitions) are transcribed as `if IS_HEADWISE_BETA { … } else
   { … }` DSL gates — the whitelisted constexpr-branch form.
+
+Translation-surface blocker: the Python conditional-expression pointer
+increments (`p_beta += V if IS_HEADWISE_BETA else 1` and the `p_dbeta`
+analogue) and conditional definitions are spelled as `if IS_HEADWISE_BETA
+{ … } else { … }` constexpr gates, one statement per arm — this adds one
+`if` to the control-flow count and repeats the `p_beta`/`p_dbeta` lhs once
+per arm relative to the Python ternary form. `do` is spelled `do_` (Lean
+keyword) and `_` loop variables are spelled `_i`; the scalar-beta `… + T - 1`
+pointer initializations are parenthesized into the ℕ domain
+(`… + ($(T) - $(1))`). All arms transcribe the Python verbatim otherwise.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentDelta

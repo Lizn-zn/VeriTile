@@ -162,6 +162,18 @@ unless stated:
   rank-1 stride-order constexprs (`= 0`) are instantiated in the
   `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
   value-verified.
+- `fused_recurrent_delta` — the Python conditional-expression pointer
+  increments (`p_beta += V if IS_HEADWISE_BETA else 1`, `p_dbeta` analogue)
+  and conditional definitions are spelled as `if IS_HEADWISE_BETA { … } else
+  { … }` constexpr gates, one statement per arm (adds one `if` to the
+  control-flow count and repeats the `p_beta`/`p_dbeta` lhs per arm);
+  `do` → `do_` (Lean keyword), `_` loop vars → `_i`; scalar-beta `… + T - 1`
+  pointer inits parenthesized into the ℕ domain.
+- `fused_recurrent_retention` — the four dead stride parameters in the
+  Python kernel signatures (`s_qk_t`, `s_qk_d`, `s_vo_t`, `s_vo_d` — never
+  used in either kernel body) are omitted from the Lean surface binders
+  (`fused_rwkv6_kernel`/`fused_recurrent_hgrn` precedent); both bodies are
+  otherwise transcribed verbatim.
 - `triton_linear_activation` — the `K_LOAD_MASK_NEEDED` constexpr branch is
   specialized to its `@triton.heuristics` value `True` (exact-multiple `K`;
   `SPLIT_K = 1` is the only launched value), so the descending

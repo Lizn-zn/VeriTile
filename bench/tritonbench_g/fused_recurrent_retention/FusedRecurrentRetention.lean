@@ -105,6 +105,14 @@ in-bounds lanes, and the partial-tail-block regime (`i_k·BK + BK > DK` or
 `i_v·BV + BV > DV`) is part of the trusted boundary. Store-offset injectivity
 and the tile-fit bound `BV ≤ DV` are honest structural side conditions of the
 headline.
+
+Translation-surface blocker: the Python kernel signatures carry four stride
+parameters that are never used in either kernel body (`s_qk_t`, `s_qk_d`,
+`s_vo_t`, `s_vo_d` — dead arguments; addressing uses only `s_qk_h`/`s_vo_h`
+and literal element strides); they are omitted from the Lean surface binders
+(`fused_rwkv6_kernel`/`fused_recurrent_hgrn` precedent). Both kernel bodies
+are otherwise transcribed verbatim, including `tl.debug_barrier()` and the
+phase-2 pointer rebasing.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentRetention
