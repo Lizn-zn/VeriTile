@@ -259,7 +259,30 @@ theorem silu_step_realizesR
         (fun i => (S, laneOffset s BLOCK_N i)))
       (expected := fun R i =>
         MemCell.of .bf16 (some (aSpec R (xs i)) : WithBot ℝ)) := by
-  sorry
+  rw [ComputeRefine.realizesR_writeIf_iff]
+  intro R
+  apply ComputeKernel.computeCorrectR_of_toAlgKernel
+  · simp [silu_step, ComputeExpr.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * BLOCK_N + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 0 * BLOCK_N + a.val = s.pids 0 * BLOCK_N + b.val := by
+      simpa using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
+  have hx := h_x i
+  simp only [laneOffset] at hx
+  simp [hActive, aSpec, TiledActivation.silu,
+        tile_elementwise, hx, RoundingModel.cast, RoundingModel.storeValue,
+        FloatDType.storeValue, FloatDType.ofReal]
 
 /-- Frame lemma for step A: every region other than `S` is untouched, for
 every rounding model. -/
@@ -268,7 +291,25 @@ theorem silu_step_preservesR (R : RoundingModel)
     (s s' : BlockState) (keepReg : RegionName) (h_keep : keepReg ≠ S)
     (hExec : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s = some s') :
     ∀ offset : Nat, s'.mem keepReg offset = s.mem keepReg offset := by
-  sorry
+  intro offset
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_other_region R .bf16 _ _ _
+        keepReg h_keep offset]
+  rfl
+
+/-- Step A leaves the program ids untouched (needed to carry the lane
+addressing across the composition). -/
+private theorem silu_step_execR_pids (R : RoundingModel)
+    (X S : RegionName) (ncols BLOCK_N : Nat) (s s1 : BlockState)
+    (hExec : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s = some s1) :
+    s1.pids = s.pids := by
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s1
+  rw [BlockState.foldl_writeMemAsR_masked_pids]
+  rfl
 
 /-- Component theorem for step B: given the bf16 intermediate `S` holding
 payloads `zs`, the active lanes of `OUT` receive `round(round(z·y))`. -/
@@ -287,9 +328,51 @@ theorem mul_step_realizesR
         (fun i => (OUT, laneOffset s BLOCK_N i)))
       (expected := fun R i =>
         MemCell.of .bf16 (some (R.round .bf16 (R.round .bf16 (zs i * ys i))) : WithBot ℝ)) := by
-  sorry
+  rw [ComputeRefine.realizesR_writeIf_iff]
+  intro R
+  apply ComputeKernel.computeCorrectR_of_toAlgKernel
+  · simp [mul_step, ComputeExpr.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * BLOCK_N + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 0 * BLOCK_N + a.val = s.pids 0 * BLOCK_N + b.val := by
+      simpa using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
+  have hz := h_z i hActive
+  have hy := h_y i
+  simp only [laneOffset] at hz hy
+  simp [hActive, BlockState.readMemValue_bf16_of_cell hz, hy,
+        tile_elementwise, RoundingModel.cast, RoundingModel.storeValue,
+        FloatDType.storeValue, FloatDType.ofReal]
 
 /-! ## The composed pipeline theorem -/
+
+/-- Unpack a `RealizesR` statement at one model and one successful execution
+of the projected kernel: the raw per-lane output clause. -/
+private theorem realizesR_out {ι : Type} {α : Type}
+    [ComputeCorrect.OutputReadable α]
+    {k : ComputeKernel} {s : BlockState}
+    {write : ComputeCorrect.WriteMap ι} {expected : RoundingModel → ι → α}
+    (h : ComputeRefine.RealizesR k s write expected) (R : RoundingModel)
+    (hAlg : k.toAlgorithm? = Except.ok k.toAlgKernel)
+    {s' : BlockState}
+    (hExec : execR R k.toAlgKernel s = some s') :
+    ∀ i : ι, match write i with
+      | some addr => ComputeCorrect.OutputReadable.read s' addr = expected R i
+      | none => True := by
+  have h' := (h R).2
+  unfold ComputeKernel.AlgorithmCorrectR at h'
+  rw [hAlg] at h'
+  exact h' s s' hExec rfl
 
 /-- The unfused pipeline realizes `unfusedSpec` for **every** rounding model —
 **derived by composing** `silu_step_realizesR` and `mul_step_realizesR`
@@ -310,7 +393,53 @@ theorem swiglu_unfused_realizesR
         (fun i => (OUT, laneOffset s BLOCK_N i)))
       (expected := fun R i =>
         MemCell.of .bf16 (some (unfusedSpec xs ys R i) : WithBot ℝ)) := by
-  sorry
+  rw [ComputeRefine.realizesR_writeIf_iff]
+  intro R
+  apply ComputeKernel.computeCorrectR_of_toAlgKernel
+  · simp [swiglu_unfused]
+  intro s0 s' hExec hs0
+  subst s0
+  rw [exec_swiglu_unfusedR] at hExec
+  unfold execUnfusedR at hExec
+  intro i hActive
+  cases hA : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s with
+  | none => rw [hA] at hExec; exact absurd hExec (by simp)
+  | some s1 =>
+      rw [hA] at hExec
+      have hExecB : execR R (ComputeKernel.toAlgKernel (mul_step S Y OUT ncols BLOCK_N)) s1
+          = some s' := hExec
+      have hpids : s1.pids = s.pids := silu_step_execR_pids R X S ncols BLOCK_N s s1 hA
+      -- intermediate `S` cells from step A's realization
+      have hAout := realizesR_out (silu_step_realizesR X S ncols BLOCK_N s xs h_x) R
+        (by simp [silu_step, ComputeExpr.toAlgorithm?]) hA
+      have h_z1 : ∀ j : Fin BLOCK_N, s1.pids 0 * BLOCK_N + j.val < ncols →
+          s1.mem S (laneOffset s1 BLOCK_N j) =
+            MemCell.of .bf16 (some (aSpec R (xs j)) : WithBot ℝ) := by
+        intro j hj
+        have hj' : s.pids 0 * BLOCK_N + j.val < ncols := by rwa [hpids] at hj
+        have hout := hAout j
+        simp only [ComputeCorrect.WriteMap.writeIf, hj', if_true] at hout
+        simpa [laneOffset, hpids] using hout
+      -- `Y` survives step A (frame lemma; `S ≠ Y`)
+      have h_y1 : ∀ j : Fin BLOCK_N, s1.readMem Y (laneOffset s1 BLOCK_N j) = ys j := by
+        intro j
+        have hmem := silu_step_preservesR R X S ncols BLOCK_N s s1 Y (Ne.symm h_SY) hA
+        have hread : s1.readMem Y (laneOffset s1 BLOCK_N j)
+            = s.readMem Y (laneOffset s1 BLOCK_N j) := by
+          unfold BlockState.readMem
+          rw [hmem]
+        rw [hread]
+        have hy := h_y j
+        simp only [laneOffset, hpids] at hy ⊢
+        exact hy
+      -- step B's realization at the intermediate state
+      have hBout := realizesR_out
+        (mul_step_realizesR S Y OUT ncols BLOCK_N s1 (fun j => aSpec R (xs j)) ys h_z1 h_y1)
+        R (by simp [mul_step, ComputeExpr.toAlgorithm?]) hExecB
+      have hAct1 : s1.pids 0 * BLOCK_N + i.val < ncols := by rw [hpids]; exact hActive
+      have hout := hBout i
+      simp only [ComputeCorrect.WriteMap.writeIf, hAct1, if_true] at hout
+      simpa [laneOffset, hpids, unfusedSpec] using hout
 
 /-! ## The headline pair theorems (`ComputeRefine.RefinesR`) -/
 
@@ -337,7 +466,25 @@ theorem swiglu_refinesR
         (relation := fun i (lhsCell rhsCell : MemCell) =>
           lhsCell = MemCell.of .bf16 (some (fusedSpec xs ys R i) : WithBot ℝ) ∧
           rhsCell = MemCell.of .bf16 (some (unfusedSpec xs ys R i) : WithBot ℝ)) := by
-  sorry
+  intro R
+  apply ComputeKernel.computeRefineR_of_toAlgKernel
+  · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
+  · simp [swiglu_unfused]
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro i
+  have hFout := realizesR_out
+    (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys h_x h_y) R
+    (by simp [swiglu_fused, ComputeExpr.toAlgorithm?]) hL
+  have hUout := realizesR_out
+    (swiglu_unfused_realizesR X Y S OUT ncols BLOCK_N s xs ys h_x h_y h_SY) R
+    (by simp [swiglu_unfused]) hR
+  by_cases hi : s.pids 0 * BLOCK_N + i.val < ncols
+  · have hF := hFout i
+    have hU := hUout i
+    simp only [ComputeCorrect.WriteMap.writeIf, hi, if_true] at hF hU ⊢
+    exact ⟨hF, hU⟩
+  · simp only [ComputeCorrect.WriteMap.writeIf, hi, if_false]
 
 /-- **"fused = unfused"**: when the intermediate `silu(x)` is representable
 for the model, the pair relation strengthens to plain cell equality. -/
@@ -360,7 +507,11 @@ theorem swiglu_fused_eq_unfused_of_representable
           (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
           (fun i => (OUT, laneOffset s BLOCK_N i)))
         (relation := fun _ (lhsCell rhsCell : MemCell) => lhsCell = rhsCell) := by
-  sorry
+  intro R hRep
+  refine ComputeRefine.RefinesR.mono
+    (swiglu_refinesR X Y S OUT ncols BLOCK_N s xs ys h_x h_y h_SY R) ?_
+  rintro i a b ⟨ha, hb⟩
+  rw [ha, hb, fusedSpec_eq_unfusedSpec_of_representable xs ys R i (hRep i)]
 
 /-- Degeneration at the trivial model: the classic two-kernel
 `ComputeRefine.Realizes` equality statement (the `FusedSiLU`-shaped final

@@ -448,6 +448,64 @@ theorem scatter_memcell_R_prop_masked_nd (R : RoundingModel)
     rw [foldl_writeMemAsR_preserve_masked R dtype offsetFn valueFn (fun k => decide (P k))
       (offsetFn i) l₁ _ h_l1_not_in]
 
+/-- The R-write leaves the program ids untouched. -/
+@[simp] theorem writeMemAsR_pids (R : RoundingModel) (dtype : FloatDType)
+    (s : BlockState) (region : RegionName) (offset : Nat)
+    (v : TileCarrier dtype.toTileDType) :
+    (s.writeMemAsR R dtype region offset v).pids = s.pids := rfl
+
+/-- A `P`-masked `writeMemAsR` scatter `foldl` leaves the program ids
+untouched. -/
+theorem foldl_writeMemAsR_masked_pids {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (P : α → Prop) [DecidablePred P] (l : List α) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+        s).pids) = s.pids := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons]
+      by_cases h : P hd
+      · simp only [h, if_true]
+        rw [ih, writeMemAsR_pids]
+      · simp only [h, if_false]
+        exact ih s
+
+/-- A `P`-masked `writeMemAsR` scatter `foldl` into `region` leaves every
+other region's cells untouched (the frame the pipeline composition needs). -/
+theorem foldl_writeMemAsR_preserve_other_region {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (hr : r ≠ region) (o : Nat) (l : List α) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+        s).mem r o) = s.mem r o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons]
+      by_cases h : P hd
+      · simp only [h, if_true]
+        rw [ih, writeMemAsR_mem, if_neg (fun hc => hr hc.1)]
+      · simp only [h, if_false]
+        exact ih s
+
+/-- Tag-exact readback of a bf16 cell through the operational `tl.load`
+channel: `readMemValue .bf16` on a `MemCell.of .bf16 (some z)` cell returns
+`some z` (the finite-fallback round trip is the identity on `some`). -/
+theorem readMemValue_bf16_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {z : ℝ}
+    (h : s.mem region offset = MemCell.of .bf16 (some z : WithBot ℝ)) :
+    s.readMemValue .bf16 region offset = (some z : WithBot ℝ) := by
+  simp [readMemValue, readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
 end BlockState
 
 end VeriTile.Triton

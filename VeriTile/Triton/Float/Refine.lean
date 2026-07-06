@@ -312,6 +312,37 @@ def SingleRounding {ι : Type}
     (core : ι → ℝ) : Prop :=
   ∀ (R : RoundingModel) (i : ι), expected R i = R.round dtype (core i)
 
+/-- `RefinesR` is monotone in the relation: any pointwise weakening of the
+pair relation is again realized. Used to strengthen the event-ledger relation
+to plain cell equality under representability hypotheses. -/
+theorem RefinesR.mono {R : RoundingModel} {ι : Type} {α β : Type}
+    [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
+    {lhs rhs : ComputeKernel} {initialState : BlockState}
+    {lhsWrite rhsWrite : ComputeCorrect.WriteMap ι}
+    {rel rel' : ι → α → β → Prop}
+    (h : RefinesR R lhs rhs initialState lhsWrite rhsWrite rel)
+    (himp : ∀ i a b, rel i a b → rel' i a b) :
+    RefinesR R lhs rhs initialState lhsWrite rhsWrite rel' := by
+  unfold RefinesR ComputeKernel.ExecRefineR ComputeKernel.ComputeRefineR
+    ComputeKernel.ProjectedRefineR at h ⊢
+  obtain ⟨-, h⟩ := h
+  refine ⟨trivial, ?_⟩
+  cases hL : lhs.toAlgorithm? with
+  | error e => rw [hL] at h; exact h
+  | ok lAlg =>
+      cases hR : rhs.toAlgorithm? with
+      | error e => rw [hL, hR] at h; exact h
+      | ok rAlg =>
+          rw [hL, hR] at h
+          intro s0 l r hl hr hs0 i
+          have hi := h s0 l r hl hr hs0 i
+          revert hi
+          cases lhsWrite i <;> cases rhsWrite i <;> intro hi
+          · trivial
+          · trivial
+          · trivial
+          · exact himp _ _ _ hi
+
 /-- A `RoundFree` realization yields the exact ℝ statement for every model,
 not only the trivial one. -/
 theorem RealizesR.exact_of_roundFree {ι : Type} {α : Type}
