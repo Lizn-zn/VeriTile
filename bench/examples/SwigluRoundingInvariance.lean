@@ -7,64 +7,75 @@ import VeriTile.Triton.Math.Activation
 /-!
 # SwiGLU fused vs unfused — rounding-invariance pilot (#447 Phase C)
 
-The first `ComputeRefine.RealizesR` theorems: two SwiGLU pipelines that are
-**definitionally equal** under the erased/ideal semantics (`ComputeCorrect.*`)
-but **distinct terms** under the rounding-model semantics, with their full
-rounding-event structure pinned down for every `RoundingModel`.
+Compositional form, mirroring `VeriTile.Examples.FusedSiLU`: the unfused
+pipeline is **two separate kernels** (`silu_step`, then `mul_step`) composed
+through a real bf16 tensor in memory — exactly what an eager framework
+launches — and the final theorems live on the two-kernel refinement surface
+`ComputeRefine.RefinesR`.
 
-## The two pipelines
+## The kernels
 
-* `swiglu_fused` — the Triton-kernel dataflow: `silu(x)·y` stays on the ℝ
-  register channel, one bf16 materialization at the output
-  (`(out).to(tl.bfloat16)` + bf16 store).
-* `swiglu_unfused` — the eager dataflow: the intermediate `silu(x)` is
-  materialized to bf16 (`(s).to(tl.bfloat16)`) before the multiply, exactly
-  like an eager `F.silu(x)` writing a bf16 tensor.
+* `swiglu_fused` — one kernel: `silu(x)·y` on the ℝ register channel, one
+  bf16 materialization at the output store.
+* `silu_step` (**A**) — writes the intermediate `silu(x)` to the bf16 tensor
+  `S` in memory.
+* `mul_step` (**B**) — loads `S` back (a bf16-typed load), multiplies by `y`,
+  stores bf16.
+* `swiglu_unfused` — the pipeline `B ∘ A`: literally the concatenation of the
+  two step kernels' bodies; `exec_swiglu_unfusedR` splits its execution into
+  the sequential composition, so the pipeline theorem is *derived from* the
+  two step theorems rather than proven monolithically.
 
-## Rounding-event ledger (what the raw specs record)
+## Rounding-event ledger
 
-Each `R.round .bf16` in a spec is one event; the mixed-dtype multiply's
-automatic bf16→ℝ upcast is `R.round .real = id` — upcast exactness holds *by
-the model's only axiom*, no grid hypotheses needed.
-
-```
-fused   : round(round(silu(x)·y))                two events: exit cast + store
-unfused : round(round(round(silu(x))·y))         three: materialize + exit cast + store
-```
-
-Under `IdemRounding` (every real rounding is idempotent) the cast+store pairs
-collapse and the pipelines take the shapes of the #447 narrative:
+Each `R.round .bf16` is one event. Loads of bf16 cells return the stored
+payload (tag-exact); the mixed-dtype multiply's automatic bf16→ℝ upcast is
+`R.round .real = id` — exact by the model's only axiom.
 
 ```
-fused   : round(silu(x)·y)                       exactly ONE rounding of the ℝ core
-unfused : round(round(silu(x))·y)                the extra intermediate rounding
+fused    : round(round(silu(x)·y))                     2 events (exit cast + store)
+A        : round(round(silu(x)))            =: aSpec   2 events (exit cast + store)
+B        : round(round(z·y))                           2 events (exit cast + store)
+unfused  = B ∘ A : round(round(aSpec(x)·y))            4 events
 ```
+
+Under `IdemRounding` the cast+store pairs collapse pairwise and the pipelines
+take the #447-narrative shapes: `round(silu(x)·y)` (exactly one rounding) vs
+`round(round(silu(x))·y)` (the extra intermediate rounding).
 
 ## Theorems
 
-* `swiglu_fused_realizesR` / `swiglu_unfused_realizesR` — the unconditional
-  ∀-`R` realization theorems (the pilot's main results). Outputs are read at
-  the `MemCell` layer (`MemCell.of .bf16 (some …)`): the store is bf16-tagged
-  and `readMem`'s real-channel decode is tag-exact, so a narrow-float output
-  cell is only observable as its typed `MemCell` — the same convention the
-  classic bench proofs use for fp16/bf16 stores (`rmsnorm_fused_llama`,
-  `scatter_memcell_fp16_prop_masked_nd`).
-* `fusedSpec_single_rounding` / `unfusedSpec_double_rounding` — the Idem
-  collapses above (pure spec algebra).
-* `fusedSpec_eq_unfusedSpec_of_representable` — conditional coincidence: if
-  the intermediate `silu(x)` is a fixed point of `R.round .bf16`, the two
-  pipelines agree.
-* `fusedSpec_ne_unfusedSpec` — the model *distinguishes* the pipelines: a
-  concrete witness model on which the specs differ (unprovable before #447:
-  both erased to the same closed form).
-* `swiglu_fused_realizes_classic` — degeneration: the classic
-  `ComputeCorrect.Realizes` statement with the ℝ closed form inside the bf16
-  output cell, recovered from the invariance theorem at the trivial model.
+Outputs are read at the `MemCell` layer (`MemCell.of .bf16 (some …)`): the
+stores are bf16-tagged and `readMem`'s real-channel decode is tag-exact, so a
+narrow-float cell is only observable as its typed `MemCell` — the classic
+fp16/bf16 convention (`rmsnorm_fused_llama`).
+
+* `silu_step_realizesR` / `mul_step_realizesR` — the component theorems (A
+  and B verified separately).
+* `silu_step_preservesR` — A leaves every region other than `S` untouched
+  (the aliasing frame the composition needs).
+* `swiglu_unfused_realizesR` — the pipeline theorem, **derived by composing**
+  the component theorems through the intermediate state.
+* `swiglu_fused_realizesR` — the fused kernel's component theorem.
+* **`swiglu_refinesR`** — the headline pair theorem on
+  `ComputeRefine.RefinesR`: for every rounding model, fused and unfused
+  realize their respective event-ledger terms side by side.
+* **`swiglu_fused_eq_unfused_of_representable`** — "fused = unfused": when
+  the intermediate `silu(x)` is representable, the relation strengthens to
+  plain cell equality, for every rounding model.
+* `swiglu_refines_classic` — degeneration at `triv`: the classic
+  `ComputeRefine.Realizes` equality statement (the `FusedSiLU`-shaped
+  theorem) recovered from the invariance theorem.
+* Spec algebra: `fusedSpec_single_rounding`, `unfusedSpec_shape` (Idem
+  collapses), `fusedSpec_ne_unfusedSpec` (a witness model distinguishing the
+  pipelines — unstatable before #447).
 -/
 
 namespace VeriTile.Bench.Examples.SwigluRounding
 
 open VeriTile.Triton
+
+/-! ## Kernels -/
 
 /-- Fused SwiGLU: compute on the ℝ channel, single bf16 materialization at
 the output store. -/
@@ -77,33 +88,80 @@ def swiglu_fused (X Y OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel :=
   tl.store(OUT + cols, (out).to(tl.bfloat16), mask=cols < $(ncols))
 }
 
-/-- Unfused SwiGLU: the intermediate `silu(x)` is materialized to bf16 before
-the multiply (the eager-pipeline dataflow). The multiply's automatic bf16→ℝ
-upcast is exact (`round_real = id`). -/
-def swiglu_unfused (X Y OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel := triton {
+/-- Step A of the unfused pipeline: materialize `silu(x)` into the bf16
+tensor `S`. -/
+def silu_step (X S : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel := triton {
   start_col = tl.program_id(0) * $(BLOCK_N)
   cols = start_col + tl.arange(0, $(BLOCK_N))
   x = tl.load(X + cols, mask=cols < $(ncols), other=0.0)
-  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0)
   s = x * tl.sigmoid(x)
-  s16 = (s).to(tl.bfloat16)
-  out = s16 * y
+  tl.store(S + cols, (s).to(tl.bfloat16), mask=cols < $(ncols))
+}
+
+/-- Step B of the unfused pipeline: load the bf16 intermediate back and
+multiply by `y`. The `S` load is bf16-typed (it reads bf16 cells); the
+mixed-dtype multiply upcasts it to ℝ exactly. -/
+def mul_step (S Y OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel := triton {
+  start_col = tl.program_id(0) * $(BLOCK_N)
+  cols = start_col + tl.arange(0, $(BLOCK_N))
+  z = tl.load(S + cols, mask=cols < $(ncols)).to(tl.bfloat16)
+  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0)
+  out = z * y
   tl.store(OUT + cols, (out).to(tl.bfloat16), mask=cols < $(ncols))
 }
+
+/-- The unfused pipeline `B ∘ A` as one kernel: the concatenation of the two
+step bodies (what the eager framework's two launches execute in sequence). -/
+def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel :=
+  let body : List Stmt :=
+    (silu_step X S ncols BLOCK_N).body ++
+    (mul_step S Y OUT ncols BLOCK_N).body
+  ComputeKernel.fromAlgBody [X, Y] [OUT] body
+
+/-! ## Sequential decomposition of the pipeline -/
+
+private theorem stepStmtsR_append (R : RoundingModel) (xs ys : List Stmt) (s : BlockState) :
+    stepStmtsR R (xs ++ ys) s = (stepStmtsR R xs s).bind (fun s' => stepStmtsR R ys s') := by
+  induction xs generalizing s with
+  | nil => simp [stepStmtsR]
+  | cons st rest ih =>
+      simp [stepStmtsR]
+      cases stepStmtR R st s <;> simp [ih]
+
+/-- Execution of the composed pipeline under a rounding model, as the
+sequential composition of the two step executions. -/
+noncomputable def execUnfusedR (R : RoundingModel)
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
+    Option BlockState :=
+  match execR R (silu_step X S ncols BLOCK_N) s with
+  | none => none
+  | some s1 => execR R (mul_step S Y OUT ncols BLOCK_N) s1
+
+theorem exec_swiglu_unfusedR (R : RoundingModel)
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
+    execR R (swiglu_unfused X Y S OUT ncols BLOCK_N) s =
+      execUnfusedR R X Y S OUT ncols BLOCK_N s := by
+  simp [swiglu_unfused, execUnfusedR, execR, stepStmtsR_append]
+  cases h1 : stepStmtsR R (silu_step X S ncols BLOCK_N).body s <;> simp
+
+/-! ## Specs (the rounding-event ledger, term by term) -/
 
 /-- Lane address for this example's 1-D launch. -/
 def laneOffset (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pids 0 * BLOCK_N + i.val
 
-/-- Raw fused spec: exit cast + bf16 store — two rounding events around the
-shared ℝ core. -/
+/-- Step A's per-lane payload: `silu(x)` through A's exit cast + bf16 store. -/
+noncomputable def aSpec (R : RoundingModel) (x : ℝ) : ℝ :=
+  R.round .bf16 (R.round .bf16 (TiledActivation.silu x))
+
+/-- Fused spec: exit cast + store — two events around the shared ℝ core. -/
 noncomputable def fusedSpec (xs ys : Fin BLOCK_N → ℝ) (R : RoundingModel) (i : Fin BLOCK_N) : ℝ :=
   R.round .bf16 (R.round .bf16 (TiledActivation.swiglu (xs i) (ys i)))
 
-/-- Raw unfused spec: intermediate materialization + exit cast + store —
-three rounding events; the extra one wraps `silu(x)` alone. -/
+/-- Unfused (composed) spec: B's two events around `aSpec(x)·y` — four events
+total, of which the inner two are A's. -/
 noncomputable def unfusedSpec (xs ys : Fin BLOCK_N → ℝ) (R : RoundingModel) (i : Fin BLOCK_N) : ℝ :=
-  R.round .bf16 (R.round .bf16 (R.round .bf16 (TiledActivation.silu (xs i)) * ys i))
+  R.round .bf16 (R.round .bf16 (aSpec R (xs i) * ys i))
 
 /-! ## Spec algebra (no kernel execution involved) -/
 
@@ -113,21 +171,22 @@ theorem fusedSpec_single_rounding {BLOCK_N : Nat} (xs ys : Fin BLOCK_N → ℝ)
       R.round .bf16 (TiledActivation.swiglu (xs i) (ys i)) := by
   simp [fusedSpec, IdemRounding.idem]
 
-theorem unfusedSpec_double_rounding {BLOCK_N : Nat} (xs ys : Fin BLOCK_N → ℝ)
+/-- Under idempotence the four unfused events collapse pairwise to the #447
+narrative shape: `round(round(silu(x))·y)`. -/
+theorem unfusedSpec_shape {BLOCK_N : Nat} (xs ys : Fin BLOCK_N → ℝ)
     (R : RoundingModel) [IdemRounding R] (i : Fin BLOCK_N) :
     unfusedSpec xs ys R i =
       R.round .bf16 (R.round .bf16 (TiledActivation.silu (xs i)) * ys i) := by
-  simp [unfusedSpec, IdemRounding.idem]
+  simp [unfusedSpec, aSpec, IdemRounding.idem]
 
-/-- Conditional coincidence: when the intermediate `silu(x)` is already
-representable, the extra materialization is invisible and the two pipelines
-agree. -/
+/-- Conditional coincidence: when the intermediate `silu(x)` is representable,
+A's materialization is invisible and the specs agree. -/
 theorem fusedSpec_eq_unfusedSpec_of_representable {BLOCK_N : Nat}
     (xs ys : Fin BLOCK_N → ℝ) (R : RoundingModel) (i : Fin BLOCK_N)
     (h : R.Representable .bf16 (TiledActivation.silu (xs i))) :
     fusedSpec xs ys R i = unfusedSpec xs ys R i := by
-  unfold fusedSpec unfusedSpec
-  rw [h, TiledActivation.swiglu]
+  unfold fusedSpec unfusedSpec aSpec
+  rw [h, h, TiledActivation.swiglu]
 
 /-- The model distinguishes the two pipelines: a concrete rounding model and
 inputs on which the specs differ. (Under the erased semantics both pipelines
@@ -138,21 +197,15 @@ theorem fusedSpec_ne_unfusedSpec :
   -- Witness model: rounding shifts every non-real channel by 1 (a legitimate
   -- `RoundingModel`: the only axiom constrains the `.real` channel).
   -- At `x = 0, y = 1`: `silu 0 = 0`, so
-  --   fused   = round (round 0)           = 2
-  --   unfused = round (round (round 0·1)) = 3.
+  --   fused   = round (round 0)                 = 2
+  --   unfused = round (round (aSpec 0 · 1))     = round (round 2) = 4.
   refine ⟨⟨fun dt x => if dt = .real then x else x + 1, by funext x; simp⟩,
     fun _ => 0, fun _ => 1, 0, ?_⟩
-  simp [fusedSpec, unfusedSpec, TiledActivation.swiglu, TiledActivation.silu]
+  simp [fusedSpec, unfusedSpec, aSpec, TiledActivation.swiglu, TiledActivation.silu]
 
-/-! ## The realization theorems -/
+/-! ## Component theorems -/
 
-/-- The fused kernel realizes `fusedSpec` for **every** rounding model.
-
-Outputs are read at the `MemCell` layer (`MemCell.of .bf16 (some …)`): the
-store is bf16-tagged and `readMem`'s real-channel decode is tag-exact, so a
-narrow-float output cell is only observable as its typed `MemCell` — mirroring
-the classic convention for fp16/bf16 stores (`rmsnorm_fused_llama`,
-`scatter_memcell_fp16_prop_masked_nd`). -/
+/-- The fused kernel realizes `fusedSpec` for **every** rounding model. -/
 theorem swiglu_fused_realizesR
     (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
     (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
@@ -192,66 +245,145 @@ theorem swiglu_fused_realizesR
         tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
         FloatDType.storeValue, FloatDType.ofReal]
 
-/-- The unfused kernel realizes `unfusedSpec` for **every** rounding model.
-Same `MemCell`-layer readback convention as `swiglu_fused_realizesR`. -/
-theorem swiglu_unfused_realizesR
-    (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
-    (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
-    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i)
+/-- Component theorem for step A: for every rounding model, the active lanes
+of `S` receive `aSpec(x)` as bf16 cells. -/
+theorem silu_step_realizesR
+    (X S : RegionName) (ncols BLOCK_N : Nat)
+    (s : BlockState) (xs : Fin BLOCK_N → ℝ)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i) :
+    ComputeRefine.RealizesR
+      (kernel := silu_step X S ncols BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+        (fun i => (S, laneOffset s BLOCK_N i)))
+      (expected := fun R i =>
+        MemCell.of .bf16 (some (aSpec R (xs i)) : WithBot ℝ)) := by
+  sorry
+
+/-- Frame lemma for step A: every region other than `S` is untouched, for
+every rounding model. -/
+theorem silu_step_preservesR (R : RoundingModel)
+    (X S : RegionName) (ncols BLOCK_N : Nat)
+    (s s' : BlockState) (keepReg : RegionName) (h_keep : keepReg ≠ S)
+    (hExec : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s = some s') :
+    ∀ offset : Nat, s'.mem keepReg offset = s.mem keepReg offset := by
+  sorry
+
+/-- Component theorem for step B: given the bf16 intermediate `S` holding
+payloads `zs`, the active lanes of `OUT` receive `round(round(z·y))`. -/
+theorem mul_step_realizesR
+    (S Y OUT : RegionName) (ncols BLOCK_N : Nat)
+    (s : BlockState) (zs ys : Fin BLOCK_N → ℝ)
+    (h_z : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
+      s.mem S (laneOffset s BLOCK_N i) =
+        MemCell.of .bf16 (some (zs i) : WithBot ℝ))
     (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i) :
     ComputeRefine.RealizesR
-      (kernel := swiglu_unfused X Y OUT ncols BLOCK_N)
+      (kernel := mul_step S Y OUT ncols BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+        (fun i => (OUT, laneOffset s BLOCK_N i)))
+      (expected := fun R i =>
+        MemCell.of .bf16 (some (R.round .bf16 (R.round .bf16 (zs i * ys i))) : WithBot ℝ)) := by
+  sorry
+
+/-! ## The composed pipeline theorem -/
+
+/-- The unfused pipeline realizes `unfusedSpec` for **every** rounding model —
+**derived by composing** `silu_step_realizesR` and `mul_step_realizesR`
+through the intermediate state (with the frame lemma keeping `Y` intact;
+`S ≠ Y` is the aliasing hypothesis the composition needs, and `S ≠ X` keeps
+the (unused) `X` readback honest in the intermediate state). -/
+theorem swiglu_unfused_realizesR
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat)
+    (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i)
+    (h_SY : S ≠ Y) :
+    ComputeRefine.RealizesR
+      (kernel := swiglu_unfused X Y S OUT ncols BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, laneOffset s BLOCK_N i)))
       (expected := fun R i =>
         MemCell.of .bf16 (some (unfusedSpec xs ys R i) : WithBot ℝ)) := by
-  rw [ComputeRefine.realizesR_writeIf_iff]
-  intro R
-  apply ComputeKernel.computeCorrectR_of_toAlgKernel
-  · simp [swiglu_unfused, ComputeExpr.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * BLOCK_N + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have hab' : s.pids 0 * BLOCK_N + a.val = s.pids 0 * BLOCK_N + b.val := by
-      simpa using hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
-    rfl
-  simp [execR, swiglu_unfused, stepStmtsR, stepStmtR, evalOpR.eq_def,
-        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
-  subst s'
-  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
-  rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
-  have hx := h_x i
-  have hy := h_y i
-  simp only [laneOffset] at hx hy
-  simp [hActive, unfusedSpec, TiledActivation.silu,
-        tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
-        FloatDType.storeValue, FloatDType.ofReal]
+  sorry
 
-/-! ## Degeneration to the classic surface -/
+/-! ## The headline pair theorems (`ComputeRefine.RefinesR`) -/
 
-/-- At the trivial model the invariance theorem collapses to the classic
-`ComputeCorrect.Realizes` statement with the ℝ closed form inside the bf16
-output cell — the existing proof style is the shadow of the new one. -/
-theorem swiglu_fused_realizes_classic
-    (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
+/-- **The pair theorem**: for every rounding model, the fused kernel and the
+unfused pipeline realize their respective event-ledger terms side by side on
+the shared output lanes. -/
+theorem swiglu_refinesR
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat)
     (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
     (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i)
-    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i) :
-    ComputeCorrect.Realizes
-      (kernel := swiglu_fused X Y OUT ncols BLOCK_N)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i)
+    (h_SY : S ≠ Y) :
+    ∀ R : RoundingModel,
+      ComputeRefine.RefinesR R
+        (lhs := swiglu_fused X Y OUT ncols BLOCK_N)
+        (rhs := swiglu_unfused X Y S OUT ncols BLOCK_N)
+        (initialState := s)
+        (lhsWrite := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+          (fun i => (OUT, laneOffset s BLOCK_N i)))
+        (rhsWrite := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+          (fun i => (OUT, laneOffset s BLOCK_N i)))
+        (relation := fun i (lhsCell rhsCell : MemCell) =>
+          lhsCell = MemCell.of .bf16 (some (fusedSpec xs ys R i) : WithBot ℝ) ∧
+          rhsCell = MemCell.of .bf16 (some (unfusedSpec xs ys R i) : WithBot ℝ)) := by
+  sorry
+
+/-- **"fused = unfused"**: when the intermediate `silu(x)` is representable
+for the model, the pair relation strengthens to plain cell equality. -/
+theorem swiglu_fused_eq_unfused_of_representable
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat)
+    (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i)
+    (h_SY : S ≠ Y) :
+    ∀ R : RoundingModel,
+      (∀ i : Fin BLOCK_N, R.Representable .bf16 (TiledActivation.silu (xs i))) →
+      ComputeRefine.RefinesR R
+        (lhs := swiglu_fused X Y OUT ncols BLOCK_N)
+        (rhs := swiglu_unfused X Y S OUT ncols BLOCK_N)
+        (initialState := s)
+        (lhsWrite := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+          (fun i => (OUT, laneOffset s BLOCK_N i)))
+        (rhsWrite := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+          (fun i => (OUT, laneOffset s BLOCK_N i)))
+        (relation := fun _ (lhsCell rhsCell : MemCell) => lhsCell = rhsCell) := by
+  sorry
+
+/-- Degeneration at the trivial model: the classic two-kernel
+`ComputeRefine.Realizes` equality statement (the `FusedSiLU`-shaped final
+theorem) — every rounding collapses, both sides hold the ℝ closed form. -/
+theorem swiglu_refines_classic
+    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat)
+    (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (laneOffset s BLOCK_N i) = xs i)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (laneOffset s BLOCK_N i) = ys i)
+    (h_SY : S ≠ Y) :
+    ComputeRefine.Realizes
+      (lhs := swiglu_fused X Y OUT ncols BLOCK_N)
+      (rhs := swiglu_unfused X Y S OUT ncols BLOCK_N)
       (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
+      (lhsWrite := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, laneOffset s BLOCK_N i)))
-      (expected := fun i =>
-        MemCell.of .bf16 (some (TiledActivation.swiglu (xs i) (ys i)) : WithBot ℝ)) := by
-  have h := (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys h_x h_y).toRealizes
-  simpa [fusedSpec] using h
+      (rhsWrite := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
+        (fun i => (OUT, laneOffset s BLOCK_N i)))
+      (relation := fun _ (lhsCell rhsCell : MemCell) => lhsCell = rhsCell) := by
+  rw [← ComputeRefine.refinesR_triv_iff]
+  exact swiglu_fused_eq_unfused_of_representable X Y S OUT ncols BLOCK_N s xs ys
+    h_x h_y h_SY .triv (fun _ => rfl)
 
 end VeriTile.Bench.Examples.SwigluRounding
