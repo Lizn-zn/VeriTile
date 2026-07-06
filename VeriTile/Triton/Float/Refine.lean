@@ -116,6 +116,19 @@ theorem execCorrectR_triv_iff (ck : ComputeKernel) (s : BlockState)
   unfold ExecCorrectR ComputeCorrectR ExecCorrect ComputeCorrect ProjectedCorrect
   exact and_congr_right fun _ => algorithmCorrectR_triv_iff ck _
 
+/-- Bridge for projected algorithm kernels using `ck.toAlgKernel` as the
+canonical projection — the `R`-parametric mirror of
+`computeCorrect_of_toAlgKernel`. -/
+theorem computeCorrectR_of_toAlgKernel {R : RoundingModel} {ck : ComputeKernel}
+    {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    (hc : Kernel.CorrectR R ck.toAlgKernel post) :
+    ComputeCorrectR R ck post := by
+  refine ⟨trivial, ?_⟩
+  unfold AlgorithmCorrectR
+  rw [h]
+  exact hc
+
 end ComputeKernel
 
 /-! ## The rounding-invariant realization surface -/
@@ -143,6 +156,38 @@ def RealizesR {ι : Type} {α : Type} [ComputeCorrect.OutputReadable α]
       ∀ i : ι, match write i with
         | some addr => ComputeCorrect.OutputReadable.read s' addr = expected R i
         | none => True)
+
+/-- `writeIf` unpacking for `RealizesR` — the `R`-parametric mirror of
+`ComputeCorrect.realizes_writeIf_iff`. -/
+theorem realizesR_writeIf_iff {ι : Type} {α : Type}
+    [ComputeCorrect.OutputReadable α]
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (mask : ι → Prop) [DecidablePred mask]
+    (addr : ι → MemCellAddr) (expected : RoundingModel → ι → α) :
+    RealizesR kernel initialState
+        (ComputeCorrect.WriteMap.writeIf mask addr) expected ↔
+      ∀ R : RoundingModel,
+        ComputeKernel.ExecCorrectR R kernel initialState (fun s' =>
+          ∀ i : ι, mask i →
+            ComputeCorrect.OutputReadable.read s' (addr i) = expected R i) := by
+  unfold RealizesR
+  refine forall_congr' fun R => ?_
+  unfold ComputeCorrect.WriteMap.writeIf ComputeKernel.ExecCorrectR
+    ComputeKernel.ComputeCorrectR ComputeKernel.AlgorithmCorrectR
+    Kernel.CorrectR
+  cases hAlg : kernel.toAlgorithm? with
+  | error e => simp
+  | ok ak =>
+      simp only [and_congr_right_iff]
+      intro _
+      constructor
+      · intro h s0 s' hExec hs0 i hi
+        have hout := h s0 s' hExec hs0 i
+        simpa [hi] using hout
+      · intro h s0 s' hExec hs0 i
+        by_cases hi : mask i
+        · simpa [hi] using h s0 s' hExec hs0 i hi
+        · simp [hi]
 
 /-- **Refinement implies ideal correctness** — the single theorem connecting
 the `ComputeRefine` family to the `ComputeCorrect` family. Instantiates the
