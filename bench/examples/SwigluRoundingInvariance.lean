@@ -118,7 +118,7 @@ def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKerne
   let body : List Stmt :=
     (silu_step X S ncols BLOCK_N).body ++
     (mul_step S Y OUT ncols BLOCK_N).body
-  ComputeKernel.fromAlgBody [X, Y] [OUT] body
+  ComputeKernel.fromKernelBody [X, Y] [OUT] body
 
 /-! ## Sequential decomposition of the pipeline -/
 

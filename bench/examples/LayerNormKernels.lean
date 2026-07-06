@@ -97,7 +97,7 @@ def layerNormAffineTailKernel
       , .store .real [N] (MemAccess.region yReg (.ref .nat [N] "offs"))
           (.ref .real [N] "y") MaskOpt.none
       ]
-  ComputeKernel.fromAlgBody [xReg, γReg, βReg] [yReg] body
+  ComputeKernel.fromKernelBody [xReg, γReg, βReg] [yReg] body
 
 /-- LayerNorm spec: `y_i = (x_i − μ) / √(var + ε) · γ_i + β_i`.
 

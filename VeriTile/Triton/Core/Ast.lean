@@ -948,7 +948,7 @@ inductive ComputeKernel where
 namespace ComputeKernel
 
 /-- Build a compute-facing kernel from an already-constructed algorithm body. -/
-def fromAlgBody (inputs outputs : List RegionName) (body : List Stmt) : ComputeKernel :=
+def fromKernelBody (inputs outputs : List RegionName) (body : List Stmt) : ComputeKernel :=
   ComputeKernel.mk inputs outputs (body.map ComputeStmt.alg)
 
 /-- Fallible projection from the compute-facing kernel surface to the algorithm
@@ -981,11 +981,11 @@ def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
   rw [ComputeStmt.listToAlgorithm?_map_alg]
   rfl
 
-@[simp] theorem toAlgorithm?_fromAlgBody
+@[simp] theorem toAlgorithm?_fromKernelBody
     (inputs outputs : List RegionName) (body : List Stmt) :
-    (ComputeKernel.fromAlgBody inputs outputs body).toAlgorithm? =
+    (ComputeKernel.fromKernelBody inputs outputs body).toAlgorithm? =
       Except.ok (Kernel.mk inputs outputs body) := by
-  simp [ComputeKernel.fromAlgBody]
+  simp [ComputeKernel.fromKernelBody]
 
 /--
 Legacy coercion used by existing examples whose definitions are still annotated
@@ -1019,11 +1019,11 @@ def toAlgKernel (ck : ComputeKernel) : AlgKernel :=
       Kernel.mk inputs outputs body := by
   simp [toAlgKernel]
 
-@[simp] theorem toAlgKernel_fromAlgBody
+@[simp] theorem toAlgKernel_fromKernelBody
     (inputs outputs : List RegionName) (body : List Stmt) :
-    (ComputeKernel.fromAlgBody inputs outputs body).toAlgKernel =
+    (ComputeKernel.fromKernelBody inputs outputs body).toAlgKernel =
       Kernel.mk inputs outputs body := by
-  simp [ComputeKernel.fromAlgBody]
+  simp [ComputeKernel.fromKernelBody]
 
 instance : Coe ComputeKernel AlgKernel where
   coe := toAlgKernel
@@ -1054,10 +1054,10 @@ abbrev body (ck : ComputeKernel) : List Stmt :=
     (ComputeKernel.mk inputs outputs (body.map ComputeStmt.alg)).body = body := by
   simp [ComputeKernel.body]
 
-@[simp] theorem body_fromAlgBody
+@[simp] theorem body_fromKernelBody
     (inputs outputs : List RegionName) (body : List Stmt) :
-    (ComputeKernel.fromAlgBody inputs outputs body).body = body := by
-  simp [ComputeKernel.fromAlgBody]
+    (ComputeKernel.fromKernelBody inputs outputs body).body = body := by
+  simp [ComputeKernel.fromKernelBody]
 
 @[simp] theorem toAlgKernel_body_mk_map_alg
     (inputs outputs : List RegionName) (body : List Stmt) :

@@ -119,7 +119,7 @@ def unfusedSiLUKernel
     (siluStepGate xReg gateReg zReg blockSize).body ++
     (siluStepSilu zReg siluReg blockSize).body ++
     (siluStepResidual siluReg residualReg outReg blockSize).body
-  ComputeKernel.fromAlgBody [xReg, gateReg, residualReg] [outReg] body
+  ComputeKernel.fromKernelBody [xReg, gateReg, residualReg] [outReg] body
 
 private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
     stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by

@@ -826,7 +826,7 @@ def fa1NaiveVerifiedForwardKernelStridedBoundaryD
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD sOB sOH ++
     fa1NaiveComputeBoundaryD M S Bd scale ++
     fa1NaiveStoreBoundaryD outReg M Bd S_q D sOM sOD
-  ComputeKernel.fromAlgBody [qReg, kReg, vReg] [outReg] body
+  ComputeKernel.fromKernelBody [qReg, kReg, vReg] [outReg] body
 
 def fa1NaiveVerifiedForwardKernelStridedCausalBoundaryD
     (qReg kReg vReg outReg : RegionName)
@@ -839,7 +839,7 @@ def fa1NaiveVerifiedForwardKernelStridedCausalBoundaryD
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD sOB sOH ++
     fa1NaiveComputeCausalBoundaryD M S Bd scale ++
     fa1NaiveStoreBoundaryD outReg M Bd S_q D sOM sOD
-  ComputeKernel.fromAlgBody [qReg, kReg, vReg] [outReg] body
+  ComputeKernel.fromKernelBody [qReg, kReg, vReg] [outReg] body
 
 theorem fa1_naive_forward_correct_strided_boundaryD
     {M S D Bd S_q : Nat}

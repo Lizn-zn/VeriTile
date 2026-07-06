@@ -68,7 +68,7 @@ private def nestedCounterKernel (M N : Nat) : ComputeKernel :=
   let body : List Stmt :=
     [.assign .nat [] "cnt" (.constNat 0),
      .forLoop "i" M (nestedCounterOuterBody N)]
-  ComputeKernel.fromAlgBody [] [] body
+  ComputeKernel.fromKernelBody [] [] body
 
 private theorem nestedCounter_inner_step
     (base j : Nat) (s : BlockState)
