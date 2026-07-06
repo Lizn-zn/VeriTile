@@ -221,4 +221,111 @@ noncomputable def execR (R : RoundingModel) (k : Kernel) (s : BlockState) :
     Option BlockState :=
   stepStmtsR R k.body s
 
+/-! ## Degeneration to the trivial model
+
+At `RoundingModel.triv` both rounding-event sites are the identity
+(`evalOpR_triv` for casts, `BlockState.writeMemTypedR_triv` for narrowing
+stores), so the parametric stepper collapses onto `stepStmt` arm by arm.
+The four mutual theorems mirror the termination measures of the four mutual
+definitions above. -/
+
+set_option maxHeartbeats 1600000 in
+mutual
+
+/-- The rounding-model-parametric stepper degenerates to the existing stepper
+at the trivial model: `stepStmtR .triv` *is* `stepStmt`. -/
+theorem stepStmtR_triv : ∀ (st : Stmt) (s : BlockState),
+    stepStmtR RoundingModel.triv st s = stepStmt st s
+  | .assign dtype shape name e, s => by
+      simp only [stepStmtR, stepStmt, evalOpR_triv e s]
+  | .store dtype shape mem val mask, s => by
+      cases mem <;> cases mask <;>
+        simp only [stepStmtR, stepStmt, evalOpR_triv, BlockState.writeMemTypedR_triv]
+  | @Stmt.atomicAdd dtype h shape mem val mask, s => by
+      cases mem <;> cases mask <;>
+        simp only [stepStmtR, stepStmt, evalOpR_triv, BlockState.writeMemTypedR_triv]
+  | .atomicRMW op dtype shape mem input extraInput mask dest, s => by
+      simp only [stepStmtR]
+  | .forLoop idx n body, s => by
+      simp only [stepStmtR, stepStmt, stepForLoopAuxR_triv idx 0 n body s]
+  | .forRange idx start stop step body, s => by
+      simp only [stepStmtR, stepStmt, stepForRangeAuxR_triv idx start stop step body s]
+  | .forRangeDyn idx start stop step body, s => by
+      simp only [stepStmtR, stepStmt, evalOpR_triv start s, evalOpR_triv stop s,
+        evalOpR_triv step s]
+      cases evalOp start s with
+      | none => rfl
+      | some start' =>
+        cases evalOp stop s with
+        | none => rfl
+        | some stop' =>
+          cases evalOp step s with
+          | none => rfl
+          | some step' =>
+            exact stepForRangeAuxR_triv idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
+              (step'.data PUnit.unit) body s
+  | .ifThen cond body, s => by
+      simp only [stepStmtR, stepStmt, evalOpR_triv cond s, stepStmtsR_triv body s]
+  | .ifThenElse cond thenBody elseBody, s => by
+      simp only [stepStmtR, stepStmt, evalOpR_triv cond s, stepStmtsR_triv thenBody s,
+        stepStmtsR_triv elseBody s]
+termination_by st _ => (sizeOf st, 0)
+decreasing_by
+  all_goals simp_wf
+  all_goals (try omega)
+  all_goals (have : 0 < sizeOf idx := by cases idx; simp)
+  all_goals omega
+
+/-- Statement-list degeneration: `stepStmtsR .triv` *is* `stepStmts`. -/
+theorem stepStmtsR_triv : ∀ (l : List Stmt) (s : BlockState),
+    stepStmtsR RoundingModel.triv l s = stepStmts l s
+  | [], s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, s => by
+      simp only [stepStmtsR, stepStmts, stepStmtR_triv st s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' => exact stepStmtsR_triv rest s'
+termination_by l _ => (sizeOf l, 0)
+decreasing_by all_goals (simp_wf; omega)
+
+/-- `forLoop` auxiliary degeneration. -/
+theorem stepForLoopAuxR_triv : ∀ (idx : RegName) (start n : Nat) (body : List Stmt)
+    (s : BlockState),
+    stepForLoopAuxR RoundingModel.triv idx start n body s = stepForLoopAux idx start n body s
+  | idx, start, n, body, s => by
+      rw [stepForLoopAuxR, stepForLoopAux]
+      simp only [stepStmtsR_triv body (s.setReg idx .nat [] (Tile.scalar start))]
+      split
+      · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
+        | none => rfl
+        | some s' => exact stepForLoopAuxR_triv idx (start + 1) n body s'
+      · rfl
+termination_by _ start n body _ => (sizeOf body + 1, n - start)
+decreasing_by all_goals omega
+
+/-- `forRange` auxiliary degeneration. -/
+theorem stepForRangeAuxR_triv : ∀ (idx : RegName) (cur stop step : Nat) (body : List Stmt)
+    (s : BlockState),
+    stepForRangeAuxR RoundingModel.triv idx cur stop step body s =
+      stepForRangeAux idx cur stop step body s
+  | idx, cur, stop, step, body, s => by
+      rw [stepForRangeAuxR, stepForRangeAux]
+      simp only [stepStmtsR_triv body (s.setReg idx .nat [] (Tile.scalar cur))]
+      split
+      · rfl
+      · split
+        · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) with
+          | none => rfl
+          | some s' => exact stepForRangeAuxR_triv idx (cur + step) stop step body s'
+        · rfl
+termination_by _ cur stop _ body _ => (sizeOf body + 1, stop - cur)
+decreasing_by all_goals omega
+
+end
+
+/-- Kernel-execution degeneration: `execR .triv` *is* `exec`. -/
+theorem execR_triv (k : Kernel) (s : BlockState) :
+    execR RoundingModel.triv k s = exec k s := by
+  simp only [execR, exec, stepStmtsR_triv k.body s]
+
 end VeriTile.Triton
