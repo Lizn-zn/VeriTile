@@ -119,6 +119,9 @@ partial def expandLoad (expandExpr : ExprExpander)
         padding := ← `(PaddingOption.zero)
     | `(tritonMemKwarg| eviction_policy="evict_last") =>
         pure ()
+    | `(tritonMemKwarg| eviction_policy="evict_first") =>
+        -- Cache-eviction hint only; no semantic content.
+        pure ()
     | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
         unless name.getId.getString! == "dtype" do
           Macro.throwError

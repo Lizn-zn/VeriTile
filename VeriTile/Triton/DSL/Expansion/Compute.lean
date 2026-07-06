@@ -68,6 +68,40 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
   let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
   pure ⟨algTerm, a'.dtype, outShape, computeTerm?, computeDType?⟩
 
+/-- `tl.extra.cuda.libdevice.pow(base, exponent)`: element-wise real power,
+lowering to `Op.pow` (`Real.rpow` semantics). Operands are coerced onto the
+ℝ channel like the other real math calls (`$(...)` antiquotes reinterpreted
+as ℝ, `Nat` lifted via `Op.natToReal`, floats widened via `Op.castFloat`);
+shapes broadcast like binary arithmetic, which covers the common
+scalar-base × tensor-exponent form (e.g. RoPE's `pow(theta, freqs)`). -/
+partial def expandPow (expandExpr : ExprExpander) (env : Env) (ctx : String)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  let a' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match ← expandLeanAntiquoteAs? .real a with
+      | some out => pure out
+      | none => pure a'
+    else
+      pure a'
+  let b' ←
+    if a'.dtype == .real && b'.dtype == .nat then
+      match ← expandLeanAntiquoteAs? .real b with
+      | some out => pure out
+      | none => pure b'
+    else
+      pure b'
+  let (a', b') ← coerceRealArithOperands ctx a' b'
+  ensureComputeArithComposable ctx a'
+  ensureComputeArithComposable ctx b'
+  let aTerm ← realMathTerm (ctx ++ " base") a'
+  let bTerm ← realMathTerm (ctx ++ " exponent") b'
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  let algTerm ← `(Op.pow $bc $aTerm $bTerm)
+  let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
+  pure ⟨algTerm, .real, outShape, computeTerm?, computeDType?⟩
+
 partial def expandBoolMaskMul? (expandExpr : ExprExpander) (env : Env)
     (a b : TSyntax `tritonExpr) : MacroM (Option EOut) := do
   let a' ← expandExpr env a

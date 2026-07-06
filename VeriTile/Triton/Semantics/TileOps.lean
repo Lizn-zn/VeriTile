@@ -11,6 +11,7 @@ import Mathlib.Analysis.SpecialFunctions.Sigmoid
 import Mathlib.Analysis.Complex.Trigonometric
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Arctan
+import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Math.RealErf
 import VeriTile.Triton.Semantics.State
@@ -209,6 +210,13 @@ noncomputable def WithBot.realErf : WithBot ℝ → WithBot ℝ
   | none   => some (-1)        -- erf(-∞) = -1
   | some r => some (VeriTile.Math.realErf r)
 
+/-- `⊥`-propagating element-wise power on `WithBot ℝ` (`Op.pow` carrier
+semantics): `Real.rpow` on two finite lanes, `⊥` if either lane is `⊥`,
+matching the uniform `Option.map₂` propagation of `WithBot.realSub` /
+`WithBot.realMul` / `WithBot.realDiv`. -/
+noncomputable def WithBot.realPow : WithBot ℝ → WithBot ℝ → WithBot ℝ :=
+  Option.map₂ Real.rpow
+
 noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
   | .sum, xs => xs.foldl WithBot.realAdd ((0 : ℝ) : WithBot ℝ)
   | .prod, xs => xs.foldl WithBot.realMul ((1 : ℝ) : WithBot ℝ)
@@ -272,6 +280,8 @@ comparator starting from `x`. -/
     WithBot.realSinh (some r) = some (Real.sinh r) := rfl
 @[simp] theorem WithBot.realErf_some (r : ℝ) :
     WithBot.realErf (some r) = some (VeriTile.Math.realErf r) := rfl
+@[simp] theorem WithBot.realPow_some (a b : ℝ) :
+    WithBot.realPow (some a) (some b) = some (Real.rpow a b) := rfl
 
 @[simp] theorem WithBot.realExp_bot :
     WithBot.realExp (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
@@ -368,6 +378,9 @@ expressions like `tl.log(tl.exp(x) - max)`. -/
 @[simp] theorem WithBot.realDiv_coe_coe (a b : ℝ) :
     WithBot.realDiv ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
       = (((a / b : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realPow_coe_coe (a b : ℝ) :
+    WithBot.realPow ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (((Real.rpow a b : ℝ)) : WithBot ℝ) := rfl
 
 /-- `realSub ⊥ x = ⊥` (and symmetrically). The corresponding `realAdd` and
 `realMul` propagate `⊥` for the same reason — but only `Sub` is needed for the

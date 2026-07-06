@@ -107,6 +107,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .boolOr _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .boolNot a => a.MemorySafe bounds
   | .max2 _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
+  | .pow _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .where c a b => c.MemorySafe bounds ∧ a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .ite c a b => c.MemorySafe bounds ∧ a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .reduceMax _ _ a => a.MemorySafe bounds

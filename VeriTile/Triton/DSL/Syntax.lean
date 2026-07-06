@@ -37,7 +37,7 @@ syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.exp2(" tritonExpr ")" : tritonExpr
 syntax "tl.math.exp2(" tritonExpr ")" : tritonExpr
-syntax "tl.extra.cuda.libdevice.pow(" tritonExpr ", " num ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.pow(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.log2(" tritonExpr ")" : tritonExpr
 syntax "tl.math.log2(" tritonExpr ")" : tritonExpr
@@ -125,6 +125,7 @@ syntax "boundary_check=([" num,* "]" ":" term ")" : tritonMemKwarg
 syntax "boundary_check=(" num,* ")" : tritonMemKwarg
 syntax "padding_option=\"zero\"" : tritonMemKwarg
 syntax "eviction_policy=\"evict_last\"" : tritonMemKwarg
+syntax "eviction_policy=\"evict_first\"" : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
 syntax num : tritonReduceKwarg

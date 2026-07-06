@@ -147,6 +147,76 @@ unless stated:
   single-tile specializations; the multi-tile fallback branches (pointer `+=`
   advances, online recurrences) are not transcribed. This one is a genuine
   partial-coverage scope restriction, not just a notational rewrite.
+- `relu_strided_buffer` — the `one_tile_per_cta` constexpr branch is split
+  into two Lean surfaces (one-tile and grid-stride); the `relu_forward`
+  helper JIT (`tl.where(x > 0, x, 0)`) is inlined at its call site; the
+  rank-1 stride-order constexprs (`in0_stride_order0 = out0_stride_order0
+  = 0`, their only rank-1 value) are instantiated in the
+  `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
+  value-verified (including the multi-iteration grid-stride loop).
+- `pow_scalar_tensor` — the `one_tile_per_cta` constexpr branch is split
+  into two Lean surfaces (one-tile and grid-stride); the
+  `pow_func_scalar_tensor` helper JIT (`_pow(x.to(tl.float32), exponent)`)
+  is inlined at its single call site per branch as
+  `tl.extra.cuda.libdevice.pow($((val0 : ℝ)).to(tl.float32), in0)`; the
+  rank-1 stride-order constexprs (`= 0`) are instantiated in the
+  `boundary_check=(...)` / `order=(...)` slots. Both branches are fully
+  value-verified.
+- `fused_recurrent_delta` — the Python conditional-expression pointer
+  increments (`p_beta += V if IS_HEADWISE_BETA else 1`, `p_dbeta` analogue)
+  and conditional definitions are spelled as `if IS_HEADWISE_BETA { … } else
+  { … }` constexpr gates, one statement per arm (adds one `if` to the
+  control-flow count and repeats the `p_beta`/`p_dbeta` lhs per arm);
+  `do` → `do_` (Lean keyword), `_` loop vars → `_i`; scalar-beta `… + T - 1`
+  pointer inits parenthesized into the ℕ domain.
+- `fused_recurrent_retention` — the four dead stride parameters in the
+  Python kernel signatures (`s_qk_t`, `s_qk_d`, `s_vo_t`, `s_vo_d` — never
+  used in either kernel body) are omitted from the Lean surface binders
+  (`fused_rwkv6_kernel`/`fused_recurrent_hgrn` precedent); both bodies are
+  otherwise transcribed verbatim.
+- `triton_linear_activation` — the `K_LOAD_MASK_NEEDED` constexpr branch is
+  specialized to its `@triton.heuristics` value `True` (exact-multiple `K`;
+  `SPLIT_K = 1` is the only launched value), so the descending
+  `for k in range(K, 0, -BLOCK_K)` is the ascending trip-count loop with
+  `K = BLOCK_K · numKBlocks` as the antiquoted binder (loop variable dead in
+  the unmasked arm). The `tanh`/`relu`/`gelu`/`fast_gelu` helper JITs are
+  inlined at call sites; module constants `sqrt2`/`sqrt2pi` are antiquoted
+  reals; unused `CACHE_KEY_M/N/K` and `SPLIT_K` parameters dropped; the
+  string constexpr `ACTIVATION` is a Lean `String` parameter with all four
+  `==` gates transcribed verbatim.
+- `rbe_triton_transform` — the helper `get_freq_multi_tokens` JIT is inlined
+  at its single call site; the helper-local `DIM: tl.constexpr = 128` is
+  generalized to a `DIM : Nat` binder (`NB_TOKENS` instantiated to
+  `BLOCK_SIZE_M` as at the call site); Python's dtype/shape-changing `freqs`
+  rebindings get fresh names (`freqs`/`freqs_f`/`freqs_p`/`freqs_mn`);
+  `.to(tl.float32)` on the int tile is spelled `tl.toReal`; the implicit
+  int→float promotion of `tl.arange(0, NB_TOKENS) + starting_idx` is the
+  explicit `tks`/`tks_f` binding pair. Fully value-verified on the full 2-D
+  tile.
+- `bgmv_shrink_kernel` — the Python early `return` on the signed sentinel
+  (`lora_index == -1`) is an `if lora_index != -1 { ... }` guard in the
+  faithful surface (DSL has no early exit); the guard-false path is proven
+  write-free, and the proof surfaces verify the active body with a
+  `Region .nat`-typed `lora_indices` (sentinel skip = trusted host boundary,
+  `lora_expand_gemv`/`sgmv_expand_slice` precedent). The constexpr tail
+  `if SPLIT_K == 1: tl.store else: tl.atomic_add` is split into two proof
+  surfaces (`matmul_tma` precedent), gated by `SPLIT_K_ONE : Bool` in the
+  faithful surface. `tl.max_contiguous` erased to its value argument; the
+  upstream unused `xk_stride` parameter dropped.
+- `layer_norm_welfold` — mechanical spellings only (no helper inlining, no
+  scope restriction): `tl.full` positional dtype spelled `dtype=tl.float32`;
+  `tl.broadcast_to` via the tuple `tl.broadcast` form; the fused
+  `tmpN = tl.sum(_tmpN, 1)[:, None]` split into two statements;
+  `tl.store(..., None)` as the unmasked `tl.store`; `libdevice.rsqrt`
+  spelled `tl.rsqrt`; register casts parenthesized `(tmpM).to(tl.float32)`.
+- `fused_layernorm_triton` — the inductor `triton_helpers.welford_reduce` /
+  `triton_helpers.welford(…, 1)` helper calls are inlined as their exact-ℝ
+  closed forms (general-branch Welford update; combine as the
+  `(Σw, Σ(w·m)/Σw, Σ(m2 + w·m²) − Σw·mean²)` moment identity);
+  `tl.broadcast_to` is spelled via the tuple `tl.broadcast` form;
+  `tl.store(..., None)` is the unmasked `tl.store`; `libdevice.rsqrt` is
+  spelled `tl.rsqrt` (rmsnorm_triton / layer_norm_liger precedent); register
+  casts are parenthesized `(tmpN).to(tl.float32)`.
 
 ### Required VeriTile surface extensions
 

@@ -31,6 +31,29 @@ kernel,作为 [TritonBench, ACL 2025 Findings][paper] 的 headline channel
 
 不带这些 adapter:121 OK / 31 Soft / 32 Hard。
 
+## 状态更新(2026-07-05)—— 过时 blocker 清扫
+
+下方表格是 2026-05-05 的静态快照存档。其中引用的若干能力缺口此后已在
+DSL 落地,第一批曾被 blocker 卡住的 kernel 现已移植**并证明**(逐 kernel
+权威状态见 `proof_gap_manifest.tsv`):
+
+- `tl.num_programs`(#92)、`tl.atomic_add` 值级证明、`tl.debug_barrier`
+  (在算法层擦除为 no-op)、`tl.math.*` / `tl.extra.cuda.libdevice.*`
+  适配器(含精确 `erf`)、通用 `tl.extra.cuda.libdevice.pow`(`Op.pow` /
+  `Real.rpow`,标量底 × 张量指数)均已实现 —— 下表中 `num_programs`、
+  `atomic_add`、`debug_barrier`、`tl.extra` 的 blocker 标注已过时。
+- 2026-07-05 批次移植 + 证明完成(9 个):`relu_strided_buffer`、
+  `pow_scalar_tensor`、`fused_layernorm_triton`、`layer_norm_welfold`、
+  `bgmv_shrink_kernel`、`rbe_triton_transform`、`triton_linear_activation`、
+  `fused_recurrent_delta`、`fused_recurrent_retention`。
+- **重新分类**:`isfinite_kernel` 下表列为 Soft/`num_programs`,但其真实
+  blocker 是 `isfinited`/`finitef` libdevice 浮点分类内建函数——在精确 ℝ
+  语义下退化(ℝ 中一切有限),归属 #447 浮点建模家族,而非任何 surface
+  adapter 缺口。
+- 截至本次更新仍开放:`int_dot`(#93)、`int4_packed`(#95)、`fp8` 与
+  `fp4`(#447/#52 家族)、`RNG`(#41)、`atomic(cas,xchg)` 并发
+  (#12/#84)。
+
 ## Per-family 判定矩阵
 
 | Family | Total | OK | Soft | Hard |
