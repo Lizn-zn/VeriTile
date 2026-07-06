@@ -328,4 +328,126 @@ theorem execR_triv (k : Kernel) (s : BlockState) :
     execR RoundingModel.triv k s = exec k s := by
   simp only [execR, exec, stepStmtsR_triv k.body s]
 
+/-! ## R-scatter readback (#447 Phase C)
+
+The `writeMemAsR` mirror of the fp16 `MemCell` scatter-readback family in
+`VeriTile.Triton.Kernel.ScatterStore` (`scatter_memcell_fp16_prop_masked_nd`).
+Narrow float cells are **not** decodable by `BlockState.readMem` (it reads the
+`.real` channel only, and `MemCell.readAs` is tag-exact), so — exactly like
+the existing fp16-store bench proofs — the readback is stated at the `MemCell`
+layer: the cell an active lane leaves behind is
+`MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype v))`. -/
+
+namespace BlockState
+
+/-- `writeMemTypedR` at a concrete narrow-float tag reduces to `writeMemAsR`
+(store-side rounding-event site). -/
+@[simp] theorem writeMemTypedR_fp32 (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier .fp32) :
+    s.writeMemTypedR R .fp32 region offset v =
+      s.writeMemAsR R .fp32 region offset v := rfl
+
+@[simp] theorem writeMemTypedR_fp16 (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier .fp16) :
+    s.writeMemTypedR R .fp16 region offset v =
+      s.writeMemAsR R .fp16 region offset v := rfl
+
+@[simp] theorem writeMemTypedR_bf16 (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier .bf16) :
+    s.writeMemTypedR R .bf16 region offset v =
+      s.writeMemAsR R .bf16 region offset v := rfl
+
+/-- Single-cell readback of the R-write, at the `MemCell` layer. -/
+theorem writeMemAsR_mem (R : RoundingModel) (dtype : FloatDType)
+    (s : BlockState) (region : RegionName) (offset : Nat)
+    (v : TileCarrier dtype.toTileDType) (r : RegionName) (o : Nat) :
+    (s.writeMemAsR R dtype region offset v).mem r o =
+      if r = region ∧ o = offset then
+        MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype v))
+      else s.mem r o := rfl
+
+/-- A masked `writeMemAsR` scatter `foldl` preserves any cell not hit by an
+active lane. -/
+theorem foldl_writeMemAsR_preserve_masked {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ s : BlockState, (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+      ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+        s).mem region o) = s.mem region o := by
+  induction l with
+  | nil => intro s _h; rfl
+  | cons hd tl ih =>
+      intro s h
+      rw [List.foldl_cons]
+      have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+        fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+      by_cases hmaskhd : mask hd = true
+      · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+        simp only [hmaskhd, if_true]
+        rw [ih _ htl, writeMemAsR_mem]
+        rw [if_neg (by intro hsame; exact hhd hsame.2.symm)]
+      · have hmaskhd' : mask hd = false := by
+          cases hm : mask hd
+          · rfl
+          · exact absurd hm hmaskhd
+        simp only [hmaskhd', if_false, Bool.false_eq_true]
+        exact ih _ htl
+
+/-- Readback of a `P`-masked `writeMemAsR` scatter store at lane `i`'s offset:
+the `R`-rounded stored cell if `P i`, else the prior contents, given injective
+offsets. `R`-mirror of `scatter_memcell_fp16_prop_masked_nd`. -/
+theorem scatter_memcell_R_prop_masked_nd (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier dtype.toTileDType)
+    (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+       s).mem region (offsetFn i)
+    = if P i then
+        MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype (valueFn i)))
+      else
+        s.mem region (offsetFn i) := by
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  have hstep :
+      (fun (acc : BlockState) k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k)
+        else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  rw [hstep]
+  rw [foldl_writeMemAsR_preserve_masked R dtype offsetFn valueFn (fun k => decide (P k))
+    (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hPi : P i
+  · simp only [hPi, if_true]
+    rw [writeMemAsR_mem, if_pos ⟨rfl, rfl⟩]
+  · simp only [hPi, if_false]
+    rw [foldl_writeMemAsR_preserve_masked R dtype offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₁ _ h_l1_not_in]
+
+end BlockState
+
 end VeriTile.Triton

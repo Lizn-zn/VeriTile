@@ -43,7 +43,12 @@ unfused : round(round(silu(x))·y)                the extra intermediate roundin
 ## Theorems
 
 * `swiglu_fused_realizesR` / `swiglu_unfused_realizesR` — the unconditional
-  ∀-`R` realization theorems (the pilot's main results).
+  ∀-`R` realization theorems (the pilot's main results). Outputs are read at
+  the `MemCell` layer (`MemCell.of .bf16 (some …)`): the store is bf16-tagged
+  and `readMem`'s real-channel decode is tag-exact, so a narrow-float output
+  cell is only observable as its typed `MemCell` — the same convention the
+  classic bench proofs use for fp16/bf16 stores (`rmsnorm_fused_llama`,
+  `scatter_memcell_fp16_prop_masked_nd`).
 * `fusedSpec_single_rounding` / `unfusedSpec_double_rounding` — the Idem
   collapses above (pure spec algebra).
 * `fusedSpec_eq_unfusedSpec_of_representable` — conditional coincidence: if
@@ -53,8 +58,8 @@ unfused : round(round(silu(x))·y)                the extra intermediate roundin
   concrete witness model on which the specs differ (unprovable before #447:
   both erased to the same closed form).
 * `swiglu_fused_realizes_classic` — degeneration: the classic
-  `ComputeCorrect.Realizes` statement with the ℝ closed form, recovered from
-  the invariance theorem at the trivial model.
+  `ComputeCorrect.Realizes` statement with the ℝ closed form inside the bf16
+  output cell, recovered from the invariance theorem at the trivial model.
 -/
 
 namespace VeriTile.Bench.Examples.SwigluRounding
@@ -130,11 +135,24 @@ have the same closed form, so this statement was previously unwritable.) -/
 theorem fusedSpec_ne_unfusedSpec :
     ∃ (R : RoundingModel) (xs ys : Fin 1 → ℝ) (i : Fin 1),
       fusedSpec xs ys R i ≠ unfusedSpec xs ys R i := by
-  sorry
+  -- Witness model: rounding shifts every non-real channel by 1 (a legitimate
+  -- `RoundingModel`: the only axiom constrains the `.real` channel).
+  -- At `x = 0, y = 1`: `silu 0 = 0`, so
+  --   fused   = round (round 0)           = 2
+  --   unfused = round (round (round 0·1)) = 3.
+  refine ⟨⟨fun dt x => if dt = .real then x else x + 1, by funext x; simp⟩,
+    fun _ => 0, fun _ => 1, 0, ?_⟩
+  simp [fusedSpec, unfusedSpec, TiledActivation.swiglu, TiledActivation.silu]
 
 /-! ## The realization theorems -/
 
-/-- The fused kernel realizes `fusedSpec` for **every** rounding model. -/
+/-- The fused kernel realizes `fusedSpec` for **every** rounding model.
+
+Outputs are read at the `MemCell` layer (`MemCell.of .bf16 (some …)`): the
+store is bf16-tagged and `readMem`'s real-channel decode is tag-exact, so a
+narrow-float output cell is only observable as its typed `MemCell` — mirroring
+the classic convention for fp16/bf16 stores (`rmsnorm_fused_llama`,
+`scatter_memcell_fp16_prop_masked_nd`). -/
 theorem swiglu_fused_realizesR
     (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
     (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
@@ -146,10 +164,36 @@ theorem swiglu_fused_realizesR
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, laneOffset s BLOCK_N i)))
-      (expected := fusedSpec xs ys) := by
-  sorry
+      (expected := fun R i =>
+        MemCell.of .bf16 (some (fusedSpec xs ys R i) : WithBot ℝ)) := by
+  rw [ComputeRefine.realizesR_writeIf_iff]
+  intro R
+  apply ComputeKernel.computeCorrectR_of_toAlgKernel
+  · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * BLOCK_N + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 0 * BLOCK_N + a.val = s.pids 0 * BLOCK_N + b.val := by
+      simpa using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
+  have hx := h_x i
+  have hy := h_y i
+  simp only [laneOffset] at hx hy
+  simp [hActive, fusedSpec, TiledActivation.swiglu, TiledActivation.silu,
+        tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
+        FloatDType.storeValue, FloatDType.ofReal]
 
-/-- The unfused kernel realizes `unfusedSpec` for **every** rounding model. -/
+/-- The unfused kernel realizes `unfusedSpec` for **every** rounding model.
+Same `MemCell`-layer readback convention as `swiglu_fused_realizesR`. -/
 theorem swiglu_unfused_realizesR
     (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
     (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
@@ -161,14 +205,39 @@ theorem swiglu_unfused_realizesR
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, laneOffset s BLOCK_N i)))
-      (expected := unfusedSpec xs ys) := by
-  sorry
+      (expected := fun R i =>
+        MemCell.of .bf16 (some (unfusedSpec xs ys R i) : WithBot ℝ)) := by
+  rw [ComputeRefine.realizesR_writeIf_iff]
+  intro R
+  apply ComputeKernel.computeCorrectR_of_toAlgKernel
+  · simp [swiglu_unfused, ComputeExpr.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * BLOCK_N + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 0 * BLOCK_N + a.val = s.pids 0 * BLOCK_N + b.val := by
+      simpa using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [execR, swiglu_unfused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  simp only [ComputeCorrect.OutputReadable.read_memcell, laneOffset]
+  rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
+  have hx := h_x i
+  have hy := h_y i
+  simp only [laneOffset] at hx hy
+  simp [hActive, unfusedSpec, TiledActivation.silu,
+        tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
+        FloatDType.storeValue, FloatDType.ofReal]
 
 /-! ## Degeneration to the classic surface -/
 
 /-- At the trivial model the invariance theorem collapses to the classic
-`ComputeCorrect.Realizes` statement with the ℝ closed form — the existing
-proof style is the shadow of the new one. -/
+`ComputeCorrect.Realizes` statement with the ℝ closed form inside the bf16
+output cell — the existing proof style is the shadow of the new one. -/
 theorem swiglu_fused_realizes_classic
     (X Y OUT : RegionName) (ncols BLOCK_N : Nat)
     (s : BlockState) (xs ys : Fin BLOCK_N → ℝ)
@@ -180,7 +249,8 @@ theorem swiglu_fused_realizes_classic
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 0 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, laneOffset s BLOCK_N i)))
-      (expected := fun i => TiledActivation.swiglu (xs i) (ys i)) := by
+      (expected := fun i =>
+        MemCell.of .bf16 (some (TiledActivation.swiglu (xs i) (ys i)) : WithBot ℝ)) := by
   have h := (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys h_x h_y).toRealizes
   simpa [fusedSpec] using h
 
