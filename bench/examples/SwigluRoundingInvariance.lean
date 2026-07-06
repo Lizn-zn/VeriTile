@@ -26,8 +26,9 @@ Under `IdemRounding` the cast+store pairs collapse pairwise to the
 Compositional form, mirroring `VeriTile.Examples.FusedSiLU`: the unfused
 pipeline is **two separate kernels** (`silu_step`, then `mul_step`) composed
 through a real bf16 tensor in memory — exactly what an eager framework
-launches — and the final theorems live on the two-kernel refinement surface
-`ComputeRefine.RefinesR`.
+launches — and the final theorems live on the two-kernel refinement surfaces:
+the writes-equality `ComputeRefine.RefinesR` (the headline) and the pointwise
+`ComputeRefine.RefinesAtR` (the event ledger).
 
 ## The kernels
 
@@ -56,15 +57,17 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 * `swiglu_unfused_realizesR` — the pipeline theorem, **derived by composing**
   the component theorems through the intermediate state.
 * `swiglu_fused_realizesR` — the fused kernel's component theorem.
-* **`swiglu_refinesR`** — the headline pair theorem on
-  `ComputeRefine.RefinesR`: for every rounding model, fused and unfused
+* `swiglu_refinesR` — the event-ledger pair theorem on the pointwise surface
+  `ComputeRefine.RefinesAtR`: for every rounding model, fused and unfused
   realize their respective event-ledger terms side by side.
-* **`swiglu_fused_eq_unfused_of_representable`** — "fused = unfused": when
-  the intermediate `silu(x)` is representable, the relation strengthens to
-  plain cell equality, for every rounding model.
-* `swiglu_refines_classic` — degeneration at `triv`: the classic
-  `ComputeRefine.Realizes` equality statement (the `FusedSiLU`-shaped
-  theorem) recovered from the invariance theorem.
+* **`swiglu_fused_eq_unfused_of_representable`** — the headline "fused =
+  unfused" on the writes-equality surface `ComputeRefine.RefinesR`: when the
+  intermediate `silu(x)` is representable, the two pipelines perform the
+  same writes — final memories agree everywhere outside the scratch tensor
+  `S`, for every rounding model.
+* `swiglu_refines_classic` — degeneration at `triv`: the canonical
+  `ComputeRefine.Realizes` writes-equality statement recovered from the
+  invariance theorem.
 * Spec algebra: `fusedSpec_single_rounding`, `unfusedSpec_shape` (Idem
   collapses), `fusedSpec_ne_unfusedSpec` (a witness model distinguishing the
   pipelines — unstatable before #447).
@@ -438,15 +441,74 @@ theorem swiglu_unfused_realizesR (h_x : Loaded s X BLOCK_N xs) (h_y : Loaded s Y
       simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hAct1, if_true] at hout
       simpa [laneOffset, hpids, unfusedSpec] using hout
 
-/-! ## The headline pair theorems (`ComputeRefine.RefinesR`) -/
+/-! ## Frame lemmas (the writes each kernel does NOT perform) -/
 
-/-- **The pair theorem**: for every rounding model, the fused kernel and the
-unfused pipeline realize their respective event-ledger terms side by side on
-the shared output lanes. -/
+/-- Frame lemma for the fused kernel: every region other than `OUT` is
+untouched. -/
+private theorem swiglu_fused_preservesR (R : RoundingModel) (s' : BlockState)
+    (r : RegionName) (hrOUT : r ≠ OUT)
+    (hExec : execR R (swiglu_fused X Y OUT ncols BLOCK_N) s = some s') :
+    ∀ o : Nat, s'.mem r o = s.mem r o := by
+  intro o
+  simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_other_region R .bf16 _ _ _ r hrOUT o]
+  rfl
+
+/-- Frame lemma for the fused kernel: `OUT` offsets not hit by an active lane
+are untouched. -/
+private theorem swiglu_fused_preserves_unhitR (R : RoundingModel) (s' : BlockState)
+    (o : Nat)
+    (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
+      laneOffset s BLOCK_N i ≠ o)
+    (hExec : execR R (swiglu_fused X Y OUT ncols BLOCK_N) s = some s') :
+    s'.mem OUT o = s.mem OUT o := by
+  simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_masked_prop R .bf16 _ _ _ o _
+      (fun k _ hPk => ho k.1 hPk)]
+  rfl
+
+/-- Frame lemma for step B: every region other than `OUT` is untouched. -/
+private theorem mul_step_preservesR (R : RoundingModel) (s' : BlockState)
+    (r : RegionName) (hrOUT : r ≠ OUT)
+    (hExec : execR R (mul_step S Y OUT ncols BLOCK_N) s = some s') :
+    ∀ o : Nat, s'.mem r o = s.mem r o := by
+  intro o
+  simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_other_region R .bf16 _ _ _ r hrOUT o]
+  rfl
+
+/-- Frame lemma for step B: `OUT` offsets not hit by an active lane are
+untouched. -/
+private theorem mul_step_preserves_unhitR (R : RoundingModel) (s' : BlockState)
+    (o : Nat)
+    (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
+      laneOffset s BLOCK_N i ≠ o)
+    (hExec : execR R (mul_step S Y OUT ncols BLOCK_N) s = some s') :
+    s'.mem OUT o = s.mem OUT o := by
+  simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_masked_prop R .bf16 _ _ _ o _
+      (fun k _ hPk => ho k.1 hPk)]
+  rfl
+
+/-! ## The headline pair theorems -/
+
+/-- **The event-ledger pair theorem** (on the pointwise surface
+`ComputeRefine.RefinesAtR` — it genuinely needs per-side values, which the
+writes-equality form cannot express): for every rounding model, the fused
+kernel and the unfused pipeline realize their respective event-ledger terms
+side by side on the shared output lanes. -/
 theorem swiglu_refinesR (h_x : Loaded s X BLOCK_N xs) (h_y : Loaded s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ∀ R : RoundingModel,
-      ComputeRefine.RefinesR R
+      ComputeRefine.RefinesAtR R
         (swiglu_fused X Y OUT ncols BLOCK_N)
         (swiglu_unfused X Y S OUT ncols BLOCK_N) s
         (outWrites s OUT ncols BLOCK_N) (outWrites s OUT ncols BLOCK_N)
@@ -473,33 +535,86 @@ theorem swiglu_refinesR (h_x : Loaded s X BLOCK_N xs) (h_y : Loaded s Y BLOCK_N 
     exact ⟨hF, hU⟩
   · simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hi, if_false]
 
-/-- **"fused = unfused"**: when the intermediate `silu(x)` is representable
-for the model, the pair relation strengthens to plain cell equality. -/
+/-- **"fused = unfused"** — the headline writes-equality theorem
+(`ComputeRefine.RefinesR`, scratch `[S]`): when the intermediate `silu(x)` is
+representable for the model, running the fused kernel and the unfused
+pipeline from the same state performs THE SAME WRITES — the final memories
+agree at every cell outside the scratch tensor `S`. -/
 theorem swiglu_fused_eq_unfused_of_representable
     (h_x : Loaded s X BLOCK_N xs) (h_y : Loaded s Y BLOCK_N ys) (h_SY : S ≠ Y) :
     ∀ R : RoundingModel,
       (∀ i : Fin BLOCK_N, R.Representable .bf16 (TiledActivation.silu (xs i))) →
       ComputeRefine.RefinesR R
         (swiglu_fused X Y OUT ncols BLOCK_N)
-        (swiglu_unfused X Y S OUT ncols BLOCK_N) s
-        (outWrites s OUT ncols BLOCK_N) (outWrites s OUT ncols BLOCK_N)
-        (fun _ (lhs rhs : MemCell) => lhs = rhs) := by
+        (swiglu_unfused X Y S OUT ncols BLOCK_N) s [S] := by
   intro R hRep
-  refine ComputeRefine.RefinesR.mono
-    (swiglu_refinesR X Y S OUT ncols BLOCK_N s xs ys h_x h_y h_SY R) ?_
-  rintro i a b ⟨ha, hb⟩
-  rw [ha, hb, fusedSpec_eq_unfusedSpec_of_representable xs ys R i (hRep i)]
+  apply ComputeKernel.computeRefineR_of_toAlgKernel
+  · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
+  · simp [swiglu_unfused]
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro r hr o
+  have hrS : r ≠ S := by simpa using hr
+  -- split the pipeline execution into A ; B (keeping the original `hR`)
+  have hRsplit := hR
+  rw [exec_swiglu_unfusedR] at hRsplit
+  unfold execUnfusedR at hRsplit
+  cases hA : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s with
+  | none => rw [hA] at hRsplit; exact absurd hRsplit (by simp)
+  | some s1 =>
+      rw [hA] at hRsplit
+      have hRB : execR R (ComputeKernel.toAlgKernel (mul_step S Y OUT ncols BLOCK_N)) s1
+          = some rhs' := hRsplit
+      have hpids : s1.pids = s.pids := silu_step_execR_pids X S ncols BLOCK_N s R s1 hA
+      -- step A only touches `S`, and `r ≠ S`
+      have hA_mem : ∀ o' : Nat, s1.mem r o' = s.mem r o' :=
+        silu_step_preservesR X S ncols BLOCK_N s R s1 r hrS hA
+      by_cases hrOUT : r = OUT
+      · rw [hrOUT] at hA_mem ⊢
+        by_cases hhit : ∃ i : Fin BLOCK_N,
+            (s.pids 0 * BLOCK_N + i.val < ncols) ∧ o = laneOffset s BLOCK_N i
+        · -- an active lane writes this cell on both sides; the written values
+          -- coincide by the representability collapse of the two specs
+          obtain ⟨i, hAct, rfl⟩ := hhit
+          have hFout := realizesR_out
+            (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys h_x h_y) R
+            (by simp [swiglu_fused, ComputeExpr.toAlgorithm?]) hL
+          have hUout := realizesR_out
+            (swiglu_unfused_realizesR X Y S OUT ncols BLOCK_N s xs ys h_x h_y h_SY) R
+            (by simp [swiglu_unfused]) hR
+          have hF := hFout i
+          have hU := hUout i
+          simp only [outWrites, ComputeCorrect.WriteMap.writeIf, hAct, if_true,
+            ComputeCorrect.OutputReadable.read_memcell] at hF hU
+          rw [hF, hU, fusedSpec_eq_unfusedSpec_of_representable xs ys R i (hRep i)]
+        · -- no active lane hits this `OUT` cell: preserved on both sides
+          have hmiss : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
+              laneOffset s BLOCK_N i ≠ o :=
+            fun i hi heq => hhit ⟨i, hi, heq.symm⟩
+          have hLmem : lhs'.mem OUT o = s.mem OUT o :=
+            swiglu_fused_preserves_unhitR X Y OUT ncols BLOCK_N s R lhs' o hmiss hL
+          have hBmem : rhs'.mem OUT o = s1.mem OUT o :=
+            mul_step_preserves_unhitR Y S OUT ncols BLOCK_N s1 R rhs' o
+              (fun i hi => by
+                simp only [laneOffset, hpids]
+                exact hmiss i (by rwa [hpids] at hi)) hRB
+          rw [hLmem, hBmem, hA_mem o]
+      · -- `r ∉ {S, OUT}`: untouched by every store on both sides
+        have hLmem : lhs'.mem r o = s.mem r o :=
+          swiglu_fused_preservesR X Y OUT ncols BLOCK_N s R lhs' r hrOUT hL o
+        have hBmem : rhs'.mem r o = s1.mem r o :=
+          mul_step_preservesR Y S OUT ncols BLOCK_N s1 R rhs' r hrOUT hRB o
+        rw [hLmem, hBmem, hA_mem o]
 
-/-- Degeneration at the trivial model: the classic two-kernel
-`ComputeRefine.Realizes` equality statement (the `FusedSiLU`-shaped final
-theorem) — every rounding collapses, both sides hold the ℝ closed form. -/
+/-- Degeneration at the trivial model: the canonical two-kernel
+`ComputeRefine.Realizes` writes-equality statement — every rounding
+collapses, and the fused kernel and the unfused pipeline perform the same
+writes outside the scratch tensor `S`. -/
 theorem swiglu_refines_classic
     (h_x : Loaded s X BLOCK_N xs) (h_y : Loaded s Y BLOCK_N ys) (h_SY : S ≠ Y) :
     ComputeRefine.Realizes
       (swiglu_fused X Y OUT ncols BLOCK_N)
-      (swiglu_unfused X Y S OUT ncols BLOCK_N) s
-      (outWrites s OUT ncols BLOCK_N) (outWrites s OUT ncols BLOCK_N)
-      (fun _ (lhs rhs : MemCell) => lhs = rhs) := by
+      (swiglu_unfused X Y S OUT ncols BLOCK_N) s [S] := by
   rw [← ComputeRefine.refinesR_triv_iff]
   exact swiglu_fused_eq_unfused_of_representable X Y S OUT ncols BLOCK_N s xs ys
     h_x h_y h_SY .triv (fun _ => rfl)

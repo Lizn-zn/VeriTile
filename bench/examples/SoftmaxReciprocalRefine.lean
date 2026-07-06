@@ -1,36 +1,51 @@
 import VeriTile.Examples.SoftmaxReciprocal
 
 /-!
-Refinement theorem (`ComputeRefine` pair surface) for the reciprocal-softmax
-rewrite. The kernels, specs, correctness lemmas, and the exec-level
-refinement live in `VeriTile.Examples.SoftmaxReciprocal`.
+Refinement theorem (`ComputeRefine.Realizes`, writes-equality) for the
+reciprocal-softmax rewrite. The kernels, specs, correctness lemmas, and the
+exec-level refinement live in `VeriTile.Examples.SoftmaxReciprocal`.
 -/
 
 namespace VeriTile.Examples
 
 open VeriTile.Triton VeriTile.Triton.TiledSoftmax
 
-/-- Compute-facing view-level refinement surface for the reciprocal softmax
-rewrite. -/
+/-- Writes-equality refinement surface for the reciprocal softmax rewrite:
+from the same initial state, the per-element-divide and precomputed-reciprocal
+stable softmax kernels perform the same writes (no scratch regions). -/
 theorem softmax_reciprocal_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
     ComputeRefine.Realizes
-      (lhs := stableSoftmaxKernel xReg yReg N)
-      (rhs := softmaxRecipKernel xReg yReg N)
-      (initialState := s)
-      (lhsWrite := ComputeCorrect.WriteMap.ofTensorView (programTileView s yReg N))
-      (rhsWrite := ComputeCorrect.WriteMap.ofTensorView (programTileView s yReg N))
-      (relation := fun (_ : TileIndex [N]) (lhs rhs : ℝ) => lhs = rhs) := by
+      (stableSoftmaxKernel xReg yReg N)
+      (softmaxRecipKernel xReg yReg N) s [] := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
-  intro idx
-  have hview := softmax_reciprocal_refinement_exec_view xReg yReg N hN s xs h_x idx
-  rw [hL, hR] at hview
-  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
-    observeTileAt] using hview
+  intro r hr o
+  simp [exec, stableSoftmaxKernel, stepStmts, stepStmt, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        NumericDType.div] at hL
+  simp [exec, softmaxRecipKernel, stepStmts, stepStmt, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        NumericDType.div] at hR
+  repeat unfold evalOp at hL
+  repeat unfold evalOp at hR
+  simp [Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hL
+  simp [Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hR
+  subst lhs'
+  subst rhs'
+  refine BlockState.foldl_writeMem_mem_congr _ _ _ _ ?_ r o _ _ rfl
+  intro k _
+  -- Per-lane value equality: `e / S = e * S⁻¹` (simp normalized `1 / S` to
+  -- `S⁻¹`), the reciprocal rewrite `div_eq_mul_inv_real` in inverse form.
+  exact div_eq_mul_inv _ _
 
 end VeriTile.Examples

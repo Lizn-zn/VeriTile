@@ -408,7 +408,40 @@ theorem layernorm_kernels_refinement_exec_view
     using layernorm_kernels_refinement xReg γReg βReg yReg N hN ε s xs γs βs
       hx hγ hβ h_yx h_yγ h_yβ idx.1
 
-/-- Compute-facing view-level surface for `layernorm_kernels_refinement`. -/
+/-- A `stepForLoopAux` run whose body is store-free preserves every memory
+cell. Used to show the fused kernel's Welford loop (register-only assigns)
+leaves memory untouched before the final store. -/
+private theorem stepForLoopAux_mem_of_storeFree
+    (idx : RegName) (body : List Stmt)
+    (hsf : body.all (fun st => storeFree st) = Bool.true)
+    (start n : Nat) (s s' : BlockState)
+    (h : stepForLoopAux idx start n body s = some s') :
+    s'.mem = s.mem := by
+  by_cases hlt : start < n
+  · rw [stepForLoopAux.step_lt hlt] at h
+    cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) <;>
+      simp [hbody] at h
+    rename_i mid
+    have hmid : mid.mem = s.mem :=
+      storeFree_stepStmts_mem body (s.setReg idx .nat [] (Tile.scalar start))
+        mid hsf hbody
+    exact (stepForLoopAux_mem_of_storeFree idx body hsf (start + 1) n mid s' h).trans
+      hmid
+  · have hge : n ≤ start := Nat.le_of_not_gt hlt
+    rw [stepForLoopAux.step_ge hge] at h
+    simp_all
+termination_by n - start
+
+/-- The Welford loop body is store-free: five register assignments. -/
+private theorem onlineWelfordLoopBody_storeFree (xReg : RegionName) (N : Nat) :
+    (onlineWelfordLoopBody xReg N).all (fun st => storeFree st) = Bool.true := by
+  simp [onlineWelfordLoopBody, storeFree]
+
+set_option maxHeartbeats 1600000 in
+/-- Compute-facing writes-equality refinement surface for
+`layernorm_kernels_refinement`: from the same initial state, the two-pass and
+fused LayerNorm kernels perform THE SAME WRITES — their final memories agree
+at every cell, with no scratch regions. -/
 theorem layernorm_kernels_refinement_view
     (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
@@ -420,20 +453,115 @@ theorem layernorm_kernels_refinement_view
       (fun idx : TileIndex [N] => βs idx.1))
     (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
     ComputeRefine.Realizes
-      (lhs := twoPassLayerNormKernel xReg γReg βReg yReg N ε)
-      (rhs := fusedLayerNormKernel xReg γReg βReg yReg N ε)
-      (initialState := s)
-      (lhsWrite := ComputeCorrect.WriteMap.ofTensorView (programTileView s yReg N))
-      (rhsWrite := ComputeCorrect.WriteMap.ofTensorView (programTileView s yReg N))
-      (relation := fun (_ : TileIndex [N]) (lhs rhs : ℝ) => lhs = rhs) := by
+      (twoPassLayerNormKernel xReg γReg βReg yReg N ε)
+      (fusedLayerNormKernel xReg γReg βReg yReg N ε) s [] := by
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := N) (xs := xs) h_x
+  have hγ := inputFeatureLoadedAt_of_featureView_loaded (s := s) (region := γReg)
+    (N := N) (xs := γs) h_γ
+  have hβ := inputFeatureLoadedAt_of_featureView_loaded (s := s) (region := βReg)
+    (N := N) (xs := βs) h_β
+  have hTP := twopass_layernorm_correct xReg γReg βReg yReg N hN ε s xs γs βs
+    hx hγ hβ h_yx h_yγ h_yβ
+  have hFU := fused_layernorm_correct xReg γReg βReg yReg N hN ε s xs γs βs
+    hx hγ hβ h_yx h_yγ h_yβ
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [N] => s.pid * N + idx.1.val) :=
+    injective_offset_singleton (s.pid * N)
+  -- Fused-side loop bookkeeping: run the Welford loop once, characterize its
+  -- final state, and record that the loop (register-only assigns) leaves all
+  -- of memory untouched.
+  obtain ⟨sLoop, hLoop, hPloop⟩ :=
+    layernorm_welford_loop xReg γReg βReg N s xs γs βs hx hγ hβ
+  have hMemLoop : sLoop.mem = s.mem := by
+    have h := hLoop
+    rw [stepForLoopAux.forLoop_unfold] at h
+    exact stepForLoopAux_mem_of_storeFree "i" (onlineWelfordLoopBody xReg N)
+      (onlineWelfordLoopBody_storeFree xReg N) 0 N
+      (((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+          "M" .real [] (Tile.scalar 0)).setReg "S" .real [] (Tile.scalar 0))
+      sLoop h
+  -- `exec fused s` runs the loop to `sLoop`, then the straight-line tail.
+  have h_exec_tail :
+      exec (fusedLayerNormKernel xReg γReg βReg yReg N ε).toAlgKernel s =
+        exec (layerNormAffineTailKernel xReg γReg βReg yReg N ε).toAlgKernel
+          sLoop := by
+    have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
+                  = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
+      simp [stepStmt, evalOp]
+    have hM0 : stepStmt (.assign .real [] "M" (.const 0))
+                  (s.setReg "pid" .nat [] (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "M" .real [] (Tile.scalar 0)) := by
+      simp [stepStmt, evalOp]
+      rfl
+    have hS0 : stepStmt (.assign .real [] "S" (.const 0))
+                  ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "M" .real [] (Tile.scalar 0))
+                = some (((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "M" .real [] (Tile.scalar 0)).setReg
+                    "S" .real [] (Tile.scalar 0)) := by
+      simp [stepStmt, evalOp]
+      rfl
+    show stepStmts (fusedLayerNormKernel xReg γReg βReg yReg N ε).body s
+        = stepStmts (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body sLoop
+    simp only [show (fusedLayerNormKernel xReg γReg βReg yReg N ε).body =
+        ([ .assign .nat [] "pid" (.programId 0)
+         , .assign .real [] "M" (.const 0)
+         , .assign .real [] "S" (.const 0)
+         , .forLoop "i" N (onlineWelfordLoopBody xReg N)
+         ] ++ (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body) from rfl]
+    show stepStmts ([_, _, _, _] ++ _) s = _
+    rw [show ∀ (a b c d : Stmt) (rest : List Stmt) (s : BlockState),
+        stepStmts ([a, b, c, d] ++ rest) s
+          = stepStmts (a :: b :: c :: d :: rest) s from fun _ _ _ _ _ _ => rfl]
+    rw [stepStmts.cons_some hpid]
+    rw [stepStmts.cons_some hM0]
+    rw [stepStmts.cons_some hS0]
+    rw [stepStmts.cons_some hLoop]
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
-  intro idx
-  have hview := layernorm_kernels_refinement_exec_view xReg γReg βReg yReg N hN ε
-    s xs γs βs h_x h_γ h_β h_yx h_yγ h_yβ idx
-  rw [hL, hR] at hview
-  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
-    observeTileAt] using hview
+  intro r hr o
+  -- Per-lane written-value equality, transported from the two proven
+  -- per-lane correctness theorems through the exec hypotheses.
+  have hEq : ∀ i : Fin N,
+      lhs'.readMem yReg (s.pid * N + i.val)
+        = rhs'.readMem yReg (s.pid * N + i.val) := by
+    intro i
+    have h1 := hTP i
+    have h2 := hFU i
+    rw [hL] at h1
+    rw [hR] at h2
+    simp [observeAt] at h1 h2
+    exact h1.trans h2.symm
+  rw [h_exec_tail] at hR
+  rcases hPloop with ⟨hM, hS, hpidReg, _hpidLoop, _hXl, _hγl, _hβl⟩
+  -- Reduce both executions to explicit single-scatter final states.
+  simp [exec, twoPassLayerNormKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.natToReal,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        NumericDType.div] at hL
+  repeat unfold evalOp at hL
+  simp [Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.mul] at hL
+  simp [exec, layerNormAffineTailKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.natToReal,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        hM, hS, hpidReg] at hR
+  subst lhs'
+  subst rhs'
+  -- Both kernels end in ONE unmasked scatter over the same offsets
+  -- `s.pid * N + k`; compare memories cell-by-cell.
+  refine BlockState.foldl_writeMem_mem_congr _ _ _ _ ?_ r o _ _ ?_
+  · -- written values agree lane-by-lane (both equal `layerNormSpec`)
+    intro k _
+    have h := hEq k.1
+    rw [BlockState.scatter_readback_nd _ _ _ h_inj (k.1, PUnit.unit),
+        BlockState.scatter_readback_nd _ _ _ h_inj (k.1, PUnit.unit)] at h
+    exact h
+  · -- base states: registers only differ; the loop preserved memory
+    simp [hMemLoop]
 
 end VeriTile.Examples

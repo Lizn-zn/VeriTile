@@ -506,6 +506,31 @@ theorem readMemValue_bf16_of_cell {s : BlockState} {region : RegionName}
     s.readMemValue .bf16 region offset = (some z : WithBot ℝ) := by
   simp [readMemValue, readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
 
+/-- A `P`-masked `writeMemAsR` scatter preserves every same-region offset not
+hit by an active lane (the `Prop`-mask twin of
+`foldl_writeMemAsR_preserve_masked`, for the writes-equality frame proofs). -/
+theorem foldl_writeMemAsR_preserve_masked_prop {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (P : α → Prop) [DecidablePred P] (o : Nat) (l : List α)
+    (ho : ∀ k ∈ l, P k → offsetFn k ≠ o) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+        s).mem region o) = s.mem region o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons]
+      by_cases h : P hd
+      · simp only [h, if_true]
+        rw [ih (fun k hk hPk => ho k (List.mem_cons_of_mem hd hk) hPk),
+          writeMemAsR_mem,
+          if_neg (fun hc => ho hd (List.mem_cons_self) h hc.2.symm)]
+      · simp only [h, if_false]
+        exact ih (fun k hk hPk => ho k (List.mem_cons_of_mem hd hk) hPk) s
+
 end BlockState
 
 end VeriTile.Triton

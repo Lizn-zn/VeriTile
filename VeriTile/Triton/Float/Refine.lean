@@ -263,14 +263,13 @@ theorem RealizesR.toRealizes {ι : Type} {α : Type}
   exact this
 
 /--
-Two-kernel refinement realization under a rounding model — the `R`-parametric
-mirror of the classic `ComputeRefine.Realizes` pair surface. The pilot's
-headline "fused vs unfused" theorems are stated here: `relation` receives the
-two kernels' output cells and can express both the event-ledger relation
-(each side equals its `R`-annotated term) and, under representability
-hypotheses, plain equality.
+Two-kernel *pointwise* refinement realization under a rounding model — the
+`R`-parametric mirror of `ComputeRefine.RealizesAt`. `relation` receives the
+two kernels' output cells at declared addresses and can express the
+event-ledger relation (each side equals its `R`-annotated term). The
+canonical whole-memory refinement semantics is `ComputeRefine.RefinesR`.
 -/
-def RefinesR (R : RoundingModel) {ι : Type} {α β : Type}
+def RefinesAtR (R : RoundingModel) {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
@@ -283,15 +282,33 @@ def RefinesR (R : RoundingModel) {ι : Type} {α β : Type}
             (ComputeCorrect.OutputReadable.read rhs' rhsAddr)
       | _, _ => True)
 
-/-- Degeneration: at the trivial model, `RefinesR` *is* the classic pair
-surface `ComputeRefine.Realizes`. -/
-theorem refinesR_triv_iff {ι : Type} {α β : Type}
+/-- Degeneration: at the trivial model, `RefinesAtR` *is* the classic
+pointwise pair surface `ComputeRefine.RealizesAt`. -/
+theorem refinesAtR_triv_iff {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
     (relation : ι → α → β → Prop) :
-    RefinesR .triv lhs rhs initialState lhsWrite rhsWrite relation ↔
-      Realizes lhs rhs initialState lhsWrite rhsWrite relation := by
+    RefinesAtR .triv lhs rhs initialState lhsWrite rhsWrite relation ↔
+      RealizesAt lhs rhs initialState lhsWrite rhsWrite relation := by
+  unfold RefinesAtR RealizesAt
+  exact ComputeKernel.execRefineR_triv_iff _ _ _ _
+
+/-- `lhs` refines `rhs` under the rounding model `R`: from the same initial
+state, the two kernels performed THE SAME WRITES — the final memories agree
+at every cell outside the declared `scratch` regions. The `R`-parametric
+mirror of the canonical `ComputeRefine.Realizes`. -/
+def RefinesR (R : RoundingModel) (lhs rhs : ComputeKernel)
+    (initialState : BlockState) (scratch : List RegionName := []) : Prop :=
+  ComputeKernel.ExecRefineR R lhs rhs initialState (fun lhs' rhs' =>
+    ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)
+
+/-- Degeneration: at the trivial model, `RefinesR` *is* the canonical
+whole-memory pair surface `ComputeRefine.Realizes`. -/
+theorem refinesR_triv_iff (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (scratch : List RegionName) :
+    RefinesR .triv lhs rhs initialState scratch ↔
+      Realizes lhs rhs initialState scratch := by
   unfold RefinesR Realizes
   exact ComputeKernel.execRefineR_triv_iff _ _ _ _
 
@@ -312,18 +329,17 @@ def SingleRounding {ι : Type}
     (core : ι → ℝ) : Prop :=
   ∀ (R : RoundingModel) (i : ι), expected R i = R.round dtype (core i)
 
-/-- `RefinesR` is monotone in the relation: any pointwise weakening of the
-pair relation is again realized. Used to strengthen the event-ledger relation
-to plain cell equality under representability hypotheses. -/
-theorem RefinesR.mono {R : RoundingModel} {ι : Type} {α β : Type}
+/-- `RefinesAtR` is monotone in the relation: any pointwise weakening of the
+pair relation is again realized. -/
+theorem RefinesAtR.mono {R : RoundingModel} {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     {lhs rhs : ComputeKernel} {initialState : BlockState}
     {lhsWrite rhsWrite : ComputeCorrect.WriteMap ι}
     {rel rel' : ι → α → β → Prop}
-    (h : RefinesR R lhs rhs initialState lhsWrite rhsWrite rel)
+    (h : RefinesAtR R lhs rhs initialState lhsWrite rhsWrite rel)
     (himp : ∀ i a b, rel i a b → rel' i a b) :
-    RefinesR R lhs rhs initialState lhsWrite rhsWrite rel' := by
-  unfold RefinesR ComputeKernel.ExecRefineR ComputeKernel.ComputeRefineR
+    RefinesAtR R lhs rhs initialState lhsWrite rhsWrite rel' := by
+  unfold RefinesAtR ComputeKernel.ExecRefineR ComputeKernel.ComputeRefineR
     ComputeKernel.ProjectedRefineR at h ⊢
   obtain ⟨-, h⟩ := h
   refine ⟨trivial, ?_⟩

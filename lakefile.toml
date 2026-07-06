@@ -31,6 +31,7 @@ globs = [
   "VeriTile.Examples.HyperConnections.+",
   "VeriTile.Examples.FlashAttention1",
   "VeriTile.Examples.FlashAttention1.+",
+  "VeriTile.Examples.FlashAttention2",
 ]
 
 # Math sub-library: Taylor and integral bounds for the GeLU error
