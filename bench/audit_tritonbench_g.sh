@@ -3222,6 +3222,31 @@ else
   failures=$((failures + 1))
 fi
 
+# ---- Machine-checkable trust audit (Phase E) --------------------------------
+# Two populations, two mechanisms (see documents/TrustAudit.md):
+#  * library theorems  -> VeriTile/Meta/TrustReport.lean (#axiomsClean on every
+#    proven library theorem). Building the module elaborates every gate;
+#    `lake build` of the target both materializes its deps (incl. ApproxGeLU)
+#    and fails on any smuggled `sorry`/axiom.
+#  * standalone bench   -> bench/audit_trust.sh (external temp-copy #axiomsClean
+#    over every bench/tritonbench_g/* port and bench/examples/* file).
+# A failure here is a REAL soundness finding (a proof calling itself complete
+# while depending on sorryAx / a non-standard axiom), not a scan heuristic.
+
+if lake build VeriTile.Meta.TrustReport; then
+  printf 'ok library trust report (#axiomsClean all proven lib theorems)\n'
+else
+  printf 'FAIL library trust report: a proven library theorem has a bad axiom footprint\n'
+  failures=$((failures + 1))
+fi
+
+if bench/audit_trust.sh; then
+  printf 'ok bench corpus trust audit (#axiomsClean all ports + examples)\n'
+else
+  printf 'FAIL bench corpus trust audit: a port/example has a bad axiom footprint\n'
+  failures=$((failures + 1))
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
