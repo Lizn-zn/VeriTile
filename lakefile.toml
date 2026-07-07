@@ -12,6 +12,7 @@ rev = "v4.29.0"
 [[lean_lib]]
 name = "VeriTile"
 globs = [
+  "VeriTile.Triton",
   "VeriTile.Triton.+",
   "VeriTile.Examples.Common",
   "VeriTile.Examples.TritonSmoke",

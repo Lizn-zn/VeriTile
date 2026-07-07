@@ -1,8 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Triton
 
 /-!
 # `triton_conv2d_fwd` — closed-form conv2d-forward correctness

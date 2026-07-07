@@ -1,9 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.StreamingAccumulator
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Triton
 
 /-!
 # `block_sparse_attn` — strict per-kernel correctness

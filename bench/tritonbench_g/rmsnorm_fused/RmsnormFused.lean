@@ -1,8 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.Math.RMSNorm
-import VeriTile.Triton.DSL
+import VeriTile.Triton
 
 /-!
 # `rmsnorm_fused` — strict per-kernel correctness

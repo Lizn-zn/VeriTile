@@ -1,8 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Activation
+import VeriTile.Triton
 
 /-!
 # `geglu_tanh_triton` — strict per-kernel correctness

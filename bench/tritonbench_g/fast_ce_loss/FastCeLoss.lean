@@ -1,11 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.LogSumExp
-import VeriTile.Triton.Math.Loss
-import VeriTile.Triton.Semantics.MaskedReduction
-import VeriTile.Triton.Semantics.TiledIndexing
+import VeriTile.Triton
 
 /-!
 # `fast_ce_loss` — strict per-kernel correctness

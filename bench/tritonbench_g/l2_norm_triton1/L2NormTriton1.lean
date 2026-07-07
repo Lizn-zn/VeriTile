@@ -1,8 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Semantics.MaskedReduction
+import VeriTile.Triton
 
 /-!
 # `l2_norm_triton1` — strict per-kernel correctness
