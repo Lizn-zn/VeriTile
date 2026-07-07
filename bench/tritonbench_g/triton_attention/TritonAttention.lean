@@ -10485,10 +10485,4 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-end TestShape
-
 end VeriTile.Bench.TritonBenchG.TritonAttention

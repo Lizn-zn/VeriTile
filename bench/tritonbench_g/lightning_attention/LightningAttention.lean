@@ -1323,10 +1323,4 @@ corollaries of the dimension-general headline
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-end TestShape
-
 end VeriTile.Bench.TritonBenchG.LightningAttention
