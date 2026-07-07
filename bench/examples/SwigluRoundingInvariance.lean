@@ -56,8 +56,9 @@ and the headline theorem transfers to real launches
 
 ## Theorems
 
-Outputs are read at the `MemCell` layer (`bf16Cell v = MemCell.of .bf16
-(some v)`): the stores are bf16-tagged and `readMem`'s real-channel decode is
+Outputs are read at the `MemCell` layer (`floatCell .bf16 v = MemCell.of .bf16
+(some v)`, from `VeriTile.Examples.Common`): the stores are bf16-tagged and
+`readMem`'s real-channel decode is
 tag-exact, so a narrow-float cell is only observable as its typed `MemCell` —
 the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 
@@ -94,7 +95,7 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 namespace VeriTile.Bench.Examples.SwigluRounding
 
 open VeriTile.Triton
-open VeriTile.Examples (InputLoadedAt outWritesTo)
+open VeriTile.Examples (InputLoadedAt outWritesTo floatCell InputCellsLoadedAt)
 
 /-! ## Kernels -/
 
@@ -176,16 +177,6 @@ def laneOffset (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
 the events. -/
 local notation:max R "⟦" v "⟧" => RoundingModel.round R FloatDType.bf16 v
 
-/-- A bf16 output cell holding `v`. -/
-def bf16Cell (v : ℝ) : MemCell := MemCell.of .bf16 (some v : WithBot ℝ)
-
-/-- This program's active lanes of `reg` hold the bf16 cells `bf16Cell (zs i)`
-(step B's intermediate-input hypothesis). -/
-def LoadedCells (s : BlockState) (reg : RegionName) (ncols BLOCK_N : Nat)
-    (zs : Fin BLOCK_N → ℝ) : Prop :=
-  ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
-    s.mem reg (laneOffset s BLOCK_N i) = bf16Cell (zs i)
-
 /-! ## Specs (the rounding-event ledger, term by term) -/
 
 /-- Step A's per-lane payload: `silu(x)` through A's exit cast + bf16 store. -/
@@ -246,7 +237,7 @@ theorem swiglu_fused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (swiglu_fused X Y OUT ncols BLOCK_N) s
       (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => bf16Cell (fusedSpec xs ys R i)) := by
+      (fun R i => floatCell .bf16 (fusedSpec xs ys R i)) := by
   unfold InputLoadedAt at h_x h_y
   unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
@@ -271,7 +262,7 @@ theorem swiglu_fused_realizesR
   have hx := h_x i
   have hy := h_y i
   simp only [BlockState.pid_eq] at hx hy
-  simp [hActive, bf16Cell, fusedSpec, TiledActivation.swiglu, TiledActivation.silu,
+  simp [hActive, floatCell, fusedSpec, TiledActivation.swiglu, TiledActivation.silu,
         tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
         FloatDType.storeValue, FloatDType.ofReal]
 
@@ -280,7 +271,7 @@ of `S` receive `aSpec(x)` as bf16 cells. -/
 theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
     ComputeRefine.RealizesR (silu_step X S ncols BLOCK_N) s
       (outWritesTo s S ncols BLOCK_N)
-      (fun R i => bf16Cell (aSpec R (xs i))) := by
+      (fun R i => floatCell .bf16 (aSpec R (xs i))) := by
   unfold InputLoadedAt at h_x
   unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
@@ -304,7 +295,7 @@ theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
   rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
   have hx := h_x i
   simp only [BlockState.pid_eq] at hx
-  simp [hActive, bf16Cell, aSpec, TiledActivation.silu,
+  simp [hActive, floatCell, aSpec, TiledActivation.silu,
         tile_elementwise, hx, RoundingModel.cast, RoundingModel.storeValue,
         FloatDType.storeValue, FloatDType.ofReal]
 
@@ -336,11 +327,11 @@ private theorem silu_step_execR_pids (R : RoundingModel) (s1 : BlockState)
 /-- Component theorem for step B: given the bf16 intermediate `S` holding
 payloads `zs`, the active lanes of `OUT` receive `R⟦R⟦z·y⟧⟧`. -/
 theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
-    (h_z : LoadedCells s S ncols BLOCK_N zs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
+    (h_z : InputCellsLoadedAt s S ncols BLOCK_N .bf16 zs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (mul_step S Y OUT ncols BLOCK_N) s
       (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => bf16Cell R⟦R⟦zs i * ys i⟧⟧) := by
-  unfold LoadedCells bf16Cell at h_z
+      (fun R i => floatCell .bf16 R⟦R⟦zs i * ys i⟧⟧) := by
+  unfold InputCellsLoadedAt floatCell at h_z
   unfold InputLoadedAt at h_y
   unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
@@ -364,9 +355,8 @@ theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
   rw [BlockState.scatter_memcell_R_prop_masked_nd R .bf16 _ _ _ _ h_inj (i, PUnit.unit)]
   have hz := h_z i hActive
   have hy := h_y i
-  simp only [laneOffset] at hz
-  simp only [BlockState.pid_eq] at hy
-  simp [hActive, bf16Cell, BlockState.readMemValue_bf16_of_cell hz, hy,
+  simp only [BlockState.pid_eq] at hz hy
+  simp [hActive, floatCell, BlockState.readMemValue_bf16_of_cell hz, hy,
         tile_elementwise, RoundingModel.cast, RoundingModel.storeValue,
         FloatDType.storeValue, FloatDType.ofReal]
 
@@ -399,7 +389,7 @@ theorem swiglu_unfused_realizesR
     (h_SY : S ≠ Y) :
     ComputeRefine.RealizesR (swiglu_unfused X Y S OUT ncols BLOCK_N) s
       (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => bf16Cell (unfusedSpec xs ys R i)) := by
+      (fun R i => floatCell .bf16 (unfusedSpec xs ys R i)) := by
   unfold outWritesTo
   rw [ComputeRefine.realizesR_writeIf_iff]
   intro R
@@ -419,12 +409,13 @@ theorem swiglu_unfused_realizesR
       -- intermediate `S` cells from step A's realization
       have hAout := realizesR_out (silu_step_realizesR X S ncols BLOCK_N s xs h_x) R
         (by simp [silu_step, ComputeExpr.toAlgorithm?]) hA
-      have h_z1 : LoadedCells s1 S ncols BLOCK_N (fun j => aSpec R (xs j)) := by
+      have h_z1 : InputCellsLoadedAt s1 S ncols BLOCK_N .bf16 (fun j => aSpec R (xs j)) := by
         intro j hj
+        rw [BlockState.pid_eq] at hj
         have hj' : s.pids 0 * BLOCK_N + j.val < ncols := by rwa [hpids] at hj
         have hout := hAout j
         simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hj', if_true] at hout
-        simpa [laneOffset, hpids] using hout
+        simpa [BlockState.pid_eq, hpids] using hout
       -- `Y` survives step A (frame lemma; `S ≠ Y`)
       have h_y1 : InputLoadedAt s1 Y BLOCK_N ys := by
         intro j
@@ -520,8 +511,8 @@ theorem swiglu_refinesR
         (swiglu_unfused X Y S OUT ncols BLOCK_N) s
         (outWritesTo s OUT ncols BLOCK_N) (outWritesTo s OUT ncols BLOCK_N)
         (fun i lhs rhs =>
-          lhs = bf16Cell (fusedSpec xs ys R i) ∧
-          rhs = bf16Cell (unfusedSpec xs ys R i)) := by
+          lhs = floatCell .bf16 (fusedSpec xs ys R i) ∧
+          rhs = floatCell .bf16 (unfusedSpec xs ys R i)) := by
   intro R
   apply ComputeKernel.computeRefineR_of_toAlgKernel
   · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
