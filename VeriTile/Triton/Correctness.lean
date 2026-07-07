@@ -1,5 +1,5 @@
 /-
-VeriTile.Triton.Float.Correctness
+VeriTile.Triton.Correctness
 
 Float-facing correctness bridge for the current real-valued Triton semantics.
 -/

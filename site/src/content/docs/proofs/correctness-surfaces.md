@@ -4,7 +4,7 @@ title: "Correctness Surfaces"
 
 This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Surfaces live in
-[`VeriTile.Triton.Float.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Float/Correctness.lean).
+[`VeriTile.Triton.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile.Triton.Correctness.lean).
 
 ## Quick-Pick Table
 
