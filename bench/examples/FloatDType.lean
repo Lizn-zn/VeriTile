@@ -1,11 +1,26 @@
 /-
-VeriTile.Examples.FloatDType
+# `VeriTile.Examples.FloatDType` — dtype erasure as the float-facing policy
 
-Worked example for VeriTile's float-facing theorem policy.
+Worked example for VeriTile's float-facing theorem policy: `ComputeCorrect`
+kernels carry explicit `tl.float32` memory annotations, and the algorithmic
+correctness theorem is discharged by **erasing** those annotations to the Real
+channel and reusing the Real-valued proof (here VectorAdd's). This is the
+erased/ideal pathway — the complement of the rounding-model pathway
+(`ComputeRefine.*R`) demonstrated in `bench/examples/SwigluRoundingInvariance`.
 
-The kernel is written with explicit `tl.float32` memory annotations. The
-algorithmic correctness theorem is discharged by erasing those annotations and
-reusing the Real-valued VectorAdd proof.
+## Kernels & theorems
+
+Kernels: `floatAddKernel`, `floatStableSoftmaxKernel`, `floatSoftmaxRecipKernel`.
+
+* `float_add_erases_to_real` / `float_stable_softmax_erases_to_real` /
+  `float_softmax_recip_erases_to_real` — the annotated kernel's projection
+  erases to the Real-typed kernel (the reuse bridge).
+* `float_add_kernel_correct_view` / `…_exec_view` — the erased correctness
+  statement (`ComputeCorrect.Realizes`).
+* `float_add_respects_real_regions` and the honest negation
+  `float_add_not_respects_fp32_regions` — the true region-typing contract holds
+  on the Real channel, and the naïve fp32-region claim is **provably false**
+  (the projection erases fp32 loads to Real before the typing would bite).
 -/
 
 import VeriTile.Triton

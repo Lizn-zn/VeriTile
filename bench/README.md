@@ -12,20 +12,28 @@ variant, and proof-status tracked.
 > Status (2026-05-05): **TritonBench-G v1** picked as the external anchor.
 > Static coverage analysis landed at
 > [`tritonbench_coverage.md`](./tritonbench_coverage.md). Imported upstream
-> Python kernels go under [`tritonbench_g/`](./tritonbench_g/); Lean
-> ports live under `VeriTile/Examples/`. Per-kernel manifest is now
-> [`scripts/kernel-manifest.tsv`](../scripts/kernel-manifest.tsv); per-port
-> proof-status table will populate as ports land.
+> Python kernels go under [`tritonbench_g/`](./tritonbench_g/); additional
+> Lean showcase ports live under `VeriTile/Examples/`. The per-kernel manifest
+> is [`scripts/kernel-manifest.tsv`](../scripts/kernel-manifest.tsv), and the
+> per-port completion status is tracked in
+> [`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md).
 
 ## Current state
 
-There is no formal benchmark manifest yet. The de facto benchmark is
-`VeriTile/Examples/` — VectorAdd, Softmax, OnlineSoftmax, LayerNorm, Welford,
+**151 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
+holds a faithful `.py` + `.lean` pair, all 151 compile (`bench/check_ports.sh`
+reports `151 ok, 0 fail`), and every completed port carries a standard
+`ComputeCorrect.Realizes` correctness surface. The 33 remaining work
+directories are README-only scaffolds, not yet counted as ports. The source of
+truth for these counts and the per-port evidence is
+[`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md); the
+manifest schema is enforced by `bench/audit_tritonbench_g.sh`.
+
+`VeriTile/Examples/` and `bench/examples/` additionally hold hand-written
+showcase proofs — VectorAdd, Softmax, OnlineSoftmax, LayerNorm, Welford,
 FusedSiLU, ApproxGeLU, RowWise, GridComposition, FlashAttention-1 forward
-across dense / causal / boundary / D-tail variants, plus the smoke and frame
-files. It works for development but lacks source attribution, a versioned
-manifest, and a published progress table — so it is not currently usable as a
-benchmark *artifact* visible to outside readers.
+across dense / causal / boundary / D-tail variants, and the fused-vs-unfused
+SwiGLU rounding-invariance pilot.
 
 The earlier `bench/llm_eval/` LLM-proof-drafting eval was retired on
 2026-05-05; LLM-assist evaluation is no longer a benchmark axis of the

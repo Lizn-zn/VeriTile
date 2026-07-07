@@ -1,7 +1,10 @@
 /-
-VeriTile.Examples.FusedSiLU
+# `VeriTile.Examples.FusedSiLU` — fused SiLU ≡ three-kernel pipeline
 
-Fused SiLU kernel and unfused pipeline over the typed Triton core.
+Fused SiLU kernel and unfused pipeline over the typed Triton core. This is the
+compositional-refinement template that `bench/examples/SwigluRoundingInvariance`
+mirrors: a fused single kernel proven equal to a memory-materializing pipeline
+of separately-verified step kernels.
 
 This is a kernel-refinement example: the fused kernel
 
@@ -58,6 +61,21 @@ def silu_step_residual(silu_ptr, residual_ptr, out_ptr,
     residual = tl.load(residual_ptr + offsets)
     tl.store(out_ptr + offsets, residual + silu)
 ```
+
+## Kernels & theorems
+
+Kernels: `fusedSiLUKernel` and the three step kernels `siluStepGate`,
+`siluStepSilu`, `siluStepResidual` (the unfused pipeline is their body
+composition; `exec_unfusedSiLUKernel` splits the run into the three stages).
+
+* `fused_silu_correct` / `silu_step_*_correct` — each kernel realizes its
+  per-lane spec (`ComputeCorrect.Realizes`).
+* `silu_step_*_preserves` — the aliasing frames the composition needs.
+* `silu_kernels_refinement` / `silu_kernels_refinement_view` — the headline
+  pair theorem on the two-kernel writes-equality surface `ComputeRefine.Refines`
+  (final memories agree outside the scratch temporaries `zReg`/`siluReg`). For
+  the rounding-model (∀R) analogue of this compositional pattern see
+  `bench/examples/SwigluRoundingInvariance.lean`.
 -/
 
 import Mathlib.Analysis.SpecialFunctions.Sigmoid

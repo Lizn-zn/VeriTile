@@ -135,7 +135,7 @@ Bench files are checked individually (they are not `lake` library targets):
 ```bash
 # 0. build the shared library once (so imports resolve)
 lake build VeriTile
-lake build VeriTile.Triton.Kernel      # barrel, if the file imports it
+lake build VeriTile.Triton             # umbrella prelude (what ports import)
 
 # 1. compile a kernel file — must be exit 0 with zero `error:` lines
 lake env lean bench/tritonbench_g/<kernel>/<File>.lean

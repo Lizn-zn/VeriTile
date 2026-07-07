@@ -19,11 +19,21 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
 
 - **DSL**:typed Triton 子集,带 `triton { ... }` 宏、ND tile shape、reduction、
   mask(`mask=`/`other=`)、block-pointer 操作、`if`/`for` 控制流。
-- **定理 surface**:`ComputeCorrect.Realizes`(kernel ↔ 数学规范)和
-  `ComputeRefine.Realizes`(kernel pair 等价)。两者都通过 `toAlgorithm?`
+- **定理 surface**:`ComputeCorrect.Realizes`(*单个 kernel 对照数学规范*)和
+  `ComputeRefine.Refines`(*一个 kernel refine 另一个* —— writes-equality:两个
+  终态 memory 在所有非 scratch cell 上逐格相等)。两者都通过 `toAlgorithm?`
   投影,底层走 `Kernel.Correct` / `Kernel.Refine`。
-- **示例**:15 个 TritonBench-G 端口及其证明
-  (见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
+- **窄浮点 / rounding-model 层**(#447):抽象的 `RoundingModel`
+  (`round : FloatDType → ℝ → ℝ`,唯一公理 `round_real = id`)把一个 black-box
+  rounding 函数穿过语义(`evalOpR` / `stepStmtR` / `execR`)。rounding-parametric
+  surface `ComputeRefine.RealizesR`(单 kernel 对照 R-annotated spec)和
+  `RefinesR` / `RefinesAtR`(双 kernel)对**每个** rounding model 全称量化;
+  桥 `RealizesR.toRealizes` 在 trivial model 处退化为理想的
+  `ComputeCorrect.Realizes`。见 fused-vs-unfused SwiGLU showcase
+  [`bench/examples/SwigluRoundingInvariance.lean`](./bench/examples/SwigluRoundingInvariance.lean)。
+- **示例**:151 个 TritonBench-G 端口及其证明(真值来源:
+  [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
+  见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
   FlashAttention-1 forward、online softmax、Welford、LayerNorm、log-sum-exp。
 - **CI gate**:`lake build` + `scripts/check-artifact.sh`(无 `sorry`、
   公理白名单、manifest schema、文档漂移检查)。
@@ -55,7 +65,9 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | 目标 | 用 |
 |---|---|
 | 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes` |
-| 两个 kernel realize 某个输出关系 | `ComputeRefine.Realizes` |
+| 一个 kernel refine 另一个(writes-equality)| `ComputeRefine.Refines` |
+| 两个 kernel 逐地址 pointwise 相符 | `ComputeRefine.RefinesAt` |
+| 同上,但对每个 rounding model 成立(窄浮点)| `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
 | 值 + 索引同时输出(如 `tl.max(..., return_indices=True)`)| `ComputeCorrect.OutputPairWhere` |
 | 自定义 final-state 后置条件 | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | 关系跨任意初始状态(罕见) | `ComputeCorrect.General` / `ComputeRefine.General` |
@@ -121,9 +133,23 @@ Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
 
 ```text
 VeriTile/
-  Triton/                  AST、操作语义、内存、DSL、数学
+  Triton.lean              总入口 prelude(`import VeriTile.Triton`)
+  Triton/
+    Core/                  AST(Kernel/ComputeKernel 类型、ComputeOp 位常量)
+    Semantics/             typed 操作语义(exec、execR)
+    Memory/                BlockState、tensor view、readback
+    DSL/                   `triton { ... }` 前端
+    Math/                  纯 `(Fin N → ℝ) → ...` 算子(含 Math/Erf)
+    KernelLemmas/          可复用的 bench 证明辅助(原 Triton/Kernel/)
+    Correctness.lean       顶层 correctness/refinement surface
+                           (Kernel.Correct、ComputeCorrect.*、ComputeRefine.*)
+    Float/                 浮点 dtype 机制:dtype erasure +
+                           rounding model(RoundingModel、execR、Refine、Pipeline)
+    Launch/                Grid-launch 组合 / write footprint
+    Concurrency/           Grid 级 atomic-add 正确性(位于 Launch 之上)
   Examples/                已证 correctness/refinement 范例
-bench/tritonbench_g/       TritonBench-G v1 端口(15 个已闭合)
+bench/tritonbench_g/       TritonBench-G v1 端口(151 对;见 completion_audit.md)
+bench/examples/            Showcase 证明(SwiGLU rounding invariance 等)
 documents/                 设计笔记、子集规范、surface 指南
 scripts/                   CI gate、kernel manifest、LLM 证明 wrapper
 verso/                     幻灯片 / 概览

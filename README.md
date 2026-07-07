@@ -21,12 +21,23 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
 - **DSL**: typed Triton subset with `triton { ... }` macro, ND tile shapes,
   reductions, masks (`mask=`/`other=`), block-pointer ops, and bare
   `if`/`for` control flow.
-- **Theorem surfaces**: `ComputeCorrect.Realizes` for kernel ↔ math
-  specification, `ComputeRefine.Realizes` for kernel pair equivalence.
-  Both project through `toAlgorithm?` and run on `Kernel.Correct` /
-  `Kernel.Refine` underneath.
-- **Examples**: 15 ported TritonBench-G kernels with proofs (see
-  [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
+- **Theorem surfaces**: `ComputeCorrect.Realizes` for *one kernel vs a math
+  specification*, `ComputeRefine.Refines` for *one kernel refining another*
+  (writes-equality: the two final memories agree at every cell outside the
+  declared scratch regions). Both project through `toAlgorithm?` and run on
+  `Kernel.Correct` / `Kernel.Refine` underneath.
+- **Narrow-float / rounding-model layer** (#447): an abstract `RoundingModel`
+  (`round : FloatDType → ℝ → ℝ`, sole axiom `round_real = id`) threads a
+  black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /
+  `execR`). The rounding-parametric surfaces `ComputeRefine.RealizesR` (single
+  kernel vs an R-annotated spec) and `RefinesR` / `RefinesAtR` (two kernels)
+  quantify over *every* rounding model; the bridge `RealizesR.toRealizes`
+  degenerates to ideal `ComputeCorrect.Realizes` at the trivial model. See the
+  fused-vs-unfused SwiGLU showcase
+  [`bench/examples/SwigluRoundingInvariance.lean`](./bench/examples/SwigluRoundingInvariance.lean).
+- **Examples**: 151 ported TritonBench-G kernels with proofs (source of truth:
+  [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
+  see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
 - **CI gate**: `lake build` + `scripts/check-artifact.sh` (no `sorry`,
   axiom whitelist, manifest schema, doc-drift checks).
@@ -59,7 +70,9 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | Goal | Use |
 |---|---|
 | One kernel matches an output spec | `ComputeCorrect.Realizes` |
-| Two kernels satisfy an output relation | `ComputeRefine.Realizes` |
+| One kernel refines another (writes-equality) | `ComputeRefine.Refines` |
+| Two kernels agree pointwise per address | `ComputeRefine.RefinesAt` |
+| Same, under every rounding model (narrow-float) | `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
 | Value + index output (e.g. `tl.max(..., return_indices=True)`) | `ComputeCorrect.OutputPairWhere` |
 | Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
@@ -128,9 +141,24 @@ Task-oriented:
 
 ```text
 VeriTile/
-  Triton/                  Core AST, semantics, memory, DSL, math
+  Triton.lean              Umbrella prelude (`import VeriTile.Triton`)
+  Triton/
+    Core/                  AST (Kernel/ComputeKernel type, ComputeOp bits)
+    Semantics/             Typed operational semantics (exec, execR)
+    Memory/                BlockState, tensor views, readback
+    DSL/                   `triton { ... }` front-end
+    Math/                  Pure `(Fin N → ℝ) → ...` operators (+ Math/Erf)
+    KernelLemmas/          Reusable bench-proof helpers (was Triton/Kernel/)
+    Correctness.lean       Top-level correctness/refinement surfaces
+                           (Kernel.Correct, ComputeCorrect.*, ComputeRefine.*)
+    Float/                 Floating-dtype machinery: dtype erasure +
+                           the rounding model (RoundingModel, execR, Refine,
+                           Pipeline)
+    Launch/                Grid-launch composition / write footprints
+    Concurrency/           Grid-wide atomic-add correctness (above Launch)
   Examples/                Worked correctness/refinement proofs
-bench/tritonbench_g/       TritonBench-G v1 ports (15 closed)
+bench/tritonbench_g/       TritonBench-G v1 ports (151 pairs; see completion_audit.md)
+bench/examples/            Showcase proofs (SwiGLU rounding invariance, ...)
 documents/                 Design notes, subset spec, surface guide
 scripts/                   CI gate, kernel manifest, LLM proof wrapper
 verso/                     Slide deck / overview

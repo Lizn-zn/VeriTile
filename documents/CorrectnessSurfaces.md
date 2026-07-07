@@ -9,7 +9,9 @@ properties of `ComputeKernel`s. Surfaces live in
 | Goal | Use |
 |---|---|
 | One kernel realizes an output spec | `ComputeCorrect.Realizes` |
-| Two kernels realize an output relation | `ComputeRefine.Realizes` |
+| One kernel refines another (writes-equality) | `ComputeRefine.Refines` |
+| Two kernels agree pointwise per declared address | `ComputeRefine.RefinesAt` |
+| Any of the above, under every rounding model (narrow-float) | `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
 | Whole-grid launch (every program writes correctly) | `Kernel.ForAllProgramsSome` (temporary; see Grid section) |
 | Value/index pair on every lane | `ComputeCorrect.OutputPair` |
 | Value/index pair on active lanes only | `ComputeCorrect.OutputPairWhere` |
@@ -140,9 +142,89 @@ worth doing until a second heterogeneous-output kernel appears.
 
 ## Kernel Refinement
 
-Kernel refinement runs two kernels from the same initial state and
-relates their observations. For ordinary optimization proofs prefer an
-equality helper.
+### `Realizes` vs `Refines` — the naming scheme
+
+VeriTile splits the two verification questions by name:
+
+- **`Realizes`** — *a kernel realizes a spec* (one kernel vs expected
+  outputs). `ComputeCorrect.Realizes` (the workhorse single-kernel surface,
+  above) and its rounding-parametric mirror `ComputeRefine.RealizesR` both
+  live here.
+- **`Refines`** — *a kernel refines another kernel* (two kernels compared to
+  each other). `ComputeRefine.Refines` (writes-equality), `ComputeRefine.RefinesAt`
+  (pointwise per-address relation), and their rounding mirrors
+  `RefinesR` / `RefinesAtR`.
+
+### Writes-equality: `ComputeRefine.Refines`
+
+The canonical two-kernel surface is `ComputeRefine.Refines`. It runs both
+kernels from the same initial state and asserts that they performed **the same
+writes** — the two final memories agree at every cell outside a declared list
+of `scratch` regions:
+
+```lean
+ComputeRefine.Refines lhs rhs s scratch
+-- := ExecRefine lhs rhs s (fun l r =>
+--      ∀ region ∉ scratch, ∀ offset, l.mem region offset = r.mem region offset)
+```
+
+Same write locations, same written values, one equation. `scratch` names the
+regions the two kernels are *allowed* to disagree on — a pipeline's
+intermediate tensors (e.g. `[S]` for a fused-vs-unfused SwiGLU pair, or the
+`zReg`/`siluReg` temporaries in `FusedSiLU`). Pass `[]` when the two kernels
+must agree on all of memory. This is the surface every `*_refinement_view`
+theorem in `bench/examples/` lands on.
+
+### Pointwise: `ComputeRefine.RefinesAt`
+
+When the two kernels write to **different** target cells, or the comparison is
+a non-equality relation, use the pointwise form. It relates the two kernels'
+outputs through two independent `WriteMap`s:
+
+```lean
+ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
+-- post: ∀ i, match lhsWrite i, rhsWrite i with
+--   | some la, some ra => relation i (read lhs' la) (read rhs' ra)
+--   | _, _ => True
+```
+
+The carrier types of the two reads are inferred independently, so `RefinesAt`
+covers heterogeneous-layout comparisons and proof middleware. Use the same
+write map on both sides for ordinary same-buffer equivalence. `Refines` is the
+whole-memory form to reach for first; `RefinesAt` is the escape hatch when you
+genuinely need per-side values.
+
+### Rounding-model surfaces (narrow float, #447)
+
+For kernels with narrow-float output channels there is a rounding-parametric
+mirror of each surface, universally quantified over **every** `RoundingModel`
+(`round : FloatDType → ℝ → ℝ`, sole axiom `round_real = id`). They live in
+[`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean) and
+execute under the R-threaded semantics `execR`:
+
+- `ComputeRefine.RealizesR kernel s write expected` — single kernel vs an
+  `R`-annotated spec `expected : RoundingModel → ι → α`. The spec's shape
+  *is* the rounding-event ledger: no `R.round` means the observed path is
+  rounding-free; one `R.round` means one final quantization; nested
+  `R.round`s count one event each.
+- `ComputeRefine.RefinesR R lhs rhs s scratch` — the writes-equality pair
+  surface under `R`.
+- `ComputeRefine.RefinesAtR R lhs rhs s lhsWrite rhsWrite relation` — the
+  pointwise pair surface under `R`.
+
+The two families meet in exactly one bridge, `ComputeRefine.RealizesR.toRealizes`
+("refinement implies ideal correctness"): instantiating at the trivial model
+`.triv`, where `execR` degenerates to the exact `exec`, turns any `RealizesR`
+into an ordinary `ComputeCorrect.Realizes` for `expected .triv`. Degeneration
+lemmas `refinesR_triv_iff` / `refinesAtR_triv_iff` recover `Refines` /
+`RefinesAt` the same way. The gold-standard walkthrough is
+[`bench/examples/SwigluRoundingInvariance.lean`](../bench/examples/SwigluRoundingInvariance.lean).
+
+### Equality helpers
+
+For ordinary optimization proofs that read back the same buffer on both sides,
+the equality helpers below are thin wrappers over `ExecRefine` and remain the
+most readable choice.
 
 ### Scalar equality
 

@@ -1,7 +1,19 @@
 /-
-VeriTile.Triton.Correctness
+# `VeriTile.Triton.Correctness` — the correctness & refinement surfaces
 
-Float-facing correctness bridge for the current real-valued Triton semantics.
+Top-level surface module (relocated out of `Float/`): the public vocabulary
+every kernel proof lands on.
+
+* `Kernel.Correct` — the generic postcondition-style correctness predicate.
+* `ComputeCorrect.*` — the **`Realizes`** family: *one kernel realizes a spec*
+  (`ComputeCorrect.Realizes` = kernel outputs match `expected` on a `WriteMap`),
+  plus `WriteMap` and the `OutputReadable` carrier typeclass.
+* `ComputeRefine.*` — the **`Refines`** family: *one kernel refines another*
+  (`ComputeRefine.Refines` = writes-equality, final memories agree outside the
+  declared `scratch`; `ComputeRefine.RefinesAt` = pointwise per-address).
+
+The rounding-model mirrors (`RealizesR` / `RefinesR` / `RefinesAtR`) live in
+`VeriTile.Triton.Float.Refine`.
 -/
 
 import VeriTile.Triton.Float.StateErasure
