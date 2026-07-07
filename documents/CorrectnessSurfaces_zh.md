@@ -9,7 +9,9 @@
 | 目标 | 用 |
 |---|---|
 | 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes` |
-| 两个 kernel realize 某个输出关系 | `ComputeRefine.Realizes` |
+| 一个 kernel refine 另一个(writes-equality)| `ComputeRefine.Refines` |
+| 两个 kernel 逐地址 pointwise 相符 | `ComputeRefine.RefinesAt` |
+| 上述任一,但对每个 rounding model 成立(窄浮点)| `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
 | Whole-grid 启动(每个 program 都正确写入)| `Kernel.ForAllProgramsSome`(临时;见 Grid 章节)|
 | 每个 lane 都输出 value/index 对 | `ComputeCorrect.OutputPair` |
 | 仅在 active lane 上输出 value/index 对 | `ComputeCorrect.OutputPairWhere` |
@@ -129,8 +131,79 @@ typeclass 把它们一并归入,但在出现第二种 heterogeneous 输出 kerne
 
 ## Kernel refinement
 
-Kernel refinement 从同一初始状态出发跑两个 kernel,并关联它们的 observation。
-做常规优化证明时优先选 equality helper。
+### `Realizes` vs `Refines` —— 命名方案
+
+VeriTile 用命名区分两个验证问题:
+
+- **`Realizes`** —— *一个 kernel realize 某个 spec*(单 kernel 对照期望输出)。
+  `ComputeCorrect.Realizes`(上文的主力单 kernel surface)以及它的
+  rounding-parametric 镜像 `ComputeRefine.RealizesR` 都属于这一类。
+- **`Refines`** —— *一个 kernel refine 另一个 kernel*(两个 kernel 互相对照)。
+  `ComputeRefine.Refines`(writes-equality)、`ComputeRefine.RefinesAt`
+  (逐地址 pointwise 关系),以及它们的 rounding 镜像 `RefinesR` / `RefinesAtR`。
+
+### Writes-equality:`ComputeRefine.Refines`
+
+标准的双 kernel surface 是 `ComputeRefine.Refines`。它从同一初始状态跑两个
+kernel,断言它们做了**相同的写入** —— 两个终态 memory 在所有非 `scratch`
+region cell 上逐格相等:
+
+```lean
+ComputeRefine.Refines lhs rhs s scratch
+-- := ExecRefine lhs rhs s (fun l r =>
+--      ∀ region ∉ scratch, ∀ offset, l.mem region offset = r.mem region offset)
+```
+
+相同写入位置、相同写入值,一条等式。`scratch` 列出两个 kernel *允许*不一致的
+region —— pipeline 的中间 tensor(例如 fused-vs-unfused SwiGLU pair 的 `[S]`,
+或 `FusedSiLU` 里的 `zReg`/`siluReg` 临时区)。当两个 kernel 必须在整个 memory
+上一致时传 `[]`。`bench/examples/` 里每个 `*_refinement_view` 定理都落在这个
+surface 上。
+
+### Pointwise:`ComputeRefine.RefinesAt`
+
+当两个 kernel 写到**不同**目标 cell,或对照关系不是等式时,用 pointwise 形式。
+它通过两张独立的 `WriteMap` 关联两个 kernel 的输出:
+
+```lean
+ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
+-- post: ∀ i, match lhsWrite i, rhsWrite i with
+--   | some la, some ra => relation i (read lhs' la) (read rhs' ra)
+--   | _, _ => True
+```
+
+两边 read 的 carrier 类型各自推断,所以 `RefinesAt` 覆盖异构 layout 对照和证明
+中间件。同一 buffer 的普通等价用两边相同的 write map。首选 whole-memory 的
+`Refines`;确实需要 per-side 值时才用 `RefinesAt` 这个 escape hatch。
+
+### Rounding-model surface(窄浮点,#447)
+
+对窄浮点输出通道的 kernel,每个 surface 都有一个 rounding-parametric 镜像,对
+**每个** `RoundingModel`(`round : FloatDType → ℝ → ℝ`,唯一公理
+`round_real = id`)全称量化。它们定义在
+[`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean),在
+R-threaded 语义 `execR` 下执行:
+
+- `ComputeRefine.RealizesR kernel s write expected` —— 单 kernel 对照
+  `R`-annotated spec `expected : RoundingModel → ι → α`。spec 的形状**就是**
+  rounding-event 账本:没有 `R.round` 表示观察路径无 rounding;一个 `R.round`
+  表示一次最终量化;嵌套的 `R.round` 每个算一次事件。
+- `ComputeRefine.RefinesR R lhs rhs s scratch` —— `R` 下的 writes-equality
+  pair surface。
+- `ComputeRefine.RefinesAtR R lhs rhs s lhsWrite rhsWrite relation` —— `R` 下
+  的 pointwise pair surface。
+
+两个家族恰好在一个桥 `ComputeRefine.RealizesR.toRealizes`("refinement 蕴含理想
+correctness")处相遇:在 trivial model `.triv` 处实例化(此时 `execR` 退化为
+精确的 `exec`),把任何 `RealizesR` 变成关于 `expected .triv` 的普通
+`ComputeCorrect.Realizes`。退化引理 `refinesR_triv_iff` / `refinesAtR_triv_iff`
+以同样方式恢复 `Refines` / `RefinesAt`。范例见
+[`bench/examples/SwigluRoundingInvariance.lean`](../bench/examples/SwigluRoundingInvariance.lean)。
+
+### Equality helper
+
+两边读回同一 buffer 的常规优化证明,下面的 equality helper 是 `ExecRefine` 的
+薄封装,仍是最可读的选择。
 
 ### 标量等式
 
