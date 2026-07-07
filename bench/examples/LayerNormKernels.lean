@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.LayerNormKernels
+# `VeriTile.Examples.LayerNormKernels` — fused ≡ two-pass LayerNorm
 
 Tier 2 kernel-pair: fused single-pass LayerNorm ≡ two-pass LayerNorm.
 Composes the Welford recurrence (Phase B #4) with the affine
@@ -7,6 +7,19 @@ Composes the Welford recurrence (Phase B #4) with the affine
 
 The two-pass kernel proof is closed over the typed tile semantics. The fused
 kernel proof still depends on the Welford loop invariant.
+
+## Kernels & theorems
+
+Kernels: `twoPassLayerNormKernel`, `fusedLayerNormKernel`,
+`layerNormAffineTailKernel`.
+
+* `layerNormSpec_eq_layerNorm` — the mathematical spec identity.
+* `twopass_layernorm_correct` / `fused_layernorm_correct` — each kernel realizes
+  the LayerNorm spec (`ComputeCorrect.Realizes`).
+* `layernorm_kernels_refinement` / `…_refinement_view` — the headline pair
+  theorem on the two-kernel writes-equality surface `ComputeRefine.Refines`.
+  For the rounding-model (∀R) analogue of the compositional pattern see
+  `bench/examples/SwigluRoundingInvariance.lean`.
 -/
 
 import VeriTile.Triton

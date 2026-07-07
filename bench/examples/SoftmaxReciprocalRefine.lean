@@ -4,6 +4,9 @@ import VeriTile.Examples.SoftmaxReciprocal
 Refinement theorem (`ComputeRefine.Refines`, writes-equality) for the
 reciprocal-softmax rewrite. The kernels, specs, correctness lemmas, and the
 exec-level refinement live in `VeriTile.Examples.SoftmaxReciprocal`.
+
+Headline: `softmax_reciprocal_refinement_view`. For the rounding-model (∀R) variant of the
+writes-equality surface see `bench/examples/SwigluRoundingInvariance.lean`.
 -/
 
 namespace VeriTile.Examples
