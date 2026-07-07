@@ -145,25 +145,19 @@ variable (xs ys : Fin BLOCK_N → ℝ)
 
 /-! ## Sequential decomposition of the pipeline -/
 
-/-- Execution of the composed pipeline under a rounding model, as the
-sequential composition of the two step executions. -/
-noncomputable def execUnfusedR (R : RoundingModel)
-    (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
-    Option BlockState :=
-  match execR R (silu_step X S ncols BLOCK_N) s with
-  | none => none
-  | some s1 => execR R (mul_step S Y OUT ncols BLOCK_N) s1
-
+/-- Execution of the composed pipeline `A ; B` as the sequential composition
+of the two step executions — the two-stage instance of the library split
+`execR_toAlgKernel_seq` (the no-reset fold over the `ComputeKernel.seq`
+stages). -/
 theorem exec_swiglu_unfusedR (R : RoundingModel)
     (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
     execR R (swiglu_unfused X Y S OUT ncols BLOCK_N) s =
-      execUnfusedR R X Y S OUT ncols BLOCK_N s := by
+      (execR R (silu_step X S ncols BLOCK_N) s).bind
+        (fun s1 => execR R (mul_step S Y OUT ncols BLOCK_N) s1) := by
   show execR R (ComputeKernel.seq [X, Y] [OUT]
       [silu_step X S ncols BLOCK_N, mul_step S Y OUT ncols BLOCK_N]).toAlgKernel s = _
   rw [execR_toAlgKernel_seq]
   simp only [List.foldl_cons, List.foldl_nil, Option.bind_some]
-  unfold execUnfusedR
-  cases execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s <;> simp
 
 /-! ## Lane addressing, readback carrier, and the shared write map
 
@@ -414,7 +408,6 @@ theorem swiglu_unfused_realizesR
   intro s0 s' hExec hs0
   subst s0
   rw [exec_swiglu_unfusedR] at hExec
-  unfold execUnfusedR at hExec
   intro i hActive
   cases hA : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s with
   | none => rw [hA] at hExec; exact absurd hExec (by simp)
@@ -573,7 +566,6 @@ theorem swiglu_fused_eq_unfused_of_representable
   -- split the pipeline execution into A ; B (keeping the original `hR`)
   have hRsplit := hR
   rw [exec_swiglu_unfusedR] at hRsplit
-  unfold execUnfusedR at hRsplit
   cases hA : execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s with
   | none => rw [hA] at hRsplit; exact absurd hRsplit (by simp)
   | some s1 =>
