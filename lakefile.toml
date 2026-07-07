@@ -14,7 +14,10 @@ name = "VeriTile"
 globs = [
   "VeriTile.Triton",
   "VeriTile.Triton.+",
-  "VeriTile.Meta.+",
+  # Statement-audit commands only (lightweight, imports just `Lean`). The
+  # TrustReport driver lives in VeriTileFull because it audits ApproxGeLU,
+  # which pulls the heavy analysis chain the lite target deliberately skips.
+  "VeriTile.Meta.StatementAudit",
   "VeriTile.Examples.Common",
   "VeriTile.Examples.TritonSmoke",
   "VeriTile.Examples.MemorySafety",
@@ -45,9 +48,16 @@ globs = ["VeriTile.Math.+"]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the
 # GeLU error bound or before any release tagging.
+#
+# `VeriTile.Meta.TrustReport` (the generated whole-library trust gate — runs
+# `#axiomsClean` on every proven library theorem) lives here because it imports
+# ApproxGeLU. `lake build VeriTile.Meta.TrustReport` builds its dependencies and
+# runs the audit in one step; keeping it out of the lite lib preserves the
+# lite/full split.
 [[lean_lib]]
 name = "VeriTileFull"
 globs = [
   "VeriTile.Examples.ApproxGeLU",
   "VeriTile.Examples.ApproxGeLU.+",
+  "VeriTile.Meta.TrustReport",
 ]
