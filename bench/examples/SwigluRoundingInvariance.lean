@@ -54,42 +54,39 @@ two-launch pipeline agree on everything but the final dead register file,
 and the headline theorem transfers to real launches
 (`swiglu_fused_launch_eq_pipeline_of_representable`).
 
-## Theorems
+## Public surface
 
 Outputs are read at the `MemCell` layer (`floatCell .bf16 v = MemCell.of .bf16
 (some v)`, from `VeriTile.Examples.Common`): the stores are bf16-tagged and
-`readMem`'s real-channel decode is
-tag-exact, so a narrow-float cell is only observable as its typed `MemCell` —
-the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
+`readMem`'s real-channel decode is tag-exact, so a narrow-float cell is only
+observable as its typed `MemCell` — the classic fp16/bf16 convention
+(`rmsnorm_fused_llama`).
 
-* `silu_step_realizesR` / `mul_step_realizesR` — the component theorems (A
-  and B verified separately).
-* `silu_step_preservesR` — A leaves every region other than `S` untouched
-  (the aliasing frame the composition needs).
-* `swiglu_unfused_realizesR` — the pipeline theorem, **derived by composing**
-  the component theorems through the intermediate state.
-* `swiglu_fused_realizesR` — the fused kernel's component theorem.
-* `swiglu_refinesR` — the event-ledger pair theorem on the pointwise surface
-  `ComputeRefine.RefinesAtR`: for every rounding model, fused and unfused
-  realize their respective event-ledger terms side by side.
+The reader-facing declarations are the four kernels above and:
+
 * **`swiglu_fused_eq_unfused_of_representable`** — the headline "fused =
   unfused" on the writes-equality surface `ComputeRefine.RefinesR`: when the
-  intermediate `silu(x)` is representable, the two pipelines perform the
-  same writes — final memories agree everywhere outside the scratch tensor
-  `S`, for every rounding model.
-* `swiglu_refines_classic` — degeneration at `triv`: the canonical
-  `ComputeRefine.Refines` writes-equality statement recovered from the
-  invariance theorem.
-* `silu_step_regClosed` / `mul_step_regClosed` / `swiglu_fused_regClosed` —
-  the semantic register-closedness of the three kernels (inputs to the
-  launch bridge).
+  intermediate `silu(x)` is representable, the two pipelines perform the same
+  writes — final memories agree everywhere outside the scratch tensor `S`, for
+  every rounding model.
+* **`swiglu_refines_classic`** — its degeneration at `triv`: the canonical
+  `ComputeRefine.Refines` writes-equality statement.
 * **`swiglu_fused_launch_eq_pipeline_of_representable`** — the honest-launch
   corollary: the fused single launch and the honest two-launch pipeline
-  (`execPipelineR`, registers reset at every launch) end with memories that
-  agree everywhere outside the scratch tensor `S`.
-* Spec algebra: `fusedSpec_single_rounding`, `unfusedSpec_shape` (Idem
-  collapses), `fusedSpec_ne_unfusedSpec` (a witness model distinguishing the
-  pipelines — unstatable before #447).
+  (`execPipelineR`, registers reset at every launch) agree outside `S`.
+* `swiglu_refinesR` — the event-ledger pair theorem (`ComputeRefine.RefinesAtR`):
+  for every rounding model, fused and unfused realize their respective
+  `R⟦…⟧`-annotated terms side by side.
+* Spec algebra (the ledger, no kernel execution): `fusedSpec_single_rounding`,
+  `unfusedSpec_shape` (Idem collapses), `fusedSpec_ne_unfusedSpec` (a witness
+  model distinguishing the pipelines — unstatable before #447).
+
+Everything else is `private` supporting machinery: the per-kernel component
+realizations (`silu_step_realizesR`, `mul_step_realizesR`,
+`swiglu_fused_realizesR`, `swiglu_unfused_realizesR` — A and B verified
+separately, then composed), the aliasing/frame lemmas, the register-closedness
+proofs (`*_regClosed`, inputs to the launch bridge), and the exec split
+`exec_swiglu_unfusedR`.
 -/
 
 namespace VeriTile.Bench.Examples.SwigluRounding
@@ -150,7 +147,7 @@ variable (xs ys : Fin BLOCK_N → ℝ)
 of the two step executions — the two-stage instance of the library split
 `execR_toAlgKernel_seq` (the no-reset fold over the `ComputeKernel.seq`
 stages). -/
-theorem exec_swiglu_unfusedR (R : RoundingModel)
+private theorem exec_swiglu_unfusedR (R : RoundingModel)
     (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
     execR R (swiglu_unfused X Y S OUT ncols BLOCK_N) s =
       (execR R (silu_step X S ncols BLOCK_N) s).bind
@@ -228,7 +225,7 @@ theorem fusedSpec_ne_unfusedSpec :
 /-! ## Component theorems -/
 
 /-- The fused kernel realizes `fusedSpec` for **every** rounding model. -/
-theorem swiglu_fused_realizesR
+private theorem swiglu_fused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (swiglu_fused X Y OUT ncols BLOCK_N) s
       (outWritesTo s OUT ncols BLOCK_N)
@@ -263,7 +260,7 @@ theorem swiglu_fused_realizesR
 
 /-- Component theorem for step A: for every rounding model, the active lanes
 of `S` receive `aSpec(x)` as bf16 cells. -/
-theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
+private theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
     ComputeRefine.RealizesR (silu_step X S ncols BLOCK_N) s
       (outWritesTo s S ncols BLOCK_N)
       (fun R i => floatCell .bf16 (aSpec R (xs i))) := by
@@ -296,7 +293,7 @@ theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
 
 /-- Frame lemma for step A: every region other than `S` is untouched, for
 every rounding model. -/
-theorem silu_step_preservesR (R : RoundingModel) (s' : BlockState)
+private theorem silu_step_preservesR (R : RoundingModel) (s' : BlockState)
     (keepReg : RegionName) (h_keep : keepReg ≠ S)
     (hExec : execR R (silu_step X S ncols BLOCK_N) s = some s') :
     ∀ offset : Nat, s'.mem keepReg offset = s.mem keepReg offset := by
@@ -321,7 +318,7 @@ private theorem silu_step_execR_pids (R : RoundingModel) (s1 : BlockState)
 
 /-- Component theorem for step B: given the bf16 intermediate `S` holding
 payloads `zs`, the active lanes of `OUT` receive `R⟦R⟦z·y⟧⟧`. -/
-theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
+private theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
     (h_z : InputCellsLoadedAt s S ncols BLOCK_N .bf16 zs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
     ComputeRefine.RealizesR (mul_step S Y OUT ncols BLOCK_N) s
       (outWritesTo s OUT ncols BLOCK_N)
@@ -379,7 +376,7 @@ private theorem realizesR_out {ι : Type} {α : Type}
 **derived by composing** `silu_step_realizesR` and `mul_step_realizesR`
 through the intermediate state (with the frame lemma keeping `Y` intact;
 `S ≠ Y` is the aliasing hypothesis the composition needs). -/
-theorem swiglu_unfused_realizesR
+private theorem swiglu_unfused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ComputeRefine.RealizesR (swiglu_unfused X Y S OUT ncols BLOCK_N) s
@@ -622,7 +619,7 @@ register bindings. All three kernels here are straight-line load/compute/
 store programs, so their executions from two `MemPidsEq` states normalize to
 the same masked scatter store over `MemPidsEq` base states. -/
 
-theorem silu_step_regClosed : (silu_step X S ncols BLOCK_N).RegClosed := by
+private theorem silu_step_regClosed : (silu_step X S ncols BLOCK_N).RegClosed := by
   intro R s t h
   simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
     tile_elementwise, ComputeExpr.toAlgorithm?]
@@ -634,7 +631,7 @@ theorem silu_step_regClosed : (silu_step X S ncols BLOCK_N).RegClosed := by
   · exact hab.writeMemAsR _ _ _ _ _
   · exact hab
 
-theorem mul_step_regClosed : (mul_step S Y OUT ncols BLOCK_N).RegClosed := by
+private theorem mul_step_regClosed : (mul_step S Y OUT ncols BLOCK_N).RegClosed := by
   intro R s t h
   simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
     tile_elementwise, ComputeExpr.toAlgorithm?]
@@ -646,7 +643,7 @@ theorem mul_step_regClosed : (mul_step S Y OUT ncols BLOCK_N).RegClosed := by
   · exact hab.writeMemAsR _ _ _ _ _
   · exact hab
 
-theorem swiglu_fused_regClosed : (swiglu_fused X Y OUT ncols BLOCK_N).RegClosed := by
+private theorem swiglu_fused_regClosed : (swiglu_fused X Y OUT ncols BLOCK_N).RegClosed := by
   intro R s t h
   simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
     tile_elementwise, ComputeExpr.toAlgorithm?]
