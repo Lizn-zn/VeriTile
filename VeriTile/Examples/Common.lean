@@ -23,6 +23,14 @@ length-`n` input vector. -/
 def castFin {n k : Nat} (h : k ≤ n) (i : Fin k) : Fin n :=
   ⟨i.val, lt_of_lt_of_le i.isLt h⟩
 
+/-- Offset of lane `i` in the current program's contiguous 1-D tile:
+`s.pid * N + i.val` — the address underlying the `InputLoadedAt` /
+`outWritesTo` / `InputCellsLoadedAt` contracts, exposed as a shared name for
+worked examples to use in place of a local address def. `@[reducible]` so it
+is defeq to the raw expression the contracts inline. -/
+@[reducible] def programLaneOffset (s : BlockState) (N : Nat) (i : Fin N) : Nat :=
+  s.pid * N + i.val
+
 /-- Region `region` holds tile `xs` at offsets `[pid*N, pid*N + N - 1]`. -/
 def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
@@ -37,6 +45,27 @@ def outWritesTo (s : BlockState) (region : RegionName)
   ComputeCorrect.WriteMap.writeIf
     (fun i : Fin N => s.pid * N + i.val < cols)
     (fun i => (region, s.pid * N + i.val))
+
+/-- A memory cell carrying the real value `v` at the narrow-float dtype `dt`.
+Narrow-float stores are only observable as their typed `MemCell` (the real
+decode is tag-exact), so `MemCell`-layer contracts speak of these cells rather
+than raw reals. Cased on `dt` so the `TileCarrier` (all `WithBot ℝ` for float
+channels) reduces at each dtype. -/
+def floatCell : FloatDType → ℝ → MemCell
+  | .real, v => MemCell.of .real (some v)
+  | .fp32, v => MemCell.of .fp32 (some v)
+  | .fp16, v => MemCell.of .fp16 (some v)
+  | .bf16, v => MemCell.of .bf16 (some v)
+
+/-- `MemCell`-layer counterpart of `InputLoadedAt`: the current program's active
+lanes (`s.pid * N + i.val < cols`) of `region` hold the narrow-float cells
+`floatCell dt (vs i)`. This is the contract a downstream kernel places on a
+`dt`-typed intermediate tensor materialized by an upstream kernel (e.g. the
+bf16 scratch between two fused-vs-unfused pipeline stages). -/
+def InputCellsLoadedAt (s : BlockState) (region : RegionName)
+    (cols N : Nat) (dt : FloatDType) (vs : Fin N → ℝ) : Prop :=
+  ∀ i : Fin N, s.pid * N + i.val < cols →
+    s.mem region (s.pid * N + i.val) = floatCell dt (vs i)
 
 /-- Transfer a one-dimensional loaded tile across states when the consumer
 state has the same `pid` and agrees with the producer on the loaded region. -/
