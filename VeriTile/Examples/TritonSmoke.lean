@@ -5,7 +5,6 @@ Small smoke tests for the typed Triton core.
 -/
 
 import VeriTile.Triton.Core
-import VeriTile.Triton.Compute
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.Memory
