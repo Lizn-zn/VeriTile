@@ -39,10 +39,24 @@ the writes-equality `ComputeRefine.RefinesR` (the headline) and the pointwise
   `S` in memory.
 * `mul_step` (**B**) — loads `S` back (a bf16-typed load), multiplies by `y`,
   stores bf16.
-* `swiglu_unfused` — the pipeline `B ∘ A`: literally the concatenation of the
-  two step kernels' bodies; `exec_swiglu_unfusedR` splits its execution into
-  the sequential composition, so the pipeline theorem is *derived from* the
-  two step theorems rather than proven monolithically.
+* `swiglu_unfused` — the pipeline `B ∘ A` as `ComputeKernel.seq [X, Y] [OUT]
+  [A, B]`: the concatenation of the two step kernels' bodies;
+  `exec_swiglu_unfusedR` splits its execution into the sequential
+  composition, so the pipeline theorem is *derived from* the two step
+  theorems rather than proven monolithically.
+
+## Honest launch semantics
+
+Concatenation lets register bindings flow across the A/B seam — something no
+real two-launch execution allows. The honest semantics is `execPipelineR R
+[A, B] s`: registers reset (`BlockState.resetRegs`) before **every** launch.
+The library bridge theorem `ComputeKernel.execR_seq_rel_execPipelineR`
+discharges that register-leakage gap: because `silu_step`, `mul_step` (and
+`swiglu_fused`) are proven `RegClosed` here — their executions never depend
+on pre-existing register bindings — the concatenated pipeline and the honest
+two-launch pipeline agree on everything but the final dead register file,
+and the headline theorem transfers to real launches
+(`swiglu_fused_launch_eq_pipeline_of_representable`).
 
 ## Theorems
 
@@ -69,6 +83,13 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 * `swiglu_refines_classic` — degeneration at `triv`: the canonical
   `ComputeRefine.Realizes` writes-equality statement recovered from the
   invariance theorem.
+* `silu_step_regClosed` / `mul_step_regClosed` / `swiglu_fused_regClosed` —
+  the semantic register-closedness of the three kernels (inputs to the
+  launch bridge).
+* **`swiglu_fused_launch_eq_pipeline_of_representable`** — the honest-launch
+  corollary: the fused single launch and the honest two-launch pipeline
+  (`execPipelineR`, registers reset at every launch) end with memories that
+  agree everywhere outside the scratch tensor `S`.
 * Spec algebra: `fusedSpec_single_rounding`, `unfusedSpec_shape` (Idem
   collapses), `fusedSpec_ne_unfusedSpec` (a witness model distinguishing the
   pipelines — unstatable before #447).
@@ -114,27 +135,19 @@ def mul_step (S Y OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel := tri
   tl.store(OUT + cols, (out).to(tl.bfloat16), mask=cols < $(ncols))
 }
 
-/-- The unfused pipeline `B ∘ A` as one kernel: the concatenation of the two
-step bodies (what the eager framework's two launches execute in sequence). -/
+/-- The unfused pipeline `B ∘ A` as one kernel: `ComputeKernel.seq` of the
+two step kernels — the concatenation of their bodies (registers flowing
+across the seam; the honest per-launch semantics is `execPipelineR`, related
+by the launch bridge below). -/
 def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel :=
-  let body : List Stmt :=
-    (silu_step X S ncols BLOCK_N).body ++
-    (mul_step S Y OUT ncols BLOCK_N).body
-  ComputeKernel.fromKernelBody [X, Y] [OUT] body
+  ComputeKernel.seq [X, Y] [OUT]
+    [silu_step X S ncols BLOCK_N, mul_step S Y OUT ncols BLOCK_N]
 
 /- Pre-defined variables used in the following -/
 variable (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState)
 variable (xs ys : Fin BLOCK_N → ℝ)
 
 /-! ## Sequential decomposition of the pipeline -/
-
-private theorem stepStmtsR_append (R : RoundingModel) (xs ys : List Stmt) (s : BlockState) :
-    stepStmtsR R (xs ++ ys) s = (stepStmtsR R xs s).bind (fun s' => stepStmtsR R ys s') := by
-  induction xs generalizing s with
-  | nil => simp [stepStmtsR]
-  | cons st rest ih =>
-      simp [stepStmtsR]
-      cases stepStmtR R st s <;> simp [ih]
 
 /-- Execution of the composed pipeline under a rounding model, as the
 sequential composition of the two step executions. -/
@@ -149,8 +162,12 @@ theorem exec_swiglu_unfusedR (R : RoundingModel)
     (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState) :
     execR R (swiglu_unfused X Y S OUT ncols BLOCK_N) s =
       execUnfusedR R X Y S OUT ncols BLOCK_N s := by
-  simp [swiglu_unfused, execUnfusedR, execR, stepStmtsR_append]
-  cases h1 : stepStmtsR R (silu_step X S ncols BLOCK_N).body s <;> simp
+  show execR R (ComputeKernel.seq [X, Y] [OUT]
+      [silu_step X S ncols BLOCK_N, mul_step S Y OUT ncols BLOCK_N]).toAlgKernel s = _
+  rw [execR_toAlgKernel_seq]
+  simp only [List.foldl_cons, List.foldl_nil, Option.bind_some]
+  unfold execUnfusedR
+  cases execR R (ComputeKernel.toAlgKernel (silu_step X S ncols BLOCK_N)) s <;> simp
 
 /-! ## Lane addressing, readback carrier, and the shared write map
 
@@ -622,5 +639,130 @@ theorem swiglu_refines_classic
   rw [← ComputeRefine.refinesR_triv_iff]
   exact swiglu_fused_eq_unfused_of_representable X Y S OUT ncols BLOCK_N s xs ys
     h_x h_y h_SY .triv (fun _ => rfl)
+
+/-! ## Register-closedness of the kernels
+
+The launch bridge (`ComputeKernel.execR_seq_rel_execPipelineR`) needs each
+stage to be `RegClosed`: its execution must not depend on pre-existing
+register bindings. All three kernels here are straight-line load/compute/
+store programs, so their executions from two `MemPidsEq` states normalize to
+the same masked scatter store over `MemPidsEq` base states. -/
+
+theorem silu_step_regClosed : (silu_step X S ncols BLOCK_N).RegClosed := by
+  intro R s t h
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise, ComputeExpr.toAlgorithm?]
+  simp only [h.readMem_eq, ← h.pids_eq]
+  refine MemPidsEq.foldl_congr (fun a b hab k => ?_) _
+    ((((h.setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _)
+  dsimp only
+  split_ifs with hP
+  · exact hab.writeMemAsR _ _ _ _ _
+  · exact hab
+
+theorem mul_step_regClosed : (mul_step S Y OUT ncols BLOCK_N).RegClosed := by
+  intro R s t h
+  simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise, ComputeExpr.toAlgorithm?]
+  simp only [h.readMem_eq, h.readMemValue_eq, ← h.pids_eq, ← h.undef_eq]
+  refine MemPidsEq.foldl_congr (fun a b hab k => ?_) _
+    (((((h.setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _)
+  dsimp only
+  split_ifs with hP
+  · exact hab.writeMemAsR _ _ _ _ _
+  · exact hab
+
+theorem swiglu_fused_regClosed : (swiglu_fused X Y OUT ncols BLOCK_N).RegClosed := by
+  intro R s t h
+  simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise, ComputeExpr.toAlgorithm?]
+  simp only [h.readMem_eq, ← h.pids_eq]
+  refine MemPidsEq.foldl_congr (fun a b hab k => ?_) _
+    (((((h.setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _).setReg _ _ _ _)
+  dsimp only
+  split_ifs with hP
+  · exact hab.writeMemAsR _ _ _ _ _
+  · exact hab
+
+/-! ## The honest-launch corollary -/
+
+/-- Unpack a `RefinesR` statement at one successful execution pair: the raw
+outside-scratch memory-agreement clause. -/
+private theorem refinesR_mem {R : RoundingModel} {lhs rhs : ComputeKernel}
+    {st : BlockState} {scratch : List RegionName}
+    (h : ComputeRefine.RefinesR R lhs rhs st scratch)
+    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    {l r : BlockState}
+    (hEL : execR R lhs.toAlgKernel st = some l)
+    (hER : execR R rhs.toAlgKernel st = some r) :
+    ∀ reg ∉ scratch, ∀ o : Nat, l.mem reg o = r.mem reg o := by
+  unfold ComputeRefine.RefinesR ComputeKernel.ExecRefineR
+    ComputeKernel.ComputeRefineR ComputeKernel.ProjectedRefineR at h
+  rw [hLAlg, hRAlg] at h
+  exact h.2 st l r hEL hER rfl
+
+/-- **The honest-launch corollary**: for every rounding model with the
+intermediate `silu(x)` representable, the FUSED single launch and the HONEST
+two-launch pipeline (`execPipelineR` — registers reset at every launch) end
+with memories that agree at every cell outside the scratch tensor `S`.
+
+Derived from the headline writes-equality theorem via the launch bridge
+(`ComputeKernel.execR_seq_rel_execPipelineR`) and the three `RegClosed`
+proofs — the pipeline is NOT reproven from scratch. -/
+theorem swiglu_fused_launch_eq_pipeline_of_representable
+    (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
+    (h_SY : S ≠ Y) (R : RoundingModel)
+    (hRep : ∀ i : Fin BLOCK_N, R.Representable .bf16 (TiledActivation.silu (xs i)))
+    {sF sP : BlockState}
+    (hF : execPipelineR R [swiglu_fused X Y OUT ncols BLOCK_N] s = some sF)
+    (hP : execPipelineR R [silu_step X S ncols BLOCK_N,
+      mul_step S Y OUT ncols BLOCK_N] s = some sP) :
+    ∀ r ∉ ([S] : List RegionName), ∀ o : Nat, sF.mem r o = sP.mem r o := by
+  intro r hr o
+  -- 1. The honest fused launch is one `execR` from the reset state.
+  have hFexec : execR R (swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel s.resetRegs
+      = some sF := by
+    rw [execPipelineR_cons] at hF
+    cases hE : execR R (swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel s.resetRegs with
+    | none => rw [hE, Option.bind_none] at hF; exact absurd hF (by simp)
+    | some w => rw [hE, Option.bind_some, execPipelineR_nil] at hF; exact hF
+  -- 2. `RegClosed` aligns the fused reset launch with the no-reset execution.
+  have hClF := swiglu_fused_regClosed X Y OUT ncols BLOCK_N R s.resetRegs s
+    (memPidsEq_resetRegs s).symm
+  rw [hFexec] at hClF
+  cases hE0 : execR R (swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel s with
+  | none => rw [hE0] at hClF; exact absurd hClF (memPidsEqO_some_none sF)
+  | some sF0 =>
+  rw [hE0] at hClF
+  have hMPF : MemPidsEq sF sF0 := hClF
+  -- 3. The launch bridge aligns the concatenated pipeline with the honest one.
+  have hBr : MemPidsEqO
+      (execR R (swiglu_unfused X Y S OUT ncols BLOCK_N).toAlgKernel s)
+      (execPipelineR R [silu_step X S ncols BLOCK_N,
+        mul_step S Y OUT ncols BLOCK_N] s) :=
+    ComputeKernel.execR_seq_rel_execPipelineR R [X, Y] [OUT]
+      (by
+        intro k hk
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hk
+        rcases hk with rfl | rfl
+        · exact silu_step_regClosed X S ncols BLOCK_N
+        · exact mul_step_regClosed Y S OUT ncols BLOCK_N) s
+  rw [hP] at hBr
+  cases hEU : execR R (swiglu_unfused X Y S OUT ncols BLOCK_N).toAlgKernel s with
+  | none => rw [hEU] at hBr; exact absurd hBr (memPidsEqO_none_some sP)
+  | some sU =>
+  rw [hEU] at hBr
+  have hMPU : MemPidsEq sU sP := hBr
+  -- 4. The headline theorem relates the two no-reset executions outside `S`.
+  have hHead := refinesR_mem
+    (swiglu_fused_eq_unfused_of_representable X Y S OUT ncols BLOCK_N s xs ys
+      h_x h_y h_SY R hRep)
+    (by simp [swiglu_fused, ComputeExpr.toAlgorithm?])
+    (by simp [swiglu_unfused])
+    hE0 hEU r hr o
+  -- 5. Chain the three memory agreements.
+  rw [hMPF.mem_eq, ← hMPU.mem_eq]
+  exact hHead
 
 end VeriTile.Bench.Examples.SwigluRounding
