@@ -1,7 +1,7 @@
 import VeriTile.Examples.SoftmaxEq
 
 /-!
-Refinement theorem (`ComputeRefine.Realizes`, writes-equality) for the naive
+Refinement theorem (`ComputeRefine.Refines`, writes-equality) for the naive
 vs stable softmax kernel pair. The kernels, specs, correctness lemmas, and the
 exec-level refinement live in `VeriTile.Examples.SoftmaxEq`.
 -/
@@ -18,7 +18,7 @@ theorem softmax_kernels_refinement_view
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (naiveSoftmaxKernel xReg yReg blockSize)
       (stableSoftmaxKernel xReg yReg blockSize) s [] := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'

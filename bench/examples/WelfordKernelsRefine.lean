@@ -1,7 +1,7 @@
 import VeriTile.Examples.WelfordKernels
 
 /-!
-Writes-equality refinement (`ComputeRefine.Realizes` whole-memory surface) for
+Writes-equality refinement (`ComputeRefine.Refines` whole-memory surface) for
 the two-pass vs online Welford kernel pair: from the same initial state, both
 kernels perform the same writes — their final memories agree at every cell.
 The kernels, specs, correctness lemmas, and the exec-level refinement live in
@@ -213,7 +213,7 @@ theorem welford_kernels_refinement_view
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1))
     (h_mv : meanReg ≠ varReg) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (twopassWelfordKernel xReg meanReg varReg blockSize)
       (onlineWelfordKernel xReg meanReg varReg blockSize)
       s [] := by

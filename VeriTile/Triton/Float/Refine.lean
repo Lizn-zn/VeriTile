@@ -17,7 +17,7 @@ The two families meet in exactly one theorem: `ComputeRefine.RealizesR.toRealize
 rides the Phase-A degeneration chain (`execR_triv`).
 
 Note on the `R` suffix: the enclosing `ComputeRefine` namespace already hosts
-the classic two-kernel refinement surfaces (`ComputeRefine.Realizes` compares
+the classic two-kernel refinement surfaces (`ComputeRefine.Refines` compares
 a kernel pair under the exact semantics); the rounding-parametric members
 carry an `R` suffix to coexist with them.
 -/
@@ -264,7 +264,7 @@ theorem RealizesR.toRealizes {ι : Type} {α : Type}
 
 /--
 Two-kernel *pointwise* refinement realization under a rounding model — the
-`R`-parametric mirror of `ComputeRefine.RealizesAt`. `relation` receives the
+`R`-parametric mirror of `ComputeRefine.RefinesAt`. `relation` receives the
 two kernels' output cells at declared addresses and can express the
 event-ledger relation (each side equals its `R`-annotated term). The
 canonical whole-memory refinement semantics is `ComputeRefine.RefinesR`.
@@ -283,33 +283,33 @@ def RefinesAtR (R : RoundingModel) {ι : Type} {α β : Type}
       | _, _ => True)
 
 /-- Degeneration: at the trivial model, `RefinesAtR` *is* the classic
-pointwise pair surface `ComputeRefine.RealizesAt`. -/
+pointwise pair surface `ComputeRefine.RefinesAt`. -/
 theorem refinesAtR_triv_iff {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
     (relation : ι → α → β → Prop) :
     RefinesAtR .triv lhs rhs initialState lhsWrite rhsWrite relation ↔
-      RealizesAt lhs rhs initialState lhsWrite rhsWrite relation := by
-  unfold RefinesAtR RealizesAt
+      RefinesAt lhs rhs initialState lhsWrite rhsWrite relation := by
+  unfold RefinesAtR RefinesAt
   exact ComputeKernel.execRefineR_triv_iff _ _ _ _
 
 /-- `lhs` refines `rhs` under the rounding model `R`: from the same initial
 state, the two kernels performed THE SAME WRITES — the final memories agree
 at every cell outside the declared `scratch` regions. The `R`-parametric
-mirror of the canonical `ComputeRefine.Realizes`. -/
+mirror of the canonical `ComputeRefine.Refines`. -/
 def RefinesR (R : RoundingModel) (lhs rhs : ComputeKernel)
     (initialState : BlockState) (scratch : List RegionName := []) : Prop :=
   ComputeKernel.ExecRefineR R lhs rhs initialState (fun lhs' rhs' =>
     ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)
 
 /-- Degeneration: at the trivial model, `RefinesR` *is* the canonical
-whole-memory pair surface `ComputeRefine.Realizes`. -/
+whole-memory pair surface `ComputeRefine.Refines`. -/
 theorem refinesR_triv_iff (lhs rhs : ComputeKernel) (initialState : BlockState)
     (scratch : List RegionName) :
     RefinesR .triv lhs rhs initialState scratch ↔
-      Realizes lhs rhs initialState scratch := by
-  unfold RefinesR Realizes
+      Refines lhs rhs initialState scratch := by
+  unfold RefinesR Refines
   exact ComputeKernel.execRefineR_triv_iff _ _ _ _
 
 /-! ### Named invariant shapes -/
