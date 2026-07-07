@@ -3,7 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Triton.KernelLemmas
 
 /-!
 # `attention_forward_triton` — closed-form correctness (WIP scaffold)
@@ -55,7 +55,7 @@ compiled body reduces by `rfl`, so
 then `simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind]` steps
 all assigns (the `@[simp] evalOp_*` and `setReg` lemmas thread register lookups
 through the accumulated `setReg` chain automatically). -/
--- `evalOp_floorDiv` and `evalOp_mod` now live in `VeriTile.Triton.Kernel`
+-- `evalOp_floorDiv` and `evalOp_mod` now live in `VeriTile.Triton.KernelLemmas`
 -- (EvalHelpers) and are reused from there via the `import` above. The former
 -- local copies (byte-identical) were removed to avoid an ambiguous-name clash
 -- for downstream files that import both this module and the Kernel lib.
@@ -90,7 +90,7 @@ broadcast in the `Q_ptrs`/`O_block_ptr` pointer offsets). -/
   unfold evalOp; simp [Tile.expandDim]; rfl
 
 -- `evalOp_ptrAdd` and `evalOp_ptrBase` also now live in
--- `VeriTile.Triton.Kernel` (EvalHelpers) and are reused from there via the
+-- `VeriTile.Triton.KernelLemmas` (EvalHelpers) and are reused from there via the
 -- `import` above (former byte-identical local copies removed; see note above).
 
 /-- Eval helper for `exp2` (`tl.math.exp2`): `Tile.uop realExp2` over the operand. -/
