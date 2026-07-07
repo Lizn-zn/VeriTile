@@ -15,6 +15,8 @@ memory/layout/grid behavior to these operators; they do not re-define them.
 -/
 
 import VeriTile.Triton.Math.Activation
+import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.Math.Erf
 import VeriTile.Triton.Math.L2Norm
 import VeriTile.Triton.Math.LogSumExp
 import VeriTile.Triton.Math.Loss

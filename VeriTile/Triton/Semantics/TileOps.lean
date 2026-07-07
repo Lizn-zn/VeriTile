@@ -13,7 +13,7 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Arctan
 import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import VeriTile.Math.RealErf
+import VeriTile.Triton.Math.Erf
 import VeriTile.Triton.Semantics.State
 
 namespace VeriTile.Triton

@@ -986,10 +986,4 @@ theorem fused_recurrent_hgrn_output_summary_general
 
 end Correct
 
-/-! # ══════════ TEST-SHAPE — concrete instances / pinned scaffolding ══════════ -/
-
-section TestShape
-
-end TestShape
-
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn

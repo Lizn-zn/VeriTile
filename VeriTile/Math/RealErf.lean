@@ -6,6 +6,11 @@ A self-contained development of the Gauss error function used by
 (currently v4.29.0) does not expose `Real.erf`, so we build the API we need
 on top of `integral_gaussian_Ioi` and the fundamental theorem of calculus.
 
+The definitions themselves (`gaussianKernel`, `realErf`) live in the
+lightweight module `VeriTile.Triton.Math.Erf` (same namespace, same
+constants), so the core Triton semantics can use them without pulling in the
+heavy analysis imports below. This file proves the theorems about them.
+
 The error function is defined exactly as in the standard references:
 
     realErf x = (2 / √π) * ∫_0^x exp(-(t*t)) dt.
@@ -23,21 +28,16 @@ deferred and not part of this file.
 import Mathlib.Analysis.SpecialFunctions.Gaussian.GaussianIntegral
 import Mathlib.MeasureTheory.Integral.IntervalIntegral.FundThmCalculus
 import Mathlib.MeasureTheory.Integral.IntegralEqImproper
+import VeriTile.Triton.Math.Erf
 
 namespace VeriTile.Math
 
 open Real MeasureTheory Set Filter Topology
 open scoped Topology
 
-/-! ## Gaussian kernel `t ↦ exp(-(t*t))` -/
+/-! ## Gaussian kernel `t ↦ exp(-(t*t))`
 
-/-- Pointwise integrand of the Gauss error function. We use `t * t` rather
-than `t ^ 2` so the algebraic shape lines up with the kernel that appears in
-`VeriTile.Examples.ApproxGeLU`. -/
-noncomputable def gaussianKernel (t : ℝ) : ℝ := Real.exp (-(t * t))
-
-lemma gaussianKernel_def (t : ℝ) :
-    gaussianKernel t = Real.exp (-(t * t)) := rfl
+`gaussianKernel` itself is defined in `VeriTile.Triton.Math.Erf`. -/
 
 lemma gaussianKernel_eq_pow (t : ℝ) :
     gaussianKernel t = Real.exp (-1 * t ^ 2) := by
@@ -87,16 +87,9 @@ lemma integral_gaussianKernel_Ioi_zero :
     exact gaussianKernel_eq_pow t
   rw [hcongr, h, div_one]
 
-/-! ## The error function -/
+/-! ## The error function
 
-/-- The Gauss error function:
-`realErf x = (2 / √π) * ∫_0^x exp(-(t*t)) dt`. -/
-noncomputable def realErf (x : ℝ) : ℝ :=
-  (2 / Real.sqrt Real.pi) * ∫ t in (0)..x, gaussianKernel t
-
-lemma realErf_def (x : ℝ) :
-    realErf x = (2 / Real.sqrt Real.pi) *
-      ∫ t in (0)..x, Real.exp (-(t * t)) := rfl
+`realErf` itself is defined in `VeriTile.Triton.Math.Erf`. -/
 
 @[simp] lemma realErf_zero : realErf 0 = 0 := by
   simp [realErf, intervalIntegral.integral_same]
