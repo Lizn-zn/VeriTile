@@ -30,6 +30,16 @@ Documentation Map):
 | How are atomics / async copies modeled? | [ConcurrencySemantics.md](./ConcurrencySemantics.md) |
 | ApproxGeLU midrange certified-error strategy | [ApproxGeluPhiStrategy.md](./ApproxGeluPhiStrategy.md) |
 
+## Living Paper Artifacts
+
+Maintained continuously through WIP (skeletons first, details/results on
+demand):
+
+- [Proposal.md](./Proposal.md) — the academic story spine (motivation →
+  running example → high-level idea → plan)
+- [ProposalSlides.md](./ProposalSlides.md) — companion slide outline
+  (source of truth for the deck; rendering toolchain TBD)
+
 ## Architecture / Roadmap
 
 The end-to-end project plan and roadmap live in the repo root:
