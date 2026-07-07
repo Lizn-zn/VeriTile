@@ -622,9 +622,9 @@ both sides for ordinary same-buffer equivalence. Lanes where either side is
 `none` impose no output relation.
 
 This is the tool for heterogeneous-layout comparisons and proof middleware;
-the canonical whole-memory refinement semantics is `ComputeRefine.Realizes`.
+the canonical whole-memory refinement semantics is `ComputeRefine.Refines`.
 -/
-def RealizesAt {ι : Type} {α β : Type}
+def RefinesAt {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
@@ -641,7 +641,7 @@ def RealizesAt {ι : Type} {α β : Type}
 performed THE SAME WRITES — the final memories agree at every cell outside
 the declared `scratch` regions. Same write locations, same written values,
 one equation. -/
-def Realizes (lhs rhs : ComputeKernel) (initialState : BlockState)
+def Refines (lhs rhs : ComputeKernel) (initialState : BlockState)
     (scratch : List RegionName := []) : Prop :=
   ComputeKernel.ExecRefine lhs rhs initialState (fun lhs' rhs' =>
     ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)

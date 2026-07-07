@@ -451,7 +451,7 @@ theorem silu_kernels_refinement_exec_view
 
 /-! ### Whole-memory frame lemmas for the writes-equality refinement surface
 
-`ComputeRefine.Realizes` compares the two final memories cell-by-cell, so the
+`ComputeRefine.Refines` compares the two final memories cell-by-cell, so the
 refinement proof needs `.mem`-level frames: each kernel touches only its own
 store target. Proved by symbolic execution down to the store's `writeMem`
 scatter, then the generic scatter frame lemma. -/
@@ -518,7 +518,7 @@ theorem silu_kernels_refinement_view
       (fun idx : TileIndex [blockSize] => residuals idx.1))
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
       (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
       s [zReg, siluReg] := by

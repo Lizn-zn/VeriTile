@@ -8,7 +8,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Triton.KernelLemmas
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq

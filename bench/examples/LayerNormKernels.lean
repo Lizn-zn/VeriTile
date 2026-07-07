@@ -447,7 +447,7 @@ theorem layernorm_kernels_refinement_view
     (h_β : TensorView.loaded s (featureView βReg N)
       (fun idx : TileIndex [N] => βs idx.1))
     (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (twoPassLayerNormKernel xReg γReg βReg yReg N ε)
       (fusedLayerNormKernel xReg γReg βReg yReg N ε) s [] := by
   have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)

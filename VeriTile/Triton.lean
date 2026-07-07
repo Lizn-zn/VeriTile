@@ -14,7 +14,7 @@ worked examples import this single module in place of the individual
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory
-import VeriTile.Triton.Kernel
+import VeriTile.Triton.KernelLemmas
 import VeriTile.Triton.Correctness
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL

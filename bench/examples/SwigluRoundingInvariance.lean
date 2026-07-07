@@ -77,7 +77,7 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
   same writes — final memories agree everywhere outside the scratch tensor
   `S`, for every rounding model.
 * `swiglu_refines_classic` — degeneration at `triv`: the canonical
-  `ComputeRefine.Realizes` writes-equality statement recovered from the
+  `ComputeRefine.Refines` writes-equality statement recovered from the
   invariance theorem.
 * `silu_step_regClosed` / `mul_step_regClosed` / `swiglu_fused_regClosed` —
   the semantic register-closedness of the three kernels (inputs to the
@@ -623,13 +623,13 @@ theorem swiglu_fused_eq_unfused_of_representable
         rw [hLmem, hBmem, hA_mem o]
 
 /-- Degeneration at the trivial model: the canonical two-kernel
-`ComputeRefine.Realizes` writes-equality statement — every rounding
+`ComputeRefine.Refines` writes-equality statement — every rounding
 collapses, and the fused kernel and the unfused pipeline perform the same
 writes outside the scratch tensor `S`. -/
 theorem swiglu_refines_classic
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (swiglu_fused X Y OUT ncols BLOCK_N)
       (swiglu_unfused X Y S OUT ncols BLOCK_N) s [S] := by
   rw [← ComputeRefine.refinesR_triv_iff]

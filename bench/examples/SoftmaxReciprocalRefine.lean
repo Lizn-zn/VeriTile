@@ -1,7 +1,7 @@
 import VeriTile.Examples.SoftmaxReciprocal
 
 /-!
-Refinement theorem (`ComputeRefine.Realizes`, writes-equality) for the
+Refinement theorem (`ComputeRefine.Refines`, writes-equality) for the
 reciprocal-softmax rewrite. The kernels, specs, correctness lemmas, and the
 exec-level refinement live in `VeriTile.Examples.SoftmaxReciprocal`.
 -/
@@ -18,7 +18,7 @@ theorem softmax_reciprocal_refinement_view
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeRefine.Realizes
+    ComputeRefine.Refines
       (stableSoftmaxKernel xReg yReg N)
       (softmaxRecipKernel xReg yReg N) s [] := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'

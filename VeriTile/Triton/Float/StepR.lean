@@ -331,7 +331,7 @@ theorem execR_triv (k : Kernel) (s : BlockState) :
 /-! ## R-scatter readback (#447 Phase C)
 
 The `writeMemAsR` mirror of the fp16 `MemCell` scatter-readback family in
-`VeriTile.Triton.Kernel.ScatterStore` (`scatter_memcell_fp16_prop_masked_nd`).
+`VeriTile.Triton.KernelLemmas.ScatterStore` (`scatter_memcell_fp16_prop_masked_nd`).
 Narrow float cells are **not** decodable by `BlockState.readMem` (it reads the
 `.real` channel only, and `MemCell.readAs` is tag-exact), so — exactly like
 the existing fp16-store bench proofs — the readback is stated at the `MemCell`

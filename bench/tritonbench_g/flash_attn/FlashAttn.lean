@@ -66,7 +66,7 @@ sorry-free in `VeriTile/Triton/Semantics/BlockPtrEval.lean` +
 `VeriTile/Triton/Core/{Types,Shape}.lean` (`address_2d_offsets`,
 `advance_2d_offsets`, the `blockPtr_*_index` forms, `inBounds_nil_*`), the
 dynamic-loop driver `forRangeDyn_inv` lives in
-`VeriTile/Triton/Kernel/LoopInvariant.lean`, and the flash-attn-specific recipes
+`VeriTile/Triton/KernelLemmas/LoopInvariant.lean`, and the flash-attn-specific recipes
 `flash_makeBlockPtrDyn_eval` / `flash_makeBlockPtr_rowcol_eval` /
 `flash_advance_{col,row}_eval` / `flash_load_{K,Q}_eval` (below) specialize them
 to this kernel's exact `make_block_ptr` AST.
