@@ -275,5 +275,3 @@ v1 running examples reaches that trigger.
   [`ConcurrencySemantics.md`](./ConcurrencySemantics.md);
   [`AsyncRunningExamples.md`](./AsyncRunningExamples.md) (#460);
   [#409](https://github.com/Lizn-zn/VeriTile/issues/409) gap table.
-</content>
-</invoke>
