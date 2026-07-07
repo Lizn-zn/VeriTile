@@ -23,6 +23,14 @@ length-`n` input vector. -/
 def castFin {n k : Nat} (h : k ≤ n) (i : Fin k) : Fin n :=
   ⟨i.val, lt_of_lt_of_le i.isLt h⟩
 
+/-- Offset of lane `i` in the current program's contiguous 1-D tile:
+`s.pid * N + i.val` — the address underlying the `InputLoadedAt` /
+`outWritesTo` / `InputCellsLoadedAt` contracts, exposed as a shared name for
+worked examples to use in place of a local address def. `@[reducible]` so it
+is defeq to the raw expression the contracts inline. -/
+@[reducible] def programLaneOffset (s : BlockState) (N : Nat) (i : Fin N) : Nat :=
+  s.pid * N + i.val
+
 /-- Region `region` holds tile `xs` at offsets `[pid*N, pid*N + N - 1]`. -/
 def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=

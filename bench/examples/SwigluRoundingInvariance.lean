@@ -95,7 +95,7 @@ the classic fp16/bf16 convention (`rmsnorm_fused_llama`).
 namespace VeriTile.Bench.Examples.SwigluRounding
 
 open VeriTile.Triton
-open VeriTile.Examples (InputLoadedAt outWritesTo floatCell InputCellsLoadedAt)
+open VeriTile.Examples (InputLoadedAt outWritesTo floatCell InputCellsLoadedAt programLaneOffset)
 
 /-! ## Kernels -/
 
@@ -165,13 +165,8 @@ theorem exec_swiglu_unfusedR (R : RoundingModel)
 Input hypotheses use the shared `VeriTile.Examples.InputLoadedAt` contract
 (region holds `xs` at `s.pid * N + i` — the canonical per-program 1-D tile);
 output claims use its write-side counterpart `VeriTile.Examples.outWritesTo`
-(the same lanes, masked by `< ncols`). `laneOffset` is that same address,
+(the same lanes, masked by `< ncols`). `programLaneOffset` is that same address,
 named for the proofs. -/
-
-/-- Lane address for this example's 1-D launch (`= s.pid * BLOCK_N + i.val`,
-the `InputLoadedAt`/`outWritesTo` addressing). -/
-def laneOffset (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
-  s.pids 0 * BLOCK_N + i.val
 
 /-- Each `R⟦v⟧` is ONE bf16 rounding event — count the brackets to count
 the events. -/
@@ -420,14 +415,14 @@ theorem swiglu_unfused_realizesR
       have h_y1 : InputLoadedAt s1 Y BLOCK_N ys := by
         intro j
         have hmem := silu_step_preservesR X S ncols BLOCK_N s R s1 Y (Ne.symm h_SY) hA
-        have hread : s1.readMem Y (laneOffset s1 BLOCK_N j)
-            = s.readMem Y (laneOffset s1 BLOCK_N j) := by
+        have hread : s1.readMem Y (programLaneOffset s1 BLOCK_N j)
+            = s.readMem Y (programLaneOffset s1 BLOCK_N j) := by
           unfold BlockState.readMem
           rw [hmem]
-        show s1.readMem Y (laneOffset s1 BLOCK_N j) = ys j
+        show s1.readMem Y (programLaneOffset s1 BLOCK_N j) = ys j
         rw [hread]
         have hy := h_y j
-        simp only [BlockState.pid_eq, laneOffset, hpids] at hy ⊢
+        simp only [BlockState.pid_eq, programLaneOffset, hpids] at hy ⊢
         exact hy
       -- step B's realization at the intermediate state
       have hBout := realizesR_out
@@ -436,7 +431,7 @@ theorem swiglu_unfused_realizesR
       have hAct1 : s1.pids 0 * BLOCK_N + i.val < ncols := by rw [hpids]; exact hActive
       have hout := hBout i
       simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct1, if_true] at hout
-      simpa [laneOffset, hpids, unfusedSpec] using hout
+      simpa [programLaneOffset, hpids, unfusedSpec] using hout
 
 /-! ## Frame lemmas (the writes each kernel does NOT perform) -/
 
@@ -458,7 +453,7 @@ are untouched. -/
 private theorem swiglu_fused_preserves_unhitR (R : RoundingModel) (s' : BlockState)
     (o : Nat)
     (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
-      laneOffset s BLOCK_N i ≠ o)
+      programLaneOffset s BLOCK_N i ≠ o)
     (hExec : execR R (swiglu_fused X Y OUT ncols BLOCK_N) s = some s') :
     s'.mem OUT o = s.mem OUT o := by
   simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
@@ -485,7 +480,7 @@ untouched. -/
 private theorem mul_step_preserves_unhitR (R : RoundingModel) (s' : BlockState)
     (o : Nat)
     (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
-      laneOffset s BLOCK_N i ≠ o)
+      programLaneOffset s BLOCK_N i ≠ o)
     (hExec : execR R (mul_step S Y OUT ncols BLOCK_N) s = some s') :
     s'.mem OUT o = s.mem OUT o := by
   simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
@@ -570,7 +565,7 @@ theorem swiglu_fused_eq_unfused_of_representable
       by_cases hrOUT : r = OUT
       · rw [hrOUT] at hA_mem ⊢
         by_cases hhit : ∃ i : Fin BLOCK_N,
-            (s.pids 0 * BLOCK_N + i.val < ncols) ∧ o = laneOffset s BLOCK_N i
+            (s.pids 0 * BLOCK_N + i.val < ncols) ∧ o = programLaneOffset s BLOCK_N i
         · -- an active lane writes this cell on both sides; the written values
           -- coincide by the representability collapse of the two specs
           obtain ⟨i, hAct, rfl⟩ := hhit
@@ -584,18 +579,18 @@ theorem swiglu_fused_eq_unfused_of_representable
           have hU := hUout i
           simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct, if_true,
             ComputeCorrect.OutputReadable.read_memcell] at hF hU
-          simp only [laneOffset]
+          simp only [programLaneOffset]
           rw [hF, hU, fusedSpec_eq_unfusedSpec_of_representable xs ys R i (hRep i)]
         · -- no active lane hits this `OUT` cell: preserved on both sides
           have hmiss : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
-              laneOffset s BLOCK_N i ≠ o :=
+              programLaneOffset s BLOCK_N i ≠ o :=
             fun i hi heq => hhit ⟨i, hi, heq.symm⟩
           have hLmem : lhs'.mem OUT o = s.mem OUT o :=
             swiglu_fused_preserves_unhitR X Y OUT ncols BLOCK_N s R lhs' o hmiss hL
           have hBmem : rhs'.mem OUT o = s1.mem OUT o :=
             mul_step_preserves_unhitR Y S OUT ncols BLOCK_N s1 R rhs' o
               (fun i hi => by
-                simp only [laneOffset, hpids]
+                simp only [programLaneOffset, BlockState.pid_eq, hpids]
                 exact hmiss i (by rwa [hpids] at hi)) hRB
           rw [hLmem, hBmem, hA_mem o]
       · -- `r ∉ {S, OUT}`: untouched by every store on both sides
