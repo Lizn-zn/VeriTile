@@ -120,9 +120,59 @@ reduction)会被多种 operator 复用。按机制命名,去重才对得上 —�
 4. **只是 Mathlib + kernel 参数名的一行组合?**
    → 留在 kernel 文件里。**不要**移到 `Math/`。
 
+## 物理模块布局
+
+上面的三层规则讲的是*新的 math/bridge/glue 放哪*。物理上的
+`VeriTile/Triton/` 目录树还承载语义、correctness、float 基础设施。当前目录图:
+
+```text
+VeriTile/
+  Triton.lean               总入口 prelude —— `import VeriTile.Triton` 拉入整个
+                            子集(Core + Semantics + Memory + KernelLemmas +
+                            Correctness + Float + DSL + Math + Launch +
+                            Concurrency)。全部 151 个 bench 端口和 showcase 文件
+                            都只 import 这一个模块。
+  Triton/
+    Core/                   AST:`Kernel` / `ComputeKernel` 类型和 `ComputeOp`
+                            位常量(原 `Triton/Compute.lean` 已折进这里并删除)。
+    Semantics/              typed 操作语义:exec、step、tiled indexing、masked
+                            reduction、streaming accumulator ……
+    Memory/                 BlockState、tensor view、readback。
+    DSL/                    `triton { ... }` 宏前端。
+    Math/                   纯 `(Fin N → ℝ) → ...` 算子(见三层规则)。Math/Erf
+                            拆分:轻量的 `Triton.Math.Erf`(def `realErf`,被
+                            Semantics/TileOps 用)vs 重量的 `Math.RealErf`
+                            (Gaussian-integral 证明)—— 拆分让 lite 构建的
+                            Mathlib 闭包更小。
+    KernelLemmas/           可复用的 bench 证明辅助(EvalHelpers、LoopInvariant、
+                            Matmul、OffsetInjective、ScatterStore)。此目录由
+                            `Triton/Kernel/` 改名而来;它装的是证明引理,
+                            **不是** `Kernel` 类型(类型在 Core/Ast)。
+    Correctness.lean        顶层 correctness/refinement surface:`Kernel.Correct`、
+                            `ComputeCorrect.*`、`ComputeRefine.*`、`WriteMap`、
+                            `OutputReadable`。(从 Float/ 移出;原
+                            `VeriTile.Triton.Float.Correctness`。)
+    Float/                  仅浮点 dtype 机制:dtype erasure(Erasure、
+                            StateErasure)+ rounding model(RoundingModel、
+                            EvalOpR、StepR、Refine、Pipeline)。rounding surface
+                            `RealizesR`/`RefinesR`/`RefinesAtR` 在
+                            `Float/Refine.lean`。
+    Launch/                 Grid-launch 组合:GridWriteFootprint、GridFrames、
+                            mergeFrames、GridWritesDisjoint。
+    Concurrency/            Grid 级 atomic-add 正确性。
+```
+
+### 依赖方向
+
+`Concurrency/Atomic` 依赖 `Launch.Composition`(复用 GridWriteFootprint /
+GridFrames / GridWritesDisjoint),而 `Launch` 从不 import `Concurrency` ——
+因此这条边是单向的,无环。在任何 layer diagram 里都要把
+**Concurrency/Atomic 放在 Launch *之上***:grid 级 atomic-add 正确性是建在
+grid-launch 之上的应用层,而不是它下面。
+
 ## 相关
 
 - [`ProofConventions.md`](./ProofConventions.md) —— 证明 tactic 约定,包括
   `erw` 作为 carrier-bridge 的 fallback。
 - [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) —— 用户面 theorem
-  surface(`Realizes`, `WriteMap`, `OutputReadable`)。
+  surface(`Realizes`, `Refines`, `WriteMap`, `OutputReadable`)。
