@@ -536,7 +536,7 @@ input-range hypothesis*. No `-1e38` stand-in.
 
 # `forLoop_inv` — the master induction lemma
 
-`VeriTile/LoopInvariant.lean`
+`VeriTile/Kernel/LoopInvariant.lean`
 
 ::::cols3
 :::cardBlue
