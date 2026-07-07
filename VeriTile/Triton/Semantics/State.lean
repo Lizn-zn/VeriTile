@@ -1707,3 +1707,56 @@ theorem foldl_writeMem_mem_preserve_unhit {α : Type} {region : RegionName}
 end BlockState
 
 end VeriTile.Triton
+
+/-! ## Fresh-launch register reset (#447 Phase C.5)
+
+A real kernel launch starts from an empty register file: registers never
+survive across launches, only global memory (and the launch environment —
+program ids, grid dimensions, undef) does. `BlockState.resetRegs` is that
+fresh-launch state; the honest multi-launch pipeline semantics
+(`VeriTile.Triton.Float.Pipeline`) resets registers before every stage. -/
+
+namespace VeriTile.Triton
+
+namespace BlockState
+
+/-- Fresh-launch state: clear every register binding; keep memory, program
+ids, the undef environment, and the launch-grid dimensions. -/
+def resetRegs (s : BlockState) : BlockState :=
+  { s with regs := fun _ _ _ => none }
+
+@[simp] theorem resetRegs_mem (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.mem region offset = s.mem region offset := rfl
+
+@[simp] theorem resetRegs_regs (s : BlockState) (dtype : TileDType)
+    (shape : TileShape) (name : RegName) :
+    s.resetRegs.regs dtype shape name = none := rfl
+
+@[simp] theorem resetRegs_pids (s : BlockState) : s.resetRegs.pids = s.pids := rfl
+
+@[simp] theorem resetRegs_pid (s : BlockState) : s.resetRegs.pid = s.pid := rfl
+
+@[simp] theorem resetRegs_undef (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.undef region offset = s.undef region offset := rfl
+
+@[simp] theorem resetRegs_numPids (s : BlockState) : s.resetRegs.numPids = s.numPids := rfl
+
+@[simp] theorem resetRegs_readMem (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMem region offset = s.readMem region offset := rfl
+
+@[simp] theorem resetRegs_readMemAs (s : BlockState) (dtype : FloatDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemAs dtype region offset = s.readMemAs dtype region offset := rfl
+
+@[simp] theorem resetRegs_readMemTyped (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemTyped dtype region offset = s.readMemTyped dtype region offset := rfl
+
+@[simp] theorem resetRegs_readMemValue (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemValue dtype region offset = s.readMemValue dtype region offset := by
+  cases dtype <;> rfl
+
+end BlockState
+
+end VeriTile.Triton

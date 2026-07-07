@@ -14,3 +14,4 @@ import VeriTile.Triton.Float.RoundingModel
 import VeriTile.Triton.Float.EvalOpR
 import VeriTile.Triton.Float.StepR
 import VeriTile.Triton.Float.Refine
+import VeriTile.Triton.Float.Pipeline

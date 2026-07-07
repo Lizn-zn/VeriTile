@@ -1065,6 +1065,38 @@ abbrev body (ck : ComputeKernel) : List Stmt :=
       body := by
   exact body_mk_map_alg inputs outputs body
 
+/-! ### n-ary pipeline concatenation (#447 Phase C.5)
+
+`seq` is `fromKernelBody`'s n-ary sibling: it concatenates the (projected)
+bodies of the stage kernels into one kernel, with explicitly given port
+lists. It is a purely *syntactic* combinator — concatenation lets register
+bindings flow across the stage seams, which no real multi-launch execution
+allows. The honest per-launch semantics (`execPipelineR`, registers reset
+between launches) and the bridge discharging the register-leakage gap live
+in `VeriTile.Triton.Float.Pipeline`. -/
+
+/-- Concatenate the stage bodies of `ks` into one kernel with the given
+input/output port lists. -/
+def seq (inputs outputs : List RegionName) (ks : List ComputeKernel) : ComputeKernel :=
+  fromKernelBody inputs outputs (ks.flatMap ComputeKernel.body)
+
+@[simp] theorem toAlgorithm?_seq
+    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (ComputeKernel.seq inputs outputs ks).toAlgorithm? =
+      Except.ok (Kernel.mk inputs outputs (ks.flatMap ComputeKernel.body)) := by
+  simp [ComputeKernel.seq]
+
+@[simp] theorem toAlgKernel_seq
+    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (ComputeKernel.seq inputs outputs ks).toAlgKernel =
+      Kernel.mk inputs outputs (ks.flatMap ComputeKernel.body) := by
+  simp [ComputeKernel.seq]
+
+@[simp] theorem body_seq
+    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (ComputeKernel.seq inputs outputs ks).body = ks.flatMap ComputeKernel.body := by
+  simp [ComputeKernel.seq]
+
 end ComputeKernel
 
 end VeriTile.Triton

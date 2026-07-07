@@ -534,3 +534,20 @@ theorem foldl_writeMemAsR_preserve_masked_prop {α : Type} (R : RoundingModel)
 end BlockState
 
 end VeriTile.Triton
+
+/-! ## Sequential decomposition -/
+
+namespace VeriTile.Triton
+
+/-- `stepStmtsR` splits over list concatenation: running `xs ++ ys` is
+running `xs`, then (if it succeeds) running `ys` from the resulting state.
+The n-ary pipeline split (`execR_toAlgKernel_seq`) is built on this. -/
+theorem stepStmtsR_append (R : RoundingModel) (xs ys : List Stmt) (s : BlockState) :
+    stepStmtsR R (xs ++ ys) s = (stepStmtsR R xs s).bind (fun s' => stepStmtsR R ys s') := by
+  induction xs generalizing s with
+  | nil => simp [stepStmtsR]
+  | cons st rest ih =>
+      simp [stepStmtsR]
+      cases stepStmtR R st s <;> simp [ih]
+
+end VeriTile.Triton
