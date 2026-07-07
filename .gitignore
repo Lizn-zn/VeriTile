@@ -8,6 +8,7 @@
 node_modules/
 
 # Editor / tooling
+.agents
 /.claude/
 *.olean
 *.ilean
