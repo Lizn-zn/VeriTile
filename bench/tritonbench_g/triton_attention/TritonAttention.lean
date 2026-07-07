@@ -1,11 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Semantics.BlockPtrEval
+import VeriTile.Triton
 import VeriTile.Examples.FlashAttention1
 
 /-!

@@ -9,12 +9,7 @@ The two-pass kernel proof is closed over the typed tile semantics. The fused
 kernel proof still depends on the Welford loop invariant.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Math.Reduction
+import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Examples.WelfordKernels
 

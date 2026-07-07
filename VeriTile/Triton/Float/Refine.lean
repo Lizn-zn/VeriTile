@@ -23,7 +23,7 @@ carry an `R` suffix to coexist with them.
 -/
 
 import VeriTile.Triton.Float.StepR
-import VeriTile.Triton.Float.Correctness
+import VeriTile.Triton.Correctness
 
 namespace VeriTile.Triton
 

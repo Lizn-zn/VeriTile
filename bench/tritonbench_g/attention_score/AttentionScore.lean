@@ -1,10 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Semantics.BlockPtrEval
-import VeriTile.Triton.Kernel.LoopInvariant
+import VeriTile.Triton
 
 /-!
 # `attention_score` — strict per-kernel correctness

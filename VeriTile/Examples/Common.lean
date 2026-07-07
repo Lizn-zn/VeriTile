@@ -10,7 +10,7 @@ ergonomic shorthands used by worked examples.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory
-import VeriTile.Triton.Float.Correctness
+import VeriTile.Triton.Correctness
 
 namespace VeriTile.Examples
 

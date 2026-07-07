@@ -25,7 +25,7 @@ output is NOT phrased as `ComputeCorrect.Realizes`: it stays in the raw
 `(exec …).map (·.readMemValue .fp16 OutScale …) = some (if …)` form. This is a
 framework *carrier* limitation, not a proof gap. `ComputeCorrect.Realizes`
 requires an `OutputReadable` instance for the readback type, and the only
-instances in `VeriTile.Triton.Float.Correctness` are for `MemCell`, `ℝ`, `Nat`,
+instances in `VeriTile.Triton.Correctness` are for `MemCell`, `ℝ`, `Nat`,
 and `Int`. The scale reads back at `TileCarrier .fp16` (the *decoded* fp16
 value), which has no `OutputReadable` carrier, so it cannot be wrapped in
 `Realizes`. The conjunct is nonetheless genuine and non-self-referential: it

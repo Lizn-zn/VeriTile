@@ -1,8 +1,4 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Triton
 
 /-!
 # `sgmv_expand_slice` — full closed-form correctness
