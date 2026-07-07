@@ -28,6 +28,7 @@ Documentation Map):
 | How does memory safety / framing work? | [MemorySafety.md](./MemorySafety.md) |
 | What's the GPU memory model? | [GpuMemoryModel.md](./GpuMemoryModel.md) |
 | How are atomics / async copies modeled? | [ConcurrencySemantics.md](./ConcurrencySemantics.md) |
+| State-machine vs TLA for async correctness? | [AsyncModelingSubstrate.md](./AsyncModelingSubstrate.md) |
 | ApproxGeLU midrange certified-error strategy | [ApproxGeluPhiStrategy.md](./ApproxGeluPhiStrategy.md) |
 
 ## Living Paper Artifacts

@@ -121,6 +121,7 @@ Task-oriented:
 | How does memory safety / framing work? | [MemorySafety.md](./documents/MemorySafety.md) |
 | What's the GPU memory model? | [GpuMemoryModel.md](./documents/GpuMemoryModel.md) |
 | How are atomics / async copies modeled? | [ConcurrencySemantics.md](./documents/ConcurrencySemantics.md) |
+| State-machine vs TLA for async correctness? | [AsyncModelingSubstrate.md](./documents/AsyncModelingSubstrate.md) |
 | How does the kernel manifest work? | [KernelManifest.md](./documents/KernelManifest.md) |
 | Naming conventions for theorem surfaces | [TheoremSurfaces.md](./documents/TheoremSurfaces.md) |
 | LLM proof wrapper | [scripts/README.md](./scripts/README.md) |
