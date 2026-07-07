@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fast_rms_layernorm` — strict per-kernel correctness
@@ -42,7 +42,7 @@ gemma_rms_layernorm_backward_dy_compute_correct  ← backward dY (Gemma)
 The two forward summaries are the public top theorems. The RMS row math
 (`rmsInputTile`, `rmsSumCarrier`, `rmsInvVarCarrier`, `rmsLayernormYSpec`,
 `gemmaRmsLayernormYSpec`) is defined inline in this file rather than reusing
-`VeriTile.Triton.Math.RMSNorm`.
+`VeriTile.Math.RMSNorm`.
 
 ## Modeling boundary
 
@@ -64,7 +64,7 @@ kernels rather than a runtime branch. `@triton.autotune` is not modeled.
 
 namespace VeriTile.Bench.TritonBenchG.FastRmsLayernorm
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 

@@ -13,16 +13,16 @@ is loaded by `InputRowLoadedAt`.
 -/
 
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Reduction
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Reduction
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Source Triton shape
 
@@ -75,13 +75,13 @@ def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKe
 
 /-! ## Math denotations -/
 
-/-- Mathematical row-wise sum. Thin alias for `Triton.TiledReduction.tileSum`. -/
+/-- Mathematical row-wise sum. Thin alias for `TiledReduction.tileSum`. -/
 noncomputable def rowWiseSumSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.tileSum xs
+  TiledReduction.tileSum xs
 
-/-- Mathematical row-wise max. Thin alias for `Triton.TiledReduction.tileMax`. -/
+/-- Mathematical row-wise max. Thin alias for `TiledReduction.tileMax`. -/
 noncomputable def rowWiseMaxSpec {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.tileMax h xs
+  TiledReduction.tileMax h xs
 
 /-! ## Kernel correctness -/
 
@@ -100,7 +100,7 @@ theorem rowWiseSum_correct
         Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        rowWiseSumSpec, Triton.TiledReduction.tileSum]
+        rowWiseSumSpec, TiledReduction.tileSum]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   apply Exists.intro
@@ -163,7 +163,7 @@ theorem rowWiseMax_correct
         Tile.bop, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        rowWiseMaxSpec, Triton.TiledReduction.tileMax]
+        rowWiseMaxSpec, TiledReduction.tileMax]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   apply Exists.intro

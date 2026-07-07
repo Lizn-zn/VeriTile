@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `rmsnorm_implementation` — strict per-kernel correctness
@@ -39,7 +39,7 @@ rmsnorm_implementation_compute_correct        ← one-block slice (0 < N ≤ BLO
 arbitrary `N_SIZE` (var and output loops each tiled over `BLOCK_N_SIZE` and
 closed by `forRange` loop invariants). The one-block `*_compute_correct` is the
 single-iteration specialization. The RMSNorm row math is defined inline in this
-file rather than reusing `VeriTile.Triton.Math.RMSNorm`.
+file rather than reusing `VeriTile.Math.RMSNorm`.
 
 ## Modeling boundary
 
@@ -60,7 +60,7 @@ injectivity. `@triton.autotune` is not modeled.
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormImplementation
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

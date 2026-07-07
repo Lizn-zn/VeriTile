@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `masked_select` — strict per-kernel correctness
@@ -45,7 +45,7 @@ of the realized write map.
 
 namespace VeriTile.Bench.TritonBenchG.MaskedSelect
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `masked_select.py`'s `masked_select_kernel`.
 

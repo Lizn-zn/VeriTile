@@ -32,7 +32,7 @@ import VeriTile.Examples.FlashAttention1.Common.CausalBoundary
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Causal streaming math model
 
@@ -1360,7 +1360,7 @@ theorem attentionReal_row_eq {M1 M2 S D : Nat}
     (hRow : ∀ d' : Fin D, Q1 (i1, d', PUnit.unit) = Q2 (i2, d', PUnit.unit)) :
     attentionReal Q1 K V scale (i1, d, PUnit.unit)
       = attentionReal Q2 K V scale (i2, d, PUnit.unit) := by
-  unfold attentionReal VeriTile.Triton.attentionReal VeriTile.Triton.scaledScore
+  unfold attentionReal VeriTile.attentionReal VeriTile.scaledScore
   simp [hRow]
 
 /-- Bridge: the slice-form `attentionReal` produced by FA-1's strided

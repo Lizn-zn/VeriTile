@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Core.Bodies
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 private def fa1PreLoopStridedState (qReg : RegionName) (M D : Nat)
     (sQB sQH sQS sQD : Nat) (sKB sKH : Nat) (sVB sVH : Nat)

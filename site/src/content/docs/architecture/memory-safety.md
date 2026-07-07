@@ -2,7 +2,7 @@
 title: "Layer-1 Memory Bounds Safety"
 ---
 
-`VeriTile.Triton.Memory.Bounds` defines the lightweight bounds-safety layer for
+`VeriTile.Memory.Bounds` defines the lightweight bounds-safety layer for
 Triton memory operations:
 
 ```lean
@@ -47,7 +47,7 @@ The predicate covers the three memory-addressing forms in the AST:
   out-of-bounds lanes are excluded from the bound obligation.
 
 Pointer-register provenance is intentionally not solved here. The optional
-checker in `VeriTile.Triton.Memory.Typing` can later provide sufficient
+checker in `VeriTile.Memory.Typing` can later provide sufficient
 conditions for dynamic pointer-address safety; the bounds layer stays semantic
 and composable.
 
@@ -65,13 +65,13 @@ Those are later layers in the concurrency roadmap; see
 `documents/ConcurrencySemantics.md`. `Kernel.MemorySafe` is only the
 per-program active-lane region-bounds contract.
 
-Layer 2a is implemented separately in `VeriTile.Triton.Memory.Frame`. It adds
+Layer 2a is implemented separately in `VeriTile.Memory.Frame`. It adds
 predicate-level write footprints and `BlockState.WriteWithin` frame contracts
 for single-program executions. Layer 2b lives in
-`VeriTile.Triton.Launch.Composition`: it merges explicit per-program
+`VeriTile.Launch.Composition`: it merges explicit per-program
 `Kernel.ExecFrame`s when their write footprints are pairwise disjoint.
 Structured footprint extraction and proof automation live in
-`VeriTile.Triton.Memory.Footprint` (#61). This layer keeps
+`VeriTile.Memory.Footprint` (#61). This layer keeps
 `WriteFootprint := MemCellAddr -> Prop` as the semantic interface and adds
 smart constructors such as `WriteFootprint.tileImage`,
 `activeTileImage`, and block-pointer address-image helpers.

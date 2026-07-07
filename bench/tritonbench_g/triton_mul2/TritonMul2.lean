@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -47,7 +47,7 @@ aliases `in_ptr0`, and `mul2_inplace_kernel` is correct writing back in place.
 
 namespace VeriTile.Bench.TritonBenchG.TritonMul2
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `triton_mul2.py`'s `mul2_kernel`.
 

@@ -5,7 +5,7 @@ description: 标准 1D scatter、双通道写、单步循环、helper 地图、�
 
 到现在,bench 语料的证明模式稳定在几个模板上。本页把每个 pattern 映射到
 `Semantics/Scalar.lean`、`Semantics/State.lean`、
-`VeriTile/Triton/LoopInvariant.lean` 里的 helper,并给出可直接抄的骨架。
+`VeriTile/LoopInvariant.lean` 里的 helper,并给出可直接抄的骨架。
 
 :::caution[时效性]
 下文列出的 helper 名最近一次盘点是 2026-05-17。**lemma 名是稳定的,但
@@ -78,7 +78,7 @@ Pattern:
 ## 循环不变量证明
 
 Kernel body 被 `for` / `tl.for` 包住。用
-[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/LoopInvariant.lean)
+[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/LoopInvariant.lean)
 或它的兄弟。
 
 ### DSL → AST → helper 映射

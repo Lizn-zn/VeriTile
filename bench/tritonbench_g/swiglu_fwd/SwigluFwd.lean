@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Activation
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Activation
 
 /-!
 # `swiglu_fwd` — strict per-kernel correctness
@@ -32,7 +32,7 @@ swiglu_fwd_kernel_output_summary              ← TOP THEOREM
 
 ## Modeling boundary
 
-The spec is an **oracle wrapper** over `VeriTile.Triton.Math.Activation`: the
+The spec is an **oracle wrapper** over `VeriTile.Math.Activation`: the
 SwiGLU math (`TiledActivation.swiglu`, built on `TiledActivation.silu`) lives
 once in `Math.Activation` and is reused here, so this file only checks that the
 kernel realizes that oracle lane-wise. Arithmetic is over `ℝ` (not bit-accurate
@@ -45,7 +45,7 @@ the scatter, so the result is correct even if `OUT` aliases `X` or `Y`.
 
 namespace VeriTile.Bench.TritonBenchG.SwigluFwd
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `swiglu_fwd.py`'s `_swiglu_fwd_kernel`.
 

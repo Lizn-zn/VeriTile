@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `softmax_triton2` — strict per-kernel correctness
@@ -46,7 +46,7 @@ the row is read into registers before the masked scatter.
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxTriton2
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful 1:1 transcription of `softmax_triton2.py`'s `softmax_kernel`.
 

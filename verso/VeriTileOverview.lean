@@ -342,7 +342,7 @@ Cross-cutting subsystems plug into the same `BlockState`:
 
 # DSL layer — accept Triton-like surface syntax
 
-`VeriTile/Triton/DSL/`
+`VeriTile/Frontend/Triton/DSL/`
 
 ::::cols3
 :::cardBlue
@@ -390,7 +390,7 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 
 # Core AST — types, shapes, and the typed `Op`
 
-`VeriTile/Triton/Core/`
+`VeriTile/Core/`
 
 ::::cols3
 :::cardBlue
@@ -437,7 +437,7 @@ inductive Op : TileDType → TileShape → Type
 
 # `ComputeKernel` — proof-stating surface, projects to `AlgKernel`
 
-`VeriTile/Triton/Float/` + `VeriTile/Triton/Core/Ast.lean`
+`VeriTile/Float/` + `VeriTile/Core/Ast.lean`
 
 ::::cols3
 :::cardBlue
@@ -492,7 +492,7 @@ external (PLAN.md §Compute-gap details).
 
 # Operational semantics — `evalOp`, `stepStmt`, `exec`
 
-`VeriTile/Triton/Semantics/`
+`VeriTile/Semantics/`
 
 ::::cols3
 :::cardBlue
@@ -536,7 +536,7 @@ input-range hypothesis*. No `-1e38` stand-in.
 
 # `forLoop_inv` — the master induction lemma
 
-`VeriTile/Triton/LoopInvariant.lean`
+`VeriTile/LoopInvariant.lean`
 
 ::::cols3
 :::cardBlue
@@ -580,7 +580,7 @@ only thing the LLM agent has to discover.
 
 # Memory subsystem — bounds · footprint · frame · typing · view
 
-`VeriTile/Triton/Memory/`
+`VeriTile/Memory/`
 
 ::::cols3
 :::cardBlue
@@ -624,7 +624,7 @@ end ComputeKernel
 
 # Concurrency framework — trace · refinement · discipline
 
-`VeriTile/Triton/Concurrency/`
+`VeriTile/Concurrency/`
 
 ::::cols3
 :::cardBlue
@@ -690,7 +690,7 @@ The pure-sequential proof chain refuses to execute async — silently sequential
 :::cardGreen
 *Side door · concurrency framework*
 
-`VeriTile/Triton/Concurrency/` builds an `EffectTrace` (memory ∪ async ∪ barrier), derives `HappensBefore`, and states correctness as `RefinesSequential concurrent sequential` on final memory.
+`VeriTile/Concurrency/` builds an `EffectTrace` (memory ∪ async ∪ barrier), derives `HappensBefore`, and states correctness as `RefinesSequential concurrent sequential` on final memory.
 
 :::
 
@@ -743,7 +743,7 @@ Once these are proved, *concurrent ≡ sequential on final memory* follows by re
 
 # Launch — ND grid + disjoint-writes composition
 
-`VeriTile/Triton/Launch/`
+`VeriTile/Launch/`
 
 ::::cols3
 :::cardBlue

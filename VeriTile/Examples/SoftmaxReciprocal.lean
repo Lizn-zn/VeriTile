@@ -10,17 +10,17 @@ in `SoftmaxEq.lean` and proven correct via `softmax_stable_correct`).
 This file adds only the reciprocal-form kernel and the equivalence theorem.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Softmax
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile VeriTile.TiledSoftmax
 
 /-- Stable softmax with precomputed reciprocal. Saves N-1 divisions vs
     the per-element-divide form (`stableSoftmaxKernel`). -/

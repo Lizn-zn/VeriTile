@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel.LoopInvariant
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel.LoopInvariant
 
 /-!
 # `softmax_optimize` — strict per-kernel correctness
@@ -56,12 +56,12 @@ is the stable softmax: `reduceMax` over the padded tile, `exp(row - rowMax)`,
 `other=-float("inf")`; out-of-bounds lanes (`i ≥ N`) are preserved. The
 `.to(output_ptr.dtype.element_ty)` cast is the identity post-erasure. The spec
 references `Tile.reduceMax` / `Tile.reduceSum` directly, not
-`VeriTile.Triton.Math.*`.
+`VeriTile.Math.*`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedVariables false
 
@@ -708,7 +708,7 @@ In loop A (`start_n < prev_multiple`, step-aligned), every lane column
 `c·TILE_N + ℓ` is `< N`, so `laneScoreAt = some (loaded score)` and the body
 advances `laneState` by exactly one `soStep`. -/
 
-open VeriTile.Triton in
+open VeriTile in
 /-- **Aligned `forRangeAux` invariant principle.** When the counter is always a
 multiple of `step` and `step ∣ stop`, the loop terminates with the counter
 *exactly* at `stop` (not merely `≥ stop`), so the invariant holds at `stop`. -/
@@ -751,7 +751,7 @@ theorem forRangeAux_inv_aligned
       rw [stepForRangeAux.step_lt hstep hlt, h_body]
       exact h_aux
 
-open VeriTile.Triton in
+open VeriTile in
 /-- Aligned `forRangeDyn` invariant principle: the loop ends at `stop` exactly. -/
 theorem forRangeDyn_inv_aligned
     {idx : RegName} {startOp stopOp stepOp : Op .nat []}

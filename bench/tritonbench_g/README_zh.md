@@ -124,7 +124,7 @@ license;Apache-2.0 → MIT vendoring 在 attribution 之下被允许。
 4. 把上游 `.py` 放进去,带上面的 attribution header。
 5. 加 `<KernelName>.lean` 包含 DSL port。用
    `namespace VeriTile.Bench.TritonBenchG.<KernelName>`,导入
-   `VeriTile.Triton.Core` + `VeriTile.Triton.DSL`。
+   `VeriTile.Core` + `VeriTile.Frontend.Triton.DSL`。
 6. 用 `bench/check_ports.sh <kernel_name>` 验证。
 7. (阶段 2/3)写好 spec / proof 后,加一行 `scripts/kernel-manifest.tsv`,
    `source = tritonbench:<filename>.py`、`source_ref = <upstream-commit>`。

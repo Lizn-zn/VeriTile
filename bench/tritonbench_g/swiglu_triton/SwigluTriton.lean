@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Activation
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Activation
 
 /-!
 # `swiglu_triton` — strict per-kernel correctness
@@ -39,7 +39,7 @@ swiglu_backward_kernel_output_summary         ← TOP THEOREM (backward)
 
 ## Modeling boundary
 
-The specs are **oracle wrappers** over `VeriTile.Triton.Math.Activation`: the
+The specs are **oracle wrappers** over `VeriTile.Math.Activation`: the
 SwiGLU math (`TiledActivation.swiglu`, `TiledActivation.swigluBwdA/B`, built on
 `TiledActivation.silu`) lives once in `Math.Activation` and is reused here, so
 this file only checks that the kernels realize those oracles lane-wise.
@@ -55,7 +55,7 @@ the first channel, and is stated as a `Sum`-indexed multi-output `ComputeCorrect
 
 namespace VeriTile.Bench.TritonBenchG.SwigluTriton
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `swiglu_triton.py`'s `_swiglu_forward_kernel`.
 

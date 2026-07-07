@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `destindex_copy_kv1` — strict per-kernel correctness
@@ -47,7 +47,7 @@ program alias), which the host guarantees via distinct dest rows / strides.
 
 namespace VeriTile.Bench.TritonBenchG.DestindexCopyKv1
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `destindex_copy_kv1.py`'s
 `_fwd_kernel_destindex_copy_kv`.

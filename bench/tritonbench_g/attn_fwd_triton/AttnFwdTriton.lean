@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `attn_fwd_triton` — strict per-kernel correctness
@@ -76,7 +76,7 @@ marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -376,7 +376,7 @@ softmax with a **scalar** score scale `q_scale · k_scale` (loaded once per
 program / per key block) and a **causal** mask
 `tl.where(offs_m[:, None] ≥ start_n + offs_n[None, :], qk, -inf)`. So the genuine
 closed form is the predicate-masked base-2 per-key-scale attention
-`attentionRealBase2PerKeyScalePred` (`VeriTile/Triton/Math/Attention.lean`),
+`attentionRealBase2PerKeyScalePred` (`VeriTile/Math/Attention.lean`),
 instantiated with:
 
 * `keep := causalKeep qStart` — key `j` contributes to query row `i` iff
@@ -391,7 +391,7 @@ This routes to **base-2** (NOT FlashAttention1's natural-exp
 `attentionRealBase2PerKeyScalePred_eq_streaming` (sorry-free) delivers the
 `osStep` online-softmax fold the exec loop realizes. -/
 
-open VeriTile.Triton (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
+open VeriTile (attentionRealBase2PerKeyScalePred attnKeyListPred osStep
   causalKeep)
 
 /-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
@@ -599,23 +599,23 @@ than a fixed numeral. -/
 
 namespace AftFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 end AftFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
-open VeriTile.Triton
+open VeriTile
 
 namespace AftFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 end AftFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdTriton
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Lift a base-state register readback through a `setReg` to a different name —
 used to thread the `s1` head readbacks (`offs_*`/`qvk_offset`) through the
@@ -998,7 +998,7 @@ theorem aftg_sentinel_eq : WithBot.realSub (some (0.0 : ℝ)) (some (1000000.0 :
 
 namespace AftgFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 /-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
 `N_CTX`/`HEAD_ACTIVE`): the streamed per-key-block statements with every dimension
@@ -1301,7 +1301,7 @@ end AftgFoundation
 
 section General
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ### General spec layer (genuine causal closed form over symbolic dims) -/
 
@@ -1387,7 +1387,7 @@ theorem attnFwdTritonOutSpecG_eq_streaming
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attnFwdTritonOutSpecG] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+    VeriTile.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTileAFT2mG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
       (kTileAFT2G s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
       (vTileAFT2mG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
@@ -2553,7 +2553,7 @@ theorem aftgStateBotG_full_eq_spec
   rw [aftgStateBotG_ratio_eq _ _ _ _ _ _ _ _ hne]
   rw [aftgKeysUptoG_full_eq_pred]
   rw [attnFwdTritonOutSpecG_eq_streaming]
-  rw [VeriTile.Triton.osStep_foldl_eq_batch]
+  rw [VeriTile.osStep_foldl_eq_batch]
 
 set_option maxRecDepth 8000 in
 /-- **General body split** — the lowered general AFT2 body decomposes as

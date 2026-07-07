@@ -6,13 +6,36 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4.git"
 rev = "v4.29.0"
 
-# Lite target: Triton subset + worked examples without the GeLU error
-# certificate. Routine kernel-verification work uses this; it skips the
-# `VeriTile.Math.*` chain and ApproxGeLU's analysis-heavy proofs.
+# Lite target: the neutral foundation + worked examples without the GeLU
+# error certificate. Routine kernel-verification work uses this; it skips the
+# GeLU analysis chain (`VeriTile.Math.GeluTaylor20*`, `RealErf`, `Tanh`) and
+# ApproxGeLU's analysis-heavy proofs.
 [[lean_lib]]
 name = "VeriTile"
 globs = [
-  "VeriTile.Triton.+",
+  # Neutral core foundation (relocated out of `VeriTile.Triton.*`, #472).
+  "VeriTile.Core.+",
+  "VeriTile.Semantics.+",
+  "VeriTile.Memory.+",
+  "VeriTile.Float.+",
+  "VeriTile.Launch.+",
+  "VeriTile.Concurrency.+",
+  "VeriTile.Kernel.+",
+  "VeriTile.Compute",
+  "VeriTile.ExternalCheck",
+  # Pure-math operator library (was `VeriTile.Triton.Math.*`).
+  "VeriTile.Math",
+  "VeriTile.Math.Activation",
+  "VeriTile.Math.Attention",
+  "VeriTile.Math.L2Norm",
+  "VeriTile.Math.LogSumExp",
+  "VeriTile.Math.Loss",
+  "VeriTile.Math.Optimizer",
+  "VeriTile.Math.RMSNorm",
+  "VeriTile.Math.Reduction",
+  "VeriTile.Math.Softmax",
+  # Triton frontend (syntax macros + lowering).
+  "VeriTile.Frontend.Triton.+",
   "VeriTile.Examples.Common",
   "VeriTile.Examples.TritonSmoke",
   "VeriTile.Examples.MemorySafety",
@@ -37,10 +60,20 @@ globs = [
 
 # Math sub-library: Taylor and integral bounds for the GeLU error
 # certificate. Pulls in heavy Mathlib analysis (`MeasureTheory`,
-# `Analysis.Calculus.MeanValue`, …).
+# `Analysis.Calculus.MeanValue`, …). The pure-math operator library also lives
+# under `VeriTile.Math.*` but ships with the lite `VeriTile` lib above; this
+# sub-library is only the analysis-heavy GeLU-certificate chain.
 [[lean_lib]]
 name = "VeriTileMath"
-globs = ["VeriTile.Math.+"]
+globs = [
+  "VeriTile.Math.GeluTaylor20Cert",
+  "VeriTile.Math.GeluTaylor20PolyBound",
+  "VeriTile.Math.GeluTaylor20PolyDef",
+  "VeriTile.Math.GeluTaylor20PolyLowerCases",
+  "VeriTile.Math.GeluTaylor20PolyUpperCases",
+  "VeriTile.Math.RealErf",
+  "VeriTile.Math.Tanh",
+]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the
 # GeLU error bound or before any release tagging.

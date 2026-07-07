@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `masked_add_cuda` — strict per-kernel correctness
@@ -45,7 +45,7 @@ disjointness side condition is required.
 
 namespace VeriTile.Bench.TritonBenchG.MaskedAddCuda
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `masked_add_cuda.py`'s `masked_add_kernel`.
 

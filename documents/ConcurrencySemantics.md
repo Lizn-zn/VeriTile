@@ -159,7 +159,7 @@ visibility, or data-structure invariants.
 The first vocabulary slice lives in:
 
 ```text
-VeriTile/Triton/Concurrency/Trace.lean
+VeriTile/Concurrency/Trace.lean
 ```
 
 It defines `ThreadId`, `RMWOp`, `MemoryEvent`, `TraceEvent`, and `Trace`.

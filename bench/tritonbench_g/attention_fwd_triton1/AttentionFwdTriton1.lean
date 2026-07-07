@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.TileOps
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `attention_fwd_triton1` — strict per-kernel correctness
@@ -62,7 +62,7 @@ trusted host boundary.
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

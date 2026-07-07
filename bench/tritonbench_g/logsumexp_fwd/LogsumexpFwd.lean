@@ -1,10 +1,10 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Launch.Grid
-import VeriTile.Triton.Math.LogSumExp
-import VeriTile.Triton.Semantics.MaskedReduction
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Launch.Grid
+import VeriTile.Math.LogSumExp
+import VeriTile.Semantics.MaskedReduction
 import VeriTile.Examples.Common
 import VeriTile.Examples.LogSumExpEq
 
@@ -43,9 +43,9 @@ logsumexp_fwd_kernel_grid_blockLSE_correct        ← whole-grid per-block block
 ```
 
 The spec is the standard mathematical `LSE` (from
-`VeriTile.Triton.Math.LogSumExp`) together with the tiled
+`VeriTile.Math.LogSumExp`) together with the tiled
 `blockLSE` / `partialLSE_full` / `scaledLane_full` / `validLanes` (from
-`VeriTile.Triton.Semantics.TiledIndexing`), under the `TiledLogSumExp`
+`VeriTile.Semantics.TiledIndexing`), under the `TiledLogSumExp`
 oracle — the math is *not* inline-duplicated here.
 
 ## Modeling boundary
@@ -62,7 +62,7 @@ layer.
 
 namespace VeriTile.Bench.TritonBenchG.LogsumexpFwd
 
-open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Examples
+open VeriTile VeriTile.TiledLogSumExp VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `logsumexp_fwd.py`'s `logsumexp_fwd_kernel`.
 

@@ -259,7 +259,7 @@ Real-valued observation surface. In other words, the old theorem-facing
 `RegionName → Nat → ℝ` view still exists as an API layer, but it is no longer
 the runtime storage representation.
 
-Region dtype contracts are modeled separately in `VeriTile.Triton.Memory.Typing`:
+Region dtype contracts are modeled separately in `VeriTile.Memory.Typing`:
 
 ```lean
 RegionTyping := RegionName → TileDType
@@ -365,7 +365,7 @@ float-facing theorems can still use erasure equations such as
 `k.eraseDType = realK` to reuse Real proofs for dtype-annotated algorithm
 kernels. Numeric compute correctness/refinement is represented separately by
 external gap contracts and differential tests rather than IEEE-754 proof. These
-definitions live in `VeriTile.Triton.Float`; see `documents/EraseDType.md` for
+definitions live in `VeriTile.Float`; see `documents/EraseDType.md` for
 the compute/algorithm split and bitcast
 policy.
 

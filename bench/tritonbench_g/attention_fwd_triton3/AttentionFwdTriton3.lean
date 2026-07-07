@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `attention_fwd_triton3` — strict per-kernel correctness
@@ -119,7 +119,7 @@ a line-for-line textual match, and the textual py↔lean scans in
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -683,12 +683,12 @@ theorem aft3OsStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List
         rw [mul_right_comm, ← pow2_add]; ring_nf
     have hsumL : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0))).sum
         = pow2 (-Mr) * (block.map (fun p => pow2 p.1)).sum := by
-      have := VeriTile.Triton.sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun _ => 1)
+      have := VeriTile.sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun _ => 1)
       simp only [mul_one] at this
       rw [this, WithBot.unbotD_coe]
     have hsumT : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0) * p.2)).sum
         = pow2 (-Mr) * (block.map (fun p => pow2 p.1 * p.2)).sum := by
-      rw [VeriTile.Triton.sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun p => p.2), WithBot.unbotD_coe]
+      rw [VeriTile.sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun p => p.2), WithBot.unbotD_coe]
     refine Prod.ext hfst.symm (Prod.ext ?_ ?_)
     · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
     · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
@@ -1030,7 +1030,7 @@ theorem attentionFwdTriton3Case1OutSpecG_eq_streaming
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attentionFwdTriton3Case1OutSpecG] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+    VeriTile.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
       (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
       (fun i j => natSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d
@@ -1048,7 +1048,7 @@ theorem attentionFwdTriton3Case2OutSpecG_eq_streaming
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attentionFwdTriton3Case2OutSpecG] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+    VeriTile.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
       (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
       (fun i j => natComplementSlidingWindowKeepG (s.pids 0) BM BN off size i j) i d
@@ -1065,7 +1065,7 @@ theorem attentionFwdTriton3Case3OutSpecG_eq_streaming
             (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) i d).foldl osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attentionFwdTriton3Case3OutSpecG] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+    VeriTile.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTile3G s Q base BM ND sqm sqk) (kTile3G s K base NC ND skn skk)
       (vTile3G s V base NC ND svk svn) (keyScale3G sc NC)
       (fun (i : Fin BM) (j : Fin NC) => noWindowKeep i j) i d
@@ -1295,7 +1295,7 @@ theorem aft3KeysUptoG_full {BM ND NC : Nat}
     [∀ i j, Decidable (keep i j)] (i : Fin BM) (d : Fin ND) :
     aft3KeysUptoG qT kT vT keyScale keep NC i d
       = attnKeyListPred qT kT vT keyScale keep i d := by
-  unfold aft3KeysUptoG VeriTile.Triton.attnKeyListPred
+  unfold aft3KeysUptoG VeriTile.attnKeyListPred
   apply List.filterMap_congr
   intro j _
   simp only [j.isLt, true_and]
@@ -1345,9 +1345,9 @@ theorem aft3StateBotG_ratio_eq {BM ND NC : Nat}
          st.2.2 / st.2.1) := by
   rw [aft3StateBotG_snd_fst, aft3StateBotG_snd_snd]
   simp only
-  have hcL := (VeriTile.Triton.osStep_foldl_consistent
+  have hcL := (VeriTile.osStep_foldl_consistent
     (aft3KeysUptoG qT kT vT keyScale keep hi i d) 0 0 0 0 0 (by simp) (by simp)).1
-  have hcT := (VeriTile.Triton.osStep_foldl_consistent
+  have hcT := (VeriTile.osStep_foldl_consistent
     (aft3KeysUptoG qT kT vT keyScale keep hi i d) 0 0 0 0 0 (by simp) (by simp)).2
   rw [show (List.foldl osStep (0, 0, 0) (aft3KeysUptoG qT kT vT keyScale keep hi i d)).2.1
         = _ from hcL,

@@ -12,7 +12,7 @@ import VeriTile.Examples.FlashAttention1.ScoreVariants.Backward
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 namespace FA1Score
 

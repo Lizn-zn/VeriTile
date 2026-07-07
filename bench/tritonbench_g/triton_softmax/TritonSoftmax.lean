@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `triton_softmax` — strict per-kernel correctness
@@ -40,12 +40,12 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float). The row reduction (`tl.m
 so padding lanes do not contribute to the max or sum. Out-of-bounds lanes
 (`i ≥ n_cols`) are not stored, preserving the prior output value. The spec
 references `Tile.reduceMax` / `Tile.reduceSum` / `WithBot.realExp` directly, not
-`VeriTile.Triton.Math.*`.
+`VeriTile.Math.*`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TritonSoftmax
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful 1:1 transcription of `triton_softmax.py`'s `softmax_kernel`.
 

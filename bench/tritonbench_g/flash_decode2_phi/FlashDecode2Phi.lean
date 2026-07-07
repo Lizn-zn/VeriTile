@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `flash_decode2_phi` — strict per-kernel correctness
@@ -74,7 +74,7 @@ composition of these faces with the (trusted) loop scheduling.
 
 namespace VeriTile.Bench.TritonBenchG.FlashDecode2Phi
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 1000000

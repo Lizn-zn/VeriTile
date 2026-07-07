@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Boundary.Helpers
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Boundary-masked strided initialization stage. The Q register is loaded
 with the same mask as the v1 kernel: in-bounds rows come from memory, while
@@ -1154,7 +1154,7 @@ theorem fa1_forward_correct_strided_boundaryD_of_step
   rw [FA1MathBoundary.streaming_eq_attentionReal hBk
       (padHeadD (Bd := Bd) Q) hSkLe
       (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V) scale idx hL]
-  exact VeriTile.Triton.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
+  exact VeriTile.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
 
 /-- D-tail causal-boundary strided forward correctness in canonical spec
 form, parameterized by the D-tail causal-boundary loop-step lemma. -/
@@ -1227,7 +1227,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_of_step
       (s.pids 0 * M)
       (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K)
       (padHeadD (Bd := Bd) V) scale idx]
-  exact VeriTile.Triton.attentionRealCausalBlock_padHeadD_eq hDLe (s.pids 0 * M) Q K V scale idx hDIdx
+  exact VeriTile.attentionRealCausalBlock_padHeadD_eq hDLe (s.pids 0 * M) Q K V scale idx hDIdx
 
 
 end VeriTile.Examples

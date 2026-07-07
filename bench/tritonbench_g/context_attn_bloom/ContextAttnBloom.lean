@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `context_attn_bloom` — strict per-kernel correctness
@@ -56,7 +56,7 @@ special case.
 
 namespace VeriTile.Bench.TritonBenchG.ContextAttnBloom
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

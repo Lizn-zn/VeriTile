@@ -8,7 +8,7 @@ import VeriTile.Examples.ApproxGeLU.Elementary
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 /-! ## Taylor expansions of `tanh u` and `realErf z` at the gelu arguments
 

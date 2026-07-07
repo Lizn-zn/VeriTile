@@ -4,12 +4,12 @@ VeriTile.Examples.FlashAttention1.Core
 FlashAttention-1 v0/full-tile proof surface.
 -/
 
-import VeriTile.Triton.Float
+import VeriTile.Float
 import VeriTile.Examples.FlashAttention1.Core.Forward
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- 4D-aware corollary of `fa1_forward_correct_strided`. Given inputs
 laid out via `Offset.strided` over `[B, H, S, D]` (with valid strides

@@ -10,13 +10,13 @@ autograd, or an arbitrary user branch.  The branch is split at the DSL boundary:
 `mhcDepthConnectionKernel` consumes a separately supplied branch output.
 -/
 
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 namespace VeriTile.Examples.HyperConnections
 
-open VeriTile.Triton
+open VeriTile
 
 /-!
 ## Layout convention

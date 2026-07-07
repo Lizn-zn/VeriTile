@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `pow_scalar_tensor` — strict per-kernel correctness
@@ -60,7 +60,7 @@ scalar argument, never a read-back of the kernel's own output.
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float). `_pow` is modeled by
 `Op.pow` / Mathlib's `Real.rpow` — per the `Op.pow` doc comment in
-`VeriTile/Triton/Core/Ast.lean`: for base > 0 this matches CUDA `pow`
+`VeriTile/Core/Ast.lean`: for base > 0 this matches CUDA `pow`
 exactly; for a negative base with non-integer exponent Mathlib's `rpow`
 returns its junk-value convention where CUDA returns NaN — the usual
 real-semantics modeling boundary, consistent with how the rest of VeriTile
@@ -96,7 +96,7 @@ out0_stride_order0 = 0`, their only rank-1 value) are instantiated in the
 
 namespace VeriTile.Bench.TritonBenchG.PowScalarTensor
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -878,7 +878,7 @@ torch strides of a non-degenerate rank-1 buffer are ≥ 1), and for the
 grid-stride branch `in0_ptr ≠ out0_ptr` (later iterations load after earlier
 stores) and `0 < s.numPids 0` (a launched grid has at least one program).
 Spec-strength caveat (see the Modeling boundary section and the `Op.pow` doc
-comment in `VeriTile/Triton/Core/Ast.lean`): `_pow` is `Real.rpow`, which
+comment in `VeriTile/Core/Ast.lean`): `_pow` is `Real.rpow`, which
 matches CUDA `pow` for `val0 > 0` but returns Mathlib's junk-value convention
 where CUDA returns NaN for a negative base with non-integer exponent. -/
 theorem pow_scalar_tensor_output_summary_general

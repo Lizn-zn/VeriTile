@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `decay_cumsum` — strict per-kernel correctness
@@ -69,7 +69,7 @@ side condition.
 
 namespace VeriTile.Bench.TritonBenchG.DecayCumsum
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -1894,7 +1894,7 @@ mandated per-statement architecture is required:
 1. `exec → stepStmts toAlgKernel.body`, with the surface body decomposed by
    `bwd_body_decomp_general` into the 15-stmt prologue + the `forRangeDyn` reverse loop.
 2. Drive the `forRangeDyn` loop with `forRangeAux_inv` /
-   `VeriTile.Triton.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
+   `VeriTile.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
    partial reverse prefix sum), *not* a `simp` over the whole loop.
 3. Per body statement: `stepStmts.cons_some` + `simp only` over the named
    `evalOp_*` lemmas (`evalOp_add/mul/sub/ref/…`, `evalOp_ref_setReg*`) — never
@@ -4018,7 +4018,7 @@ theorem bwd_loop_drive_general
     bwdInvG_entry DQInner DQInter DKInner DKInter Q K G DG s s0 s_qk_h DK BT BK hsh
   -- drive the loop
   obtain ⟨final, sfinal, hloop, hge, hPfinal⟩ :=
-    VeriTile.Triton.forRangeDyn_inv (idx := "__rev_t") (start := 0) (stop := BT) (step := 1)
+    VeriTile.forRangeDyn_inv (idx := "__rev_t") (start := 0) (stop := BT) (step := 1)
       (P := bwdInvG DQInner DQInter DKInner DKInter Q K G DG s s_qk_h DK BT BK)
       (s_init := s0)
       (evalOp_constNat 0 s0)

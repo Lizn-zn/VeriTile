@@ -132,7 +132,7 @@ The initial imports landed without these headers (commit `eab9b81`); back-fillin
 2. Cross-check its verdict in [`tritonbench_coverage.md`](./tritonbench_coverage.md). Prefer `OK` first; `Soft` next; `Hard` only when the relevant capability extension has landed.
 3. Create `bench/tritonbench_g/<kernel_name>/`.
 4. Drop the upstream `.py` in there with the attribution header above.
-5. Add `<KernelName>.lean` with the DSL port. Use `namespace VeriTile.Bench.TritonBenchG.<KernelName>` and import `VeriTile.Triton.Core` + `VeriTile.Triton.DSL`.
+5. Add `<KernelName>.lean` with the DSL port. Use `namespace VeriTile.Bench.TritonBenchG.<KernelName>` and import `VeriTile.Core` + `VeriTile.Frontend.Triton.DSL`.
 6. Verify with `bench/check_ports.sh <kernel_name>`.
 7. (Stage 2/3) When you write a spec / proof, add a `scripts/kernel-manifest.tsv` row with `source = tritonbench:<filename>.py` and `source_ref = <upstream-commit>`.
 8. Update the Provenance table above if importing from a fresh upstream commit.

@@ -443,7 +443,7 @@ becoming a Lean theorem:</p>
           <h2>
             DSL layer — accept Triton-like surface syntax</h2>
           <p>
-            <code>VeriTile/Triton/DSL/</code></p>
+            <code>VeriTile/Frontend/Triton/DSL/</code></p>
           <div class="cols cols-3" id="--verso-component-24">
             <div class="card card-blue" id="--verso-component-25">
               <p>
@@ -524,7 +524,7 @@ becoming a Lean theorem:</p>
           <h2>
             Core AST — types, shapes, and the typed <code>Op</code></h2>
           <p>
-            <code>VeriTile/Triton/Core/</code></p>
+            <code>VeriTile/Core/</code></p>
           <div class="cols cols-3" id="--verso-component-28">
             <div class="card card-blue" id="--verso-component-29">
               <p>
@@ -601,7 +601,7 @@ becoming a Lean theorem:</p>
           <h2>
             <code>ComputeKernel</code> — proof-stating surface, projects to <code>AlgKernel</code></h2>
           <p>
-            <code>VeriTile/Triton/Float/</code> + <code>VeriTile/Triton/Core/Ast.lean</code></p>
+            <code>VeriTile/Float/</code> + <code>VeriTile/Core/Ast.lean</code></p>
           <div class="cols cols-3" id="--verso-component-32">
             <div class="card card-blue" id="--verso-component-33">
               <p>
@@ -682,7 +682,7 @@ external (PLAN.md §Compute-gap details).</p>
           <h2>
             Operational semantics — <code>evalOp</code>, <code>stepStmt</code>, <code>exec</code></h2>
           <p>
-            <code>VeriTile/Triton/Semantics/</code></p>
+            <code>VeriTile/Semantics/</code></p>
           <div class="cols cols-3" id="--verso-component-37">
             <div class="card card-blue" id="--verso-component-38">
               <p>
@@ -758,7 +758,7 @@ input-range hypothesis</strong>. No <code>-1e38</code> stand-in.</p>
           <h2>
             <code>forLoop_inv</code> — the master induction lemma</h2>
           <p>
-            <code>VeriTile/Triton/LoopInvariant.lean</code></p>
+            <code>VeriTile/Kernel/LoopInvariant.lean</code></p>
           <div class="cols cols-3" id="--verso-component-42">
             <div class="card card-blue" id="--verso-component-43">
               <p>
@@ -828,7 +828,7 @@ only thing the LLM agent has to discover.</p>
           <h2>
             Memory subsystem — bounds · footprint · frame · typing · view</h2>
           <p>
-            <code>VeriTile/Triton/Memory/</code></p>
+            <code>VeriTile/Memory/</code></p>
           <div class="cols cols-3" id="--verso-component-47">
             <div class="card card-blue" id="--verso-component-48">
               <p>
@@ -902,7 +902,7 @@ end ComputeKernel
           <h2>
             Concurrency framework — trace · refinement · discipline</h2>
           <p>
-            <code>VeriTile/Triton/Concurrency/</code></p>
+            <code>VeriTile/Concurrency/</code></p>
           <div class="cols cols-3" id="--verso-component-51">
             <div class="card card-blue" id="--verso-component-52">
               <p>
@@ -986,7 +986,7 @@ boundary.</p>
               <p>
                 <strong>Side door · concurrency framework</strong></p>
               <p>
-                <code>VeriTile/Triton/Concurrency/</code> builds an <code>EffectTrace</code> (memory ∪ async ∪ barrier), derives <code>HappensBefore</code>, and states correctness as <code>RefinesSequential concurrent sequential</code> on final memory.</p>
+                <code>VeriTile/Concurrency/</code> builds an <code>EffectTrace</code> (memory ∪ async ∪ barrier), derives <code>HappensBefore</code>, and states correctness as <code>RefinesSequential concurrent sequential</code> on final memory.</p>
               </div>
             </div>
           <div class="card card-muted" id="--verso-component-60">
@@ -1063,7 +1063,7 @@ Once these are proved, <strong>concurrent ≡ sequential on final memory</strong
           <h2>
             Launch — ND grid + disjoint-writes composition</h2>
           <p>
-            <code>VeriTile/Triton/Launch/</code></p>
+            <code>VeriTile/Launch/</code></p>
           <div class="cols cols-3" id="--verso-component-65">
             <div class="card card-blue" id="--verso-component-66">
               <p>

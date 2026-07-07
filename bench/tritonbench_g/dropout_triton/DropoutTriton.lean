@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `dropout_triton` — strict per-kernel correctness
@@ -47,7 +47,7 @@ into registers before the scatter, so the result is correct even if
 
 namespace VeriTile.Bench.TritonBenchG.DropoutTriton
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `dropout_triton.py`'s `_dropout`.
 

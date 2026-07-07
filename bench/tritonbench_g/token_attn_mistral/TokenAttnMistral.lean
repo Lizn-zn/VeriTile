@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `token_attn_mistral` — strict per-kernel correctness
@@ -60,7 +60,7 @@ contiguous-layout side-conditions `stride_pbs = 1` and `stride_req_to_tokens_s =
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnMistral
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -496,7 +496,7 @@ readback).  Routing/decode notes for that bridge:
 The two *algebraic* halves of the loop-invariant induction are proven
 sorry-free, together with the generic dynamic-loop principle:
 
-* `VeriTile.Triton.forRangeDyn_inv` — master invariant principle for
+* `VeriTile.forRangeDyn_inv` — master invariant principle for
   `forRangeDyn` (mirror of `forRange_inv`), the induction engine for the
   `range(0, cur_att_seq_len, BLOCK_N)` window loop.
 * `pMasked` / `vMasked` — the algorithm-layer values produced by the masked

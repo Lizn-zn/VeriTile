@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `chunk_gla_simple` — closed-form correctness
@@ -69,7 +69,7 @@ chunk_gla_simple_output_summary_general                    ← TOP THEOREM (dime
 
 namespace VeriTile.Bench.TritonBenchG.ChunkGlaSimple
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 4000000

@@ -1,11 +1,11 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Semantics.BlockPtrEval
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.TileOps
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
+import VeriTile.Semantics.BlockPtrEval
 import VeriTile.Examples.FlashAttention1
 
 /-!
@@ -81,7 +81,7 @@ backward-grads summary additionally requires the score tiles distinct
 
 namespace VeriTile.Bench.TritonBenchG.TritonAttention
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -2887,7 +2887,7 @@ theorem fwdOutSpec_eq_streaming
         = VeriTile.Examples.attentionRealCausalBlock (s.pids 0 * 128)
             (fwdQTile s Q) (fwdKTile s K) (fwdVTile s V)
             ((Real.sqrt (64 : ℝ))⁻¹) idx from by
-        unfold fwdOutSpec VeriTile.Triton.attentionRealCausalBlock
+        unfold fwdOutSpec VeriTile.attentionRealCausalBlock
           VeriTile.Examples.attentionRealCausalBlock scaledScore
         rfl]
   exact (streaming_eq_attentionRealCausalBlock (Bk := 128) (by norm_num)
@@ -3110,7 +3110,7 @@ theorem fwdOutSpecG_eq_streaming
             (fwdKTileG s K stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
             (fwdVTileG s V stride_hz_2d HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
             sc idx from by
-        unfold fwdOutSpecG VeriTile.Triton.attentionRealCausalBlock
+        unfold fwdOutSpecG VeriTile.attentionRealCausalBlock
           VeriTile.Examples.attentionRealCausalBlock scaledScore
         rfl]
   exact (streaming_eq_attentionRealCausalBlock (Bk := BLOCK_N) hBN

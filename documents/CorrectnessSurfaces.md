@@ -2,7 +2,7 @@
 
 This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Surfaces live in
-[`VeriTile.Triton.Float.Correctness`](../VeriTile/Triton/Float/Correctness.lean).
+[`VeriTile.Float.Correctness`](../VeriTile/Float/Correctness.lean).
 
 ## Quick-Pick Table
 

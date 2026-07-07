@@ -21,16 +21,16 @@ its closed form via simp on the operational semantics. The refinement theorem
 itself is fully proven from those two lemmas plus `naive_eq_stable`.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Softmax
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Softmax
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile VeriTile.TiledSoftmax
 
 /-! ## (a) Source Triton (`.py`) — for reference only
 
@@ -92,7 +92,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
 
 The reusable math denotation (`naiveSoftmaxMath`, `stableSoftmaxMath`,
 `naive_eq_stable`, `naiveSpec`, `stableSpec`, `tileMax`) lives in
-`VeriTile.Triton.Math.Softmax`. -/
+`VeriTile.Math.Softmax`. -/
 
 /-! ## (d) kernel refinement
 

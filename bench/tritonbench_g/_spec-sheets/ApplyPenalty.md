@@ -127,7 +127,7 @@ def activeStoreAddr
 
 ```
 /-- Per-lane `Logits` output spec: the reusable Lion penalty oracle
-(`VeriTile.Triton.Math.Optimizer.lionPenalty`) applied to the values this lane
+(`VeriTile.Math.Optimizer.lionPenalty`) applied to the values this lane
 loads — the logit at the gathered token, its count, and the three penalties. -/
 ```
 ```lean

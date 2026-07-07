@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `kldiv_triton` — strict per-kernel correctness
@@ -55,12 +55,12 @@ Python-tested **single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`**, where the
 column loop runs once; masked lanes use `other=0.0` and out-of-bounds lanes
 (`i ≥ n_cols`) are preserved. Output offset injectivity is an explicit
 hypothesis. The specs reference `Real.log` / `Real.exp` directly, not
-`VeriTile.Triton.Math.*`.
+`VeriTile.Math.*`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KldivTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

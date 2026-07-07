@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -66,7 +66,7 @@ not present here.
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeKvCopy
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -75,7 +75,7 @@ set_option linter.unusedSimpArgs false
 The genuine value store writes an `.int` channel (the `.to(tl.int8)` quotient)
 while the scale store writes the `.real` channel. The following lemmas are the
 `.int` analogues of the `.nat`/`.real` scatter-readback and cross-channel
-preservation lemmas in `VeriTile.Triton.Semantics.State`. -/
+preservation lemmas in `VeriTile.Semantics.State`. -/
 
 /-- `.int` masked-foldl preservation: writes whose (masked) offsets all miss `o`
 leave `readMemValue .int region o` unchanged. -/

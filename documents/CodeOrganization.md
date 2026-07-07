@@ -6,6 +6,33 @@ VeriTile separates three concerns into three layers. Knowing which layer
 something belongs in saves churn when adding new operators, new bridge
 lemmas, and new kernel transcriptions.
 
+## Repository layout (neutral foundation)
+
+The DSL-agnostic **foundation** lives directly under `VeriTile/*`, in the
+neutral `VeriTile` namespace (no `.Triton` accent):
+
+```
+VeriTile/
+  Core/            typed AST — Op / Stmt / Kernel (Types, Shape, Ast)
+  Semantics/       evalOp / stepStmt / exec + BlockState
+  Memory/          memory reasoning (View, Frame, Typing, Bounds, Footprint)
+  Float/           #447 rounding model + correctness surfaces
+  Launch/          grid launch
+  Concurrency/     atomics / async / trace substrate
+  Kernel/          proof-reuse lemma libraries (LoopInvariant, Matmul, …)
+  Math/            pure ℝ operator library + GeLU-cert analysis
+  Compute.lean, ExternalCheck.lean
+  Frontend/
+    Triton/DSL/    the `triton { ... }` frontend: syntax macros + lowering
+  Examples/        worked per-kernel proofs
+```
+
+The `triton{…}` **frontend** (syntax + lowering only, no owned semantics) sits
+beside the foundation at `VeriTile/Frontend/Triton/`; a later Tilelang frontend
+joins as `VeriTile/Frontend/Tilelang/`. This layout is the result of #472
+Phase 1 — a mechanical relocation out of `VeriTile/Triton/` with zero semantic
+change. See [`ArchitectureHandoff.md`](./ArchitectureHandoff.md).
+
 ## The three layers
 
 ```
@@ -19,16 +46,16 @@ lemmas, and new kernel transcriptions.
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Semantics/X.lean           │  ← bridging mechanisms
+                    │  VeriTile/Semantics/X.lean           │  ← bridging mechanisms
     bridging        │  - `Tile`, `WithBot`, `Option.map₂`         │
                     │  - tiled indexing (lane, validLanes, ...)   │
                     │  - masked reductions (sup', sum, dot)       │
-                    │  - kernel-agnostic, but Triton-bound        │
+                    │  - kernel-agnostic, bound to core semantics │
                     └─────────────────────────────────────────────┘
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Math/X.lean                │  ← pure math
+                    │  VeriTile/Math/X.lean                │  ← pure math
    pure math        │  - `(Fin N → ℝ) → ...` operators            │
                     │  - non-trivial mathematical identities      │
                     │  - depends only on Mathlib                  │
@@ -39,7 +66,7 @@ Each layer can only depend on the layers below it.
 
 ## What goes where
 
-### `VeriTile/Triton/Math/`
+### `VeriTile/Math/`
 
 **Naming**: by mathematical operator. `Math/Activation.lean`,
 `Math/Reduction.lean`, `Math/L2Norm.lean`, `Math/LogSumExp.lean`,
@@ -60,7 +87,7 @@ argument-binding wrapper).
 - `WithBot` / `Tile` / `Option.map₂` — those go to `Semantics/`
 - Per-kernel `*Spec` that just binds the math to a kernel's argument tuple
 
-### `VeriTile/Triton/Semantics/`
+### `VeriTile/Semantics/`
 
 **Naming**: by **mechanism**, not by operator. `Semantics/TiledIndexing.lean`,
 `Semantics/MaskedReduction.lean`, `Semantics/Step.lean`,
@@ -102,7 +129,7 @@ softmax / log-sum-exp / L2 / max-with-mask alike.
 - The kernel correctness theorem (algorithm-layer + compute-facing)
 
 **Pattern**: glue code. The `*Spec` reads "this kernel writes
-`Triton.TiledX.operator (load_xs ...) ...`" by binding kernel layout to
+`TiledX.operator (load_xs ...) ...`" by binding kernel layout to
 math operators through the bridge lemmas in `Semantics/`.
 
 ## How to add a new piece

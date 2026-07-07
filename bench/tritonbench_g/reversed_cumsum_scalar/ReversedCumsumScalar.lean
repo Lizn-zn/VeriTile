@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `reversed_cumsum_scalar` — strict per-kernel correctness
@@ -66,7 +66,7 @@ Output injectivity is a side condition (discharged dimension-generally).
 
 namespace VeriTile.Bench.TritonBenchG.ReversedCumsumScalar
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

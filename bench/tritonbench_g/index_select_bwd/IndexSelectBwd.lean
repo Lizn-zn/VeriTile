@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `index_select_bwd` — strict per-kernel correctness
@@ -47,7 +47,7 @@ the realized write map.
 
 namespace VeriTile.Bench.TritonBenchG.IndexSelectBwd
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `index_select_bwd.py`'s
 `index_select_cat_bwd_kernel`.

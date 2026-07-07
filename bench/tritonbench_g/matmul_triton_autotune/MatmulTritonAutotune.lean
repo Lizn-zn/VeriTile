@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `matmul_triton_autotune` — closed-form matmul+activation correctness
@@ -65,7 +65,7 @@ exempt this port on this marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.MatmulTritonAutotune
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

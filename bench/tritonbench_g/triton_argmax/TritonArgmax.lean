@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `triton_argmax` — strict per-kernel correctness
@@ -53,12 +53,12 @@ streaming `update`-guarded recurrence is outside this slice. Tie-breaking follow
 `return_indices_tie_break_left=True` via `argMaxDrop`. Offset injectivity /
 buffer-aliasing side conditions (e.g. `mid_value ≠ mid_index`, output offset
 injectivity) are explicit hypotheses. The specs reference `Tile.reduceMax` /
-`Tile.argMaxDrop` directly, not `VeriTile.Triton.Math.*`.
+`Tile.argMaxDrop` directly, not `VeriTile.Math.*`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TritonArgmax
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 

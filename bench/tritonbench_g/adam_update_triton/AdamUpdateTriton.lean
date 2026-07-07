@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Optimizer
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Optimizer
 
 /-!
 # `adam_update_triton` — strict per-kernel correctness
@@ -41,7 +41,7 @@ given by the spec — and leaves out-of-range lanes (`≥ n_elements`) untouched
 Because `pid` is arbitrary, this covers every program of the grid.
 
 The specs `pFullSpec` / `expAvgFullSpec` are **oracle wrappers**: they apply the
-layout-free Lion oracle (`VeriTile.Triton.Math.Optimizer.lionParam` /
+layout-free Lion oracle (`VeriTile.Math.Optimizer.lionParam` /
 `lionMomentum`) to the values this lane loads, so the optimizer math is stated
 once, in `Math.Optimizer`, and never re-derived here.
 
@@ -54,7 +54,7 @@ alias — no kernel caller relies on aliasing them).
 
 namespace VeriTile.Bench.TritonBenchG.AdamUpdateTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `batched_vecmat_mult` — strict per-kernel correctness
@@ -66,7 +66,7 @@ distinct addresses), and a clean initial `undef`.
 
 namespace VeriTile.Bench.TritonBenchG.BatchedVecmatMult
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

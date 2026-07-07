@@ -9,7 +9,7 @@ import VeriTile.Examples.FlashAttention1.Backward.Math
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 namespace FA1Score
 /-- Absolute distance on sequence indices, as a natural number. -/

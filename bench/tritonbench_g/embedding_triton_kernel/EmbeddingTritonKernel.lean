@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `embedding_triton_kernel` — strict per-kernel correctness
@@ -54,7 +54,7 @@ realized write map.
 
 namespace VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

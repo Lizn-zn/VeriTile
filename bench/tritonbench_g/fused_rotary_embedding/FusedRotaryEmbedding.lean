@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fused_rotary_embedding` — strict per-kernel correctness
@@ -49,7 +49,7 @@ conditions: store-offset injectivity and cache-region distinctness hypotheses.
 
 namespace VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

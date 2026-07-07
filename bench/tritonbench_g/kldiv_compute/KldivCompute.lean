@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.Math.Loss
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Math.Loss
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -32,7 +32,7 @@ kldivergence_kernel_output_summary            ← TOP THEOREM
 ```
 
 The per-lane spec is `klDivSpec (xs i) (ys i)` from the
-`VeriTile.Triton.Math.Loss` (`TiledLoss`) oracle — the math is *not*
+`VeriTile.Math.Loss` (`TiledLoss`) oracle — the math is *not*
 inline-duplicated here. Inputs are presented via `InputLoadedAt` (the values
 each lane loads).
 
@@ -48,8 +48,8 @@ or `y_ptr`.
 
 namespace VeriTile.Bench.TritonBenchG.KldivCompute
 
-open VeriTile.Triton VeriTile.Examples
-open VeriTile.Triton.TiledLoss
+open VeriTile VeriTile.Examples
+open VeriTile.TiledLoss
 
 /-- Faithful 1:1 transcription of `kldiv_compute.py`'s
 `kldivergence_kernel`.

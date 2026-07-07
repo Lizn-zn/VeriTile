@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.ScoreVariants.Math
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 namespace FA1Score
 /-! ## Block-local score views

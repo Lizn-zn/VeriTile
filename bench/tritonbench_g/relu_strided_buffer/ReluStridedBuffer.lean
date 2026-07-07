@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Activation
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Activation
 
 /-!
 # `relu_strided_buffer` — strict per-kernel correctness
@@ -85,7 +85,7 @@ their only rank-1 value) are instantiated in the `boundary_check=(...)` /
 
 namespace VeriTile.Bench.TritonBenchG.ReluStridedBuffer
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

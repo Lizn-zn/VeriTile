@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -50,7 +50,7 @@ full `[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 
 `attention_forward_triton_closed_form_correct` is a **genuine closed-form value
 claim**: every active output lane of `Out` equals
-`VeriTile.Triton.attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under
+`VeriTile.attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under
 the per-block key scale — i.e. the base-2, per-key-scaled attention output, not
 the kernel's own executed value. It is **general**: arbitrary batch/head strides,
 head count `H`, block sizes, KV-block count (`N_CTX = BLOCK_N · numKVBlocks`),
@@ -61,7 +61,7 @@ assumptions are the contiguity contracts the kernel relies on
 the special case.
 
 The mathematical heart — online-softmax recurrence == batch base-2 softmax —
-is proved sorry-free in `VeriTile/Triton/Math/Attention.lean`
+is proved sorry-free in `VeriTile/Math/Attention.lean`
 (`attentionRealBase2PerKeyScale_eq_streaming`, `osBlockStep_foldl_eq_batch`), and
 the full `exec`-side loop unfolding (Phase 3) is complete in
 `VeriTile/Examples/AttentionForwardClosedForm.lean`. The top theorem here is now
@@ -71,7 +71,7 @@ the full `exec`-side loop unfolding (Phase 3) is complete in
 
 namespace VeriTile.Bench.TritonBenchG.AttentionForwardTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

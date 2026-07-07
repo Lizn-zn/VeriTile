@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `matrix_reduction` — strict per-kernel correctness
@@ -43,7 +43,7 @@ target `y_ptr` is taken disjoint enough that the row-vector scatter is injective
 
 namespace VeriTile.Bench.TritonBenchG.MatrixReduction
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful 1:1 transcription of `matrix_reduction.py`'s `load_reduce_kernel`.
 

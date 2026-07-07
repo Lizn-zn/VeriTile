@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Boundary.Boundary
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 theorem fa1_forward_correct_4D_boundary_slice
     {B H S_q S_k D Bk numKVBlocks M : Nat}

@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -47,7 +47,7 @@ aliases `src`.
 
 namespace VeriTile.Bench.TritonBenchG.MulExponentCompensator
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- The constexpr multiplier from `mul_exponent_compensator.py`. -/
 noncomputable def exponentCompensator : ℝ :=

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.TileOps
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `token_softmax_llama` — strict per-kernel correctness
@@ -73,7 +73,7 @@ states it over symbolic dims — fully self-contained, no surface self-reference
 
 namespace VeriTile.Bench.TritonBenchG.TokenSoftmaxLlama
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

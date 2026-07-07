@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `destindex_copy` — strict per-kernel correctness
@@ -49,7 +49,7 @@ unused head-count / head-stride arguments are kept at the signature boundary.
 
 namespace VeriTile.Bench.TritonBenchG.DestindexCopy
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `destindex_copy.py`'s
 `_fwd_kernel_destindex_copy_kv`.

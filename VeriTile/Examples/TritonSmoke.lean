@@ -4,19 +4,19 @@ VeriTile.Examples.TritonSmoke
 Small smoke tests for the typed Triton core.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Compute
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.Memory
-import VeriTile.Triton.Memory.Typing
-import VeriTile.Triton.Launch
-import VeriTile.Triton.Concurrency
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Compute
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Memory
+import VeriTile.Memory.Typing
+import VeriTile.Launch
+import VeriTile.Concurrency
+import VeriTile.Frontend.Triton.DSL
 
 namespace VeriTile.Examples.TritonSmoke
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Smoke test for scalar-pointer load/store syntax. -/
 def scalarCopyKernel (xReg yReg : RegionName) : ComputeKernel := triton {

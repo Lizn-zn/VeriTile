@@ -2,7 +2,7 @@
 
 **状态:** 规范,2026-04-29 已批准。
 **Phase:** B(Tier 2 streaming reduction)。
-**涉及文件:** `VeriTile/Triton/Semantics.lean`、新增 `VeriTile/Triton/LoopInvariant.lean`、`VeriTile.lean`。
+**涉及文件:** `VeriTile/Semantics.lean`、新增 `VeriTile/LoopInvariant.lean`、`VeriTile.lean`。
 
 本规范确定 VeriTile 嵌入 Triton 子集中 `Stmt.forLoop` 的操作语义,以及
 所有 Phase B(welford / online softmax / layernorm)和 Phase C
@@ -105,7 +105,7 @@ lex pair 是 `PLAN.md` 已经规定的。)
 
 ## 4. 引理族
 
-放在新文件 `VeriTile/Triton/LoopInvariant.lean`。引理族有一个 master
+放在新文件 `VeriTile/LoopInvariant.lean`。引理族有一个 master
 lemma 加一小组 ergonomics corollary。Corollary 按需添加;Phase B 只需要
 下面两个。
 
@@ -204,11 +204,11 @@ forLoop_readout_scalar h0 h_step h_readout
 
 | 文件 | 状态 | 责任 |
 |---|---|---|
-| `VeriTile/Triton/Semantics.lean` | 修改 | 把 `stepStmt` / `stepStmts` 转成 `mutual` 块;加 `stepForLoopAux`;替换 forLoop 的 `none` 占位;加 `termination_by`。 |
-| `VeriTile/Triton/LoopInvariant.lean` | 新建 | `forLoop_inv` master lemma;`forLoop_readout_scalar` 与 `forLoop_readout_tile` corollary。 |
-| `VeriTile.lean` | 修改 | 加 `import VeriTile.Triton.LoopInvariant`。 |
+| `VeriTile/Semantics.lean` | 修改 | 把 `stepStmt` / `stepStmts` 转成 `mutual` 块;加 `stepForLoopAux`;替换 forLoop 的 `none` 占位;加 `termination_by`。 |
+| `VeriTile/LoopInvariant.lean` | 新建 | `forLoop_inv` master lemma;`forLoop_readout_scalar` 与 `forLoop_readout_tile` corollary。 |
+| `VeriTile.lean` | 修改 | 加 `import VeriTile.LoopInvariant`。 |
 
-`Triton/Core.lean` 不变(`Stmt.forLoop` 构造子已存在;只有它的语义之前
+`Core.lean` 不变(`Stmt.forLoop` 构造子已存在;只有它的语义之前
 是占位)。
 
 ## 6. 验证

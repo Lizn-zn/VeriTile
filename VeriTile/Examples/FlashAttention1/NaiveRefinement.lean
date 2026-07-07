@@ -4,12 +4,12 @@ VeriTile.Examples.FlashAttention1.NaiveRefinement
 Step 4 of issue #39: make the naive/reference refinement surface explicit.
 -/
 
-import VeriTile.Triton.Float
+import VeriTile.Float
 import VeriTile.Examples.FlashAttention1.NaiveKernel
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Naive FA reference
 

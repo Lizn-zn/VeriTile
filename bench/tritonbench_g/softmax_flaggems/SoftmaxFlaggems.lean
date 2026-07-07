@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `softmax_flaggems` — strict per-kernel correctness
@@ -57,7 +57,7 @@ The `.to(output_ptr.dtype.element_ty)` cast is the identity post-erasure.
 Offset injectivity is an explicit hypothesis (`nonInnerOffset_injective` requires
 `pid_k·TILE_K + TILE_K ≤ K`; the inner backward takes injectivity as a
 hypothesis, which holds when `TILE_N ≤ N`). The specs reference
-`Tile.reduceMax` / `Tile.reduceSum` directly, not `VeriTile.Triton.Math.*`.
+`Tile.reduceMax` / `Tile.reduceSum` directly, not `VeriTile.Math.*`.
 
 ## Translation-surface blocker
 
@@ -72,7 +72,7 @@ this marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

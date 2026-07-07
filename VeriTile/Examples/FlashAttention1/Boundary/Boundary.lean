@@ -10,7 +10,7 @@ set_option maxHeartbeats 800000
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 private theorem fa1_boundary_eval_k_ptrs
     (s : BlockState) (Bk D k batch headIdx sKB sKH sKN sKD : Nat)

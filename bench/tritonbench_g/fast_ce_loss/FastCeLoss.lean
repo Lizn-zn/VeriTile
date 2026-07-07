@@ -1,11 +1,11 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.LogSumExp
-import VeriTile.Triton.Math.Loss
-import VeriTile.Triton.Semantics.MaskedReduction
-import VeriTile.Triton.Semantics.TiledIndexing
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.LogSumExp
+import VeriTile.Math.Loss
+import VeriTile.Semantics.MaskedReduction
+import VeriTile.Semantics.TiledIndexing
 
 /-!
 # `fast_ce_loss` — strict per-kernel correctness
@@ -76,13 +76,13 @@ identity at the algorithm layer. The forward logits load uses
 `other = -float("inf")` for out-of-vocab lanes. The masked backward store leaves
 inactive lanes (`col_offsets ≥ VOCAB_SIZE`) untouched and assumes the per-tile
 output offset is injective. The spec is built inline; it does not reference a
-`VeriTile.Triton.Math.*` oracle.
+`VeriTile.Math.*` oracle.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FastCeLoss
 
-open VeriTile.Triton
-open VeriTile.Triton.TiledLogSumExp
+open VeriTile
+open VeriTile.TiledLogSumExp
 
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 800000
@@ -841,9 +841,9 @@ theorem cross_entropy_backward_store_slice_compute_correct
 In the textbook regime — `DO_SOFTCAPPING = false`, `DO_LOGIT_SCALING = false`,
 and the block exactly spanning the vocabulary (`BLOCK_SIZE = VOCAB_SIZE = n+1`,
 so every lane is valid) — the kernel's genuine LSE/loss specs collapse to the
-shared pure `crossEntropyLoss` from `VeriTile.Triton.Math.Loss`. -/
+shared pure `crossEntropyLoss` from `VeriTile.Math.Loss`. -/
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- In the full-vocab, no-transform regime the kernel's per-row stable LSE
 `fastCeLseSpec … id` is exactly the canonical `stableLSE` of the row logits. -/
 theorem fastCeLseSpec_id_eq_stableLSE
@@ -855,7 +855,7 @@ theorem fastCeLseSpec_id_eq_stableLSE
     simp only [Bool.false_eq_true, reduceIte]
   rw [heq, partialLSE_full_zero_self_eq_stableLSE]
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- **Bridge: textbook cross-entropy.** Under `DO_SOFTCAPPING = false`,
 `DO_LOGIT_SCALING = false`, and a block spanning the whole vocabulary
 (`VOCAB_SIZE = n+1`, label in range as `lbl : Fin (n+1)` with its underlying

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `softmax_reducev` — strict per-kernel correctness
@@ -70,7 +70,7 @@ realizes the genuine input-side closed form directly.
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxReducev
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -2547,7 +2547,7 @@ theorem sr_execG
     · intro hD'; rw [h13 hD']; simp only [Nat.zero_mul, srStateBot_zero]
     · rw [h14]; simp only [Nat.zero_mul, srStateBot_zero]
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
-    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+    VeriTile.forRangeDyn_inv (idx := "start_n")
       (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "cur_batch_seq_len")
       (stepOp := Op.constNat BLOCK_N)
       (P := fun i st => srInvariantG Logics V BLoc BStartLoc.cast BSeqLen.cast mil slh slb svbs svh svd sb ss BLOCK_DMODEL BLOCK_N s0 (i / BLOCK_N) st

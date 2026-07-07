@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Optimizer
-import VeriTile.Triton.Launch.Composition
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Optimizer
+import VeriTile.Launch.Composition
 
 /-!
 # `adam_update_triton` — proof architecture
@@ -45,7 +45,7 @@ update_fn_kernel_launchCorrect                       ← FINAL THEOREM
           ├─ update_fn_kernel_p_correct / _exp_avg_correct   (per-program)
           │     · one program's masked store realizes pFullSpec / expAvgFullSpec,
           │       which are thin wrappers over `lionParam` / `lionMomentum`
-          │       (the math lives once in `VeriTile.Triton.Math.Optimizer`).
+          │       (the math lives once in `VeriTile.Math.Optimizer`).
           ├─ GridLaunchedOrdinary.observeOrdinaryCell        (read merged cell)
           ├─ grid_offset_covers_exactly_once                 (each k owned once)
           └─ adam_cdiv_covers                                (grid covers [0,n))
@@ -83,7 +83,7 @@ FlashAttention examples.
 
 namespace VeriTile.Examples.AdamUpdateGridLaunch
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 
@@ -372,7 +372,7 @@ blocks partition the array with no cross-program collision.
 
 This is the index-level half of whole-grid correctness. The remaining step —
 merging every program's memory into one final `BlockState` — is the launch
-framework's responsibility (`VeriTile.Triton.Launch`) and is not asserted here.
+framework's responsibility (`VeriTile.Launch`) and is not asserted here.
 The statement is generic in `BLOCK_SIZE`/`k`; it is the cross-program
 companion to `BlockState.linearOffset` and could be hoisted to
 `Semantics.Offset`. -/

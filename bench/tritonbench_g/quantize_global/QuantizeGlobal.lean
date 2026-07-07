@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `quantize_global` — strict per-kernel correctness (blocked tail)
@@ -50,7 +50,7 @@ configs are instantiated as separate theorems.
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeGlobal
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `quantize_global.py`'s `_quantize_global`.
 

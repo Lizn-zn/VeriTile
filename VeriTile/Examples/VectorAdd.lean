@@ -36,15 +36,15 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 -/
 
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Embedded Triton AST
 

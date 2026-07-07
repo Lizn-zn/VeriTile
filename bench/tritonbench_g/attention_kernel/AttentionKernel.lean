@@ -1,10 +1,10 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Semantics.BlockPtrEval
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
+import VeriTile.Semantics.BlockPtrEval
 
 /-!
 # `attention_kernel` — strict per-kernel correctness
@@ -57,7 +57,7 @@ boundary.
 
 namespace VeriTile.Bench.TritonBenchG.AttentionKernel
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -187,7 +187,7 @@ summary asserts: the kernel computes the base-2 streaming softmax
 per-key score `fscore` (scaled dot plus the additive relative-position bias
 `(b0 + b1)·log2 e`) — not the kernel's own executed `Out` readback.
 
-The pure-math heart (`VeriTile.Triton.attnGenScore`, `closed_form_g`,
+The pure-math heart (`VeriTile.attnGenScore`, `closed_form_g`,
 `attnGenScore_eq_streaming` in `Math/Attention.lean`) and the block-pointer
 `evalOp` reduction lemmas (`Semantics/BlockPtrEval.lean`) are complete and
 sorry-free; this section supplies the kernel-specific `evalOp` reductions
@@ -203,7 +203,7 @@ these block-ptr lemmas. -/
 
 namespace ClosedForm
 
-open VeriTile.Triton
+open VeriTile
 
 /-- **`makeBlockPtrDyn` eval** (the `K`/`V` block pointers — static offsets,
 dynamic base): evaluates the base-offset op and packages the constant
@@ -276,7 +276,7 @@ theorem advance_row_eval (s : BlockState) (region : RegionName)
 
 The loaded Q/K/V/B0 tiles read from the *input* state `s0`, and the kernel's
 genuine per-key score `fscore` (used as the `score` argument of the generalized
-streaming-softmax spec `VeriTile.Triton.attnGenScore`). -/
+streaming-softmax spec `VeriTile.attnGenScore`). -/
 
 /-- Loaded (pre-scale) Q tile: row `r`, head lane `e`. -/
 noncomputable def qRaw (s0 : BlockState) (Q : RegionName)
@@ -312,7 +312,7 @@ noncomputable def b1Val (s0 : BlockState) (B0 : RegionName)
 /-- **Genuine per-key score** `fscore r j` of `_fwd_kernel_aligned`:
 `qk_scale·(Σ_e Q[r,e]·K[e,j]) + (b0[r, j/BN] + b1[r, j%BN])·log2 e`,
 with `qk_scale = sm_scale · log2 e` already folded into the pre-scaled `q`. This
-is the `score` argument of `VeriTile.Triton.attnGenScore`, whose batch base-2
+is the `score` argument of `VeriTile.attnGenScore`, whose batch base-2
 softmax `(Σ 2^fscore · V) / (Σ 2^fscore)` is the kernel's closed form (see
 `closed_form_g`). -/
 noncomputable def fscore (s0 : BlockState) (Q K B0 : RegionName)

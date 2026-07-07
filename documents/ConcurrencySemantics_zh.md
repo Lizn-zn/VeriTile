@@ -147,7 +147,7 @@ invariant。
 第一份词汇切片放在:
 
 ```text
-VeriTile/Triton/Concurrency/Trace.lean
+VeriTile/Concurrency/Trace.lean
 ```
 
 它定义了 `ThreadId`、`RMWOp`、`MemoryEvent`、`TraceEvent` 和 `Trace`。

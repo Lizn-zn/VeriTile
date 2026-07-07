@@ -1,6 +1,6 @@
 # Layer-1 内存 bounds safety
 
-`VeriTile.Triton.Memory.Bounds` 定义了 Triton 内存操作的轻量 bounds-safety 层:
+`VeriTile.Memory.Bounds` 定义了 Triton 内存操作的轻量 bounds-safety 层:
 
 ```lean
 abbrev RegionBounds := RegionName -> Nat
@@ -41,7 +41,7 @@ predicate 覆盖 AST 中的三种内存寻址形式:
 - Block pointer,`MemAccess.blockPtr ptr boundaryCheck`,checked 维度
   越界的 lane 不参与 bound 义务。
 
-pointer-register provenance 在这里有意不解决。`VeriTile.Triton.Memory.Typing`
+pointer-register provenance 在这里有意不解决。`VeriTile.Memory.Typing`
 中的可选 checker 之后可以为动态 pointer-address 安全性提供充分条件;
 bounds 这一层保持纯语义且可组合。
 
@@ -59,12 +59,12 @@ bounds 这一层保持纯语义且可组合。
 `documents/ConcurrencySemantics.md`。`Kernel.MemorySafe` 仅是 per-program
 active-lane region-bounds contract。
 
-Layer 2a 单独在 `VeriTile.Triton.Memory.Frame` 中实现。它增加了
+Layer 2a 单独在 `VeriTile.Memory.Frame` 中实现。它增加了
 predicate 级 write footprint 和 single-program execution 的
 `BlockState.WriteWithin` frame contract。Layer 2b 放在
-`VeriTile.Triton.Launch.Composition`:在 write footprint 两两不相交时
+`VeriTile.Launch.Composition`:在 write footprint 两两不相交时
 合并显式的 per-program `Kernel.ExecFrame`。结构化 footprint 抽取与
-proof automation 放在 `VeriTile.Triton.Memory.Footprint`(#61)。
+proof automation 放在 `VeriTile.Memory.Footprint`(#61)。
 这一层把 `WriteFootprint := MemCellAddr -> Prop` 作为语义接口,
 并增加诸如 `WriteFootprint.tileImage`、`activeTileImage` 以及
 block-pointer address-image helper 等 smart constructor。

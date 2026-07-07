@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.StreamingAccumulator
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.StreamingAccumulator
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `block_sparse_attn` — strict per-kernel correctness
@@ -75,7 +75,7 @@ softmax). The self-referential `produced…Value` carriers are retired.
 
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -344,7 +344,7 @@ For a program `(start_m, off_bh)`, with `qStart = start_m · BLOCK_M`:
   `d ∈ [0, BLOCK_D)`, block 1 reads V channels `BLOCK_D + d` (`acc2` is stored at
   `out_ptrs + BLOCK_D`).
 
-This is exactly `VeriTile.Triton.attentionRealCausal` evaluated on the gathered
+This is exactly `VeriTile.attentionRealCausal` evaluated on the gathered
 selected-key tiles, except the causal predicate is on the *global* key position
 `selKeyGlobal r` rather than on the gathered index `r`; we therefore inline the
 softmax here with that global predicate. -/
@@ -468,7 +468,7 @@ with the second value tile. -/
 
 namespace BSAMathCausal
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Gathered scaled score: `scale · Σ_e Q[i,e] · Kg[r,e]`, reading the gathered
 key tile at flat stream index `r` (no global remap on the score itself). -/
@@ -1367,7 +1367,7 @@ theorem block_sparse_attn_output_store_second_slice_compute_correct
 
 section BSARecipes
 
-open VeriTile.Triton
+open VeriTile
 
 /-- **`if cond { thenBody } else { elseBody }` step, true branch.** When the
 elaborated condition Op evaluates to the scalar boolean `true`, the runtime

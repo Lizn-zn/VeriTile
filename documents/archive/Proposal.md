@@ -382,10 +382,10 @@ VeriTile is the unique combination: **kernel-level + LLM-driven + Lean-verified 
 ## 11. Concrete First Step (Week 1)
 
 ```lean
--- File: VeriTile/Triton/Core.lean
+-- File: VeriTile/Core.lean
 import Mathlib
 
-namespace VeriTile.Triton
+namespace VeriTile
 
 -- Minimal Triton ops to start
 inductive Op : Type where

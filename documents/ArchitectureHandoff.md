@@ -58,19 +58,28 @@ validated". IEEE-754 formalization is *permanently* out of Lean scope by design.
   Launch/*, Concurrency/*                         grid launch + atomics/async gap
   ─────────────────────────────────────────────
   Semantics/{EvalOp,Step,State,…}                evalOp / stepStmt / exec + BlockState
-  DSL/{Syntax,Expansion/*,Typing,Inference}      triton{…} macro → ComputeKernel
+  Frontend/Triton/DSL/{Syntax,Expansion/*,…}     triton{…} macro → ComputeKernel  (frontend)
   Core/{Types,Shape,Ast}                          the typed AST: Op / Stmt / Kernel
-  Triton/Math/*, VeriTile/Math/*                  pure ℝ operators + Mathlib identities
+  Math/*                                          pure ℝ operators + Mathlib identities
 ```
 
+> **Layout note (#472, Phase 1).** The DSL-agnostic foundation was mechanically
+> relocated out of `VeriTile/Triton/` to **`VeriTile/*` directly** — the paths above
+> (`Core/`, `Semantics/`, `Memory/`, `Float/`, `Launch/`, `Concurrency/`, `Kernel/`,
+> `Math/`, plus `Compute.lean`/`ExternalCheck.lean`) are all `VeriTile/<Name>`, and their
+> identifiers live in the neutral `VeriTile` namespace (no `.Triton` accent). The
+> `triton{…}` **frontend** now lives under `VeriTile/Frontend/Triton/` (namespace
+> `VeriTile.Frontend.Triton.DSL`). This was a zero-semantics rename; a later Tilelang
+> frontend joins as `VeriTile/Frontend/Tilelang`. See `CodeOrganization.md`.
+
 The **three-layer discipline** (from `CodeOrganization.md`) governs where new code goes:
-pure `(Fin N → ℝ) → …` math → `Triton/Math/`; anything generic over a kernel's
+pure `(Fin N → ℝ) → …` math → `Math/`; anything generic over a kernel's
 `(load, mask)` touching `Tile`/`WithBot` → `Semantics/` (named by *mechanism*, not
 operator); anything touching `BlockState`/`RegionName`/layout → per-kernel glue.
 
 ---
 
-## 3. Core AST — `Triton/Core/`
+## 3. Core AST — `Core/`
 
 The typed substrate. A well-typed expression is a term of `Op dtype shape`, so illegal
 dtype/shape combinations are unrepresentable.
@@ -98,7 +107,7 @@ dtype/shape combinations are unrepresentable.
 - `Kernel` (= `AlgKernel`) — `{ inputs outputs : List RegionName, body : List Stmt }`. **Memory is a single global map at runtime**; `inputs/outputs` are metadata.
 - Also here: the compute wrapper (`ComputeDType, ComputeOp, ComputeExpr, ComputeStmt, ComputeKernel`, `EraseDTypeError`, bit structs `UInt32Bits/Int32Bits/Float32Bits`) — see §5.
 
-## 4. Semantics — `Triton/Semantics/` (umbrella `Semantics.lean`)
+## 4. Semantics — `Semantics/` (umbrella `Semantics.lean`)
 
 The operational model. Everything is `Option`-valued (⟂ = undefined read/out-of-bounds).
 
@@ -127,7 +136,7 @@ The predicates live here (not in `Kernel/`). Bottom to top:
 - Transition lemmas `computeCorrect_of_toAlgorithm_eq` / `computeCorrect_of_toAlgKernel rfl` discharge the projection so proofs proceed on `Kernel.Correct`.
 - `ComputeCorrectAt?`/`…At?` — ε-bounded observation predicates reserved for future test-backed IEEE claims; deliberately unused by the ℝ proofs.
 
-## 7. Memory reasoning — `Triton/Memory/`
+## 7. Memory reasoning — `Memory/`
 
 Primitives live in `Semantics/State.lean` (§4); `Memory/` is the *reasoning* layer on top.
 - **`Memory/View.lean`** — `TensorView shape := { region, base, strides }` with `offset` (strided address map), `loaded`/`InputAt` ("region contains tensor `xs` under this map"), `Valid` (non-overlap), `offset_injective`; address-map builders `Offset.strided/contig/rowMajor2D` + injectivity lemmas; `IndirectView`/`pagedAddr` for gather/paged-KV.
@@ -137,7 +146,7 @@ Primitives live in `Semantics/State.lean` (§4); `Memory/` is the *reasoning* la
 
 See `MemorySafety.md` and `GpuMemoryModel.md` for the intended discipline.
 
-## 8. `#447` Float rounding model — `Triton/Float/` (the newest work, PR #456)
+## 8. `#447` Float rounding model — `Float/` (the newest work, PR #456)
 
 The latest body of work on `main`. Adds a rounding-invariance layer *alongside* (never
 modifying) the existing evaluator/stepper. Full deep-dive: it is worth reading the four
@@ -155,14 +164,14 @@ a concrete IEEE encoding. (Consumers like the SwiGLU pilot live on branch
 
 ## 9. Launch & Concurrency — the grid + the compute-to-algorithm gap
 
-**`Triton/Launch/`** — `Grid := { dims }`, `GridIndex g` (typed ND program index) with
+**`Launch/`** — `Grid := { dims }`, `GridIndex g` (typed ND program index) with
 `toPids`; `BlockState.withGridIndex` instantiates a program's pids. Grid theorems today use
 `Kernel.ForAllProgramsSome` (per-program-local: every grid index succeeds + postcondition).
 `Composition.lean` composes disjoint programs: `GridWritesDisjoint` (from disjoint
 `tileImage`s), `mergeFrames`, `GridLaunchedOrdinary`, and the general `LaunchCorrect`.
 There is **no whole-grid `launchExec` and no `num_programs` def yet** — known gaps.
 
-**`Triton/Concurrency/`** (intentionally the weaker "first" surface, `#81`) —
+**`Concurrency/`** (intentionally the weaker "first" surface, `#81`) —
 `Trace.lean`: the event vocabulary (`MemoryEvent`, `TraceEvent`, `AsyncEvent`,
 `BarrierEvent`, `EffectTrace`, `HappensBefore`, `PermissionModel`/`OwnershipMap`).
 `Atomic.lean`: atomics proven at the *algorithm* level — `trace_atomicAdd_real_correct`,
@@ -176,7 +185,7 @@ double-buffered-copy-refines-sequential example. **No operational interleaving s
 general bisimulation exists yet** — async/barrier concurrency is modeled abstractly and
 connected to semantics only through `RefinesSequential`. See `ConcurrencySemantics.md`.
 
-## 10. DSL — the `triton { ... }` macro — `Triton/DSL/`
+## 10. DSL — the `triton { ... }` macro — `Frontend/Triton/DSL/`
 
 Compile-time lowering pipeline: parse → infer → expand → build.
 - **`Syntax.lean`** — `declare_syntax_cat tritonExpr/tritonStmt/…` parser categories; the single user entry `syntax "triton" "{" tritonStmt* "}" : term`.
@@ -186,9 +195,10 @@ Compile-time lowering pipeline: parse → infer → expand → build.
 
 ## 11. Pure math & proof-reuse libraries
 
-- **`Triton/Math/`** — operator-named pure ℝ files (`Activation, Reduction, Softmax, LogSumExp, L2Norm, Loss, …`): `(Fin N → ℝ) → …` definitions + non-trivial identities (e.g. naive = stable softmax, Welford = two-pass), depending only on Mathlib. Inclusion rule: ≥2 callers and mathematically substantive.
-- **`VeriTile/Math/`** — heavier certified analysis (e.g. `GeluTaylor20*` polynomial bound certificate chain, `RealErf`, `Tanh`).
-- **`Triton/Kernel/`** — *proof-reuse* lemma libraries (NOT kernel definitions): `LoopInvariant.lean` (`forLoop_inv` master induction lemma), `Matmul.lean`, `OffsetInjective.lean`, `ScatterStore.lean`, `EvalHelpers.lean` (`cdiv` + `evalOp` unfold lemmas).
+- **`Math/`** (`VeriTile/Math/`) — the pure-math library, now consolidated into one directory (two flavours coexist, distinct namespaces):
+  - *operator library* (namespace `VeriTile`, files `Activation, Reduction, Softmax, LogSumExp, L2Norm, Loss, Optimizer, RMSNorm, Attention`): `(Fin N → ℝ) → …` definitions + non-trivial identities (e.g. naive = stable softmax, Welford = two-pass), depending only on Mathlib. Inclusion rule: ≥2 callers and mathematically substantive. Ships with the lite `VeriTile` lib.
+  - *certified analysis* (namespace `VeriTile.Math`, files `GeluTaylor20*` polynomial-bound certificate chain, `RealErf`, `Tanh`): heavier Mathlib analysis, isolated in the `VeriTileMath` lib.
+- **`Kernel/`** — *proof-reuse* lemma libraries (NOT kernel definitions): `LoopInvariant.lean` (`forLoop_inv` master induction lemma), `Matmul.lean`, `OffsetInjective.lean`, `ScatterStore.lean`, `EvalHelpers.lean` (`cdiv` + `evalOp` unfold lemmas).
 
 ## 12. Verification harness — `bench/`, `scripts/`, CI
 

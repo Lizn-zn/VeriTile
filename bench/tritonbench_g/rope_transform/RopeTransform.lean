@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -76,7 +76,7 @@ The `@triton.heuristics`/`BACKWARD_PASS` flag is modeled by the `Bool` argument;
 
 namespace VeriTile.Bench.TritonBenchG.RopeTransform
 
-open VeriTile.Triton
+open VeriTile
 open VeriTile.Examples.AttentionForwardClosedForm
 
 set_option maxHeartbeats 5000000

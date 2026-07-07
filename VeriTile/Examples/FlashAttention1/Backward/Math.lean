@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 open BigOperators
 
 namespace FA1Backward

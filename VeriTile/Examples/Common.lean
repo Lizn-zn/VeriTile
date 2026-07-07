@@ -3,17 +3,17 @@ VeriTile.Examples.Common
 
 Shared example-level helpers for the parameterized-region kernel correctness
 pattern. The reusable memory-contract layer (`InputAt`, `Offset`,
-`TensorView`) lives in `VeriTile.Triton.Memory`; this file keeps only the
+`TensorView`) lives in `VeriTile.Memory`; this file keeps only the
 ergonomic shorthands used by worked examples.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Memory
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Memory
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Cast `Fin k` to `Fin n` when `k ≤ n`.
 

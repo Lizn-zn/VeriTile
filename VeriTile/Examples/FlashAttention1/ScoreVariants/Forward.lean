@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.ScoreVariants.Loop
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 namespace FA1Score
 theorem fa1_score_blockrec_forward_raw_of_step

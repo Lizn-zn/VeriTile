@@ -4,12 +4,12 @@ VeriTile.Examples.MemorySafety
 Representative Layer-1 memory-bounds safety examples.
 -/
 
-import VeriTile.Triton.Memory.Bounds
+import VeriTile.Memory.Bounds
 import Mathlib.Tactic
 
 namespace VeriTile.Examples.MemorySafety
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Baseline scalar copy with direct region+offset addressing. -/
 def straightLineCopyKernel (xReg outReg : RegionName) : Kernel :=

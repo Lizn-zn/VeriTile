@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Core.PreLoop
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 800000 in
 /-- One FA-1 KV-block iteration preserves the loop invariant. -/
@@ -232,7 +232,7 @@ theorem fa1_step
         (Op.reduceMax ⟨1, by simp⟩ «false»
           (Op.ref .real [M, Bk] "scores")) s6).bind
         fun v => some (s6.setReg "m_block" .real [M] v)) = some s7
-      rw [VeriTile.Triton.evalOp_reduceMax]
+      rw [VeriTile.evalOp_reduceMax]
       simp [s7, s6, mBlock, scores, Tile.reduceMax, Tile.reduceMaxDrop, Tile.ofReal,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hBk]
       apply congrArg (fun t =>
@@ -314,8 +314,8 @@ theorem fa1_step
           some s10 := by
       simp only [stepStmt, evalOp_exp, evalOp_sub, Option.bind_eq_bind, Option.bind_some]
       unfold evalOp
-      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
-        VeriTile.Triton.evalOp_ref,
+      simp [VeriTile.evalOp_expandDim, VeriTile.evalOp_expandDim_ref,
+        VeriTile.evalOp_ref,
         evalOp_expandDim_one_real,
         s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
         p, scores, mNew, Tile.bop, Tile.uop, Tile.ofReal, Tile.expandDim, NumericDType.sub,
@@ -1116,7 +1116,7 @@ theorem fa1_step_strided
         (Op.reduceMax ⟨1, by simp⟩ «false»
           (Op.ref .real [M, Bk] "scores")) s6).bind
         fun v => some (s6.setReg "m_block" .real [M] v)) = some s7
-      rw [VeriTile.Triton.evalOp_reduceMax]
+      rw [VeriTile.evalOp_reduceMax]
       simp [s7, s6, mBlock, scores, Tile.reduceMax, Tile.reduceMaxDrop, Tile.ofReal,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hBk]
       apply congrArg (fun t =>
@@ -1198,8 +1198,8 @@ theorem fa1_step_strided
           some s10 := by
       simp only [stepStmt, evalOp_exp, evalOp_sub, Option.bind_eq_bind, Option.bind_some]
       unfold evalOp
-      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
-        VeriTile.Triton.evalOp_ref,
+      simp [VeriTile.evalOp_expandDim, VeriTile.evalOp_expandDim_ref,
+        VeriTile.evalOp_ref,
         evalOp_expandDim_one_real,
         s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
         p, scores, mNew, Tile.bop, Tile.uop, Tile.ofReal, Tile.expandDim, NumericDType.sub,
@@ -2118,8 +2118,8 @@ theorem fa1_step_strided_causal
           some s12 := by
       simp only [stepStmt, evalOp_exp, evalOp_sub, Option.bind_eq_bind, Option.bind_some]
       unfold evalOp
-      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
-        VeriTile.Triton.evalOp_ref,
+      simp [VeriTile.evalOp_expandDim, VeriTile.evalOp_expandDim_ref,
+        VeriTile.evalOp_ref,
         evalOp_expandDim_one_real,
         s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
         p, scores, mNew, Tile.bop, Tile.uop, Tile.expandDim, NumericDType.sub,

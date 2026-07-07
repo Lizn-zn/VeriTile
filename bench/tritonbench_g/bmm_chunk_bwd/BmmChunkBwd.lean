@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `bmm_chunk_bwd` — closed-form batched-matmul-backward correctness
@@ -87,7 +87,7 @@ BLOCK_SIZE_CS)` is driven by `forRangeDyn`). The textual py↔lean scans in
 
 namespace VeriTile.Bench.TritonBenchG.BmmChunkBwd
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

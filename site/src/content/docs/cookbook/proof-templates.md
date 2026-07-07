@@ -6,7 +6,7 @@ description: Standard 1D scatter, dual-channel store, single-step loops, the hel
 By now the proof patterns for the bench corpus have stabilized into a
 handful of templates. This page maps each pattern to the helpers in
 `Semantics/Scalar.lean`, `Semantics/State.lean`, and
-`VeriTile/Triton/LoopInvariant.lean`, and gives a skeleton you can copy.
+`VeriTile/LoopInvariant.lean`, and gives a skeleton you can copy.
 
 :::caution[Currency]
 The named helpers below were last surveyed 2026-05-17. Specific lemma
@@ -82,7 +82,7 @@ this clean — a typed nat/int write doesn't disturb the real-channel
 ## Loop-invariant proofs
 
 The kernel's body is wrapped in a `for` / `tl.for`. Use
-[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/LoopInvariant.lean)
+[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/LoopInvariant.lean)
 or its siblings.
 
 ### DSL → AST → helper map

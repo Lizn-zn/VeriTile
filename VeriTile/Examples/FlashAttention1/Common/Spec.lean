@@ -5,11 +5,11 @@ FA-1 forward Real specs, 4D layout wrappers, and view wrappers.
 -/
 
 import VeriTile.Examples.FlashAttention1.Common.Kernels
-import VeriTile.Triton.Math.Attention
+import VeriTile.Math.Attention
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Math model — softmax-attention
 
@@ -54,7 +54,7 @@ plain `TileIndex → ℝ` inputs. Lifts through `Tile.ofReal`, runs
 noncomputable def attentionReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (scale : ℝ) : TileIndex [M, D] → ℝ :=
-  VeriTile.Triton.attentionReal Q K V scale
+  VeriTile.attentionReal Q K V scale
 
 /-! ## Causal math model
 

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `triton_conv2d_fwd` — closed-form conv2d-forward correctness
@@ -68,7 +68,7 @@ injectivity (distinct active lanes hit distinct `Output` addresses).
 
 namespace VeriTile.Bench.TritonBenchG.TritonConv2dFwd
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

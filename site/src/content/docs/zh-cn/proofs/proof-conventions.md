@@ -11,7 +11,7 @@ title: "VeriTile 证明约定"
 VeriTile 的 kernel-side 计算住在 `WithBot ℝ` 值的 carrier 里:
 `Tile.reduceSum (Tile.bop mul ...)`, `Option.map₂`, `Option.map`,
 `WithBot.realSqrt`, `WithBot.unbotD`。数学层是纯 `ℝ`。我们用
-`VeriTile.Triton.Semantics.MaskedReduction`(以及其它同级 `Semantics/` 机
+`VeriTile.Semantics.MaskedReduction`(以及其它同级 `Semantics/` 机
 制文件)里的定理桥接两者:
 
 ```lean
@@ -60,7 +60,7 @@ unblock 的。看那个文件里的具体写法。
 ## 开场 simp:优先用 `tile_elementwise`
 
 Kernel 证明通常以一个 "kernel-exec 标准化" simp 开场。用
-`VeriTile.Triton.Semantics.BroadcastReshape` 注册的 `tile_elementwise`
+`VeriTile.Semantics.BroadcastReshape` 注册的 `tile_elementwise`
 simp set 取代以前那串 8-15 个 lemma 名:
 
 ```lean

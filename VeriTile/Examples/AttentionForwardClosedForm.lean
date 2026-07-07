@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `attention_forward_triton` — closed-form correctness (WIP scaffold)
@@ -12,7 +12,7 @@ Scaffold for replacing the *self-referential* output summary in
 `bench/tritonbench_g/attention_forward_triton` (whose `expected` is the kernel's
 own executed output, hence tautological) with a genuine closed-form claim:
 the quantized flash-attention forward kernel computes
-`VeriTile.Triton.attentionRealBase2PerKeyScale` (base-2 softmax, per-block
+`VeriTile.attentionRealBase2PerKeyScale` (base-2 softmax, per-block
 key-scale) of the loaded Q/K/V tiles.
 
 The surface kernel is copied verbatim from the bench port (bench ports are not
@@ -38,7 +38,7 @@ complete and sorry-free.
 
 namespace VeriTile.Examples.AttentionForwardClosedForm
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -55,7 +55,7 @@ compiled body reduces by `rfl`, so
 then `simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind]` steps
 all assigns (the `@[simp] evalOp_*` and `setReg` lemmas thread register lookups
 through the accumulated `setReg` chain automatically). -/
--- `evalOp_floorDiv` and `evalOp_mod` now live in `VeriTile.Triton.Kernel`
+-- `evalOp_floorDiv` and `evalOp_mod` now live in `VeriTile.Kernel`
 -- (EvalHelpers) and are reused from there via the `import` above. The former
 -- local copies (byte-identical) were removed to avoid an ambiguous-name clash
 -- for downstream files that import both this module and the Kernel lib.
@@ -90,7 +90,7 @@ broadcast in the `Q_ptrs`/`O_block_ptr` pointer offsets). -/
   unfold evalOp; simp [Tile.expandDim]; rfl
 
 -- `evalOp_ptrAdd` and `evalOp_ptrBase` also now live in
--- `VeriTile.Triton.Kernel` (EvalHelpers) and are reused from there via the
+-- `VeriTile.Kernel` (EvalHelpers) and are reused from there via the
 -- `import` above (former byte-identical local copies removed; see note above).
 
 /-- Eval helper for `exp2` (`tl.math.exp2`): `Tile.uop realExp2` over the operand. -/
@@ -703,7 +703,7 @@ noncomputable def keyScale (s : BlockState) (Q_scale K_scale : RegionName)
 The exec-side loop invariant tracks the kernel's running `(m_i, l_i, acc)` after
 `b` processed key-blocks. The kernel seeds `m_i = ⊥ (-inf)`, `l_i = 1`, `acc = 0`
 and updates per block. These are the base-2, per-key-scale analogue of
-`VeriTile/Triton/Semantics/StreamingAccumulator.lean`'s base-`e` partials.
+`VeriTile/Semantics/StreamingAccumulator.lean`'s base-`e` partials.
 
 Note the `l_i = 1` seed (this kernel, unlike FA-1's `l_i = 0`): it is zeroed by
 block 0's `α = pow2(⊥ − m₁) = 0`, so for `b ≥ 1` the partials match a clean

@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Boundary
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -77,7 +77,7 @@ theorem fa1NaiveDirectOut_eq_attentionReal {M S D Bd : Nat}
   rw [FA1MathBoundary.oFreeBoundary_div_lFreeBoundary_eq_attentionReal S
       (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V)
       scale 1 (by omega) idx hPos]
-  exact VeriTile.Triton.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
+  exact VeriTile.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
 
 private theorem sum_causal_exp_scores_eq_some {M S D : Nat}
     (qStart : Nat) (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
@@ -223,7 +223,7 @@ theorem fa1NaiveCausalDirectOut_eq_attentionRealCausalBlock {M S D Bd : Nat}
   rw [FA1MathCausalBoundary.oFreeBoundary_div_lFreeBoundary_eq_attentionRealCausalBlock S
       qStart (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V)
       scale 1 (by omega) idx hPos]
-  exact VeriTile.Triton.attentionRealCausalBlock_padHeadD_eq hDLe qStart Q K V scale idx hDIdx
+  exact VeriTile.attentionRealCausalBlock_padHeadD_eq hDLe qStart Q K V scale idx hDIdx
 
 private def fa1NaiveComputeBoundaryD (M S Bd : Nat) (scale : ℝ) : List Stmt :=
   [ Stmt.assign .real [M, S] "scores"

@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `layer_norm_liger` — strict per-kernel correctness
@@ -41,7 +41,7 @@ The summary characterizes all three Python-observable forward outputs `Y`,
 (`layer_norm_liger_forward_mean_store_slice_*`,
 `layer_norm_liger_forward_rstd_store_slice_*`) that isolate the scalar stores;
 the layernorm row math is defined inline in this file rather than reusing
-`VeriTile.Triton.Math.RMSNorm`.
+`VeriTile.Math.RMSNorm`.
 
 ## Modeling boundary
 
@@ -60,7 +60,7 @@ Output/output disjointness among `Y`, `Mean`, `RSTD` is assumed (`Y ≠ Mean`,
 
 namespace VeriTile.Bench.TritonBenchG.LayerNormLiger
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

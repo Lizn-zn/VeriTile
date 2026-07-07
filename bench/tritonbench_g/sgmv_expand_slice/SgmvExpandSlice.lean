@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `sgmv_expand_slice` — full closed-form correctness
@@ -76,7 +76,7 @@ exempt this port on this marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.SgmvExpandSlice
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

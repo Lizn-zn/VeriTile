@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `matrix_transpose` — strict per-kernel correctness
@@ -45,7 +45,7 @@ satisfies it.
 
 namespace VeriTile.Bench.TritonBenchG.MatrixTranspose
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful 1:1 transcription of `matrix_transpose.py`'s `kernel`.
 

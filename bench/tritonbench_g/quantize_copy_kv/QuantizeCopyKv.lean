@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -68,7 +68,7 @@ modeled. `@triton.autotune` is not present here.
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeCopyKv
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -77,7 +77,7 @@ set_option linter.unusedSimpArgs false
 The genuine value store writes an `.int` channel (the `.to(tl.int8)` quotient)
 and the scale store writes an `.fp16` channel. The following lemmas are the
 `.int`/`.fp16` analogues of the `.nat`/`.real` scatter-readback and
-cross-channel preservation lemmas in `VeriTile.Triton.Semantics.State`. -/
+cross-channel preservation lemmas in `VeriTile.Semantics.State`. -/
 
 /-- `.int` masked-foldl preservation: writes whose (masked) offsets all miss `o`
 leave `readMemValue .int region o` unchanged. -/
@@ -573,7 +573,7 @@ output is NOT phrased as `ComputeCorrect.Realizes`: it stays in the raw
 `(exec …).map (·.readMemValue .fp16 OutScale …) = some (if …)` form. This is a
 framework *carrier* limitation, not a proof gap. `ComputeCorrect.Realizes`
 requires an `OutputReadable` instance for the readback type, and the only
-instances in `VeriTile.Triton.Float.Correctness` are for `MemCell`, `ℝ`, `Nat`,
+instances in `VeriTile.Float.Correctness` are for `MemCell`, `ℝ`, `Nat`,
 and `Int`. The scale reads back at `TileCarrier .fp16` (the *decoded* fp16
 value), which has no `OutputReadable` carrier, so it cannot be wrapped in
 `Realizes`. The conjunct is nonetheless genuine and non-self-referential: it

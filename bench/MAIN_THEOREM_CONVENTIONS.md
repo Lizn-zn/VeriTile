@@ -101,11 +101,11 @@ landed, an explicitly-scoped theorem whose narrowed scope is stated in its own
 hypotheses/docstring. Partial-but-honest is acceptable; anything that reads as
 "done" when it isn't is not.
 
-## 7. Shared pure math lives in `VeriTile/Triton/Math/*`
+## 7. Shared pure math lives in `VeriTile/Math/*`
 
 When a genuinely reusable pure-math object exists (e.g.
 `crossEntropyLoss = stableLSE − logit_target`, `klDivSpec`), put the **pure
-function** in `VeriTile/Triton/Math/*` and connect each kernel with a **bridge
+function** in `VeriTile/Math/*` and connect each kernel with a **bridge
 lemma** proving its (kernel-coupled) spec reduces to the pure core in the base
 regime. Kernel-coupled specs — those taking `BlockState` / `RegionName` / program
 ids — **stay in the kernel file**; only pure `ℝ`-level math is lifted.
@@ -135,7 +135,7 @@ Bench files are checked individually (they are not `lake` library targets):
 ```bash
 # 0. build the shared library once (so imports resolve)
 lake build VeriTile
-lake build VeriTile.Triton.Kernel      # barrel, if the file imports it
+lake build VeriTile.Kernel      # barrel, if the file imports it
 
 # 1. compile a kernel file — must be exit 0 with zero `error:` lines
 lake env lean bench/tritonbench_g/<kernel>/<File>.lean
@@ -159,8 +159,8 @@ Notes:
   environments); do **not** run bare `lake build`/`lake clean`/`lake exe cache`
   while iterating on a kernel — they can invalidate the prebuilt oleans.
 - Masked-reduction / log-sum-exp proofs need
-  `import VeriTile.Triton.Semantics.{TiledIndexing,MaskedReduction}` +
-  `VeriTile.Triton.Math.LogSumExp` and **`open VeriTile.Triton.TiledLogSumExp`**
+  `import VeriTile.Semantics.{TiledIndexing,MaskedReduction}` +
+  `VeriTile.Math.LogSumExp` and **`open VeriTile.TiledLogSumExp`**
   (the lemmas `validLanes` / `partialLSE_full` / `sup'_masked_map_eq` / `stableLSE`
   live in that nested namespace).
 

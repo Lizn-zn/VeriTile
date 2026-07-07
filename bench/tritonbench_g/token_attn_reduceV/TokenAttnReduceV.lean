@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `token_attn_reduceV` — strict per-kernel correctness
@@ -66,7 +66,7 @@ hypotheses `stride_pbs = 1` and `stride_req_to_tokens_s = 1`).
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnReduceV
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

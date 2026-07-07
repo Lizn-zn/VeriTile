@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `rope_embedding` — strict per-kernel correctness
@@ -57,7 +57,7 @@ shapes (and the `BACKWARD_PASS` heuristic is modeled by the `Bool` argument).
 
 namespace VeriTile.Bench.TritonBenchG.RopeEmbedding
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

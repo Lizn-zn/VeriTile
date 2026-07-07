@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.Math.RMSNorm
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Math.RMSNorm
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `rmsnorm_fused` — strict per-kernel correctness
@@ -29,11 +29,11 @@ rms_norm_fwd_fused_output_summary             ← TOP THEOREM
   └─ rms_norm_fwd_fused_compute_correct       ← ComputeCorrect over the masked store
        └─ rms_norm_fwd_fused_correct          ← algorithm-layer readback per lane
             └─ rmsnormCarrierSpec_eq_rmsnormSpec
-                 └─ rmsVarCarrier_eq_rmsMeanSq (uses VeriTile.Triton.Math.RMSNorm /
+                 └─ rmsVarCarrier_eq_rmsMeanSq (uses VeriTile.Math.RMSNorm /
                                                 TiledL2Norm reduction lemmas)
 ```
 
-The row spec is `TiledRMSNorm.rmsAffine` from `VeriTile.Triton.Math.RMSNorm`
+The row spec is `TiledRMSNorm.rmsAffine` from `VeriTile.Math.RMSNorm`
 (reusing `TiledRMSNorm.rmsMeanSq` / `TiledL2Norm` reduction lemmas rather than
 inlining the reduction math).
 
@@ -53,7 +53,7 @@ block).
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormFused
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

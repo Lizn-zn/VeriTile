@@ -8,7 +8,7 @@ import VeriTile.Examples.ApproxGeLU.Taylor5
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 /-- 7th-order tanh Taylor polynomial: `u − u³/3 + 2u⁵/15 − 17u⁷/315`. -/
 noncomputable def tanhTaylor7 (u : ℝ) : ℝ :=

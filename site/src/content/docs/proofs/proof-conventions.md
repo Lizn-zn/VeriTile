@@ -11,7 +11,7 @@ default choices below are what most VeriTile kernel proofs use.
 VeriTile's kernel-side computation lives in `WithBot ℝ`-valued carriers:
 `Tile.reduceSum (Tile.bop mul ...)`, `Option.map₂`, `Option.map`,
 `WithBot.realSqrt`, `WithBot.unbotD`. The math layer is in pure `ℝ`. We
-bridge between them with theorems in `VeriTile.Triton.Semantics.MaskedReduction`
+bridge between them with theorems in `VeriTile.Semantics.MaskedReduction`
 (and similar `Semantics/` mechanism files):
 
 ```lean
@@ -64,7 +64,7 @@ variable + cast/wrapper structure that prevents direct unification.
 
 Kernel proofs typically open with a "kernel-exec normalization" simp. Use
 the `tile_elementwise` simp set (registered in
-`VeriTile.Triton.Semantics.BroadcastReshape`) to replace the recurring
+`VeriTile.Semantics.BroadcastReshape`) to replace the recurring
 8-to-15-name list:
 
 ```lean

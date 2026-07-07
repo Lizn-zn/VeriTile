@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 def fa1PreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "pid" (Op.programId 0)

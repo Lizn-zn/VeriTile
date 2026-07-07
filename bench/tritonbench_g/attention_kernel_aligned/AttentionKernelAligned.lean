@@ -1,10 +1,10 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Semantics.BlockPtrEval
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
+import VeriTile.Semantics.BlockPtrEval
 
 /-!
 # `attention_kernel_aligned` — strict per-kernel correctness
@@ -70,7 +70,7 @@ trusted host boundary.
 
 namespace VeriTile.Bench.TritonBenchG.AttentionKernelAligned
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -411,7 +411,7 @@ register the kernel computes. -/
 
 namespace ClosedForm
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ### Block-pointer `evalOp` reductions (K/V/Q/O pointers) -/
 

@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -45,7 +45,7 @@ disjointness is assumed: the row is read into registers before the scatter.
 
 namespace VeriTile.Bench.TritonBenchG.SquareMatrix
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `square_matrix.py`'s `square_kernel`.
 

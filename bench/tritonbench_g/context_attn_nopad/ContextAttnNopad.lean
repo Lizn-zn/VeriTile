@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `context_attn_nopad` — strict per-kernel correctness
@@ -61,7 +61,7 @@ recovered as a concrete special case.
 
 namespace VeriTile.Bench.TritonBenchG.ContextAttnNopad
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -3023,7 +3023,7 @@ theorem nopad_exec_general
   have hinv0' : nopadInvariantG Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s0 0 s0 :=
     nopadInvariantG_zero_reanchor Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s s0 ⟨hpids0, hmem0, hundef0, hcb0, hch0, hsm0, hseq0, hsl0, hn0, hd0, hoffm0, hq0, hkp0, hvp0, hbmask0, hmi0, hli0, hacc0⟩
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
-    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+    VeriTile.forRangeDyn_inv (idx := "start_n")
       (startOp := Op.constNat 0)
       (stopOp := Op.mul .nat Broadcast.nil
         (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")

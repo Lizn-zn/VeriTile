@@ -4,13 +4,13 @@ VeriTile.Examples.GridComposition
 Representative whole-grid disjoint-frame composition smoke.
 -/
 
-import VeriTile.Triton.Memory.Footprint
-import VeriTile.Triton.Launch.Composition
-import VeriTile.Triton.Concurrency.Atomic
+import VeriTile.Memory.Footprint
+import VeriTile.Launch.Composition
+import VeriTile.Concurrency.Atomic
 
 namespace VeriTile.Examples.GridComposition
 
-open VeriTile.Triton
+open VeriTile
 
 /-- One-dimensional constant store indexed by `tl.program_id(0)`. -/
 def gridConstStoreKernel (outReg : RegionName) : Kernel :=

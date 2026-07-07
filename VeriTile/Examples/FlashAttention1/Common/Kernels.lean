@@ -4,15 +4,15 @@ VeriTile.Examples.FlashAttention1.Common.Kernels
 FA-1 forward kernel DSL surfaces shared by the proof modules.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## FA-1 forward kernel — DSL definition
 

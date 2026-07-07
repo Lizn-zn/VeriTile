@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `max_reduction` — strict per-kernel correctness
@@ -50,7 +50,7 @@ transcription. `other=-float("inf")` masked lanes are modeled as `⊥`
 
 namespace VeriTile.Bench.TritonBenchG.MaxReduction
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 

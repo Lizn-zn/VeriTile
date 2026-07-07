@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `softmax_triton3` — strict per-kernel correctness
@@ -51,7 +51,7 @@ scatter.
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxTriton3
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `softmax_triton3.py`'s `softmax_kernel`.
 

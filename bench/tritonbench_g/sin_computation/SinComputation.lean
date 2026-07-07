@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -41,7 +41,7 @@ the result is correct even if `out_ptr` aliases `in_ptr0`.
 
 namespace VeriTile.Bench.TritonBenchG.SinComputation
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `sin_computation.py`'s `sin_kernel`.
 

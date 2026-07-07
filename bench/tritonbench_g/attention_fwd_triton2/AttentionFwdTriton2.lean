@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
 import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
@@ -55,11 +55,11 @@ full `[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 
 `attention_fwd_triton2_closed_form_correct` is a **genuine closed-form value
 claim**: every active output lane of `Out` equals
-`VeriTile.Triton.attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under
+`VeriTile.attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under
 the per-block key scale — the base-2, per-key-scaled attention output, NOT the
 kernel's own executed value. The mathematical heart — online-softmax recurrence
 == batch base-2 softmax — is proved sorry-free in
-`VeriTile/Triton/Math/Attention.lean`, and the full `exec`-side loop unfolding is
+`VeriTile/Math/Attention.lean`, and the full `exec`-side loop unfolding is
 complete in `VeriTile/Examples/AttentionForwardClosedForm.lean`. Because this
 kernel's surface is (post dtype-erasure) definitionally the same loop, the top
 theorem here bridges directly to that result. Tracked as
@@ -80,7 +80,7 @@ marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton2
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

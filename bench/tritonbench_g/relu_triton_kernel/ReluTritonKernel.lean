@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Activation
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Activation
 import VeriTile.Examples.Common
 
 /-!
@@ -46,7 +46,7 @@ aliases `x_ptr`.
 
 namespace VeriTile.Bench.TritonBenchG.ReluTritonKernel
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `relu_triton_kernel.py`'s `relu_kernel`.
 

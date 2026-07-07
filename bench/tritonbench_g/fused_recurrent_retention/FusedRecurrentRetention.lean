@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fused_recurrent_retention` — genuine retention closed-form correctness
@@ -117,7 +117,7 @@ phase-2 pointer rebasing.
 
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentRetention
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

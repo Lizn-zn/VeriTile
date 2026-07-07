@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Optimizer
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Optimizer
 
 /-!
 # `apply_penalty` — strict per-kernel correctness
@@ -62,14 +62,14 @@ hold default or duplicated token ids and are simply not constrained); the
 correctness claim is correspondingly restricted to the active lanes. The
 integer-to-float promotion in `batch_ids_count * cur_freqency` and the
 `tl.where(logit > 0, …)` branch are modeled directly. The penalty spec
-`penaltyValue` goes through `VeriTile.Triton.Math.Optimizer`'s Lion oracle
+`penaltyValue` goes through `VeriTile.Math.Optimizer`'s Lion oracle
 (`TiledOptimizer.lionPenalty`); the surrounding arithmetic is the `ℝ`
 ordered-field operations directly.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ApplyPenalty
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -169,7 +169,7 @@ theorem storeOffset_eq_active
   simp [hAct]
 
 /-- Per-lane `Logits` output spec: the reusable Lion penalty oracle
-(`VeriTile.Triton.Math.Optimizer.lionPenalty`) applied to the values this lane
+(`VeriTile.Math.Optimizer.lionPenalty`) applied to the values this lane
 loads — the logit at the gathered token, its count, and the three penalties. -/
 noncomputable def penaltyValue
     (s : BlockState)

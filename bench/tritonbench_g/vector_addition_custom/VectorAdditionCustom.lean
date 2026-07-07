@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 /-!
@@ -42,7 +42,7 @@ or `B`.
 
 namespace VeriTile.Bench.TritonBenchG.VectorAdditionCustom
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `vector_addition_custom.py`'s `_add_kernel`.
 

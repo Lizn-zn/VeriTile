@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `kldiv_ops` — strict per-kernel correctness
@@ -57,12 +57,12 @@ case split. The forward-none and backward branches are modeled as one-block
 slices (one `BLOCK_SIZE` iteration after the row-pointer advance); masked lanes
 use `other=0.0` and out-of-bounds lanes (`i ≥ n_cols`) are preserved. Output
 offset injectivity is an explicit hypothesis. The specs reference `Real.log` /
-`Real.exp` directly, not `VeriTile.Triton.Math.*`.
+`Real.exp` directly, not `VeriTile.Math.*`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KldivOps
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -235,7 +235,7 @@ noncomputable def forwardDefaultSpec
 
 /-- Bridge: For real `a b`, the kernel's Bool comparison
 `ComparableDType.real.gt (some a) (some b) = true` is equivalent to `b < a`. -/
-lemma _root_.VeriTile.Triton.ComparableDType.real_gt_some_some_eq_true_iff
+lemma _root_.VeriTile.ComparableDType.real_gt_some_some_eq_true_iff
     (a b : ℝ) :
     ComparableDType.real.gt (some a) (some b) = Bool.true ↔ b < a := by
   unfold ComparableDType.gt

@@ -2,7 +2,7 @@
 
 **Status:** Spec, approved 2026-04-29.
 **Phase:** B (Tier 2 streaming reductions).
-**Files affected:** `VeriTile/Triton/Semantics.lean`, new `VeriTile/Triton/LoopInvariant.lean`, `VeriTile.lean`.
+**Files affected:** `VeriTile/Semantics.lean`, new `VeriTile/LoopInvariant.lean`, `VeriTile.lean`.
 
 This spec fixes the operational semantics of `Stmt.forLoop` in VeriTile's
 embedded Triton subset and the shape of the loop-induction lemma family that
@@ -113,7 +113,7 @@ prescribes.)
 
 ## 4. Lemma family
 
-Lives in a new file `VeriTile/Triton/LoopInvariant.lean`. The family has one
+Lives in a new file `VeriTile/LoopInvariant.lean`. The family has one
 master lemma plus a small set of ergonomics corollaries. Corollaries are added
 on demand; only the two below are required for Phase B.
 
@@ -215,11 +215,11 @@ predicates.
 
 | File | Status | Responsibility |
 |---|---|---|
-| `VeriTile/Triton/Semantics.lean` | Modify | Convert `stepStmt` / `stepStmts` to `mutual` block; add `stepForLoopAux`; replace forLoop's `none` placeholder; add `termination_by`. |
-| `VeriTile/Triton/LoopInvariant.lean` | Create | `forLoop_inv` master lemma; `forLoop_readout_scalar` and `forLoop_readout_tile` corollaries. |
-| `VeriTile.lean` | Modify | Add `import VeriTile.Triton.LoopInvariant`. |
+| `VeriTile/Semantics.lean` | Modify | Convert `stepStmt` / `stepStmts` to `mutual` block; add `stepForLoopAux`; replace forLoop's `none` placeholder; add `termination_by`. |
+| `VeriTile/LoopInvariant.lean` | Create | `forLoop_inv` master lemma; `forLoop_readout_scalar` and `forLoop_readout_tile` corollaries. |
+| `VeriTile.lean` | Modify | Add `import VeriTile.LoopInvariant`. |
 
-No changes to `Triton/Core.lean` (the `Stmt.forLoop` constructor is already
+No changes to `Core.lean` (the `Stmt.forLoop` constructor is already
 defined; only its semantics was a placeholder).
 
 ## 6. Validation

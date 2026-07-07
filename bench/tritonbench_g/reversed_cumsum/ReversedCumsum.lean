@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `reversed_cumsum` — strict per-kernel correctness
@@ -64,7 +64,7 @@ scatter requires only active-lane collision freedom (taken as a hypothesis).
 
 namespace VeriTile.Bench.TritonBenchG.ReversedCumsum
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

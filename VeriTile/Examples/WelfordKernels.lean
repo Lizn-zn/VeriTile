@@ -11,17 +11,17 @@ import Mathlib.Algebra.BigOperators.Fin
 import Mathlib.Tactic.FieldSimp
 import Mathlib.Tactic.Ring
 import Mathlib.Tactic.Linarith
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Math.Reduction
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
+import VeriTile.Math.Reduction
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Kernels -/
 
@@ -309,14 +309,14 @@ def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
         (Op.mul .real .nil (Op.ref .real [] "delta")
           (Op.ref .real [] "delta2")))]
 
-/-- Per-row mean spec. Thin alias for `Triton.TiledReduction.welfordMean`. -/
+/-- Per-row mean spec. Thin alias for `TiledReduction.welfordMean`. -/
 noncomputable def welfordMeanSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.welfordMean xs
+  TiledReduction.welfordMean xs
 
 /-- Per-row population variance spec. Thin alias for
-`Triton.TiledReduction.welfordVar`. -/
+`TiledReduction.welfordVar`. -/
 noncomputable def welfordVarSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.welfordVar xs
+  TiledReduction.welfordVar xs
 
 theorem twopass_welford_correct
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
@@ -334,8 +334,8 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordMeanSpec, Triton.TiledReduction.welfordMean,
-        Triton.TiledReduction.tileSum]
+        welfordMeanSpec, TiledReduction.welfordMean,
+        TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     repeat unfold evalOp
@@ -349,9 +349,9 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordVarSpec, Triton.TiledReduction.welfordVar,
-        Triton.TiledReduction.welfordSumSq,
-        Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum]
+        welfordVarSpec, TiledReduction.welfordVar,
+        TiledReduction.welfordSumSq,
+        TiledReduction.welfordMean, TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     repeat unfold evalOp
@@ -532,12 +532,12 @@ theorem online_welford_correct
   constructor
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,
-      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
+      TiledReduction.welfordMean, TiledReduction.tileSum,
       twoPassMean, hMeanEq]
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, welfordVarSpec,
-      Triton.TiledReduction.welfordVar, Triton.TiledReduction.welfordSumSq,
-      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
+      TiledReduction.welfordVar, TiledReduction.welfordSumSq,
+      TiledReduction.welfordMean, TiledReduction.tileSum,
       twoPassS, twoPassMean, hSEq]
 
 theorem welford_kernels_refinement

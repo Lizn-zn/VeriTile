@@ -20,7 +20,7 @@ grid-stride 分支另需 `in0_ptr ≠ out0_ptr` 与 `0 < numPids`。
 
 建模边界:`_pow` 建模为 `Op.pow` / Mathlib `Real.rpow` —— 对 `val0 > 0`
 精确;负底数配非整数指数时 `rpow` 返回 junk-value 约定而 CUDA `pow` 返回
-NaN(见 `VeriTile/Triton/Core/Ast.lean` 中 `Op.pow` 的 doc comment)。
+NaN(见 `VeriTile/Core/Ast.lean` 中 `Op.pow` 的 doc comment)。
 `.to(tl.float32)` / `.to(*_ptr.type.element_ty)` cast 在 ℝ 通道上消解为恒等。
 
 本目录是 TritonBench-G 全形式化 roadmap 的 per-kernel 工作目录。

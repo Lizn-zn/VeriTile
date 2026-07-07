@@ -19,7 +19,7 @@ lemmas, and new kernel transcriptions.
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Semantics/X.lean           │  ← bridging mechanisms
+                    │  VeriTile/Semantics/X.lean           │  ← bridging mechanisms
     bridging        │  - `Tile`, `WithBot`, `Option.map₂`         │
                     │  - tiled indexing (lane, validLanes, ...)   │
                     │  - masked reductions (sup', sum, dot)       │
@@ -28,7 +28,7 @@ lemmas, and new kernel transcriptions.
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Math/X.lean                │  ← pure math
+                    │  VeriTile/Math/X.lean                │  ← pure math
    pure math        │  - `(Fin N → ℝ) → ...` operators            │
                     │  - non-trivial mathematical identities      │
                     │  - depends only on Mathlib                  │
@@ -39,7 +39,7 @@ Each layer can only depend on the layers below it.
 
 ## What goes where
 
-### `VeriTile/Triton/Math/`
+### `VeriTile/Math/`
 
 **Naming**: by mathematical operator. `Math/Activation.lean`,
 `Math/Reduction.lean`, `Math/L2Norm.lean`, `Math/LogSumExp.lean`,
@@ -60,7 +60,7 @@ argument-binding wrapper).
 - `WithBot` / `Tile` / `Option.map₂` — those go to `Semantics/`
 - Per-kernel `*Spec` that just binds the math to a kernel's argument tuple
 
-### `VeriTile/Triton/Semantics/`
+### `VeriTile/Semantics/`
 
 **Naming**: by **mechanism**, not by operator. `Semantics/TiledIndexing.lean`,
 `Semantics/MaskedReduction.lean`, `Semantics/Step.lean`,
@@ -102,7 +102,7 @@ softmax / log-sum-exp / L2 / max-with-mask alike.
 - The kernel correctness theorem (algorithm-layer + compute-facing)
 
 **Pattern**: glue code. The `*Spec` reads "this kernel writes
-`Triton.TiledX.operator (load_xs ...) ...`" by binding kernel layout to
+`TiledX.operator (load_xs ...) ...`" by binding kernel layout to
 math operators through the bridge lemmas in `Semantics/`.
 
 ## How to add a new piece

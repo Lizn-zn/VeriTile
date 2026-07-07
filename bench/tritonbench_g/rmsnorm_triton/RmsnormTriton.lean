@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Math.Attention
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
+import VeriTile.Math.Attention
 
 /-!
 # `rmsnorm_triton` — strict per-kernel correctness
@@ -65,7 +65,7 @@ well-formedness bound that yields per-lane output-offset injectivity via
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

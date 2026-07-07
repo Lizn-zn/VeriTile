@@ -32,7 +32,7 @@ Lean-side pain on the outermost-first side:
 - Structural induction on `init`.
 - Helper `_pos` (positivity-asserting) variants to avoid `Option`.
 
-The reduce-axis implementation in `VeriTile/Triton/Semantics.lean` —
+The reduce-axis implementation in `VeriTile/Semantics.lean` —
 `Tile.reduceSumDropLast`, `reduceMaxDropLast_pos` — is the canonical
 template.
 
@@ -54,7 +54,7 @@ The discipline:
    `Offset.rowMajor2D`, `Offset.contig` are ergonomic helpers; the core
    API stays generic.
 
-The reduce-axis API in `VeriTile/Triton/Core.lean` — `axisDim`,
+The reduce-axis API in `VeriTile/Core.lean` — `axisDim`,
 `eraseAxis`, `setAxisOne`, `reduceShape`, `insertAxisIndex`,
 `replaceAxisIndex` — is the canonical template. Mirror that pattern for
 any new axis-aware op.

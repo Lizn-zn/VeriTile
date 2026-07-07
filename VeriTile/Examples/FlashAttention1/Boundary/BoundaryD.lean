@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Boundary.Core
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 private theorem fa1_boundaryD_eval_k_ptrs
     (s : BlockState) (Bk Bd k batch headIdx sKB sKH sKN sKD : Nat)

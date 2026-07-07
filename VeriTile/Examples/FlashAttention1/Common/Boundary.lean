@@ -4,11 +4,11 @@ VeriTile.Examples.FlashAttention1.Common.Boundary
 FA-1 boundary-masked non-causal streaming Real recurrence.
 -/
 
-import VeriTile.Triton.Semantics.StreamingAccumulator
+import VeriTile.Semantics.StreamingAccumulator
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 /-! ## Boundary-masked streaming math model (FA-1 v1 scaffold)
 
 The full-tile `FA1Math` recurrence indexes K/V by

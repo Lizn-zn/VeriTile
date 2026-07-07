@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `dequantize_matmul` — strict per-kernel correctness
@@ -53,7 +53,7 @@ instantiated as separate theorems.
 
 namespace VeriTile.Bench.TritonBenchG.DequantizeMatmul
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful 1:1 transcription of `dequantize_matmul.py`'s `dequantize_kernel`.
 

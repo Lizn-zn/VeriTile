@@ -9,12 +9,12 @@ algorithm contract consumed by FA-1 backward kernels.
 -/
 
 import VeriTile.Examples.FlashAttention1.Backward.Math
-import VeriTile.Triton.Concurrency.Atomic
-import VeriTile.Triton.Float
+import VeriTile.Concurrency.Atomic
+import VeriTile.Float
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 open BigOperators
 
 namespace FA1Backward

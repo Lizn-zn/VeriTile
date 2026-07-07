@@ -80,7 +80,7 @@ Add Lean `notation`/`infixl` declarations so that arithmetic constructors
 look like infix operators. Plus helper functions for the noisier constructors.
 
 ```lean
-namespace VeriTile.Triton.Notation
+namespace VeriTile.Notation
 
 scoped infixl:65 " ⊕ " => Op.add
 scoped infixl:65 " ⊖ " => Op.sub
@@ -96,13 +96,13 @@ scoped notation:max "sum⟨" e "⟩"  => Op.reduceSum e
 scoped notation:max "broadcast(" e ", " n ")" => Op.broadcast e n
 scoped notation:max "bcast " n " of " e => Op.broadcast e n
 
-end VeriTile.Triton.Notation
+end VeriTile.Notation
 ```
 
 The example then reads:
 
 ```lean
-open VeriTile.Triton VeriTile.Triton.Notation in
+open VeriTile VeriTile.Notation in
 def naiveSoftmax' (N : Nat) : Kernel where
   inputs  := ["X"]
   outputs := ["Y"]

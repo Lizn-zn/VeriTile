@@ -2,7 +2,7 @@
 
 本文档说明在证明 `ComputeKernel` 的性质时,应当选用哪个公开 theorem surface。
 所有 surface 定义在
-[`VeriTile.Triton.Float.Correctness`](../VeriTile/Triton/Float/Correctness.lean)。
+[`VeriTile.Float.Correctness`](../VeriTile/Float/Correctness.lean)。
 
 ## 速查表
 

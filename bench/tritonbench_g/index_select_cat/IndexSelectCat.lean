@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `index_select_cat` — strict per-kernel correctness
@@ -46,7 +46,7 @@ case split (inactive cells preserved); the compute-facing theorem restricts to
 
 namespace VeriTile.Bench.TritonBenchG.IndexSelectCat
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `index_select_cat.py`'s
 `index_select_cat_fwd_kernel`.

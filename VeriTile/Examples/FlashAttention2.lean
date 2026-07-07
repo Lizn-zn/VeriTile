@@ -12,14 +12,14 @@ refine this baseline rather than changing the user-facing spec.
 
 import VeriTile.Examples.FlashAttention1.Core
 import VeriTile.Examples.FlashAttention1.Backward
-import VeriTile.Triton.Semantics.StreamingAccumulator
-import VeriTile.Triton.Math.Softmax
-import VeriTile.Triton.Launch.Grid
+import VeriTile.Semantics.StreamingAccumulator
+import VeriTile.Math.Softmax
+import VeriTile.Launch.Grid
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
-open VeriTile.Triton.TiledSoftmax
+open VeriTile
+open VeriTile.TiledSoftmax
 open BigOperators
 
 /-! ## FA-2 delayed-rescale math bridges
@@ -1611,7 +1611,7 @@ theorem fa2ScalarScoreMaxKernel_correct_view
   intro s0 s' hExec hs0
   subst s0
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hBk.ne'
-  simp [exec, fa2ScalarScoreMaxKernel, stepStmts, stepStmt, VeriTile.Triton.evalOp_reduceMax,
+  simp [exec, fa2ScalarScoreMaxKernel, stepStmts, stepStmt, VeriTile.evalOp_reduceMax,
         Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, tileMax,
         BlockState.writeMemTyped_real, hBk] at hExec ⊢
@@ -1634,7 +1634,7 @@ theorem fa2ScalarScoreMaxKernel_correct_view
             (fun j : Fin (n + 1) =>
               ((s.readMem scoreReg (s.pids 0 * (n + 1) + j.val) : ℝ) : WithBot ℝ)))) := by
     subst stScores
-    rw [VeriTile.Triton.evalOp_reduceMax]
+    rw [VeriTile.evalOp_reduceMax]
     unfold Tile.reduceMax
     simp [Tile.reduceMaxDrop, NumericDType.add, NumericDType.mul]
     split

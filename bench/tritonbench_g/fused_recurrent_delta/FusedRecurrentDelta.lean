@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fused_recurrent_delta` — genuine delta-rule recurrence correctness
@@ -133,7 +133,7 @@ pointer initializations are parenthesized into the ℕ domain
 
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentDelta
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `matmul_leakyrelu` — closed-form matmul + leaky-ReLU correctness
@@ -53,7 +53,7 @@ injectivity; clean initial `undef`.
 
 namespace VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

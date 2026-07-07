@@ -12,15 +12,15 @@ import Mathlib.MeasureTheory.Integral.IntervalIntegral.Basic
 import VeriTile.Math.GeluTaylor20Cert
 import VeriTile.Math.RealErf
 import VeriTile.Math.Tanh
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 /-! ## Embedded Triton AST -/
 

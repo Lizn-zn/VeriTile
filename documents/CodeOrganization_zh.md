@@ -18,7 +18,7 @@ VeriTile 把三件事分到三层。知道某个东西属于哪一层,以后加�
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Semantics/X.lean           │  ← 桥接机制
+                    │  VeriTile/Semantics/X.lean           │  ← 桥接机制
     bridging        │  - `Tile` / `WithBot` / `Option.map₂`       │
                     │  - tiled indexing (lane / validLanes / ...) │
                     │  - masked reductions (sup' / sum / dot)     │
@@ -27,7 +27,7 @@ VeriTile 把三件事分到三层。知道某个东西属于哪一层,以后加�
                                        │ uses
                                        ▼
                     ┌─────────────────────────────────────────────┐
-                    │  VeriTile/Triton/Math/X.lean                │  ← 纯数学
+                    │  VeriTile/Math/X.lean                │  ← 纯数学
    pure math        │  - `(Fin N → ℝ) → ...` 算子                 │
                     │  - 非平凡的数学等式                         │
                     │  - 只依赖 Mathlib                            │
@@ -38,7 +38,7 @@ VeriTile 把三件事分到三层。知道某个东西属于哪一层,以后加�
 
 ## 各层职责
 
-### `VeriTile/Triton/Math/`
+### `VeriTile/Math/`
 
 **命名**: 按数学算子。`Math/Activation.lean`, `Math/Reduction.lean`,
 `Math/L2Norm.lean`, `Math/LogSumExp.lean`, `Math/Softmax.lean`,
@@ -58,7 +58,7 @@ VeriTile 把三件事分到三层。知道某个东西属于哪一层,以后加�
 - `WithBot` / `Tile` / `Option.map₂` —— 那是 `Semantics/` 的事
 - 每个 kernel 自己的 `*Spec`,只是把数学绑到 kernel 参数元组上
 
-### `VeriTile/Triton/Semantics/`
+### `VeriTile/Semantics/`
 
 **命名**: 按**机制**,**不**按 operator。`Semantics/TiledIndexing.lean`,
 `Semantics/MaskedReduction.lean`, `Semantics/Step.lean`,
@@ -99,7 +99,7 @@ reduction)会被多种 operator 复用。按机制命名,去重才对得上 —�
 - Kernel correctness theorem(algorithm-layer + compute-facing)
 
 **模式**: glue code。`*Spec` 写成"这个 kernel 写出
-`Triton.TiledX.operator (load_xs ...) ...`",通过 `Semantics/` 的桥引理
+`TiledX.operator (load_xs ...) ...`",通过 `Semantics/` 的桥引理
 把 kernel layout 接到数学算子。
 
 ## 加新东西时的归属判断

@@ -381,10 +381,10 @@ VeriTile 是这个独特组合:**kernel 级 + LLM 驱动 + Lean 验证 + 零 Lea
 ## 11. 第一周的具体起步
 
 ```lean
--- File: VeriTile/Triton/Core.lean
+-- File: VeriTile/Core.lean
 import Mathlib
 
-namespace VeriTile.Triton
+namespace VeriTile
 
 -- 起步用的最小 Triton op
 inductive Op : Type where

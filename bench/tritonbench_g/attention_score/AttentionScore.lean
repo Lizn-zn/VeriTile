@@ -1,10 +1,10 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Semantics.BlockPtrEval
-import VeriTile.Triton.Kernel.LoopInvariant
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Semantics.BlockPtrEval
+import VeriTile.Kernel.LoopInvariant
 
 /-!
 # `attention_score` — strict per-kernel correctness
@@ -88,7 +88,7 @@ boundary.
 
 namespace VeriTile.Bench.TritonBenchG.AttentionScore
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

@@ -42,7 +42,7 @@ import VeriTile.Examples.ApproxGeLU.Certified
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 /-! ## Correctness and Approximation Statements -/
 

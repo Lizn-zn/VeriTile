@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fused_activation` — strict per-kernel correctness
@@ -50,7 +50,7 @@ with `x_ptr` is governed by the supplied read hypotheses.
 
 namespace VeriTile.Bench.TritonBenchG.FusedActivation
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Faithful transcription of `fused_activation.py`'s
 `fused_add_mul_activation_kernel`.

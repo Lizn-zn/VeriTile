@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `mixed_sparse_attention` — strict per-kernel correctness
@@ -60,7 +60,7 @@ honest side conditions, subsuming the former pinned per-case Python summaries.
 
 namespace VeriTile.Bench.TritonBenchG.MixedSparseAttention
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -346,7 +346,7 @@ noncomputable def mixedSparseAttnClosedForm
 
 section MSARecipes
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Local `evalOp` unfolding for `.le` (mirrors `block_sparse_attn`'s `bsa_evalOp_ge`;
 used for the causal `cols[None,:] ≤ offs_m[:,None]` mask). -/
@@ -970,7 +970,7 @@ final closed-form ratio, exactly as `mixedSparseAttnClosedForm = numer/denom`). 
 
 section MSAFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ### Streaming online-softmax accumulators (unnormalized, base-2)
 
@@ -1390,7 +1390,7 @@ theorem stepStmt_ifThen_true {cond : Op .bool []}
 
 end MSAFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## FULLY-GENERAL (symbolic strides + layout) AST + body split -/
 
@@ -3407,7 +3407,7 @@ theorem msa_loopA_execGS
   have hmnb : s.regs .nat [] "max_num_blks" = some (Tile.scalar 8) := by
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, h, _⟩ := hinv; exact h
   obtain ⟨final, sF, hloop, hfin, hP⟩ :=
-    VeriTile.Triton.forRangeDyn_inv (idx := "block_index")
+    VeriTile.forRangeDyn_inv (idx := "block_index")
       (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "max_num_blks")
       (stepOp := Op.constNat 1)
       (P := fun i st => msaInvariantAGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV
@@ -3454,7 +3454,7 @@ theorem msa_loopB_execGS
   have hmnc : s.regs .nat [] "max_num_cols" = some (Tile.scalar 16) := by
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, h, _⟩ := hinv; exact h
   obtain ⟨final, sF, hloop, hfin, hP⟩ :=
-    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+    VeriTile.forRangeDyn_inv (idx := "start_n")
       (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "max_num_cols")
       (stepOp := Op.constNat BN)
       (P := fun i st => msaInvariantBGS Q K V Seqlens Blocks BlockOffsets ColCounts Cols Out BM BN BD H NR NS NV

@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `lora_expand_gemv` — strict per-kernel correctness
@@ -65,7 +65,7 @@ from `lora_indices`); the per-lane global output-offset injectivity `hinj` and
 
 namespace VeriTile.Bench.TritonBenchG.LoraExpandGemv
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -154,7 +154,7 @@ is verified; `BLOCK_K ≥ K` (the kernel's `next_power_of_2(K)` choice) lets the
 
 namespace Full
 
-open VeriTile.Triton
+open VeriTile
 
 /-- The full loop surface: signed-sentinel guard elided (the host only launches
 the active body when `lora_index ≠ -1`), `RegionName`-typed `lora_indices` so the

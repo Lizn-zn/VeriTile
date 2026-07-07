@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.TileOps
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `lightning_attention` — strict per-kernel correctness
@@ -57,7 +57,7 @@ conditions: tile-offset injectivity hypotheses where required.
 
 namespace VeriTile.Bench.TritonBenchG.LightningAttention
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

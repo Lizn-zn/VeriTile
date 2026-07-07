@@ -9,18 +9,18 @@ The two-pass kernel proof is closed over the typed tile semantics. The fused
 kernel proof still depends on the Welford loop invariant.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Math.Reduction
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
+import VeriTile.Math.Reduction
 import VeriTile.Examples.Common
 import VeriTile.Examples.WelfordKernels
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Two-pass LayerNorm kernel: `tl.sum` twice (mean and var), then affine. -/
 def twoPassLayerNormKernel
@@ -103,23 +103,23 @@ def layerNormAffineTailKernel
 
 Body uses the kernel-internal `twoPassMean`/`twoPassS` since the proof bridges
 through the running ↔ two-pass equivalence. The user-facing operator is
-`Triton.TiledReduction.layerNorm`; see `layerNormSpec_eq_layerNorm` below. -/
+`TiledReduction.layerNorm`; see `layerNormSpec_eq_layerNorm` below. -/
 noncomputable def layerNormSpec {N : Nat}
     (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) : ℝ :=
   let μ : ℝ := twoPassMean xs
   let v : ℝ := twoPassS xs / N
   (xs i - μ) / Real.sqrt (v + ε) * γs i + βs i
 
-/-- `layerNormSpec` agrees with `Triton.TiledReduction.layerNorm`; the local
+/-- `layerNormSpec` agrees with `TiledReduction.layerNorm`; the local
 spec is a beta-η variant that exposes `twoPassMean`/`twoPassS` as named
 let-bindings to ease kernel-side proofs. -/
 theorem layerNormSpec_eq_layerNorm {N : Nat}
     (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) :
     layerNormSpec xs γs βs ε i =
-      Triton.TiledReduction.layerNorm xs γs βs ε i := by
-  simp [layerNormSpec, Triton.TiledReduction.layerNorm,
-        Triton.TiledReduction.welfordMean, Triton.TiledReduction.welfordVar,
-        Triton.TiledReduction.welfordSumSq, Triton.TiledReduction.tileSum,
+      TiledReduction.layerNorm xs γs βs ε i := by
+  simp [layerNormSpec, TiledReduction.layerNorm,
+        TiledReduction.welfordMean, TiledReduction.welfordVar,
+        TiledReduction.welfordSumSq, TiledReduction.tileSum,
         twoPassMean, twoPassS]
 
 private def P_layernorm {N : Nat}

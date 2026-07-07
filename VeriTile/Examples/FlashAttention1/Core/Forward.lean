@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Core.Steps
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Strided readout stage: once `P_fa1_strided numKVBlocks` holds at the
 loop exit, the post-loop normalization (`out := o_acc / l_i[:, None]`)

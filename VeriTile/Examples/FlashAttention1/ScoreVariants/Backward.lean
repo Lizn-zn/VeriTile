@@ -9,7 +9,7 @@ import VeriTile.Examples.FlashAttention1.ScoreVariants.Math
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 open BigOperators
 
 namespace FA1Score

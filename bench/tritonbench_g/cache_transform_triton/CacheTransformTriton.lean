@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `cache_transform_triton` — strict per-kernel correctness
@@ -55,7 +55,7 @@ output buffers are distinct, so neither store clobbers the other) and an
 
 namespace VeriTile.Bench.TritonBenchG.CacheTransformTriton
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

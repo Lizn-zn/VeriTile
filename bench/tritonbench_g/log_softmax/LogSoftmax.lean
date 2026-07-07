@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `log_softmax` — strict per-kernel correctness
@@ -35,7 +35,7 @@ log_softmax_backward_kernel_compute_correct          ← companion backward kern
 
 The per-cell spec (`logSoftmaxSpec`) is built inline from the tiled primitives
 `Tile.reduceMax`/`reduceSum`/`bop`/`uop` rather than from a
-`VeriTile.Triton.Math.Softmax` oracle — the softmax math is inline-duplicated in
+`VeriTile.Math.Softmax` oracle — the softmax math is inline-duplicated in
 this file. The backward spec (`logSoftmaxBackwardSpec`) is likewise inline.
 
 ## Modeling boundary
@@ -52,7 +52,7 @@ hypothesis `hOutInj`: the per-tile output offset map `outOffset` is injective
 
 namespace VeriTile.Bench.TritonBenchG.LogSoftmax
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

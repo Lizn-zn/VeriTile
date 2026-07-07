@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `triton_linear_activation` — closed-form fused linear+activation correctness
@@ -86,7 +86,7 @@ are transcribed verbatim). The textual py↔lean scans in
 
 namespace VeriTile.Bench.TritonBenchG.TritonLinearActivation
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

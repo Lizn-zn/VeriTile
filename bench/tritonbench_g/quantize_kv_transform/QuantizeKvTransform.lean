@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `quantize_kv_transform` — strict per-kernel correctness
@@ -69,7 +69,7 @@ numerically modeled. `@triton.autotune` is not present here.
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeKvTransform
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -78,7 +78,7 @@ set_option linter.unusedSimpArgs false
 The genuine value store writes an `.int` channel (the `.to(tl.int8)` quotient).
 The scale store writes the `.real` channel (the `.to(OutScale.dtype.element_ty)`
 cast is the identity over `ℝ`). The lemmas below are the `.int` analogue of the
-`.real` scatter-readback in `VeriTile.Triton.Semantics.State`, plus the
+`.real` scatter-readback in `VeriTile.Semantics.State`, plus the
 cross-channel preservation lemmas that peel one store off the other's readback
 by region distinctness. -/
 

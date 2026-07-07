@@ -1,22 +1,22 @@
--- VeriTile: default (lite) target — Triton + worked examples without the
--- analysis-heavy ApproxGeLU certificate.
+-- VeriTile: default (lite) target — the neutral foundation + worked examples
+-- without the analysis-heavy ApproxGeLU certificate.
 --
--- ApproxGeLU and the `VeriTile.Math.*` chain (Taylor + integral bounds for
--- the GeLU error certificate) live in the separate `VeriTileMath` library
--- and are pulled in by `VeriTileFull`. Routine kernel work builds against
--- this lite root, skipping the heavy Mathlib analysis chain.
+-- ApproxGeLU and the GeLU error-certificate math (`VeriTile.Math.GeluTaylor20*`,
+-- `RealErf`, `Tanh` — Taylor + integral bounds) live in the separate
+-- `VeriTileMath` library and are pulled in by `VeriTileFull`. Routine kernel
+-- work builds against this lite root, skipping the heavy Mathlib analysis chain.
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.MemoryTyping
-import VeriTile.Triton.Memory
-import VeriTile.Triton.MemoryBounds
-import VeriTile.Triton.MemoryFrame
-import VeriTile.Triton.MemoryFootprint
-import VeriTile.Triton.Concurrency
-import VeriTile.Triton.Launch
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Memory.Typing
+import VeriTile.Memory
+import VeriTile.Memory.Bounds
+import VeriTile.Memory.Frame
+import VeriTile.Memory.Footprint
+import VeriTile.Concurrency
+import VeriTile.Launch
+import VeriTile.Kernel
 import VeriTile.Examples.TritonSmoke
 import VeriTile.Examples.MemorySafety
 import VeriTile.Examples.MemoryFrame

@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Boundary.Bodies
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Reading the `n`-th KV block through the row-major address expression
 used by the loop gives the corresponding `blockIndex` cell of a full

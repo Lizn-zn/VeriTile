@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 import VeriTile.Examples.Common
 
 /-!
@@ -49,7 +49,7 @@ is injective). The only side condition is `BLOCK_N ≠ 0` (a nonempty inner chun
 
 namespace VeriTile.Bench.TritonBenchG.MeanReduction
 
-open VeriTile.Triton VeriTile.Examples
+open VeriTile VeriTile.Examples
 
 /-- Faithful transcription of `mean_reduction.py`'s `mean_dim_kernel`.
 

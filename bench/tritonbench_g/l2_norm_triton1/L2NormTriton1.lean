@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Semantics.MaskedReduction
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Semantics.MaskedReduction
 
 /-!
 # `l2_norm_triton1` — strict per-kernel correctness
@@ -34,7 +34,7 @@ l2_norm_fwd_1pass_kernel_output_summary       ← TOP THEOREM
 
 ## Modeling boundary
 
-The spec is an **oracle wrapper** over `VeriTile.Triton.Math` L2-norm definitions
+The spec is an **oracle wrapper** over `VeriTile.Math` L2-norm definitions
 (`TiledL2Norm.l2Norm`, built on `l2NormSqSum` / `l2NormRstd`): the L2-norm math
 lives once in `Math.*` and is reused here, so this file only checks that the
 kernel realizes that oracle lane-wise. The intra-kernel reduction
@@ -49,8 +49,8 @@ presented via the `s.readMem`-resolved tile `l2Load`.
 
 namespace VeriTile.Bench.TritonBenchG.L2NormTriton1
 
-open VeriTile.Triton
-open VeriTile.Triton.TiledL2Norm
+open VeriTile
+open VeriTile.TiledL2Norm
 
 set_option linter.unusedSimpArgs false
 

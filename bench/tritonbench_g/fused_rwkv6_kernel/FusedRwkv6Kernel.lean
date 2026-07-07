@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fused_rwkv6_kernel` — genuine RWKV-6 closed-form correctness
@@ -72,7 +72,7 @@ are side conditions, discharged for the Python regression shape.
 
 namespace VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

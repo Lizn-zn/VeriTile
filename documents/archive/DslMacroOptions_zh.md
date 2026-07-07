@@ -78,7 +78,7 @@ def naiveSoftmax (N : Nat) : Kernel where
 再加上一些 helper function 处理较啰嗦的构造子。
 
 ```lean
-namespace VeriTile.Triton.Notation
+namespace VeriTile.Notation
 
 scoped infixl:65 " ⊕ " => Op.add
 scoped infixl:65 " ⊖ " => Op.sub
@@ -94,13 +94,13 @@ scoped notation:max "sum⟨" e "⟩"  => Op.reduceSum e
 scoped notation:max "broadcast(" e ", " n ")" => Op.broadcast e n
 scoped notation:max "bcast " n " of " e => Op.broadcast e n
 
-end VeriTile.Triton.Notation
+end VeriTile.Notation
 ```
 
 示例随之变成:
 
 ```lean
-open VeriTile.Triton VeriTile.Triton.Notation in
+open VeriTile VeriTile.Notation in
 def naiveSoftmax' (N : Nat) : Kernel where
   inputs  := ["X"]
   outputs := ["Y"]

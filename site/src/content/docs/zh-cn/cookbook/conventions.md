@@ -27,7 +27,7 @@ description: TileShape 朝向、ND-general 算子、命名模式、何处该 pus
 - 对 `init` 做结构归纳。
 - 提 `_pos`(positivity-asserting)版本免掉 `Option`。
 
-`VeriTile/Triton/Semantics.lean` 里的 reduce 实现 ——
+`VeriTile/Semantics.lean` 里的 reduce 实现 ——
 `Tile.reduceSumDropLast`、`reduceMaxDropLast_pos` —— 是范本。
 
 ## 一定走完全 ND
@@ -45,7 +45,7 @@ description: TileShape 朝向、ND-general 算子、命名模式、何处该 pus
 3. **同时提供命名 offset 族。**`Offset.linear1D`、`Offset.rowMajor2D`、
    `Offset.contig` 是人体工学 helper;核心 API 保持通用。
 
-`VeriTile/Triton/Core.lean` 的 reduce-axis API —— `axisDim`、
+`VeriTile/Core.lean` 的 reduce-axis API —— `axisDim`、
 `eraseAxis`、`setAxisOne`、`reduceShape`、`insertAxisIndex`、
 `replaceAxisIndex` —— 是范本。新轴感知算子照这个 pattern 来。
 

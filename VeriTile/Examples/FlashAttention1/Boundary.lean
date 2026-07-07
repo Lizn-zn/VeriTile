@@ -8,6 +8,6 @@ import VeriTile.Examples.FlashAttention1.Boundary.Views
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 end VeriTile.Examples

@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `chunk_cumsum_vector` — strict per-kernel correctness
@@ -75,7 +75,7 @@ case via `*_active_no_collision`).
 
 namespace VeriTile.Bench.TritonBenchG.ChunkCumsumVector
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

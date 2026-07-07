@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `fast_layernorm` — strict per-kernel correctness
@@ -39,7 +39,7 @@ layernorm_backward_dx_compute_correct         ← backward dX (separate kernel)
 There are additional proof-oriented store-slice theorems
 (`layernorm_forward_inv_var_store_slice_*`, `layernorm_forward_mean_store_slice_*`)
 that isolate individual scalar stores; the layernorm row math is defined inline
-in this file rather than reusing `VeriTile.Triton.Math.RMSNorm`.
+in this file rather than reusing `VeriTile.Math.RMSNorm`.
 
 ## Modeling boundary
 
@@ -60,7 +60,7 @@ region must not alias another output (`Y ≠ r`, `Y ≠ mu`, `r ≠ Y`, `r ≠ m
 
 namespace VeriTile.Bench.TritonBenchG.FastLayernorm
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

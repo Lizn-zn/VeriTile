@@ -8,15 +8,15 @@ algorithmic correctness theorem is discharged by erasing those annotations and
 reusing the Real-valued VectorAdd proof.
 -/
 
-import VeriTile.Triton.Float
-import VeriTile.Triton.Memory.Typing
-import VeriTile.Triton.DSL
+import VeriTile.Float
+import VeriTile.Memory.Typing
+import VeriTile.Frontend.Triton.DSL
 import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.SoftmaxReciprocal
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Float-facing kernel -/
 

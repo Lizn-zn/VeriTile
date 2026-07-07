@@ -235,7 +235,7 @@ proof-facing 的 Real 兼容 API 仍然是 `BlockState.readMem` /
 observation surface。换句话说,旧的 theorem-facing `RegionName → Nat → ℝ`
 view 仍然作为 API 层存在,但它不再是 runtime storage representation。
 
-Region dtype contract 单独放在 `VeriTile.Triton.Memory.Typing`:
+Region dtype contract 单独放在 `VeriTile.Memory.Typing`:
 
 ```lean
 RegionTyping := RegionName → TileDType
@@ -326,7 +326,7 @@ kernel 上。面向 DSL 的 compute surface 是 `ComputeKernel`;
 float-facing theorem 仍可使用 `k.eraseDType = realK` 这类 erasure 等式,为带 dtype
 标注的 algorithm kernel 复用 Real proof。数值 compute correctness/refinement 仍由
 外部 gap contract 和 differential tests 单独支撑,不是 IEEE-754 proof。这些定义放在
-`VeriTile.Triton.Float`;compute / algorithm split 和 bitcast policy 见
+`VeriTile.Float`;compute / algorithm split 和 bitcast policy 见
 `documents/EraseDType.md`。
 
 ## Operator / syntax 覆盖 checklist

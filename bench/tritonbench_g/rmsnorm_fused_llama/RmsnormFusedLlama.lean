@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `rmsnorm_fused_llama` — strict per-kernel correctness
@@ -35,7 +35,7 @@ rms_norm_fwd_fused_llama_output_summary       ← TOP THEOREM
 
 The RMSNorm row math (`rmsInputTile`, `rmsVarCarrier`, `rmsInvCarrier`,
 `rmsnormCarrierSpec` / `rmsnormSpec`) is defined inline in this file rather than
-reusing `VeriTile.Triton.Math.RMSNorm`.
+reusing `VeriTile.Math.RMSNorm`.
 
 ## Modeling boundary
 
@@ -55,7 +55,7 @@ single-block precondition (Python fixes `BLOCK_SIZE = 16384` after checking
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormFusedLlama
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

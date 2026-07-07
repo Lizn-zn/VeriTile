@@ -196,7 +196,7 @@ mandated per-statement architecture is required:
 1. `exec → stepStmts toAlgKernel.body`, with the surface body decomposed by
    `bwd_body_decomp_general` into the 15-stmt prologue + the `forRangeDyn` reverse loop.
 2. Drive the `forRangeDyn` loop with `forRangeAux_inv` /
-   `VeriTile.Triton.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
+   `VeriTile.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
    partial reverse prefix sum), *not* a `simp` over the whole loop.
 3. Per body statement: `stepStmts.cons_some` + `simp only` over the named
    `evalOp_*` lemmas (`evalOp_add/mul/sub/ref/…`, `evalOp_ref_setReg*`) — never

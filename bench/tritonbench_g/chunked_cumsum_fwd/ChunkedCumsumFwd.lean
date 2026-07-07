@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `chunked_cumsum_fwd` — strict per-kernel correctness
@@ -71,7 +71,7 @@ presented rather than re-derived. Output offset injectivity is a side condition
 
 namespace VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false

@@ -193,7 +193,7 @@ def kIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
 /-- **Genuine per-key score** `fscore r j` of `_fwd_kernel_aligned`:
 `qk_scale·(Σ_e Q[r,e]·K[e,j]) + (b0[r, j/BN] + b1[r, j%BN])·log2 e`,
 with `qk_scale = sm_scale · log2 e` already folded into the pre-scaled `q`. This
-is the `score` argument of `VeriTile.Triton.attnGenScore`, whose batch base-2
+is the `score` argument of `VeriTile.attnGenScore`, whose batch base-2
 softmax `(Σ 2^fscore · V) / (Σ 2^fscore)` is the kernel's closed form (see
 `closed_form_g`). -/
 ```

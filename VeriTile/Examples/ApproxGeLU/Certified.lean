@@ -8,7 +8,7 @@ import VeriTile.Examples.ApproxGeLU.Taylor9
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 /-! ### External Taylor-20 midrange certificate
 

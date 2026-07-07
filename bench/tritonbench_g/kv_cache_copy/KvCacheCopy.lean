@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `kv_cache_copy` — strict per-kernel correctness
@@ -55,7 +55,7 @@ The split-x case quantifies over every `split_x : Fin (HEAD_DIM // KCACHE_X)`.
 
 namespace VeriTile.Bench.TritonBenchG.KvCacheCopy
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false

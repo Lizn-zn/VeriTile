@@ -1,7 +1,7 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `int8_quantization` — strict per-kernel correctness
@@ -53,7 +53,7 @@ is not present here; the Q pre-scale constant is carried symbolically.
 
 namespace VeriTile.Bench.TritonBenchG.Int8Quantization
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

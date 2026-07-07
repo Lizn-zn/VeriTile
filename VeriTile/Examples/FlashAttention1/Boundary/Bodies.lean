@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ### Boundary strided helpers — pre-loop / loop body / post-loop
 

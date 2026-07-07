@@ -39,18 +39,18 @@ def stable_lse_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
 ```
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.LogSumExp
-import VeriTile.Triton.Math.Softmax
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.LogSumExp
+import VeriTile.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Triton.TiledSoftmax
+open VeriTile VeriTile.TiledLogSumExp VeriTile.TiledSoftmax
 
 /-- Direct log-sum-exp kernel: y = log(Σ exp(x)). -/
 def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {

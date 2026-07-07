@@ -6,11 +6,11 @@ Generic operational loop invariant proofs for score-variant FA-1 kernels.
 
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Block
 import VeriTile.Examples.FlashAttention1.Core.Bodies
-import VeriTile.Triton.Memory.View
+import VeriTile.Memory.View
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 
 namespace FA1Score
 /-! ## Generic score loop invariant
@@ -2295,8 +2295,8 @@ theorem fa1_score_loop_tail_correct
       simp only [stepStmt, evalOp_exp, evalOp_sub, Option.bind_eq_bind,
         Option.bind_some]
       unfold evalOp
-      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
-        VeriTile.Triton.evalOp_ref, evalOp_expandDim_one_real,
+      simp [VeriTile.evalOp_expandDim, VeriTile.evalOp_expandDim_ref,
+        VeriTile.evalOp_ref, evalOp_expandDim_one_real,
         s4, s3, s2, s1, pExec, scoresTile, mNewExec, Tile.bop, Tile.uop,
         Tile.expandDim, NumericDType.sub, hscores]
       change some (s3.setReg "p" .real [M, Bk] pExec) = some s4
@@ -2333,8 +2333,8 @@ theorem fa1_score_loop_tail_correct
         s2, s1, oNewExec, alphaExec, pExec, oOld, Tile.bop, Tile.dot,
         Tile.expandDim, NumericDType.add, NumericDType.mul, ho, hvReg]
       unfold evalOp
-      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
-        VeriTile.Triton.evalOp_ref, evalOp_expandDim_one_real,
+      simp [VeriTile.evalOp_expandDim, VeriTile.evalOp_expandDim_ref,
+        VeriTile.evalOp_ref, evalOp_expandDim_one_real,
         s6, s5, s4, s3, s2, s1, oNewExec, alphaExec, pExec, oOld,
         Tile.bop, Tile.uop, Tile.dot, Tile.expandDim, NumericDType.add,
         NumericDType.mul, Option.bind, ho, hvReg]

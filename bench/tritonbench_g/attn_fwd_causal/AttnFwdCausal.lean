@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `attn_fwd_causal` — strict per-kernel correctness
@@ -71,7 +71,7 @@ marker (registered in `proof_blockers.md`).
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -619,7 +619,7 @@ Step/attn_step/postLoop/top theorems are the NEXT stage (not in this bank). -/
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 
@@ -936,23 +936,23 @@ theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
 
 namespace AfcFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 end AfcFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
-open VeriTile.Triton
+open VeriTile
 
 namespace AfcFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 end AfcFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
-open VeriTile.Triton
+open VeriTile
 
 /-- **Sentinel boundedness side-condition.** For a faithful bounded-input kernel,
 every key's coerced score exceeds the `-1e6` masking sentinel (the def quantifies
@@ -970,7 +970,7 @@ def afcScoreBound
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase
 
-open VeriTile.Triton VeriTile.Bench.TritonBenchG.AttnFwdCausal
+open VeriTile VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal.AfcInvariantBase
 
@@ -986,13 +986,13 @@ theorem regs_setReg_chain {d d' : TileDType} {sh sh' : TileShape}
 
 namespace AfcFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 end AfcFoundation
 
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ## Masked-block bridge layer (ported aft3 → afc; [128,64], -1e6 sentinel, HEAD_ACTIVE) -/
 
@@ -1125,7 +1125,7 @@ the **dimension-parameterized** contiguous layout. -/
 
 namespace AfcFoundation
 
-open VeriTile.Triton
+open VeriTile
 
 /-- General loop body (symbolic `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL`/`HEAD_DIM`/
 `N_CTX`/`HEAD_ACTIVE`): the streamed per-key-block statements with every dimension
@@ -1428,7 +1428,7 @@ end AfcFoundation
 
 section General
 
-open VeriTile.Triton
+open VeriTile
 
 /-! ### General spec layer (genuine causal closed form over symbolic dims) -/
 
@@ -1514,7 +1514,7 @@ theorem attnFwdCausalOutSpecG_eq_streaming
               osStep (0, 0, 0)
          st.2.2 / st.2.1) := by
   simpa [attnFwdCausalOutSpecG] using
-    VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming
+    VeriTile.attentionRealBase2PerKeyScalePred_eq_streaming
       (qTileAFCmG s Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
       (kTileAFCG s K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
       (vTileAFCmG s V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
@@ -2682,7 +2682,7 @@ theorem afcStateBotG_full_eq_spec
   rw [afcStateBotG_ratio_eq _ _ _ _ _ _ _ _ hne]
   rw [afcKeysUptoG_full_eq_pred]
   rw [attnFwdCausalOutSpecG_eq_streaming]
-  rw [VeriTile.Triton.osStep_foldl_eq_batch]
+  rw [VeriTile.osStep_foldl_eq_batch]
 
 set_option maxRecDepth 8000 in
 /-- **General body split** — the lowered general AFC body decomposes as

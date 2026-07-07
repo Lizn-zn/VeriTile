@@ -4,18 +4,18 @@ VeriTile.Examples.OnlineSoftmax
 Online softmax recurrence and typed Triton kernel skeleton.
 -/
 
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
-import VeriTile.Triton.Math.Softmax
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
+import VeriTile.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile VeriTile.TiledSoftmax
 
 def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
   stableSoftmaxKernel xReg yReg N

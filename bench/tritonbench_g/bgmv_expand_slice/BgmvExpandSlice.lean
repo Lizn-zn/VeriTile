@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Kernel
 
 /-!
 # `bgmv_expand_slice` — strict per-kernel correctness
@@ -56,7 +56,7 @@ stride) via `affine1D_inj`. The statement is scoped to *active* lanes
 
 namespace VeriTile.Bench.TritonBenchG.BgmvExpandSlice
 
-open VeriTile.Triton
+open VeriTile
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -134,7 +134,7 @@ theorem bgmv_expand_slice_surface_toAlgorithm_supported
 namespace Full
 
 namespace ScratchBgmv
-open VeriTile.Triton
+open VeriTile
 set_option maxHeartbeats 2000000
 
 def bgmv_full
@@ -479,7 +479,7 @@ theorem store_step (out_ptr : RegionName) (cbase cn_stride BLOCK_N c : Nat) (s :
 end ScratchBgmv
 
 namespace Step2
-open VeriTile.Triton ScratchBgmv
+open VeriTile ScratchBgmv
 
 -- abbreviations for the two pointer bases
 def lbaseOf (s0 : BlockState) (li split_n_length l0_stride lora_k_stride : Nat) : Nat :=
@@ -695,7 +695,7 @@ theorem wbStep
 end Step2
 
 namespace Loop
-open VeriTile.Triton ScratchBgmv Step2
+open VeriTile ScratchBgmv Step2
 
 noncomputable def wbInv
     (input_ptr lora_ptr out_ptr : RegionName)
@@ -768,7 +768,7 @@ theorem wb_forRange
 end Loop
 
 namespace Prefix2
-open VeriTile.Triton ScratchBgmv Step2 Loop
+open VeriTile ScratchBgmv Step2 Loop
 set_option linter.unusedVariables false
 
 -- tiled_a load eval (region masked)
@@ -934,7 +934,7 @@ theorem preLoop (input_ptr lora_ptr out_ptr : RegionName)
 end Prefix2
 
 namespace Final
-open VeriTile.Triton ScratchBgmv Step2 Loop Prefix2
+open VeriTile ScratchBgmv Step2 Loop Prefix2
 
 theorem bgmv_full_correct
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)
@@ -1021,7 +1021,7 @@ end Final
 
 
 namespace Final
-open VeriTile.Triton ScratchBgmv Step2 Loop Prefix2
+open VeriTile ScratchBgmv Step2 Loop Prefix2
 
 theorem bgmv_full_compute_correct
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)

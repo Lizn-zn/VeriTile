@@ -22,7 +22,7 @@ for the grid-stride branch `in0_ptr ≠ out0_ptr` and `0 < numPids`.
 Modeling boundary: `_pow` is `Op.pow` / Mathlib `Real.rpow` — exact for
 `val0 > 0`; for a negative base with non-integer exponent `rpow` returns its
 junk-value convention where CUDA `pow` returns NaN (see the `Op.pow` doc
-comment in `VeriTile/Triton/Core/Ast.lean`). The `.to(tl.float32)` /
+comment in `VeriTile/Core/Ast.lean`). The `.to(tl.float32)` /
 `.to(*_ptr.type.element_ty)` casts erase to the identity on the ℝ channel.
 
 This directory is the per-kernel workspace for the TritonBench-G

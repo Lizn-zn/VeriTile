@@ -8,7 +8,7 @@ import VeriTile.Examples.ApproxGeLU.Kernel
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton VeriTile.Math
+open VeriTile VeriTile.Math
 
 lemma two_sigmoid_two_sub_one_eq_tanh (u : ℝ) :
     2 * Real.sigmoid (2 * u) - 1 = Real.tanh u := by

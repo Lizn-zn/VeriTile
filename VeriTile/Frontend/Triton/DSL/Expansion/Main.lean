@@ -1,0 +1,2887 @@
+/-
+VeriTile.Frontend.Triton.DSL.Expansion
+
+A `triton { ... }` macro that embeds Triton-style kernel syntax inside Lean,
+modelled on the `arm64 { ... }` style used in arm-in-lean.
+
+Example:
+
+  def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel := triton {
+    pid  := tl.program_id(0)
+    offs := pid * $(N) + tl.arange($(N))
+    x    := tl.load($(xReg) + offs)
+    e    := tl.exp(x)
+    s    := tl.sum(e)
+    y    := e / s
+    tl.store($(yReg) + offs, y)
+  }
+
+Conventions:
+  * Bare identifiers in expression position → register references
+    (`pid`, `x`, `e`, etc. become `Op.ref "pid"`, `Op.ref "x"`, ...).
+  * Memory accesses use pointer-like kernel parameters:
+    `$(xReg) + offs` builds a pointer tile in pointer context, and
+    `tl.load(ptr)` / `tl.store(ptr, value)` consume pointer-valued expressions.
+  * `$(<lean-term>)` is context-sensitive: address/shape/index contexts lower it
+    to `.nat`, while data/scalar contexts lower it to `.real`. Ambiguous uses
+    should be rejected instead of guessed.
+  * Numeric literals become `Op.const`.
+  * Statements are separated by newlines (no explicit terminator).
+
+Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
+`tl.arange(start, end)`, `tl.exp(_)`, `tl.exp2(_)`, `tl.log(_)`, `tl.log2(_)`,
+`tl.sigmoid(_)`, `tl.sqrt(_)`, `tl.math.rsqrt(_)`/`tl.rsqrt(_)`, `tl.tanh(_)`, `tl.sin(_)`, `tl.cos(_)`,
+`tl.tan(_)`, `tl.atan(_)`, `tl.cosh(_)`, `tl.sinh(_)`, `tl.erf(_)`,
+`tl.extra.cuda.libdevice.erf(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load(ptrExpr)`,
+binary `+ - * /`, parens, identifiers, numerals, antiquotation (`$(t)` for
+Lean values in typed contexts / `RegionName` in pointer context).
+Pointer arithmetic supports `ptr + nat` and `nat + ptr`.
+
+The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
+at macro time (no new AST constructor). The literal-0 special case
+`tl.arange(0, e)` collapses to `tl.arange(e)`, producing an AST identical to the
+single-argument form so existing proofs (e.g. via `scatter_readback`) remain
+applicable verbatim.
+
+Currently supported statements: assignment (`name := expr`),
+`tl.store(ptrExpr, value)`.
+
+`Kernel.inputs` / `Kernel.outputs` are auto-populated by scanning the body for
+`tl.load(...)` (input regions) and `tl.store(...)` (output regions). Order
+follows body occurrence; no macro-time dedup since regions are Lean terms
+(possibly equal at runtime but not statically). `Kernel.inputs/outputs` is
+metadata only (not consumed by `exec`), so duplicates are harmless.
+
+This module owns macro expansion only. Surface syntax, macro-time typing
+helpers, and metadata scanning live in sibling `DSL.*` modules.
+-/
+
+import VeriTile.Core
+import VeriTile.Frontend.Triton.DSL.Metadata
+import VeriTile.Frontend.Triton.DSL.Inference
+import VeriTile.Frontend.Triton.DSL.Expansion.Common
+import VeriTile.Frontend.Triton.DSL.Expansion.Memory
+import VeriTile.Frontend.Triton.DSL.Expansion.Compute
+import VeriTile.Frontend.Triton.DSL.Expansion.Control
+import VeriTile.Frontend.Triton.DSL.Syntax
+import VeriTile.Frontend.Triton.DSL.Typing
+
+open Lean
+open Lean.Elab
+open Lean.Elab.Term
+open Lean.Meta
+
+set_option maxHeartbeats 400000
+
+namespace VeriTile.Frontend.Triton.DSL
+
+/-! ## Expansion -/
+
+def extractDTypeKwarg (kwargs : TSyntaxArray `tritonMemKwarg) :
+    MacroM (Option DInfo) := do
+  for kw in kwargs do
+    match kw with
+    | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
+        if name.getId.toString == "dtype" then
+          return some (← expandDType dt)
+    | _ => pure ()
+  return none
+
+def parseMaxReturnIndicesKwargs (dims : List (TSyntax `term))
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
+  let mut seenAxis : Bool := Bool.false
+  let mut seenReturn : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max return_indices: duplicate axis"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError "tl.max return_indices: axis out of bounds"
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max return_indices: duplicate axis"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError "tl.max return_indices: axis out of bounds"
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| return_indices=True) =>
+        seenReturn := Bool.true
+    | `(tritonReduceKwarg| return_indices=False) =>
+        Macro.throwError "tl.max tuple binding requires `return_indices=True`"
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError "tl.max return_indices: `keep_dims` is not supported"
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError "tl.max return_indices: `keep_dims` is not supported"
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        let nm := name.getId.toString
+        if nm == "return_indices_tie_break_left" then
+          pure ()
+        else
+          Macro.throwError
+            ("tl.max return_indices: unsupported kwarg `" ++ nm ++ "`")
+    | _ => Macro.throwUnsupported
+  unless seenReturn do
+    Macro.throwError "tl.max tuple binding requires `return_indices=True`"
+  unless seenAxis do
+    Macro.throwError "tl.max return_indices requires an explicit axis"
+  pure axisIdx
+
+private def typedRegionAntiquote? (r : TSyntax `term) :
+    MacroM (Option (TSyntax `term × DInfo)) := do
+  let dtype? ←
+    match r with
+    | `(($_:term : Region .real)) => pure (some DInfo.real)
+    | `(($_:term : Region .fp32)) => pure (some DInfo.fp32)
+    | `(($_:term : Region .fp16)) => pure (some DInfo.fp16)
+    | `(($_:term : Region .bf16)) => pure (some DInfo.bf16)
+    | `(($_:term : Region .int)) => pure (some DInfo.int)
+    | `(($_:term : Region .nat)) => pure (some DInfo.nat)
+    | `(($_:term : Region .bool)) => pure (some DInfo.bool)
+    | `(($_:term : Region TileDType.real)) => pure (some DInfo.real)
+    | `(($_:term : Region TileDType.fp32)) => pure (some DInfo.fp32)
+    | `(($_:term : Region TileDType.fp16)) => pure (some DInfo.fp16)
+    | `(($_:term : Region TileDType.bf16)) => pure (some DInfo.bf16)
+    | `(($_:term : Region TileDType.int)) => pure (some DInfo.int)
+    | `(($_:term : Region TileDType.nat)) => pure (some DInfo.nat)
+    | `(($_:term : Region TileDType.bool)) => pure (some DInfo.bool)
+    | _ => pure none
+  let some dtype := dtype?
+    | pure none
+  pure (some (r, dtype))
+
+private def expandIdentRefByName (env : Env) (name : String) : MacroM EOut := do
+  let (dtype, shape) ← lookupEnv env name
+  let s : TSyntax `term := Syntax.mkStrLit name
+  let dt ← dtype.term
+  let sh ← shape.term
+  let term ← `(Op.ref $dt $sh $s)
+  match lookupComputeDType? env name with
+  | some .fp32 =>
+      pure ⟨term, dtype, shape, some (← fp32ComputeExpr term), some .fp32⟩
+  | some _ =>
+      pure ⟨term, dtype, shape,
+        some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
+        lookupComputeDType? env name⟩
+  | none =>
+      pure ⟨term, dtype, shape, none, none⟩
+
+private partial def nonnegativeIntTermAsNat? (term : TSyntax `term) :
+    MacroM (Option (TSyntax `term)) := do
+  match term with
+  | `(Op.castNatToInt $e) =>
+      pure (some e)
+  | `(Op.constInt (Int.ofNat $e)) =>
+      pure (some (← `(Op.constNat $e)))
+  | `(Op.constInt $n:num) =>
+      pure (some (← `(Op.constNat $n)))
+  | `(Op.add NumericDType.int $bc $a $b) => do
+      match ← nonnegativeIntTermAsNat? a, ← nonnegativeIntTermAsNat? b with
+      | some aNat, some bNat =>
+          pure (some (← `(Op.add NumericDType.nat $bc $aNat $bNat)))
+      | _, _ => pure none
+  | `(Op.mul NumericDType.int $bc $a $b) => do
+      match ← nonnegativeIntTermAsNat? a, ← nonnegativeIntTermAsNat? b with
+      | some aNat, some bNat =>
+          pure (some (← `(Op.mul NumericDType.nat $bc $aNat $bNat)))
+      | _, _ => pure none
+  | _ =>
+      pure none
+
+private def pointerOffsetIntAsNat (out : EOut) : MacroM EOut := do
+  match ← nonnegativeIntTermAsNat? out.term with
+  | some natTerm => pure { out with term := natTerm, dtype := .nat }
+  | none => pure { out with term := ← `(Op.castIntToNat $out.term), dtype := .nat }
+
+mutual
+
+partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  if stx.raw.getKind == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          let e' ← expandIdentRefByName env name
+          ensureDType .nat e'.dtype "nat expression"
+          pure e'
+      | none => Macro.throwUnsupported
+    else
+      Macro.throwUnsupported
+  else
+  if stx.raw.getKind == ``tritonMethodCastElementTy ||
+      stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdentSpaced ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
+    let args := stx.raw.getArgs
+    if h : 0 < args.size then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      expandNatExpectedExpr env e
+    else
+      Macro.throwUnsupported
+  else
+  match methodCast? stx with
+  | some (e, dt) =>
+      let dst ← expandDType dt
+      if dst == .int then
+        expandNatExpectedExpr env e
+      else
+        let e' ← expandExpr env stx
+        ensureDType .nat e'.dtype "nat expression"
+        pure e'
+  | none =>
+  match stx with
+  | `(tritonExpr| $n:num) =>
+      pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $i:ident) =>
+      let rawName := i.getId.toString
+      let userName := i.getId.getString!
+      let erasedName := i.getId.eraseMacroScopes.toString
+      if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
+        let name :=
+          if env.any (fun entry => entry.1 == rawName) then rawName
+          else if env.any (fun entry => entry.1 == userName) then userName
+          else erasedName
+        let (dtype, shape) ← lookupEnv env name
+        ensureDType .nat dtype "nat expression"
+        let s : TSyntax `term := Syntax.mkStrLit name
+        let sh ← shape.term
+        pure ⟨← `(Op.ref TileDType.nat $sh $s), .nat, shape, none, none⟩
+      else
+        let t : TSyntax `term := ⟨i.raw⟩
+        pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $($t:term)) =>
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| ($e:tritonExpr)) =>
+      expandNatExpectedExpr env e
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      pure ⟨← `(Op.add NumericDType.nat $bc $a'.term $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      pure ⟨← `(Op.sub NumericDType.nat $bc $a'.term $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      pure ⟨← `(Op.mul NumericDType.nat $bc $a'.term $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $a'.term $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => do
+      let one ← `(Op.constNat 1)
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      let num ← `(Op.sub NumericDType.nat $bc
+        (Op.add NumericDType.nat $bc $a'.term $b'.term) $one)
+      pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $num $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      pure ⟨← `(Op.mod IntegralDType.nat $bc $a'.term $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | _ => do
+      let e' ← expandExpr env stx
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+
+partial def expandIntExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  let natToInt (e' : EOut) : MacroM EOut := do
+    match e'.dtype with
+    | .int => pure e'
+    | .nat =>
+        pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape,
+          e'.computeTerm, e'.computeDType?⟩
+    | _ =>
+        ensureDType .int e'.dtype "int expression"
+        pure e'
+  if stx.raw.getKind == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          natToInt (← expandIdentRefByName env name)
+      | none => Macro.throwUnsupported
+    else
+      Macro.throwUnsupported
+  else
+  if stx.raw.getKind == ``tritonMethodCastElementTy ||
+      stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdentSpaced ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
+    let args := stx.raw.getArgs
+    if h : 0 < args.size then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      expandIntExpectedExpr env e
+    else
+      Macro.throwUnsupported
+  else
+  match methodCast? stx with
+  | some (e, dt) =>
+      let dst ← expandDType dt
+      if dst == .nat then
+        natToInt (← expandNatExpectedExpr env e)
+      else
+        natToInt (← expandExpr env stx)
+  | none =>
+  match stx with
+  | `(tritonExpr| $n:num) =>
+      pure ⟨← `(Op.constInt $n), .int, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $i:ident) =>
+      let rawName := i.getId.toString
+      let userName := i.getId.getString!
+      let erasedName := i.getId.eraseMacroScopes.toString
+      if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
+        let name :=
+          if env.any (fun entry => entry.1 == rawName) then rawName
+          else if env.any (fun entry => entry.1 == userName) then userName
+          else erasedName
+        natToInt (← expandIdentRefByName env name)
+      else
+        let t : TSyntax `term := ⟨i.raw⟩
+        pure ⟨← `(Op.constInt (Int.ofNat $t)), .int, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Int))) =>
+      pure ⟨← `(Op.constInt $t), .int, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $($t:term)) =>
+      pure ⟨← `(Op.constInt (Int.ofNat $t)), .int, SInfo.scalar, none, none⟩
+  | `(tritonExpr| ($e:tritonExpr)) =>
+      expandIntExpectedExpr env e
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
+      let a' ← expandIntExpectedExpr env a
+      let b' ← expandIntExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "int expression"
+      pure ⟨← `(Op.add NumericDType.int $bc $a'.term $b'.term),
+        .int, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
+      let a' ← expandIntExpectedExpr env a
+      let b' ← expandIntExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "int expression"
+      pure ⟨← `(Op.sub NumericDType.int $bc $a'.term $b'.term),
+        .int, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
+      let a' ← expandIntExpectedExpr env a
+      let b' ← expandIntExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "int expression"
+      pure ⟨← `(Op.mul NumericDType.int $bc $a'.term $b'.term),
+        .int, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
+      let a' ← expandIntExpectedExpr env a
+      let b' ← expandIntExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "int expression"
+      pure ⟨← `(Op.floorDiv IntegralDType.int $bc $a'.term $b'.term),
+        .int, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
+      let a' ← expandIntExpectedExpr env a
+      let b' ← expandIntExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "int expression"
+      pure ⟨← `(Op.mod IntegralDType.int $bc $a'.term $b'.term),
+        .int, outShape, none, none⟩
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .int) (some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .int)
+  | _ => do
+      natToInt (← expandExpr env stx)
+
+private partial def valueTypedAntiquote? (stx : TSyntax `tritonExpr) : MacroM Bool := do
+  match stx with
+  | `(tritonExpr| $(($_:term : Nat))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Int))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Bool))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : ℝ))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Real))) => pure Bool.true
+  | _ => pure Bool.false
+
+private partial def sameRaw (a b : Syntax) : Bool :=
+  toString a == toString b
+
+private partial def expandArangeRangeWithEnv (env : Env)
+    (s e : TSyntax `tritonExpr) : MacroM EOut := do
+  match s, e with
+  | `(tritonExpr| $i:ident * $($step:term)),
+    `(tritonExpr| ($j:ident + $(1)) * $($step':term)) =>
+      if i.getId.eraseMacroScopes != j.getId.eraseMacroScopes ||
+          !sameRaw step.raw step'.raw then
+        expandArangeRange s e
+      else
+        let s' ← expandNatExpectedExpr env s
+        let stepTerm ← `(($step : Nat))
+        pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
+              $s'.term (Op.arange $stepTerm)),
+          .nat, SInfo.vec stepTerm, none, none⟩
+  | _, _ => expandArangeRange s e
+
+partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
+    MacroM (Option StaticPtrOut) := do
+  if ← valueTypedAntiquote? stx then
+    return none
+  match stx with
+  | `(tritonExpr| $($r:term)) =>
+      let zero ← `(Op.constNat 0)
+      match ← typedRegionAntiquote? r with
+      | some (region, dtype) =>
+          pure (some ⟨region, some dtype, zero, SInfo.scalar, Bool.true⟩)
+      | none =>
+          pure (some ⟨r, none, zero, SInfo.scalar, Bool.true⟩)
+  | `(tritonExpr| $r:ident) =>
+      let rawName := r.getId.toString
+      let userName := r.getId.getString!
+      let erasedName := r.getId.eraseMacroScopes.toString
+      if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
+        pure (none : Option StaticPtrOut)
+      else
+        let zero ← `(Op.constNat 0)
+        let region : TSyntax `term := ⟨r.raw⟩
+        pure (some ⟨region, none, zero, SInfo.scalar, Bool.true⟩)
+  | `(tritonExpr| ($e:tritonExpr)) =>
+      expandStaticPtrExpr env e
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
+      match ← expandStaticPtrExpr env a with
+      | some p =>
+          let b0 ← expandExpr env b
+          let b' ←
+            if b0.dtype == .int then
+              pointerOffsetIntAsNat b0
+            else if b0.dtype == .nat then
+              pure b0
+            else
+              expandNatExpectedExpr env b
+          if p.baseOnly then
+            pure (some ⟨p.region, p.regionDType?, b'.term, b'.shape, Bool.false⟩)
+          else
+            let (bc, outShape) ← broadcastTerm p.shape b'.shape "pointer offset"
+            let off := p.offset
+            let bTerm := b'.term
+            let nextOff ← `(Op.add NumericDType.nat $bc $off $bTerm)
+            pure (some ⟨p.region, p.regionDType?, nextOff, outShape, Bool.false⟩)
+      | none => pure (none : Option StaticPtrOut)
+  | _ => pure (none : Option StaticPtrOut)
+
+partial def expandWhereFromCond (env : Env) (c' : EOut)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .bool c'.dtype "tl.where condition"
+  let expandNatToIntBranch (e : TSyntax `tritonExpr) (out : EOut) : MacroM EOut := do
+    match methodCast? e with
+    | some (_inner, dt) =>
+        let dst ← expandDType dt
+        if out.dtype == .nat && dst == .int then
+          pure ⟨← `(Op.castNatToInt $out.term), .int, out.shape, none, none⟩
+        else
+          pure out
+    | none => pure out
+  let (a', b') ←
+    if a'.dtype == b'.dtype then
+      pure (a', b')
+    else
+      if a'.dtype == .nat && b'.dtype == .int then
+        pure (⟨← `(Op.castNatToInt $a'.term), .int, a'.shape,
+          a'.computeTerm, a'.computeDType?⟩, b')
+      else if a'.dtype == .int && b'.dtype == .nat then
+        pure (a', ⟨← `(Op.castNatToInt $b'.term), .int, b'.shape,
+          b'.computeTerm, b'.computeDType?⟩)
+      else do
+        let aCast ← expandNatToIntBranch a a'
+        let bCast ← expandNatToIntBranch b b'
+        pure (aCast, bCast)
+  unless a'.dtype == b'.dtype do
+    Macro.throwError "tl.where: branch dtype mismatch"
+  let (_, valueShape) ← broadcastTerm a'.shape b'.shape "tl.where branches"
+  let (_, target) ← broadcastTerm c'.shape valueShape "tl.where condition"
+  let cTerm ← coerceShape c'.term c'.shape target "tl.where condition"
+  let aTerm ← coerceShape a'.term a'.shape target "tl.where then-branch"
+  let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
+  pure ⟨← `(Op.where $cTerm $aTerm $bTerm), a'.dtype, target, none, none⟩
+
+partial def expandIteFromCond (env : Env) (c' : EOut)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .bool c'.dtype "conditional expression condition"
+  ensureShape SInfo.scalar c'.shape "conditional expression condition"
+  let expandNatToIntBranch (e : TSyntax `tritonExpr) (out : EOut) : MacroM EOut := do
+    match methodCast? e with
+    | some (_inner, dt) =>
+        let dst ← expandDType dt
+        if out.dtype == .nat && dst == .int then
+          pure ⟨← `(Op.castNatToInt $out.term), .int, out.shape, none, none⟩
+        else
+          pure out
+    | none => pure out
+  let (a', b') ←
+    if a'.dtype == b'.dtype then
+      pure (a', b')
+    else
+      if a'.dtype == .nat && b'.dtype == .int then
+        pure (⟨← `(Op.castNatToInt $a'.term), .int, a'.shape,
+          a'.computeTerm, a'.computeDType?⟩, b')
+      else if a'.dtype == .int && b'.dtype == .nat then
+        pure (a', ⟨← `(Op.castNatToInt $b'.term), .int, b'.shape,
+          b'.computeTerm, b'.computeDType?⟩)
+      else do
+        let aCast ← expandNatToIntBranch a a'
+        let bCast ← expandNatToIntBranch b b'
+        pure (aCast, bCast)
+  unless a'.dtype == b'.dtype do
+    Macro.throwError "conditional expression: branch dtype mismatch"
+  let (_, target) ← broadcastTerm a'.shape b'.shape "conditional expression branches"
+  let aTerm ← coerceShape a'.term a'.shape target "conditional expression then-branch"
+  let bTerm ← coerceShape b'.term b'.shape target "conditional expression else-branch"
+  pure ⟨← `(Op.ite $c'.term $aTerm $bTerm), a'.dtype, target, none, none⟩
+
+partial def expandBoolCondition (env : Env) (cond : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  match cond with
+  | `(tritonExpr| $a:ident == $b:str) =>
+      if env.any (fun entry => entry.1 == a.getId.toString) then
+        expandExpr env cond
+      else
+        let lhs : TSyntax `term := ⟨a.raw⟩
+        let rhs : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool ($lhs == $rhs)), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $a:ident != $b:str) =>
+      if env.any (fun entry => entry.1 == a.getId.toString) then
+        expandExpr env cond
+      else
+        let lhs : TSyntax `term := ⟨a.raw⟩
+        let rhs : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool ($lhs != $rhs)), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $b:ident) =>
+      if env.any (fun entry => entry.1 == b.getId.toString) then
+        expandExpr env cond
+      else
+        let boolTerm : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool $boolTerm), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| not $b:ident) =>
+      if env.any (fun entry => entry.1 == b.getId.toString) then
+        expandExpr env cond
+      else
+        let boolTerm : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.boolNot (Op.constBool $boolTerm)), .bool, SInfo.scalar, none, none⟩
+  | _ =>
+      expandExpr env cond
+
+partial def mergeBranchEnv (base thenEnv elseEnv : Env) : Env :=
+  let baseNames := base.map (fun entry => entry.1)
+  let thenNew := thenEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let elseNew := elseEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let mergedNew :=
+    thenNew.filter (fun t =>
+      let (tn, td, ts, tc) := t
+      match elseNew.find? (fun e => e.1 == tn) with
+      | some e =>
+          let (_, ed, es, ec) := e
+          td == ed && ts.eq es && tc == ec
+      | none => Bool.false)
+  if mergedNew.isEmpty then
+    thenNew ++ base
+  else
+    mergedNew ++ base
+
+partial def staticBoolCond? (env : Env) (cond : TSyntax `tritonExpr) : Bool :=
+  match cond with
+  | `(tritonExpr| $a:ident == $_:str) =>
+      !env.any (fun entry => entry.1 == a.getId.toString)
+  | `(tritonExpr| $a:ident != $_:str) =>
+      !env.any (fun entry => entry.1 == a.getId.toString)
+  | `(tritonExpr| $b:ident) =>
+      !env.any (fun entry => entry.1 == b.getId.toString)
+  | `(tritonExpr| not $e:tritonExpr) =>
+      staticBoolCond? env e
+  | _ => Bool.false
+
+partial def mergeStaticBranchEnv (base thenEnv elseEnv : Env) : Env :=
+  let baseNames := base.map (fun entry => entry.1)
+  let thenNew := thenEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let elseNew := elseEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let thenNames := thenNew.map (fun entry => entry.1)
+  let elseOnly := elseNew.filter (fun entry => !(thenNames.contains entry.1))
+  thenNew ++ elseOnly ++ base
+
+partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
+    (offsets strides : Array (TSyntax `tritonExpr)) :
+    MacroM (TSyntax `term × Option (TSyntax `term)) := do
+  unless offsets.size == strides.size do
+    Macro.throwError (ctx ++ ": offsets and strides must have the same rank")
+  let mut staticOffsets : Array (TSyntax `term) := #[]
+  let mut dynamicAdds : Array (TSyntax `term) := #[]
+  for i in [:offsets.size] do
+    let off := offsets[i]!
+    let strideTerm ← natDimTerm (ctx ++ " strides") strides[i]!
+    match off with
+    | `(tritonExpr| $n:num) =>
+        staticOffsets := staticOffsets.push (⟨n.raw⟩ : TSyntax `term)
+    | `(tritonExpr| $($t:term)) =>
+        staticOffsets := staticOffsets.push (← `(($t : Nat)))
+    | `(tritonExpr| $id:ident) =>
+        if env.any (fun entry => entry.1 == id.getId.toString) then
+          staticOffsets := staticOffsets.push (← `((0 : Nat)))
+          let off' ← expandNatExpectedExpr env off
+          ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+          dynamicAdds := dynamicAdds.push
+            (← `(Op.mul NumericDType.nat Broadcast.nil $off'.term (Op.constNat $strideTerm)))
+        else
+          let t : TSyntax `term := ⟨id.raw⟩
+          staticOffsets := staticOffsets.push (← `(($t : Nat)))
+    | _ =>
+        staticOffsets := staticOffsets.push (← `((0 : Nat)))
+        let off' ← expandNatExpectedExpr env off
+        ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+        dynamicAdds := dynamicAdds.push
+          (← `(Op.mul NumericDType.nat Broadcast.nil $off'.term (Op.constNat $strideTerm)))
+  let rec listTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List Nat))
+    | d :: rest => do
+        let tail ← listTerm rest
+        `($d :: $tail)
+  let rec sumOps : List (TSyntax `term) → MacroM (Option (TSyntax `term))
+    | [] => pure none
+    | [x] => pure (some x)
+    | x :: xs => do
+        match ← sumOps xs with
+        | none => pure (some x)
+        | some rest =>
+            pure (some (← `(Op.add NumericDType.nat Broadcast.nil $x $rest)))
+  pure (← listTerm staticOffsets.toList, ← sumOps dynamicAdds.toList)
+
+partial def natBlockPtrOffsets (env : Env) (ctx : String)
+    (offsets : Array (TSyntax `tritonExpr)) :
+    MacroM (TSyntax `term × TSyntax `term × Bool) := do
+  let mut staticOffsets : Array (TSyntax `term) := #[]
+  let mut offsetOps : Array (TSyntax `term) := #[]
+  let mut hasDynamic := Bool.false
+  for off in offsets do
+    match off with
+    | `(tritonExpr| $n:num) =>
+        staticOffsets := staticOffsets.push (⟨n.raw⟩ : TSyntax `term)
+        offsetOps := offsetOps.push (← `(Op.constNat $n))
+    | `(tritonExpr| $($t:term)) =>
+        staticOffsets := staticOffsets.push (← `(($t : Nat)))
+        offsetOps := offsetOps.push (← `(Op.constNat ($t : Nat)))
+    | `(tritonExpr| $id:ident) =>
+        if env.any (fun entry => entry.1 == id.getId.toString) then
+          hasDynamic := Bool.true
+          staticOffsets := staticOffsets.push (← `((0 : Nat)))
+          let off' ← expandNatExpectedExpr env off
+          ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+          offsetOps := offsetOps.push off'.term
+        else
+          let t : TSyntax `term := ⟨id.raw⟩
+          staticOffsets := staticOffsets.push (← `(($t : Nat)))
+          offsetOps := offsetOps.push (← `(Op.constNat ($t : Nat)))
+    | _ =>
+        hasDynamic := Bool.true
+        staticOffsets := staticOffsets.push (← `((0 : Nat)))
+        let off' ← expandNatExpectedExpr env off
+        ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+        offsetOps := offsetOps.push off'.term
+  let rec natListTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List Nat))
+    | d :: rest => do
+        let tail ← natListTerm rest
+        `($d :: $tail)
+  let rec opListTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List (Op .nat [])))
+    | d :: rest => do
+        let tail ← opListTerm rest
+        `($d :: $tail)
+  pure (← natListTerm staticOffsets.toList, ← opListTerm offsetOps.toList, hasDynamic)
+
+partial def expandFullDTypeTerm (expandExpr : ExprExpander) (env : Env)
+    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
+    (dt : TSyntax `term) : MacroM EOut := do
+  let dtString := toString dt.raw
+  if dtString.contains "OUT_DTYPE" then
+    let dtypeStx ← `(tritonDType| OUT_DTYPE)
+    return ← expandComputeFull expandExpr env dims v dtypeStx
+  if dtString.contains "dtype" && dtString.contains "element_ty" then
+    expandFull expandExpr env dims v
+  else if dtString.contains "tl.float32" then
+    let dt ← `(tritonDType| tl.float32)
+    expandComputeFull expandExpr env dims v dt
+  else if dtString.contains "tl.float64" then
+    expandFull expandExpr env dims v (dtypeHint := some .real)
+  else if dtString.contains "tl.float16" then
+    expandFull expandExpr env dims v (dtypeHint := some .fp16)
+  else if dtString.contains "tl.bfloat16" then
+    expandFull expandExpr env dims v (dtypeHint := some .bf16)
+  else if dtString.contains "tl.int1" then
+    expandFull expandExpr env dims v (dtypeHint := some .bool)
+  else if dtString.contains "tl.int" then
+    expandFull expandExpr env dims v (dtypeHint := some .int)
+  else if dtString.contains "tl.uint" then
+    expandFull expandExpr env dims v (dtypeHint := some .nat)
+  else
+    Macro.throwError "tl.full: expected `dtype=<ptr>.dtype.element_ty` or a Triton dtype"
+
+partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
+  if stx.raw.getKind == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      let dt : TSyntax `tritonDType := ⟨args[2]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          let e' ← expandIdentRefByName env name
+          let dst ← expandDType dt
+          match dst with
+          | .bool =>
+              Macro.throwError "tl.cast: Bool casts are only supported directly on tl.load"
+          | .nat =>
+              match e'.dtype with
+              | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+                  let sh ← e'.shape.term
+                  let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+                  pure ⟨ref, .nat, e'.shape, none, none⟩
+              | .int =>
+                  pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
+              | _ => pure e'
+          | .int =>
+              match e'.dtype with
+              | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+                  let srcProof ← e'.dtype.floatProof
+                  let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+                  pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
+              | .nat =>
+                  pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
+              | _ => pure e'
+          | .fp32 =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | _ =>
+              let srcProof ← e'.dtype.floatProof
+              let dstProof ← dst.floatProof
+              pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+      | none => Macro.throwUnsupported
+    else
+      Macro.throwUnsupported
+  else
+  if stx.raw.getKind == ``tritonMethodCastElementTy ||
+      stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdentSpaced ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
+    let args := stx.raw.getArgs
+    if h : 0 < args.size then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      let raw := toString stx.raw
+      if raw.contains "tl.int" then
+        expandIntExpectedExpr env e
+      else if raw.contains "tl.uint" then
+        expandNatExpectedExpr env e
+      else
+        let e' ← expandExpr env e
+        pure e'
+    else
+      Macro.throwUnsupported
+  else
+  match methodCast? stx with
+  | some (e, dt) =>
+      let dst ← expandDType dt
+      match dst with
+      | .bool =>
+          let rec expandBoolLoadCast (e : TSyntax `tritonExpr) : MacroM (Option EOut) := do
+            match e with
+            | `(tritonExpr| ($inner:tritonExpr)) =>
+                expandBoolLoadCast inner
+            | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+                pure (some (← expandLoad expandExpr expandStaticPtrExpr env p kwargs (some .bool) (some mask)))
+            | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+                pure (some (← expandLoad expandExpr expandStaticPtrExpr env p kwargs (some .bool)))
+            | _ =>
+                pure none
+          match ← expandBoolLoadCast e with
+          | some out => pure out
+          | none =>
+              Macro.throwError "tl.cast: Bool casts are only supported directly on tl.load"
+      | _ =>
+          let e' ← expandExpr env e
+          match e'.dtype, dst with
+          | .real, .nat | .fp32, .nat | .fp16, .nat | .bf16, .nat
+          | .floatVar _, .nat =>
+              let sh ← e'.shape.term
+              let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+              pure ⟨ref, .nat, e'.shape, none, none⟩
+          | .int, .nat =>
+              pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
+          | .real, .int | .fp32, .int | .fp16, .int | .bf16, .int
+          | .floatVar _, .int =>
+              let srcProof ← e'.dtype.floatProof
+              let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
+          | .nat, .int =>
+              pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
+          | _, .int =>
+              pure e'
+          | _, .fp32 =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | _, _ =>
+              let srcProof ← e'.dtype.floatProof
+              let dstProof ← dst.floatProof
+              pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+  | none =>
+  match stx with
+  | `(tritonExpr| $n:num) =>
+      -- Bare numeric literals are `ℝ` data constants (e.g. `1` in `1 / s`).
+      pure ⟨← `(Op.const $n), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $n:scientific) =>
+      pure ⟨← `(Op.const $n), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| true) =>
+      pure ⟨← `(Op.constBool Bool.true), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| false) =>
+      pure ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $i:ident) =>
+      let rawName := i.getId.toString
+      let userName := i.getId.getString!
+      let erasedName := i.getId.eraseMacroScopes.toString
+      unless env.any (fun entry =>
+          entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) do
+        let t : TSyntax `term := ⟨i.raw⟩
+        return ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+      let name :=
+        if env.any (fun entry => entry.1 == rawName) then rawName
+        else if env.any (fun entry => entry.1 == userName) then userName
+        else erasedName
+      let (dtype, shape) ← lookupEnv env name
+      let s : TSyntax `term := Syntax.mkStrLit name
+      let dt ← dtype.term
+      let sh ← shape.term
+      let term ← `(Op.ref $dt $sh $s)
+      match lookupComputeDType? env name with
+      | some .fp32 =>
+          pure ⟨term, dtype, shape,
+            some (← fp32ComputeExpr term),
+            some .fp32⟩
+      | some _ =>
+          pure ⟨term, dtype, shape,
+            some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
+            lookupComputeDType? env name⟩
+      | none =>
+          pure ⟨term, dtype, shape, none, none⟩
+  | `(tritonExpr| $(($t:term : ℝ))) =>
+      pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Real))) =>
+      pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Bool))) =>
+      pure ⟨← `(Op.constBool $t), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Nat))) =>
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Int))) =>
+      pure ⟨← `(Op.constInt $t), .int, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $($t:term)) =>
+      -- `$(...)` antiquote is the address/size channel: `Nat`.
+      -- Data/scalar contexts reinterpret the same surface form through
+      -- `expandLeanAntiquoteAs? .real` before this default is used.
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| ($e:tritonExpr)) =>
+      expandExpr env e
+  | `(tritonExpr| tl.program_id($e:tritonExpr)) =>
+      expandProgramId e
+  | `(tritonExpr| tl.program_id(axis=$e:tritonExpr)) =>
+      expandProgramId e
+  | `(tritonExpr| tl.num_programs($e:tritonExpr)) =>
+      expandNumPrograms e
+  | `(tritonExpr| tl.num_programs(axis=$e:tritonExpr)) =>
+      expandNumPrograms e
+  | `(tritonExpr| tl.arange($e:tritonExpr)) =>
+      expandArange e
+  | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do
+      expandArangeRangeWithEnv env s e
+  | `(tritonExpr| tl.exp($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.exp" e'
+      pure ⟨← `(Op.exp $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.exp2" e'
+      pure ⟨← `(Op.exp2 $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.math.exp2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.math.exp2" e'
+      pure ⟨← `(Op.exp2 $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $b:tritonExpr)) => do
+      -- A literal exponent `2` keeps its historical `x * x` (`Op.mul`)
+      -- lowering so existing squared-magnitude ports (e.g. rmsnorm_triton)
+      -- elaborate unchanged; every other exponent — including the
+      -- scalar-base × tensor-exponent form — lowers to the general
+      -- `Op.pow` (`Real.rpow`) node via `expandPow`.
+      match b with
+      | `(tritonExpr| $n:num) =>
+          if n.getNat == 2 then
+            expandArith expandExpr env "tl.extra.cuda.libdevice.pow" (← `(Op.mul)) e e
+          else
+            expandPow expandExpr env "tl.extra.cuda.libdevice.pow" e b
+      | _ => expandPow expandExpr env "tl.extra.cuda.libdevice.pow" e b
+  | `(tritonExpr| tl.log($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.log" e'
+      pure ⟨← `(Op.log $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.log2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.log2" e'
+      pure ⟨← `(Op.log2 $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.math.log2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.math.log2" e'
+      pure ⟨← `(Op.log2 $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.sigmoid" e'
+      pure ⟨← `(Op.sigmoid $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| silu($e:tritonExpr)) =>
+      expandExpr env (← `(tritonExpr| $e * tl.sigmoid($e)))
+  | `(tritonExpr| leaky_relu($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "leaky_relu" e'
+      let (cmpBc, cmpShape) ← broadcastTerm e'.shape SInfo.scalar "leaky_relu"
+      ensureShape e'.shape cmpShape "leaky_relu"
+      let (mulBc, mulShape) ← broadcastTerm SInfo.scalar e'.shape "leaky_relu"
+      ensureShape e'.shape mulShape "leaky_relu"
+      let zero ← `(Op.const 0)
+      let slope ← `(Op.const (0.01 : ℝ))
+      let cond ← `(Op.ge ComparableDType.real $cmpBc $eTerm $zero)
+      let scaled ← `(Op.mul NumericDType.real $mulBc $slope $eTerm)
+      pure ⟨← `(Op.where $cond $eTerm $scaled), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.sqrt" e'
+      pure ⟨← `(Op.sqrt $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.math.rsqrt($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.math.rsqrt" e'
+      pure ⟨← `(Op.rsqrt $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.rsqrt($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.rsqrt" e'
+      pure ⟨← `(Op.rsqrt $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| triton_tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "triton_tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.sin($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.sin" e'
+      pure ⟨← `(Op.sin $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.math.sin($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.math.sin" e'
+      pure ⟨← `(Op.sin $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.cos($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.cos" e'
+      pure ⟨← `(Op.cos $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.tan($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.tan" e'
+      pure ⟨← `(Op.tan $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.atan($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.atan" e'
+      pure ⟨← `(Op.atan $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.cosh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.cosh" e'
+      pure ⟨← `(Op.cosh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.sinh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.sinh" e'
+      pure ⟨← `(Op.sinh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.erf($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.erf" e'
+      pure ⟨← `(Op.erf $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.extra.cuda.libdevice.erf" e'
+      pure ⟨← `(Op.erf $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.abs($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.abs"
+      let (cmpBc, cmpShape) ← broadcastTerm e'.shape SInfo.scalar "tl.abs"
+      ensureShape e'.shape cmpShape "tl.abs"
+      let (subBc, subShape) ← broadcastTerm SInfo.scalar e'.shape "tl.abs"
+      ensureShape e'.shape subShape "tl.abs"
+      let zero ← `(Op.const 0)
+      let cond ← `(Op.lt ComparableDType.real $cmpBc $e'.term $zero)
+      let neg ← `(Op.sub NumericDType.real $subBc $zero $e'.term)
+      pure ⟨← `(Op.where $cond $neg $e'.term), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
+      expandBoolBin expandExpr env "tl.logical_and" (← `(Op.boolAnd)) a b
+  | `(tritonExpr| tl.logical_or($a:tritonExpr, $b:tritonExpr)) => do
+      expandBoolBin expandExpr env "tl.logical_or" (← `(Op.boolOr)) a b
+  | `(tritonExpr| tl.logical_not($a:tritonExpr)) => do
+      expandBoolNot expandExpr env "tl.logical_not" a
+  | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) => do
+      expandCdiv expandExpr env a b
+  | `(tritonExpr| tl.max($e:tritonExpr, $n:num)) => do
+      expandReduceMax expandExpr env e #[← `(tritonReduceKwarg| $n:num)]
+  | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
+      match b with
+      | `(tritonExpr| $n:num) =>
+          expandReduceMax expandExpr env a #[← `(tritonReduceKwarg| $n:num)]
+      | _ =>
+          let a' ← expandExpr env a
+          let b' ← expandExpr env b
+          ensureDType .real a'.dtype "tl.max"
+          ensureDType .real b'.dtype "tl.max"
+          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
+          pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape, none, none⟩
+  | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax expandExpr env "tl.maximum" (← `(Op.gt)) a b
+  | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax expandExpr env "tl.minimum" (← `(Op.lt)) a b
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax expandExpr env "min" (← `(Op.lt)) a b
+  | `(tritonExpr| tl.cumsum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan expandExpr env "tl.cumsum" (← `(ScanOp.sum)) e kwargs
+  | `(tritonExpr| tl.cumprod($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan expandExpr env "tl.cumprod" (← `(ScanOp.prod)) e kwargs
+  | `(tritonExpr| tl.associative_scan($e:tritonExpr, $op:tritonScanOp $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan expandExpr env "tl.associative_scan" (← expandScanOp op) e kwargs
+  | `(tritonExpr| tl.argmax($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandArgReduce expandExpr env "tl.argmax" (← `(Op.argMax)) e kwargs
+  | `(tritonExpr| tl.argmin($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandArgReduce expandExpr env "tl.argmin" (← `(Op.argMin)) e kwargs
+  | `(tritonExpr| tl.sort($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandSort expandExpr env e kwargs
+  | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandReduce expandExpr env "tl.sum" (← `(Op.reduceSum)) e kwargs
+  | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandReduceMax expandExpr env e kwargs
+  | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .nat e'.dtype "tl.toReal"
+      pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.multiple_of($e:tritonExpr, $_align:tritonExpr)) => do
+      expandExpr env e
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $_align:tritonExpr)) => do
+      expandExpr env e
+  | `(tritonExpr| tl.bitcast($e:tritonExpr, $dt:tritonDType)) => do
+      let dst ← expandComputeDType dt
+      let dstTerm ← dst.term
+      match e with
+      | `(tritonExpr| $n:num) =>
+          let bits := n.getNat
+          unless bits < 2^32 do
+            Macro.throwError "tl.bitcast(...): literal does not fit 32 bits"
+          if dst == .fp32 then
+            validateFp32BitsForAlg bits
+          let payload ← computeLiteralPayloadTerm .uint32 bits
+          let op ←
+            `(ComputeOp.bitcast ComputeDType.uint32 $dstTerm rfl
+                (ComputeOp.const $payload))
+          let algTerm ← computeLiteralAlgTerm dst bits
+          pure ⟨algTerm, dst.algDType, SInfo.scalar,
+            some (← `(ComputeExpr.compute $op)), none⟩
+      | _ =>
+          let e' ← expandExpr env e
+          let src ← inferComputeSourceDType "tl.bitcast" e'.dtype
+          let srcTerm ← src.term
+          let algTerm ← dst.placeholderAlgTerm e'.shape
+          let op ←
+            `(ComputeOp.bitcast $srcTerm $dstTerm rfl
+                (ComputeOp.alg $srcTerm $e'.term))
+          pure ⟨algTerm, dst.algDType, e'.shape,
+            some (← `(ComputeExpr.compute $op)), none⟩
+  | `(tritonExpr| tl.cast($e:tritonExpr, $dt:tritonDType)) => do
+      let e' ← expandExpr env e
+      let dst ← expandDType dt
+      match dst with
+      | .nat =>
+          match e'.dtype with
+          | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+              let sh ← e'.shape.term
+              let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+              pure ⟨ref, .nat, e'.shape, none, none⟩
+          | .int =>
+              pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
+          | _ => pure e'
+      | .int =>
+          match e'.dtype with
+          | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+              let srcProof ← e'.dtype.floatProof
+              let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
+          | .nat =>
+              pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
+          | _ => pure e'
+      | .fp32 =>
+          let srcProof ← e'.dtype.floatProof
+          let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+          pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+      | _ =>
+          let srcProof ← e'.dtype.floatProof
+          let dstProof ← dst.floatProof
+          pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+  | `(tritonExpr| tl.extra.cuda.libdevice.llrint($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let realTerm ← realMathTerm "tl.extra.cuda.libdevice.llrint" e'
+      let sh ← e'.shape.term
+      let argCompute ←
+        match e'.computeTerm with
+        | some computeTerm => pure computeTerm
+        | none => `(ComputeExpr.alg $realTerm)
+      pure ⟨← `(Op.ref TileDType.int $sh "__compute_llrint_unprojected__"),
+        .int, e'.shape, some (← `(ComputeExpr.llrint $argCompute)), some .int⟩
+  | `(tritonExpr| -inf) =>
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| - float ($arg:term)) =>
+      let argString := toString arg.raw
+      unless argString.contains "inf" do
+        Macro.throwError "float(...): only `float(\"inf\")` is supported in Triton DSL expressions"
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| float ($arg:term)) =>
+      let argString := toString arg.raw
+      unless argString.contains "-inf" do
+        Macro.throwError "float(...): only `float(\"-inf\")` is supported in Triton DSL expressions"
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
+      expandDot expandExpr env a b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr $[, $_kwargs:tritonReduceKwarg]*)) => do
+      -- Triton dot kwargs such as `allow_tf32` and `out_dtype` are execution
+      -- hints for the current real-valued carrier, so the compute semantics
+      -- erase them.
+      expandDot expandExpr env a b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $acc:tritonExpr)) => do
+      -- Fused accumulator form: `tl.dot(a, b, acc) ≡ acc + tl.dot(a, b)`.
+      -- Both `tl.dot(a, b)` and `acc` have shape `[M, N]`; their `+` uses
+      -- the standard same-shape broadcast.
+      let dot ← expandDot expandExpr env a b
+      let acc' ← expandExpr env acc
+      ensureDType .real acc'.dtype "tl.dot accumulator"
+      ensureShape dot.shape acc'.shape "tl.dot accumulator"
+      let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
+      pure ⟨← `(Op.add NumericDType.real $bc $dot.term $acc'.term),
+            .real, outShape, none, none⟩
+  | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $baseKw:ident=$base:tritonExpr,
+        $shapeKw:ident=[$parentDims:tritonExpr,*], $stridesKw:ident=[$strideDims:tritonExpr,*],
+        $offsetsKw:ident=[$offsetDims:tritonExpr,*], $blockShapeKw:ident=[$blockDims:tritonExpr,*])) => do
+      unless baseKw.getId.toString == "base" &&
+          shapeKw.getId.toString == "shape" &&
+          stridesKw.getId.toString == "strides" &&
+          offsetsKw.getId.toString == "offsets" &&
+          blockShapeKw.getId.toString == "block_shape" do
+        Macro.throwError "tl.make_block_ptr kwargs must be `base`, `shape`, `strides`, `offsets`, `block_shape` in that order"
+      let sp ← expandStaticPtrExpr env p
+      let (region, baseFromPtr?) ← match sp with
+        | some sp =>
+            pure (sp.region, if sp.baseOnly then none else some sp.offset)
+        | none =>
+            Macro.throwError "tl.make_block_ptr: first argument must be a region antiquote like `$(xReg)`"
+      let base' ←
+        match ← expandLeanAntiquoteAs? .nat base with
+        | some out => pure out
+        | none =>
+            match base with
+            | `(tritonExpr| $n:num) =>
+                pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
+            | _ => expandNatExpectedExpr env base
+      ensureShape SInfo.scalar base'.shape "tl.make_block_ptr base"
+      let baseTerm ←
+        match baseFromPtr? with
+        | none => pure base'.term
+        | some ptrBase => do
+            let (bc, outShape) ← broadcastTerm SInfo.scalar SInfo.scalar "tl.make_block_ptr base"
+            ensureShape SInfo.scalar outShape "tl.make_block_ptr base"
+            `(Op.add NumericDType.nat $bc $ptrBase $base'.term)
+      let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
+      let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
+      let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
+  | `(tritonExpr| tl.make_block_ptr($baseKw:ident=$p:tritonExpr,
+        $shapeKw:ident=($parentDims:tritonExpr,*), $stridesKw:ident=($strideDims:tritonExpr,*),
+        $offsetsKw:ident=($offsetDims:tritonExpr,*), $blockShapeKw:ident=($blockDims:tritonExpr,*),
+        $orderKw:ident=($_order:num,*))) => do
+      unless baseKw.getId.toString == "base" &&
+          shapeKw.getId.toString == "shape" &&
+          stridesKw.getId.toString == "strides" &&
+          offsetsKw.getId.toString == "offsets" &&
+          blockShapeKw.getId.toString == "block_shape" &&
+          orderKw.getId.toString == "order" do
+        Macro.throwError "tl.make_block_ptr kwargs must be `base`, `shape`, `strides`, `offsets`, `block_shape`, optional `order` in that order"
+      let sp ← expandStaticPtrExpr env p
+      let (region, baseTerm, baseShape) ← match sp with
+        | some sp => pure (sp.region, sp.offset, sp.shape)
+        | none => Macro.throwError "tl.make_block_ptr: `base=` must start from a region expression"
+      ensureShape SInfo.scalar baseShape "tl.make_block_ptr base"
+      let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
+      let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
+      let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
+  | `(tritonExpr| tl.make_block_ptr($baseKw:ident=$p:tritonExpr,
+        $shapeKw:ident=($parentDims:tritonExpr,*), $stridesKw:ident=($strideDims:tritonExpr,*),
+        $offsetsKw:ident=($offsetDims:tritonExpr,*), $blockShapeKw:ident=($blockDims:tritonExpr,*))) => do
+      unless baseKw.getId.toString == "base" &&
+          shapeKw.getId.toString == "shape" &&
+          stridesKw.getId.toString == "strides" &&
+          offsetsKw.getId.toString == "offsets" &&
+          blockShapeKw.getId.toString == "block_shape" do
+        Macro.throwError "tl.make_block_ptr kwargs must be `base`, `shape`, `strides`, `offsets`, `block_shape` in that order"
+      let sp ← expandStaticPtrExpr env p
+      let (region, baseTerm, baseShape) ← match sp with
+        | some sp => pure (sp.region, sp.offset, sp.shape)
+        | none => Macro.throwError "tl.make_block_ptr: `base=` must start from a region expression"
+      ensureShape SInfo.scalar baseShape "tl.make_block_ptr base"
+      let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
+      let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
+      let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
+  | `(tritonExpr| tl.advance($p:tritonExpr, [$deltas:tritonExpr,*])) => do
+      let p' ← expandExpr env p
+      ensureDType .blockPtr p'.dtype "tl.advance pointer"
+      let deltasTerm ← intCoeListTerm "tl.advance offsets" deltas
+      pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
+  | `(tritonExpr| tl.advance($p:tritonExpr, $offsetsKw:ident=($deltas:tritonExpr,*))) => do
+      unless offsetsKw.getId.toString == "offsets" do
+        Macro.throwError "tl.advance kwarg must be `offsets`"
+      let p' ← expandExpr env p
+      ensureDType .blockPtr p'.dtype "tl.advance pointer"
+      let deltasTerm ← intCoeListTerm "tl.advance offsets" deltas
+      pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst) (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := some dst)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+  | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.lt)) a b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.le)) a b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.eq)) a b
+  | `(tritonExpr| $a:tritonExpr > $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.gt)) a b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.ge)) a b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
+      expandCmp expandExpr env "comparison" (← `(Op.ne)) a b
+  | `(tritonExpr| $a:tritonExpr & $b:tritonExpr) => do
+      expandBoolOrNatBitwise expandExpr env "`&`" (← `(Op.boolAnd)) (← `(Op.bitAnd)) a b
+  | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) => do
+      expandBoolBin expandExpr env "`and`" (← `(Op.boolAnd)) a b
+  | `(tritonExpr| $a:tritonExpr | $b:tritonExpr) => do
+      expandBoolOrNatBitwise expandExpr env "`|`" (← `(Op.boolOr)) (← `(Op.bitOr)) a b
+  | `(tritonExpr| $a:tritonExpr ^ $b:tritonExpr) => do
+      expandNatBitwise expandExpr env "`^`" (← `(Op.bitXor)) a b
+  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => do
+      expandNatBitwise expandExpr env "`<<`" (← `(Op.shiftLeft)) a b
+  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => do
+      expandNatBitwise expandExpr env "`>>`" (← `(Op.shiftRight)) a b
+  | `(tritonExpr| ~$a:tritonExpr) => do
+      expandBoolNot expandExpr env "boolean ~" a
+  | `(tritonExpr| not $a:tritonExpr) => do
+      expandBoolNot expandExpr env "boolean not" a
+  | `(tritonExpr| -$a:tritonExpr) => do
+      let a' ← expandExpr env a
+      let (zeroTerm, zeroDType) ←
+        match a'.dtype with
+        | .real => pure (← `(Op.const 0.0), DInfo.real)
+        | .fp32 => pure (← `(Op.constFloat FloatDType.fp32 0.0), DInfo.fp32)
+        | .fp16 => pure (← `(Op.constFloat FloatDType.fp16 0.0), DInfo.fp16)
+        | .bf16 => pure (← `(Op.constFloat FloatDType.bf16 0.0), DInfo.bf16)
+        | .int => pure (← `(Op.constInt 0), DInfo.int)
+        | _ => Macro.throwError "unary -: dtype mismatch"
+      ensureDType zeroDType a'.dtype "unary -"
+      let np ← a'.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm SInfo.scalar a'.shape "unary -"
+      let term ← `(Op.sub $np $bc $zeroTerm $a'.term)
+      let zero : EOut := ⟨zeroTerm, zeroDType, SInfo.scalar, none, none⟩
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "unary -" term zero a'
+      pure ⟨term, a'.dtype, outShape, computeTerm?, computeDType?⟩
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
+      match ← expandStaticPtrExpr env stx with
+      | some sp =>
+          let (bc, _) ← broadcastTerm SInfo.scalar sp.shape "pointer arithmetic"
+          pure ⟨← `(Op.ptrAdd $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape, none, none⟩
+      | none =>
+          let a' ← expandExpr env a
+          let b' ← expandExpr env b
+          match a'.dtype, b'.dtype with
+          | .ptr, .nat =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape, none, none⟩
+          | .ptr, .int =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
+              let bNat ← pointerOffsetIntAsNat b'
+              pure ⟨← `(Op.ptrAdd $bc $a'.term $bNat.term), .ptr, outShape, none, none⟩
+          | .nat, .ptr =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape, none, none⟩
+          | .int, .ptr =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
+              let aNat ← pointerOffsetIntAsNat a'
+              pure ⟨← `(Op.ptrAdd $bc $b'.term $aNat.term), .ptr, outShape, none, none⟩
+          | _, _ =>
+              expandArith expandExpr env "arithmetic" (← `(Op.add)) a b
+  | `(tritonExpr| $a:tritonExpr - float ($arg:term)) => do
+      let argString := toString arg.raw
+      unless argString.contains "inf" && !argString.contains "-inf" do
+        Macro.throwError "float(...): subtraction shorthand only supports `float(\"inf\")`"
+      expandExpr env (← `(tritonExpr| $a:tritonExpr + -inf))
+  | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
+      expandArith expandExpr env "arithmetic" (← `(Op.sub)) a b
+  | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
+      match ← expandBoolMaskMul? expandExpr env a b with
+      | some out => pure out
+      | none => expandArith expandExpr env "arithmetic" (← `(Op.mul)) a b
+  | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
+      expandArith expandExpr env "arithmetic" (← `(Op.div)) a b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
+      expandIntegralArith expandExpr env "integer floor division" (← `(Op.floorDiv)) a b
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => do
+      let one ← `(Op.constNat 1)
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "_div_up"
+      let num ← `(Op.sub NumericDType.nat $bc
+        (Op.add NumericDType.nat $bc $a'.term $b'.term) $one)
+      pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $num $b'.term),
+        .nat, outShape, none, none⟩
+  | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
+      expandIntegralArith expandExpr env "integer remainder" (← `(Op.mod)) a b
+  | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
+      let c' ← expandExpr env c
+      expandWhereFromCond env c' a b
+  | `(tritonExpr| ($a:tritonExpr if $c:tritonExpr else $b:tritonExpr)) => do
+      let c' ← expandBoolCondition env c
+      expandIteFromCond env c' a b
+  | `(tritonExpr| $e:tritonExpr[ : ]) => do
+      -- Python no-op full slice `e[:]`.
+      expandExpr env e
+  | `(tritonExpr| $e:tritonExpr[ : , None ]) => do
+      -- `e[:, None]` — insert a unit axis at position 1: `[N] → [N, 1]`.
+      expandSlicerNone expandExpr env e (axisIdx := 1)
+  | `(tritonExpr| $e:tritonExpr[ None , : ]) => do
+      -- `e[None, :]` — insert a unit axis at position 0: `[N] → [1, N]`.
+      expandSlicerNone expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ None ]) => do
+      -- `e[None]` — insert a unit axis at position 0: `[] → [1]`.
+      expandExpandDims expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ : , None , None ]) => do
+      -- `e[:, None, None]` — `[N] → [N, 1, 1]`.
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 1)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "2"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        dims.take 2 ++ [← `((1 : Nat))] ++ dims.drop 2
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ None , : , None ]) => do
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 0)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "2"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        dims.take 2 ++ [← `((1 : Nat))] ++ dims.drop 2
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ None , None , : ]) => do
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 0)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "0"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        [← `((1 : Nat))] ++ dims
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ : , None , : ]) => do
+      -- `e[:, None, :]` — insert a unit axis in the middle of a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 1)
+  | `(tritonExpr| $e:tritonExpr[ None , : , : ]) => do
+      -- `e[None, :, :]` — add a leading unit axis to a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ : , : , None ]) => do
+      -- `e[:, :, None]` — add a trailing unit axis to a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 2)
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $kw:tritonReduceKwarg)) => do
+      match kw with
+      | `(tritonReduceKwarg| axis = $n:num) =>
+          expandExpandDims expandExpr env e (axisIdx := n.getNat)
+      | `(tritonReduceKwarg| $name:ident = $_) =>
+          Macro.throwError
+            ("tl.expand_dims: unknown kwarg `" ++ name.getId.toString ++
+             "`. Only literal `axis = N` is supported.")
+      | _ => Macro.throwUnsupported
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $n:num)) => do
+      expandExpandDims expandExpr env e (axisIdx := n.getNat)
+  | `(tritonExpr| tl.trans($e:tritonExpr)) => do
+      -- `tl.trans(e)` — transpose the trailing two axes (`Op.transpose`).
+      expandTranspose expandExpr env e
+  | `(tritonExpr| tl.permute($e:tritonExpr, [$axes:num,*])) => do
+      expandPermute expandExpr env e axes.getElems.toList
+  | `(tritonExpr| tl.reshape($e:tritonExpr, [$dims:tritonExpr,*])) => do
+      expandReshapeLike expandExpr env "tl.reshape" e dims.getElems
+  | `(tritonExpr| tl.view($e:tritonExpr, [$dims:tritonExpr,*])) => do
+      expandReshapeLike expandExpr env "tl.view" e dims.getElems
+  | `(tritonExpr| tl.ravel($e:tritonExpr)) => do
+      expandRavel expandExpr env e
+  | `(tritonExpr| tl.flip($e:tritonExpr, $ax:num)) => do
+      expandFlip expandExpr env e ax.getNat
+  | `(tritonExpr| tl.flip($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let ax ← parseFlipKwargs kwargs
+      expandFlip expandExpr env e ax
+  | `(tritonExpr| tl.join($a:tritonExpr, $b:tritonExpr)) => do
+      expandJoin expandExpr env a b
+  | `(tritonExpr| tl.split($e:tritonExpr, $side:num)) => do
+      expandSplit expandExpr env e side.getNat
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr)) => do
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr, $name:ident=$dt:tritonDType)) => do
+      unless name.getId.getString! == "dtype" do
+        Macro.throwError
+          ("tl.full: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
+      expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr,
+      $name:ident=$ptr:ident.$dtype:ident.$elem:ident)) => do
+      unless name.getId.getString! == "dtype" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected `dtype=<ptr>.dtype.element_ty`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr, $name:ident=$dt:ident)) => do
+      unless name.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected `dtype=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$dt:tritonDType,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" && valueName.getId.getString! == "value" do
+        Macro.throwError "tl.full: expected kwargs `dtype=` and `value=`"
+      expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$dt:tritonDType)) => do
+      unless valueName.getId.getString! == "value" && dtypeName.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=`"
+      expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$ptr:ident.$dtype:ident.$elem:ident,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" &&
+          valueName.getId.getString! == "value" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected kwargs `dtype=<ptr>.dtype.element_ty` and `value=`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$ptr:ident.$dtype:ident.$elem:ident)) => do
+      unless valueName.getId.getString! == "value" &&
+          dtypeName.getId.getString! == "dtype" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=<ptr>.dtype.element_ty`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$dt:ident,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" &&
+          valueName.getId.getString! == "value" do
+        Macro.throwError "tl.full: expected kwargs `dtype=` and `value=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$dt:ident)) => do
+      unless valueName.getId.getString! == "value" &&
+          dtypeName.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*])) => do
+      -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
+      let zero ← `(tritonExpr| 0)
+      expandFull expandExpr env dims.getElems zero
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $dt:tritonDType)) => do
+      expandComputeZeros expandExpr env dims.getElems dt
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:tritonDType)) => do
+      unless name.getId.getString! == "dtype" do
+        Macro.throwError
+          ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
+      expandComputeZeros expandExpr env dims.getElems dt
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:term)) => do
+      let dtString := toString dt.raw
+      if name.getId.getString! == "dtype" && dtString.contains "OUT_DTYPE" then
+        let dtypeStx ← `(tritonDType| OUT_DTYPE)
+        return ← expandComputeZeros expandExpr env dims.getElems dtypeStx
+      unless name.getId.getString! == "dtype" &&
+          dtString.contains "dtype" && dtString.contains "element_ty" do
+        Macro.throwError ("tl.zeros: expected `dtype=<ptr>.dtype.element_ty`; got " ++ dtString)
+      let zero ← `(tritonExpr| 0)
+      expandFull expandExpr env dims.getElems zero
+  | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let zero ←
+        match e'.dtype with
+        | .real => `(Op.const 0.0)
+        | .fp32 => `(Op.constFloat FloatDType.fp32 0.0)
+        | .fp16 => `(Op.constFloat FloatDType.fp16 0.0)
+        | .bf16 => `(Op.constFloat FloatDType.bf16 0.0)
+        | .floatVar name => do
+            let t : TSyntax `term := ⟨mkIdent (Name.mkSimple name)⟩
+            `(Op.constFloat $t 0.0)
+        | .nat => `(Op.constNat 0)
+        | .int => `(Op.constInt 0)
+        | .bool => `(Op.constBool Bool.false)
+        | .ptr | .blockPtr =>
+            Macro.throwError "tl.zeros_like: pointer-valued tensors are not supported"
+      let shape ← e'.shape.term
+      pure ⟨← `(Op.full $shape $zero), e'.dtype, e'.shape, none, none⟩
+  | _ => (Macro.throwUnsupported : MacroM EOut)
+
+end
+
+mutual
+
+partial def expandStmt (env : Env) (pinned intPinned : List String)
+    (regionDTypes : Inference.RegionDTypes) (ptrElems : Inference.PtrElems)
+    (stx : TSyntax `tritonStmt) :
+    MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+  let unsupportedAtomic2 (op : String) (p v : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    discard <| expandExpr env p
+    discard <| expandExpr env v
+    let opTerm : TSyntax `term := ⟨Syntax.mkStrLit op⟩
+    pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+      ← `(ComputeStmt.effectMarker $opTerm), env, Bool.true)
+  let ensureNoAtomicKwargs (op : String) (kwargs : TSyntaxArray `tritonMemKwarg) :
+      MacroM Unit := do
+    unless kwargs.isEmpty do
+      Macro.throwError (op ++ ": kwargs are not modeled for return-valued atomics yet")
+  let expandAtomicRMWCore (opName : String) (opTerm : TSyntax `term)
+      (dest : Option Ident) (p input : TSyntax `tritonExpr)
+      (extraInput : Option (TSyntax `tritonExpr)) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let input' ← expandExpr env input
+    ensureAlgorithmOnly opName input'
+    let extra' ←
+      match extraInput with
+      | none => pure none
+      | some extra => do
+          let e ← expandExpr env extra
+          ensureAlgorithmOnly opName e
+          ensureDType input'.dtype e.dtype opName
+          pure (some e)
+    let mkTerms (memTerm : TSyntax `term) (targetShape : SInfo) :
+        MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+      let inputTerm ← coerceShape input'.term input'.shape targetShape opName
+      let extraTerm? ←
+        match extra' with
+        | none => pure none
+        | some e => pure (some (← coerceShape e.term e.shape targetShape opName))
+      let dt ← input'.dtype.term
+      let sh ← targetShape.term
+      let destTerm ←
+        match dest with
+        | none => `(Option.none)
+        | some ident =>
+            let lit ← identAsStr ⟨ident.raw⟩
+            `(Option.some $lit)
+      let extraAlgTerm ←
+        match extraTerm? with
+        | none => `(Option.none)
+        | some t => `(Option.some $t)
+      let extraComputeTerm ←
+        match extraTerm? with
+        | none => `(Option.none)
+        | some t => `(Option.some (ComputeExpr.alg $t))
+      let alg ←
+        `(Stmt.atomicRMW $opTerm $dt $sh $memTerm $inputTerm $extraAlgTerm
+            (MaskOpt.none) $destTerm)
+      let compute ←
+        `(ComputeStmt.atomicRMW $opTerm $dt $sh $memTerm
+            (ComputeExpr.alg $inputTerm) $extraComputeTerm (MaskOpt.none) $destTerm)
+      let nextEnv :=
+        match dest with
+        | none => env
+        | some ident => (ident.getId.toString, input'.dtype, targetShape, none) :: env
+      pure (alg, compute, nextEnv, Bool.false)
+    match ← expandStaticPtrExpr env p with
+    | some sp =>
+        mkTerms (← `(MemAccess.region $sp.region $sp.offset)) sp.shape
+    | none =>
+        let p' ← expandExpr env p
+        ensureDType .ptr p'.dtype (opName ++ " pointer")
+        mkTerms (← `(MemAccess.ptr $p'.term)) p'.shape
+  let loadDTypeHint (dest : Ident) (p : TSyntax `tritonExpr) : MacroM (Option DInfo) := do
+    let regionHint : Option DInfo ←
+      match ← expandStaticPtrExpr env p with
+      | some sp =>
+          match regionTermName sp.region with
+          | some name => pure (Inference.lookupRegionDType regionDTypes name)
+          | none => pure none
+      | none =>
+          match p with
+          | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
+          | _ => pure none
+    let pinHint : Option DInfo :=
+      if intPinned.contains dest.getId.toString then some .int
+      else if pinned.contains dest.getId.toString then some .nat
+      else none
+    pure (regionHint.orElse (fun _ => pinHint))
+  let emitAssign (dest : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let nameLit ← identAsStr dest
+    let dt ← e'.dtype.term
+    let sh ← e'.shape.term
+    let exprTerm ←
+      match e'.computeTerm with
+      | some ce => pure ce
+      | none => `(ComputeExpr.alg $e'.term)
+    pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+      ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+      (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+      e'.computeTerm.isSome)
+  let expandLoadSubAssign (dest : Ident) (p : TSyntax `tritonExpr)
+      (kwargs : TSyntaxArray `tritonMemKwarg) (rhs : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let hint ← loadDTypeHint dest p
+    let load' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+    ensureAlgorithmOnly "arithmetic" load'
+    let rhs' ←
+      match ← expandLeanAntiquoteAs? load'.dtype rhs with
+      | some out => pure out
+      | none => expandExpr env rhs
+    ensureAlgorithmOnly "arithmetic" rhs'
+    ensureDType load'.dtype rhs'.dtype "arithmetic"
+    let np ← load'.dtype.numericProof
+    let (bc, outShape) ← broadcastTerm load'.shape rhs'.shape "arithmetic"
+    let term ← `(Op.sub $np $bc $load'.term $rhs'.term)
+    emitAssign dest { term := term, dtype := load'.dtype, shape := outShape, computeTerm := none }
+  let expandSelfAddAssign (dest old : Ident) (rhs : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    if dest.getId.getString! != old.getId.getString! then
+      let full : TSyntax `tritonExpr ← `(tritonExpr| $old:ident + $rhs:tritonExpr)
+      let e' ←
+        if intPinned.contains dest.getId.toString then
+          expandIntExpectedExpr env full
+        else if pinned.contains dest.getId.toString then
+          expandNatExpectedExpr env full
+        else
+          expandExpr env full
+      emitAssign dest e'
+    else
+      let rawName := old.getId.toString
+      let userName := old.getId.getString!
+      let erasedName := old.getId.eraseMacroScopes.toString
+      let some (envName, lhsDType, lhsShape, lhsComputeDType?) :=
+          env.find? (fun entry =>
+            entry.1 == rawName || entry.1 == userName || entry.1 == erasedName)
+        | do
+            let nameLit ← identAsStr dest
+            let rhs' ← expandNatExpectedExpr env rhs
+            ensureAlgorithmOnly "pointer rebind assignment" rhs'
+            let region : TSyntax `term := ⟨old.raw⟩
+            let lhsTerm ← `(Op.ptrBase $region)
+            let (bc, outShape) ← broadcastTerm SInfo.scalar rhs'.shape "pointer rebind assignment"
+            let outShapeTerm ← outShape.term
+            let term ← `(Op.ptrAdd $bc $lhsTerm $rhs'.term)
+            return (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+              ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+              (dest.getId.toString, .ptr, outShape, none) :: env,
+              Bool.false)
+      let nameLit : TSyntax `term := Syntax.mkStrLit envName
+      if lhsDType == .ptr then
+        let rhs0 ← expandExpr env rhs
+        let rhs' ←
+          match rhs0.dtype with
+          | .nat => pure rhs0
+          | .int =>
+              pointerOffsetIntAsNat rhs0
+          | _ => expandNatExpectedExpr env rhs
+        ensureAlgorithmOnly "pointer rebind assignment" rhs'
+        let lhsShapeTerm ← lhsShape.term
+        let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+        let (bc, outShape) ← broadcastTerm lhsShape rhs'.shape "pointer rebind assignment"
+        let outShapeTerm ← outShape.term
+        let term ← `(Op.ptrAdd $bc $lhsTerm $rhs'.term)
+        return (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+          ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+          (dest.getId.toString, .ptr, outShape, none) ::
+            (envName, .ptr, outShape, none) :: env,
+          Bool.false)
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ envName ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ←
+        if lhsDType == .nat then
+          expandNatExpectedExpr env rhs
+        else
+          expandExpr env rhs
+      let rhs' ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real rhs with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs') ← coerceNatIntOperands "self add assignment" lhs rhs'
+      let (lhs, rhs') ← coerceRealArithOperands "self add assignment" lhs rhs'
+      ensureComputeArithComposable "self add assignment lhs" lhs
+      ensureComputeArithComposable "self add assignment rhs" rhs'
+      unless lhs.dtype == rhs'.dtype do
+        Macro.throwError "self add assignment: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs'.shape "self add assignment"
+      let eTerm ← `(Op.add $np $bc $lhs.term $rhs'.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "self add assignment" eTerm lhs rhs'
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+          (envName, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  match stx with
+  | `(tritonStmt| $valueName:ident, $indexName:ident = tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.max return_indices"
+      let dims := match e'.shape with | .dims ds => ds
+      let axisIdx ← parseMaxReturnIndicesKwargs dims kwargs
+      let outDims ← eraseNth dims axisIdx
+      let outShape := SInfo.dims outDims
+      let outShapeTerm ← outShape.term
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      let valueLit ← identAsStr valueName
+      let indexLit ← identAsStr indexName
+      let valueOp ← `(Op.reduceMax (⟨$axisLit, by simp⟩) Bool.false $e'.term)
+      let indexOp ← `(Op.argMax (⟨$axisLit, by simp⟩) $e'.term)
+      let valueStmt ← `(Stmt.assign TileDType.real $outShapeTerm $valueLit $valueOp)
+      let indexStmt ← `(Stmt.assign TileDType.nat $outShapeTerm $indexLit $indexOp)
+      let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
+      let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
+      let env' :=
+        (indexName.getId.eraseMacroScopes.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.getString!, DInfo.nat, outShape, none) ::
+          (indexName.getId.toString, DInfo.nat, outShape, none) ::
+          (valueName.getId.eraseMacroScopes.toString, DInfo.real, outShape, none) ::
+          (valueName.getId.getString!, DInfo.real, outShape, none) ::
+          (valueName.getId.toString, DInfo.real, outShape, none) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
+        env', Bool.false)
+  | `(tritonStmt| $valueName:ident, $indexName:ident := tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.max return_indices"
+      let dims := match e'.shape with | .dims ds => ds
+      let axisIdx ← parseMaxReturnIndicesKwargs dims kwargs
+      let outDims ← eraseNth dims axisIdx
+      let outShape := SInfo.dims outDims
+      let outShapeTerm ← outShape.term
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      let valueLit ← identAsStr valueName
+      let indexLit ← identAsStr indexName
+      let valueOp ← `(Op.reduceMax (⟨$axisLit, by simp⟩) Bool.false $e'.term)
+      let indexOp ← `(Op.argMax (⟨$axisLit, by simp⟩) $e'.term)
+      let valueStmt ← `(Stmt.assign TileDType.real $outShapeTerm $valueLit $valueOp)
+      let indexStmt ← `(Stmt.assign TileDType.nat $outShapeTerm $indexLit $indexOp)
+      let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
+      let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
+      let env' :=
+        (indexName.getId.eraseMacroScopes.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.getString!, DInfo.nat, outShape, none) ::
+          (indexName.getId.toString, DInfo.nat, outShape, none) ::
+          (valueName.getId.eraseMacroScopes.toString, DInfo.real, outShape, none) ::
+          (valueName.getId.getString!, DInfo.real, outShape, none) ::
+          (valueName.getId.toString, DInfo.real, outShape, none) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
+        env', Bool.false)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident = tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let mkAssign (name : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term) := do
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+          ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+      let (aStmt, aCompute) ← mkAssign lhs0 aOut
+      let (bStmt, bCompute) ← mkAssign lhs1 b'
+      let env' :=
+        (lhs1.getId.toString, b'.dtype, b'.shape, b'.computeDType?) ::
+        (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$aStmt, $bStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$aCompute, $bCompute]),
+        env', aOut.computeTerm.isSome || b'.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, _ = tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let nameLit ← identAsStr lhs0
+      let dt ← aOut.dtype.term
+      let sh ← aOut.shape.term
+      let exprTerm ←
+        match aOut.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $aOut.term)
+      let stmt ← `(Stmt.assign $dt $sh $nameLit $aOut.term)
+      let compute ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm)
+      let env' := (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (stmt, compute, env', aOut.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident := tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let mkAssign (name : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term) := do
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+          ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+      let (aStmt, aCompute) ← mkAssign lhs0 aOut
+      let (bStmt, bCompute) ← mkAssign lhs1 b'
+      let env' :=
+        (lhs1.getId.toString, b'.dtype, b'.shape, b'.computeDType?) ::
+        (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$aStmt, $bStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$aCompute, $bCompute]),
+        env', aOut.computeTerm.isSome || b'.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, _ := tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let nameLit ← identAsStr lhs0
+      let dt ← aOut.dtype.term
+      let sh ← aOut.shape.term
+      let exprTerm ←
+        match aOut.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $aOut.term)
+      let stmt ← `(Stmt.assign $dt $sh $nameLit $aOut.term)
+      let compute ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm)
+      let env' := (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (stmt, compute, env', aOut.computeTerm.isSome)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident, $_lhs2:ident = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident, _ = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      unless lhs.size == rhs.size do
+        Macro.throwError
+          ("multiple assignment: left side has " ++ toString lhs.size ++
+           " targets but right side has " ++ toString rhs.size ++ " values")
+      let mut algStmts : Array (TSyntax `term) := #[]
+      let mut computeStmts : Array (TSyntax `term) := #[]
+      let mut env' := env
+      let mut hasCompute := Bool.false
+      let mut expanded : Array EOut := #[]
+      for expr in rhs do
+        let e' ← expandExpr env expr
+        expanded := expanded.push e'
+        hasCompute := hasCompute || e'.computeTerm.isSome
+      for idx in [:lhs.size] do
+        let name := lhs[idx]!
+        let e' := expanded[idx]!
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        algStmts := algStmts.push (← `(Stmt.assign $dt $sh $nameLit $e'.term))
+        computeStmts := computeStmts.push
+          (← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+        env' := (name.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env'
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$algStmts,*]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$computeStmts,*]),
+        env', hasCompute)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* := $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      unless lhs.size == rhs.size do
+        Macro.throwError
+          ("multiple assignment: left side has " ++ toString lhs.size ++
+           " targets but right side has " ++ toString rhs.size ++ " values")
+      let mut algStmts : Array (TSyntax `term) := #[]
+      let mut computeStmts : Array (TSyntax `term) := #[]
+      let mut env' := env
+      let mut hasCompute := Bool.false
+      let mut expanded : Array EOut := #[]
+      for expr in rhs do
+        let e' ← expandExpr env expr
+        expanded := expanded.push e'
+        hasCompute := hasCompute || e'.computeTerm.isSome
+      for idx in [:lhs.size] do
+        let name := lhs[idx]!
+        let e' := expanded[idx]!
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        algStmts := algStmts.push (← `(Stmt.assign $dt $sh $nameLit $e'.term))
+        computeStmts := computeStmts.push
+          (← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+        env' := (name.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env'
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$algStmts,*]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$computeStmts,*]),
+        env', hasCompute)
+  | `(tritonStmt| $i:ident = tl.max($e:tritonExpr, $n:num)) => do
+      let nameLit ← identAsStr i
+      let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
+        #[← `(tritonReduceKwarg| $n:num)]
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      let env' :=
+        (i.getId.eraseMacroScopes.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.getString!, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        env', e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident := tl.max($e:tritonExpr, $n:num)) => do
+      let nameLit ← identAsStr i
+      let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
+        #[← `(tritonReduceKwarg| $n:num)]
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      let env' :=
+        (i.getId.eraseMacroScopes.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.getString!, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        env', e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident := tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
+  | `(tritonStmt| $i:ident := tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
+  | `(tritonStmt| $i:ident = tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
+  | `(tritonStmt| $i:ident = tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
+  | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*) - $rhs:tritonExpr) => do
+      expandLoadSubAssign i p kwargs rhs
+  | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*) - $rhs:tritonExpr) => do
+      expandLoadSubAssign i p kwargs rhs
+  | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let nameLit ← identAsStr i
+      let hint ← loadDTypeHint i p
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let nameLit ← identAsStr i
+      let hint ← loadDTypeHint i p
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = $j:ident + $rhs:tritonExpr) => do
+      expandSelfAddAssign i j rhs
+  | `(tritonStmt| $i:ident := $j:ident + $rhs:tritonExpr) => do
+      expandSelfAddAssign i j rhs
+  | `(tritonStmt| $i:ident % $e:tritonExpr) => do
+      discard <| expandExpr env (← `(tritonExpr| $i:ident % $e:tritonExpr))
+      let alg ← `(Stmt.ifThen (Op.constBool Bool.true) ([] : List Stmt))
+      let compTerm ←
+        `(ComputeStmt.ifThen (Op.constBool Bool.true) ([] : List ComputeStmt))
+      pure (alg, compTerm, env, Bool.false)
+  | `(tritonStmt| $i:ident := $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let e' ←
+        if intPinned.contains i.getId.toString then
+          expandIntExpectedExpr env e
+        else if pinned.contains i.getId.toString then
+          expandNatExpectedExpr env e
+        else
+          expandExpr env e
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let e' ←
+        if intPinned.contains i.getId.toString then
+          expandIntExpectedExpr env e
+        else if pinned.contains i.getId.toString then
+          expandNatExpectedExpr env e
+        else
+          expandExpr env e
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident += $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      if env.any (fun entry => entry.1 == name) then
+        let (lhsDType, lhsShape) ← lookupEnv env name
+        match lhsDType with
+        | .ptr =>
+            let rhs0 ← expandExpr env e
+            let rhs ←
+              match rhs0.dtype with
+              | .nat => pure rhs0
+              | .int =>
+                  pointerOffsetIntAsNat rhs0
+              | _ => expandNatExpectedExpr env e
+            ensureAlgorithmOnly "`+=` pointer offset" rhs
+            let lhsShapeTerm ← lhsShape.term
+            let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+            let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`+=` pointer offset"
+            let outShapeTerm ← outShape.term
+            let term ← `(Op.ptrAdd $bc $lhsTerm $rhs.term)
+            pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+              ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+              (name, .ptr, outShape, none) :: env,
+              Bool.false)
+        | _ =>
+            let lhsShapeTerm ← lhsShape.term
+            let lhsDTypeTerm ← lhsDType.term
+            let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+            let lhsComputeDType? := lookupComputeDType? env name
+            let lhsComputeTerm? ←
+              match lhsComputeDType? with
+              | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+              | some _ =>
+                  Macro.throwError
+                    ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+              | none => pure none
+            let lhs : EOut :=
+              { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+                computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+            let rhs0 ← expandExpr env e
+            let rhs ←
+              if lhs.dtype == .real && rhs0.dtype == .nat then
+                match ← expandLeanAntiquoteAs? .real e with
+                | some out => pure out
+                | none => pure rhs0
+              else
+                pure rhs0
+            let (lhs, rhs) ← coerceRealArithOperands "`+=`" lhs rhs
+            ensureComputeArithComposable "`+=` lhs" lhs
+            ensureComputeArithComposable "`+=` rhs" rhs
+            unless lhs.dtype == rhs.dtype do
+              Macro.throwError "`+=`: dtype mismatch"
+            let np ← lhs.dtype.numericProof
+            let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`+=`"
+            let eTerm ← `(Op.add $np $bc $lhs.term $rhs.term)
+            let (computeTerm?, computeDType?) ← fp32ComputeArith? "`+=`" eTerm lhs rhs
+            let e' : EOut :=
+              { term := eTerm, dtype := lhs.dtype, shape := outShape,
+                computeTerm := computeTerm?, computeDType? := computeDType? }
+            let dt ← e'.dtype.term
+            let sh ← e'.shape.term
+            let exprTerm ←
+              match e'.computeTerm with
+              | some ce => pure ce
+              | none => `(ComputeExpr.alg $e'.term)
+            pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+              ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+              (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+              e'.computeTerm.isSome)
+      else
+          let rhs0 ← expandExpr env e
+          let rhs ←
+            match rhs0.dtype with
+            | .nat => pure rhs0
+            | .int =>
+                pointerOffsetIntAsNat rhs0
+            | _ => expandNatExpectedExpr env e
+          ensureAlgorithmOnly "`+=` pointer offset" rhs
+          let region : TSyntax `term := ⟨i.raw⟩
+          let lhsTerm ← `(Op.ptrBase $region)
+          let (bc, outShape) ← broadcastTerm SInfo.scalar rhs.shape "`+=` pointer offset"
+          let outShapeTerm ← outShape.term
+          let term ← `(Op.ptrAdd $bc $lhsTerm $rhs.term)
+          pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+            ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+            (name, .ptr, outShape, none) :: env,
+            Bool.false)
+  | `(tritonStmt| $i:ident -= $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      unless env.any (fun entry => entry.1 == name) do
+        Macro.throwError ("`-=`: unknown identifier `" ++ name ++ "`")
+      let (lhsDType, lhsShape) ← lookupEnv env name
+      if lhsDType == .ptr then
+        let rhs0 ← expandExpr env e
+        let rhs ←
+          match rhs0.dtype with
+          | .nat => pure rhs0
+          | .int =>
+              pointerOffsetIntAsNat rhs0
+          | _ => expandNatExpectedExpr env e
+        ensureAlgorithmOnly "`-=` pointer offset" rhs
+        let lhsShapeTerm ← lhsShape.term
+        let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+        let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`-=` pointer offset"
+        let outShapeTerm ← outShape.term
+        let term ← `(Op.ptrSub $bc $lhsTerm $rhs.term)
+        pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+          ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+          (name, .ptr, outShape, none) :: env,
+          Bool.false)
+      else if lhsDType == .blockPtr then
+        Macro.throwError "`-=`: block pointer subtraction is not supported"
+      else
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeDType? := lookupComputeDType? env name
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ← expandExpr env e
+      let rhs ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real e with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs) ← coerceRealArithOperands "`-=`" lhs rhs
+      ensureComputeArithComposable "`-=` lhs" lhs
+      ensureComputeArithComposable "`-=` rhs" rhs
+      unless lhs.dtype == rhs.dtype do
+        Macro.throwError "`-=`: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`-=`"
+      let eTerm ← `(Op.sub $np $bc $lhs.term $rhs.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`-=`" eTerm lhs rhs
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident *= $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      unless env.any (fun entry => entry.1 == name) do
+        Macro.throwError ("`*=`: unknown identifier `" ++ name ++ "`")
+      let (lhsDType, lhsShape) ← lookupEnv env name
+      if lhsDType == .ptr || lhsDType == .blockPtr then
+        Macro.throwError "`*=`: pointer multiplication is not supported"
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeDType? := lookupComputeDType? env name
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ← expandExpr env e
+      let rhs ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real e with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs) ← coerceRealArithOperands "`*=`" lhs rhs
+      ensureComputeArithComposable "`*=` lhs" lhs
+      ensureComputeArithComposable "`*=` rhs" rhs
+      unless lhs.dtype == rhs.dtype do
+        Macro.throwError "`*=`: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`*=`"
+      let eTerm ← `(Op.mul $np $bc $lhs.term $rhs.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`*=`" eTerm lhs rhs
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident /= $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      unless env.any (fun entry => entry.1 == name) do
+        Macro.throwError ("`/=`: unknown identifier `" ++ name ++ "`")
+      let (lhsDType, lhsShape) ← lookupEnv env name
+      if lhsDType == .ptr || lhsDType == .blockPtr then
+        Macro.throwError "`/=`: pointer division is not supported"
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeDType? := lookupComputeDType? env name
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ← expandExpr env e
+      let rhs ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real e with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs) ← coerceRealArithOperands "`/=`" lhs rhs
+      ensureComputeArithComposable "`/=` lhs" lhs
+      ensureComputeArithComposable "`/=` rhs" rhs
+      unless lhs.dtype == rhs.dtype do
+        Macro.throwError "`/=`: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`/=`"
+      let eTerm ← `(Op.div $np $bc $lhs.term $rhs.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`/=`" eTerm lhs rhs
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v kwargs (positionalMask := some mask)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $kw0:tritonMemKwarg $[, $kwargs:tritonMemKwarg]*)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v (#[kw0] ++ kwargs)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v #[]
+  | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      expandAtomicAdd expandExpr expandStaticPtrExpr env p v kwargs
+  | `(tritonStmt| tl.atomic_max($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_max" p v
+  | `(tritonStmt| tl.atomic_min($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_min" p v
+  | `(tritonStmt| tl.atomic_and($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_and" p v
+  | `(tritonStmt| tl.atomic_or($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_or" p v
+  | `(tritonStmt| tl.atomic_xor($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_xor" p v
+  | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) none p v none
+  | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) none p cmp (some v)
+  | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) => do
+      discard <| expandExpr env dst
+      discard <| expandExpr env src
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.effectMarker "tl.async_copy"), env, Bool.true)
+  | `(tritonStmt| tl.async_wait()) =>
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.effectMarker "tl.async_wait"), env, Bool.true)
+  | `(tritonStmt| tl.debug_barrier()) =>
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.effectMarker "tl.debug_barrier"), env, Bool.true)
+  | `(tritonStmt| tl.static_print($_msg:term)) =>
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.alg (Stmt.ifThen (Op.constBool Bool.false) [])), env,
+        Bool.false)
+  | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range(0, $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forRange $nameLit 0 $stop $step [$algBody,*]),
+        ← `(ComputeStmt.forRange $nameLit 0 $stop $step [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($stop:tritonExpr) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let stop' ← expandNatExpectedExpr env stop
+      ensureShape SInfo.scalar stop'.shape "range stop"
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      let zero ← `(Op.constNat 0)
+      let one ← `(Op.constNat 1)
+      pure (← `(Stmt.forRangeDyn $nameLit $zero $stop'.term $one [$algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $nameLit $zero $stop'.term $one [$computeBody,*]),
+        env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($($start:term), $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forRange $nameLit $start $stop $step [$algBody,*]),
+        ← `(ComputeStmt.forRange $nameLit $start $stop $step [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let start' ← expandNatExpectedExpr env start
+      let stop' ← expandNatExpectedExpr env stop
+      ensureShape SInfo.scalar start'.shape "range start"
+      ensureShape SInfo.scalar stop'.shape "range stop"
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      let one ← `(Op.constNat 1)
+      pure (← `(Stmt.forRangeDyn $nameLit $start'.term $stop'.term $one [$algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $nameLit $start'.term $stop'.term $one [$computeBody,*]),
+        env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, -$stop:tritonExpr, -$step:tritonExpr) { $stmts:tritonStmt* }) => do
+      let _ := stop
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      let revName := "__rev_" ++ name
+      let revNameLit : TSyntax `term := Syntax.mkStrLit revName
+      let start' ← expandNatExpectedExpr env start
+      let step' ← expandNatExpectedExpr env step
+      ensureShape SInfo.scalar start'.shape "reverse range start"
+      ensureShape SInfo.scalar step'.shape "reverse range step"
+      let bodyEnv :=
+        (name, DInfo.nat, SInfo.scalar, none) ::
+        (revName, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ←
+        expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      let zero ← `(Op.constNat 0)
+      let one ← `(Op.constNat 1)
+      let count ←
+        `(Op.add NumericDType.nat Broadcast.nil
+            (Op.div NumericDType.nat Broadcast.nil $start'.term $step'.term) $one)
+      let revRef ← `(Op.ref TileDType.nat [] $revNameLit)
+      let stride ← `(Op.mul NumericDType.nat Broadcast.nil $revRef $step'.term)
+      let idxTerm ← `(Op.sub NumericDType.nat Broadcast.nil $start'.term $stride)
+      let idxAssign ← `(Stmt.assign TileDType.nat [] $nameLit $idxTerm)
+      let computeIdxAssign ←
+        `(ComputeStmt.assign TileDType.nat [] $nameLit (ComputeExpr.alg $idxTerm))
+      pure (← `(Stmt.forRangeDyn $revNameLit $zero $count $one [$idxAssign, $algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $revNameLit $zero $count $one
+              [$computeIdxAssign, $computeBody,*]),
+        env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let start' ← expandNatExpectedExpr env start
+      let stop' ← expandNatExpectedExpr env stop
+      let step' ← expandNatExpectedExpr env step
+      ensureShape SInfo.scalar start'.shape "range start"
+      ensureShape SInfo.scalar stop'.shape "range stop"
+      ensureShape SInfo.scalar step'.shape "range step"
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$computeBody,*]),
+        env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in tl.static_range($($n:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in tl.static_range($n:num) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| tl.static_range $i:ident in $n:num { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "tl.if condition"
+      ensureShape SInfo.scalar cond'.shape "tl.if condition"
+      let thenBaseEnv := env
+      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems elseStmts.toList
+      let nextEnv :=
+        if staticBoolCond? env cond then
+          mergeStaticBranchEnv thenBaseEnv thenEnv elseEnv
+        else
+          mergeBranchEnv thenBaseEnv thenEnv elseEnv
+      pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
+        ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
+        nextEnv,
+        cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
+  | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "tl.if condition"
+      ensureShape SInfo.scalar cond'.shape "tl.if condition"
+      let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
+        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
+        bodyEnv,
+        bodyHasCompute)
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* } else { $se:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } else { $se:tritonStmt* } }))
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* } elif $c2:tritonExpr { $s2:tritonStmt* } else { $se:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } else { if $c2:tritonExpr { $s2:tritonStmt* } else { $se:tritonStmt* } } }))
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* } elif $c2:tritonExpr { $s2:tritonStmt* } elif $c3:tritonExpr { $s3:tritonStmt* } else { $se:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } else { if $c2:tritonExpr { $s2:tritonStmt* } else { if $c3:tritonExpr { $s3:tritonStmt* } else { $se:tritonStmt* } } } }))
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } }))
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* } elif $c2:tritonExpr { $s2:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } else { if $c2:tritonExpr { $s2:tritonStmt* } } }))
+  | `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } elif $c1:tritonExpr { $s1:tritonStmt* } elif $c2:tritonExpr { $s2:tritonStmt* } elif $c3:tritonExpr { $s3:tritonStmt* }) =>
+      expandStmt env pinned intPinned regionDTypes ptrElems
+        (← `(tritonStmt| if $c0:tritonExpr { $s0:tritonStmt* } else { if $c1:tritonExpr { $s1:tritonStmt* } else { if $c2:tritonExpr { $s2:tritonStmt* } else { if $c3:tritonExpr { $s3:tritonStmt* } } } }))
+  | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "if condition"
+      ensureShape SInfo.scalar cond'.shape "if condition"
+      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems elseStmts.toList
+      pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
+        ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
+        (if staticBoolCond? env cond then
+          mergeStaticBranchEnv env thenEnv elseEnv
+        else
+          mergeBranchEnv env thenEnv elseEnv),
+        cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
+  | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "if condition"
+      ensureShape SInfo.scalar cond'.shape "if condition"
+      let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
+        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
+        bodyEnv,
+        bodyHasCompute)
+  | `(tritonStmt| return) =>
+      Macro.throwError "`return` is only supported as the sole body statement of `if cond { return }`"
+  | _ => Macro.throwUnsupported
+
+private partial def isReturnStmt (st : TSyntax `tritonStmt) : MacroM Bool := do
+  pure (st.raw.getKind == ``tritonReturn)
+
+private partial def ifReturnCond? (st : TSyntax `tritonStmt) :
+    MacroM (Option (TSyntax `tritonExpr)) := do
+  match st with
+  | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      match stmts.toList with
+      | [st] =>
+          if ← isReturnStmt st then
+            pure (some cond)
+          else
+            pure none
+      | _ => pure none
+  | _ => pure none
+
+partial def expandStmts (env : Env) (pinned intPinned : List String)
+    (regionDTypes : Inference.RegionDTypes) (ptrElems : Inference.PtrElems)
+    (stmts : List (TSyntax `tritonStmt)) :
+    MacroM (Array (TSyntax `term) × Array (TSyntax `term) × Env × Bool) := do
+  match stmts with
+  | [] => pure (#[], #[], env, Bool.false)
+  | st :: rest => do
+      if Inference.isRegionDirective st then
+        return ← expandStmts env pinned intPinned regionDTypes ptrElems rest
+      match ← ifReturnCond? st with
+      | some cond => do
+          let cond' ← expandBoolCondition env cond
+          ensureDType .bool cond'.dtype "return condition"
+          ensureShape SInfo.scalar cond'.shape "return condition"
+          let (algRest, computeRest, restEnv, restHasCompute) ←
+            expandStmts env pinned intPinned regionDTypes ptrElems rest
+          let negCond ← `(Op.boolNot $cond'.term)
+          pure (#[
+              ← `(Stmt.ifThen $negCond [$algRest,*])
+            ], #[
+              ← `(ComputeStmt.ifThen $negCond [$computeRest,*])
+            ], restEnv, cond'.computeTerm.isSome || restHasCompute)
+      | none => do
+          let (algTerm, computeTerm, nextEnv, stmtHasCompute) ←
+            expandStmt env pinned intPinned regionDTypes ptrElems st
+          let (algRest, computeRest, restEnv, restHasCompute) ←
+            expandStmts nextEnv pinned intPinned regionDTypes ptrElems rest
+          pure (#[algTerm] ++ algRest, #[computeTerm] ++ computeRest,
+            restEnv, stmtHasCompute || restHasCompute)
+
+end
+
+/-! ## Block elaborator -/
+
+private def dInfoOfTileDTypeExpr? (e : Expr) : MetaM (Option DInfo) := do
+  let e ← whnf e
+  if e.isConstOf ``TileDType.real then
+    pure (some .real)
+  else if e.isConstOf ``TileDType.fp32 then
+    pure (some .fp32)
+  else if e.isConstOf ``TileDType.fp16 then
+    pure (some .fp16)
+  else if e.isConstOf ``TileDType.bf16 then
+    pure (some .bf16)
+  else if e.isConstOf ``TileDType.int then
+    pure (some .int)
+  else if e.isConstOf ``TileDType.nat then
+    pure (some .nat)
+  else if e.isConstOf ``TileDType.bool then
+    pure (some .bool)
+  else
+    pure none
+
+private def regionDTypeOfLocalType? (type : Expr) : MetaM (Option DInfo) := do
+  let type ← whnf type
+  match type with
+  | Expr.app fn d =>
+      if fn.isConstOf ``Region then
+        dInfoOfTileDTypeExpr? d
+      else
+        pure none
+  | _ => pure none
+
+private def collectLocalRegionDTypes : TermElabM Inference.RegionDTypes := do
+  let mut out : Inference.RegionDTypes := []
+  for decl in (← getLCtx) do
+    unless decl.isImplementationDetail do
+      match ← regionDTypeOfLocalType? decl.type with
+      | some dtype => out := out ++ [(decl.userName.toString, dtype)]
+      | none => pure ()
+  pure out
+
+private def localNatFVarName? (e : Expr) : TermElabM (Option String) := do
+  let e ← whnf e
+  match e with
+  | Expr.fvar fvarId =>
+      match (← getLCtx).find? fvarId with
+      | some decl => pure (some decl.userName.toString)
+      | none => pure none
+  | _ => pure none
+
+private def natEqAliasOfLocalType? (type : Expr) :
+    TermElabM (Option (String × String)) := do
+  let type ← whnf type
+  let args := type.getAppArgs
+  if type.getAppFn.isConstOf ``Eq && args.size == 3 then
+    let α ← whnf args[0]!
+    if α.isConstOf ``Nat then
+      match (← localNatFVarName? args[1]!), (← localNatFVarName? args[2]!) with
+      | some lhs, some rhs => pure (some (lhs, rhs))
+      | _, _ => pure none
+    else
+      pure none
+  else
+    pure none
+
+private def collectLocalNatEqAliases : TermElabM (List (String × String)) := do
+  let mut out : List (String × String) := []
+  for decl in (← getLCtx) do
+    unless decl.isImplementationDetail do
+      match ← natEqAliasOfLocalType? decl.type with
+      | some pair => out := out ++ [pair]
+      | none => pure ()
+  pure out
+
+partial def rewriteIdentAliases (aliases : List (String × String)) (stx : Syntax) :
+    Syntax :=
+  if stx.isIdent then
+    let key := stx.getId.eraseMacroScopes.toString
+    match aliases.find? (fun pair => pair.1 == key) with
+    | some (_, target) => mkIdentFrom stx (Name.mkSimple target)
+    | none => stx
+  else
+    match stx with
+    | Syntax.node info kind args =>
+        Syntax.node info kind (args.map (rewriteIdentAliases aliases))
+    | other => other
+
+elab_rules : term
+  | `(triton { $stmts:tritonStmt* }) => do
+      -- Pre-pass: scan the body for identifiers that appear in `.nat`-pinning
+      -- positions (offsets of static-ptr-add chains). The `expandStmt` cases
+      -- for `name = tl.load(p)` / `name := tl.load(p)` consult this list
+      -- when no explicit `dtype=` kwarg is given, defaulting to `.nat`
+      -- instead of `.real` so that `name` participates correctly in pointer
+      -- arithmetic downstream.
+      let localRegionDTypes ← collectLocalRegionDTypes
+      let natEqAliases ← collectLocalNatEqAliases
+      let expanded ← liftMacroM do
+        let stmtList : List (TSyntax `tritonStmt) :=
+          stmts.toList.map fun st => ⟨rewriteIdentAliases natEqAliases st.raw⟩
+        let pinned := Inference.collectNatPinned stmtList
+        let intPinned := Inference.collectIntPinned stmtList
+        -- Pre-pass: collect `region <name> = <dtype>` directives so the
+        -- macro can default `tl.load(R + offs)` / `tl.store(R + offs, _)`
+        -- to the declared element dtype instead of `.real`. Local Lean
+        -- parameters typed as `Region d` are available here through the term
+        -- elaborator and act as implicit region declarations.
+        let regionDTypes :=
+          Inference.collectRegionDTypes stmtList ++ localRegionDTypes
+        -- Pre-pass: propagate region dtypes to chained pointer bindings
+        -- (`p = R + offs; ... ; tl.load(p)` recovers `R`'s dtype on the load).
+        let ptrElems := Inference.collectPtrElems regionDTypes stmtList
+        let (_, computeStmtTerms, _, _) ←
+          expandStmts [] pinned intPinned regionDTypes ptrElems stmtList
+        -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
+        -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
+        -- dedup (a mix of literals and Lean terms can't be statically deduped, and
+        -- `Kernel.inputs/outputs` is metadata-only, so duplicates are harmless).
+        let (allIns, allOuts) := Metadata.blockRegions stmts.toList
+        let insArr  : Array (TSyntax `term) := allIns.toArray
+        let outsArr : Array (TSyntax `term) := allOuts.toArray
+        `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
+      elabTerm expanded none
+
+end VeriTile.Frontend.Triton.DSL

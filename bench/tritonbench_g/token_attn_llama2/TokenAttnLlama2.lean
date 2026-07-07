@@ -1,8 +1,8 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Semantics.TileOps
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Semantics.TileOps
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
 
 /-!
 # `token_attn_llama2` — strict per-kernel correctness
@@ -59,7 +59,7 @@ the honest side-conditions: a clean `undef` state and output-offset injectivity)
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnLlama2
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 

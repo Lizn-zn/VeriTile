@@ -1,9 +1,9 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.Attention
-import VeriTile.Triton.Kernel
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.Attention
+import VeriTile.Kernel
 
 /-!
 # `flash_attn` — strict per-kernel correctness
@@ -43,7 +43,7 @@ sm_scale · log2(e)` folded into `q`:
 These are the genuine `expected` values, defined over the loaded tiles, **not**
 the kernel's own executed output. The mathematical heart (online-softmax fold ==
 batch base-2 softmax, causal and non-causal) is proved sorry-free in
-`VeriTile/Triton/Math/Attention.lean`
+`VeriTile/Math/Attention.lean`
 (`attentionRealBase2PerKeyScale_eq_streaming`,
 `attentionRealBase2PerKeyScaleCausal_eq_streaming`, `osBlockStep_foldl_eq_batch`).
 
@@ -67,11 +67,11 @@ readback `Realizes` theorems for both the `O` (`out_buffer / denom`) and `L`
 (`max + log2 denom`) stores at the correct, injective offsets; (4) the
 `exec`-side **block-pointer evaluation foundation** for the loop-invariant proof:
 the general block-ptr construction/advance/load `evalOp` reductions now live
-sorry-free in `VeriTile/Triton/Semantics/BlockPtrEval.lean` +
-`VeriTile/Triton/Core/{Types,Shape}.lean` (`address_2d_offsets`,
+sorry-free in `VeriTile/Semantics/BlockPtrEval.lean` +
+`VeriTile/Core/{Types,Shape}.lean` (`address_2d_offsets`,
 `advance_2d_offsets`, the `blockPtr_*_index` forms, `inBounds_nil_*`), the
 dynamic-loop driver `forRangeDyn_inv` lives in
-`VeriTile/Triton/Kernel/LoopInvariant.lean`, and the flash-attn-specific recipes
+`VeriTile/Kernel/LoopInvariant.lean`, and the flash-attn-specific recipes
 `flash_makeBlockPtrDyn_eval` / `flash_makeBlockPtr_rowcol_eval` /
 `flash_advance_{col,row}_eval` / `flash_load_{K,Q}_eval` (below) specialize them
 to this kernel's exact `make_block_ptr` AST.
@@ -111,7 +111,7 @@ strides `(16384, 8192, 64, 1)`; case 1 is `IS_CAUSAL = true`, case 2 is `false`.
 
 namespace VeriTile.Bench.TritonBenchG.FlashAttn
 
-open VeriTile.Triton
+open VeriTile
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -515,14 +515,14 @@ theorem flashAttnOValueSpec_eq_streaming
     (i : Fin BLOCK_M) (d : Fin DIM) :
     flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
         (i, d, PUnit.unit)
-      = (let st := (VeriTile.Triton.attnKeyList
+      = (let st := (VeriTile.attnKeyList
             (qTile s Q stride_q_head DIM BLOCK_M)
             (kTile s K stride_q_head DIM SEQLEN)
             (vTile s V stride_q_head DIM SEQLEN)
             (fun _ : Fin SEQLEN => sm_scale * log2e) i d).foldl
-          VeriTile.Triton.osStep (0, 0, 0)
+          VeriTile.osStep (0, 0, 0)
          st.2.2 / st.2.1) :=
-  VeriTile.Triton.attentionRealBase2PerKeyScale_eq_streaming _ _ _ _ i d
+  VeriTile.attentionRealBase2PerKeyScale_eq_streaming _ _ _ _ i d
 
 /-- The genuine causal `O`-value spec unfolds to the streaming fold over the
 causally filtered key list. Sorry-free bridge to `Math/Attention.lean`. -/
@@ -532,15 +532,15 @@ theorem flashAttnOValueSpecCausal_eq_streaming
     (i : Fin BLOCK_M) (d : Fin DIM) :
     flashAttnOValueSpecCausal s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
         (i, d, PUnit.unit)
-      = (let st := (VeriTile.Triton.attnKeyListCausal
+      = (let st := (VeriTile.attnKeyListCausal
             (qTile s Q stride_q_head DIM BLOCK_M)
             (kTile s K stride_q_head DIM SEQLEN)
             (vTile s V stride_q_head DIM SEQLEN)
             (fun _ : Fin SEQLEN => sm_scale * log2e)
             (s.pids 0 * BLOCK_M) i d).foldl
-          VeriTile.Triton.osStep (0, 0, 0)
+          VeriTile.osStep (0, 0, 0)
          st.2.2 / st.2.1) :=
-  VeriTile.Triton.attentionRealBase2PerKeyScaleCausal_eq_streaming _ _ _ _ _ i d
+  VeriTile.attentionRealBase2PerKeyScaleCausal_eq_streaming _ _ _ _ _ i d
 
 /-! ## exec-side block-pointer eval recipes (for the loop-invariant proof)
 
@@ -548,8 +548,8 @@ The `exec`-side proof that the `make_block_ptr` streaming loop realizes
 `flashAttnOValueSpec{,Causal}` is closed sorry-free (`flash_attn_exec_general`).
 The reusable foundation for that proof — the block-pointer
 construction/advance/load `evalOp` reductions — lives sorry-free in
-`VeriTile/Triton/Semantics/BlockPtrEval.lean` and
-`VeriTile/Triton/Core/{Types,Shape}.lean`. These local wrappers specialize them
+`VeriTile/Semantics/BlockPtrEval.lean` and
+`VeriTile/Core/{Types,Shape}.lean`. These local wrappers specialize them
 to `flash_attn`'s exact AST: `Q`/`O` use `makeBlockPtrDynOffsets`
 (`offsets=(start_m·BLOCK_M, 0)`), `K`/`V` use `makeBlockPtrDyn`
 (`offsets=(0,0)`), and the per-block step is `tl.advance`. They are the
@@ -873,7 +873,7 @@ inputs to the flash kernel's per-key score `(sm_scale·log2e)·(q row i · k row
 and value `V[j, d]`, with future keys (`> qStart + i`) or out-of-window keys
 (`≥ hi`) simply not emitted. -/
 
-open VeriTile.Triton (osStep pow2 attnKeyListCausal attnKeyList)
+open VeriTile (osStep pow2 attnKeyListCausal attnKeyList)
 
 /-- The `(score, value)` pair the kernel streams for output `(i, d)` at *global*
 key `j`: score `scale · Σ_e q[i,e]·k[j,e]`, value `V[j, d]`. (`scale` already
@@ -1555,9 +1555,9 @@ theorem flashStateBot_ratio_eq
       = (flashState qT kT vT scale causal qStart hi i d).2.2
         / (flashState qT kT vT scale causal qStart hi i d).2.1 := by
   rw [flashStateBot_snd_fst, flashStateBot_snd_snd]
-  have hcL := (VeriTile.Triton.osStep_foldl_consistent
+  have hcL := (VeriTile.osStep_foldl_consistent
     (flashKeysUpto qT kT vT scale causal qStart hi i d) 0 0 0 0 0 (by simp) (by simp)).1
-  have hcT := (VeriTile.Triton.osStep_foldl_consistent
+  have hcT := (VeriTile.osStep_foldl_consistent
     (flashKeysUpto qT kT vT scale causal qStart hi i d) 0 0 0 0 0 (by simp) (by simp)).2
   rw [flashState]
   rw [show (List.foldl osStep (0, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).2.1
@@ -1685,7 +1685,7 @@ block-pointer foundation + `flashStateBot`/`flashRunningMax` recurrence and the
 `(BS,HEAD,SEQLEN,DIM)=(2,2,128,64)`, `BLOCK_M=128`, `BLOCK_N=64`,
 `stride_q_head=8192`; `sm_scale`/`IS_CAUSAL` kept as parameters. -/
 
-open VeriTile.Triton (osStep pow2 attnKeyList attnKeyListCausal osBlockStep)
+open VeriTile (osStep pow2 attnKeyList attnKeyListCausal osBlockStep)
 
 /-- `evalOp` of a `constBool` literal. -/
 theorem flash_evalOp_constBool (b : Bool) (s : BlockState) :

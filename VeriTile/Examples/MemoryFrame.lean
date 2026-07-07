@@ -4,11 +4,11 @@ VeriTile.Examples.MemoryFrame
 Representative Layer-2a write-footprint / frame examples.
 -/
 
-import VeriTile.Triton.Memory.Footprint
+import VeriTile.Memory.Footprint
 
 namespace VeriTile.Examples.MemoryFrame
 
-open VeriTile.Triton
+open VeriTile
 
 /-- Scalar direct store to one known cell. -/
 def scalarDirectStoreKernel (outReg : RegionName) : Kernel :=

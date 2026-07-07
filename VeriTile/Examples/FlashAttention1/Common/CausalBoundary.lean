@@ -8,7 +8,7 @@ import VeriTile.Examples.FlashAttention1.Common.Boundary
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile
 /-! ## Causal boundary streaming math model
 
 Combines the KV boundary mask with the causal `j <= qStart + i` mask.

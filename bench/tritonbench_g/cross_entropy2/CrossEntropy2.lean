@@ -1,11 +1,11 @@
-import VeriTile.Triton.Core
-import VeriTile.Triton.Semantics
-import VeriTile.Triton.Float
-import VeriTile.Triton.DSL
-import VeriTile.Triton.Math.LogSumExp
-import VeriTile.Triton.Math.Loss
-import VeriTile.Triton.Semantics.MaskedReduction
-import VeriTile.Triton.Semantics.TiledIndexing
+import VeriTile.Core
+import VeriTile.Semantics
+import VeriTile.Float
+import VeriTile.Frontend.Triton.DSL
+import VeriTile.Math.LogSumExp
+import VeriTile.Math.Loss
+import VeriTile.Semantics.MaskedReduction
+import VeriTile.Semantics.TiledIndexing
 
 /-!
 # `cross_entropy2` — strict per-kernel correctness
@@ -72,13 +72,13 @@ are plain `Bool`/`constexpr` parameters modeled as `Bool`. The
 The forward LSE uses `other = -float("inf")` for out-of-block lanes. The masked
 `dlogits` store leaves inactive lanes (`col_offsets ≥ n_cols`) untouched and
 assumes the per-tile output offset is injective. The spec is built inline; it
-does not reference a `VeriTile.Triton.Math.*` oracle.
+does not reference a `VeriTile.Math.*` oracle.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.CrossEntropy2
 
-open VeriTile.Triton
-open VeriTile.Triton.TiledLogSumExp
+open VeriTile
+open VeriTile.TiledLogSumExp
 
 set_option linter.unusedSimpArgs false
 
@@ -87,7 +87,7 @@ set_option linter.unusedSimpArgs false
 The forward loss/scale tail is a sequence of register assignments and nested
 `if`/`else` blocks (only assignments before the stores), so it writes no memory
 and preserves every cell. We use the shared generic frame `storeFree` /
-`storeFree_stepStmts_mem` (in `VeriTile.Triton`, `VeriTile/Triton/Semantics/Step.lean`)
+`storeFree_stepStmts_mem` (in `VeriTile`, `VeriTile/Semantics/Step.lean`)
 to show the genuine `lse` store survives the loss branches. -/
 
 /-- Faithful transcription of `cross_entropy2.py`'s
@@ -1377,10 +1377,10 @@ In the base regime — a single column block exactly spanning the vocabulary
 no `lse²` term (`lse_square_scale = 0`), the label active and in range, and
 `total_classes = n_cols` — the kernel's genuine five-way `crossEntropyLossSpec`
 collapses to the shared pure `crossEntropyLoss` / `crossEntropyLossSmoothed`
-from `VeriTile.Triton.Math.Loss`, with the per-class `logit_scale` folded into
+from `VeriTile.Math.Loss`, with the per-class `logit_scale` folded into
 the logits (`xs = logit_scale • rowLogits`). -/
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- Folding the scale into the logits: a scaled stable LSE equals the plain
 stable LSE of the scaled logits. -/
 theorem stableLSE_scale_fold {D : Nat} (xs : Fin D → ℝ) (hD : 0 < D) (scale : ℝ) :
@@ -1395,7 +1395,7 @@ theorem stableLSE_scale_fold {D : Nat} (xs : Fin D → ℝ) (hD : 0 < D) (scale 
   congr 1
   ring
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- The scaled `partialLSE_full` (full-vocab single block) equals the canonical
 `stableLSE` of the scale-folded row logits. -/
 theorem partialLSE_full_scale_eq_stableLSE
@@ -1414,7 +1414,7 @@ theorem partialLSE_full_scale_eq_stableLSE
     congr 1 <;> simp [h0]]
   rw [partialLSE_full_zero_self_eq_stableLSE _ _ _, stableLSE_scale_fold]
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- The kernel's scaled `blockSumLogits` (full-vocab single block) equals the
 plain total of the scale-folded row logits. -/
 theorem blockSumLogits_scale_eq_sum
@@ -1430,7 +1430,7 @@ theorem blockSumLogits_scale_eq_sum
   simp only [h0, Nat.zero_mul, Nat.zero_add]
   ring
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- The kernel's scaled `labelLogit` is the scale-folded row logit at `t`. -/
 theorem labelLogit_scale_eq_rowLogits
     (s : BlockState) (logits_ptr : RegionName) (logits_row_stride : Nat) (n : Nat)
@@ -1440,7 +1440,7 @@ theorem labelLogit_scale_eq_rowLogits
   unfold labelLogit rowLogits
   rw [ht]; ring
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- **Bridge: textbook cross-entropy (no smoothing), scale folded.** In the base
 regime (`HAS_SMOOTHING = false`, `SPLIT = false`, `lse_square_scale = 0`,
 `s.pids 1 = 0`, `n_cols = n+1`, `class_start_idx = 0`, label active and in range
@@ -1479,7 +1479,7 @@ theorem crossEntropyLossSpec_eq_crossEntropyLoss
   rw [labelLogit_scale_eq_rowLogits s logits_ptr 0 n (labelVal - 0) logit_scale t hShift]
   ring
 
-open VeriTile.Triton.TiledLoss in
+open VeriTile.TiledLoss in
 /-- **Bridge: textbook cross-entropy with label smoothing, scale folded.** In the
 smoothed base regime (`HAS_SMOOTHING = true`, `SPLIT = false`,
 `lse_square_scale = 0`, `s.pids 1 = 0`, `n_cols = n+1`, `class_start_idx = 0`,
