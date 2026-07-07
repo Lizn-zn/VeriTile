@@ -1646,6 +1646,117 @@ theorem foldl_writeMemTypedAt_masked_pid {α : Type} (dtype : TileDType)
       · simp [hmask]
       · simp [hmask]
 
+/-! ### Whole-memory (cell-level) frame toolkit for scatter stores
+
+Used by the `ComputeRefine.Realizes` writes-equality surface: two kernels
+that scatter the same offsets with pointwise-equal values leave equal
+memories, and every cell they do not hit is preserved. -/
+
+/-- Cell-level characterization of a single scalar write (definitional). -/
+theorem writeMem_mem (s : BlockState) (region : RegionName) (offset : Nat)
+    (v : ℝ) (r : RegionName) (o : Nat) :
+    (s.writeMem region offset v).mem r o =
+      if r = region ∧ o = offset then MemCell.real v else s.mem r o := rfl
+
+/-- Pointwise-mem congruence for unmasked `writeMem` scatters: same offsets,
+pointwise-equal values, bases agreeing at the observed cell — equal cells.
+No injectivity needed. -/
+theorem foldl_writeMem_mem_congr {α : Type} {region : RegionName}
+    (l : List α) (offsetFn : α → Nat) (vL vR : α → ℝ)
+    (hv : ∀ k ∈ l, vL k = vR k) (r : RegionName) (o : Nat) :
+    ∀ (sL sR : BlockState), sL.mem r o = sR.mem r o →
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (vL k)) sL).mem r o
+        = (l.foldl (fun acc k => acc.writeMem region (offsetFn k) (vR k)) sR).mem r o) := by
+  induction l with
+  | nil => intro sL sR h; exact h
+  | cons hd tl ih =>
+      intro sL sR h
+      rw [List.foldl_cons, List.foldl_cons]
+      refine ih (fun k hk => hv k (List.mem_cons_of_mem hd hk)) _ _ ?_
+      rw [writeMem_mem, writeMem_mem, hv hd (List.mem_cons_self), h]
+
+/-- An unmasked `writeMem` scatter into `region` leaves every other region's
+cells untouched. -/
+theorem foldl_writeMem_mem_preserve_other_region {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (l : List α)
+    (r : RegionName) (hr : r ≠ region) (o : Nat) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem r o)
+        = s.mem r o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih, writeMem_mem,
+        if_neg (fun hc => hr hc.1)]
+
+/-- An unmasked `writeMem` scatter preserves every offset it does not hit. -/
+theorem foldl_writeMem_mem_preserve_unhit {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (l : List α)
+    (o : Nat) (ho : ∀ k ∈ l, offsetFn k ≠ o) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem region o)
+        = s.mem region o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih (fun k hk => ho k (List.mem_cons_of_mem hd hk)),
+        writeMem_mem, if_neg (fun hc => ho hd (List.mem_cons_self) hc.2.symm)]
+
+end BlockState
+
+end VeriTile.Triton
+
+/-! ## Fresh-launch register reset (#447 Phase C.5)
+
+A real kernel launch starts from an empty register file: registers never
+survive across launches, only global memory (and the launch environment —
+program ids, grid dimensions, undef) does. `BlockState.resetRegs` is that
+fresh-launch state; the honest multi-launch pipeline semantics
+(`VeriTile.Triton.Float.Pipeline`) resets registers before every stage. -/
+
+namespace VeriTile.Triton
+
+namespace BlockState
+
+/-- Fresh-launch state: clear every register binding; keep memory, program
+ids, the undef environment, and the launch-grid dimensions. -/
+def resetRegs (s : BlockState) : BlockState :=
+  { s with regs := fun _ _ _ => none }
+
+@[simp] theorem resetRegs_mem (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.mem region offset = s.mem region offset := rfl
+
+@[simp] theorem resetRegs_regs (s : BlockState) (dtype : TileDType)
+    (shape : TileShape) (name : RegName) :
+    s.resetRegs.regs dtype shape name = none := rfl
+
+@[simp] theorem resetRegs_pids (s : BlockState) : s.resetRegs.pids = s.pids := rfl
+
+@[simp] theorem resetRegs_pid (s : BlockState) : s.resetRegs.pid = s.pid := rfl
+
+@[simp] theorem resetRegs_undef (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.undef region offset = s.undef region offset := rfl
+
+@[simp] theorem resetRegs_numPids (s : BlockState) : s.resetRegs.numPids = s.numPids := rfl
+
+@[simp] theorem resetRegs_readMem (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMem region offset = s.readMem region offset := rfl
+
+@[simp] theorem resetRegs_readMemAs (s : BlockState) (dtype : FloatDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemAs dtype region offset = s.readMemAs dtype region offset := rfl
+
+@[simp] theorem resetRegs_readMemTyped (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemTyped dtype region offset = s.readMemTyped dtype region offset := rfl
+
+@[simp] theorem resetRegs_readMemValue (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) :
+    s.resetRegs.readMemValue dtype region offset = s.readMemValue dtype region offset := by
+  cases dtype <;> rfl
+
 end BlockState
 
 end VeriTile.Triton

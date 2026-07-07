@@ -119,7 +119,7 @@ def unfusedSiLUKernel
     (siluStepGate xReg gateReg zReg blockSize).body ++
     (siluStepSilu zReg siluReg blockSize).body ++
     (siluStepResidual siluReg residualReg outReg blockSize).body
-  ComputeKernel.fromAlgBody [xReg, gateReg, residualReg] [outReg] body
+  ComputeKernel.fromKernelBody [xReg, gateReg, residualReg] [outReg] body
 
 private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
     stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by
@@ -453,7 +453,63 @@ theorem silu_kernels_refinement_exec_view
     using silu_kernels_refinement xReg gateReg residualReg zReg siluReg outReg
       blockSize hN s xs gates residuals hx hg hres h_zRes h_siluRes idx.1
 
-/-- Compute-facing view-level surface for `silu_kernels_refinement`. -/
+/-! ### Whole-memory frame lemmas for the writes-equality refinement surface
+
+`ComputeRefine.Realizes` compares the two final memories cell-by-cell, so the
+refinement proof needs `.mem`-level frames: each kernel touches only its own
+store target. Proved by symbolic execution down to the store's `writeMem`
+scatter, then the generic scatter frame lemma. -/
+
+private theorem fused_silu_mem_frame
+    (xReg gateReg residualReg outReg : RegionName) (blockSize : Nat)
+    {s s' : BlockState}
+    (h : exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s = some s')
+    {r : RegionName} (hr : r ≠ outReg) (o : Nat) :
+    s'.mem r o = s.mem r o := by
+  simp [exec, fusedSiLUKernel, stepStmts, stepStmt, evalOp, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
+
+private theorem silu_step_gate_mem_frame
+    (xReg gateReg zReg : RegionName) (blockSize : Nat)
+    {s s' : BlockState}
+    (h : exec (siluStepGate xReg gateReg zReg blockSize) s = some s')
+    {r : RegionName} (hr : r ≠ zReg) (o : Nat) :
+    s'.mem r o = s.mem r o := by
+  simp [exec, siluStepGate, stepStmts, stepStmt, Tile.bop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
+
+private theorem silu_step_silu_mem_frame
+    (zReg siluReg : RegionName) (blockSize : Nat)
+    {s s' : BlockState}
+    (h : exec (siluStepSilu zReg siluReg blockSize) s = some s')
+    {r : RegionName} (hr : r ≠ siluReg) (o : Nat) :
+    s'.mem r o = s.mem r o := by
+  simp [exec, siluStepSilu, stepStmts, stepStmt, evalOp, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
+
+private theorem silu_step_residual_mem_frame
+    (siluReg residualReg outReg : RegionName) (blockSize : Nat)
+    {s s' : BlockState}
+    (h : exec (siluStepResidual siluReg residualReg outReg blockSize) s = some s')
+    {r : RegionName} (hr : r ≠ outReg) (o : Nat) :
+    s'.mem r o = s.mem r o := by
+  simp [exec, siluStepResidual, stepStmts, stepStmt, Tile.bop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
+
+set_option maxHeartbeats 1600000 in
+/-- Compute-facing surface for `silu_kernels_refinement`: writes-equality
+refinement. From the same initial state, the fused kernel and the unfused
+pipeline perform the same writes — the two final memories agree at every cell
+outside the declared scratch regions `zReg`/`siluReg` (the pipeline's
+temporaries). -/
 theorem silu_kernels_refinement_view
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
@@ -467,23 +523,103 @@ theorem silu_kernels_refinement_view
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
     ComputeRefine.Realizes
-      (lhs := fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
-      (rhs := unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
-      (initialState := s)
-      (lhsWrite := ComputeCorrect.WriteMap.ofTensorView
-        (programTileView s outReg blockSize))
-      (rhsWrite := ComputeCorrect.WriteMap.ofTensorView
-        (programTileView s outReg blockSize))
-      (relation := fun (_ : TileIndex [blockSize]) (lhs rhs : ℝ) => lhs = rhs) := by
+      (fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
+      (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
+      s [zReg, siluReg] := by
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hg := inputLoadedAt_of_programTileView_loaded (s := s) (region := gateReg)
+    (N := blockSize) (xs := gates) h_g
+  have hres := inputLoadedAt_of_programTileView_loaded (s := s) (region := residualReg)
+    (N := blockSize) (xs := residuals) h_res
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
-  intro idx
-  have hview := silu_kernels_refinement_exec_view xReg gateReg residualReg zReg siluReg outReg
-    blockSize hN s xs gates residuals h_x h_g h_res h_zRes h_siluRes idx
-  have hUnf := exec_unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize s
-  rw [← hUnf, hR] at hview
-  simpa [hL, ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
-    observeTileAt] using hview
+  intro r hr o
+  simp only [List.mem_cons, List.not_mem_nil, or_false, not_or] at hr
+  obtain ⟨hrz, hrsilu⟩ := hr
+  have hRsplit := hR
+  rw [exec_unfusedSiLUKernel] at hRsplit
+  unfold execUnfusedSiLU at hRsplit
+  cases h1 : exec (siluStepGate xReg gateReg zReg blockSize) s with
+  | none => simp [h1] at hRsplit
+  | some s1 =>
+    simp only [h1] at hRsplit
+    cases h2 : exec (siluStepSilu zReg siluReg blockSize) s1 with
+    | none => simp [h2] at hRsplit
+    | some s2 =>
+      simp only [h2] at hRsplit
+      -- hRsplit : exec (siluStepResidual …) s2 = some rhs'
+      have hpid1 : s1.pid = s.pid := exec_pid h1
+      have hpid2 : s2.pid = s1.pid := exec_pid h2
+      have hpid2s : s2.pid = s.pid := hpid2.trans hpid1
+      by_cases hrOut : r = outReg
+      · -- both sides scatter the same values to the same `outReg` offsets
+        subst hrOut
+        -- pipeline stage facts at `s2` (mirrors `unfused_silu_correct`)
+        have h_z : InputLoadedAt s1 zReg blockSize (gateSpec xs gates) := by
+          intro j
+          have hzj :=
+            silu_step_gate_correct xReg gateReg zReg blockSize hN s xs gates hx hg j
+          rw [h1] at hzj
+          simp [observeAt] at hzj
+          rw [hpid1]
+          exact hzj
+        have h_silu_loaded :
+            InputLoadedAt s2 siluReg blockSize (siluSpec (gateSpec xs gates)) := by
+          intro j
+          have hsj :=
+            silu_step_silu_correct zReg siluReg blockSize hN s1 (gateSpec xs gates) h_z j
+          rw [h2] at hsj
+          simp [observeAt] at hsj
+          rw [hpid2]
+          exact hsj
+        have h_res1 : InputLoadedAt s1 residualReg blockSize residuals := by
+          intro j
+          have hrj :=
+            silu_step_gate_preserves xReg gateReg zReg residualReg blockSize hN s
+              xs gates hx hg (fun h => h_zRes h.symm) j
+          rw [h1] at hrj
+          simp [observeAt] at hrj
+          rw [hpid1, hrj]
+          exact hres j
+        have h_res2 : InputLoadedAt s2 residualReg blockSize residuals := by
+          intro j
+          have hrj :=
+            silu_step_silu_preserves zReg siluReg residualReg blockSize hN s1
+              (gateSpec xs gates) h_z (fun h => h_siluRes h.symm) j
+          rw [h2] at hrj
+          simp [observeAt] at hrj
+          rw [hpid2, hrj]
+          exact h_res1 j
+        -- symbolic execution of the two stores
+        simp [exec, fusedSiLUKernel, stepStmts, stepStmt, evalOp, Tile.bop, Tile.uop,
+              NumericDType.add, NumericDType.mul] at hL
+        simp [exec, siluStepResidual, stepStmts, stepStmt, Tile.bop,
+              NumericDType.add, NumericDType.mul] at hRsplit
+        subst hL
+        subst hRsplit
+        have hpids : s2.pids 0 = s.pids 0 := hpid2s
+        rw [hpids]
+        refine BlockState.foldl_writeMem_mem_congr _ _ _ _ ?_ r o _ _ ?_
+        · -- per-lane written values agree
+          intro k _
+          have hxk := hx k.1
+          have hgk := hg k.1
+          have hresk := hres k.1
+          have hsiluk := h_silu_loaded k.1
+          have hres2k := h_res2 k.1
+          rw [hpid2s] at hsiluk hres2k
+          simp [hxk, hgk, hresk, hsiluk, hres2k, siluSpec, gateSpec,
+                Triton.TiledActivation.silu]
+        · -- the two scatter bases agree at the observed cell
+          simp only [BlockState.setReg_mem]
+          rw [silu_step_silu_mem_frame zReg siluReg blockSize h2 hrsilu o,
+              silu_step_gate_mem_frame xReg gateReg zReg blockSize h1 hrz o]
+      · -- `r` is none of `zReg`/`siluReg`/`outReg`: both sides preserve the cell
+        rw [fused_silu_mem_frame xReg gateReg residualReg outReg blockSize hL hrOut o,
+            silu_step_residual_mem_frame siluReg residualReg outReg blockSize hRsplit hrOut o,
+            silu_step_silu_mem_frame zReg siluReg blockSize h2 hrsilu o,
+            silu_step_gate_mem_frame xReg gateReg zReg blockSize h1 hrz o]
 
 end VeriTile.Examples

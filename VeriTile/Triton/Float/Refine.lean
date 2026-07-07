@@ -66,6 +66,21 @@ theorem correctR_triv_iff (k : Kernel) (post : BlockState → BlockState → Pro
   unfold CorrectR Correct
   simp only [execR_triv]
 
+/-- Two-kernel refinement under a rounding model: `Kernel.Refine` with both
+executions replaced by `execR R`. -/
+def RefineR (R : RoundingModel) (lhs rhs : Kernel)
+    (rel : BlockState → BlockState → BlockState → Prop) : Prop :=
+  ∀ s lhs' rhs',
+    execR R lhs s = some lhs' →
+    execR R rhs s = some rhs' →
+    rel s lhs' rhs'
+
+theorem refineR_triv_iff (lhs rhs : Kernel)
+    (rel : BlockState → BlockState → BlockState → Prop) :
+    RefineR .triv lhs rhs rel ↔ Refine lhs rhs rel := by
+  unfold RefineR Refine
+  simp only [execR_triv]
+
 end Kernel
 
 /-! ## Compute-kernel surfaces under a rounding model -/
@@ -116,6 +131,62 @@ theorem execCorrectR_triv_iff (ck : ComputeKernel) (s : BlockState)
   unfold ExecCorrectR ComputeCorrectR ExecCorrect ComputeCorrect ProjectedCorrect
   exact and_congr_right fun _ => algorithmCorrectR_triv_iff ck _
 
+/-- Bridge for projected algorithm kernels using `ck.toAlgKernel` as the
+canonical projection — the `R`-parametric mirror of
+`computeCorrect_of_toAlgKernel`. -/
+theorem computeCorrectR_of_toAlgKernel {R : RoundingModel} {ck : ComputeKernel}
+    {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    (hc : Kernel.CorrectR R ck.toAlgKernel post) :
+    ComputeCorrectR R ck post := by
+  refine ⟨trivial, ?_⟩
+  unfold AlgorithmCorrectR
+  rw [h]
+  exact hc
+
+/-- `ProjectedRefine` under a rounding model. -/
+def ProjectedRefineR (R : RoundingModel) (lhs rhs : ComputeKernel)
+    (rel : BlockState → BlockState → BlockState → Prop) : Prop :=
+  match lhs.toAlgorithm?, rhs.toAlgorithm? with
+  | Except.ok lhsAlg, Except.ok rhsAlg => Kernel.RefineR R lhsAlg rhsAlg rel
+  | _, _ => False
+
+/-- `ComputeRefine` under a rounding model (same `GapPolicy` plumbing). -/
+def ComputeRefineR (R : RoundingModel) (lhs rhs : ComputeKernel)
+    (rel : BlockState → BlockState → BlockState → Prop)
+    (gap : GapPolicy := .ignore) : Prop :=
+  GapPolicy.Holds gap ∧ ProjectedRefineR R lhs rhs rel
+
+/-- One-run refinement under a rounding model from a fixed initial state. -/
+def ExecRefineR (R : RoundingModel) (lhs rhs : ComputeKernel) (s : BlockState)
+    (rel : BlockState → BlockState → Prop) : Prop :=
+  ComputeRefineR R lhs rhs (fun s0 lhs' rhs' => s0 = s → rel lhs' rhs')
+
+theorem execRefineR_triv_iff (lhs rhs : ComputeKernel) (s : BlockState)
+    (rel : BlockState → BlockState → Prop) :
+    ExecRefineR .triv lhs rhs s rel ↔ ExecRefine lhs rhs s rel := by
+  unfold ExecRefineR ComputeRefineR ProjectedRefineR
+    ExecRefine ComputeRefine ProjectedRefine
+  refine and_congr_right fun _ => ?_
+  cases lhs.toAlgorithm? <;> cases rhs.toAlgorithm? <;>
+    first
+      | exact Iff.rfl
+      | exact Kernel.refineR_triv_iff _ _ _
+
+/-- Bridge for projected refinements using `toAlgKernel` on both sides — the
+`R`-parametric mirror of `computeRefine_of_toAlgKernel`. -/
+theorem computeRefineR_of_toAlgKernel {R : RoundingModel}
+    {lhs rhs : ComputeKernel}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (hL : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hR : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    (h : Kernel.RefineR R lhs.toAlgKernel rhs.toAlgKernel rel) :
+    ComputeRefineR R lhs rhs rel := by
+  refine ⟨trivial, ?_⟩
+  unfold ProjectedRefineR
+  rw [hL, hR]
+  exact h
+
 end ComputeKernel
 
 /-! ## The rounding-invariant realization surface -/
@@ -144,6 +215,38 @@ def RealizesR {ι : Type} {α : Type} [ComputeCorrect.OutputReadable α]
         | some addr => ComputeCorrect.OutputReadable.read s' addr = expected R i
         | none => True)
 
+/-- `writeIf` unpacking for `RealizesR` — the `R`-parametric mirror of
+`ComputeCorrect.realizes_writeIf_iff`. -/
+theorem realizesR_writeIf_iff {ι : Type} {α : Type}
+    [ComputeCorrect.OutputReadable α]
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (mask : ι → Prop) [DecidablePred mask]
+    (addr : ι → MemCellAddr) (expected : RoundingModel → ι → α) :
+    RealizesR kernel initialState
+        (ComputeCorrect.WriteMap.writeIf mask addr) expected ↔
+      ∀ R : RoundingModel,
+        ComputeKernel.ExecCorrectR R kernel initialState (fun s' =>
+          ∀ i : ι, mask i →
+            ComputeCorrect.OutputReadable.read s' (addr i) = expected R i) := by
+  unfold RealizesR
+  refine forall_congr' fun R => ?_
+  unfold ComputeCorrect.WriteMap.writeIf ComputeKernel.ExecCorrectR
+    ComputeKernel.ComputeCorrectR ComputeKernel.AlgorithmCorrectR
+    Kernel.CorrectR
+  cases hAlg : kernel.toAlgorithm? with
+  | error e => simp
+  | ok ak =>
+      simp only [and_congr_right_iff]
+      intro _
+      constructor
+      · intro h s0 s' hExec hs0 i hi
+        have hout := h s0 s' hExec hs0 i
+        simpa [hi] using hout
+      · intro h s0 s' hExec hs0 i
+        by_cases hi : mask i
+        · simpa [hi] using h s0 s' hExec hs0 i hi
+        · simp [hi]
+
 /-- **Refinement implies ideal correctness** — the single theorem connecting
 the `ComputeRefine` family to the `ComputeCorrect` family. Instantiates the
 universal statement at the trivial model, where the parametric semantics is
@@ -158,6 +261,56 @@ theorem RealizesR.toRealizes {ι : Type} {α : Type}
   have := h .triv
   rw [ComputeKernel.execCorrectR_triv_iff] at this
   exact this
+
+/--
+Two-kernel *pointwise* refinement realization under a rounding model — the
+`R`-parametric mirror of `ComputeRefine.RealizesAt`. `relation` receives the
+two kernels' output cells at declared addresses and can express the
+event-ledger relation (each side equals its `R`-annotated term). The
+canonical whole-memory refinement semantics is `ComputeRefine.RefinesR`.
+-/
+def RefinesAtR (R : RoundingModel) {ι : Type} {α β : Type}
+    [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
+    (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
+    (relation : ι → α → β → Prop) : Prop :=
+  ComputeKernel.ExecRefineR R lhs rhs initialState (fun lhs' rhs' =>
+    ∀ i : ι, match lhsWrite i, rhsWrite i with
+      | some lhsAddr, some rhsAddr =>
+          relation i
+            (ComputeCorrect.OutputReadable.read lhs' lhsAddr)
+            (ComputeCorrect.OutputReadable.read rhs' rhsAddr)
+      | _, _ => True)
+
+/-- Degeneration: at the trivial model, `RefinesAtR` *is* the classic
+pointwise pair surface `ComputeRefine.RealizesAt`. -/
+theorem refinesAtR_triv_iff {ι : Type} {α β : Type}
+    [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
+    (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
+    (relation : ι → α → β → Prop) :
+    RefinesAtR .triv lhs rhs initialState lhsWrite rhsWrite relation ↔
+      RealizesAt lhs rhs initialState lhsWrite rhsWrite relation := by
+  unfold RefinesAtR RealizesAt
+  exact ComputeKernel.execRefineR_triv_iff _ _ _ _
+
+/-- `lhs` refines `rhs` under the rounding model `R`: from the same initial
+state, the two kernels performed THE SAME WRITES — the final memories agree
+at every cell outside the declared `scratch` regions. The `R`-parametric
+mirror of the canonical `ComputeRefine.Realizes`. -/
+def RefinesR (R : RoundingModel) (lhs rhs : ComputeKernel)
+    (initialState : BlockState) (scratch : List RegionName := []) : Prop :=
+  ComputeKernel.ExecRefineR R lhs rhs initialState (fun lhs' rhs' =>
+    ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)
+
+/-- Degeneration: at the trivial model, `RefinesR` *is* the canonical
+whole-memory pair surface `ComputeRefine.Realizes`. -/
+theorem refinesR_triv_iff (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (scratch : List RegionName) :
+    RefinesR .triv lhs rhs initialState scratch ↔
+      Realizes lhs rhs initialState scratch := by
+  unfold RefinesR Realizes
+  exact ComputeKernel.execRefineR_triv_iff _ _ _ _
 
 /-! ### Named invariant shapes -/
 
@@ -175,6 +328,36 @@ def SingleRounding {ι : Type}
     (expected : RoundingModel → ι → ℝ) (dtype : FloatDType)
     (core : ι → ℝ) : Prop :=
   ∀ (R : RoundingModel) (i : ι), expected R i = R.round dtype (core i)
+
+/-- `RefinesAtR` is monotone in the relation: any pointwise weakening of the
+pair relation is again realized. -/
+theorem RefinesAtR.mono {R : RoundingModel} {ι : Type} {α β : Type}
+    [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
+    {lhs rhs : ComputeKernel} {initialState : BlockState}
+    {lhsWrite rhsWrite : ComputeCorrect.WriteMap ι}
+    {rel rel' : ι → α → β → Prop}
+    (h : RefinesAtR R lhs rhs initialState lhsWrite rhsWrite rel)
+    (himp : ∀ i a b, rel i a b → rel' i a b) :
+    RefinesAtR R lhs rhs initialState lhsWrite rhsWrite rel' := by
+  unfold RefinesAtR ComputeKernel.ExecRefineR ComputeKernel.ComputeRefineR
+    ComputeKernel.ProjectedRefineR at h ⊢
+  obtain ⟨-, h⟩ := h
+  refine ⟨trivial, ?_⟩
+  cases hL : lhs.toAlgorithm? with
+  | error e => rw [hL] at h; exact h
+  | ok lAlg =>
+      cases hR : rhs.toAlgorithm? with
+      | error e => rw [hL, hR] at h; exact h
+      | ok rAlg =>
+          rw [hL, hR] at h
+          intro s0 l r hl hr hs0 i
+          have hi := h s0 l r hl hr hs0 i
+          revert hi
+          cases lhsWrite i <;> cases rhsWrite i <;> intro hi
+          · trivial
+          · trivial
+          · trivial
+          · exact himp _ _ _ hi
 
 /-- A `RoundFree` realization yields the exact ℝ statement for every model,
 not only the trivial one. -/

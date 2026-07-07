@@ -331,7 +331,7 @@ algorithm dtype annotations. This keeps float-facing examples compute-first
 while reusing the existing Real proof path. -/
 def eraseDType (ck : ComputeKernel) : ComputeKernel :=
   let k := ck.toAlgKernel.eraseDType
-  ComputeKernel.fromAlgBody k.inputs k.outputs k.body
+  ComputeKernel.fromKernelBody k.inputs k.outputs k.body
 
 end ComputeKernel
 

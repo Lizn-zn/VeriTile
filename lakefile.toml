@@ -25,14 +25,13 @@ globs = [
   "VeriTile.Examples.LogSumExpEq",
   "VeriTile.Examples.SoftmaxReciprocal",
   "VeriTile.Examples.VectorAdd",
-  "VeriTile.Examples.FusedSiLU",
   "VeriTile.Examples.RowWise",
   "VeriTile.Examples.WelfordKernels",
-  "VeriTile.Examples.LayerNormKernels",
   "VeriTile.Examples.OnlineSoftmax",
   "VeriTile.Examples.HyperConnections.+",
   "VeriTile.Examples.FlashAttention1",
   "VeriTile.Examples.FlashAttention1.+",
+  "VeriTile.Examples.FlashAttention2",
 ]
 
 # Math sub-library: Taylor and integral bounds for the GeLU error

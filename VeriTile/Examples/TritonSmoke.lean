@@ -852,21 +852,21 @@ def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : ComputeKernel :=
           (Op.constNat 1)
           (Op.constNat 0))
         MaskOpt.none]
-  ComputeKernel.fromAlgBody [xReg] [outReg] body
+  ComputeKernel.fromKernelBody [xReg] [outReg] body
 
 def natLoadStoreCoreKernel (idxReg outReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
       [Stmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
         (Op.load .nat (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
         MaskOpt.none]
-  ComputeKernel.fromAlgBody [idxReg] [outReg] body
+  ComputeKernel.fromKernelBody [idxReg] [outReg] body
 
 def intLoadStoreCoreKernel (idxReg outReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
       [Stmt.store .int [] (MemAccess.region outReg (Op.constNat 0))
         (Op.load .int (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
         MaskOpt.none]
-  ComputeKernel.fromAlgBody [idxReg] [outReg] body
+  ComputeKernel.fromKernelBody [idxReg] [outReg] body
 
 def indirectLoadCoreKernel (idxReg dataReg outReg : RegionName)
     (N stride : Nat) : ComputeKernel :=
@@ -881,7 +881,7 @@ def indirectLoadCoreKernel (idxReg dataReg outReg : RegionName)
                 (Op.constNat stride))))
           MaskOpt.none)
         MaskOpt.none]
-  ComputeKernel.fromAlgBody [idxReg, dataReg] [outReg] body
+  ComputeKernel.fromKernelBody [idxReg, dataReg] [outReg] body
 
 def indirectLoadView (idxReg dataReg : RegionName)
     (N stride : Nat) : IndirectView [N] [] :=
@@ -1027,14 +1027,14 @@ def registerConflictKernel : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .nat [] "x" (Op.constNat 0)
     , Stmt.assign .real [] "x" (Op.const 0) ]
-  ComputeKernel.fromAlgBody [] [] body
+  ComputeKernel.fromKernelBody [] [] body
 
 def pointerWhereConflictKernel : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .ptr [] "p"
         (Op.where (Op.constBool Bool.true)
           (Op.ptrBase (d := .real) "x") (Op.ptrBase (d := .real) "y")) ]
-  ComputeKernel.fromAlgBody [] [] body
+  ComputeKernel.fromKernelBody [] [] body
 
 def checkerValidPointerStoreKernel (xReg outReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
@@ -1047,20 +1047,20 @@ def checkerValidPointerStoreKernel (xReg outReg : RegionName) : ComputeKernel :=
         (MemAccess.ptr (Op.ref .ptr [4] "outPtrs"))
         (Op.ref .real [4] "x")
         MaskOpt.none ]
-  ComputeKernel.fromAlgBody [xReg] [outReg] body
+  ComputeKernel.fromKernelBody [xReg] [outReg] body
 
 def unboundPointerRefKernel : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .real [] "x"
         (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ]
-  ComputeKernel.fromAlgBody ["x"] [] body
+  ComputeKernel.fromKernelBody ["x"] [] body
 
 def nonPointerRefAsPointerKernel : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .real [] "p" (Op.const 0)
     , Stmt.assign .real [] "x"
         (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ]
-  ComputeKernel.fromAlgBody ["x"] [] body
+  ComputeKernel.fromKernelBody ["x"] [] body
 
 def blockPointerRefKernel (xReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
@@ -1072,13 +1072,13 @@ def blockPointerRefKernel (xReg : RegionName) : ComputeKernel :=
         (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp2") [0])
         (Op.full [1] (Op.const 1))
         MaskOpt.none ]
-  ComputeKernel.fromAlgBody [xReg] [] body
+  ComputeKernel.fromKernelBody [xReg] [] body
 
 def blockPointerMetadataMismatchKernel (xReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .blockPtr [1] "bp"
         (Op.makeBlockPtr xReg 0 [8] [1] [] [0]) ]
-  ComputeKernel.fromAlgBody [xReg] [] body
+  ComputeKernel.fromKernelBody [xReg] [] body
 
 def blockPointerBoundaryMismatchKernel (xReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
@@ -1088,7 +1088,7 @@ def blockPointerBoundaryMismatchKernel (xReg : RegionName) : ComputeKernel :=
         (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp") [1])
         (Op.full [1] (Op.const 1))
         MaskOpt.none ]
-  ComputeKernel.fromAlgBody [xReg] [] body
+  ComputeKernel.fromKernelBody [xReg] [] body
 
 example :
     Kernel.checkStrict (checkerEnv [("x", .real), ("out", .real)])

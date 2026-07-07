@@ -613,14 +613,18 @@ def Post
   ComputeKernel.ExecRefine lhs rhs s rel
 
 /--
-Overloaded refinement-realization surface over state-free output write maps.
+Overloaded refinement-realization surface over state-free output write maps —
+the *pointwise* form, relating the two kernels' outputs at declared addresses.
 
 The left and right kernels may write to different target cells. The carrier
 types are inferred independently from `relation`; use the same write map on
 both sides for ordinary same-buffer equivalence. Lanes where either side is
 `none` impose no output relation.
+
+This is the tool for heterogeneous-layout comparisons and proof middleware;
+the canonical whole-memory refinement semantics is `ComputeRefine.Realizes`.
 -/
-def Realizes {ι : Type} {α β : Type}
+def RealizesAt {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
@@ -632,6 +636,15 @@ def Realizes {ι : Type} {α β : Type}
             (ComputeCorrect.OutputReadable.read lhs' lhsAddr)
             (ComputeCorrect.OutputReadable.read rhs' rhsAddr)
       | _, _ => True)
+
+/-- `lhs` refines `rhs`: from the same initial state, the two kernels
+performed THE SAME WRITES — the final memories agree at every cell outside
+the declared `scratch` regions. Same write locations, same written values,
+one equation. -/
+def Realizes (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (scratch : List RegionName := []) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs initialState (fun lhs' rhs' =>
+    ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)
 
 /-- Two kernels produce equal Real scalar observations after running from `s`. -/
 def OutputScalarEq
