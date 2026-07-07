@@ -1,5 +1,6 @@
 import VeriTile.Triton
 import VeriTile.Examples.Common
+import VeriTile.Meta.StatementAudit
 
 /-!
 # SwiGLU fused vs unfused — rounding-invariance pilot (#447 Phase C)
@@ -735,5 +736,31 @@ theorem swiglu_fused_launch_eq_pipeline_of_representable
   -- 5. Chain the three memory agreements.
   rw [hMPF.mem_eq, ← hMPU.mem_eq]
   exact hHead
+
+/-! ## Trust audit (compile-time gate)
+
+These commands re-audit the public results every time the file is elaborated —
+if any gate fails (a smuggled axiom / `sorry`, a foreign constant in a trusted
+statement, or a self-referential spec) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
+
+-- (1) No `sorry`, no smuggled axiom, in any result's transitive proof.
+#axiomsClean swiglu_fused_eq_unfused_of_representable
+#axiomsClean swiglu_refines_classic
+#axiomsClean swiglu_fused_launch_eq_pipeline_of_representable
+#axiomsClean swiglu_refinesR
+
+-- (2) The headline is a *kernel-vs-kernel* writes-equality: its statement may
+-- mention ONLY the kernels, the loaded-input contract, and the library
+-- refinement surface — NO spec. If a spec ever leaks in, this fails.
+#stmtSurfaceSubset swiglu_refines_classic ⊆
+  [swiglu_fused, swiglu_unfused, InputLoadedAt, ComputeRefine.Refines,
+   BlockState, RegionName]
+
+-- (3) The specs the ledger theorem trusts are independent mathematics, not the
+-- kernels' own execution (no circular "kernel does what the kernel does").
+#specNonCircular fusedSpec avoiding [swiglu_fused, swiglu_unfused, silu_step, mul_step]
+#specNonCircular unfusedSpec avoiding [swiglu_fused, swiglu_unfused, silu_step, mul_step]
+#specNonCircular aSpec avoiding [swiglu_fused, swiglu_unfused, silu_step, mul_step]
 
 end VeriTile.Bench.Examples.SwigluRounding
