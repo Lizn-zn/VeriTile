@@ -113,6 +113,7 @@ Task-oriented:
 | Question | Doc |
 |---|---|
 | Which Triton constructs are supported? | [TritonSubset.md](./documents/TritonSubset.md) |
+| How does Tilelang map onto the core? | [TilelangMapping.md](./documents/TilelangMapping.md) |
 | Where does my new lemma / definition belong? | [CodeOrganization.md](./documents/CodeOrganization.md) |
 | Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./documents/ProofConventions.md) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |

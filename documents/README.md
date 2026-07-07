@@ -18,6 +18,7 @@ Documentation Map):
 | Question | Doc |
 |---|---|
 | Which Triton constructs are supported? | [TritonSubset.md](./TritonSubset.md) ([中文](./TritonSubset_zh.md)) |
+| How does Tilelang map onto the neutral core? | [TilelangMapping.md](./TilelangMapping.md) |
 | Where does my new lemma / definition belong? | [CodeOrganization.md](./CodeOrganization.md) ([中文](./CodeOrganization_zh.md)) |
 | Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./ProofConventions.md) ([中文](./ProofConventions_zh.md)) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
