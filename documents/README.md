@@ -23,6 +23,7 @@ Documentation Map):
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
 | Naming conventions for theorem surfaces | [TheoremSurfaces.md](./TheoremSurfaces.md) |
 | How does the kernel manifest work? | [KernelManifest.md](./KernelManifest.md) |
+| How is the axiom-clean / sorry-free trust audit run? | [TrustAudit.md](./TrustAudit.md) |
 | How does dtype erasure work? | [EraseDType.md](./EraseDType.md) |
 | How does memory safety / framing work? | [MemorySafety.md](./MemorySafety.md) |
 | What's the GPU memory model? | [GpuMemoryModel.md](./GpuMemoryModel.md) |
