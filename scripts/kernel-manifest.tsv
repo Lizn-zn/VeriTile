@@ -4,7 +4,8 @@
 # id<TAB>file<TAB>theorem<TAB>kind<TAB>status<TAB>source<TAB>source_ref<TAB>config<TAB>label<TAB>notes
 #
 # `file` is the path where the theorem is DEFINED (post-refactor: some refine
-# theorems live in bench/examples/*Refine.lean, and FloatDType/FusedSiLU/
+# theorems live in bench/examples/*Refine.lean, and FloatDTypeCorrect/
+# FloatDTypeRefine/FusedSiLU/
 # LayerNormKernels relocated to bench/examples/). `theorem` is the FULLY-
 # QUALIFIED name so downstream trust tooling (VeriTile/Meta/TrustReport.lean,
 # bench/audit_trust.sh) resolves it unambiguously regardless of open namespaces.
@@ -20,8 +21,8 @@ log_sum_exp_shift_refine	bench/examples/LogSumExpEqRefine.lean	VeriTile.Examples
 softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalRefine.lean	VeriTile.Examples.softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
 vector_add_aligned	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_correct_view	correct	proven	internal	-	BLOCK_SIZE=N	Vector add aligned correctness	aligned single-block elementwise add
 vector_add_masked	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_masked_correct_view	correct	proven	internal	-	BLOCK_SIZE, n_elements	Vector add correctness	masked boundary variant
-float_add	bench/examples/FloatDType.lean	VeriTile.Examples.float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
-float_softmax_reciprocal	bench/examples/FloatDType.lean	VeriTile.Examples.float_softmax_reciprocal_refinement_view	refine	proven	internal	-	fp32 erased to real	Float dtype rewrite refinement	algorithm-layer Real proof through dtype erasure
+float_add	bench/examples/FloatDTypeCorrect.lean	VeriTile.Examples.float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
+float_softmax_reciprocal	bench/examples/FloatDTypeRefine.lean	VeriTile.Examples.float_softmax_reciprocal_refinement_view	refine	proven	internal	-	fp32 erased to real	Float dtype rewrite refinement	algorithm-layer Real proof through dtype erasure
 argmax2_nat_store	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.argmax2_index_store_correct_view	correct	proven	internal	-	2 elements	Typed Nat memory store	smoke for Nat store
 nat_load_store	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.nat_load_store_correct_view	correct	proven	internal	-	1 scalar	Typed Nat memory load/store	smoke for typed HBM load/store
 indirect_load	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.indirect_load_correct_view	correct	proven	internal	-	1 scalar	Indirect indexed load correctness	generic indirect view smoke
