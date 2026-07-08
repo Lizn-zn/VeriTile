@@ -30,7 +30,7 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   `RefinesR` / `RefinesAtR`(双 kernel)对**每个** rounding model 全称量化;
   桥 `RealizesR.toRealizes` 在 trivial model 处退化为理想的
   `ComputeCorrect.Realizes`。见 fused-vs-unfused SwiGLU showcase
-  [`bench/examples/SwigluRoundingInvariance.lean`](./bench/examples/SwigluRoundingInvariance.lean)。
+  [`bench/examples/Swiglu.lean`](./bench/examples/Swiglu.lean)。
 - **示例**:151 个 TritonBench-G 端口及其证明(真值来源:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上

@@ -14,7 +14,7 @@ API 出发。完整 user guide 见
 - 窄浮点 kernel 有对每个 `RoundingModel` 全称量化的 rounding-parametric 镜像:
   `ComputeRefine.RealizesR`(单 kernel)和 `RefinesR` / `RefinesAtR`(双
   kernel);见 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) 及 showcase
-  `bench/examples/SwigluRoundingInvariance.lean`。
+  `bench/examples/Swiglu.lean`。
 
 投影后的算法 lemma 仍然可以提到 `Kernel.Correct` 或 `Kernel.Refine`,
 但仅限于明确属于内部 bridge lemma。这些 lemma 不应当作为

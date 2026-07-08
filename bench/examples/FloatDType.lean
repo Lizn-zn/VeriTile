@@ -6,7 +6,7 @@ kernels carry explicit `tl.float32` memory annotations, and the algorithmic
 correctness theorem is discharged by **erasing** those annotations to the Real
 channel and reusing the Real-valued proof (here VectorAdd's). This is the
 erased/ideal pathway — the complement of the rounding-model pathway
-(`ComputeRefine.*R`) demonstrated in `bench/examples/SwigluRoundingInvariance`.
+(`ComputeRefine.*R`) demonstrated in `bench/examples/Swiglu`.
 
 ## Kernels & theorems
 

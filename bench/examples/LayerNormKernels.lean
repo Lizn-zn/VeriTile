@@ -19,7 +19,7 @@ Kernels: `twoPassLayerNormKernel`, `fusedLayerNormKernel`,
 * `layernorm_kernels_refinement` / `…_refinement_view` — the headline pair
   theorem on the two-kernel writes-equality surface `ComputeRefine.Refines`.
   For the rounding-model (∀R) analogue of the compositional pattern see
-  `bench/examples/SwigluRoundingInvariance.lean`.
+  `bench/examples/Swiglu.lean`.
 -/
 
 import VeriTile.Triton

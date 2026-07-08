@@ -35,12 +35,19 @@ structure RoundingModel where
   round : FloatDType → ℝ → ℝ
   /-- The `.real` channel is the mathematical carrier: no rounding, ever. -/
   round_real : round .real = id
+  /-- Idempotence: rounding an already-rounded value is a no-op. This is
+  intrinsic to quantizing onto a discrete grid — the first cast lands on the
+  grid, and re-casting a grid point is the identity — so *every* genuine
+  rounding satisfies it (even stochastic rounding: grid points are fixed).
+  A function without it is not a rounding, so it is a defining field of the
+  model rather than an opt-in mixin like `MonoRounding`/`OddRounding`. -/
+  round_idem : ∀ dtype x, round dtype (round dtype x) = round dtype x
 
 namespace RoundingModel
 
 /-- The trivial model: every cast/store is exact. This *is* the current
 semantics — see the degeneration lemmas `evalOpR_triv` / `stepStmtR_triv`. -/
-def triv : RoundingModel := ⟨fun _ => id, rfl⟩
+def triv : RoundingModel := ⟨fun _ => id, rfl, fun _ _ => rfl⟩
 
 @[simp] theorem triv_round (dtype : FloatDType) : triv.round dtype = id := rfl
 
@@ -100,20 +107,26 @@ def storeValue (R : RoundingModel) (dtype : FloatDType)
     R.storeValue .real x = FloatDType.real.storeValue x := by
   simp [storeValue]
 
+/-- ℝ-level quantization to the `dtype` grid: the numerical core shared by the
+typed cast (`RoundingModel.cast`) and the store demotion (`storeValue`). Both a
+`.to(dtype)` cast and a store into a `dtype` buffer quantize a real to the
+`dtype` grid, and on the `.real`-carried ℝ channel both are exactly this.
+Specs written over ℝ use `castTo` in place of the two typed operations.
+`@[reducible]` so lemmas about `round` (e.g. `round_idem`) fire through it. -/
+@[reducible] def castTo (R : RoundingModel) (dtype : FloatDType) (x : ℝ) : ℝ :=
+  R.round dtype x
+
 end RoundingModel
 
 /-! ## Opt-in property mixins
 
-Cited per-theorem as instance hypotheses (`[IdemRounding R]` …). The trivial
-model satisfies every mixin, so adding one never vacuates a statement; real
-round-to-nearest-even also satisfies every mixin, so statements remain true
-of actual hardware rounding. -/
-
-/-- Rounding an already-rounded value is a no-op (every value a rounding
-produces is representable). Buys double-cast elimination and
-"values loaded from a narrow buffer are representable". -/
-class IdemRounding (R : RoundingModel) : Prop where
-  idem : ∀ dtype x, R.round dtype (R.round dtype x) = R.round dtype x
+Idempotence is *not* here — it is a defining field of `RoundingModel`
+(`round_idem`), because a non-idempotent function is not a rounding. The mixins
+below are genuinely optional properties that some roundings lack (e.g.
+stochastic rounding is not monotone). Cited per-theorem as instance hypotheses
+(`[MonoRounding R]` …); the trivial model satisfies every mixin, so adding one
+never vacuates a statement, and real round-to-nearest-even satisfies them too,
+so statements remain true of actual hardware rounding. -/
 
 /-- Rounding preserves order. Buys comparison/max/clamp stability. -/
 class MonoRounding (R : RoundingModel) : Prop where
@@ -131,7 +144,6 @@ class GridNested (R : RoundingModel) : Prop where
   nest_bf16 : ∀ x, R.round .bf16 x = x → R.round .fp32 x = x
   nest_fp16 : ∀ x, R.round .fp16 x = x → R.round .fp32 x = x
 
-instance : IdemRounding RoundingModel.triv := ⟨fun _ _ => rfl⟩
 instance : MonoRounding RoundingModel.triv := ⟨fun _ => monotone_id⟩
 instance : OddRounding RoundingModel.triv := ⟨fun _ _ => rfl⟩
 instance : GridNested RoundingModel.triv := ⟨fun _ _ => rfl, fun _ _ => rfl⟩

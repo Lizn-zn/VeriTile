@@ -198,7 +198,7 @@ correctness")处相遇:在 trivial model `.triv` 处实例化(此时 `execR` 退
 精确的 `exec`),把任何 `RealizesR` 变成关于 `expected .triv` 的普通
 `ComputeCorrect.Realizes`。退化引理 `refinesR_triv_iff` / `refinesAtR_triv_iff`
 以同样方式恢复 `Refines` / `RefinesAt`。范例见
-[`bench/examples/SwigluRoundingInvariance.lean`](../bench/examples/SwigluRoundingInvariance.lean)。
+[`bench/examples/Swiglu.lean`](../bench/examples/Swiglu.lean)。
 
 ### Equality helper
 
