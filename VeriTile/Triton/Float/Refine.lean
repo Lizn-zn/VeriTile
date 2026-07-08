@@ -145,6 +145,18 @@ theorem computeCorrectR_of_toAlgKernel {R : RoundingModel} {ck : ComputeKernel}
   rw [h]
   exact hc
 
+/-- Unpack a fixed-`R` `ExecCorrectR` at one successful execution of the
+projected kernel: the raw post-condition on the final state. Kernel-agnostic. -/
+theorem ExecCorrectR.out {R : RoundingModel} {ck : ComputeKernel} {s : BlockState}
+    {post : BlockState → Prop}
+    (h : ExecCorrectR R ck s post)
+    (hAlg : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    {s' : BlockState} (hExec : execR R ck.toAlgKernel s = some s') : post s' := by
+  have h' := h.2
+  unfold AlgorithmCorrectR at h'
+  rw [hAlg] at h'
+  exact h' s s' hExec rfl
+
 /-- `ProjectedRefine` under a rounding model. -/
 def ProjectedRefineR (R : RoundingModel) (lhs rhs : ComputeKernel)
     (rel : BlockState → BlockState → BlockState → Prop) : Prop :=

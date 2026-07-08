@@ -37,7 +37,7 @@ abstract model `R`.
 Outputs are read at the `MemCell` layer (`floatCell .bf16 v`): bf16 stores are
 tag-exact, so a narrow-float cell is only observable as its typed `MemCell` —
 the classic fp16/bf16 convention (`rmsnorm_fused_llama`). The generic
-`RealizesR` unpacker used below (`ComputeRefine.RealizesR.out`) is
+fixed-`R` unpacker used below (`ComputeKernel.ExecCorrectR.out`) is
 kernel-agnostic and lives in the library (`VeriTile.Triton.Float.Refine`).
 
 ## The public result (bottom of file)
@@ -108,17 +108,17 @@ def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKerne
 
 end Swiglu.kernels
 
-section Swiglu.lemmas
-
-/- The per-lane "expected output" of each kernel is written inline as a closed
-form over `TiledActivation` + `RoundingModel.castTo` (one `castTo .bf16` = one
-bf16 quantization: a `.to(bf16)` cast or a store into a bf16 buffer). There are
-deliberately **no** spec definitions — nothing to be circular, nothing to
-audit; the public theorem's statement never mentions a spec. -/
-
-/- Pre-defined variables used in the lemmas and the theorem below. -/
+/- Variables shared by every lemma and the theorem below — declared **once**, at
+namespace scope, so both `Swiglu.lemmas` and `Swiglu.theorems` inherit them
+(`end <section>` only clears variables declared *inside* that section). Each
+kernel's per-lane "expected output" is written inline as a closed form over
+`TiledActivation` + `RoundingModel.castTo` (one `castTo .bf16` = one bf16
+quantization) — there are deliberately **no** spec definitions. -/
 variable (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState)
 variable (xs ys : Fin BLOCK_N → ℝ)
+variable (R : RoundingModel)
+
+section Swiglu.lemmas
 
 /-! ## Sequential decomposition of the pipeline -/
 
@@ -144,17 +144,14 @@ counterpart `VeriTile.Examples.outWritesTo`. `programLaneOffset` is that same
 address, named for the proofs. -/
 
 /-- The fused kernel writes `c(c( c(silu x) · y ))` (three bf16 quantizations)
-at each active `OUT` lane, for every rounding model. -/
+at each active `OUT` lane, under rounding model `R`. -/
 private theorem swiglu_fused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
-    ComputeRefine.RealizesR (swiglu_fused X Y OUT ncols BLOCK_N) s
-      (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => floatCell .bf16
-        (R.castTo .bf16 (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i)) * ys i)))) := by
+    ComputeKernel.ExecCorrectR R (swiglu_fused X Y OUT ncols BLOCK_N) s (fun s' =>
+      ∀ i : Fin BLOCK_N, s.pid * BLOCK_N + i.val < ncols →
+        ComputeCorrect.OutputReadable.read s' (OUT, s.pid * BLOCK_N + i.val)
+          = floatCell .bf16 (R.castTo .bf16 (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i)) * ys i)))) := by
   unfold InputLoadedAt at h_x h_y
-  unfold outWritesTo
-  rw [ComputeRefine.realizesR_writeIf_iff]
-  intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
   · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -179,18 +176,15 @@ private theorem swiglu_fused_realizesR
         tile_elementwise, hx, hy, RoundingModel.cast, RoundingModel.storeValue,
         FloatDType.storeValue, FloatDType.ofReal]
 
-/-- Component theorem for step A: for every rounding model, the active lanes of
+/-- Component theorem for step A: under rounding model `R`, the active lanes of
 `S` receive `c(c(silu x))` (the `.to(bf16)` cast + the store to the bf16
 tensor) as bf16 cells. -/
 private theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
-    ComputeRefine.RealizesR (silu_step X S ncols BLOCK_N) s
-      (outWritesTo s S ncols BLOCK_N)
-      (fun R i => floatCell .bf16
-        (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i))))) := by
+    ComputeKernel.ExecCorrectR R (silu_step X S ncols BLOCK_N) s (fun s' =>
+      ∀ i : Fin BLOCK_N, s.pid * BLOCK_N + i.val < ncols →
+        ComputeCorrect.OutputReadable.read s' (S, s.pid * BLOCK_N + i.val)
+          = floatCell .bf16 (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i))))) := by
   unfold InputLoadedAt at h_x
-  unfold outWritesTo
-  rw [ComputeRefine.realizesR_writeIf_iff]
-  intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
   · simp [silu_step, ComputeExpr.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -216,7 +210,7 @@ private theorem silu_step_realizesR (h_x : InputLoadedAt s X BLOCK_N xs) :
 
 /-- Frame lemma for step A: every region other than `S` is untouched, for
 every rounding model. -/
-private theorem silu_step_preservesR (R : RoundingModel) (s' : BlockState)
+private theorem silu_step_preservesR (s' : BlockState)
     (keepReg : RegionName) (h_keep : keepReg ≠ S)
     (hExec : execR R (silu_step X S ncols BLOCK_N) s = some s') :
     ∀ offset : Nat, s'.mem keepReg offset = s.mem keepReg offset := by
@@ -230,7 +224,7 @@ private theorem silu_step_preservesR (R : RoundingModel) (s' : BlockState)
 
 /-- Step A leaves the program ids untouched (needed to carry the lane
 addressing across the composition). -/
-private theorem silu_step_execR_pids (R : RoundingModel) (s1 : BlockState)
+private theorem silu_step_execR_pids (s1 : BlockState)
     (hExec : execR R (silu_step X S ncols BLOCK_N) s = some s1) :
     s1.pids = s.pids := by
   simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
@@ -240,17 +234,15 @@ private theorem silu_step_execR_pids (R : RoundingModel) (s1 : BlockState)
   rfl
 
 /-- Component theorem for step B: given the bf16 intermediate `S` holding
-payloads `zs`, the active lanes of `OUT` receive `R⟦R⟦z·y⟧⟧`. -/
+payloads `zs`, the active lanes of `OUT` receive `c(c(z·y))` under `R`. -/
 private theorem mul_step_realizesR (zs : Fin BLOCK_N → ℝ)
     (h_z : InputCellsLoadedAt s S ncols BLOCK_N .bf16 zs) (h_y : InputLoadedAt s Y BLOCK_N ys) :
-    ComputeRefine.RealizesR (mul_step S Y OUT ncols BLOCK_N) s
-      (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => floatCell .bf16 (R.castTo .bf16 (R.castTo .bf16 (zs i * ys i)))) := by
+    ComputeKernel.ExecCorrectR R (mul_step S Y OUT ncols BLOCK_N) s (fun s' =>
+      ∀ i : Fin BLOCK_N, s.pid * BLOCK_N + i.val < ncols →
+        ComputeCorrect.OutputReadable.read s' (OUT, s.pid * BLOCK_N + i.val)
+          = floatCell .bf16 (R.castTo .bf16 (R.castTo .bf16 (zs i * ys i)))) := by
   unfold InputCellsLoadedAt floatCell at h_z
   unfold InputLoadedAt at h_y
-  unfold outWritesTo
-  rw [ComputeRefine.realizesR_writeIf_iff]
-  intro R
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
   · simp [mul_step, ComputeExpr.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -283,14 +275,12 @@ active `OUT` lane, for every rounding model. **Derived by composing**
 private theorem swiglu_unfused_realizesR
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
-    ComputeRefine.RealizesR (swiglu_unfused X Y S OUT ncols BLOCK_N) s
-      (outWritesTo s OUT ncols BLOCK_N)
-      (fun R i => floatCell .bf16
-        (R.castTo .bf16 (R.castTo .bf16
-          (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i))) * ys i)))) := by
-  unfold outWritesTo
-  rw [ComputeRefine.realizesR_writeIf_iff]
-  intro R
+    ComputeKernel.ExecCorrectR R (swiglu_unfused X Y S OUT ncols BLOCK_N) s (fun s' =>
+      ∀ i : Fin BLOCK_N, s.pid * BLOCK_N + i.val < ncols →
+        ComputeCorrect.OutputReadable.read s' (OUT, s.pid * BLOCK_N + i.val)
+          = floatCell .bf16
+            (R.castTo .bf16 (R.castTo .bf16
+              (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i))) * ys i)))) := by
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
   · simp [swiglu_unfused]
   intro s0 s' hExec hs0
@@ -305,15 +295,14 @@ private theorem swiglu_unfused_realizesR
           = some s' := hExec
       have hpids : s1.pids = s.pids := silu_step_execR_pids X S ncols BLOCK_N s R s1 hA
       -- intermediate `S` cells from step A's realization
-      have hAout := ComputeRefine.RealizesR.out
-        (silu_step_realizesR X S ncols BLOCK_N s xs h_x) R
+      have hAout := ComputeKernel.ExecCorrectR.out
+        (silu_step_realizesR X S ncols BLOCK_N s xs R h_x)
         (by simp [silu_step, ComputeExpr.toAlgorithm?]) hA
       have h_z1 : InputCellsLoadedAt s1 S ncols BLOCK_N .bf16 (fun j => R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs j)))) := by
         intro j hj
         rw [BlockState.pid_eq] at hj
         have hj' : s.pids 0 * BLOCK_N + j.val < ncols := by rwa [hpids] at hj
-        have hout := hAout j
-        simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hj', if_true] at hout
+        have hout := hAout j (by rw [BlockState.pid_eq]; exact hj')
         simpa [BlockState.pid_eq, hpids] using hout
       -- `Y` survives step A (frame lemma; `S ≠ Y`)
       have h_y1 : InputLoadedAt s1 Y BLOCK_N ys := by
@@ -329,19 +318,18 @@ private theorem swiglu_unfused_realizesR
         simp only [BlockState.pid_eq, programLaneOffset, hpids] at hy ⊢
         exact hy
       -- step B's realization at the intermediate state
-      have hBout := ComputeRefine.RealizesR.out
-        (mul_step_realizesR Y S OUT ncols BLOCK_N s1 ys (fun j => R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs j)))) h_z1 h_y1)
-        R (by simp [mul_step, ComputeExpr.toAlgorithm?]) hExecB
+      have hBout := ComputeKernel.ExecCorrectR.out
+        (mul_step_realizesR Y S OUT ncols BLOCK_N s1 ys R (fun j => R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs j)))) h_z1 h_y1)
+        (by simp [mul_step, ComputeExpr.toAlgorithm?]) hExecB
       have hAct1 : s1.pids 0 * BLOCK_N + i.val < ncols := by rw [hpids]; exact hActive
-      have hout := hBout i
-      simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct1, if_true] at hout
+      have hout := hBout i (by rw [BlockState.pid_eq]; exact hAct1)
       simpa [programLaneOffset, hpids] using hout
 
 /-! ## Frame lemmas (the writes each kernel does NOT perform) -/
 
 /-- Frame lemma for the fused kernel: every region other than `OUT` is
 untouched. -/
-private theorem swiglu_fused_preservesR (R : RoundingModel) (s' : BlockState)
+private theorem swiglu_fused_preservesR (s' : BlockState)
     (r : RegionName) (hrOUT : r ≠ OUT)
     (hExec : execR R (swiglu_fused X Y OUT ncols BLOCK_N) s = some s') :
     ∀ o : Nat, s'.mem r o = s.mem r o := by
@@ -354,7 +342,7 @@ private theorem swiglu_fused_preservesR (R : RoundingModel) (s' : BlockState)
 
 /-- Frame lemma for the fused kernel: `OUT` offsets not hit by an active lane
 are untouched. -/
-private theorem swiglu_fused_preserves_unhitR (R : RoundingModel) (s' : BlockState)
+private theorem swiglu_fused_preserves_unhitR (s' : BlockState)
     (o : Nat)
     (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
       programLaneOffset s BLOCK_N i ≠ o)
@@ -368,7 +356,7 @@ private theorem swiglu_fused_preserves_unhitR (R : RoundingModel) (s' : BlockSta
   rfl
 
 /-- Frame lemma for step B: every region other than `OUT` is untouched. -/
-private theorem mul_step_preservesR (R : RoundingModel) (s' : BlockState)
+private theorem mul_step_preservesR (s' : BlockState)
     (r : RegionName) (hrOUT : r ≠ OUT)
     (hExec : execR R (mul_step S Y OUT ncols BLOCK_N) s = some s') :
     ∀ o : Nat, s'.mem r o = s.mem r o := by
@@ -381,7 +369,7 @@ private theorem mul_step_preservesR (R : RoundingModel) (s' : BlockState)
 
 /-- Frame lemma for step B: `OUT` offsets not hit by an active lane are
 untouched. -/
-private theorem mul_step_preserves_unhitR (R : RoundingModel) (s' : BlockState)
+private theorem mul_step_preserves_unhitR (s' : BlockState)
     (o : Nat)
     (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
       programLaneOffset s BLOCK_N i ≠ o)
@@ -399,16 +387,13 @@ end Swiglu.lemmas
 /-! ## The headline theorems -/
 section Swiglu.theorems
 
-variable (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) (s : BlockState)
-variable (xs ys : Fin BLOCK_N → ℝ)
-
 /-- **fused refines unfused** (`ComputeRefine.RefinesR`, scratch `[S]`): for
 every rounding model `R`, running the fused kernel and the unfused pipeline
 from the same state performs THE SAME WRITES — the final memories agree at
 every cell outside the scratch tensor `S`. Idempotence (`round ∘ round =
 round`, a defining field of `RoundingModel`) is what makes the two kernels'
 matched rounding sites coincide; no hypothesis is needed. -/
-theorem swiglu_fused_refines_unfused (R : RoundingModel)
+theorem swiglu_fused_refines_unfused
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ComputeRefine.RefinesR R
@@ -442,16 +427,15 @@ theorem swiglu_fused_refines_unfused (R : RoundingModel)
           -- coincide because idempotence collapses the pipeline's doubled
           -- intermediate cast to the fused kernel's single one
           obtain ⟨i, hAct, rfl⟩ := hhit
-          have hFout := ComputeRefine.RealizesR.out
-            (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys h_x h_y) R
+          have hFout := ComputeKernel.ExecCorrectR.out
+            (swiglu_fused_realizesR X Y OUT ncols BLOCK_N s xs ys R h_x h_y)
             (by simp [swiglu_fused, ComputeExpr.toAlgorithm?]) hL
-          have hUout := ComputeRefine.RealizesR.out
-            (swiglu_unfused_realizesR X Y S OUT ncols BLOCK_N s xs ys h_x h_y h_SY) R
+          have hUout := ComputeKernel.ExecCorrectR.out
+            (swiglu_unfused_realizesR X Y S OUT ncols BLOCK_N s xs ys R h_x h_y h_SY)
             (by simp [swiglu_unfused]) hR
-          have hF := hFout i
-          have hU := hUout i
-          simp only [outWritesTo, ComputeCorrect.WriteMap.writeIf, BlockState.pid_eq, hAct, if_true,
-            ComputeCorrect.OutputReadable.read_memcell] at hF hU
+          have hF := hFout i (by rw [BlockState.pid_eq]; exact hAct)
+          have hU := hUout i (by rw [BlockState.pid_eq]; exact hAct)
+          simp only [ComputeCorrect.OutputReadable.read_memcell, BlockState.pid_eq] at hF hU
           simp only [programLaneOffset]
           rw [hF, hU]
           simp [RoundingModel.castTo, R.round_idem]
