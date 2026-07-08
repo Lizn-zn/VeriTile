@@ -6,7 +6,7 @@ vs shift-trick log-sum-exp kernel pair. The kernels, specs, correctness
 lemmas, and the exec-level refinement live in `VeriTile.Examples.LogSumExpEq`.
 
 Headline: `log_sum_exp_refinement_view`. For the rounding-model (∀R) variant of the
-writes-equality surface see `bench/examples/SwigluRoundingInvariance.lean`.
+writes-equality surface see `bench/examples/Swiglu.lean`.
 -/
 
 namespace VeriTile.Examples

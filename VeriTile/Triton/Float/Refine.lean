@@ -42,11 +42,12 @@ def Representable (R : RoundingModel) (dtype : FloatDType) (x : ℝ) : Prop :=
 @[simp] theorem representable_real (R : RoundingModel) (x : ℝ) :
     R.Representable .real x := R.round_real_apply x
 
-/-- Under an idempotent model, every rounded value is representable. -/
-theorem representable_round (R : RoundingModel) [IdemRounding R]
+/-- Every rounded value is representable (rounding is idempotent by definition
+of `RoundingModel`). -/
+theorem representable_round (R : RoundingModel)
     (dtype : FloatDType) (x : ℝ) :
     R.Representable dtype (R.round dtype x) :=
-  IdemRounding.idem dtype x
+  R.round_idem dtype x
 
 end RoundingModel
 
@@ -143,6 +144,18 @@ theorem computeCorrectR_of_toAlgKernel {R : RoundingModel} {ck : ComputeKernel}
   unfold AlgorithmCorrectR
   rw [h]
   exact hc
+
+/-- Unpack a fixed-`R` `ExecCorrectR` at one successful execution of the
+projected kernel: the raw post-condition on the final state. Kernel-agnostic. -/
+theorem ExecCorrectR.out {R : RoundingModel} {ck : ComputeKernel} {s : BlockState}
+    {post : BlockState → Prop}
+    (h : ExecCorrectR R ck s post)
+    (hAlg : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    {s' : BlockState} (hExec : execR R ck.toAlgKernel s = some s') : post s' := by
+  have h' := h.2
+  unfold AlgorithmCorrectR at h'
+  rw [hAlg] at h'
+  exact h' s s' hExec rfl
 
 /-- `ProjectedRefine` under a rounding model. -/
 def ProjectedRefineR (R : RoundingModel) (lhs rhs : ComputeKernel)
@@ -375,6 +388,42 @@ theorem RealizesR.exact_of_roundFree {ι : Type} {α : Type}
         | none => True) := by
   have := h R
   rwa [hfree R] at this
+
+/-- Unpack a `RealizesR` statement at one model and one successful execution of
+the projected kernel: the raw per-lane output clause. Kernel-agnostic — usable
+by any `RealizesR` consumer that needs the per-write conclusion at a concrete
+execution. -/
+theorem RealizesR.out {ι : Type} {α : Type}
+    [ComputeCorrect.OutputReadable α]
+    {k : ComputeKernel} {st : BlockState}
+    {write : ComputeCorrect.WriteMap ι} {expected : RoundingModel → ι → α}
+    (h : RealizesR k st write expected) (R : RoundingModel)
+    (hAlg : k.toAlgorithm? = Except.ok k.toAlgKernel)
+    {s' : BlockState}
+    (hExec : execR R k.toAlgKernel st = some s') :
+    ∀ i : ι, match write i with
+      | some addr => ComputeCorrect.OutputReadable.read s' addr = expected R i
+      | none => True := by
+  have h' := (h R).2
+  unfold ComputeKernel.AlgorithmCorrectR at h'
+  rw [hAlg] at h'
+  exact h' st s' hExec rfl
+
+/-- Unpack a `RefinesR` statement at one successful execution pair: the raw
+outside-scratch memory-agreement clause. Kernel-agnostic. -/
+theorem RefinesR.memAgree {R : RoundingModel} {lhs rhs : ComputeKernel}
+    {st : BlockState} {scratch : List RegionName}
+    (h : RefinesR R lhs rhs st scratch)
+    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    {l r : BlockState}
+    (hEL : execR R lhs.toAlgKernel st = some l)
+    (hER : execR R rhs.toAlgKernel st = some r) :
+    ∀ reg ∉ scratch, ∀ o : Nat, l.mem reg o = r.mem reg o := by
+  unfold RefinesR ComputeKernel.ExecRefineR
+    ComputeKernel.ComputeRefineR ComputeKernel.ProjectedRefineR at h
+  rw [hLAlg, hRAlg] at h
+  exact h.2 st l r hEL hER rfl
 
 end ComputeRefine
 

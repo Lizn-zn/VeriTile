@@ -15,7 +15,7 @@ public compute-facing APIs. See
   `RoundingModel`: `ComputeRefine.RealizesR` (single kernel) and
   `RefinesR` / `RefinesAtR` (two kernels); see
   [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) and the showcase
-  `bench/examples/SwigluRoundingInvariance.lean`.
+  `bench/examples/Swiglu.lean`.
 
 Projected algorithm lemmas may still mention `Kernel.Correct` or
 `Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas

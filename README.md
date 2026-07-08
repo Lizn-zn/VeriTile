@@ -34,7 +34,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   quantify over *every* rounding model; the bridge `RealizesR.toRealizes`
   degenerates to ideal `ComputeCorrect.Realizes` at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
-  [`bench/examples/SwigluRoundingInvariance.lean`](./bench/examples/SwigluRoundingInvariance.lean).
+  [`bench/examples/Swiglu.lean`](./bench/examples/Swiglu.lean).
 - **Examples**: 151 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
