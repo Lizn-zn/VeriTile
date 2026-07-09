@@ -28,4 +28,5 @@ KernelLemmas, Correctness, Float, DSL, Math, Launch, Concurrency).
 - `documents/ProofConventions.md` — proof-style conventions.
 - `documents/CodeOrganization.md` — module/directory map + dependency layers.
 - `documents/CorrectnessSurfaces.md` — the `Realizes` (kernel-vs-spec) and
-  `Refines` (kernel-vs-kernel) surfaces, and their rounding-model mirrors.
+  `Refines` (kernel-vs-kernel) surfaces. The unqualified names are the
+  rounding-model surfaces; the exact-ℝ idealizations are `*_without_Rounding`.

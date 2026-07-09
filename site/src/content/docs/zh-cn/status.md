@@ -19,8 +19,8 @@ VeriTile 的当下快照,根据下方日期的仓库实测得出。所有数字�
 | `bench/tritonbench_g/<kernel>/` 目录数 | **184** |
 | 已配对 `.py` + `.lean` | **141** |
 | README-only 脚手架(尚未 port) | **43** |
-| 全 bench `ComputeCorrect.Realizes` 证明数 | **742** |
-| 全 bench `ComputeRefine.Realizes` 证明数 | 0 |
+| 全 bench `ComputeCorrect.Realizes_without_Rounding` 证明数 | **742** |
+| 全 bench `ComputeRefine.Refines_without_Rounding` 证明数 | 0 |
 | 全 bench `sorry` / `admit` | **0** |
 | `VeriTile/` + `bench/` 定理 + 引理总数 | **2,567** |
 
@@ -28,9 +28,9 @@ VeriTile 的当下快照,根据下方日期的仓库实测得出。所有数字�
 [`scripts/check-artifact.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check-artifact.sh)
 强制保证。加 `sorry` 会让 build 失败。
 
-bench 中 `ComputeRefine.Realizes` 为零的原因:refinement surface 存在,
+bench 中 `ComputeRefine.Refines_without_Rounding` 为零的原因:refinement surface 存在,
 但目前每个 bench port 都是 "kernel ↔ 数学 spec" 而不是 "kernel ↔ kernel",
-所以当前语料用 `ComputeCorrect.Realizes` 是对的 surface。
+所以当前语料用 `ComputeCorrect.Realizes_without_Rounding` 是对的 surface。
 
 ## Bench 覆盖状态
 
@@ -38,7 +38,7 @@ bench 中 `ComputeRefine.Realizes` 为零的原因:refinement surface 存在,
 
 ### 全闭合
 
-Python 测试的每个输出都有完整 `ComputeCorrect.Realizes`。约占已 port
+Python 测试的每个输出都有完整 `ComputeCorrect.Realizes_without_Rounding`。约占已 port
 bench 的一半。例子:`add_example`、`cosine_compute`、`dropout_triton`、
 `swiglu_fwd`、`kldiv_compute`、`dequantize_rowwise`、`l2_norm_triton2`、
 `apply_penalty`、`destindex_copy{,_kv1,_kv2}`、`max_reduction`、
@@ -145,8 +145,8 @@ GitHub bench 相关开放 issue,按 blocker 归类:
 ```bash
 # bench 目录 / 已 port / README-only
 find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d | wc -l
-# ComputeCorrect.Realizes 证明数
-grep -rh 'ComputeCorrect.Realizes\b' bench/tritonbench_g --include='*.lean' | wc -l
+# ComputeCorrect.Realizes_without_Rounding 证明数
+grep -rh 'ComputeCorrect.Realizes_without_Rounding\b' bench/tritonbench_g --include='*.lean' | wc -l
 # sorry / admit 强零
 grep -rE '(^|[^a-zA-Z_])(sorry|admit)( |$)' bench --include='*.lean' | wc -l
 # 文档时效性

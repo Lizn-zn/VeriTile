@@ -4,14 +4,34 @@ This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Surfaces live in
 [`VeriTile.Triton.Correctness`](../VeriTile.Triton.Correctness.lean).
 
+## The rounding default
+
+Read this first — it fixes what every surface name below means. The **unqualified**
+surface names (`Realizes`, `Refines`, `RefinesAt`, `Correct`) are the
+**rounding-model** surfaces: they take a `RoundingModel R` and execute under the
+R-threaded semantics `execR`. The **exact-ℝ idealization** — the older "everything
+is real arithmetic, no quantization" reading — is the explicitly-qualified
+`*_without_Rounding` surface (`Realizes_without_Rounding`,
+`Refines_without_Rounding`, `RefinesAt_without_Rounding`, `Correct_without_Rounding`).
+
+Rule of thumb: the unqualified name is what a kernel *actually* does on hardware
+(rounded); `*_without_Rounding` is the mathematician's idealization you fall back
+to when the rounding is irrelevant to the claim. The exact surface **degenerates
+out of** the rounding one at the trivial model `.triv` (where `execR` collapses
+onto `exec`), never the other way around. Most of the 141 ported kernels are
+proven on `*_without_Rounding` (their outputs are exact-ℝ specs); the showcase
+pairs under `bench/examples/` that carry a bf16 boundary store land on the
+rounding surface `Refines R`.
+
 ## Quick-Pick Table
 
 | Goal | Use |
 |---|---|
-| One kernel realizes an output spec | `ComputeCorrect.Realizes` |
-| One kernel refines another (writes-equality) | `ComputeRefine.Refines` |
-| Two kernels agree pointwise per declared address | `ComputeRefine.RefinesAt` |
-| Any of the above, under every rounding model (narrow-float) | `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
+| One kernel realizes an output spec (rounded) | `ComputeCorrect.Realizes` |
+| … the exact-ℝ idealization of that spec | `ComputeCorrect.Realizes_without_Rounding` |
+| One kernel refines another, writes-equality (rounded) | `ComputeRefine.Refines` |
+| … the exact-ℝ idealization | `ComputeRefine.Refines_without_Rounding` |
+| Two kernels agree pointwise per declared address | `ComputeRefine.RefinesAt` (exact: `RefinesAt_without_Rounding`) |
 | Whole-grid launch (every program writes correctly) | `Kernel.ForAllProgramsSome` (temporary; see Grid section) |
 | Value/index pair on every lane | `ComputeCorrect.OutputPair` |
 | Value/index pair on active lanes only | `ComputeCorrect.OutputPairWhere` |
@@ -31,7 +51,7 @@ index:
 ```lean
 abbrev ComputeCorrect.WriteMap (ι : Type) := ι → Option MemCellAddr
 
-ComputeCorrect.Realizes
+ComputeCorrect.Realizes_without_Rounding
   (kernel := k)
   (initialState := s)
   (write := write)
@@ -41,7 +61,7 @@ ComputeCorrect.Realizes
 --   | none => True
 ```
 
-`Realizes` is overloaded by the expected value type. `ℝ` specs use
+`Realizes_without_Rounding` is overloaded by the expected value type. `ℝ` specs use
 `BlockState.readMem`, `Nat` specs use `readMemValue .nat`, and `MemCell` specs
 use exact algorithm-layer cell equality. Use it when the spec is naturally a
 write-indexed written-cell contract or spans multiple regions. For common
@@ -115,7 +135,7 @@ ComputeCorrect.OutputArray k s view expected   -- 1D specialization
 
 `OutputArray` is the 1D `n`-shape specialization of `OutputTile` and is the
 preferred surface when the spec is naturally a `Fin n → ℝ` function. Both are
-thin wrappers over `Realizes` through `WriteMap.ofTensorView`; they exist to
+thin wrappers over `Realizes_without_Rounding` through `WriteMap.ofTensorView`; they exist to
 keep tensor-view theorem statements readable.
 
 ### Value/index pair outputs
@@ -134,9 +154,9 @@ Use these for kernels with paired outputs such as
 `tl.max(..., return_indices=True)`. `OutputPairWhere` is the right choice
 when masking restricts which lanes participate.
 
-These remain dedicated definitions rather than `Realizes` wrappers because the
+These remain dedicated definitions rather than `Realizes_without_Rounding` wrappers because the
 two channels have different readback carriers (`ℝ` for value, `Nat` for index)
-and the `Realizes` typeclass dispatches on a single carrier per call. A future
+and the `Realizes_without_Rounding` typeclass dispatches on a single carrier per call. A future
 revision could introduce a per-lane carrier typeclass to subsume them; not
 worth doing until a second heterogeneous-output kernel appears.
 
@@ -144,36 +164,39 @@ worth doing until a second heterogeneous-output kernel appears.
 
 ### `Realizes` vs `Refines` — the naming scheme
 
-VeriTile splits the two verification questions by name:
+VeriTile splits the two verification questions by name (each name is the
+rounding surface; append `_without_Rounding` for the exact-ℝ idealization):
 
 - **`Realizes`** — *a kernel realizes a spec* (one kernel vs expected
-  outputs). `ComputeCorrect.Realizes` (the workhorse single-kernel surface,
-  above) and its rounding-parametric mirror `ComputeRefine.RealizesR` both
-  live here.
+  outputs). `ComputeCorrect.Realizes` is the rounding form;
+  `ComputeCorrect.Realizes_without_Rounding` is the exact single-kernel
+  workhorse that most ported kernels use.
 - **`Refines`** — *a kernel refines another kernel* (two kernels compared to
-  each other). `ComputeRefine.Refines` (writes-equality), `ComputeRefine.RefinesAt`
-  (pointwise per-address relation), and their rounding mirrors
-  `RefinesR` / `RefinesAtR`.
+  each other). `ComputeRefine.Refines` (writes-equality) and
+  `ComputeRefine.RefinesAt` (pointwise per-address relation), with their exact
+  mirrors `Refines_without_Rounding` / `RefinesAt_without_Rounding`.
 
 ### Writes-equality: `ComputeRefine.Refines`
 
-The canonical two-kernel surface is `ComputeRefine.Refines`. It runs both
-kernels from the same initial state and asserts that they performed **the same
-writes** — the two final memories agree at every cell outside a declared list
-of `scratch` regions:
+The canonical two-kernel surface is `ComputeRefine.Refines`. Under a rounding
+model `R` it runs both kernels from the same initial state through `execR R`
+and asserts that they performed **the same writes** — the two final memories
+agree at every cell outside a declared list of `scratch` regions:
 
 ```lean
-ComputeRefine.Refines lhs rhs s scratch
--- := ExecRefine lhs rhs s (fun l r =>
+ComputeRefine.Refines R lhs rhs s scratch
+-- := ExecRefineR R lhs rhs s (fun l r =>
 --      ∀ region ∉ scratch, ∀ offset, l.mem region offset = r.mem region offset)
 ```
 
-Same write locations, same written values, one equation. `scratch` names the
-regions the two kernels are *allowed* to disagree on — a pipeline's
-intermediate tensors (e.g. `[S]` for a fused-vs-unfused SwiGLU pair, or the
-`zReg`/`siluReg` temporaries in `FusedSiLU`). Pass `[]` when the two kernels
-must agree on all of memory. This is the surface every `*_refinement_view`
-theorem in `bench/examples/` lands on.
+Same write locations, same written values, one equation — for the given `R`.
+`scratch` names the regions the two kernels are *allowed* to disagree on — a
+pipeline's intermediate tensors (e.g. `[S]` for a fused-vs-unfused SwiGLU pair,
+or the `zReg`/`siluReg` temporaries in `FusedSiLU`). Pass `[]` when the two
+kernels must agree on all of memory. This is the surface every
+`*_refinement_view` theorem in `bench/examples/` lands on; the exact-ℝ variant
+`ComputeRefine.Refines_without_Rounding` (no `R`, running under `exec`) is the
+idealization used by `bench/examples/FusedSiLU.lean`.
 
 ### Pointwise: `ComputeRefine.RefinesAt`
 
@@ -196,29 +219,32 @@ genuinely need per-side values.
 
 ### Rounding-model surfaces (narrow float, #447)
 
-For kernels with narrow-float output channels there is a rounding-parametric
-mirror of each surface, universally quantified over **every** `RoundingModel`
-(`round : FloatDType → ℝ → ℝ`, sole axiom `round_real = id`). They live in
-[`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean) and
-execute under the R-threaded semantics `execR`:
+The unqualified surfaces are the rounding surfaces: each is parametric over a
+`RoundingModel R` (`round : FloatDType → ℝ → ℝ`, with idempotence a defining
+field) and executes under the R-threaded semantics `execR`. They live in
+[`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean):
 
-- `ComputeRefine.RealizesR kernel s write expected` — single kernel vs an
+- `ComputeRefine.Realizes kernel s write expected` — single kernel vs an
   `R`-annotated spec `expected : RoundingModel → ι → α`. The spec's shape
   *is* the rounding-event ledger: no `R.round` means the observed path is
   rounding-free; one `R.round` means one final quantization; nested
   `R.round`s count one event each.
-- `ComputeRefine.RefinesR R lhs rhs s scratch` — the writes-equality pair
+- `ComputeRefine.Refines R lhs rhs s scratch` — the writes-equality pair
   surface under `R`.
-- `ComputeRefine.RefinesAtR R lhs rhs s lhsWrite rhsWrite relation` — the
+- `ComputeRefine.RefinesAt R lhs rhs s lhsWrite rhsWrite relation` — the
   pointwise pair surface under `R`.
 
-The two families meet in exactly one bridge, `ComputeRefine.RealizesR.toRealizes`
-("refinement implies ideal correctness"): instantiating at the trivial model
-`.triv`, where `execR` degenerates to the exact `exec`, turns any `RealizesR`
-into an ordinary `ComputeCorrect.Realizes` for `expected .triv`. Degeneration
-lemmas `refinesR_triv_iff` / `refinesAtR_triv_iff` recover `Refines` /
-`RefinesAt` the same way. The gold-standard walkthrough is
-[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean).
+The exact-ℝ idealizations are the `*_without_Rounding` mirrors, and they
+**degenerate out of** the rounding surfaces at the trivial model `.triv` (where
+`execR` collapses onto `exec`): the bridge `ComputeRefine.Realizes.toRealizes`
+("rounding claim implies ideal correctness") turns any `Realizes` into an
+ordinary `ComputeCorrect.Realizes_without_Rounding` for `expected .triv`.
+Degeneration lemmas `refines_triv_iff` / `refinesAt_triv_iff` recover
+`Refines_without_Rounding` / `RefinesAt_without_Rounding` the same way. The
+gold-standard walkthrough for the ∀R compositional pattern is
+[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean); the
+boundary-rounding showcases (LogSumExp, softmax, Welford, LayerNorm, FusedSiLU)
+land on `Refines R` for a fixed `R`.
 
 ### Equality helpers
 

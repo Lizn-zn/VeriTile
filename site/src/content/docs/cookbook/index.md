@@ -5,7 +5,7 @@ description: How to translate a Triton .py kernel into Lean and prove it correct
 
 The cookbook collects the working knowledge for translating a Triton `.py`
 kernel into a `triton { ... }` block, writing its spec, and closing its
-`ComputeCorrect.Realizes` proof. It distills lessons learned while building
+`ComputeCorrect.Realizes_without_Rounding` proof. It distills lessons learned while building
 out the bench corpus rather than the theoretical reference (for that see
 [Architecture & semantics](/VeriTile/architecture/) and [Proofs & surfaces](/VeriTile/proofs/)).
 

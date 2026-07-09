@@ -6,12 +6,31 @@ title: "正确性 surface"
 所有 surface 定义在
 [`VeriTile.Triton.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile.Triton.Correctness.lean)。
 
+## 舍入默认约定
+
+先读这一段 —— 它固定了下面每个 surface 名字的含义。**unqualified** 的 surface
+名字(`Realizes`、`Refines`、`RefinesAt`、`Correct`)是 **rounding-model** surface:
+它们接受一个 `RoundingModel R`,在 R-threaded 语义 `execR` 下执行。**exact-ℝ
+理想化** —— 即较早那种"全是实数运算、没有量化"的读法 —— 是显式带限定的
+`*_without_Rounding` surface(`Realizes_without_Rounding`、`Refines_without_Rounding`、
+`RefinesAt_without_Rounding`、`Correct_without_Rounding`)。
+
+经验法则:unqualified 名字是 kernel 在硬件上*实际*做的事(带舍入);
+`*_without_Rounding` 是当舍入与结论无关时可以退回去的数学家理想化。exact surface
+在 trivial model `.triv` 处(此时 `execR` 塌回 `exec`)**从** rounding surface
+**退化出来**,反方向不成立。141 个已 port kernel 里大多数证在 `*_without_Rounding`
+上(它们的输出是 exact-ℝ spec);`bench/examples/` 下带 bf16 boundary store 的
+showcase 对落在 rounding surface `Refines R` 上。
+
 ## 速查表
 
 | 目标 | 用 |
 |---|---|
-| 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes` |
-| 两个 kernel realize 某个输出关系 | `ComputeRefine.Realizes` |
+| 一个 kernel realize 某个输出规范(舍入)| `ComputeCorrect.Realizes` |
+| …该规范的 exact-ℝ 理想化 | `ComputeCorrect.Realizes_without_Rounding` |
+| 一个 kernel refine 另一个,writes-equality(舍入)| `ComputeRefine.Refines` |
+| …exact-ℝ 理想化 | `ComputeRefine.Refines_without_Rounding` |
+| 两个 kernel 逐地址 pointwise 相符 | `ComputeRefine.RefinesAt`(exact:`RefinesAt_without_Rounding`)|
 | Whole-grid 启动(每个 program 都正确写入)| `Kernel.ForAllProgramsSome`(临时;见 Grid 章节)|
 | 每个 lane 都输出 value/index 对 | `ComputeCorrect.OutputPair` |
 | 仅在 active lane 上输出 value/index 对 | `ComputeCorrect.OutputPairWhere` |

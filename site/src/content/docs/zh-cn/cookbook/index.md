@@ -4,7 +4,7 @@ description: 如何把一个 Triton .py kernel 翻译进 Lean 并完成正确性
 ---
 
 本节汇总把一个 Triton `.py` kernel 翻译进 `triton { ... }` block、写出
-spec、完成 `ComputeCorrect.Realizes` 证明所需的工作经验。它把 bench
+spec、完成 `ComputeCorrect.Realizes_without_Rounding` 证明所需的工作经验。它把 bench
 语料堆出来的教训沉淀下来,不是理论参考(那个看
 [架构与语义](/VeriTile/zh-cn/architecture/) 和 [证明与表面](/VeriTile/zh-cn/proofs/))。
 

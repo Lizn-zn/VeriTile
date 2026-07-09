@@ -110,7 +110,7 @@ imminent:
 
 Items where the cleaner answer is not yet committed:
 
-1. **Refinement bench coverage** — `ComputeRefine.Realizes` has zero
+1. **Refinement bench coverage** — `ComputeRefine.Refines_without_Rounding` has zero
    uses in `bench/` despite the surface existing. Are there
    "kernel ↔ kernel" pairs in the corpus that would benefit from
    refinement proofs, or is the surface only paying its way for

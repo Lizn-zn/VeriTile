@@ -11,12 +11,13 @@ API 出发。完整 user guide 见
   (*一个 kernel refine 另一个* —— 两个终态 memory 在所有非 scratch region 上
   writes-equality)、pointwise 的 `ComputeRefine.RefinesAt`、
   `ComputeRefine.Post` 或 `ComputeRefine.General`。
-- 窄浮点 kernel 有对每个 `RoundingModel` 全称量化的 rounding-parametric 镜像:
-  `ComputeRefine.RealizesR`(单 kernel)和 `RefinesR` / `RefinesAtR`(双
-  kernel);见 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) 及 showcase
-  `bench/examples/FusedSwiglu.lean`。
+- 窄浮点 kernel 的 correctness 落在舍入 surface 上:不带限定词的
+  `ComputeRefine.Realizes`(单 kernel)和 `Refines` / `RefinesAt`(双 kernel)都
+  接受一个 `RoundingModel R`,在 `execR` 下执行;对应的精确实数理想化是它们的
+  `*_without_Rounding` 变体。见 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)
+  及 showcase `bench/examples/FusedSwiglu.lean`。
 
-投影后的算法 lemma 仍然可以提到 `Kernel.Correct` 或 `Kernel.Refine`,
+投影后的算法 lemma 仍然可以提到 `Kernel.Correct_without_Rounding` 或 `Kernel.Refine`,
 但仅限于明确属于内部 bridge lemma。这些 lemma 不应当作为
 `scripts/kernel-manifest.tsv` 里登记的公开 example 定理。
 

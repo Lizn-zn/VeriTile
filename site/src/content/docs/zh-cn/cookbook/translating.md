@@ -120,8 +120,8 @@ Python 多分支 `if/elif/else` 折成 `tl.where`、`for` 展开、`while` 改
 
 | 目标 | Surface |
 |---|---|
-| 一个 kernel realize 某输出 spec | `ComputeCorrect.Realizes` |
-| 两个 kernel realize 某输出关系 | `ComputeRefine.Realizes` |
+| 一个 kernel realize 某输出 spec | `ComputeCorrect.Realizes_without_Rounding` |
+| 两个 kernel realize 某输出关系 | `ComputeRefine.Refines_without_Rounding` |
 | 值 + 索引同时输出(如 `return_indices=True`) | `ComputeCorrect.OutputPairWhere` |
 | 自定义 final-state 后置条件 | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | 关系跨任意初始状态 | `ComputeCorrect.General` / `ComputeRefine.General` |
