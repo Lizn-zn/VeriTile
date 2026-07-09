@@ -399,7 +399,7 @@ theorem rotary_emb_q0_block_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         qOffset s stride_qbs stride_qh stride_qd (dimEven i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_q0_block Q Cos Sin stride_qbs stride_qh
         stride_qd stride_cosbs stride_cosd stride_sinbs stride_sind
         max_total_len HEAD_Q BLOCK_HALF)
@@ -525,7 +525,7 @@ theorem rotary_emb_q1_block_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         qOffset s stride_qbs stride_qh stride_qd (dimOdd i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_q1_block Q Cos Sin stride_qbs stride_qh
         stride_qd stride_cosbs stride_cosd stride_sinbs stride_sind
         max_total_len HEAD_Q BLOCK_HALF)
@@ -660,7 +660,7 @@ theorem rotary_emb_k0_block_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         kOffset s stride_kbs stride_kh stride_kd (dimEven i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_k0_block K Cos Sin stride_kbs stride_kh
         stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
         max_total_len HEAD_K BLOCK_HALF)
@@ -781,7 +781,7 @@ theorem rotary_emb_k1_block_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         kOffset s stride_kbs stride_kh stride_kd (dimOdd i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_k1_block K Cos Sin stride_kbs stride_kh
         stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
         max_total_len HEAD_K BLOCK_HALF)
@@ -843,7 +843,7 @@ theorem rotary_emb_output_summary_general
       stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
       stride_sind max_total_len HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ
       BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_q0_block Q Cos Sin stride_qbs stride_qh stride_qd
         stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF)
       (initialState := s)
@@ -853,7 +853,7 @@ theorem rotary_emb_output_summary_general
       (expected := fun i =>
         rotaryQ0Spec s Q Cos Sin stride_qbs stride_qh stride_qd
           stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_q1_block Q Cos Sin stride_qbs stride_qh stride_qd
         stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF)
       (initialState := s)
@@ -863,7 +863,7 @@ theorem rotary_emb_output_summary_general
       (expected := fun i =>
         rotaryQ1Spec s Q Cos Sin stride_qbs stride_qh stride_qd
           stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_k0_block K Cos Sin stride_kbs stride_kh stride_kd
         stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
       (initialState := s)
@@ -873,7 +873,7 @@ theorem rotary_emb_output_summary_general
       (expected := fun i =>
         rotaryK0Spec s K Cos Sin stride_kbs stride_kh stride_kd
           stride_cosbs stride_cosd stride_sinbs stride_sind i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_emb_k1_block K Cos Sin stride_kbs stride_kh stride_kd
         stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
       (initialState := s)

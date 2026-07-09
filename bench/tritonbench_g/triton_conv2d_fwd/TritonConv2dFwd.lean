@@ -33,7 +33,7 @@ loaded `Input`/`Weight` tiles.
 ## Proof architecture
 
 ```
-conv2d_closed_form_correct                    ← TOP THEOREM (ComputeCorrect.Realizes)
+conv2d_closed_form_correct                    ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ conv2d_exec_closed_form                  ← exec-side closed form (active cells = the conv sum)
        ├─ conv2d_preLoop      (P 0,0,0 : accum = 0, Input/Weight seeded)
        ├─ conv2d_c_step / c_loop  (inner in-feat dot loop: accum += masked dot)
@@ -1795,7 +1795,7 @@ theorem conv2d_closed_form_correct
     (s : BlockState) (hBIN : 0 < BIN) (hundef : ∀ rg o, s.undef rg o = 0)
     (hIGD : in_feat_dim / groups = BIN * numCBlocks)
     (hOutInj : Function.Injective (outputOffset s BHW OF out_height out_width OBS OOFS OHS OWS (out_feat_dim / groups))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height in_width
         out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
         KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF)
@@ -1835,7 +1835,7 @@ theorem conv2d_output_summary
     (∃ alg, (conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height in_width
         out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
         KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height in_width
         out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
         KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF)

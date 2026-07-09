@@ -29,7 +29,7 @@ state both kernels write the same mean and variance.
 ## The public result (bottom of file)
 
 The single public headline is **`welford_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
 two-pass and online kernels perform the same writes (no scratch regions, so the
 scratch list is `[]`). Its statement mentions only the two kernels, the
 loaded-input contract, the writes-equality surface, and the state/region types
@@ -723,14 +723,14 @@ variable (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSiz
 variable (s : BlockState) (xs : Fin blockSize → ℝ)
 
 include hN in
-/-- **two-pass refines online** (`ComputeRefine.Refines`, no scratch): from the
+/-- **two-pass refines online** (`ComputeRefine.Refines_without_Rounding`, no scratch): from the
 same initial state, `twopassWelfordKernel` and `onlineWelfordKernel` perform the
 same writes — their final memories agree at every cell. The written mean/variance
 values coincide by Welford's identity (`welford_eq_two_pass`). -/
 theorem welford_kernels_refinement_view
     (h_x : InputLoadedAt s xReg blockSize xs)
     (h_mv : meanReg ≠ varReg) :
-    ComputeRefine.Refines
+    ComputeRefine.Refines_without_Rounding
       (twopassWelfordKernel xReg meanReg varReg blockSize)
       (onlineWelfordKernel xReg meanReg varReg blockSize)
       s [] := by
@@ -762,7 +762,7 @@ trusted statement) the file stops compiling. See
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset welford_kernels_refinement_view ⊆
   [twopassWelfordKernel, onlineWelfordKernel, InputLoadedAt,
-   ComputeRefine.Refines, BlockState, RegionName]
+   ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
 
 end Welford.theorems
 

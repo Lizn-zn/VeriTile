@@ -136,7 +136,7 @@ theorem masked_add_kernel_compute_correct
     (grad_ptr p_ptr p_mask_ptr : RegionName)
     (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := masked_add_kernel grad_ptr p_ptr p_mask_ptr
         n_elements alpha BLOCK_SIZE)
       (initialState := s)
@@ -165,7 +165,7 @@ theorem masked_add_kernel_output_summary
     (s : BlockState) :
     (∃ alg, (masked_add_kernel grad_ptr p_ptr p_mask_ptr
       n_elements alpha BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := masked_add_kernel grad_ptr p_ptr p_mask_ptr
         n_elements alpha BLOCK_SIZE)
       (initialState := s)

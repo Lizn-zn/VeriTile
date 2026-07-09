@@ -24,7 +24,7 @@ the kernel's own strided batch/chunk/head/row/col addressing.
 ## Proof architecture
 
 ```
-bmm_chunk_fwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+bmm_chunk_fwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ bmm_exec_closed_form                         ← exec-side closed form (every active cell = ∑_k A·B)
        ├─ bmm_preLoop      (P 0: acc = 0, a/b pointers seeded with batch offset)
        ├─ bmm_step         (one K-block: acc += tl.dot advances the partial sum)
@@ -1375,7 +1375,7 @@ theorem bmm_chunk_fwd_closed_form_correct
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) chunk_size BN) BM i < chunk_size)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) chunk_size BN) BN j < chunk_size)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
         SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK)
       (initialState := s)
@@ -1427,7 +1427,7 @@ theorem bmm_chunk_fwd_output_summary_general
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
         SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
         SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK)
       (initialState := s)

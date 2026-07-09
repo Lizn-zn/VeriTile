@@ -231,7 +231,7 @@ theorem fwd_kernel_destindex_copy_kv_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
         outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fwd_kernel_destindex_copy_kv K Dest_loc Out
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         head_num head_dim BLOCK_DMODEL BLOCK_HEAD)
@@ -268,7 +268,7 @@ theorem fwd_kernel_destindex_copy_kv_output_summary
     (∃ alg, (fwd_kernel_destindex_copy_kv K Dest_loc Out
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         head_num head_dim BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fwd_kernel_destindex_copy_kv K Dest_loc Out
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         head_num head_dim BLOCK_DMODEL BLOCK_HEAD)

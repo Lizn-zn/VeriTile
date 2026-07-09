@@ -185,7 +185,7 @@ end GridLaunchedOrdinary
 
 /-- Whole-grid single-memory output correctness.
 
-The launcher-facing analogue of `ComputeCorrect.Realizes`, lifted from a single
+The launcher-facing analogue of `ComputeCorrect.Realizes_without_Rounding`, lifted from a single
 program to the merged whole-grid memory. `LaunchCorrect k g s write expected`
 holds when there *exists* an ordinary disjoint launch of `k` over grid `g` from
 initial state `s` whose single merged final memory realizes `expected` at every

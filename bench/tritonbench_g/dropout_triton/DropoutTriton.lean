@@ -113,7 +113,7 @@ theorem dropout_kernel_compute_correct
     (x_ptr x_keep_ptr output_ptr : RegionName)
     (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := dropout_kernel x_ptr x_keep_ptr output_ptr
         n_elements p BLOCK_SIZE)
       (initialState := s)
@@ -141,7 +141,7 @@ theorem dropout_kernel_output_summary
     (s : BlockState) :
     (∃ alg, (dropout_kernel x_ptr x_keep_ptr output_ptr
         n_elements p BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := dropout_kernel x_ptr x_keep_ptr output_ptr
         n_elements p BLOCK_SIZE)
       (initialState := s)

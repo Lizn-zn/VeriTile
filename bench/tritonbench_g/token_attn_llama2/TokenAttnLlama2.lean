@@ -280,7 +280,7 @@ theorem token_attn_llama2_score_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_llama2_score_store_slice AttValue B_Start_Loc B_Seqlen
         Att_Out max_input_len att_value_stride_h att_value_stride_bs
         att_stride_h att_stride_bs BLOCK_N)
@@ -1217,7 +1217,7 @@ theorem token_attn_llama2_surface_output_compute_correct
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
         B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs
         stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h
@@ -1272,7 +1272,7 @@ theorem token_attn_llama2_output_summary_general
       Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh
       stride_qd stride_kbs stride_kh stride_kd att_stride_h att_stride_bs
       kv_group_num BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
         B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs
         stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h

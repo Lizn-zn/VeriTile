@@ -77,7 +77,7 @@ set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorem:** `attn_fwd_triton_output_summary_general` -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Full Lean port of `attn_fwd_triton.py`'s `_attn_fwd` (`STAGE = 3`).
 
@@ -327,7 +327,7 @@ theorem attn_fwd_triton_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attn_fwd_triton_final_store_slice Acc Out H N_CTX
         HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
         stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
@@ -360,9 +360,9 @@ theorem attn_fwd_triton_final_store_slice_compute_correct
 the first 96 head lanes. Contiguous `[B, H, N_CTX, HEAD_DIM]` tensors have
 strides `(65536, 16384, 128, 1)`. -/
 
-end Correct
+end Correct_without_Rounding
 
-section Correct
+section Correct_without_Rounding
 
 /-! ## Genuine closed-form attention spec (exp2, causal)
 
@@ -578,7 +578,7 @@ theorem osStepBot_bot_seed_indep (xs : List (ℝ × ℝ)) (hne : xs ≠ [])
     rw [hα, hub]; simp
   simp only [List.foldl_cons, hstep]
 
-end Correct
+end Correct_without_Rounding
 
 /-! ## FOUNDATION Part 1 — dimension-general body pieces (`aftgPreLoopG` ++ forRange `aftgLoopBodyG` :: postLoop)
 
@@ -4233,7 +4233,7 @@ theorem attn_fwd_triton_output_summary_general
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1

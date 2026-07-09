@@ -278,19 +278,19 @@ def ensureAlgorithmOnly (ctx : String) (e : EOut) : MacroM Unit := do
       (ctx ++ ": compute-only expressions such as runtime tl.bitcast must be assigned or stored directly before algorithm-layer composition")
 
 /-- Macro-time IEEE 754 binary32 bit-pattern triage. Throws on encodings
-that AlgorithmCorrect does not model (subnormal/zero `exp = 0`, NaN/Inf
+that AlgorithmCorrect_without_Rounding does not model (subnormal/zero `exp = 0`, NaN/Inf
 `exp = 255`), so the algorithm-side `Op.const` term emitted below is always
 backed by a `decodeRat` value that elaborates to `some _`. This is the
 single point that decides whether a `tl.bitcast` literal is admissible in
-AlgorithmCorrect — there is no runtime `Except.error` fallback downstream. -/
+AlgorithmCorrect_without_Rounding — there is no runtime `Except.error` fallback downstream. -/
 def validateFp32BitsForAlg (bits : Nat) : MacroM Unit := do
   let exp := (bits / (2 ^ 23)) % 256
   if exp = 0 then
     Macro.throwError
-      "tl.bitcast(..., tl.float32): zero/subnormal fp32 (exponent field 0) is not modeled in AlgorithmCorrect"
+      "tl.bitcast(..., tl.float32): zero/subnormal fp32 (exponent field 0) is not modeled in AlgorithmCorrect_without_Rounding"
   if exp = 255 then
     Macro.throwError
-      "tl.bitcast(..., tl.float32): NaN/Inf fp32 (exponent field 255) is not modeled in AlgorithmCorrect"
+      "tl.bitcast(..., tl.float32): NaN/Inf fp32 (exponent field 255) is not modeled in AlgorithmCorrect_without_Rounding"
 
 /-- Emit the algorithm-side `Op.const` term for a validated fp32 bit pattern.
 

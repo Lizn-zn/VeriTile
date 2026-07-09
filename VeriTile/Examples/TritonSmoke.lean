@@ -618,7 +618,7 @@ example :
   ComputeOp.minusOneBitcast_toAlgorithm
 
 /-- Runtime bitcast is expressible in the compute AST, but cannot be projected
-to AlgorithmCorrect until a compute-level numeric semantics handles it. -/
+to AlgorithmCorrect_without_Rounding until a compute-level numeric semantics handles it. -/
 def bitcastRuntimeSmoke (bitsReg outReg : RegionName) : ComputeKernel := triton {
   bits := tl.load($(bitsReg), dtype=tl.uint32)
   y := tl.bitcast(bits, tl.float32)

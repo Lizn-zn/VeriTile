@@ -139,7 +139,7 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := addKernel xReg yReg outReg blockSize)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.ofTensorView
@@ -162,7 +162,7 @@ theorem add_kernel_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := addKernel xReg yReg outReg blockSize)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.ofTensorView
@@ -288,7 +288,7 @@ theorem add_kernel_masked_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := addKernelMasked xReg yReg outReg blockSize nElements)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

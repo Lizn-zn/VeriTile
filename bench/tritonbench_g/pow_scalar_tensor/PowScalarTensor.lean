@@ -105,7 +105,7 @@ shapes are instantiations. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-! ## Surfaces -/
 
@@ -596,7 +596,7 @@ theorem pow_one_tile_compute_correct
     (val0 : ℝ) (in0_ptr out0_ptr : RegionName)
     (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
     (s : BlockState) (hStride : 0 < out0_stride0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := pow_func_scalar_tensor_kernel_rank_1_one_tile_surface val0
         in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
         tile_size0)
@@ -819,13 +819,13 @@ theorem pow_grid_stride_exec_correct
   rfl
 
 /-- Compute-facing correctness for the `one_tile_per_cta = false` grid-stride
-branch: one `Realizes` over all `(iteration, lane)` pairs. -/
+branch: one `Realizes_without_Rounding` over all `(iteration, lane)` pairs. -/
 theorem pow_grid_stride_compute_correct
     (val0 : ℝ) (in0_ptr out0_ptr : RegionName)
     (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
     (s : BlockState) (hStride : 0 < out0_stride0) (hDisj : in0_ptr ≠ out0_ptr)
     (hGrid : 0 < s.numPids 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface val0
         in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
         tile_size0)
@@ -893,7 +893,7 @@ theorem pow_scalar_tensor_output_summary_general
       in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
       tile_size0).toAlgorithm? = Except.ok alg) ∧
     -- (2) one_tile_per_cta = true: genuine elementwise scalar-base power
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := pow_func_scalar_tensor_kernel_rank_1_one_tile_surface val0
         in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
         tile_size0)
@@ -906,7 +906,7 @@ theorem pow_scalar_tensor_output_summary_general
           (taskIndex (s.pids 0) tile_size0 i)) ∧
     -- (3) one_tile_per_cta = false: genuine elementwise scalar-base power
     --     across the whole grid-stride loop
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface val0
         in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
         tile_size0)
@@ -930,6 +930,6 @@ theorem pow_scalar_tensor_output_summary_general
       out0_stride0 s0 num_tasks tiles_per_cta tile_size0 s hStride hDisj
       hGrid⟩
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.PowScalarTensor

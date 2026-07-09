@@ -125,7 +125,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `fused_recurrent_retention.py`'s
 `fused_recurrent_retention_fwd_kernel`.
@@ -623,7 +623,7 @@ theorem fused_recurrent_retention_state_step_slice_compute_correct
     (t s_qk_h s_vo_h H DK DV BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => stateOffset s DK DV BK BV idx.2.1 idx.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_state_step_slice HPrev k v HOut
         t s_qk_h s_vo_h H DK DV BK BV)
       (initialState := s)
@@ -762,7 +762,7 @@ theorem fused_recurrent_retention_output_step_slice_compute_correct
     (t s_qk_h s_vo_h B H DK DV BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => outStepOffset s t s_vo_h B H DV BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_output_step_slice HPrev q k v o
         t s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -878,7 +878,7 @@ theorem fused_recurrent_retention_final_state_store_slice_compute_correct
     (HFinal Ht : RegionName) (DK DV BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => stateOffset s DK DV BK BV idx.2.1 idx.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_final_state_store_slice HFinal Ht
         DK DV BK BV)
       (initialState := s)
@@ -1001,7 +1001,7 @@ theorem fused_recurrent_retention_bwd_dq_step_slice_compute_correct
     (t s_qk_h s_vo_h B H DK DV BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jk : Fin BK => dqStepOffset s t s_qk_h B H DK BK jk)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dq_step_slice HPrev k v do_ dq
         t s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1122,7 +1122,7 @@ theorem fused_recurrent_retention_bwd_dstate_step_slice_compute_correct
     (t s_qk_h s_vo_h H DK DV BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BK, BV] => stateOffset s DK DV BK BV idx.1 idx.2.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dstate_step_slice DHPrev q do_
         DHOut t s_qk_h s_vo_h H DK DV BK BV scale)
       (initialState := s)
@@ -1255,7 +1255,7 @@ theorem fused_recurrent_retention_bwd_dk_step_slice_compute_correct
     (t s_qk_h s_vo_h B H DK DV BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jk : Fin BK => dqStepOffset s t s_qk_h B H DK BK jk)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dk_step_slice DHPrev q do_ v dk
         t s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1380,7 +1380,7 @@ theorem fused_recurrent_retention_bwd_dv_step_slice_compute_correct
     (t s_qk_h s_vo_h B H DK DV BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => outStepOffset s t s_vo_h B H DV BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dv_step_slice DHPrev q do_ k dv
         t s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1438,7 +1438,7 @@ theorem fused_recurrent_retention_state_step_closed_form
     (hPrev : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem HPrev (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV m jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_state_step_slice HPrev k v HOut
         m s_qk_h s_vo_h H DK DV BK BV)
       (initialState := s)
@@ -1470,7 +1470,7 @@ theorem fused_recurrent_retention_output_step_closed_form
     (hPrev : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem HPrev (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV m jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_output_step_slice HPrev q k v o
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1504,7 +1504,7 @@ theorem fused_recurrent_retention_final_state_closed_form
     (hFinal : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem HFinal (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV T jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_final_state_store_slice HFinal Ht
         DK DV BK BV)
       (initialState := s)
@@ -1545,7 +1545,7 @@ theorem fused_recurrent_retention_bwd_dq_step_closed_form
     (hPrev : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem HPrev (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV m jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dq_step_slice HPrev k v do_ dq
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1580,7 +1580,7 @@ theorem fused_recurrent_retention_bwd_dstate_step_closed_form
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
             dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale (m + 1) jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dstate_step_slice DHPrev q do_
         DHOut m s_qk_h s_vo_h H DK DV BK BV scale)
       (initialState := s)
@@ -1615,7 +1615,7 @@ theorem fused_recurrent_retention_bwd_dk_step_closed_form
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
             dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale (m + 1) jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dk_step_slice DHPrev q do_ v dk
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1647,7 +1647,7 @@ theorem fused_recurrent_retention_bwd_dv_step_closed_form
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
             dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale (m + 1) jk jv) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dv_step_slice DHPrev q do_ k dv
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1808,7 +1808,7 @@ theorem fused_recurrent_retention_output_summary_general
       initial_state s_qk_h s_vo_h B H T scale BK BV DK DV
       USE_INITIAL_STATE).toAlgorithm? = Except.ok alg) ∧
     -- (3) the forward output body realizes the genuine `outClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_output_step_slice HPrev q k v o
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1819,7 +1819,7 @@ theorem fused_recurrent_retention_output_summary_general
         outClosed s q k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV scale m jv)) ∧
     -- (4) the state-update body realizes the genuine `stateClosed(m+1)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_state_step_slice HPrev k v HOut
         m s_qk_h s_vo_h H DK DV BK BV)
       (initialState := s)
@@ -1829,7 +1829,7 @@ theorem fused_recurrent_retention_output_summary_general
         stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV (m + 1) idx.2.1 idx.1)) ∧
     -- (5) the final-state writeback realizes the genuine `stateClosed(T)` (masked)
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_final_state_store_slice HFinal
         final_state DK DV BK BV)
       (initialState := s)
@@ -1843,7 +1843,7 @@ theorem fused_recurrent_retention_output_summary_general
             H DK DV BK BV T idx.2.1 idx.1
         else 0)) ∧
     -- (6) the backward `dq` body realizes the genuine `dqClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dq_step_slice HPrev k v do_ dq
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1854,7 +1854,7 @@ theorem fused_recurrent_retention_output_summary_general
         dqClosed s k v do_ initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV scale m jk)) ∧
     -- (7) the reverse gradient-state carry body realizes `b_b·dStateClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dstate_step_slice DHPrev q do_
         DHOut m s_qk_h s_vo_h H DK DV BK BV scale)
       (initialState := s)
@@ -1865,7 +1865,7 @@ theorem fused_recurrent_retention_output_summary_general
           dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale m
             idx.1 idx.2.1)) ∧
     -- (8) the reverse `dk` body realizes the genuine `dkClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dk_step_slice DHPrev q do_ v dk
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1875,7 +1875,7 @@ theorem fused_recurrent_retention_output_summary_general
       (expected := fun jk : Fin BK =>
         dkClosed s q do_ v s_qk_h s_vo_h H DK DV BK BV T scale m jk)) ∧
     -- (9) the reverse `dv` body realizes the genuine `dvClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dv_step_slice DHPrev q do_ k dv
         m s_qk_h s_vo_h B H DK DV BK BV scale)
       (initialState := s)
@@ -1916,6 +1916,6 @@ theorem fused_recurrent_retention_output_summary_general
   · exact fused_recurrent_retention_bwd_dv_step_closed_form DHPrev q do_ k dv
       m s_qk_h s_vo_h B H DK DV BK BV T scale s hmT hOutInj hDPrev
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentRetention

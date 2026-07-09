@@ -20,7 +20,7 @@ quantified, the per-program statement covers every row of the grid.
 ## Proof architecture
 
 ```
-softmax_kernel_online_v2_output_summary                ★ MAIN THEOREM (ComputeCorrect.Realizes headline)
+softmax_kernel_online_v2_output_summary                ★ MAIN THEOREM (ComputeCorrect.Realizes_without_Rounding headline)
   └─ softmax_kernel_online_v2_surface_exec_correct      internal engine lemma (full multi-tile surface)
        ├─ pass1LoopA_run / pass1LoopB_run               pass-1 online recurrence over all tiles
        ├─ reduction_step                                cross-lane (max, denom) collapse
@@ -41,7 +41,7 @@ modeled. Full-surface exec-level value correctness **is** established: the full
 online-recurrence surface `softmax_kernel_online_v2_surface` is proved to write
 the genuine full-row softmax `softmaxOptimizeFullSpec` to every active output
 column. The public headline is `softmax_kernel_online_v2_output_summary`, stated
-via `ComputeCorrect.Realizes` over the total output write map; it wraps the
+via `ComputeCorrect.Realizes_without_Rounding` over the total output write map; it wraps the
 exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct` (the
 lowering fact `..._surface_toAlgorithm_supported` is a supporting layer). Cellwise value
 correctness is also proved against the one-tile
@@ -217,7 +217,7 @@ theorem softmax_kernel_online_v2_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -247,7 +247,7 @@ theorem softmax_kernel_online_v2_one_tile_output_summary
     (s : BlockState) :
     (∃ alg, (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2519,18 +2519,18 @@ surface `softmax_kernel_online_v2_surface` realizes the genuine full-row softmax
 write map sends column `j` to `output_ptr` at `linearOffset s N j`, and the
 value read back there after any successful run is exactly the numerically
 stabilized full-row softmax of the loaded input row. Stated via
-`ComputeCorrect.Realizes` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
+`ComputeCorrect.Realizes_without_Rounding` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
 the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
 theorem softmax_kernel_online_v2_output_summary
     (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
     (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_online_v2_surface output_ptr input_ptr M N TILE_N)
       (initialState := s)
       (write := fun j : Fin N => some (output_ptr, linearOffset s N j))
       (expected := fun j : Fin N => softmaxOptimizeFullSpec s input_ptr N j) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [softmax_kernel_online_v2_surface, ComputeExpr.toAlgorithm?]
   intro s0 s' hExec hs0

@@ -491,7 +491,7 @@ theorem rotary_embedding_q0_block_compute_correct
       (fun i : Fin HEAD_HALF =>
         qOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS
           (dimIndex i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q0_block q cos sin q_token_stride
         q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -635,7 +635,7 @@ theorem rotary_embedding_q1_block_compute_correct
       (fun i : Fin HEAD_HALF =>
         qSecondOffset s q_token_stride q_head_stride head_dim_stride
           BLOCK_TOKENS HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q1_block q cos sin q_token_stride
         q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -787,7 +787,7 @@ theorem rotary_embedding_k0_block_compute_correct
       (fun i : Fin HEAD_HALF =>
         kOffset s k_token_stride k_head_stride head_dim_stride BLOCK_TOKENS
           (dimIndex i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k0_block k cos sin k_token_stride
         k_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens K_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -927,7 +927,7 @@ theorem rotary_embedding_k1_block_compute_correct
       (fun i : Fin HEAD_HALF =>
         kSecondOffset s k_token_stride k_head_stride head_dim_stride
           BLOCK_TOKENS HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k1_block k cos sin k_token_stride
         k_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens K_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -1028,7 +1028,7 @@ theorem fused_rotary_v2_kv_cache_first_half_store_slice_compute_correct
       (fun i : Fin HEAD_HALF =>
         kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
           cacheh_stride cached_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_kv_cache_first_half_store_slice OutK0Pre
         kv_cache block_ids offsets_in_last_block cacheb_stride cacheh_stride
         cached_stride HEAD_HALF)
@@ -1037,7 +1037,7 @@ theorem fused_rotary_v2_kv_cache_first_half_store_slice_compute_correct
         kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
           cacheh_stride cached_stride i))
       (expected := fun i => kvCacheFirstStoreSpec s OutK0Pre i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_rotary_v2_kv_cache_first_half_store_slice]
   intro s0 s' hExec hs0
@@ -1121,7 +1121,7 @@ theorem fused_rotary_v2_kv_cache_second_half_store_slice_compute_correct
       (fun i : Fin HEAD_HALF =>
         kvCacheSecondOffset s block_ids offsets_in_last_block cacheb_stride
           cacheh_stride cached_stride HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_kv_cache_second_half_store_slice OutK1Pre
         kv_cache block_ids offsets_in_last_block cacheb_stride cacheh_stride
         cached_stride HEAD_HALF)
@@ -1130,7 +1130,7 @@ theorem fused_rotary_v2_kv_cache_second_half_store_slice_compute_correct
         kvCacheSecondOffset s block_ids offsets_in_last_block cacheb_stride
           cacheh_stride cached_stride HEAD_HALF i))
       (expected := fun i => kvCacheSecondStoreSpec s OutK1Pre HEAD_HALF i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_rotary_v2_kv_cache_second_half_store_slice]
   intro s0 s' hExec hs0
@@ -1196,7 +1196,7 @@ theorem fused_rotary_v2_context_kv_cache_first_half_store_slice_compute_correct
         v2KvCacheFirstOffset s BlockTables ContextLengths cacheb_stride
           cacheh_stride cachebs_stride cached_stride bts_stride btb_stride
           block_size i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_kv_cache_first_half_store_slice OutK0Pre
         kv_cache
         (v2BlockId s BlockTables ContextLengths bts_stride btb_stride block_size)
@@ -1227,7 +1227,7 @@ theorem fused_rotary_v2_context_kv_cache_second_half_store_slice_compute_correct
         v2KvCacheSecondOffset s BlockTables ContextLengths cacheb_stride
           cacheh_stride cachebs_stride cached_stride bts_stride btb_stride
           block_size HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_kv_cache_second_half_store_slice OutK1Pre
         kv_cache
         (v2BlockId s BlockTables ContextLengths bts_stride btb_stride block_size)
@@ -1363,7 +1363,7 @@ theorem fused_rotary_v2_q_first_half_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin HEAD_HALF =>
         v2QFirstOffset s q_token_stride q_head_stride head_dim_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_q_first_half_store_slice OutQ0Pre Q
         q_token_stride q_head_stride head_dim_stride Q_HEAD_NUM HEAD_HALF)
       (initialState := s)
@@ -1437,7 +1437,7 @@ theorem fused_rotary_v2_q_second_half_store_slice_compute_correct
       (fun i : Fin HEAD_HALF =>
         v2QSecondOffset s q_token_stride q_head_stride head_dim_stride
           HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_rotary_v2_q_second_half_store_slice OutQ1Pre Q
         q_token_stride q_head_stride head_dim_stride Q_HEAD_NUM HEAD_HALF)
       (initialState := s)
@@ -1632,7 +1632,7 @@ theorem rotary_embedding_q_surface_q0_compute_correct
             BLOCK_TOKENS idx ≠
           qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
             BLOCK_TOKENS HEAD_HALF idx') :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -1760,7 +1760,7 @@ theorem rotary_embedding_q_surface_q1_compute_correct
             BLOCK_TOKENS idx ≠
           qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
             BLOCK_TOKENS HEAD_HALF idx') :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -1948,7 +1948,7 @@ theorem rotary_embedding_k_surface_k0_compute_correct
             KV_GROUP_NUM BLOCK_TOKENS idx ≠
           kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
             KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF idx') :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
@@ -2069,7 +2069,7 @@ theorem rotary_embedding_k_surface_k1_compute_correct
             KV_GROUP_NUM BLOCK_TOKENS idx ≠
           kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
             KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF idx') :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
@@ -2156,7 +2156,7 @@ theorem rotary_emb_nopad_output_summary_general
       surf_k_head_stride surf_head_dim_stride surf_cos_token_stride
       surf_cos_stride surf_q_total_tokens surf_Q_HEAD_NUM surf_KV_GROUP_NUM
       surf_HEAD_DIM surf_BLOCK_TOKENS).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -2169,7 +2169,7 @@ theorem rotary_emb_nopad_output_summary_general
       (expected := fun idx =>
         rotaryNopadQ0FullSpec s Q Cos Sin q_token_stride q_head_stride
           head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -2182,7 +2182,7 @@ theorem rotary_emb_nopad_output_summary_general
       (expected := fun idx =>
         rotaryNopadQ1FullSpec s Q Cos Sin q_token_stride q_head_stride
           head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
@@ -2196,7 +2196,7 @@ theorem rotary_emb_nopad_output_summary_general
         rotaryNopadK0FullSpec s K Cos Sin k_token_stride k_head_stride
           head_dim_stride cos_token_stride cos_stride KV_GROUP_NUM
           BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)

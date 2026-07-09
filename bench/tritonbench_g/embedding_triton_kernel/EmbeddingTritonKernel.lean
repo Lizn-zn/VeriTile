@@ -65,7 +65,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `[:, None]` / `[None, :]` dimension annotations preserved.
 
 The proof below connects the full `range(0, BLOCK_N, BLOCK_NN)` embedding loop
-to `ComputeCorrect.Realizes` under the stated no-collision/no-alias
+to `ComputeCorrect.Realizes_without_Rounding` under the stated no-collision/no-alias
 hypotheses. -/
 def embedding_kernel
     (weight input_ids out : RegionName)
@@ -640,7 +640,7 @@ def embedding_kernel_correct_target
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
     (s : BlockState) : Prop :=
-  ComputeCorrect.Realizes
+  ComputeCorrect.Realizes_without_Rounding
     (kernel := embedding_kernel weight input_ids out
       vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)

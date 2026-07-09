@@ -54,7 +54,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_fwd_kernel`.
@@ -244,7 +244,7 @@ theorem fused_recurrent_hgrn_output_store_slice_correct
 theorem fused_recurrent_hgrn_output_store_slice_compute_correct
     (BH O : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_output_store_slice BH O i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -321,7 +321,7 @@ theorem fused_recurrent_hgrn_forward_step_store_slice_correct
 theorem fused_recurrent_hgrn_forward_step_store_slice_compute_correct
     (BHPrev X G O : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
         i_t T D BD)
       (initialState := s)
@@ -444,7 +444,7 @@ theorem fused_recurrent_hgrn_forward_step_closed_form
     (hPrev : ∀ i : Fin BD,
       s.readMem BHPrev (bhOffset s D BD i)
         = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD i_t i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
         i_t T D BD)
       (initialState := s)
@@ -538,7 +538,7 @@ theorem fused_recurrent_hgrn_final_state_store_slice_compute_correct
     (BHFinal Ht : RegionName) (D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BD => finalStateOffset s D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -575,7 +575,7 @@ theorem fused_recurrent_hgrn_final_state_closed_form
     (hFinal : ∀ i : Fin BD,
       s.readMem BHFinal (finalStateOffset s D BD i)
         = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -654,7 +654,7 @@ theorem fused_recurrent_hgrn_bwd_grad_store_slice_correct
 theorem fused_recurrent_hgrn_bwd_grad_store_slice_compute_correct
     (GradPre Out : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_grad_store_slice GradPre Out i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -728,7 +728,7 @@ theorem fused_recurrent_hgrn_bwd_dx_step_store_slice_correct
 theorem fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
     (DHPrev DO DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
         i_t T D BD)
       (initialState := s)
@@ -809,7 +809,7 @@ theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_correct
 theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
     (DHPrev DO BO DG : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
         i_t T D BD)
       (initialState := s)
@@ -835,7 +835,7 @@ specializes the generic gradient-store slice to the observed `dx` output. -/
 theorem fused_recurrent_hgrn_bwd_dx_store_slice_compute_correct
     (DxPre DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_grad_store_slice DxPre DX i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -851,7 +851,7 @@ this specializes the generic gradient-store slice to the observed `dg` output. -
 theorem fused_recurrent_hgrn_bwd_dg_store_slice_compute_correct
     (DgPre DG : RegionName) (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_grad_store_slice DgPre DG i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -930,7 +930,7 @@ theorem fused_recurrent_hgrn_output_summary_general
     (∃ alg, (fused_recurrent_hgrn_fwd_surface X G O H0 Ht T D BD
       USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm? = Except.ok alg) ∧
     -- (2) the forward output body realizes the genuine `hgrnStateClosed(i_t+1)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
         i_t T D BD)
       (initialState := s)
@@ -940,7 +940,7 @@ theorem fused_recurrent_hgrn_output_summary_general
       (expected := fun i =>
         hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD (i_t + 1) i)) ∧
     -- (3) the final-state writeback realizes the genuine `hgrnStateClosed(T)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -951,7 +951,7 @@ theorem fused_recurrent_hgrn_output_summary_general
           hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i
         else 0)) ∧
     -- (4) the backward `dx` body realizes the genuine `dh_prev + do`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
         i_t T D BD)
       (initialState := s)
@@ -960,7 +960,7 @@ theorem fused_recurrent_hgrn_output_summary_general
         (fun i => (DX, outOffset s i_t T D BD i)))
       (expected := fun i => bwdDxStepValue s DHPrev DO i_t T D BD i)) ∧
     -- (5) the backward `dg` body realizes the genuine `(dh_prev+do)·o`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
         i_t T D BD)
       (initialState := s)
@@ -981,6 +981,6 @@ theorem fused_recurrent_hgrn_output_summary_general
   · exact fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
       DHPrev DO BO DG i_t T D BD s hOutInj
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn

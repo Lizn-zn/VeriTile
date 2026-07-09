@@ -19,7 +19,7 @@ reference value.
 ## Proof architecture
 
 ```
-matmul_kernel_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+matmul_kernel_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ matmul_kernel_exec_closed_form               ← exec-side closed form (every cell = fp16(∑_k A·B))
        ├─ preLoop      (P 0: accumulator = 0, pointers seeded)
        ├─ matmul_step         (one K-block: accumulator += dot advances the partial sum)
@@ -723,7 +723,7 @@ theorem matmul_kernel_closed_form_correct
     (BM BN BLOCK_K numKBlocks : Nat)
     (hBN : BN ≤ 4096)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_kernel_surface C A B BM BN BLOCK_K numKBlocks)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] => some (C, cOffset s BM BN idx))

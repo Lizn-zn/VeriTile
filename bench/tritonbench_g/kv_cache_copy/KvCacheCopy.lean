@@ -412,7 +412,7 @@ theorem copy_to_kcache_one_xblock_compute_correct
         kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
           stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
           stride_btb KCACHE_X i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
         LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
         stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
@@ -568,7 +568,7 @@ theorem copy_to_kcache_seqlen1_xblock_compute_correct
         seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X stride_kcb
           stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
           block_size KCACHE_X i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
         context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb
         stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
@@ -609,7 +609,7 @@ theorem copy_to_kcache_seqlen1_old_layout_block_compute_correct
       (fun i : Fin HEAD_DIM =>
         seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0 stride_kcb
           stride_kch 0 stride_kcs stride_bts stride_btb block_size HEAD_DIM i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
         context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch
         0 stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
@@ -640,7 +640,7 @@ theorem copy_to_kcache_seqlen1_new_layout_xblock_compute_correct
         seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X stride_kcb
           stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
           block_size KCACHE_X i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
         context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb
         stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
@@ -676,7 +676,7 @@ theorem copy_to_kcache_old_layout_block_compute_correct
       (fun i : Fin HEAD_DIM =>
         kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0
           stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb HEAD_DIM i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
         LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0 stride_kt stride_kh stride_kd
         stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb
@@ -714,7 +714,7 @@ theorem copy_to_kcache_new_layout_xblock_compute_correct
         kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
           stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
           stride_btb KCACHE_X i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
         LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
         stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
@@ -878,7 +878,7 @@ theorem copy_to_vcache_seqlen1_dblock_compute_correct
       (fun i : Fin BLOCK_D =>
         seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
           stride_vcs stride_vcd stride_bts stride_btb block_size i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
         context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
         stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D)
@@ -998,7 +998,7 @@ theorem copy_to_vcache_one_dblock_compute_correct
       (fun i : Fin BLOCK_D =>
         vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
           stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_one_dblock V VCache BLOCK_TABLES
         LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_vt stride_vh stride_vd
         stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
@@ -1062,7 +1062,7 @@ theorem kv_cache_copy_seqlen1_output_summary_general
       stride_kcb stride_kch 0 stride_kcs _stride_kcd stride_vcb stride_vch
       stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
       HEAD_DIM).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
         context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch
         0 stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
@@ -1075,7 +1075,7 @@ theorem kv_cache_copy_seqlen1_output_summary_general
       (expected := fun i =>
         s.readMem K (kSourceOffset s 0 stride_kt stride_kh stride_kd
           HEAD_DIM i))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
         context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
         stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
@@ -1130,7 +1130,7 @@ theorem kv_cache_copy_split_x_output_summary_general
       stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
       KCACHE_X).toAlgorithm? = Except.ok alg) ∧
     (∀ split_x : Fin NUM_SPLITS,
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
           context_lengths split_x.val stride_kt stride_kh stride_kd stride_kcb
           stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
@@ -1145,7 +1145,7 @@ theorem kv_cache_copy_split_x_output_summary_general
         (expected := fun i =>
           s.readMem K (kSourceOffset s split_x.val stride_kt stride_kh stride_kd
             KCACHE_X i))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
         context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
         stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)

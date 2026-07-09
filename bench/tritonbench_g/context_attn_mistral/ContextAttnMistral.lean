@@ -68,7 +68,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful DSL port of `context_attn_mistral.py`'s `_fwd_kernel`. -/
 def context_attn_mistral_fwd_kernel_surface
@@ -327,7 +327,7 @@ theorem context_attn_mistral_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_mistral_final_store_slice Acc B_Start_Loc B_Seqlen
         Out stride_acc_b stride_acc_h stride_acc_m stride_acc_d stride_obs
         stride_oh stride_od BLOCK_M BLOCK_DMODEL)
@@ -3419,7 +3419,7 @@ theorem context_attn_mistral_genuine_output_summary_general
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM sw : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_mistral_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
         rs hs 1 rs hs 1 rs hs 1 rs hs 1 1 sw BLK DM BLK)
       (initialState := s)
@@ -3443,7 +3443,7 @@ theorem context_attn_mistral_genuine_output_summary_general
 
 end MistralGeneralExec
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.ContextAttnMistral

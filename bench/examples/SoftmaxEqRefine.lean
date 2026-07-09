@@ -21,7 +21,7 @@ perform the same per-lane writes to `y`.
 ## The public result (bottom of file)
 
 The single public headline is **`softmax_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
 naive and stable kernels perform the same writes (no scratch regions, so the
 scratch list is `[]`). Its statement mentions only the two kernels, the
 writes-equality surface, and the state/region types — **no spec, and no input
@@ -73,13 +73,13 @@ are equal for *any* input, so no loaded-input contract is needed). -/
 variable (xReg yReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
 
 include hN in
-/-- **naive refines stable** (`ComputeRefine.Refines`, no scratch): from the
+/-- **naive refines stable** (`ComputeRefine.Refines_without_Rounding`, no scratch): from the
 same initial state, the naive and stable softmax kernels perform the same
 writes — their final memories agree at every cell. The per-lane written-value
 equality is the shift-cancellation of softmax, which holds for any input, so no
 loaded-input hypothesis is required. -/
 theorem softmax_kernels_refinement_view :
-    ComputeRefine.Refines
+    ComputeRefine.Refines_without_Rounding
       (naiveSoftmaxKernel xReg yReg blockSize)
       (stableSoftmaxKernel xReg yReg blockSize) s [] := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
@@ -120,7 +120,7 @@ trusted statement) the file stops compiling. See
 -- ONLY the two kernels, the loaded-input contract, the writes-equality surface,
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset softmax_kernels_refinement_view ⊆
-  [naiveSoftmaxKernel, stableSoftmaxKernel, ComputeRefine.Refines, BlockState, RegionName]
+  [naiveSoftmaxKernel, stableSoftmaxKernel, ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
 
 end Softmax.theorems
 

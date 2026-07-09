@@ -29,7 +29,7 @@ LayerNorm spec (Welford's running (M,S) = two-pass (μ,S) via
 ## The public result (bottom of file)
 
 The single public headline is **`layernorm_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
 two-pass and fused kernels perform the same writes (no scratch regions, so the
 scratch list is `[]`). Its statement mentions only the two kernels, the
 loaded-input contracts, the writes-equality surface, and the state/region types
@@ -675,7 +675,7 @@ theorem layernorm_kernels_refinement_view
     (h_γ : InputFeatureLoadedAt s γReg N γs)
     (h_β : InputFeatureLoadedAt s βReg N βs)
     (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
-    ComputeRefine.Refines
+    ComputeRefine.Refines_without_Rounding
       (twoPassLayerNormKernel xReg γReg βReg yReg N ε)
       (fusedLayerNormKernel xReg γReg βReg yReg N ε) s [] := by
   have hx := h_x
@@ -799,7 +799,7 @@ trusted statement) the file stops compiling. See
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset layernorm_kernels_refinement_view ⊆
   [twoPassLayerNormKernel, fusedLayerNormKernel, InputLoadedAt,
-   InputFeatureLoadedAt, ComputeRefine.Refines, BlockState, RegionName]
+   InputFeatureLoadedAt, ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
 
 end LayerNorm.theorems
 

@@ -43,7 +43,7 @@ kernel-agnostic and lives in the library (`VeriTile.Triton.Float.Refine`).
 ## The public result (bottom of file)
 
 The single public headline is **`swiglu_fused_refines_unfused`** — a
-kernel-vs-kernel refinement on `ComputeRefine.RefinesR`: for every rounding
+kernel-vs-kernel refinement on `ComputeRefine.Refines`: for every rounding
 model `R`, from the same state the fused kernel and the unfused pipeline
 perform the same writes outside the scratch tensor `S`. Its statement
 mentions only the kernels, the loaded-input contract, the rounding-model
@@ -387,7 +387,7 @@ end Swiglu.lemmas
 /-! ## The headline theorems -/
 section Swiglu.theorems
 
-/-- **fused refines unfused** (`ComputeRefine.RefinesR`, scratch `[S]`): for
+/-- **fused refines unfused** (`ComputeRefine.Refines`, scratch `[S]`): for
 every rounding model `R`, running the fused kernel and the unfused pipeline
 from the same state performs THE SAME WRITES — the final memories agree at
 every cell outside the scratch tensor `S`. Idempotence (`round ∘ round =
@@ -396,7 +396,7 @@ matched rounding sites coincide; no hypothesis is needed. -/
 theorem swiglu_fused_refines_unfused
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
-    ComputeRefine.RefinesR R
+    ComputeRefine.Refines R
       (swiglu_fused X Y OUT ncols BLOCK_N)
       (swiglu_unfused X Y S OUT ncols BLOCK_N) s [S] := by
   apply ComputeKernel.computeRefineR_of_toAlgKernel
@@ -473,7 +473,7 @@ trusted statement) the file stops compiling. See
 -- the library refinement surface — NO spec (there are none). If a spec-like
 -- definition ever creeps into the statement, this fails.
 #stmtSurfaceSubset swiglu_fused_refines_unfused ⊆
-  [swiglu_fused, swiglu_unfused, InputLoadedAt, ComputeRefine.RefinesR,
+  [swiglu_fused, swiglu_unfused, InputLoadedAt, ComputeRefine.Refines,
    RoundingModel, BlockState, RegionName]
 
 -- (There is no `#specNonCircular` gate: the file defines no specs at all, so a

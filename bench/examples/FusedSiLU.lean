@@ -28,7 +28,7 @@ input survives to the final stage.
 ## The public result (bottom of file)
 
 The single public headline is **`silu_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
 fused kernel and the unfused pipeline perform the same writes, agreeing at every
 cell outside the declared scratch temporaries `[zReg, siluReg]`. Its statement
 mentions only the two kernels, the loaded-input contract, the writes-equality
@@ -358,7 +358,7 @@ private theorem silu_kernels_refinement
 
 /-! ### Whole-memory frame lemmas for the writes-equality refinement surface
 
-`ComputeRefine.Refines` compares the two final memories cell-by-cell, so the
+`ComputeRefine.Refines_without_Rounding` compares the two final memories cell-by-cell, so the
 refinement proof needs `.mem`-level frames: each kernel touches only its own
 store target. Proved by symbolic execution down to the store's `writeMem`
 scatter, then the generic scatter frame lemma. -/
@@ -418,7 +418,7 @@ theorem silu_kernels_refinement_view
     (h_res : InputLoadedAt s residualReg blockSize residuals)
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
-    ComputeRefine.Refines
+    ComputeRefine.Refines_without_Rounding
       (fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
       (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
       s [zReg, siluReg] := by
@@ -529,7 +529,7 @@ trusted statement) the file stops compiling. See
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset silu_kernels_refinement_view ⊆
   [fusedSiLUKernel, unfusedSiLUKernel, InputLoadedAt,
-   ComputeRefine.Refines, BlockState, RegionName]
+   ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
 
 end FusedSiLU.theorems
 

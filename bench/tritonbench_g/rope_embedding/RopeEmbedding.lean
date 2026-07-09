@@ -244,7 +244,7 @@ theorem rope_embedding_forward_first_half_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE =>
         qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_forward_first_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
         BLOCK_SIZE)
@@ -363,7 +363,7 @@ theorem rope_embedding_forward_second_half_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE =>
         qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_forward_second_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
         BLOCK_SIZE)
@@ -573,7 +573,7 @@ theorem rope_embedding_backward_first_half_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE =>
         qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_backward_first_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
         BLOCK_SIZE)
@@ -605,7 +605,7 @@ theorem rope_embedding_backward_second_half_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE =>
         qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_backward_second_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
         BLOCK_SIZE)
@@ -649,7 +649,7 @@ theorem rope_embedding_forward_backward_summary_general
       (fun i : Fin BLOCK_SIZE => qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
     (∃ alg, (rope_embedding_surface Q Q_row_stride cos cos_row_stride sin
       sin_row_stride seqlen head_dim n_heads Bool.false BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_forward_first_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
       (initialState := sQ)
@@ -658,7 +658,7 @@ theorem rope_embedding_forward_backward_summary_general
         (fun i => (Q, qFirstOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i)))
       (expected := fun i => ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride
         sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_forward_second_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
       (initialState := sQ)
@@ -669,7 +669,7 @@ theorem rope_embedding_forward_backward_summary_general
         sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
     (∃ alg, (rope_embedding_surface dY Q_row_stride cos cos_row_stride sin
       sin_row_stride seqlen head_dim n_heads Bool.true BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_backward_first_half dY cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
       (initialState := sDY)
@@ -678,7 +678,7 @@ theorem rope_embedding_forward_backward_summary_general
         (fun i => (dY, qFirstOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)))
       (expected := fun i => ropeBackwardFirstSpec sDY dY cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_backward_second_half dY cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
       (initialState := sDY)

@@ -492,7 +492,7 @@ theorem rbe_real_compute_correct
           BLOCK_SIZE_K idx
         ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
             BLOCK_SIZE_K k + 1) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
         stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
         start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)
@@ -537,7 +537,7 @@ theorem rbe_imag_compute_correct
           BLOCK_SIZE_K idx
         ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
             BLOCK_SIZE_K k + 1) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
         stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
         start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)
@@ -609,7 +609,7 @@ theorem rbe_triton_transform_output_summary_general
       start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K).toAlgorithm?
         = Except.ok alg) ∧
     -- (2) even offsets: genuine `x_real·cos − x_imag·sin`
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
         stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
         start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)
@@ -624,7 +624,7 @@ theorem rbe_triton_transform_output_summary_general
         rbeOutRealSpec s x_ptr K stride_x_batch stride_x_m stride_x_n
           start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K THETA idx) ∧
     -- (3) odd offsets: genuine `x_real·sin + x_imag·cos`
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
         stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
         start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)

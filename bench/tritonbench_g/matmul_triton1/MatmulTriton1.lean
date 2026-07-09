@@ -18,7 +18,7 @@ independent closed-form `∑_k X·Y` GEMM reference, derived from the loaded
 ## Proof architecture
 
 ```
-matmul_triton1_closed_form_correct                ← TOP THEOREM (ComputeCorrect.Realizes)
+matmul_triton1_closed_form_correct                ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ matmul_triton1_exec_closed_form              ← exec-side closed form (every cell = ∑_k X·Y)
        ├─ preLoop      (P 0: z = 0, pointers seeded)
        ├─ matmul_step         (one K-block: z += dot advances the partial sum)
@@ -653,7 +653,7 @@ theorem matmul_triton1_closed_form_correct
     (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
     (hN : N ≤ NS)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N)
       (initialState := s)
       (write := fun idx : TileIndex [M, N] => some (Z, zOffset s NS N M idx))

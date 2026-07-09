@@ -31,9 +31,9 @@ bgmv_shrink_kernel_output_summary_general        ← TOP THEOREM (bundled)
   ├─ bgmv_shrink_surface_toAlgorithm_supported     faithful guarded surface lowers
   ├─ bgmv_shrink_{store,atomic}_surface_toAlgorithm_supported
   ├─ bgmv_shrink_sentinel_skip_no_write            lora_index = -1 ⇒ memory untouched
-  ├─ store_compute_correct  (SPLIT_K = 1 branch)   ComputeCorrect.Realizes, masked store
+  ├─ store_compute_correct  (SPLIT_K = 1 branch)   ComputeCorrect.Realizes_without_Rounding, masked store
   │    └─ store_exec_correct
-  └─ atomic_compute_correct (SPLIT_K > 1 branch)   ComputeCorrect.Realizes, atomic add:
+  └─ atomic_compute_correct (SPLIT_K > 1 branch)   ComputeCorrect.Realizes_without_Rounding, atomic add:
        └─ atomic_exec_correct                        out-after = out-before + contribution
             ├─ shrink_preLoop      (P 0: registers seeded, accumulator = 0)
             ├─ shrink_step         (one K-split block advances the partial sum)
@@ -1669,7 +1669,7 @@ theorem atomic_exec_correct
   rw [hstrm, if_pos hn, hcF, shrinkSpec]
   ring_nf
 
-/-! ## Realizes summaries -/
+/-! ## Realizes_without_Rounding summaries -/
 
 /-- **`SPLIT_K = 1` branch (masked store)**: the store surface realizes the
 genuine scaled rank-slice contraction `shrinkSpec` at every active output lane
@@ -1680,7 +1680,7 @@ theorem store_compute_correct
     (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
       BLOCK_N BLOCK_K SPLIT_K : Nat)
     (s : BlockState) (hS : 0 < BLOCK_K * SPLIT_K) (hcn : 0 < cn_stride) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K
         lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)
@@ -1713,7 +1713,7 @@ theorem atomic_compute_correct
     (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
       BLOCK_N BLOCK_K SPLIT_K : Nat)
     (s : BlockState) (hS : 0 < BLOCK_K * SPLIT_K) (hcn : 0 < cn_stride) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_shrink_atomic_surface input_ptr lora_ptr out_ptr N K
         lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)
@@ -1882,7 +1882,7 @@ theorem bgmv_shrink_kernel_output_summary_general
         cn_stride BLOCK_N BLOCK_K SPLIT_K SPLIT_K_ONE) s = some s' →
       s'.mem = s.mem) ∧
     -- (4) SPLIT_K = 1: masked store of the genuine contraction
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K
         lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)
@@ -1894,7 +1894,7 @@ theorem bgmv_shrink_kernel_output_summary_general
         shrinkSpec s input_ptr lora_ptr lora_indices scaling K xm_stride
           l0_stride lora_k_stride lora_n_stride BLOCK_K SPLIT_K n.val) ∧
     -- (5) SPLIT_K > 1: masked atomic add of the genuine contraction
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_shrink_atomic_surface input_ptr lora_ptr out_ptr N K
         lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)

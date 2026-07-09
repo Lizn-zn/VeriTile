@@ -23,7 +23,7 @@ independently of the kernel from the loaded `A`/`B` tiles.
 ## Proof architecture
 
 ```
-matmul_autotune_closed_form_correct               ← TOP THEOREM (ComputeCorrect.Realizes)
+matmul_autotune_closed_form_correct               ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ matmul_autotune_exec_closed_form             ← exec-side closed form (every active cell)
        ├─ preLoop      (P 0: accumulator = 0, pointers seeded, schedule derived)
        ├─ matmul_step         (one K-block: masked dot advances the partial sum)
@@ -1157,7 +1157,7 @@ theorem matmul_autotune_closed_form_correct
     (hK : K = BLOCK_K * numKBlocks) (ACTIVATION : Bool)
     (hcn : scn = 1) (hbnle : BN ≤ scm)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn
         BM BN BLOCK_K GM numKBlocks ACTIVATION)
       (initialState := s)

@@ -364,7 +364,7 @@ theorem meanFromMaskedAccumulatorSpec_eq_meanSpec
 def mean_dim_kernel_correct_target
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) : Prop :=
-  ComputeCorrect.Realizes
+  ComputeCorrect.Realizes_without_Rounding
     (kernel := mean_dim_kernel X Mean M N BLOCK_M BLOCK_N)
     (initialState := s)
     (write := ComputeCorrect.WriteMap.writeIf

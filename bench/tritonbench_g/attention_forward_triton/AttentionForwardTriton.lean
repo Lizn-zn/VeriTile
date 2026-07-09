@@ -407,7 +407,7 @@ theorem attention_forward_triton_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_forward_triton_final_store_slice Acc Out H N_CTX
         HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
         stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
@@ -461,7 +461,7 @@ theorem attention_forward_triton_closed_form_correct
       HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
     (hBN : 0 < BLOCK_N) (hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL)
     (hHD : HEAD_ACTIVE ≤ HEAD_DIM) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_forward_triton_surface Q K V Q_scale K_scale Out
         stride_qz stride_qh HEAD_DIM 1
         stride_qz stride_qh HEAD_DIM 1

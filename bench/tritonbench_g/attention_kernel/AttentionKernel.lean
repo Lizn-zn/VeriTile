@@ -58,7 +58,7 @@ set_option linter.unusedVariables false
 
 /-! **★ Main theorem:** `attention_kernel_genuine_output_compute_correct_general` -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful DSL port of `attention_kernel.py`'s `_fwd_kernel_aligned`. -/
 def attention_kernel_fwd_kernel_aligned_surface
@@ -190,7 +190,7 @@ block-pointer loads at their resolved contiguous addresses) plus the genuine
 score/tile specification `fscore`/`qRaw`/`kFlat`/`vFlat`/`b0Val`/`b1Val`. The
 `exec`-side assembly (preLoop base case, the 15-statement loop-body
 invariant step over `forRangeDyn`, the `acc /= l_i` + block-pointer-store
-epilogue, and the `ComputeCorrect.Realizes` bench bridge) is built in-file,
+epilogue, and the `ComputeCorrect.Realizes_without_Rounding` bench bridge) is built in-file,
 mirroring `VeriTile.Examples.AttentionForwardClosedForm`, swapping in the
 generalized `mPg`/`lPgK`/`oPg` invariant, the `forRangeDyn` loop driver, and
 these block-ptr lemmas. -/
@@ -2054,7 +2054,7 @@ theorem attention_kernel_genuine_output_compute_correct_general
     (stride_qh stride_kh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)
     (hKN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hHD : 0 < HEAD) (hnB : 1 ≤ nB)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
         stride_qh HEAD 1 stride_kh HEAD 1 stride_kh HEAD 1 stride_qh HEAD 1
         stride_b0h stride_b0m 2 4 (BLOCK_N * nB) 0 BIAS_LAST_SIZE 128 HEAD BLOCK_M BLOCK_N
@@ -2085,6 +2085,6 @@ theorem attention_kernel_genuine_output_compute_correct_general
 
 end ClosedForm
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel

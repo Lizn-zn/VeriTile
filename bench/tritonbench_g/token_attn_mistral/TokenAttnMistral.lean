@@ -64,7 +64,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `token_attn_mistral.py`'s
 `_fwd_kernel_token_att2`.
@@ -202,7 +202,7 @@ theorem token_attn_mistral_final_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_mistral_final_store_slice Acc Out stride_acc_bs
         stride_acc_h stride_acc_d stride_obs stride_oh stride_od BLOCK_DMODEL)
       (initialState := s)
@@ -1740,7 +1740,7 @@ theorem token_attn_mistral_closed_form_compute_correct
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
         B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
         stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
@@ -1797,7 +1797,7 @@ theorem token_attn_mistral_output_summary_general
       stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
       kv_group_num sliding_window BLOCK_DMODEL BLOCK_N).toAlgorithm? =
         Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
         B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
         stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
@@ -1823,7 +1823,7 @@ theorem token_attn_mistral_output_summary_general
       stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
       kv_group_num sliding_window BLOCK_DMODEL BLOCK_N hpbs hrts hBN s hundef hOutInj
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.TokenAttnMistral
 

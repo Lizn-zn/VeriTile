@@ -1648,7 +1648,7 @@ theorem foldl_writeMemTypedAt_masked_pid {α : Type} (dtype : TileDType)
 
 /-! ### Whole-memory (cell-level) frame toolkit for scatter stores
 
-Used by the `ComputeRefine.Refines` writes-equality surface: two kernels
+Used by the `ComputeRefine.Refines_without_Rounding` writes-equality surface: two kernels
 that scatter the same offsets with pointwise-equal values leave equal
 memories, and every cell they do not hit is preserved. -/
 

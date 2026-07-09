@@ -71,7 +71,7 @@ set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorem:** `decay_cumsum_backward_closed_output_summary_general` -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
 
@@ -787,7 +787,7 @@ theorem fwd_decay_cumsum_surface_closed_compute_correct_general
     (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ)
     (BT BK DK : Nat) (s : BlockState) (t_rel : Fin BT)
     (hne : G ≠ GO) (hBK : BK ≤ DK) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1754,7 +1754,7 @@ theorem prepare_qg_kg_surface_qg_closed_compute_correct_general
     (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT)
     (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
     (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1787,7 +1787,7 @@ theorem prepare_qg_kg_surface_kg_closed_compute_correct_general
     (s_qk_h DK BT BK : Nat) (scale : ℝ) (s : BlockState) (t_rel : Fin BT)
     (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hK_QG : K ≠ QG) (hK_KG : K ≠ KG)
     (hG_QG : G ≠ QG) (hG_KG : G ≠ KG) (hQG_KG : QG ≠ KG) (hBK : BK ≤ DK) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prepare_qg_kg_surface Q K G QG KG s_qk_h DK BT BK scale)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1899,7 +1899,7 @@ mandated per-statement architecture is required:
    (`scatter_readback_prop_masked_nd`,
    `scatter_prop_masked_preserves_other_{offset,region}`), peeling the later
    stores in reverse, exactly as the forward row-1 proof does.
-5. Bridge to `ComputeCorrect.Realizes` via `realizes_writeIf_iff` +
+5. Bridge to `ComputeCorrect.Realizes_without_Rounding` via `realizes_writeIf_iff` +
    `computeCorrect_of_toAlgKernel` (done; `decayBackwardSurfaceValue` deleted).
 
 This plan is now fully realized dimension-generally: `bwd_prologue_eval_general`
@@ -4058,7 +4058,7 @@ set_option maxHeartbeats 1600000 in
 /-- **General `dq_inter` readback.** The executed backward surface writes the honest
 closed form `bwdDQInterClosed` into `DQInter` at every active lane of row `t_rel`. -/
 theorem bwd_decay_cumsum_dq_inter_closed_compute_correct_general :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4088,7 +4088,7 @@ theorem bwd_decay_cumsum_dq_inter_closed_compute_correct_general :
 set_option maxHeartbeats 1600000 in
 /-- **General `dk_inter` readback.** -/
 theorem bwd_decay_cumsum_dk_inter_closed_compute_correct_general :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4119,7 +4119,7 @@ set_option maxHeartbeats 1600000 in
 /-- **General `dg` readback.** The executed backward surface writes the honest
 reverse-cumulative-sum closed form `bwdDGClosed` into `DG`. -/
 theorem bwd_decay_cumsum_dg_closed_compute_correct_general :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4151,7 +4151,7 @@ theorem bwd_decay_cumsum_dg_closed_compute_correct_general :
 /-- **General `output_summary`.** The executed backward surface realizes all three
 genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). -/
 theorem decay_cumsum_backward_closed_output_summary_general :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4159,7 +4159,7 @@ theorem decay_cumsum_backward_closed_output_summary_general :
         (fun i => (DQInter, offset s s_qk_h DK t_rel.val BT BK i)))
       (expected := fun i : Fin BK =>
         bwdDQInterClosed s DQInner DQInter G s_qk_h DK BT BK t_rel i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4167,7 +4167,7 @@ theorem decay_cumsum_backward_closed_output_summary_general :
         (fun i => (DKInter, offset s s_qk_h DK t_rel.val BT BK i)))
       (expected := fun i : Fin BK =>
         bwdDKInterClosed s DKInner DKInter G s_qk_h DK BT BK t_rel i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -4196,6 +4196,6 @@ end GeneralTops
 
 end BwdAssembly
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum

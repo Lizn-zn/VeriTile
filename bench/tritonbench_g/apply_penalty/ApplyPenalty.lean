@@ -453,7 +453,7 @@ theorem apply_penalty_compute_correct
       active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
       tokenId s p_token_ids p_cumsum_seq_len i =
         tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
         stride_logit_b stride_logit_s BLOCK_P)
@@ -490,7 +490,7 @@ theorem apply_penalty_output_summary
     (∃ alg, (apply_penalty Logits presence_penalty freqency_penalty
       repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
       stride_logit_b stride_logit_s BLOCK_P).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
         stride_logit_b stride_logit_s BLOCK_P)
@@ -517,7 +517,7 @@ Cellwise correctness is fully discharged: `apply_penalty_correct` proves
 `penaltyValue`) under the *active-lane* uniqueness premise
 `hUniq : ∀ i j, active i → active j → tokenId i = tokenId j → i = j` — satisfiable
 for padded blocks, unlike global injectivity. `apply_penalty_compute_correct` /
-`apply_penalty_output_summary` lift it to the `ComputeCorrect.Realizes` /
+`apply_penalty_output_summary` lift it to the `ComputeCorrect.Realizes_without_Rounding` /
 output-summary surface. The supporting readback and value-bridge lemmas above
 (`*_scatter_readback*`, `penaltyStoreValue_active_eq_penaltyValue`,
 `foldl_step_readMem_congr`) are the reusable pieces of that proof. -/

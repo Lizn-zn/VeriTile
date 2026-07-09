@@ -32,7 +32,7 @@ stride `stride_ak`).
 ## Proof architecture
 
 ```
-bmm_chunk_bwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+bmm_chunk_bwd_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ bbwd_exec_closed_form                        ← exec-side closed form (every active cell = ∑_cs Dout·A)
        ├─ bbwd_preLoop      (P 0: acc = 0, dout/a pointers seeded with batch offset)
        ├─ bbwd_step         (one CS-block: acc += tl.dot advances the partial sum)
@@ -1428,7 +1428,7 @@ theorem bmm_chunk_bwd_closed_form_correct
     (hmlt' : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) K BN) BM i < chunk_size)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) K BN) BN j < K)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
         SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS)
       (initialState := s)
@@ -1479,7 +1479,7 @@ theorem bmm_chunk_bwd_output_summary_general
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
         SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
         SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS)
       (initialState := s)

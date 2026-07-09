@@ -243,7 +243,7 @@ theorem per_block_int8_scaled_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
         L C BLK scale_stride preScale)
       (initialState := s)
@@ -294,12 +294,12 @@ theorem per_block_int8_scale_store_slice_correct
 
 theorem per_block_int8_scale_store_slice_compute_correct
     (ScalePre Scale : RegionName) (scale_stride : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
       (initialState := s)
       (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
       (expected := fun _ => scaleStoreSpec s ScalePre scale_stride) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [per_block_int8_scale_store_slice]
   intro s0 s' hExec hs0
@@ -350,7 +350,7 @@ theorem per_block_int8_closed_form_correct
     (L C BLK scale_stride : Nat) (preScale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
         L C BLK scale_stride preScale)
       (initialState := s)
@@ -359,7 +359,7 @@ theorem per_block_int8_closed_form_correct
         (fun idx => (XInt8, xOffset s L C BLK idx)))
       (expected := fun idx =>
         perBlockInt8ScaledSpec s X Scale L C BLK scale_stride preScale idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
       (initialState := s)
       (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
@@ -398,7 +398,7 @@ theorem per_block_int8_output_summary_general
         L C BLK scale_stride).toAlgorithm? = Except.ok alg) ∧
      (∃ alg, (per_block_int8_scale_compute_store_slice X Scale
         L C BLK scale_stride preScale).toAlgorithm? = Except.ok alg)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
         L C BLK scale_stride preScale)
       (initialState := s)
@@ -407,7 +407,7 @@ theorem per_block_int8_output_summary_general
         (fun idx => (XInt8, xOffset s L C BLK idx)))
       (expected := fun idx =>
         perBlockInt8ScaledSpec s X Scale L C BLK scale_stride preScale idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
       (initialState := s)
       (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))

@@ -32,7 +32,7 @@ case3: no sliding window; case4: `init=False` resume). **All four** cases are
 stated against genuine faithful closed forms (see "Genuine closed forms" below);
 case 4 is the `INIT=False` cross-launch resume, seeded from the prior
 `m_i`/`l_i`/`acc` read from the input `M`/`L`/`Out` buffers. They share the
-structure (`aft3_attn_exec{G,4G}` whole-kernel execution → `Realizes`):
+structure (`aft3_attn_exec{G,4G}` whole-kernel execution → `Realizes_without_Rounding`):
 
 ```
 attention_fwd_triton3_python_case{1,2,3,4}_output_summary_general   ← TOP THEOREMS
@@ -122,7 +122,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Full Lean port of `attention_fwd_triton3.py`'s `_attn_fwd`. -/
 def attention_fwd_triton3_surface
@@ -6498,7 +6498,7 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
     (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0)
@@ -6508,7 +6508,7 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
         (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
       (expected := fun idx : TileIndex [BM, ND] =>
         attentionFwdTriton3Case1OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0)
@@ -6538,7 +6538,7 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     rw [houtOff idx]; exact hO idx
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -6576,7 +6576,7 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
     (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1)
@@ -6586,7 +6586,7 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
         (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
       (expected := fun idx : TileIndex [BM, ND] =>
         attentionFwdTriton3Case2OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) BN off size idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1)
@@ -6616,7 +6616,7 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     rw [houtOff idx]; exact hO idx
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -6655,7 +6655,7 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
     (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0)
@@ -6665,7 +6665,7 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
         (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
       (expected := fun idx : TileIndex [BM, ND] =>
         attentionFwdTriton3Case3OutSpecG s Q K V (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn (sm_scale * 1.4426950408889634) idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off 0 1 1 BM ND BN 1 1 0 0)
@@ -6695,7 +6695,7 @@ theorem attention_fwd_triton3_python_case3_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     rw [houtOff idx]; exact hO idx
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -6736,7 +6736,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
     (∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0)
@@ -6746,7 +6746,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
         (fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)))
       (expected := fun idx : TileIndex [BM, ND] =>
         attentionFwdTriton3Case4OutSpecG s Q K V M Out L (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX sqm sqk skn skk svk svn som son ROUND_CTX (sm_scale * 1.4426950408889634) BN off size hND idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
         sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
         Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0)
@@ -6776,7 +6776,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
     rw [hstep] at hExec
     obtain rfl : sF = s' := Option.some.inj hExec
     rw [houtOff idx]; exact hO idx
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -6794,7 +6794,7 @@ theorem attention_fwd_triton3_python_case4_output_summary_general
     exact hM i
 
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3

@@ -63,7 +63,7 @@ decoded in one `simp` that unfolds the `tl.max`/`tl.sum` reductions through
 are exposed directly (sidestepping the `Fin` reduce-axis proof-irrelevance
 friction), then reads back through the injective `probOffset` scatter and matches
 the closed form lane-wise.  `token_softmax_surface_spec_compute_correct` lifts
-that to `ComputeCorrect.Realizes`, and `token_softmax_llama_output_summary_general`
+that to `ComputeCorrect.Realizes_without_Rounding`, and `token_softmax_llama_output_summary_general`
 states it over symbolic dims — fully self-contained, no surface self-reference.
 -/
 
@@ -297,7 +297,7 @@ theorem token_softmax_final_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen Prob_Out
         stride_softmax_h stride_softmax_bs stride_prob_h stride_prob_bs
         BLOCK_SIZE)
@@ -389,7 +389,7 @@ theorem token_softmax_surface_spec_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
         stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE)
       (initialState := s)
@@ -429,7 +429,7 @@ theorem token_softmax_llama_output_summary_general
       Except.ok
         (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
           stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE).toAlgKernel ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
         stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE)
       (initialState := s)

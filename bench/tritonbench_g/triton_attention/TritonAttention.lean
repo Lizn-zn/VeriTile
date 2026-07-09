@@ -82,7 +82,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- DSL port of `triton_attention.py`'s `_fwd_kernel`. -/
 def triton_attention_fwd_kernel
@@ -428,7 +428,7 @@ theorem triton_attention_forward_output_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s hzRowOffset stride_om stride_on BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_forward_output_store_slice Acc Out hzRowOffset D0
         stride_om stride_on BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -503,12 +503,12 @@ theorem triton_attention_forward_l_store_slice_compute_correct
     (LPrev L : RegionName) (off_hz N_CTX BLOCK_M : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => lRowOffset s off_hz N_CTX BLOCK_M i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_forward_l_store_slice LPrev L off_hz N_CTX BLOCK_M)
       (initialState := s)
       (write := fun i : Fin BLOCK_M => some (L, lRowOffset s off_hz N_CTX BLOCK_M i))
       (expected := fun i => lStoreSpec s LPrev off_hz N_CTX BLOCK_M i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_forward_l_store_slice]
   intro s0 s' hExec hs0
@@ -564,12 +564,12 @@ theorem triton_attention_forward_m_store_slice_compute_correct
     (MPrev M : RegionName) (off_hz N_CTX BLOCK_M : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => lRowOffset s off_hz N_CTX BLOCK_M i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_forward_m_store_slice MPrev M off_hz N_CTX BLOCK_M)
       (initialState := s)
       (write := fun i : Fin BLOCK_M => some (M, lRowOffset s off_hz N_CTX BLOCK_M i))
       (expected := fun i => mStoreSpec s MPrev off_hz N_CTX BLOCK_M i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_forward_m_store_slice]
   intro s0 s' hExec hs0
@@ -809,14 +809,14 @@ theorem triton_attention_bwd_preprocess_newdo_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         newdoOffset s BLOCK_M D_HEAD idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess_newdo_store_slice
         NewDOAcc NewDO BLOCK_M D_HEAD)
       (initialState := s)
       (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
       (expected := fun idx => newdoStoreSpec s NewDOAcc BLOCK_M D_HEAD idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess_newdo_store_slice]
   intro s0 s' hExec hs0
@@ -891,14 +891,14 @@ theorem triton_attention_bwd_preprocess_newdo_formula_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         newdoOffset s BLOCK_M D_HEAD idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess_newdo_formula_slice
         DO L NewDO BLOCK_M D_HEAD)
       (initialState := s)
       (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
       (expected := fun idx => newdoFormulaSpec s DO L BLOCK_M D_HEAD idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess_newdo_formula_slice,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -985,13 +985,13 @@ theorem triton_attention_bwd_preprocess_delta_formula_slice_correct
 
 theorem triton_attention_bwd_preprocess_delta_formula_slice_compute_correct
     (Out DO L Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess_delta_formula_slice
         Out DO L Delta BLOCK_M D_HEAD)
       (initialState := s)
       (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
       (expected := fun i => deltaFormulaSpec s Out DO L BLOCK_M D_HEAD i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess_delta_formula_slice,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -1023,13 +1023,13 @@ theorem triton_attention_bwd_preprocess_delta_store_slice_correct
 
 theorem triton_attention_bwd_preprocess_delta_store_slice_compute_correct
     (DeltaAcc Delta : RegionName) (BLOCK_M : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess_delta_store_slice
         DeltaAcc Delta BLOCK_M)
       (initialState := s)
       (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
       (expected := fun i => deltaStoreSpec s DeltaAcc BLOCK_M i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess_delta_store_slice]
   intro s0 s' hExec hs0
@@ -1166,14 +1166,14 @@ theorem triton_attention_bwd_preprocess_delta_genuine_correct
     TileShape.axisDim, TileShape.eraseAxis, NumericDType.mul, NumericDType.div]
   congr
 
-/-- `Realizes` form of the genuine `NewDO` correctness for the full surface. -/
+/-- `Realizes_without_Rounding` form of the genuine `NewDO` correctness for the full surface. -/
 theorem triton_attention_bwd_preprocess_newdo_genuine_compute_correct
     (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
     (hND : NewDO ≠ Delta)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         newdoOffset s BLOCK_M D_HEAD idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
@@ -1181,7 +1181,7 @@ theorem triton_attention_bwd_preprocess_newdo_genuine_compute_correct
         some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
       (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1193,17 +1193,17 @@ theorem triton_attention_bwd_preprocess_newdo_genuine_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
-/-- `Realizes` form of the genuine `Delta` correctness for the full surface. -/
+/-- `Realizes_without_Rounding` form of the genuine `Delta` correctness for the full surface. -/
 theorem triton_attention_bwd_preprocess_delta_genuine_compute_correct
     (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
       (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
       (expected := fun i : Fin BLOCK_M =>
         bwdPreprocessDeltaSpecG s Out DO L BLOCK_M D_HEAD i) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1234,7 +1234,7 @@ theorem triton_attention_bwd_preprocess_genuine_output_summary_general
         newdoOffset s BLOCK_M D_HEAD idx)) :
     (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
       BLOCK_M D_HEAD).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
@@ -1242,7 +1242,7 @@ theorem triton_attention_bwd_preprocess_genuine_output_summary_general
         some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
       (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
@@ -1574,7 +1574,7 @@ theorem triton_attention_bwd_score_p_formula_slice_compute_correct
     (hOffsetInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_M] => bwdScoreOffset BLOCK_M idx))
     (hRegions : PTile ≠ DSTile) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
         DOTile MVec DeltaVec PTile DSTile sm_scale BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -1583,7 +1583,7 @@ theorem triton_attention_bwd_score_p_formula_slice_compute_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_M] =>
         bwdScorePFormulaSpec s QTile KTile MVec sm_scale BLOCK_M
           BLOCK_DMODEL idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_score_formula_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1602,7 +1602,7 @@ theorem triton_attention_bwd_score_ds_formula_slice_compute_correct
     (hOffsetInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_M] => bwdScoreOffset BLOCK_M idx))
     (hRegions : PTile ≠ DSTile) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_score_formula_slice QTile KTile VTile
         DOTile MVec DeltaVec PTile DSTile sm_scale BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -1611,7 +1611,7 @@ theorem triton_attention_bwd_score_ds_formula_slice_compute_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_M] =>
         bwdScoreDSFormulaSpec s QTile KTile VTile DOTile MVec DeltaVec
           sm_scale BLOCK_M BLOCK_DMODEL idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_score_formula_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1682,7 +1682,7 @@ theorem triton_attention_bwd_dq_dot_step_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_dq_dot_step_slice DQPrev DS KTile DQ H
         stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -1692,7 +1692,7 @@ theorem triton_attention_bwd_dq_dot_step_slice_compute_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdDqDotStepSpec s DQPrev DS KTile H stride_qz stride_qh stride_qm
           stride_qk BLOCK_M idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_dq_dot_step_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1819,7 +1819,7 @@ theorem triton_attention_bwd_trans_dot_step_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_trans_dot_step_slice AccPrev LeftTile
         RightTile Out queryBlock H stride_qz stride_qh stride_qm stride_qk
         BLOCK_M BLOCK_DMODEL)
@@ -1830,7 +1830,7 @@ theorem triton_attention_bwd_trans_dot_step_slice_compute_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdTransDotStepSpec s AccPrev LeftTile RightTile queryBlock H stride_qz
           stride_qh stride_qm stride_qk BLOCK_M idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_trans_dot_step_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1851,7 +1851,7 @@ theorem triton_attention_bwd_dv_dot_step_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_trans_dot_step_slice DVPrev PTile DOTile
         DV queryBlock H stride_qz stride_qh stride_qm stride_qk BLOCK_M
         BLOCK_DMODEL)
@@ -1874,7 +1874,7 @@ theorem triton_attention_bwd_dk_dot_step_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_trans_dot_step_slice DKPrev DSTile QTile
         DK queryBlock H stride_qz stride_qh stride_qm stride_qk BLOCK_M
         BLOCK_DMODEL)
@@ -1937,7 +1937,7 @@ theorem triton_attention_bwd_dq_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_dq_store_slice DQPre DQ H stride_qz
         stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -1947,7 +1947,7 @@ theorem triton_attention_bwd_dq_store_slice_compute_correct
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradStoreSpec s DQPre H stride_qz stride_qh stride_qm stride_qk
           BLOCK_M idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [triton_attention_bwd_dq_store_slice]
   intro s0 s' hExec hs0
@@ -2017,7 +2017,7 @@ theorem triton_attention_bwd_dkdv_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_dkdv_store_slice GradPre Out H D0 stride_qz
         stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -2048,7 +2048,7 @@ theorem triton_attention_bwd_dk_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_dkdv_store_slice DKPre DK H D0 stride_qz
         stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -2071,7 +2071,7 @@ theorem triton_attention_bwd_dv_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         bwdGradOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_dkdv_store_slice DVPre DV H D0 stride_qz
         stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
       (initialState := s)
@@ -10281,7 +10281,7 @@ theorem triton_attention_forward_output_summary_general
       stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
       stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
       Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -10296,7 +10296,7 @@ theorem triton_attention_forward_output_summary_general
         MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
           (some (fwdOutSpecG s Q K V (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL
               ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc idx))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -10306,7 +10306,7 @@ theorem triton_attention_forward_output_summary_general
       (expected := fun i : Fin BLOCK_M =>
         fwdLSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
           (Nat.mul_pos (Nat.succ_pos _) hBM) i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -10336,7 +10336,7 @@ theorem triton_attention_forward_output_summary_general
     simp only [ComputeCorrect.OutputReadable.read_memcell]
     exact hO idx hActive
   · -- L
-    unfold ComputeCorrect.Realizes
+    unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -10347,7 +10347,7 @@ theorem triton_attention_forward_output_summary_general
     simp only [ComputeCorrect.OutputReadable.read_real]
     exact hLrb i
   · -- M
-    unfold ComputeCorrect.Realizes
+    unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
     intro s0 s' hExec hs0
@@ -10392,7 +10392,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
     (∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)
@@ -10402,7 +10402,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
         (fun idx : TileIndex [BM * nb, BD] => (DQ, bwdKBase s + idx.1.val * BD + idx.2.1.val)))
       (expected := fun idx : TileIndex [BM * nb, BD] =>
         bwdKernelDQSpecG s Q K V DO M Delta DQ BD (BM * nb) sc idx.1.val idx.2.1.val)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)
@@ -10415,7 +10415,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
           (some (∑ I : Fin (BM * nb),
             bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc I.val idx.1.val) *
               bwdKernelDOG s DO BD I.val idx.2.1.val))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)
@@ -10476,6 +10476,6 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
     simp only [ComputeCorrect.OutputReadable.read_memcell]
     exact hDK idx.1.val idx.2.1.val (by rw [hnbBM]; exact hidx1 idx) (hidx2 idx)
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.TritonAttention

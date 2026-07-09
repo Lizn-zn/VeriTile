@@ -87,7 +87,7 @@ theorem add_kernel_compute_correct
     (s : BlockState) (as bs : Fin BLOCK → ℝ)
     (h_a : InputLoadedAt s A BLOCK as)
     (h_b : InputLoadedAt s B BLOCK bs) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := _add_kernel A B C size BLOCK)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -114,7 +114,7 @@ theorem add_kernel_output_summary
     (h_a : InputLoadedAt s A BLOCK as)
     (h_b : InputLoadedAt s B BLOCK bs) :
     (∃ alg, (_add_kernel A B C size BLOCK).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := _add_kernel A B C size BLOCK)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

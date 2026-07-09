@@ -21,7 +21,7 @@ independent closed-form `∑_k A·B` GEMM reference, derived from the loaded
 ## Proof architecture
 
 ```
-matmul_triton2_closed_form_correct                ← TOP THEOREM (ComputeCorrect.Realizes)
+matmul_triton2_closed_form_correct                ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ matmul_triton2_exec_closed_form              ← exec-side closed form (every active cell = ∑_k A·B)
        ├─ preLoop      (P 0: accumulator = 0, pointers seeded)
        ├─ matmul_step         (one K-block: acc += dot(a,b) advances the partial sum)
@@ -959,7 +959,7 @@ theorem matmul_triton2_closed_form_correct
     (M N BM BN GM SAM SAK SBK SBN SCM SCN BK numKBlocks : Nat) (hBK : 0 < BK)
     (hInj : Function.Injective (cOffset s M N BM BN GM SCM SCN))
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
         BM BN BK GM)
       (initialState := s)
@@ -997,7 +997,7 @@ theorem matmul_triton2_output_summary_general
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
         BM BN BK GM).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
         BM BN BK GM)
       (initialState := s)

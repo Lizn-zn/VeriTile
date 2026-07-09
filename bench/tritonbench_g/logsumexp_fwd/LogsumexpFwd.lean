@@ -286,7 +286,7 @@ theorem logsumexp_fwd_kernel_compute_correct
     (xs : Fin (n+1) → ℝ)
     (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
     (h_pid1 : s.pids 1 = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
       (initialState := s)
       (write := fun _ : PUnit => some (z, s.pids 0))
@@ -297,7 +297,7 @@ theorem logsumexp_fwd_kernel_compute_correct
   have hview :=
     logsumexp_fwd_kernel_correct x z n HAS_SCALE scale s xs h_x h_pid1
   rw [hExec] at hview
-  simpa [ComputeCorrect.Realizes, ComputeKernel.ExecCorrect] using hview
+  simpa [ComputeCorrect.Realizes_without_Rounding, ComputeKernel.ExecCorrect] using hview
 
 /-- **Whole Triton-grid block-LSE correctness for `logsumexp_fwd_kernel`.**
 
@@ -311,8 +311,8 @@ boundary; it does not model the Python wrapper's later
 
 Note: until VeriTile has a whole-grid `launchExec` returning a single merged
 final state, this theorem is stated in the per-program-local form
-`Kernel.ForAllProgramsSome` instead of the unified `ComputeCorrect.Realizes`
-surface. Single-program kernels in this file already use `Realizes` /
+`Kernel.ForAllProgramsSome` instead of the unified `ComputeCorrect.Realizes_without_Rounding`
+surface. Single-program kernels in this file already use `Realizes_without_Rounding` /
 `OutputScalar`; once the launcher lands, the grid case will move there too. -/
 theorem logsumexp_fwd_kernel_grid_blockLSE_correct
     (x z : RegionName)
@@ -364,7 +364,7 @@ theorem logsumexp_fwd_kernel_output_summary
     (h_pid1 : s.pids 1 = 0) :
     (∃ alg, (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
       (initialState := s)
       (write := fun _ : PUnit => some (z, s.pids 0))

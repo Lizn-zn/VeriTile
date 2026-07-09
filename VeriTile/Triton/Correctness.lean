@@ -4,15 +4,15 @@
 Top-level surface module (relocated out of `Float/`): the public vocabulary
 every kernel proof lands on.
 
-* `Kernel.Correct` — the generic postcondition-style correctness predicate.
-* `ComputeCorrect.*` — the **`Realizes`** family: *one kernel realizes a spec*
-  (`ComputeCorrect.Realizes` = kernel outputs match `expected` on a `WriteMap`),
+* `Kernel.Correct_without_Rounding` — the generic postcondition-style correctness predicate.
+* `ComputeCorrect.*` — the **`Realizes_without_Rounding`** family: *one kernel realizes a spec*
+  (`ComputeCorrect.Realizes_without_Rounding` = kernel outputs match `expected` on a `WriteMap`),
   plus `WriteMap` and the `OutputReadable` carrier typeclass.
-* `ComputeRefine.*` — the **`Refines`** family: *one kernel refines another*
-  (`ComputeRefine.Refines` = writes-equality, final memories agree outside the
-  declared `scratch`; `ComputeRefine.RefinesAt` = pointwise per-address).
+* `ComputeRefine.*` — the **`Refines_without_Rounding`** family: *one kernel refines another*
+  (`ComputeRefine.Refines_without_Rounding` = writes-equality, final memories agree outside the
+  declared `scratch`; `ComputeRefine.RefinesAt_without_Rounding` = pointwise per-address).
 
-The rounding-model mirrors (`RealizesR` / `RefinesR` / `RefinesAtR`) live in
+The rounding-model mirrors (`Realizes` / `Refines` / `RefinesAt`) live in
 `VeriTile.Triton.Float.Refine`.
 -/
 
@@ -27,7 +27,7 @@ namespace Kernel
 /-! ## Correctness layers -/
 
 /-- A generic postcondition-style correctness predicate for executed kernels. -/
-def Correct (k : Kernel) (post : BlockState → BlockState → Prop) : Prop :=
+def Correct_without_Rounding (k : Kernel) (post : BlockState → BlockState → Prop) : Prop :=
   ∀ s s', exec k s = some s' → post s s'
 
 /--
@@ -53,14 +53,14 @@ The theorem is stated on the dtype-annotated kernel `k`, but the proof runs the
 erased Real kernel `k.eraseDType`. This is the formal Lean proof layer for
 float-facing kernels: state float, prove Real.
 -/
-def AlgorithmCorrect (k : Kernel) (post : BlockState → BlockState → Prop) : Prop :=
-  Correct k.eraseDType post
+def AlgorithmCorrect_without_Rounding (k : Kernel) (post : BlockState → BlockState → Prop) : Prop :=
+  Correct_without_Rounding k.eraseDType post
 
 /--
 Algorithmic refinement for dtype-annotated kernels.
 
 Both kernels are erased to the Real abstraction before checking the refinement
-relation. This is the kernel-pair analogue of `AlgorithmCorrect`.
+relation. This is the kernel-pair analogue of `AlgorithmCorrect_without_Rounding`.
 -/
 def AlgorithmRefine
     (lhs rhs : Kernel)
@@ -105,10 +105,10 @@ showing that floating-dtype erasure produces the real kernel. -/
 theorem algorithmCorrect_of_erase_eq {k realK : Kernel}
     {post : BlockState → BlockState → Prop}
     (herase : k.eraseDType = realK)
-    (hreal : Correct realK post) :
-    AlgorithmCorrect k post := by
+    (hreal : Correct_without_Rounding realK post) :
+    AlgorithmCorrect_without_Rounding k post := by
   intro s s' h
-  exact hreal s s' (by simpa [AlgorithmCorrect, Correct, herase] using h)
+  exact hreal s s' (by simpa [AlgorithmCorrect_without_Rounding, Correct_without_Rounding, herase] using h)
 
 /-- Transfer a real-kernel refinement theorem to an algorithmic refinement
 theorem by showing that floating-dtype erasure produces the real kernels. -/
@@ -133,15 +133,15 @@ namespace ComputeKernel
 abbrev AlgSpec := BlockState → BlockState → Prop
 
 /-- Algorithm correctness for compute kernels: successful projection exposes
-ordinary `Kernel.Correct`; failed projection is intentionally unprovable. -/
-def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+ordinary `Kernel.Correct_without_Rounding`; failed projection is intentionally unprovable. -/
+def AlgorithmCorrect_without_Rounding (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   match ck.toAlgorithm? with
-  | Except.ok ak => Kernel.Correct ak post
+  | Except.ok ak => Kernel.Correct_without_Rounding ak post
   | Except.error _ => False
 
 /-- The projected algorithm proof obligation for a compute kernel. -/
 def ProjectedCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
-  AlgorithmCorrect ck post
+  AlgorithmCorrect_without_Rounding ck post
 
 /-- Public compute-facing correctness surface.
 
@@ -196,7 +196,7 @@ def ExecRefine
 
 /-- Current compute-kernel execution is defined by successful algorithm
 projection. Future compute-only execution can refine this definition without
-changing the `AlgorithmCorrect` API. -/
+changing the `AlgorithmCorrect_without_Rounding` API. -/
 noncomputable def eval (ck : ComputeKernel) (s : BlockState) : Option BlockState :=
   match ck.toAlgorithm? with
   | Except.ok ak => exec ak s
@@ -207,16 +207,16 @@ correctness. This keeps `Except` plumbing out of user theorem statements. -/
 theorem algorithmCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
     {post : AlgSpec}
     (h : ck.toAlgorithm? = Except.ok ak)
-    (hc : Kernel.Correct ak post) :
-    AlgorithmCorrect ck post := by
-  simp [AlgorithmCorrect, h, hc]
+    (hc : Kernel.Correct_without_Rounding ak post) :
+    AlgorithmCorrect_without_Rounding ck post := by
+  simp [AlgorithmCorrect_without_Rounding, h, hc]
 
 /-- Bridge from an explicit successful projection to public compute-facing
 correctness. -/
 theorem computeCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
     {post : AlgSpec}
     (h : ck.toAlgorithm? = Except.ok ak)
-    (hc : Kernel.Correct ak post) :
+    (hc : Kernel.Correct_without_Rounding ak post) :
     ComputeCorrect ck post := by
   exact ⟨trivial, algorithmCorrect_of_toAlgorithm_eq h hc⟩
 
@@ -235,7 +235,7 @@ theorem computeCorrect_of_toAlgorithm_eq_with_gap {ck : ComputeKernel}
     {ak : AlgKernel} {post : AlgSpec} {contract : ComputeGapContract}
     (hgap : ExternalChecked contract)
     (h : ck.toAlgorithm? = Except.ok ak)
-    (hc : Kernel.Correct ak post) :
+    (hc : Kernel.Correct_without_Rounding ak post) :
     ComputeCorrect ck post (gap := .require contract) := by
   exact ⟨hgap, algorithmCorrect_of_toAlgorithm_eq h hc⟩
 
@@ -244,7 +244,7 @@ execution surface. This is the preferred bridge once examples are
 compute-facing by default. -/
 theorem computeCorrect_of_toAlgKernel {ck : ComputeKernel} {post : AlgSpec}
     (h : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
-    (hc : Kernel.Correct ck.toAlgKernel post) :
+    (hc : Kernel.Correct_without_Rounding ck.toAlgKernel post) :
     ComputeCorrect ck post := by
   exact computeCorrect_of_toAlgorithm_eq h hc
 
@@ -252,8 +252,8 @@ theorem computeCorrect_of_toAlgKernel {ck : ComputeKernel} {post : AlgSpec}
 theorem not_algorithmCorrect_of_toAlgorithm_error {ck : ComputeKernel}
     {err : EraseDTypeError} {post : AlgSpec}
     (h : ck.toAlgorithm? = Except.error err) :
-    ¬ AlgorithmCorrect ck post := by
-  simp [AlgorithmCorrect, h]
+    ¬ AlgorithmCorrect_without_Rounding ck post := by
+  simp [AlgorithmCorrect_without_Rounding, h]
 
 /-- Projection failure makes public compute correctness impossible. -/
 theorem not_computeCorrect_of_toAlgorithm_error {ck : ComputeKernel}
@@ -387,7 +387,7 @@ namespace ComputeCorrect
 
 /-! ## User-facing realization combinators -/
 
-/-- Fully general two-state correctness surface. Prefer `Post` or a `Realizes`
+/-- Fully general two-state correctness surface. Prefer `Post` or a `Realizes_without_Rounding`
 combinator when the theorem fixes one initial state. -/
 def General (ck : ComputeKernel) (post : ComputeKernel.AlgSpec) : Prop :=
   ComputeKernel.ComputeCorrect ck post
@@ -402,7 +402,7 @@ Logical output write map indexed by `ι`.
 
 The map is intentionally state-free: it describes which memory cells are
 written by each logical output index, while the execution state is supplied
-separately to `Realizes`. A `some addr` lane is checked against `expected`; a
+separately to `Realizes_without_Rounding`. A `some addr` lane is checked against `expected`; a
 `none` lane is inactive and imposes no output obligation.
 -/
 abbrev WriteMap (ι : Type) := ι → Option MemCellAddr
@@ -440,7 +440,7 @@ structure TileBlock where
 
 namespace TileBlock
 
-/-- Standard `ComputeCorrect.Realizes` write map for this block. -/
+/-- Standard `ComputeCorrect.Realizes_without_Rounding` write map for this block. -/
 def writes (t : TileBlock) : WriteMap (Fin t.size) :=
   WriteMap.writeIf (fun i : Fin t.size => t.base + i.val < t.bound)
     (fun i => (t.region, t.base + i.val))
@@ -496,7 +496,7 @@ Overloaded correctness-realization surface over a state-free output write map.
 The carrier is inferred from `expected`: `ℝ` uses `readMem`, `Nat` uses
 `readMemValue .nat`, and `MemCell` uses exact algorithm-layer cell equality.
 -/
-def Realizes {ι : Type} {α : Type} [OutputReadable α]
+def Realizes_without_Rounding {ι : Type} {α : Type} [OutputReadable α]
     (kernel : ComputeKernel) (initialState : BlockState)
     (write : WriteMap ι) (expected : ι → α) : Prop :=
   ComputeKernel.ExecCorrect kernel initialState (fun s' =>
@@ -508,12 +508,12 @@ def Realizes {ι : Type} {α : Type} [OutputReadable α]
     (kernel : ComputeKernel) (initialState : BlockState)
     (mask : ι → Prop) [DecidablePred mask]
     (addr : ι → MemCellAddr) (expected : ι → α) :
-    Realizes kernel initialState (WriteMap.writeIf mask addr) expected ↔
+    Realizes_without_Rounding kernel initialState (WriteMap.writeIf mask addr) expected ↔
       ComputeKernel.ExecCorrect kernel initialState (fun s' =>
         ∀ i : ι, mask i → OutputReadable.read s' (addr i) = expected i) := by
-  unfold Realizes WriteMap.writeIf ComputeKernel.ExecCorrect
+  unfold Realizes_without_Rounding WriteMap.writeIf ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding
   cases hAlg : kernel.toAlgorithm? with
   | error e =>
       simp
@@ -532,7 +532,7 @@ def Realizes {ι : Type} {α : Type} [OutputReadable α]
 def OutputScalar
     (kernel : ComputeKernel) (initialState : BlockState)
     (out : RegionName) (offset : Nat) (expected : ℝ) : Prop :=
-  Realizes kernel initialState
+  Realizes_without_Rounding kernel initialState
     (fun _ : PUnit => some (out, offset))
     (fun _ => expected)
 
@@ -540,7 +540,7 @@ def OutputScalar
 def OutputNatScalar
     (kernel : ComputeKernel) (initialState : BlockState)
     (out : RegionName) (offset : Nat) (expected : Nat) : Prop :=
-  Realizes kernel initialState
+  Realizes_without_Rounding kernel initialState
     (fun _ : PUnit => some (out, offset))
     (fun _ => expected)
 
@@ -548,19 +548,19 @@ def OutputNatScalar
     (ck : ComputeKernel) (s : BlockState) (out : RegionName) (offset : Nat) (e : ℝ) :
     OutputScalar ck s out offset e ↔
       ComputeKernel.ExecCorrect ck s (fun s' => s'.readMem out offset = e) := by
-  simp [OutputScalar, Realizes]
+  simp [OutputScalar, Realizes_without_Rounding]
 
 @[simp] theorem OutputNatScalar_iff
     (ck : ComputeKernel) (s : BlockState) (out : RegionName) (offset : Nat) (e : Nat) :
     OutputNatScalar ck s out offset e ↔
       ComputeKernel.ExecCorrect ck s (fun s' => s'.readMemValue .nat out offset = e) := by
-  simp [OutputNatScalar, Realizes]
+  simp [OutputNatScalar, Realizes_without_Rounding]
 
 /-- An ND Real tensor view matches `expected` after executing `ck` from `s`. -/
 def OutputTile {shape : TileShape}
     (ck : ComputeKernel) (s : BlockState)
     (view : TensorView shape) (expected : TileIndex shape → ℝ) : Prop :=
-  Realizes ck s (WriteMap.ofTensorView view) expected
+  Realizes_without_Rounding ck s (WriteMap.ofTensorView view) expected
 
 /-- A 1D Real tensor view matches `expected` after executing `ck` from `s`. -/
 def OutputArray {n : Nat}
@@ -575,10 +575,10 @@ This is the user-facing shape for kernels such as `tl.max(...,
 return_indices=True)`: the value channel is Real memory, while the index channel
 is typed Nat memory.
 
-Note: this is a documented heterogeneous-carrier special case. The `Realizes`
+Note: this is a documented heterogeneous-carrier special case. The `Realizes_without_Rounding`
 surface dispatches on a single `α` per call; pair outputs need two readback
 types simultaneously (`ℝ` for value, `Nat` for index), so they keep a dedicated
-definition rather than routing through `Realizes`. A future revision could
+definition rather than routing through `Realizes_without_Rounding`. A future revision could
 introduce a per-lane carrier typeclass to subsume this; not worth doing until
 a second heterogeneous-output kernel appears.
 -/
@@ -611,7 +611,7 @@ namespace ComputeRefine
 
 /-! ## User-facing refinement realization combinators -/
 
-/-- Fully general two-state refinement surface. Prefer `Post` or a `Realizes`
+/-- Fully general two-state refinement surface. Prefer `Post` or a `Realizes_without_Rounding`
 combinator when the theorem fixes one initial state. -/
 def General
     (lhs rhs : ComputeKernel)
@@ -634,9 +634,9 @@ both sides for ordinary same-buffer equivalence. Lanes where either side is
 `none` impose no output relation.
 
 This is the tool for heterogeneous-layout comparisons and proof middleware;
-the canonical whole-memory refinement semantics is `ComputeRefine.Refines`.
+the canonical whole-memory refinement semantics is `ComputeRefine.Refines_without_Rounding`.
 -/
-def RefinesAt {ι : Type} {α β : Type}
+def RefinesAt_without_Rounding {ι : Type} {α β : Type}
     [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
     (lhs rhs : ComputeKernel) (initialState : BlockState)
     (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
@@ -653,7 +653,7 @@ def RefinesAt {ι : Type} {α β : Type}
 performed THE SAME WRITES — the final memories agree at every cell outside
 the declared `scratch` regions. Same write locations, same written values,
 one equation. -/
-def Refines (lhs rhs : ComputeKernel) (initialState : BlockState)
+def Refines_without_Rounding (lhs rhs : ComputeKernel) (initialState : BlockState)
     (scratch : List RegionName := []) : Prop :=
   ComputeKernel.ExecRefine lhs rhs initialState (fun lhs' rhs' =>
     ∀ r, r ∉ scratch → ∀ o, lhs'.mem r o = rhs'.mem r o)

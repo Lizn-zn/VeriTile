@@ -159,7 +159,7 @@ theorem l2_norm_fwd_1pass_kernel_compute_correct
     (X Y : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := l2_norm_fwd_1pass_kernel X Y stride_x_row N eps BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -185,7 +185,7 @@ theorem l2_norm_fwd_1pass_kernel_output_summary
     (s : BlockState) :
     (∃ alg, (l2_norm_fwd_1pass_kernel X Y stride_x_row N eps BLOCK_N).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := l2_norm_fwd_1pass_kernel X Y stride_x_row N eps BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

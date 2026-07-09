@@ -168,7 +168,7 @@ theorem fused_add_mul_activation_kernel_compute_correct
       s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i)
     (h_bias : ∀ i : Fin BLOCK_SIZE,
       s.readMem bias_ptr ((fusedActivationOffset s BLOCK_SIZE i) % num_weights) = biases i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
         num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID)
       (initialState := s)
@@ -209,7 +209,7 @@ theorem fused_add_mul_activation_kernel_output_summary
     (∃ alg, (fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
         num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID).toAlgorithm? =
           Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
         num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID)
       (initialState := s)

@@ -21,7 +21,7 @@ state they perform the same single write to `y`.
 ## The public result (bottom of file)
 
 The single public headline is **`log_sum_exp_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state
+kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state
 the direct and shift-trick kernels perform the same writes (no scratch
 regions, so the scratch list is `[]`). Its statement mentions only the two
 kernels, the writes-equality surface, and the state/region types — **no spec,
@@ -74,13 +74,13 @@ contract is needed). -/
 variable (xReg yReg : RegionName) (N : Nat) (hN : 0 < N) (s : BlockState)
 
 include hN in
-/-- **direct refines shift-trick** (`ComputeRefine.Refines`, no scratch):
+/-- **direct refines shift-trick** (`ComputeRefine.Refines_without_Rounding`, no scratch):
 from the same initial state, the direct and shift-trick LSE kernels perform
 the same writes — their final memories agree at every cell. The written-value
 equality is the shift-invariance of log-sum-exp, which holds for any input, so
 no loaded-input hypothesis is required. -/
 theorem log_sum_exp_refinement_view :
-    ComputeRefine.Refines
+    ComputeRefine.Refines_without_Rounding
       (directLSEKernel xReg yReg N)
       (stableLSEKernel xReg yReg N) s [] := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
@@ -126,7 +126,7 @@ trusted statement) the file stops compiling. See
 -- and the state/region types — NO spec. If a spec-like definition ever creeps
 -- into the statement, this fails.
 #stmtSurfaceSubset log_sum_exp_refinement_view ⊆
-  [directLSEKernel, stableLSEKernel, ComputeRefine.Refines, BlockState, RegionName]
+  [directLSEKernel, stableLSEKernel, ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
 
 end LogSumExp.theorems
 

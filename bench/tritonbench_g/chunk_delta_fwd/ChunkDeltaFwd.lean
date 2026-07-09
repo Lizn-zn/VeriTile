@@ -87,7 +87,7 @@ discharged end-to-end from `exec` via `chunk_delta_fwd_exec_genuine`). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- No-mask 2D block-pointer load through a *bound register* `name` holding the
 block-pointer tile produced by `makeBlockPtrDynOffsets`. -/
@@ -565,7 +565,7 @@ theorem chunk_delta_fwd_h_store_slice_realizes_state
         s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx)
           = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
               K V BT BV BK USE_INITIAL_STATE i_t idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_delta_fwd_h_store_slice BH HOut i_t s_h_h s_h_t K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -709,7 +709,7 @@ theorem chunk_delta_fwd_v_new_store_slice_realizes_vNew
         s.readMem BVN (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)
           = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
               K V BT BV BK USE_INITIAL_STATE i_t idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew i_t 0
         s_vo_h s_vo_t s_vo_d T V BT BT BV)
       (initialState := s)
@@ -824,7 +824,7 @@ theorem chunk_delta_fwd_final_state_store_slice_realizes_final
         s.readMem BHFinal (finalStateOffset s K V BK BV idx)
           = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
               s_vo_d K V BT BV BK USE_INITIAL_STATE NT idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2422,7 +2422,7 @@ theorem chunk_delta_fwd_output_summary_general
         _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
           = Except.ok alg)
     -- (ii) the state-store face realizes the genuine chunk-start state recurrence
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_h_store_slice BH h i_t s_h_h s_h_t K V BK BV)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf
@@ -2432,7 +2432,7 @@ theorem chunk_delta_fwd_output_summary_general
           hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
             K V BT BV BK USE_INITIAL_STATE i_t idx))
     -- (iii) the corrected-value store face realizes the genuine `vNewValue`
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_v_new_store_slice BVN v_new i_t 0
           s_vo_h s_vo_t s_vo_d T V BT BT BV)
         (initialState := s)
@@ -2444,7 +2444,7 @@ theorem chunk_delta_fwd_output_summary_general
           vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
             K V BT BV BK USE_INITIAL_STATE i_t idx))
     -- (iv) the final-state store face realizes `H_{NT}`
-    ∧ ComputeCorrect.Realizes
+    ∧ ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_final_state_store_slice BHFinal final_state K V BK BV)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf
@@ -2468,6 +2468,6 @@ theorem chunk_delta_fwd_output_summary_general
       k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK NT
       USE_INITIAL_STATE s hInjF hBHF
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

@@ -18,7 +18,7 @@ real-valued `Σ_e A·B` GEMM reference is derived independently from the loaded
 ## Proof architecture
 
 ```
-matmul_tma_f32_closed_form_correct          ← TOP THEOREM (f32 branch, ComputeCorrect.Realizes)
+matmul_tma_f32_closed_form_correct          ← TOP THEOREM (f32 branch, ComputeCorrect.Realizes_without_Rounding)
   └─ matmul_tma_f32_exec_closed_form        ← exec-side closed form (every cell = ∑_e A·B)
 matmul_tma_f16_closed_form_correct          ← TOP THEOREM (fp16 branch)
   └─ matmul_tma_f16_exec_closed_form        ← exec-side closed form (every cell = fp16(∑_e A·B))
@@ -456,7 +456,7 @@ theorem matmul_tma_f32_closed_form_correct
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
     (hcn : stride_cn = 1) (hcm : BLOCK_N ≤ stride_cm) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_tma_f32_surface A B C M N K stride_am stride_ak
         stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)
@@ -601,7 +601,7 @@ theorem matmul_tma_f16_closed_form_correct
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
     (hcn : stride_cn = 1) (hcm : BLOCK_N ≤ stride_cm) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_tma_f16_surface A B C M N K stride_am stride_ak
         stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)

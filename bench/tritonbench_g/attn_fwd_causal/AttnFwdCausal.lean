@@ -74,7 +74,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Full Lean port of `attn_fwd_causal.py`'s `_attn_fwd`.
 
@@ -324,7 +324,7 @@ theorem attn_fwd_causal_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attn_fwd_causal_final_store_slice Acc Out H N_CTX
         HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
         stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
@@ -601,7 +601,7 @@ theorem afc_advance_kscale_eval (s : BlockState) (name : RegName) (ptr : Tile .p
       = some (Tile.ptrAdd Broadcast.nil ptr (Tile.scalar 1)) := by
   simp only [evalOp, evalOp_ref, evalOp_constNat, hptr, Option.bind_eq_bind, Option.bind_some]
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
@@ -4361,7 +4361,7 @@ theorem attn_fwd_causal_output_summary_general
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attn_fwd_causal_surface Q K V QScale KScale Out
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1

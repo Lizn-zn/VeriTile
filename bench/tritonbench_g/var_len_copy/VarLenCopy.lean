@@ -225,7 +225,7 @@ theorem var_len_copy_one_chunk_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => destOffset s new_a_start chunk BLOCK_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := var_len_copy_one_chunk old_a_start old_a_len old_a_location
         new_a_start new_a_location chunk BLOCK_SIZE)
       (initialState := s)
@@ -374,7 +374,7 @@ theorem var_len_copy_kernel_triton_small_length_compute_correct
       (fun i : Fin BLOCK_SIZE =>
         s.readMemValue .nat (Region.cast new_a_start : RegionName) (s.pids 0)
           + i.val)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := var_len_copy_kernel_triton old_a_start old_a_len old_a_location
         new_a_start new_a_location BLOCK_SIZE)
       (initialState := s)
@@ -422,7 +422,7 @@ theorem var_len_copy_kernel_triton_small_length_output_summary
           + i.val)) :
     (∃ alg, (var_len_copy_kernel_triton old_a_start old_a_len old_a_location
         new_a_start new_a_location BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := var_len_copy_kernel_triton old_a_start old_a_len old_a_location
         new_a_start new_a_location BLOCK_SIZE)
       (initialState := s)
