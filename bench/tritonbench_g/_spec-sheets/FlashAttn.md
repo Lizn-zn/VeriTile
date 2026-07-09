@@ -22,7 +22,7 @@ theorem flash_attn_output_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, DIM] =>
         outOffset s stride_q_head stride_o_seqlen stride_o_dim BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_output_store_slice OutBuffer O stride_buf_h
         stride_buf_m stride_buf_d stride_q_head stride_o_seqlen stride_o_dim
         BLOCK_M DIM)
@@ -135,7 +135,7 @@ theorem flash_attn_l_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => lOffset s SEQLEN BLOCK_M i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_l_store_slice Max Denom L stride_max_h
         stride_max_m stride_den_h stride_den_m SEQLEN BLOCK_M)
       (initialState := s)
@@ -255,7 +255,7 @@ loaded tiles. -/
 theorem flash_attn_genuine_output_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
         2 2 128 128 64 64 IS_CAUSAL)
@@ -514,7 +514,7 @@ FlashAttention kernel holds the closed-form log-sum-exp
 theorem flash_attn_genuine_l_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
         2 2 128 128 64 64 IS_CAUSAL)
@@ -758,7 +758,7 @@ theorem flash_attn_genuine_output_compute_correct_general
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL)
@@ -1039,7 +1039,7 @@ theorem flash_attn_genuine_l_compute_correct_general
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL)
@@ -1300,7 +1300,7 @@ theorem flash_attn_python_case1_genuine_compute_correct_general
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hAlign : (s.pids 0 + 1) * BLOCK_M = SEQLEN)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.true)
@@ -1309,7 +1309,7 @@ theorem flash_attn_python_case1_genuine_compute_correct_general
       (expected := fun idx : TileIndex [BLOCK_M, DIM] =>
         MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
           (some (flashAttnOValueSpecCausal s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M idx))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.true)
@@ -1600,7 +1600,7 @@ theorem flash_attn_python_case2_genuine_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.false)
@@ -1609,7 +1609,7 @@ theorem flash_attn_python_case2_genuine_compute_correct_general
       (expected := fun idx : TileIndex [BLOCK_M, DIM] =>
         MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
           (some (flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M idx))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.false)

@@ -26,7 +26,7 @@ theorem apply_penalty_output_summary
     (∃ alg, (apply_penalty Logits presence_penalty freqency_penalty
       repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
       stride_logit_b stride_logit_s BLOCK_P).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
         stride_logit_b stride_logit_s BLOCK_P)

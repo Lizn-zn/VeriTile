@@ -32,7 +32,7 @@ theorem matmul_leakyrelu_closed_form_correct
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) M N BM BN GROUP) BM i < M)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) M N BM BN GROUP) BN j < N)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>

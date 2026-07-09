@@ -30,7 +30,7 @@ theorem context_attn_nopad_output_summary_general
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
         rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK)
       (initialState := s)

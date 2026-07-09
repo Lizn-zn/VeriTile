@@ -29,7 +29,7 @@ theorem token_softmax_llama_output_summary_general
       Except.ok
         (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
           stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE).toAlgKernel ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
         stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE)
       (initialState := s)

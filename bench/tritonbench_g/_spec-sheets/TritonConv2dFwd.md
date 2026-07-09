@@ -27,7 +27,7 @@ theorem conv2d_output_summary
     (∃ alg, (conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height in_width
         out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
         KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

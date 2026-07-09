@@ -16,7 +16,7 @@ executing the full `attention_fwd_kernel_surface` writes the genuine
 cross-chunk `(scale·Q·b_h_c)`, read purely over INPUT memory, **no self-reference**)
 into `O` at every chunk `c < NT` and lane `(t, d)`.
 
-Stated through the standard `ComputeCorrect.Realizes` surface (like every other
+Stated through the standard `ComputeCorrect.Realizes_without_Rounding` surface (like every other
 kernel summary), so the `exec`/`Except`/`toAlgorithm?` plumbing stays out of the
 statement: the output write is the `WriteMap` over the streamed index
 `(chunk, row, col) : Fin NT × Fin BT × Fin BD`, and `expected` is the genuine
@@ -24,9 +24,9 @@ statement: the output write is the `WriteMap` over the streamed index
 * **(1)** all four `STORE`/`IFCOND` branch surfaces lower faithfully to the
   algorithm layer;
 * **(2)** the kernel runs to completion (the default branch's projected algorithm
-  kernel produces a final state) — strictly stronger than `Realizes` alone, which
+  kernel produces a final state) — strictly stronger than `Realizes_without_Rounding` alone, which
   is conditional on execution succeeding;
-* **(3)** `Realizes`: every streamed `O` lane holds the genuine `outputClosedForm`.
+* **(3)** `Realizes_without_Rounding`: every streamed `O` lane holds the genuine `outputClosedForm`.
 
 The only layout contracts are the contiguity ones the kernel genuinely relies
 on: Q/V/O block strides `(BD, 1)`, K block strides `(1, BD)`, recurrent stride
@@ -59,8 +59,8 @@ theorem attention_fwd_triton1_output_summary_general
     (∃ sF, exec (attention_fwd_kernel_surface Q K V H O
         s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgKernel s
           = some sF) ∧
-    -- (3) standard Realizes: every streamed O lane holds the genuine closed form
-    ComputeCorrect.Realizes
+    -- (3) standard Realizes_without_Rounding: every streamed O lane holds the genuine closed form
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_fwd_kernel_surface Q K V H O
         s_qh BD 1 s_hh s_ht (NT * BT) scale BT BD NT Bool.false Bool.false)
       (initialState := s)

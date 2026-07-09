@@ -23,7 +23,7 @@ theorem dequantize_rowwise_output_summary_general
     (n_elements BLOCK_SIZE P2 : Nat) (s : BlockState) :
     (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr inv_127
       n_elements BLOCK_SIZE P2).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

@@ -33,7 +33,7 @@ theorem matmul_kernel_closed_form_correct
     (BM BN BLOCK_K numKBlocks : Nat)
     (hBN : BN ≤ 4096)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_kernel_surface C A B BM BN BLOCK_K numKBlocks)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] => some (C, cOffset s BM BN idx))

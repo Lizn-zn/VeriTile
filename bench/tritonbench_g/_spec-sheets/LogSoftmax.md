@@ -24,7 +24,7 @@ theorem log_softmax_kernel_output_summary
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)) :
     (∃ alg, (log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

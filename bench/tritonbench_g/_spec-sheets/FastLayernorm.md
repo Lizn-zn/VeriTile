@@ -28,7 +28,7 @@ theorem layernorm_forward_output_summary
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
     (∃ alg, (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -37,14 +37,14 @@ theorem layernorm_forward_output_summary
         (fun i => (Y, yOutOffset s Y_row_stride i)))
       (expected := fun i =>
         layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
       (write := fun _ : PUnit => some (r, s.pid))
       (expected := fun _ =>
         invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)

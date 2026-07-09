@@ -29,7 +29,7 @@ theorem sgmv_expand_slice_one_row_block_output_summary
     (∃ alg, (sgmv_expand_slice_surface input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens
         lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
         lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

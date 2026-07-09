@@ -30,7 +30,7 @@ theorem prefill_cache_kernel_output_summary
     (∃ alg, (prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
         sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
         BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
         sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
         BLOCK_SIZE)
@@ -201,7 +201,7 @@ theorem decoding_cache_kernel_output_summary
     (∃ alg, (decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
         BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
       (initialState := s)

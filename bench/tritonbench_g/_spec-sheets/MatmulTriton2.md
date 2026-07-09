@@ -26,7 +26,7 @@ theorem matmul_triton2_output_summary_general
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
         BM BN BK GM).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

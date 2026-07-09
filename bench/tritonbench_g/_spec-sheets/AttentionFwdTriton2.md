@@ -45,7 +45,7 @@ theorem attention_fwd_triton2_output_summary_general
       stride_qz stride_qh HEAD_DIM 1
       Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
       HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

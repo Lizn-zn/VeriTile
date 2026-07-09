@@ -34,7 +34,7 @@ theorem quantize_global_transpose_blocked_output_summary_general
     (∃ err, (quantize_global_transpose_real_surface A AbsmaxInv B
       stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N
       GROUP_M).toAlgorithm? = Except.error err) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

@@ -22,7 +22,7 @@ theorem kernel_function_output_summary
     (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs) :
     (∃ alg, (kernel_function x_ptr output_ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kernel_function x_ptr output_ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

@@ -36,9 +36,9 @@ theorem chunk_cumsum_scalar_output_summary_general
     -- (2) the surface runs to completion (existence / termination)
     (∃ sfinal,
       exec (chunk_cumsum_scalar_surface S O T BT).toAlgKernel s = some sfinal) ∧
-    -- (3) standard Realizes: every in-range O lane holds the genuine global
+    -- (3) standard Realizes_without_Rounding: every in-range O lane holds the genuine global
     --     prefix sum `Σ_{m ≤ flat, m < T} S[i_bh·T + m]`, read purely over input
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_cumsum_scalar_surface S O T BT)
       (initialState := s)
       (write := fun i : Fin T => some (O, s.pids 0 * T + i.val))

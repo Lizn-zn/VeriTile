@@ -31,7 +31,7 @@ theorem dequantize_matmul_output_summary_general
       (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K)) :
     (∃ alg, (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
       stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

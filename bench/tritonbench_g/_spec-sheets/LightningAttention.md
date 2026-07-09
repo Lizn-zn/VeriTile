@@ -20,7 +20,7 @@ materialized carry buffer; no dimension is pinned. Exposes:
    that spec equals exactly `kvClosed (m+1)` — the running `Σ kᵀ·v` over the
    first `m+1` key blocks. This is the genuine standalone closed form over the
    input regions `K`, `V`, never an `exec` read-back.
-3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes its genuine spec
+3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes_without_Rounding its genuine spec
    `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
    the inter-block half of the causal linear-attention output row.
 
@@ -54,7 +54,7 @@ theorem lightning_attention_output_summary_general
     (∃ alg, (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
       _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK).toAlgorithm? = Except.ok alg) ∧
     -- (2) kv carry-fold body realizes kvStepSpec ...
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans Vreg KVOut
         d BLOCK BLOCK_MODEL)
       (initialState := s)
@@ -67,7 +67,7 @@ theorem lightning_attention_output_summary_general
       kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
         = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val) ∧
     -- (3) o_inter producer realizes its genuine spec oInterDotSpec
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
         BLOCK d BLOCK_MODEL)
       (initialState := s)

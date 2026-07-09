@@ -24,7 +24,7 @@ theorem kldivergence_kernel_output_summary
     (h_y : InputLoadedAt s y_ptr BLOCK_SIZE ys) :
     (∃ alg, (kldivergence_kernel x_ptr y_ptr output_ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kldivergence_kernel x_ptr y_ptr output_ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

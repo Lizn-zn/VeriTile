@@ -25,7 +25,7 @@ theorem logsumexp_fwd_kernel_output_summary
     (h_pid1 : s.pids 1 = 0) :
     (∃ alg, (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
       (initialState := s)
       (write := fun _ : PUnit => some (z, s.pids 0))

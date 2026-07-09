@@ -53,7 +53,7 @@ theorem chunk_gated_attention_output_summary_general
         = hClosed s K V G H0 GATEK USE_INITIAL_STATE
             s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV NT idx) :
     -- (1) `fwd_pre` cumulative normalizer realizes the genuine causal cumsum.
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gated_attention_cum_compute_slice SReg GCum s_s_h s_s_t
         s_s_d T S BT BS)
       (initialState := s)
@@ -64,7 +64,7 @@ theorem chunk_gated_attention_output_summary_general
       (expected := fun idx : TileIndex [BT, BS] =>
         cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)) ∧
     -- (2) `h` loop-row store at chunk `i_t` realizes the genuine folded state.
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gated_attention_h_state_store_slice BH H i_t
         s_h_h s_h_t s_h_d KSize VSize BK BV)
       (initialState := s)
@@ -76,7 +76,7 @@ theorem chunk_gated_attention_output_summary_general
         hClosed s K V G H0 GATEK USE_INITIAL_STATE
           s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV i_t idx)) ∧
     -- (3) final `ht` store realizes the genuine fully-folded state `hClosed NT`.
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
         KSize VSize BK BV)
       (initialState := s)

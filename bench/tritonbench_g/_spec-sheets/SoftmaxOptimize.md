@@ -25,7 +25,7 @@ theorem softmax_kernel_online_v2_one_tile_output_summary
     (s : BlockState) :
     (∃ alg, (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -111,7 +111,7 @@ surface `softmax_kernel_online_v2_surface` realizes the genuine full-row softmax
 write map sends column `j` to `output_ptr` at `linearOffset s N j`, and the
 value read back there after any successful run is exactly the numerically
 stabilized full-row softmax of the loaded input row. Stated via
-`ComputeCorrect.Realizes` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
+`ComputeCorrect.Realizes_without_Rounding` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
 the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
 ```
 </details>
@@ -122,7 +122,7 @@ theorem softmax_kernel_online_v2_output_summary
     (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
     (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_online_v2_surface output_ptr input_ptr M N TILE_N)
       (initialState := s)
       (write := fun j : Fin N => some (output_ptr, linearOffset s N j))

@@ -26,7 +26,7 @@ theorem gemv_full_output_summary
     (∃ alg, (bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

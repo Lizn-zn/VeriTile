@@ -45,7 +45,7 @@ theorem rope_embedding_output_summary_general
     (∃ alg, (rope_embedding_surface Q cos sin Q_row_stride cos_row_stride
       sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
       Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_q_first_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
       (initialState := sQ)
@@ -55,7 +55,7 @@ theorem rope_embedding_output_summary_general
       (expected := fun i =>
         ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride sin_row_stride
           seqlen head_dim BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_q_second_half Q cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
       (initialState := sQ)
@@ -68,7 +68,7 @@ theorem rope_embedding_output_summary_general
     (∃ alg, (rope_embedding_surface K cos sin Q_row_stride cos_row_stride
       sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
       Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_q_first_half K cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
       (initialState := sK)
@@ -78,7 +78,7 @@ theorem rope_embedding_output_summary_general
       (expected := fun i =>
         ropeFirstSpec sK K cos sin Q_row_stride cos_row_stride sin_row_stride
           seqlen head_dim BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_embedding_q_second_half K cos sin Q_row_stride
         cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE)
       (initialState := sK)

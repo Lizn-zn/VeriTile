@@ -47,7 +47,7 @@ theorem chunked_cumsum_fwd_summary_general
       stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
       DT_SOFTPLUS HAS_DT_BIAS BLOCK_SIZE_H BLOCK_SIZE_CHUNK).toAlgorithm?
         = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
         stride_dt_batch stride_dt_seqlen stride_dt_head stride_dt_out_batch
         stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize nheads
@@ -62,7 +62,7 @@ theorem chunked_cumsum_fwd_summary_general
         s.readMem DtPrepared
           (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
             chunk_size BLOCK_SIZE_H idx))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
         stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
         stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads
@@ -77,7 +77,7 @@ theorem chunked_cumsum_fwd_summary_general
         s.readMem DAcs
           (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
             chunk_size BLOCK_SIZE_H idx))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
         stride_dt_batch stride_dt_seqlen stride_dt_head stride_A_head
         stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head

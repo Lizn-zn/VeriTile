@@ -28,7 +28,7 @@ theorem reversed_cumsum_output_summary_general
           singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
     (∃ alg, (reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS).toAlgorithm? =
       Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := reversed_cumsum_single_block_surface SReg Z s_s_h s_s_t s_s_d
         T S BT BS)
       (initialState := s)

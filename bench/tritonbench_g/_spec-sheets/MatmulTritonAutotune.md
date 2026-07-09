@@ -34,7 +34,7 @@ theorem matmul_autotune_closed_form_correct
     (hK : K = BLOCK_K * numKBlocks) (ACTIVATION : Bool)
     (hcn : scn = 1) (hbnle : BN ≤ scm)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn
         BM BN BLOCK_K GM numKBlocks ACTIVATION)
       (initialState := s)

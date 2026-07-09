@@ -23,7 +23,7 @@ theorem attention_forward_triton_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_forward_triton_final_store_slice Acc Out H N_CTX
         HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
         stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)

@@ -31,7 +31,7 @@ theorem bgmv_full_output_summary
     (hlx : s.readMemValue .int (Region.cast lora_indices) (s.pids 1) = Int.ofNat li) :
     (∃ alg, (bgmv_full input_ptr lora_ptr out_ptr lora_indices K split_n_length xm_stride xk_stride
         l0_stride lora_k_stride lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_full input_ptr lora_ptr out_ptr lora_indices K split_n_length xm_stride xk_stride
         l0_stride lora_k_stride lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K)
       (initialState := s)

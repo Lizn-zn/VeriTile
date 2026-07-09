@@ -21,7 +21,7 @@ theorem softmax_kernel_output_summary
     (s : BlockState) :
     (∃ alg, (softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
       (initialState := s)

@@ -31,7 +31,7 @@ theorem matmul_triton1_closed_form_correct
     (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
     (hN : N ≤ NS)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N)
       (initialState := s)
       (write := fun idx : TileIndex [M, N] => some (Z, zOffset s NS N M idx))

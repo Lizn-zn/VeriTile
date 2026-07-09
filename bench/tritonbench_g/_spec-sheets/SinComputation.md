@@ -22,7 +22,7 @@ theorem sin_kernel_output_summary
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs) :
     (∃ alg, (sin_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := sin_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

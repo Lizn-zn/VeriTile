@@ -44,7 +44,7 @@ theorem reversed_cumsum_scalar_output_summary_general
     (∃ alg, (reversed_cumsum_scalar_surface S O T BT).toAlgorithm?
       = Except.ok alg) ∧
     -- (2) single-chunk genuine suffix sum, end-to-end from `S`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := reversed_cumsum_scalar_single_block_surface S O T BT)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -57,7 +57,7 @@ theorem reversed_cumsum_scalar_output_summary_general
       s'.readMem Carry (s'.pids 0)
         = (∑ flat ∈ (Finset.range T).filter
             (fun flat => s'.pids 1 * BT ≤ flat), rowElem s' S T flat) →
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := reversed_cumsum_scalar_rev_slice S Carry O T BT)
         (initialState := s')
         (write := ComputeCorrect.WriteMap.writeIf

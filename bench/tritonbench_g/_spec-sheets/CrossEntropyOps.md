@@ -10,7 +10,7 @@
 /-- **Per-kernel forward output summary for `cross_entropy_fwd_surface`
 (genuine, end-to-end).**
 
-Stated as a conjunction of `ComputeCorrect.Realizes` claims (with the side
+Stated as a conjunction of `ComputeCorrect.Realizes_without_Rounding` claims (with the side
 outputs and the logits buffer pairwise-distinct as needed, and at least one valid
 lane), bundling:
 1. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
@@ -23,7 +23,7 @@ lane), bundling:
    `z_loss_ptr[col_block·n_rows + row]` holds exactly `zLossSpec`
    (`lse_square_scale·lse²`, or `0` when the label is ignored).
 
-Each `ComputeCorrect.Realizes` internalizes the execution (`exec ... = some s'`)
+Each `ComputeCorrect.Realizes_without_Rounding` internalizes the execution (`exec ... = some s'`)
 and the lowering to the algorithm layer. All value specs read INPUT memory, never
 `exec(...).readMem`, so this summary is non-self-referential. The
 region-distinctness hypotheses are the only framing side-conditions. -/
@@ -44,7 +44,7 @@ theorem cross_entropy_fwd_output_summary
     (hneZ : lse_ptr ≠ z_loss_ptr)
     (hLL : lse_ptr ≠ logits_ptr)
     (hLZ : loss_ptr ≠ z_loss_ptr) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
         smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
         n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
@@ -53,7 +53,7 @@ theorem cross_entropy_fwd_output_summary
       (expected := fun _ =>
         partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
           (s.pids 1) h_tail Bool.true logit_scale)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
         smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
         n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
@@ -66,7 +66,7 @@ theorem cross_entropy_fwd_output_summary
           (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
             (s.pids 1) h_tail Bool.true logit_scale))) ∧
     (SPLIT = Bool.false →
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
           smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
           n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)

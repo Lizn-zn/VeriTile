@@ -32,7 +32,7 @@ theorem triton_attention_bwd_preprocess_genuine_output_summary_general
         newdoOffset s BLOCK_M D_HEAD idx)) :
     (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
       BLOCK_M D_HEAD).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
@@ -40,7 +40,7 @@ theorem triton_attention_bwd_preprocess_genuine_output_summary_general
         some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
       (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
         bwdPreprocessNewDOSpecG s Out DO L BLOCK_M D_HEAD idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
         BLOCK_M D_HEAD)
       (initialState := s)
@@ -171,7 +171,7 @@ theorem triton_attention_forward_output_summary_general
       stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
       stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
       Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -186,7 +186,7 @@ theorem triton_attention_forward_output_summary_general
         MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
           (some (fwdOutSpecG s Q K V (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL
               ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc idx))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -196,7 +196,7 @@ theorem triton_attention_forward_output_summary_general
       (expected := fun i : Fin BLOCK_M =>
         fwdLSpecG s Q K (stride_qh / BLOCK_DMODEL) BLOCK_DMODEL ((s.pids 0 + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
           (Nat.mul_pos (Nat.succ_pos _) hBM) i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_fwd_kernel Q K V L M Out sc
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
         stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
@@ -515,7 +515,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
     (∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)
@@ -525,7 +525,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
         (fun idx : TileIndex [BM * nb, BD] => (DQ, bwdKBase s + idx.1.val * BD + idx.2.1.val)))
       (expected := fun idx : TileIndex [BM * nb, BD] =>
         bwdKernelDQSpecG s Q K V DO M Delta DQ BD (BM * nb) sc idx.1.val idx.2.1.val)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)
@@ -538,7 +538,7 @@ theorem triton_attention_bwd_grads_genuine_output_summary_general
           (some (∑ I : Fin (BM * nb),
             bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc I.val idx.1.val) *
               bwdKernelDOG s DO BD I.val idx.2.1.val))))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
         32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
         2 4 (BM * nb) D0 nb BM BD BM)

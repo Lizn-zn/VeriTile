@@ -7,10 +7,10 @@
 <details><summary>docstring</summary>
 
 ```
-/-- **Dimension-general output summary (`ComputeCorrect.Realizes` form).** For
+/-- **Dimension-general output summary (`ComputeCorrect.Realizes_without_Rounding` form).** For
 arbitrary strides / `head_num` / `head_dim` / `BLOCK_DMODEL` / `BLOCK_HEAD` (and
 any program ids in `s`), the destindex quantize-KV-transform surface lowers
-(`∃ alg, … = Except.ok alg`), and its two stored outputs each `Realizes` a
+(`∃ alg, … = Except.ok alg`), and its two stored outputs each `Realizes_without_Rounding` a
 genuine input-memory closed form:
 
 * the int8 value store to `Out` realizes the genuine per-cell int value
@@ -43,7 +43,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
     (∃ alg, (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD)
@@ -54,7 +54,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
         (if active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx then
             quantizeKvTransformSurfaceIntValue s K stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL hD idx
           else s.readMemValue .int Out (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx))) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD)

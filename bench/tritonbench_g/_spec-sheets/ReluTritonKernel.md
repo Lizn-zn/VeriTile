@@ -23,7 +23,7 @@ theorem relu_kernel_output_summary
     (h_x : InputLoadedAt s x_ptr block_size xs) :
     (∃ alg, (relu_kernel x_ptr out_ptr N block_size).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := relu_kernel x_ptr out_ptr N block_size)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

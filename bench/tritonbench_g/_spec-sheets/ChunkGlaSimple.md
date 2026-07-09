@@ -36,7 +36,7 @@ theorem chunk_gla_simple_output_summary_general
     (hundef : ∀ rg off, s.undef rg off = 0)
     (hInj : Function.Injective
       (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h s_v_t
         s_h_h s_h_t scale T K V BT BK BV)
       (initialState := s)

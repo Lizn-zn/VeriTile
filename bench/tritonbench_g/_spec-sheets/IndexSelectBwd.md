@@ -28,7 +28,7 @@ theorem index_select_cat_bwd_kernel_output_summary
     (∃ alg, (index_select_cat_bwd_kernel grad_source_ptr index_ptr grad_output_ptr
         num_rows num_indices num_cols stride0 stride1
         BLOCK_SIZE_INDEX BLOCK_SIZE_COL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := index_select_cat_bwd_kernel grad_source_ptr index_ptr grad_output_ptr
         num_rows num_indices num_cols stride0 stride1
         BLOCK_SIZE_INDEX BLOCK_SIZE_COL)

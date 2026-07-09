@@ -29,7 +29,7 @@ theorem quantize_rowwise_blocked_output_summary_general
     (∃ err,
       (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
         _n_elements BLOCK_SIZE P2).toAlgorithm? = Except.error err) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

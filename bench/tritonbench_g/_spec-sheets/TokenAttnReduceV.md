@@ -49,7 +49,7 @@ theorem token_attn_reducev_output_summary_general
       B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
       stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
       kv_group_num BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
         B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
         stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od

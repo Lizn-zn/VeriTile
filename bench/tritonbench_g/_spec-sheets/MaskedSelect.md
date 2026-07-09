@@ -26,7 +26,7 @@ theorem masked_select_kernel_output_summary
         maskedSelectStoreOffset s prefix_sum_ptr n_elements BLOCK_SIZE i)) :
     (∃ alg, (masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
         n_elements BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
         n_elements BLOCK_SIZE)
       (initialState := s)

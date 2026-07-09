@@ -33,7 +33,7 @@ theorem fused_add_mul_activation_kernel_output_summary
     (∃ alg, (fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
         num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID).toAlgorithm? =
           Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
         num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID)
       (initialState := s)

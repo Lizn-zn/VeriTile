@@ -60,7 +60,7 @@ theorem rotary_transform_ops_output_summary_general
       stride_x_seqlen stride_x_nheads stride_x_headdim BLOCK_K BLOCK_M
       IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE).toAlgorithm? =
         Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN
         body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
         body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads
@@ -77,7 +77,7 @@ theorem rotary_transform_ops_output_summary_general
         rotaryO0Spec s X COS SIN body_SEQLEN_OFFSETS body_seqlen_ro
           body_stride_x_batch body_stride_x_seqlen body_stride_x_nheads
           body_stride_x_headdim body_rotary_dim_half body_BLOCK_M i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN
         body_SEQLEN_OFFSETS body_seqlen body_rotary_dim_half body_seqlen_ro
         body_stride_out_batch body_stride_out_seqlen body_stride_out_nheads

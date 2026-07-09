@@ -40,7 +40,7 @@ theorem token_attn_llama2_output_summary_general
       Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh
       stride_qd stride_kbs stride_kh stride_kd att_stride_h att_stride_bs
       kv_group_num BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
         B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs
         stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h
