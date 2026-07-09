@@ -1,37 +1,42 @@
-/-
-# `VeriTile.Examples.FloatDTypeRefine` — dtype erasure as the float-facing
-# *refinement* policy
-
-Worked example for VeriTile's float-facing theorem policy on the
-**refinement** surface (`ComputeRefine`): two kernels carry explicit
-`tl.float32` memory annotations, and the algorithmic equivalence theorem is
-discharged by **erasing** those annotations to the Real channel and reusing
-the Real-valued refinement (here the softmax reciprocal rewrite). This is the
-erased/ideal pathway — the complement of the rounding-model pathway
-(`ComputeRefine.*R`) demonstrated in `bench/examples/Swiglu`.
-
-The correctness counterpart of this policy (one annotated kernel shown to
-realize a spec through erasure) lives in
-`bench/examples/FloatDTypeCorrect.lean`.
-
-## Kernels & theorems
-
-Kernels: `floatStableSoftmaxKernel`, `floatSoftmaxRecipKernel`.
-
-* `float_stable_softmax_erases_to_real` / `float_softmax_recip_erases_to_real`
-  — each annotated kernel's projection erases to the Real-typed kernel (the
-  reuse bridge).
-* `float_softmax_reciprocal_refinement_view` / `…_exec_view` — the erased
-  equivalence statement (`ComputeRefine.General`): the per-element-divide and
-  reciprocal-form softmaxes agree cell-by-cell.
--/
-
 import VeriTile.Triton
 import VeriTile.Examples.SoftmaxReciprocal
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+/-!
+# Float dtype erasure — the float-facing *refinement* policy
+
+Self-contained showcase, read top to bottom: the **kernels** first (what we
+built), the **supporting lemmas** in the middle (`private` plumbing — the
+erasure bridges and the exec-level view), the **theorem** last (one public
+headline `float_softmax_reciprocal_refinement_view`), then a compile-time
+**trust audit**. The three real sections below are
+`FloatDTypeRefine.kernels`, `FloatDTypeRefine.lemmas`,
+`FloatDTypeRefine.theorems`.
+
+VeriTile's float-facing theorem policy on the **refinement** surface
+(`ComputeRefine`): two kernels carry explicit `tl.float32` memory annotations,
+and the algorithmic equivalence theorem is discharged by **erasing** those
+annotations to the Real channel and reusing the Real-valued refinement (here
+the softmax reciprocal rewrite). This is the erased/ideal pathway — the
+complement of the rounding-model pathway (`ComputeRefine.*R`) demonstrated in
+`bench/examples/FusedSwiglu.lean`. The correctness counterpart of this policy
+lives in `bench/examples/FloatDTypeCorrect.lean`.
+
+## The public result (bottom of file)
+
+The single public headline is **`float_softmax_reciprocal_refinement_view`** —
+the erased equivalence statement (`ComputeRefine.General`): the fp32-annotated
+per-element-divide and reciprocal-form softmaxes agree cell-by-cell after
+erasure. Its statement's project surface is pinned by the `#stmtSurfaceSubset`
+gate below — **no spec** (this is a refinement surface). The erasure bridges
+and the exec-level view are `private` scaffolding.
+-/
+
+namespace VeriTile.Bench.Examples.FloatDTypeRefine
 
 open VeriTile.Triton
+open VeriTile.Examples (stableSoftmaxKernel softmaxRecipKernel
+  softmax_reciprocal_refinement_exec_view programTileView)
 
 /-- Local reduction helper: the algorithm-projection traversals
 (`ComputeStmt.toAlgorithm?` and friends) are written in `do` notation over
@@ -41,7 +46,8 @@ This discharges them for `simp`. -/
     (f : α → Except ε β) :
     (Except.ok a : Except ε α) >>= f = f a := rfl
 
-/-! ## Float-facing kernels -/
+/-! ## Kernels -/
+section FloatDTypeRefine.kernels
 
 /-- Stable softmax with explicit fp32 input/output annotations and per-element
 division `y = e / s`. The reductions still run in the Real abstraction after
@@ -71,11 +77,14 @@ def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Compute
   tl.store($(yReg) + offs, (y).to(tl.float32))
 }
 
-/-! ## Erasure bridge -/
+end FloatDTypeRefine.kernels
+
+/-! ## Supporting lemmas (private plumbing) -/
+section FloatDTypeRefine.lemmas
 
 /-- The fp32 per-element-divide softmax erases to the existing Real kernel,
 at the algorithm-projection level. -/
-theorem float_stable_softmax_erases_to_real
+private theorem float_stable_softmax_erases_to_real
     (xReg yReg : RegionName) (blockSize : Nat) :
     (floatStableSoftmaxKernel xReg yReg blockSize).eraseDType.toAlgKernel =
       (stableSoftmaxKernel xReg yReg blockSize).toAlgKernel := by
@@ -92,7 +101,7 @@ theorem float_stable_softmax_erases_to_real
 
 /-- The fp32 reciprocal-form softmax erases to the existing Real optimized
 kernel, at the algorithm-projection level. -/
-theorem float_softmax_recip_erases_to_real
+private theorem float_softmax_recip_erases_to_real
     (xReg yReg : RegionName) (blockSize : Nat) :
     (floatSoftmaxRecipKernel xReg yReg blockSize).eraseDType.toAlgKernel =
       (softmaxRecipKernel xReg yReg blockSize).toAlgKernel := by
@@ -107,14 +116,11 @@ theorem float_softmax_recip_erases_to_real
     simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
       Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
 
-/-! ## Reused refinement theorem -/
-
-/-- Float-facing rewrite refinement: the fp32 per-element-divide softmax and
-the fp32 reciprocal-form softmax are algorithmically equivalent after erasure.
-
-This is the float theorem policy applied to a real optimization: state the
-dtype-annotated rewrite, prove it through the existing Real refinement. -/
-theorem float_softmax_reciprocal_refinement_exec_view
+/-- Float-facing rewrite refinement, exec-level view: the fp32
+per-element-divide softmax and the fp32 reciprocal-form softmax are
+algorithmically equivalent after erasure. State the dtype-annotated rewrite,
+prove it through the existing Real refinement. -/
+private theorem float_softmax_reciprocal_refinement_exec_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -131,11 +137,22 @@ theorem float_softmax_reciprocal_refinement_exec_view
     float_softmax_recip_erases_to_real xReg yReg N]
   exact softmax_reciprocal_refinement_exec_view xReg yReg N hN s xs h_x idx
 
-/-- Compute-facing surface for the fp32 reciprocal-form softmax rewrite,
-projected to the erased algorithm kernels. -/
+end FloatDTypeRefine.lemmas
+
+/-! ## The headline theorem -/
+section FloatDTypeRefine.theorems
+
+/- Shared parameters of the headline, hoisted to a `variable` block so the
+signature carries only its input hypothesis. (The input keeps the `loaded`
+view form here because the reused Real reciprocal refinement expects it.) -/
+variable (xReg yReg : RegionName) (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+
+include hN in
+/-- **float divide refines float reciprocal** (`ComputeRefine.General`, erased
+view): the two fp32-annotated softmax kernels, projected to their erased
+algorithm kernels, perform the same per-lane writes. Proved through the Real
+reciprocal refinement via the erasure bridges. -/
 theorem float_softmax_reciprocal_refinement_view
-    (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
     ComputeRefine.General
@@ -157,4 +174,23 @@ theorem float_softmax_reciprocal_refinement_view
   rw [hL, hR] at hview
   simpa using hview
 
-end VeriTile.Examples
+/-! ## Trust audit (compile-time gate)
+
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
+
+-- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+#axiomsClean float_softmax_reciprocal_refinement_view
+
+-- (2) The headline is a *kernel-vs-kernel* refinement: its statement's project
+-- surface must stay within the allowlist below — NO spec.
+#stmtSurfaceSubset float_softmax_reciprocal_refinement_view ⊆
+  [floatStableSoftmaxKernel, floatSoftmaxRecipKernel, ComputeKernel.eraseDType,
+   ComputeRefine.General, TensorView.observe, TensorView.loaded, programTileView,
+   TileIndex, BlockState, RegionName]
+
+end FloatDTypeRefine.theorems
+
+end VeriTile.Bench.Examples.FloatDTypeRefine

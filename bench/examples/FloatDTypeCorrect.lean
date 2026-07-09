@@ -1,39 +1,41 @@
-/-
-# `VeriTile.Examples.FloatDTypeCorrect` — dtype erasure as the float-facing
-# *correctness* policy
-
-Worked example for VeriTile's float-facing theorem policy on the
-**correctness** surface (`ComputeCorrect`): a kernel carries explicit
-`tl.float32` memory annotations, and the algorithmic correctness theorem is
-discharged by **erasing** those annotations to the Real channel and reusing
-the Real-valued proof (here VectorAdd's). This is the erased/ideal pathway —
-the complement of the rounding-model pathway (`ComputeRefine.*R`) demonstrated
-in `bench/examples/Swiglu`.
-
-The refinement counterpart of this policy (two annotated kernels shown
-algorithmically equivalent through erasure) lives in
-`bench/examples/FloatDTypeRefine.lean`.
-
-## Kernel & theorems
-
-Kernel: `floatAddKernel`.
-
-* `float_add_erases_to_real` — the annotated kernel's projection erases to the
-  Real-typed kernel (the reuse bridge).
-* `float_add_kernel_correct_view` / `…_exec_view` — the erased correctness
-  statement (`ComputeCorrect.General`).
-* `float_add_respects_real_regions` and the honest negation
-  `float_add_not_respects_fp32_regions` — the true region-typing contract holds
-  on the Real channel, and the naïve fp32-region claim is **provably false**
-  (the projection erases fp32 loads to Real before the typing would bite).
--/
-
 import VeriTile.Triton
 import VeriTile.Examples.VectorAdd
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+/-!
+# Float dtype erasure — the float-facing *correctness* policy
+
+Self-contained showcase, read top to bottom: the **kernel** first (what we
+built), the **supporting lemmas** in the middle (`private` plumbing — the
+erasure bridge and the honest region-typing facts), the **theorem** last (one
+public headline `float_add_kernel_correct_view`), then a compile-time **trust
+audit**. The three real sections below are `FloatDTypeCorrect.kernels`,
+`FloatDTypeCorrect.lemmas`, `FloatDTypeCorrect.theorems`.
+
+VeriTile's float-facing theorem policy on the **correctness** surface
+(`ComputeCorrect`): a kernel carries explicit `tl.float32` memory annotations,
+and the algorithmic correctness theorem is discharged by **erasing** those
+annotations to the Real channel and reusing the Real-valued proof (here
+VectorAdd's). This is the erased/ideal pathway — the complement of the
+rounding-model pathway (`ComputeRefine.*R`) demonstrated in
+`bench/examples/FusedSwiglu.lean`. The refinement counterpart of this policy
+lives in `bench/examples/FloatDTypeRefine.lean`.
+
+## The public result (bottom of file)
+
+The single public headline is **`float_add_kernel_correct_view`** — the erased
+correctness statement (`ComputeCorrect.General`): the fp32-annotated add kernel,
+projected through `eraseDType`, realizes `addSpec`. Its statement's project
+surface is pinned by the `#stmtSurfaceSubset` gate below (a correctness surface
+legitimately mentions its spec `addSpec`). The erasure bridge, the exec-level
+view, and the region-typing facts (including the honest negation
+`float_add_not_respects_fp32_regions`) are all `private` scaffolding.
+-/
+
+namespace VeriTile.Bench.Examples.FloatDTypeCorrect
 
 open VeriTile.Triton
+open VeriTile.Examples (addKernel addSpec add_kernel_correct_exec_view programTileView)
 
 /-- Local reduction helper: the algorithm-projection traversals
 (`ComputeStmt.toAlgorithm?` and friends) are written in `do` notation over
@@ -43,7 +45,8 @@ This discharges them for `simp`. -/
     (f : α → Except ε β) :
     (Except.ok a : Except ε α) >>= f = f a := rfl
 
-/-! ## Float-facing kernel -/
+/-! ## Kernel -/
+section FloatDTypeCorrect.kernels
 
 /-- Elementwise add with fp32-annotated input/output memory.
 
@@ -58,12 +61,15 @@ def floatAddKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKe
   tl.store($(outReg) + offs, out)
 }
 
-/-! ## Erasure bridge -/
+end FloatDTypeCorrect.kernels
+
+/-! ## Supporting lemmas (private plumbing) -/
+section FloatDTypeCorrect.lemmas
 
 /-- The fp32-annotated kernel erases to the existing Real VectorAdd kernel,
 at the algorithm-projection level: both sides project (via `toAlgKernel`) to
 the same plain algorithm kernel. -/
-theorem float_add_erases_to_real
+private theorem float_add_erases_to_real
     (xReg yReg outReg : RegionName) (blockSize : Nat) :
     (floatAddKernel xReg yReg outReg blockSize).eraseDType.toAlgKernel =
       (addKernel xReg yReg outReg blockSize).toAlgKernel := by
@@ -73,13 +79,11 @@ theorem float_add_erases_to_real
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
     Op.eraseDType, VeriTile.Triton.eraseDType, NumericDType.eraseDType]
 
-/-! ## Reused correctness theorem -/
+/-- Float-facing VectorAdd correctness, exec-level view.
 
-/-- Float-facing VectorAdd correctness view.
-
-The theorem statement starts from the fp32-annotated kernel, but the formal
-algorithmic proof runs the erased Real semantics: state float, prove Real. -/
-theorem float_add_kernel_correct_exec_view
+The statement starts from the fp32-annotated kernel, but the formal algorithmic
+proof runs the erased Real semantics: state float, prove Real. -/
+private theorem float_add_kernel_correct_exec_view
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (hBlockSize : 0 < blockSize)
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
@@ -97,12 +101,58 @@ theorem float_add_kernel_correct_exec_view
   exact add_kernel_correct_exec_view xReg yReg outReg blockSize hBlockSize
     s xs ys h_x h_y idx
 
-/-- Compute-facing float VectorAdd correctness view, projected to the erased
-algorithm kernel. -/
+/-- The original claim `Kernel.RespectsRegionTyping (fun _ => .fp32)
+(floatAddKernel …)` is **false** under today's definitions and is therefore
+recorded as a proved negation. `Kernel.RespectsRegionTyping` receives the
+kernel through the `ComputeKernel → AlgKernel` coercion (`toAlgKernel`), and
+the compute→algorithm projection (`ComputeOp.toAlgorithm?`) rewrites every
+`tl.float32` load to `Op.load ComputeDType.fp32.eraseDType = Op.load .real`
+before the typing contract ever sees it. The contract's load/store cases then
+demand `Γ region = .real`, i.e. `TileDType.fp32 = TileDType.real`, which
+reduces to `False`. -/
+private theorem float_add_not_respects_fp32_regions
+    (xReg yReg outReg : RegionName) (blockSize : Nat) :
+    ¬ Kernel.RespectsRegionTyping (fun _ => .fp32)
+      (floatAddKernel xReg yReg outReg blockSize) := by
+  simp [floatAddKernel, ComputeKernel.toAlgKernel,
+    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
+    Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
+    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
+    MemAccess.RespectsRegionTyping, MaskOpt.RespectsRegionTyping]
+
+/-- The true region-typing contract on today's projected surface: after the
+compute→algorithm projection the fp32 annotations are erased, so the kernel
+respects the all-`.real` region typing. -/
+private theorem float_add_respects_real_regions
+    (xReg yReg outReg : RegionName) (blockSize : Nat) :
+    Kernel.RespectsRegionTyping (fun _ => .real)
+      (floatAddKernel xReg yReg outReg blockSize) := by
+  simp [floatAddKernel, ComputeKernel.toAlgKernel,
+    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
+    Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
+    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
+    MemAccess.RespectsRegionTyping, MaskOpt.RespectsRegionTyping]
+
+end FloatDTypeCorrect.lemmas
+
+/-! ## The headline theorem -/
+section FloatDTypeCorrect.theorems
+
+/- Shared parameters of the headline, hoisted to a `variable` block so the
+signature carries only its input hypotheses. (The inputs keep the `loaded`
+view form here because the reused Real VectorAdd theorem expects it.) -/
+variable (xReg yReg outReg : RegionName)
+variable (blockSize : Nat) (hBlockSize : 0 < blockSize)
+variable (s : BlockState) (xs ys : Fin blockSize → ℝ)
+
+include hBlockSize in
+/-- **float add realizes addSpec** (`ComputeCorrect.General`, erased view):
+the fp32-annotated add kernel, projected to the erased algorithm kernel,
+computes `addSpec` at every lane. Proved through the Real VectorAdd theorem via
+the erasure bridge. -/
 theorem float_add_kernel_correct_view
-    (xReg yReg outReg : RegionName)
-    (blockSize : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1))
     (h_y : TensorView.loaded s (programTileView s yReg blockSize)
@@ -125,40 +175,24 @@ theorem float_add_kernel_correct_view
   rw [hExec] at hview
   simpa using hview
 
-/-! ## Lightweight memory typing -/
+/-! ## Trust audit (compile-time gate)
 
-/-- The original claim here — `Kernel.RespectsRegionTyping (fun _ => .fp32)
-(floatAddKernel …)` — is **false** under today's definitions and is therefore
-recorded as a proved negation. `Kernel.RespectsRegionTyping` receives the
-kernel through the `ComputeKernel → AlgKernel` coercion (`toAlgKernel`), and
-the compute→algorithm projection (`ComputeOp.toAlgorithm?`) rewrites every
-`tl.float32` load to `Op.load ComputeDType.fp32.eraseDType = Op.load .real`
-before the typing contract ever sees it. The contract's load/store cases then
-demand `Γ region = .real`, i.e. `TileDType.fp32 = TileDType.real`, which
-reduces to `False`. -/
-theorem float_add_not_respects_fp32_regions
-    (xReg yReg outReg : RegionName) (blockSize : Nat) :
-    ¬ Kernel.RespectsRegionTyping (fun _ => .fp32)
-      (floatAddKernel xReg yReg outReg blockSize) := by
-  simp [floatAddKernel, ComputeKernel.toAlgKernel,
-    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
-    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
-    Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
-    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
-    MemAccess.RespectsRegionTyping, MaskOpt.RespectsRegionTyping]
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
 
-/-- The true region-typing contract on today's projected surface: after the
-compute→algorithm projection the fp32 annotations are erased, so the kernel
-respects the all-`.real` region typing. -/
-theorem float_add_respects_real_regions
-    (xReg yReg outReg : RegionName) (blockSize : Nat) :
-    Kernel.RespectsRegionTyping (fun _ => .real)
-      (floatAddKernel xReg yReg outReg blockSize) := by
-  simp [floatAddKernel, ComputeKernel.toAlgKernel,
-    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
-    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
-    Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
-    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
-    MemAccess.RespectsRegionTyping, MaskOpt.RespectsRegionTyping]
+-- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+#axiomsClean float_add_kernel_correct_view
 
-end VeriTile.Examples
+-- (2) The headline is a *correctness* view: its statement's project surface must
+-- stay within the allowlist below. A correctness surface legitimately names its
+-- spec `addSpec`; the gate pins that this is the only spec-like constant.
+#stmtSurfaceSubset float_add_kernel_correct_view ⊆
+  [floatAddKernel, addSpec, ComputeKernel.eraseDType, ComputeCorrect.General,
+   TensorView.observe, TensorView.loaded, programTileView, TileIndex,
+   BlockState, RegionName]
+
+end FloatDTypeCorrect.theorems
+
+end VeriTile.Bench.Examples.FloatDTypeCorrect

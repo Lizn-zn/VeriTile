@@ -1,26 +1,86 @@
-import VeriTile.Examples.SoftmaxReciprocal
+import VeriTile.Triton
+import VeriTile.Examples.Common
+import VeriTile.Meta.StatementAudit
 
 /-!
-Refinement theorem (`ComputeRefine.Refines`, writes-equality) for the
-reciprocal-softmax rewrite. The kernels, specs, correctness lemmas, and the
-exec-level refinement live in `VeriTile.Examples.SoftmaxReciprocal`.
+# Softmax: per-element-divide vs precomputed-reciprocal — writes-equality refinement
 
-Headline: `softmax_reciprocal_refinement_view`. For the rounding-model (∀R) variant of the
-writes-equality surface see `bench/examples/Swiglu.lean`.
+Self-contained showcase, read top to bottom: **kernels** first (what we
+built), then the **theorem** (one public headline
+`softmax_reciprocal_refinement_view`; the writes-equality proof is direct, so
+there is no `private` lemma section), then a compile-time **trust audit**. The
+two real sections below are `SoftmaxReciprocal.kernels` and
+`SoftmaxReciprocal.theorems`.
+
+Both stable-softmax kernels compute `y = exp(x − m) / Σ exp(x − m)` per row:
+`stableSoftmaxKernel` divides each lane by the sum; `softmaxRecipKernel`
+precomputes `1 / Σ` once and multiplies (saving per-lane divisions). On the ℝ
+abstraction both are exactly equal — `e / S = e · S⁻¹` — so from the same state
+they perform the same per-lane writes to `y`.
+
+## The public result (bottom of file)
+
+The single public headline is **`softmax_reciprocal_refinement_view`** — a
+kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+divide and reciprocal kernels perform the same writes (no scratch regions, so
+the scratch list is `[]`). Its statement mentions only the two kernels, the
+writes-equality surface, and the state/region types — **no spec, and no input
+precondition** (the `#stmtSurfaceSubset` gate below enforces this). For the
+rounding-model (∀R) analogue of this surface see
+`bench/examples/FusedSwiglu.lean`.
 -/
 
-namespace VeriTile.Examples
+namespace VeriTile.Bench.Examples.SoftmaxReciprocal
 
 open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile.Examples (programTileView)
 
-/-- Writes-equality refinement surface for the reciprocal softmax rewrite:
-from the same initial state, the per-element-divide and precomputed-reciprocal
-stable softmax kernels perform the same writes (no scratch regions). -/
-theorem softmax_reciprocal_refinement_view
-    (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
+/-! ## Kernels -/
+section SoftmaxReciprocal.kernels
+
+/-- Numerically-stable softmax with a per-lane division `y = e / S`. -/
+def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x    := tl.load($(xReg) + offs)
+  m    := tl.max(x, axis=0)
+  e    := tl.exp(x - m)
+  s    := tl.sum(e, axis=0)
+  y    := e / s
+  tl.store($(yReg) + offs, y)
+}
+
+/-- Optimized stable softmax: precompute `1 / S` once, then multiply per lane
+(`y = e · S⁻¹`), saving the per-lane divisions. -/
+def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid    := tl.program_id(0)
+  offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x      := tl.load($(xReg) + offs)
+  m      := tl.max(x, axis=0)
+  e      := tl.exp(x - m)
+  s      := tl.sum(e, axis=0)
+  inv_s  := 1 / s
+  y      := e * inv_s
+  tl.store($(yReg) + offs, y)
+}
+
+end SoftmaxReciprocal.kernels
+
+/-! ## The headline theorem -/
+section SoftmaxReciprocal.theorems
+
+/- Shared parameters of the headline. Hoisted to a `variable` block so the
+signature carries only its genuine hypothesis (block nonemptiness — the writes
+are equal for *any* input, so no loaded-input contract is needed). -/
+variable (xReg yReg : RegionName) (N : Nat) (hN : 0 < N) (s : BlockState)
+
+include hN in
+/-- **divide refines reciprocal** (`ComputeRefine.Refines`, no scratch): from
+the same initial state, the per-element-divide and precomputed-reciprocal
+stable softmax kernels perform the same writes — their final memories agree at
+every cell. The per-lane written-value equality is `e / S = e · S⁻¹`, which
+holds for any input, so no loaded-input hypothesis is required. -/
+theorem softmax_reciprocal_refinement_view :
     ComputeRefine.Refines
       (stableSoftmaxKernel xReg yReg N)
       (softmaxRecipKernel xReg yReg N) s [] := by
@@ -51,4 +111,22 @@ theorem softmax_reciprocal_refinement_view
   -- `S⁻¹`), the reciprocal rewrite `div_eq_mul_inv_real` in inverse form.
   exact div_eq_mul_inv _ _
 
-end VeriTile.Examples
+/-! ## Trust audit (compile-time gate)
+
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
+
+-- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+#axiomsClean softmax_reciprocal_refinement_view
+
+-- (2) The headline is a *kernel-vs-kernel* refinement: its statement may mention
+-- ONLY the two kernels, the loaded-input contract, the writes-equality surface,
+-- and the state/region types — NO spec.
+#stmtSurfaceSubset softmax_reciprocal_refinement_view ⊆
+  [stableSoftmaxKernel, softmaxRecipKernel, ComputeRefine.Refines, BlockState, RegionName]
+
+end SoftmaxReciprocal.theorems
+
+end VeriTile.Bench.Examples.SoftmaxReciprocal

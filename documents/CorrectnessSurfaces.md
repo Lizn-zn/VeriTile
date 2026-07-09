@@ -218,7 +218,7 @@ The two families meet in exactly one bridge, `ComputeRefine.RealizesR.toRealizes
 into an ordinary `ComputeCorrect.Realizes` for `expected .triv`. Degeneration
 lemmas `refinesR_triv_iff` / `refinesAtR_triv_iff` recover `Refines` /
 `RefinesAt` the same way. The gold-standard walkthrough is
-[`bench/examples/Swiglu.lean`](../bench/examples/Swiglu.lean).
+[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean).
 
 ### Equality helpers
 

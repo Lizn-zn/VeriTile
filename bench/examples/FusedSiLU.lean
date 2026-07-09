@@ -1,90 +1,49 @@
-/-
-# `VeriTile.Examples.FusedSiLU` — fused SiLU ≡ three-kernel pipeline
-
-Fused SiLU kernel and unfused pipeline over the typed Triton core. This is the
-compositional-refinement template that `bench/examples/Swiglu`
-mirrors: a fused single kernel proven equal to a memory-materializing pipeline
-of separately-verified step kernels.
-
-This is a kernel-refinement example: the fused kernel
-
-  y = residual + (x * gate) * sigmoid(x * gate)
-
-is shown equivalent to a three-kernel pipeline that materializes the
-intermediate `z = x * gate`, then `silu = z * sigmoid(z)`, then adds the
-residual. The proof is intentionally memory-aware: the unfused pipeline writes
-temporary regions `zReg` and `siluReg`, and the refinement theorem requires
-these temporaries not to alias `residualReg` so the residual input survives
-until the final stage.
-
-Source Triton (`.py` reference, aligned single-block flavour; assumes
-`BLOCK_SIZE` equals the logical vector length, so no boundary mask is used):
-
-```python
-@triton.jit
-def fused_silu_kernel(x_ptr, gate_ptr, residual_ptr, out_ptr,
-                      BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-
-    x = tl.load(x_ptr + offsets)
-    gate = tl.load(gate_ptr + offsets)
-    residual = tl.load(residual_ptr + offsets)
-
-    z = x * gate
-    silu = z * tl.sigmoid(z)
-    y = residual + silu
-
-    tl.store(out_ptr + offsets, y)
-
-@triton.jit
-def silu_step_gate(x_ptr, gate_ptr, z_ptr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    x = tl.load(x_ptr + offsets)
-    gate = tl.load(gate_ptr + offsets)
-    tl.store(z_ptr + offsets, x * gate)
-
-@triton.jit
-def silu_step_silu(z_ptr, silu_ptr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    z = tl.load(z_ptr + offsets)
-    tl.store(silu_ptr + offsets, z * tl.sigmoid(z))
-
-@triton.jit
-def silu_step_residual(silu_ptr, residual_ptr, out_ptr,
-                       BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    silu = tl.load(silu_ptr + offsets)
-    residual = tl.load(residual_ptr + offsets)
-    tl.store(out_ptr + offsets, residual + silu)
-```
-
-## Kernels & theorems
-
-Kernels: `fusedSiLUKernel` and the three step kernels `siluStepGate`,
-`siluStepSilu`, `siluStepResidual` (the unfused pipeline is their body
-composition; `exec_unfusedSiLUKernel` splits the run into the three stages).
-
-* `fused_silu_correct` / `silu_step_*_correct` — each kernel realizes its
-  per-lane spec (`ComputeCorrect.Realizes`).
-* `silu_step_*_preserves` — the aliasing frames the composition needs.
-* `silu_kernels_refinement` / `silu_kernels_refinement_view` — the headline
-  pair theorem on the two-kernel writes-equality surface `ComputeRefine.Refines`
-  (final memories agree outside the scratch temporaries `zReg`/`siluReg`). For
-  the rounding-model (∀R) analogue of this compositional pattern see
-  `bench/examples/Swiglu.lean`.
--/
-
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
 import VeriTile.Triton
 import VeriTile.Examples.Common
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+/-!
+# Fused SiLU ≡ three-kernel pipeline — writes-equality refinement
 
-open VeriTile.Triton
+Self-contained showcase, read top to bottom: **kernels** first (the fused
+kernel and the three step kernels), the **supporting lemmas** in the middle
+(`private` plumbing — per-kernel realizations, aliasing frames, the pipeline
+split), the **theorem** last (one public headline
+`silu_kernels_refinement_view`), then a compile-time **trust audit**. The three
+real sections below are `FusedSiLU.kernels`, `FusedSiLU.lemmas`,
+`FusedSiLU.theorems`.
+
+The compositional-refinement template that `bench/examples/FusedSwiglu.lean`
+mirrors: a fused single kernel
+
+  y = residual + (x * gate) * sigmoid(x * gate)
+
+is proven equal to a three-kernel pipeline that materializes the intermediate
+`z = x * gate`, then `silu = z * sigmoid(z)`, then adds the residual. The proof
+is memory-aware: the unfused pipeline writes temporary regions `zReg`/`siluReg`,
+and the refinement requires these not to alias `residualReg` so the residual
+input survives to the final stage.
+
+## The public result (bottom of file)
+
+The single public headline is **`silu_kernels_refinement_view`** — a
+kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+fused kernel and the unfused pipeline perform the same writes, agreeing at every
+cell outside the declared scratch temporaries `[zReg, siluReg]`. Its statement
+mentions only the two kernels, the loaded-input contract, the writes-equality
+surface, and the state/region types — **no spec** (the `#stmtSurfaceSubset`
+gate below enforces this; the per-lane specs and correctness lemmas are all
+`private`). For the rounding-model (∀R) analogue of this compositional pattern
+see `bench/examples/FusedSwiglu.lean`.
+-/
+
+namespace VeriTile.Bench.Examples.FusedSiLU
+
+open VeriTile.Triton VeriTile.Examples
+
+/-! ## Kernels -/
+section FusedSiLU.kernels
 
 def fusedSiLUKernel (xReg gateReg residualReg outReg : RegionName)
     (blockSize : Nat) : ComputeKernel := triton {
@@ -126,108 +85,88 @@ def siluStepResidual (siluReg residualReg outReg : RegionName)
   tl.store($(outReg) + offsets, y)
 }
 
+/-- The unfused pipeline as one kernel: `ComputeKernel.seq` of the three step
+kernels — the concatenation of their bodies (registers flow across the seams).
+The staged execution is recovered by `exec_unfusedSiLU_split` below. -/
 def unfusedSiLUKernel
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) : ComputeKernel :=
-  let body : List Stmt :=
-    (siluStepGate xReg gateReg zReg blockSize).body ++
-    (siluStepSilu zReg siluReg blockSize).body ++
-    (siluStepResidual siluReg residualReg outReg blockSize).body
-  ComputeKernel.fromKernelBody [xReg, gateReg, residualReg] [outReg] body
+  ComputeKernel.seq [xReg, gateReg, residualReg] [outReg]
+    [siluStepGate xReg gateReg zReg blockSize,
+     siluStepSilu zReg siluReg blockSize,
+     siluStepResidual siluReg residualReg outReg blockSize]
 
-private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
-    stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by
-  induction xs generalizing s with
+end FusedSiLU.kernels
+
+/- Shared parameters of every lemma and the headline — the pipeline's regions in
+data-flow order (`keepReg` is the generic frame region), the block size, the
+state, and the three per-lane input vectors. Declared once at namespace scope so
+both `FusedSiLU.lemmas` and `FusedSiLU.theorems` inherit them (each declaration
+picks up only the variables it mentions). Block nonemptiness is never needed, so
+there is no `0 < blockSize` variable. -/
+variable (xReg gateReg zReg siluReg residualReg outReg keepReg : RegionName)
+variable (blockSize : Nat) (s : BlockState)
+variable (xs gates residuals : Fin blockSize → ℝ)
+
+/-! ## Supporting lemmas (private plumbing) -/
+section FusedSiLU.lemmas
+
+private theorem stepStmts_append (l₁ l₂ : List Stmt) (t : BlockState) :
+    stepStmts (l₁ ++ l₂) t = (stepStmts l₁ t).bind (fun t' => stepStmts l₂ t') := by
+  induction l₁ generalizing t with
   | nil => simp
   | cons st rest ih =>
       simp [stepStmts]
-      cases stepStmt st s <;> simp [ih]
+      cases stepStmt st t <;> simp [ih]
 
-noncomputable def execUnfusedSiLU
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (s : BlockState) : Option BlockState :=
-  match exec (siluStepGate xReg gateReg zReg blockSize) s with
-  | none => none
-  | some s1 =>
-    match exec (siluStepSilu zReg siluReg blockSize) s1 with
-    | none => none
-    | some s2 => exec (siluStepResidual siluReg residualReg outReg blockSize) s2
-
-theorem exec_unfusedSiLUKernel
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (s : BlockState) :
+/-- The unfused pipeline's execution splits into its three stages run in
+sequence (no register reset across the seams) — the `ComputeKernel.seq` fold
+made concrete. -/
+private theorem exec_unfusedSiLU_split :
     exec (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize) s =
-      execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s := by
-  simp [unfusedSiLUKernel, execUnfusedSiLU, exec, stepStmts_append]
-  cases h1 : stepStmts (siluStepGate xReg gateReg zReg blockSize).body s <;> simp
-  case some s1 =>
-    cases h2 : stepStmts (siluStepSilu zReg siluReg blockSize).body s1 <;> simp
+      (exec (siluStepGate xReg gateReg zReg blockSize) s).bind (fun s1 =>
+        (exec (siluStepSilu zReg siluReg blockSize) s1).bind (fun s2 =>
+          exec (siluStepResidual siluReg residualReg outReg blockSize) s2)) := by
+  simp [unfusedSiLUKernel, exec, stepStmts_append]
 
-/-- Per-lane fused-SiLU output. Bound here to the kernel's `(xs, gates, residuals)`
-input layout; delegates the math to `Triton.TiledActivation.fusedSiLU`. -/
-noncomputable def fusedSiLUSpec {blockSize : Nat}
-    (xs gates residuals : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  Triton.TiledActivation.fusedSiLU (xs i) (gates i) (residuals i)
-
-/-- Per-lane gate output `xs i * gates i`. Pure pointwise multiply; kept local
-because there is no reusable math operator at this granularity. -/
-noncomputable def gateSpec {blockSize : Nat}
-    (xs gates : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  xs i * gates i
-
-/-- Per-lane SiLU output. Delegates to `Triton.TiledActivation.silu`. -/
-noncomputable def siluSpec {blockSize : Nat}
-    (zs : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  Triton.TiledActivation.silu (zs i)
-
-theorem fused_silu_correct
-    (xReg gateReg residualReg outReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (xs gates residuals : Fin blockSize → ℝ)
+private theorem fused_silu_correct
     (_h_x   : InputLoadedAt s xReg blockSize xs)
     (_h_g   : InputLoadedAt s gateReg blockSize gates)
     (_h_res : InputLoadedAt s residualReg blockSize residuals) :
     ∀ i : Fin blockSize,
       observeAt (exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s)
                 outReg blockSize s.pid i
-        = some (fusedSiLUSpec xs gates residuals i) := by
+        = some (Triton.TiledActivation.fusedSiLU (xs i) (gates i) (residuals i)) := by
   intro i
   have h_inj :
       Function.Injective (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, fusedSiLUKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        fusedSiLUSpec, Triton.TiledActivation.fusedSiLU,
+        Triton.TiledActivation.fusedSiLU,
         Triton.TiledActivation.silu]
   unfold InputLoadedAt at _h_x _h_g _h_res
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_g, _h_res]
 
-theorem silu_step_gate_correct
-    (xReg gateReg zReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (xs gates : Fin blockSize → ℝ)
+private theorem silu_step_gate_correct
     (_h_x : InputLoadedAt s xReg blockSize xs)
     (_h_g : InputLoadedAt s gateReg blockSize gates) :
     ∀ i : Fin blockSize,
       observeAt (exec (siluStepGate xReg gateReg zReg blockSize) s)
                 zReg blockSize s.pid i
-        = some (gateSpec xs gates i) := by
+        = some (xs i * gates i) := by
   intro i
   have h_inj :
       Function.Injective (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepGate, stepStmts, stepStmt, evalOp,
-        Tile.bop, NumericDType.add, NumericDType.mul,
-        gateSpec]
+        Tile.bop, NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_x _h_g
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_g]
 
-theorem silu_step_gate_preserves
-    (xReg gateReg zReg keepReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (xs gates : Fin blockSize → ℝ)
+private theorem silu_step_gate_preserves
     (_h_x : InputLoadedAt s xReg blockSize xs)
     (_h_g : InputLoadedAt s gateReg blockSize gates)
     (h_keep : keepReg ≠ zReg) :
@@ -246,30 +185,24 @@ theorem silu_step_gate_preserves
         keepReg h_keep (s.pid * blockSize + i.val)]
   simp [BlockState.pid_eq]
 
-theorem silu_step_silu_correct
-    (zReg siluReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (zs : Fin blockSize → ℝ)
+private theorem silu_step_silu_correct (zs : Fin blockSize → ℝ)
     (_h_z : InputLoadedAt s zReg blockSize zs) :
     ∀ i : Fin blockSize,
       observeAt (exec (siluStepSilu zReg siluReg blockSize) s)
                 siluReg blockSize s.pid i
-        = some (siluSpec zs i) := by
+        = some (Triton.TiledActivation.silu (zs i)) := by
   intro i
   have h_inj :
       Function.Injective (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepSilu, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        siluSpec, Triton.TiledActivation.silu]
+        Triton.TiledActivation.silu]
   unfold InputLoadedAt at _h_z
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_z]
 
-theorem silu_step_silu_preserves
-    (zReg siluReg keepReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (zs : Fin blockSize → ℝ)
+private theorem silu_step_silu_preserves (zs : Fin blockSize → ℝ)
     (_h_z : InputLoadedAt s zReg blockSize zs)
     (h_keep : keepReg ≠ siluReg) :
     ∀ i : Fin blockSize,
@@ -287,16 +220,13 @@ theorem silu_step_silu_preserves
         keepReg h_keep (s.pid * blockSize + i.val)]
   simp [BlockState.pid_eq]
 
-theorem silu_step_residual_correct
-    (siluReg residualReg outReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (silus residuals : Fin blockSize → ℝ)
+private theorem silu_step_residual_correct (silus resids : Fin blockSize → ℝ)
     (_h_silu : InputLoadedAt s siluReg blockSize silus)
-    (_h_res : InputLoadedAt s residualReg blockSize residuals) :
+    (_h_res : InputLoadedAt s residualReg blockSize resids) :
     ∀ i : Fin blockSize,
       observeAt (exec (siluStepResidual siluReg residualReg outReg blockSize) s)
                 outReg blockSize s.pid i
-        = some (residuals i + silus i) := by
+        = some (resids i + silus i) := by
   intro i
   have h_inj :
       Function.Injective (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
@@ -307,12 +237,9 @@ theorem silu_step_residual_correct
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_silu, _h_res]
 
-theorem silu_step_residual_preserves
-    (siluReg residualReg outReg keepReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (silus residuals : Fin blockSize → ℝ)
+private theorem silu_step_residual_preserves (silus resids : Fin blockSize → ℝ)
     (_h_silu : InputLoadedAt s siluReg blockSize silus)
-    (_h_res : InputLoadedAt s residualReg blockSize residuals)
+    (_h_res : InputLoadedAt s residualReg blockSize resids)
     (h_keep : keepReg ≠ outReg) :
     ∀ i : Fin blockSize,
       observeAt (exec (siluStepResidual siluReg residualReg outReg blockSize) s)
@@ -325,15 +252,12 @@ theorem silu_step_residual_preserves
   simp_rw [_h_silu, _h_res]
   rw [BlockState.scatter_preserves_other_region outReg
         (fun k : TileIndex [blockSize] => s.pid * blockSize + k.1.val)
-        (fun k : TileIndex [blockSize] => residuals k.1 + silus k.1)
+        (fun k : TileIndex [blockSize] => resids k.1 + silus k.1)
         keepReg h_keep (s.pid * blockSize + i.val)]
   simp [BlockState.pid_eq]
 
 set_option maxHeartbeats 800000 in
-theorem unfused_silu_correct
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)
-    (xs gates residuals : Fin blockSize → ℝ)
+private theorem unfused_silu_correct
     (_h_x   : InputLoadedAt s xReg blockSize xs)
     (_h_g   : InputLoadedAt s gateReg blockSize gates)
     (_h_res : InputLoadedAt s residualReg blockSize residuals)
@@ -341,24 +265,25 @@ theorem unfused_silu_correct
     (_h_siluRes : siluReg ≠ residualReg) :
     ∀ i : Fin blockSize,
       observeAt
-        (execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s)
+        (exec (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize) s)
         outReg blockSize s.pid i
-        = some (fusedSiLUSpec xs gates residuals i) := by
+        = some (Triton.TiledActivation.fusedSiLU (xs i) (gates i) (residuals i)) := by
   intro i
-  unfold execUnfusedSiLU
+  rw [exec_unfusedSiLU_split]
   cases h_gate : exec (siluStepGate xReg gateReg zReg blockSize) s with
   | none =>
       have hz :=
-        silu_step_gate_correct xReg gateReg zReg blockSize _hN s xs gates
+        silu_step_gate_correct xReg gateReg zReg blockSize s xs gates
           _h_x _h_g i
       rw [h_gate] at hz
       simp [observeAt] at hz
   | some s1 =>
+      simp only [Option.bind_some]
       have hpid1 : s1.pid = s.pid := exec_pid h_gate
-      have h_z : InputLoadedAt s1 zReg blockSize (gateSpec xs gates) := by
+      have h_z : InputLoadedAt s1 zReg blockSize (fun j => xs j * gates j) := by
         intro j
         have hzj :=
-          silu_step_gate_correct xReg gateReg zReg blockSize _hN s xs gates
+          silu_step_gate_correct xReg gateReg zReg blockSize s xs gates
             _h_x _h_g j
         rw [h_gate] at hzj
         simp [observeAt] at hzj
@@ -367,7 +292,7 @@ theorem unfused_silu_correct
       have h_res1 : InputLoadedAt s1 residualReg blockSize residuals := by
         intro j
         have hrj :=
-          silu_step_gate_preserves xReg gateReg zReg residualReg blockSize _hN s
+          silu_step_gate_preserves xReg gateReg zReg residualReg blockSize s
             xs gates _h_x _h_g (fun h => _h_zRes h.symm) j
         rw [h_gate] at hrj
         simp [observeAt] at hrj
@@ -377,19 +302,20 @@ theorem unfused_silu_correct
       cases h_silu : exec (siluStepSilu zReg siluReg blockSize) s1 with
       | none =>
           have hsj :=
-            silu_step_silu_correct zReg siluReg blockSize _hN s1
-              (gateSpec xs gates) h_z i
+            silu_step_silu_correct zReg siluReg blockSize s1
+              (fun j => xs j * gates j) h_z i
           rw [h_silu] at hsj
           simp [observeAt] at hsj
       | some s2 =>
+          simp only [Option.bind_some]
           have hpid2 : s2.pid = s1.pid := exec_pid h_silu
           have hpid2s : s2.pid = s.pid := hpid2.trans hpid1
           have h_silu_loaded :
-              InputLoadedAt s2 siluReg blockSize (siluSpec (gateSpec xs gates)) := by
+              InputLoadedAt s2 siluReg blockSize ((fun j => Triton.TiledActivation.silu (xs j * gates j))) := by
             intro j
             have hsj :=
-              silu_step_silu_correct zReg siluReg blockSize _hN s1
-                (gateSpec xs gates) h_z j
+              silu_step_silu_correct zReg siluReg blockSize s1
+                (fun j => xs j * gates j) h_z j
             rw [h_silu] at hsj
             simp [observeAt] at hsj
             rw [hpid2]
@@ -397,26 +323,21 @@ theorem unfused_silu_correct
           have h_res2 : InputLoadedAt s2 residualReg blockSize residuals := by
             intro j
             have hrj :=
-              silu_step_silu_preserves zReg siluReg residualReg blockSize _hN s1
-                (gateSpec xs gates) h_z (fun h => _h_siluRes h.symm) j
+              silu_step_silu_preserves zReg siluReg residualReg blockSize s1
+                (fun j => xs j * gates j) h_z (fun h => _h_siluRes h.symm) j
             rw [h_silu] at hrj
             simp [observeAt] at hrj
             rw [hpid2]
             rw [hrj]
             exact h_res1 j
           have hout :=
-            silu_step_residual_correct siluReg residualReg outReg blockSize _hN s2
-              (siluSpec (gateSpec xs gates)) residuals h_silu_loaded h_res2 i
+            silu_step_residual_correct siluReg residualReg outReg blockSize s2
+              ((fun j => Triton.TiledActivation.silu (xs j * gates j))) residuals h_silu_loaded h_res2 i
           rw [hpid2s] at hout
-          simp [h_silu]
           rw [hout]
-          simp [fusedSiLUSpec, siluSpec, gateSpec,
-                Triton.TiledActivation.fusedSiLU, Triton.TiledActivation.silu]
+          simp [Triton.TiledActivation.fusedSiLU, Triton.TiledActivation.silu]
 
-theorem silu_kernels_refinement
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
-    (xs gates residuals : Fin blockSize → ℝ)
+private theorem silu_kernels_refinement
     (h_x   : InputLoadedAt s xReg blockSize xs)
     (h_g   : InputLoadedAt s gateReg blockSize gates)
     (h_res : InputLoadedAt s residualReg blockSize residuals)
@@ -426,46 +347,14 @@ theorem silu_kernels_refinement
       observeAt (exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s)
                 outReg blockSize s.pid i =
       observeAt
-        (execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s)
+        (exec (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize) s)
         outReg blockSize s.pid i := by
   intro i
   rw [fused_silu_correct
-        xReg gateReg residualReg outReg blockSize hN s xs gates residuals h_x h_g h_res i,
+        xReg gateReg residualReg outReg blockSize s xs gates residuals h_x h_g h_res i,
       unfused_silu_correct
-        xReg gateReg residualReg zReg siluReg outReg blockSize hN s xs gates residuals
+        xReg gateReg zReg siluReg residualReg outReg blockSize s xs gates residuals
         h_x h_g h_res h_zRes h_siluRes i]
-
-/-- View-level surface for `silu_kernels_refinement`. -/
-theorem silu_kernels_refinement_exec_view
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
-    (xs gates residuals : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-      (fun idx : TileIndex [blockSize] => xs idx.1))
-    (h_g : TensorView.loaded s (programTileView s gateReg blockSize)
-      (fun idx : TileIndex [blockSize] => gates idx.1))
-    (h_res : TensorView.loaded s (programTileView s residualReg blockSize)
-      (fun idx : TileIndex [blockSize] => residuals idx.1))
-    (h_zRes : zReg ≠ residualReg)
-    (h_siluRes : siluReg ≠ residualReg) :
-    ∀ idx : TileIndex [blockSize],
-      TensorView.observe
-          (exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s)
-          (programTileView s outReg blockSize) idx =
-      TensorView.observe
-          (execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s)
-          (programTileView s outReg blockSize) idx := by
-  intro idx
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := blockSize) (xs := xs) h_x
-  have hg := inputLoadedAt_of_programTileView_loaded (s := s) (region := gateReg)
-    (N := blockSize) (xs := gates) h_g
-  have hres := inputLoadedAt_of_programTileView_loaded (s := s) (region := residualReg)
-    (N := blockSize) (xs := residuals) h_res
-  simpa [TensorView.observe, observeTileAt, programTileView,
-         TensorView.offset, Offset.strided, observeAt]
-    using silu_kernels_refinement xReg gateReg residualReg zReg siluReg outReg
-      blockSize hN s xs gates residuals hx hg hres h_zRes h_siluRes idx.1
 
 /-! ### Whole-memory frame lemmas for the writes-equality refinement surface
 
@@ -474,9 +363,7 @@ refinement proof needs `.mem`-level frames: each kernel touches only its own
 store target. Proved by symbolic execution down to the store's `writeMem`
 scatter, then the generic scatter frame lemma. -/
 
-private theorem fused_silu_mem_frame
-    (xReg gateReg residualReg outReg : RegionName) (blockSize : Nat)
-    {s s' : BlockState}
+private theorem fused_silu_mem_frame {s' : BlockState}
     (h : exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s = some s')
     {r : RegionName} (hr : r ≠ outReg) (o : Nat) :
     s'.mem r o = s.mem r o := by
@@ -485,9 +372,7 @@ private theorem fused_silu_mem_frame
   subst h
   exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
 
-private theorem silu_step_gate_mem_frame
-    (xReg gateReg zReg : RegionName) (blockSize : Nat)
-    {s s' : BlockState}
+private theorem silu_step_gate_mem_frame {s' : BlockState}
     (h : exec (siluStepGate xReg gateReg zReg blockSize) s = some s')
     {r : RegionName} (hr : r ≠ zReg) (o : Nat) :
     s'.mem r o = s.mem r o := by
@@ -496,9 +381,7 @@ private theorem silu_step_gate_mem_frame
   subst h
   exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
 
-private theorem silu_step_silu_mem_frame
-    (zReg siluReg : RegionName) (blockSize : Nat)
-    {s s' : BlockState}
+private theorem silu_step_silu_mem_frame {s' : BlockState}
     (h : exec (siluStepSilu zReg siluReg blockSize) s = some s')
     {r : RegionName} (hr : r ≠ siluReg) (o : Nat) :
     s'.mem r o = s.mem r o := by
@@ -507,9 +390,7 @@ private theorem silu_step_silu_mem_frame
   subst h
   exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
 
-private theorem silu_step_residual_mem_frame
-    (siluReg residualReg outReg : RegionName) (blockSize : Nat)
-    {s s' : BlockState}
+private theorem silu_step_residual_mem_frame {s' : BlockState}
     (h : exec (siluStepResidual siluReg residualReg outReg blockSize) s = some s')
     {r : RegionName} (hr : r ≠ outReg) (o : Nat) :
     s'.mem r o = s.mem r o := by
@@ -518,34 +399,32 @@ private theorem silu_step_residual_mem_frame
   subst h
   exact BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _
 
+end FusedSiLU.lemmas
+
+/-! ## The headline theorem -/
+section FusedSiLU.theorems
+
 set_option maxHeartbeats 1600000 in
 /-- Compute-facing surface for `silu_kernels_refinement`: writes-equality
 refinement. From the same initial state, the fused kernel and the unfused
 pipeline perform the same writes — the two final memories agree at every cell
 outside the declared scratch regions `zReg`/`siluReg` (the pipeline's
-temporaries). -/
+temporaries). Inputs enter via the compact `InputLoadedAt` contract; the two
+`≠ residualReg` hypotheses keep the pipeline's scratch temporaries from
+clobbering the residual input before the final stage reads it. -/
 theorem silu_kernels_refinement_view
-    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
-    (xs gates residuals : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-      (fun idx : TileIndex [blockSize] => xs idx.1))
-    (h_g : TensorView.loaded s (programTileView s gateReg blockSize)
-      (fun idx : TileIndex [blockSize] => gates idx.1))
-    (h_res : TensorView.loaded s (programTileView s residualReg blockSize)
-      (fun idx : TileIndex [blockSize] => residuals idx.1))
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_g : InputLoadedAt s gateReg blockSize gates)
+    (h_res : InputLoadedAt s residualReg blockSize residuals)
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
     ComputeRefine.Refines
       (fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
       (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
       s [zReg, siluReg] := by
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := blockSize) (xs := xs) h_x
-  have hg := inputLoadedAt_of_programTileView_loaded (s := s) (region := gateReg)
-    (N := blockSize) (xs := gates) h_g
-  have hres := inputLoadedAt_of_programTileView_loaded (s := s) (region := residualReg)
-    (N := blockSize) (xs := residuals) h_res
+  have hx := h_x
+  have hg := h_g
+  have hres := h_res
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
@@ -553,16 +432,15 @@ theorem silu_kernels_refinement_view
   simp only [List.mem_cons, List.not_mem_nil, or_false, not_or] at hr
   obtain ⟨hrz, hrsilu⟩ := hr
   have hRsplit := hR
-  rw [exec_unfusedSiLUKernel] at hRsplit
-  unfold execUnfusedSiLU at hRsplit
+  rw [exec_unfusedSiLU_split] at hRsplit
   cases h1 : exec (siluStepGate xReg gateReg zReg blockSize) s with
   | none => simp [h1] at hRsplit
   | some s1 =>
-    simp only [h1] at hRsplit
+    simp only [h1, Option.bind_some] at hRsplit
     cases h2 : exec (siluStepSilu zReg siluReg blockSize) s1 with
     | none => simp [h2] at hRsplit
     | some s2 =>
-      simp only [h2] at hRsplit
+      simp only [h2, Option.bind_some] at hRsplit
       -- hRsplit : exec (siluStepResidual …) s2 = some rhs'
       have hpid1 : s1.pid = s.pid := exec_pid h1
       have hpid2 : s2.pid = s1.pid := exec_pid h2
@@ -571,19 +449,19 @@ theorem silu_kernels_refinement_view
       · -- both sides scatter the same values to the same `outReg` offsets
         subst hrOut
         -- pipeline stage facts at `s2` (mirrors `unfused_silu_correct`)
-        have h_z : InputLoadedAt s1 zReg blockSize (gateSpec xs gates) := by
+        have h_z : InputLoadedAt s1 zReg blockSize (fun j => xs j * gates j) := by
           intro j
           have hzj :=
-            silu_step_gate_correct xReg gateReg zReg blockSize hN s xs gates hx hg j
+            silu_step_gate_correct xReg gateReg zReg blockSize s xs gates hx hg j
           rw [h1] at hzj
           simp [observeAt] at hzj
           rw [hpid1]
           exact hzj
         have h_silu_loaded :
-            InputLoadedAt s2 siluReg blockSize (siluSpec (gateSpec xs gates)) := by
+            InputLoadedAt s2 siluReg blockSize ((fun j => Triton.TiledActivation.silu (xs j * gates j))) := by
           intro j
           have hsj :=
-            silu_step_silu_correct zReg siluReg blockSize hN s1 (gateSpec xs gates) h_z j
+            silu_step_silu_correct zReg siluReg blockSize s1 (fun j => xs j * gates j) h_z j
           rw [h2] at hsj
           simp [observeAt] at hsj
           rw [hpid2]
@@ -591,7 +469,7 @@ theorem silu_kernels_refinement_view
         have h_res1 : InputLoadedAt s1 residualReg blockSize residuals := by
           intro j
           have hrj :=
-            silu_step_gate_preserves xReg gateReg zReg residualReg blockSize hN s
+            silu_step_gate_preserves xReg gateReg zReg residualReg blockSize s
               xs gates hx hg (fun h => h_zRes h.symm) j
           rw [h1] at hrj
           simp [observeAt] at hrj
@@ -600,8 +478,8 @@ theorem silu_kernels_refinement_view
         have h_res2 : InputLoadedAt s2 residualReg blockSize residuals := by
           intro j
           have hrj :=
-            silu_step_silu_preserves zReg siluReg residualReg blockSize hN s1
-              (gateSpec xs gates) h_z (fun h => h_siluRes h.symm) j
+            silu_step_silu_preserves zReg siluReg residualReg blockSize s1
+              (fun j => xs j * gates j) h_z (fun h => h_siluRes h.symm) j
           rw [h2] at hrj
           simp [observeAt] at hrj
           rw [hpid2, hrj]
@@ -624,16 +502,35 @@ theorem silu_kernels_refinement_view
           have hsiluk := h_silu_loaded k.1
           have hres2k := h_res2 k.1
           rw [hpid2s] at hsiluk hres2k
-          simp [hxk, hgk, hresk, hsiluk, hres2k, siluSpec, gateSpec,
+          simp [hxk, hgk, hresk, hsiluk, hres2k,
                 Triton.TiledActivation.silu]
         · -- the two scatter bases agree at the observed cell
           simp only [BlockState.setReg_mem]
-          rw [silu_step_silu_mem_frame zReg siluReg blockSize h2 hrsilu o,
-              silu_step_gate_mem_frame xReg gateReg zReg blockSize h1 hrz o]
+          rw [silu_step_silu_mem_frame zReg siluReg blockSize s1 h2 hrsilu o,
+              silu_step_gate_mem_frame xReg gateReg zReg blockSize s h1 hrz o]
       · -- `r` is none of `zReg`/`siluReg`/`outReg`: both sides preserve the cell
-        rw [fused_silu_mem_frame xReg gateReg residualReg outReg blockSize hL hrOut o,
-            silu_step_residual_mem_frame siluReg residualReg outReg blockSize hRsplit hrOut o,
-            silu_step_silu_mem_frame zReg siluReg blockSize h2 hrsilu o,
-            silu_step_gate_mem_frame xReg gateReg zReg blockSize h1 hrz o]
+        rw [fused_silu_mem_frame xReg gateReg residualReg outReg blockSize s hL hrOut o,
+            silu_step_residual_mem_frame siluReg residualReg outReg blockSize s2 hRsplit hrOut o,
+            silu_step_silu_mem_frame zReg siluReg blockSize s1 h2 hrsilu o,
+            silu_step_gate_mem_frame xReg gateReg zReg blockSize s h1 hrz o]
 
-end VeriTile.Examples
+/-! ## Trust audit (compile-time gate)
+
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
+
+-- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+#axiomsClean silu_kernels_refinement_view
+
+-- (2) The headline is a *kernel-vs-kernel* refinement: its statement may mention
+-- ONLY the two kernels, the loaded-input contract, the writes-equality surface,
+-- and the state/region types — NO spec.
+#stmtSurfaceSubset silu_kernels_refinement_view ⊆
+  [fusedSiLUKernel, unfusedSiLUKernel, InputLoadedAt,
+   ComputeRefine.Refines, BlockState, RegionName]
+
+end FusedSiLU.theorems
+
+end VeriTile.Bench.Examples.FusedSiLU

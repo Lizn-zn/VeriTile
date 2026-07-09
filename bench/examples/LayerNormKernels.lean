@@ -1,35 +1,50 @@
-/-
-# `VeriTile.Examples.LayerNormKernels` — fused ≡ two-pass LayerNorm
-
-Tier 2 kernel-pair: fused single-pass LayerNorm ≡ two-pass LayerNorm.
-Composes the Welford recurrence (Phase B #4) with the affine
-`(x − μ)/√(var+ε) · γ + β` transform.
-
-The two-pass kernel proof is closed over the typed tile semantics. The fused
-kernel proof still depends on the Welford loop invariant.
-
-## Kernels & theorems
-
-Kernels: `twoPassLayerNormKernel`, `fusedLayerNormKernel`,
-`layerNormAffineTailKernel`.
-
-* `layerNormSpec_eq_layerNorm` — the mathematical spec identity.
-* `twopass_layernorm_correct` / `fused_layernorm_correct` — each kernel realizes
-  the LayerNorm spec (`ComputeCorrect.Realizes`).
-* `layernorm_kernels_refinement` / `…_refinement_view` — the headline pair
-  theorem on the two-kernel writes-equality surface `ComputeRefine.Refines`.
-  For the rounding-model (∀R) analogue of the compositional pattern see
-  `bench/examples/Swiglu.lean`.
--/
-
+import Mathlib.Data.Real.Basic
+import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Algebra.BigOperators.Field
+import Mathlib.Algebra.BigOperators.Fin
+import Mathlib.Tactic.FieldSimp
+import Mathlib.Tactic.Ring
+import Mathlib.Tactic.Linarith
 import VeriTile.Triton
 import VeriTile.Examples.Common
-import VeriTile.Examples.WelfordKernels
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+/-!
+# LayerNorm: two-pass vs fused single-pass — writes-equality refinement
 
-open VeriTile.Triton
+Self-contained showcase, read top to bottom: **kernels** first (the two
+LayerNorm kernels), the **supporting lemmas** in the middle (`private` plumbing
+— the Welford math, the loop invariant, the affine-tail decomposition, and the
+two per-kernel spec realizations), the **theorem** last (one public headline
+`layernorm_kernels_refinement_view`), then a compile-time **trust audit**. The
+three real sections below are `LayerNorm.kernels`, `LayerNorm.lemmas`,
+`LayerNorm.theorems`.
 
+`twoPassLayerNormKernel` computes mean/variance with two `tl.sum` passes then the
+affine `(x − μ)/√(var+ε)·γ + β`; `fusedLayerNormKernel` computes mean/variance in
+a single Welford `for` loop then the same affine tail. Both realize the same
+LayerNorm spec (Welford's running (M,S) = two-pass (μ,S) via
+`welford_eq_two_pass`), so from the same state they write the same output row.
+
+## The public result (bottom of file)
+
+The single public headline is **`layernorm_kernels_refinement_view`** — a
+kernel-vs-kernel refinement on `ComputeRefine.Refines`: from the same state the
+two-pass and fused kernels perform the same writes (no scratch regions, so the
+scratch list is `[]`). Its statement mentions only the two kernels, the
+loaded-input contracts, the writes-equality surface, and the state/region types
+— **no spec** (the `#stmtSurfaceSubset` gate below enforces this; the LayerNorm
+spec and per-kernel correctness lemmas are all `private`). For the
+rounding-model (∀R) analogue of this compositional pattern see
+`bench/examples/FusedSwiglu.lean`.
+-/
+
+namespace VeriTile.Bench.Examples.LayerNorm
+
+open VeriTile.Triton VeriTile.Examples
+
+/-! ## Kernels -/
+section LayerNorm.kernels
 /-- Two-pass LayerNorm kernel: `tl.sum` twice (mean and var), then affine. -/
 def twoPassLayerNormKernel
     (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel := triton {
@@ -75,7 +90,198 @@ def fusedLayerNormKernel
   tl.store($(yReg) + offs, y)
 }
 
-def layerNormAffineTailKernel
+end LayerNorm.kernels
+
+/-! ## Supporting lemmas (private plumbing) -/
+section LayerNorm.lemmas
+
+/-- Two-pass mean: μ = (∑ xᵢ) / n. -/
+private noncomputable def twoPassMean {n : Nat} (x : Fin n → ℝ) : ℝ :=
+  (∑ i, x i) / n
+
+/-- Two-pass sum-of-squared-deviations: S = ∑ (xᵢ − μ)². -/
+private noncomputable def twoPassS {n : Nat} (x : Fin n → ℝ) : ℝ :=
+  ∑ i, (x i - twoPassMean x) ^ 2
+
+/-- Welford recurrence: running mean M_k after processing x[0..k-1].
+    M_0 = 0, M_{k+1} = M_k + (x_k − M_k) / (k+1).
+    Returns 0 if k > n (out-of-range). -/
+private noncomputable def welfordMean {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
+  | 0     => 0
+  | k + 1 =>
+      if h : k < n then
+        let prev := welfordMean x k
+        prev + (x ⟨k, h⟩ - prev) / (k + 1)
+      else welfordMean x k
+
+/-- Welford recurrence: running sum-of-squared-deviations S_k.
+    S_0 = 0, S_{k+1} = S_k + (x_k − M_k) · (x_k − M_{k+1}). -/
+private noncomputable def welfordS {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
+  | 0     => 0
+  | k + 1 =>
+      if h : k < n then
+        let prevM := welfordMean x k
+        let curM  := welfordMean x (k + 1)
+        welfordS x k + (x ⟨k, h⟩ - prevM) * (x ⟨k, h⟩ - curM)
+      else welfordS x k
+
+/-- Helper: for any prefix length k ≤ n, the running Welford mean times k
+    equals the sum of the first k inputs. Used to derive the final
+    `welfordMean x n = twoPassMean x` claim. -/
+private theorem welford_mean_mul_eq_sum {n : Nat} (x : Fin n → ℝ) :
+    ∀ k : Nat, ∀ (h : k ≤ n),
+      welfordMean x k * k = ∑ i : Fin k, x (castFin h i) := by
+  intro k
+  induction k with
+  | zero =>
+    intro _
+    simp [welfordMean]
+  | succ j ih =>
+    intro hk
+    have hj : j ≤ n := Nat.le_of_succ_le hk
+    have hj_lt : j < n := hk
+    have ih' := ih hj
+    have hwm : welfordMean x (j + 1) =
+        welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / (j + 1) := by
+      simp [welfordMean, hj_lt]
+    rw [hwm]
+    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := by
+      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
+      linarith
+    have hcast : ((j + 1 : Nat) : ℝ) = (j : ℝ) + 1 := by push_cast; ring
+    rw [hcast]
+    have hlhs : (welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / ((j : ℝ) + 1))
+                  * ((j : ℝ) + 1) = welfordMean x j * j + x ⟨j, hj_lt⟩ := by
+      field_simp
+      ring
+    rw [hlhs]
+    rw [Fin.sum_univ_castSucc]
+    have h_last : x (castFin hk (Fin.last j)) = x ⟨j, hj_lt⟩ := by
+      rfl
+    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
+      intro i; rfl
+    simp only [h_cs, h_last]
+    rw [ih']
+
+/-- Welford's variance identity. For any prefix length k ≤ n,
+    the running Welford S_k equals the sum-of-squared-deviations from M_k. -/
+private theorem welford_S_eq_sum_sq_dev {n : Nat} (x : Fin n → ℝ) :
+    ∀ k : Nat, ∀ (hk : k ≤ n),
+      welfordS x k = ∑ i : Fin k, (x (castFin hk i) - welfordMean x k) ^ 2 := by
+  intro k
+  induction k with
+  | zero =>
+    intro _
+    simp [welfordS]
+  | succ j ih =>
+    intro hk
+    have hj : j ≤ n := Nat.le_of_succ_le hk
+    have hj_lt : j < n := hk
+    have ih' := ih hj
+    set M := welfordMean x j with hMdef
+    set M' := welfordMean x (j + 1) with hM'def
+    set xj := x ⟨j, hj_lt⟩ with hxjdef
+    have hM' : M' = M + (xj - M) / ((j : ℝ) + 1) := by
+      simp [hM'def, welfordMean, hj_lt, hMdef, hxjdef]
+    have hS' : welfordS x (j + 1) = welfordS x j + (xj - M) * (xj - M') := by
+      simp [welfordS, hj_lt, hMdef, hM'def, hxjdef]
+    have hjp1_pos : (0 : ℝ) < (j : ℝ) + 1 := by
+      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
+      linarith
+    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := ne_of_gt hjp1_pos
+    have hMean := welford_mean_mul_eq_sum x j hj
+    have hMM' : ((j : ℝ) + 1) * (M' - M) = xj - M := by
+      rw [hM']; field_simp; ring
+    have hxj_M' : xj - M' = (j : ℝ) * (M' - M) := by
+      have : xj - M' = (xj - M) - (M' - M) := by ring
+      rw [this, ← hMM']; ring
+    have hxj_M : xj - M = ((j : ℝ) + 1) * (M' - M) := hMM'.symm
+    rw [hS', ih']
+    rw [Fin.sum_univ_castSucc]
+    have h_last : x (castFin hk (Fin.last j)) = xj := rfl
+    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
+      intro i; rfl
+    simp only [h_cs, h_last]
+    have key :
+        (∑ i : Fin j, (x (castFin hj i) - M') ^ 2) -
+          (∑ i : Fin j, (x (castFin hj i) - M) ^ 2)
+        = (j : ℝ) * (M - M') ^ 2 := by
+      rw [← Finset.sum_sub_distrib]
+      have h_per : ∀ i : Fin j,
+          (x (castFin hj i) - M') ^ 2 - (x (castFin hj i) - M) ^ 2 =
+          (M - M') * (2 * x (castFin hj i) - M - M') := by
+        intro i; ring
+      simp_rw [h_per]
+      rw [← Finset.mul_sum]
+      have h_sum_split : ∀ i : Fin j,
+          2 * x (castFin hj i) - M - M' =
+            2 * x (castFin hj i) + (- M - M') := by
+        intro i; ring
+      simp_rw [h_sum_split]
+      rw [Finset.sum_add_distrib, ← Finset.mul_sum]
+      rw [Finset.sum_const]
+      simp only [Finset.card_univ, Fintype.card_fin, nsmul_eq_mul]
+      have hSumX : ∑ i : Fin j, x (castFin hj i) = M * j := hMean.symm
+      rw [hSumX]
+      ring
+    have lhs_alg : (xj - M) * (xj - M') - (xj - M') ^ 2
+                 = (j : ℝ) * (M - M') ^ 2 := by
+      rw [hxj_M, hxj_M']
+      ring
+    linarith [key, lhs_alg]
+
+/-- The load-bearing identity for Welford kernel refinement: after processing
+all `n` inputs, Welford's running `(M, S)` equals the two-pass `(μ, S)`. -/
+private theorem welford_eq_two_pass {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) :
+    welfordMean x n = twoPassMean x ∧ welfordS x n = twoPassS x := by
+  refine ⟨?_, ?_⟩
+  · have hMul := welford_mean_mul_eq_sum x n (le_refl n)
+    have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
+    have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
+    unfold twoPassMean
+    rw [eq_div_iff hn_ne, hMul]
+    apply Finset.sum_congr rfl
+    intro i _
+    rfl
+  · have hS := welford_S_eq_sum_sq_dev x n (le_refl n)
+    have hM : welfordMean x n = twoPassMean x := by
+      have hMul := welford_mean_mul_eq_sum x n (le_refl n)
+      have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
+      have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
+      unfold twoPassMean
+      rw [eq_div_iff hn_ne, hMul]
+      apply Finset.sum_congr rfl
+      intro i _; rfl
+    rw [hS, hM]
+    unfold twoPassS
+    apply Finset.sum_congr rfl
+    intro i _
+    rfl
+
+private def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
+  [Stmt.assign .real [] "xi"
+      (Op.load .real (MemAccess.region xReg
+        (Op.add .nat .nil
+          (Op.mul .nat .nil (Op.ref .nat [] "pid")
+            (Op.constNat blockSize))
+          (Op.ref .nat [] "i"))) MaskOpt.none),
+    Stmt.assign .real [] "delta"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "M"
+      (Op.add .real .nil (Op.ref .real [] "M")
+        (Op.div .real .nil (Op.ref .real [] "delta")
+          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
+            (Op.const 1)))),
+    Stmt.assign .real [] "delta2"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "S"
+      (Op.add .real .nil (Op.ref .real [] "S")
+        (Op.mul .real .nil (Op.ref .real [] "delta")
+          (Op.ref .real [] "delta2")))]
+
+private def layerNormAffineTailKernel
     (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel :=
   let body : List Stmt :=
       [ .assign .real [] "μ" (.ref .real [] "M")
@@ -112,7 +318,7 @@ def layerNormAffineTailKernel
 Body uses the kernel-internal `twoPassMean`/`twoPassS` since the proof bridges
 through the running ↔ two-pass equivalence. The user-facing operator is
 `Triton.TiledReduction.layerNorm`; see `layerNormSpec_eq_layerNorm` below. -/
-noncomputable def layerNormSpec {N : Nat}
+private noncomputable def layerNormSpec {N : Nat}
     (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) : ℝ :=
   let μ : ℝ := twoPassMean xs
   let v : ℝ := twoPassS xs / N
@@ -121,7 +327,7 @@ noncomputable def layerNormSpec {N : Nat}
 /-- `layerNormSpec` agrees with `Triton.TiledReduction.layerNorm`; the local
 spec is a beta-η variant that exposes `twoPassMean`/`twoPassS` as named
 let-bindings to ease kernel-side proofs. -/
-theorem layerNormSpec_eq_layerNorm {N : Nat}
+private theorem layerNormSpec_eq_layerNorm {N : Nat}
     (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) :
     layerNormSpec xs γs βs ε i =
       Triton.TiledReduction.layerNorm xs γs βs ε i := by
@@ -237,7 +443,7 @@ private theorem layernorm_affine_tail_correct
   simp [hX, hγ, hβ, div_eq_mul_inv]
 
 set_option maxHeartbeats 800000 in
-theorem twopass_layernorm_correct
+private theorem twopass_layernorm_correct
     (xReg γReg βReg yReg : RegionName) (N : Nat) (_hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs)
@@ -271,7 +477,7 @@ theorem twopass_layernorm_correct
   simp [_h_x, _h_γ, _h_β, pow_two, div_eq_mul_inv]
   exact Or.inl rfl
 
-theorem fused_layernorm_correct
+private theorem fused_layernorm_correct
     (xReg γReg βReg yReg : RegionName) (N : Nat) (_hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs)
@@ -368,7 +574,7 @@ theorem fused_layernorm_correct
   exact layernorm_affine_tail_correct xReg γReg βReg yReg N _hN ε sLoop
     xs γs βs hPtail i
 
-theorem layernorm_kernels_refinement
+private theorem layernorm_kernels_refinement
     (xReg γReg βReg yReg : RegionName) (N : Nat) (_hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs)
@@ -389,7 +595,7 @@ theorem layernorm_kernels_refinement
         _h_x _h_γ _h_β _h_yx _h_yγ _h_yβ i]
 
 /-- View-level surface for `layernorm_kernels_refinement`. -/
-theorem layernorm_kernels_refinement_exec_view
+private theorem layernorm_kernels_refinement_exec_view
     (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -445,30 +651,36 @@ private theorem onlineWelfordLoopBody_storeFree (xReg : RegionName) (N : Nat) :
     (onlineWelfordLoopBody xReg N).all (fun st => storeFree st) = Bool.true := by
   simp [onlineWelfordLoopBody, storeFree]
 
+
+end LayerNorm.lemmas
+
+/-! ## The headline theorem -/
+section LayerNorm.theorems
+
+/- Shared parameters of the headline. Hoisted to a `variable` block so the
+signature carries only its genuine hypotheses: the compact `InputLoadedAt` /
+`InputFeatureLoadedAt` input contracts and the three `yReg ≠ ·` aliasing
+constraints (the output must not alias any input). -/
+variable (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
+variable (s : BlockState) (xs γs βs : Fin N → ℝ)
+
+include hN in
 set_option maxHeartbeats 1600000 in
 /-- Compute-facing writes-equality refinement surface for
 `layernorm_kernels_refinement`: from the same initial state, the two-pass and
 fused LayerNorm kernels perform THE SAME WRITES — their final memories agree
 at every cell, with no scratch regions. -/
 theorem layernorm_kernels_refinement_view
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
-    (s : BlockState) (xs γs βs : Fin N → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1))
-    (h_γ : TensorView.loaded s (featureView γReg N)
-      (fun idx : TileIndex [N] => γs idx.1))
-    (h_β : TensorView.loaded s (featureView βReg N)
-      (fun idx : TileIndex [N] => βs idx.1))
+    (h_x : InputLoadedAt s xReg N xs)
+    (h_γ : InputFeatureLoadedAt s γReg N γs)
+    (h_β : InputFeatureLoadedAt s βReg N βs)
     (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
     ComputeRefine.Refines
       (twoPassLayerNormKernel xReg γReg βReg yReg N ε)
       (fusedLayerNormKernel xReg γReg βReg yReg N ε) s [] := by
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := N) (xs := xs) h_x
-  have hγ := inputFeatureLoadedAt_of_featureView_loaded (s := s) (region := γReg)
-    (N := N) (xs := γs) h_γ
-  have hβ := inputFeatureLoadedAt_of_featureView_loaded (s := s) (region := βReg)
-    (N := N) (xs := βs) h_β
+  have hx := h_x
+  have hγ := h_γ
+  have hβ := h_β
   have hTP := twopass_layernorm_correct xReg γReg βReg yReg N hN ε s xs γs βs
     hx hγ hβ h_yx h_yγ h_yβ
   have hFU := fused_layernorm_correct xReg γReg βReg yReg N hN ε s xs γs βs
@@ -572,4 +784,24 @@ theorem layernorm_kernels_refinement_view
   · -- base states: registers only differ; the loop preserved memory
     simp [hMemLoop]
 
-end VeriTile.Examples
+/-! ## Trust audit (compile-time gate)
+
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
+
+-- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+#axiomsClean layernorm_kernels_refinement_view
+
+-- (2) The headline is a *kernel-vs-kernel* refinement: its statement may mention
+-- ONLY the two kernels, the loaded-input contracts, the writes-equality surface,
+-- and the state/region types — NO spec.
+#stmtSurfaceSubset layernorm_kernels_refinement_view ⊆
+  [twoPassLayerNormKernel, fusedLayerNormKernel, InputLoadedAt,
+   InputFeatureLoadedAt, ComputeRefine.Refines, BlockState, RegionName]
+
+end LayerNorm.theorems
+
+end VeriTile.Bench.Examples.LayerNorm
+
