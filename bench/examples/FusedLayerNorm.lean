@@ -22,20 +22,24 @@ three real sections below are `LayerNorm.kernels`, `LayerNorm.lemmas`,
 
 `twoPassLayerNormKernel` computes mean/variance with two `tl.sum` passes then the
 affine `(x − μ)/√(var+ε)·γ + β`; `fusedLayerNormKernel` computes mean/variance in
-a single Welford `for` loop then the same affine tail. Both realize the same
+a single Welford `for` loop then the same affine tail. Both **store the output
+row rounded to bf16** (`(y).to(tl.bfloat16)`); the mean/variance reductions and
+the affine arithmetic run in ℝ (no intermediate rounding). Both realize the same
 LayerNorm spec (Welford's running (M,S) = two-pass (μ,S) via
-`welford_eq_two_pass`), so from the same state they write the same output row.
+`welford_eq_two_pass`), so from the same state they produce the same ℝ output
+row, and the only rounding is the shared bf16 output store, which quantizes
+equal values identically.
 
 ## The public result (bottom of file)
 
 The single public headline is **`layernorm_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
-two-pass and fused kernels perform the same writes (no scratch regions, so the
-scratch list is `[]`). Its statement mentions only the two kernels, the
-loaded-input contracts, the writes-equality surface, and the state/region types
-— **no spec** (the `#stmtSurfaceSubset` gate below enforces this; the LayerNorm
-spec and per-kernel correctness lemmas are all `private`). For the
-rounding-model (∀R) analogue of this compositional pattern see
+kernel-vs-kernel refinement on `ComputeRefine.Refines R` (the rounding-model
+surface): for the rounding model `R`, from the same state the two-pass and fused
+kernels perform the same writes (no scratch regions, so the scratch list is
+`[]`). Its statement mentions only the two kernels, the loaded-input contracts,
+the writes-equality surface, and the state/region types — **no spec** (the
+`#stmtSurfaceSubset` gate below enforces this; the LayerNorm spec and per-kernel
+correctness lemmas are all `private`). The compositional rounding pattern is
 `bench/examples/FusedSwiglu.lean`.
 -/
 

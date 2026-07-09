@@ -6,7 +6,7 @@
 # `file` is the path where the theorem is DEFINED (post-refactor: some refine
 # theorems live in bench/examples/*Refine.lean, and FloatDTypeCorrect/
 # FloatDTypeRefine/FusedSiLU/
-# LayerNormKernels relocated to bench/examples/). `theorem` is the FULLY-
+# FusedLayerNorm relocated to bench/examples/). `theorem` is the FULLY-
 # QUALIFIED name so downstream trust tooling (VeriTile/Meta/TrustReport.lean,
 # bench/audit_trust.sh) resolves it unambiguously regardless of open namespaces.
 #
@@ -37,7 +37,7 @@ rowwise_sum	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseSum_correct_
 rowwise_max	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
 fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLU.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
 welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Bench.Examples.Welford.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
-layernorm_refine	bench/examples/LayerNormKernels.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
+layernorm_refine	bench/examples/FusedLayerNorm.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	VeriTile.Examples.approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
 mhc_width_1x1	VeriTile/Examples/HyperConnections/Manifold.lean	VeriTile.Examples.HyperConnections.mhcWidthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank width correctness	first proof-covered width slice
 mhc_depth_1x1	VeriTile/Examples/HyperConnections/Manifold.lean	VeriTile.Examples.HyperConnections.mhcDepthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank depth correctness	first proof-covered depth slice

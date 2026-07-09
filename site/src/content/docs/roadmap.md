@@ -59,7 +59,7 @@ Estimated 100–300 lines per kernel after the helper lands.
 (#123), `layer_norm_ops` (#133). NOT substrate-blocked — the helpers
 exist (`forRange_inv` / `forLoop_inv`); the work is cross-loop scalar
 threading. Multi-week per kernel; precedent in
-`VeriTile/Examples/LayerNormKernels.lean` and `OnlineSoftmax.lean`.
+`bench/examples/FusedLayerNorm.lean` and `OnlineSoftmax.lean`.
 
 ### 5. `tl.cumsum` direction-aware semantics
 

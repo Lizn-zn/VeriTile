@@ -51,7 +51,7 @@ offset-set 不重合 helper。helper 落地后,每 kernel 估计 100–300 行�
 (#123)、`layer_norm_ops`(#133)。**不是** substrate 卡 ——
 `forRange_inv` / `forLoop_inv` 等 helper 都在;工作量在跨循环 scalar
 穿线。每 kernel 多周。先例在
-`VeriTile/Examples/LayerNormKernels.lean` 和 `OnlineSoftmax.lean`。
+`bench/examples/FusedLayerNorm.lean` 和 `OnlineSoftmax.lean`。
 
 ### 5. `tl.cumsum` 方向感知语义
 

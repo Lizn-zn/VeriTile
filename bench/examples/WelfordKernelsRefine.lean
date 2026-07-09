@@ -22,20 +22,24 @@ three real sections below are `Welford.kernels`, `Welford.lemmas`,
 
 `twopassWelfordKernel` computes the row mean/variance with two `tl.sum` passes;
 `onlineWelfordKernel` uses Welford's one-pass recurrence inside a `for` loop.
-The load-bearing identity is that after processing all inputs the running
-`(M, S)` equals the two-pass `(μ, S)` (`welford_eq_two_pass`), so from the same
-state both kernels write the same mean and variance.
+Both **store the mean and variance rounded to bf16** (`(·).to(tl.bfloat16)`); the
+reductions run in ℝ (no intermediate rounding). The load-bearing identity is that
+after processing all inputs the running `(M, S)` equals the two-pass `(μ, S)`
+(`welford_eq_two_pass`), so from the same state both kernels produce the same ℝ
+mean and variance, and the only rounding is the shared bf16 output stores, which
+quantize equal values identically.
 
 ## The public result (bottom of file)
 
 The single public headline is **`welford_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
-two-pass and online kernels perform the same writes (no scratch regions, so the
-scratch list is `[]`). Its statement mentions only the two kernels, the
-loaded-input contract, the writes-equality surface, and the state/region types
-— **no spec** (the `#stmtSurfaceSubset` gate below enforces this; the Welford
-math and correctness lemmas are all `private`). For the rounding-model (∀R)
-analogue of this surface see `bench/examples/FusedSwiglu.lean`.
+kernel-vs-kernel refinement on `ComputeRefine.Refines R` (the rounding-model
+surface): for the rounding model `R`, from the same state the two-pass and online
+kernels perform the same writes (no scratch regions, so the scratch list is
+`[]`). Its statement mentions only the two kernels, the loaded-input contract,
+the writes-equality surface, and the state/region types — **no spec** (the
+`#stmtSurfaceSubset` gate below enforces this; the Welford math and correctness
+lemmas are all `private`). The compositional rounding pattern is
+`bench/examples/FusedSwiglu.lean`.
 -/
 
 namespace VeriTile.Bench.Examples.Welford
