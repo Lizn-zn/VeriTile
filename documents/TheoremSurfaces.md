@@ -11,14 +11,16 @@ public compute-facing APIs. See
   (*a kernel refines another* — writes-equality on the two final memories
   outside declared scratch regions), the pointwise `ComputeRefine.RefinesAt`,
   `ComputeRefine.Post`, or `ComputeRefine.General`.
-- Narrow-float kernels have rounding-parametric mirrors quantified over every
-  `RoundingModel`: `ComputeRefine.RealizesR` (single kernel) and
-  `RefinesR` / `RefinesAtR` (two kernels); see
+- The default `ComputeCorrect.Realizes` / `ComputeRefine.Refines` /
+  `RefinesAt` surfaces above are the rounding surfaces, parametric over every
+  `RoundingModel`; the exact-ℝ idealizations are their `*_without_Rounding`
+  mirrors, which degenerate out of them at the trivial model. Narrow-float
+  showcase kernels land on the unqualified rounding surface directly; see
   [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) and the showcase
-  `bench/examples/Swiglu.lean`.
+  `bench/examples/FusedSwiglu.lean`.
 
-Projected algorithm lemmas may still mention `Kernel.Correct` or
-`Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas
+Projected algorithm lemmas may still mention `Kernel.Correct_without_Rounding`
+or `Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas
 should not be the exported example theorem named in
 `scripts/kernel-manifest.tsv`.
 

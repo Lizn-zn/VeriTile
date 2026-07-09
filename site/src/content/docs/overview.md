@@ -21,8 +21,8 @@ externally checked. See [Triton subset and gaps](/VeriTile/architecture/triton-s
   reductions, masks (`mask=`/`other=`), block-pointer ops, and bare
   `if`/`for` control flow.
 - **Theorem surfaces**: `ComputeCorrect.Realizes` for kernel ↔ math
-  specification, `ComputeRefine.Realizes` for kernel pair equivalence.
-  Both project through `toAlgorithm?` and run on `Kernel.Correct` /
+  specification, `ComputeRefine.Refines` for kernel pair equivalence.
+  Both project through `toAlgorithm?` and run on `Kernel.Correct_without_Rounding` /
   `Kernel.Refine` underneath.
 - **Examples**: 15 ported TritonBench-G kernels with proofs (see
   [`bench/tritonbench_g/`](https://github.com/Lizn-zn/VeriTile/tree/main/bench/tritonbench_g/)) plus FlashAttention-1
@@ -57,7 +57,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | Goal | Use |
 |---|---|
 | One kernel matches an output spec | `ComputeCorrect.Realizes` |
-| Two kernels satisfy an output relation | `ComputeRefine.Realizes` |
+| Two kernels satisfy an output relation | `ComputeRefine.Refines` |
 | Value + index output (e.g. `tl.max(..., return_indices=True)`) | `ComputeCorrect.OutputPairWhere` |
 | Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
@@ -72,7 +72,7 @@ theorem add_kernel_correct
     (s : BlockState) (xs ys : Fin n → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg n) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg n) ys) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := addKernel xReg yReg outReg n)
       (initialState := s)
       (write := fun i : Fin n => some (outReg, s.pid * n + i.val))

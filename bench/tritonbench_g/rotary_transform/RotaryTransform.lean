@@ -532,7 +532,7 @@ theorem rotary_kernel_o0o1_row_o0_compute_correct
           stride_out_headdim BLOCK_M i))
     (hStrideHd : stride_out_headdim ≠ 0)
     (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -576,7 +576,7 @@ theorem rotary_kernel_o0o1_row_o1_compute_correct
           stride_out_headdim rotary_dim_half BLOCK_M i))
     (hStrideHd : stride_out_headdim ≠ 0)
     (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -626,7 +626,7 @@ theorem rotary_kernel_o0o1_row_all_outputs_compute_correct
           stride_out_headdim rotary_dim_half BLOCK_M i))
     (hStrideHd : stride_out_headdim ≠ 0)
     (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -641,7 +641,7 @@ theorem rotary_kernel_o0o1_row_all_outputs_compute_correct
         rotaryO0Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
           stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
           BLOCK_M i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -707,7 +707,7 @@ theorem rotary_transform_python_output_summary_general
       surf_stride_x_batch surf_stride_x_seqlen surf_stride_x_nheads surf_stride_x_headdim
       BLOCK_K BLOCK_M_surf IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED
       CONJUGATE).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -722,7 +722,7 @@ theorem rotary_transform_python_output_summary_general
         rotaryO0Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
           stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
           BLOCK_M i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen

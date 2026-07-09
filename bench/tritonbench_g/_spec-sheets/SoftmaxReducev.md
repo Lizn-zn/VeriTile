@@ -22,7 +22,7 @@ theorem softmax_reducev_final_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_reducev_final_store_slice Acc ESum Out
         stride_acc_bs stride_acc_h stride_acc_d stride_es_bs stride_es_h
         stride_obs stride_oh stride_od BLOCK_DMODEL)
@@ -149,7 +149,7 @@ theorem softmax_reducev_genuine_output_compute_correct_general
     (hM : srRunningMax (srQkFG s Logics BStartLoc.cast BSeqLen.cast slh slb)
       (srVFG s V BLoc BSeqLen.cast mil sb ss svbs svh svd BLOCK_DMODEL)
       (srSeqLen s BSeqLen.cast) (⟨0, hD⟩ : Fin BLOCK_DMODEL) = (mr : WithBot ℝ)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
         mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N other_kv_index)
       (initialState := s)

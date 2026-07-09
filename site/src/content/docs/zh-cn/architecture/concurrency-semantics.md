@@ -44,7 +44,7 @@ atomic、async/TMA、barrier、shared memory、WGMMA 以及 scheduling 注解。
 
 `AlgKernel` 是证明层。它就是已有的 `Kernel` 类型,带数学 Real/Nat/Int
 语义,后续可能扩展面向证明的抽象 effect marker,例如代数化的
-`atomic_add`。`Kernel.Correct` / `Kernel.Refine` 在这一层证明;面向
+`atomic_add`。`Kernel.Correct_without_Rounding` / `Kernel.Refine` 在这一层证明;面向
 compute 的公开 surface 通过 `ComputeKernel.ComputeCorrect` /
 `ComputeKernel.ComputeRefine` 把这些证明暴露出去。
 
@@ -94,7 +94,7 @@ AlgKernel.atomic_add real == mathematical sum/fold
 
 | 特性类别 | 投影后的算法证明 / ComputeCorrect | 运行时 / 差分测试 |
 | --- | --- | --- |
-| 确定性且可投影到算法层 | 是,经由 `toAlgorithm?` 和 `Kernel.Correct` | 可选 |
+| 确定性且可投影到算法层 | 是,经由 `toAlgorithm?` 和 `Kernel.Correct_without_Rounding` | 可选 |
 | 带代数抽象的 atomic 或 reduction | 是,前提是 `toAlgorithm?` 投影到抽象的 AlgKernel reduction marker,并由 theorem discharge | 推荐 |
 | 具有有效 sequentialization discipline 的 async/TMA | 是,前提是 `toAlgorithm?` 投影到 sequential 的 AlgKernel 形式或抽象 sequentialization marker,并配 theorem | 推荐 |
 | 非顺序且无算法投影 | 否 | 在更强语义出现之前只走 testing/runtime |

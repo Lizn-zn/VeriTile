@@ -35,7 +35,7 @@ theorem bmm_chunk_fwd_output_summary_general
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
         SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bmm_matmul_surface A B Out chunk_size (BK * numKBlocks) ngroups
         SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK)
       (initialState := s)

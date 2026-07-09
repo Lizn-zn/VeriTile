@@ -45,7 +45,7 @@ the genuine scale spec (`quantizeCopyKvScaleCell`) is the stored fp16 cell of
 are computed from the kernel inputs, so the top summary is not self-referential.
 The top summary is dimension-general (arbitrary strides / `head_num` /
 `BLOCK_DMODEL` / `BLOCK_HEAD`); its int8 value conjunct is stated as
-`ComputeCorrect.Realizes`, while the fp16 scale conjunct stays in raw exec-
+`ComputeCorrect.Realizes_without_Rounding`, while the fp16 scale conjunct stays in raw exec-
 readback form because `TileCarrier .fp16` has no `OutputReadable` carrier (see
 the summary's docstring for the honest note).
 
@@ -560,20 +560,20 @@ fp16 per-row scale `quantizeCopyKvScaleCell` to `OutScale` (masked by
 `scaleActive`) — under honest offset-injectivity side conditions.
 
 The three headline conjuncts are: (1) the surface lowers through algorithm
-erasure; (2) the int8 value output stated as `ComputeCorrect.Realizes` over a
+erasure; (2) the int8 value output stated as `ComputeCorrect.Realizes_without_Rounding` over a
 total per-lane write map to `Out` (the `expected` carries the inactive-lane
 `readMemValue .int Out` guarantee, so the map is total and the mask lives in
 `expected`); (3) the fp16 per-row scale output.
 
 **Honest carrier note for conjunct (3).** Unlike conjunct (2), the fp16 scale
-output is NOT phrased as `ComputeCorrect.Realizes`: it stays in the raw
+output is NOT phrased as `ComputeCorrect.Realizes_without_Rounding`: it stays in the raw
 `(exec …).map (·.readMemValue .fp16 OutScale …) = some (if …)` form. This is a
-framework *carrier* limitation, not a proof gap. `ComputeCorrect.Realizes`
+framework *carrier* limitation, not a proof gap. `ComputeCorrect.Realizes_without_Rounding`
 requires an `OutputReadable` instance for the readback type, and the only
 instances in `VeriTile.Triton.Correctness` are for `MemCell`, `ℝ`, `Nat`,
 and `Int`. The scale reads back at `TileCarrier .fp16` (the *decoded* fp16
 value), which has no `OutputReadable` carrier, so it cannot be wrapped in
-`Realizes`. The conjunct is nonetheless genuine and non-self-referential: it
+`Realizes_without_Rounding`. The conjunct is nonetheless genuine and non-self-referential: it
 reads INPUT memory and `quantizeCopyKvScaleCell` is computed from the kernel
 inputs (see `destindex_copy_quantize_kv_real_surface_scale_output_compute_correct`).
 This is the honest-blocker outcome of `MAIN_THEOREM_CONVENTIONS.md` §6.
@@ -593,7 +593,7 @@ theorem destindex_copy_quantize_kv_output_summary_general
     (∃ alg, (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD)
@@ -604,10 +604,10 @@ theorem destindex_copy_quantize_kv_output_summary_general
         (if active s head_num BLOCK_HEAD BLOCK_DMODEL idx then
             quantizeCopyKvSurfaceIntValue s K stride_k_bs stride_k_h stride_k_d head_num BLOCK_DMODEL hD idx
           else s.readMemValue .int Out (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx) : Int))) ∧
-    -- Conjunct (3): raw `.map … = some (if …)` form, NOT `Realizes` — see the
+    -- Conjunct (3): raw `.map … = some (if …)` form, NOT `Realizes_without_Rounding` — see the
     -- honest carrier note in the docstring. `TileCarrier .fp16` (the decoded fp16
     -- value read back here) has no `OutputReadable` instance in the framework, so
-    -- this genuine, non-self-referential output cannot be wrapped in `Realizes`.
+    -- this genuine, non-self-referential output cannot be wrapped in `Realizes_without_Rounding`.
     (∀ i : Fin BLOCK_HEAD,
       (exec (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
             stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
@@ -623,10 +623,10 @@ theorem destindex_copy_quantize_kv_output_summary_general
     destindex_copy_quantize_kv_real_surface_scale_output_compute_correct K DestLoc Out OutScale
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD s hD (fun h => hOut h.symm) hScaleInj⟩
-  -- Middle conjunct: the int8 value output as `ComputeCorrect.Realizes` over a
+  -- Middle conjunct: the int8 value output as `ComputeCorrect.Realizes_without_Rounding` over a
   -- total write map. `readMemValue .int : Int` has an `OutputReadable Int`
   -- carrier, so this converts from the raw exec-readback engine lemma.
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [destindex_copy_quantize_kv_real_surface, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]

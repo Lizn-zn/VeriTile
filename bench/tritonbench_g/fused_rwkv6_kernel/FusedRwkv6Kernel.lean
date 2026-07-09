@@ -78,7 +78,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `fused_rwkv6_kernel.py`'s
 `fused_recurrent_rwkv6_fwd_kernel` as used by the exported benchmark helper.
@@ -374,7 +374,7 @@ theorem fused_recurrent_rwkv6_state_step_slice_compute_correct
     (t s_k_h s_v_h K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => finalStateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         t s_k_h s_v_h K V BK BV)
       (initialState := s)
@@ -530,7 +530,7 @@ theorem fused_recurrent_rwkv6_output_step_slice_compute_correct
     (t s_k_h s_v_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => outStepOffset s t s_v_h B H V BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
         t s_k_h s_v_h B H T K V BK BV scale)
       (initialState := s)
@@ -646,7 +646,7 @@ theorem fused_recurrent_rwkv6_final_state_store_slice_compute_correct
     (BHFinal Ht : RegionName) (K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => finalStateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal Ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -686,7 +686,7 @@ theorem fused_recurrent_rwkv6_state_step_closed_form
     (hPrev : ∀ idx : TileIndex [BV, BK],
       s.readMem BHPrev (finalStateOffset s K V BK BV idx)
         = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV m idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         m s_k_h s_v_h K V BK BV)
       (initialState := s)
@@ -716,7 +716,7 @@ theorem fused_recurrent_rwkv6_output_step_closed_form
     (hPrev : ∀ idx : TileIndex [BV, BK],
       s.readMem BHPrev (finalStateOffset s K V BK BV idx)
         = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV m idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
         m s_k_h s_v_h B H T K V BK BV scale)
       (initialState := s)
@@ -747,7 +747,7 @@ theorem fused_recurrent_rwkv6_final_state_closed_form
     (hFinal : ∀ idx : TileIndex [BV, BK],
       s.readMem BHFinal (finalStateOffset s K V BK BV idx)
         = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV T idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal Ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -868,7 +868,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
       s_k_h s_v_h B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
       Bool.false).toAlgorithm? = Except.ok alg) ∧
     -- (2) the output body realizes the genuine `outputClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
         m s_k_h s_v_h B H T K V BK BV scale)
       (initialState := s)
@@ -879,7 +879,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
         outputClosed s q k v w u h0 USE_INITIAL_STATE s_k_h s_v_h H K V BK BV
           scale m jv)) ∧
     -- (3) the state-update body realizes the genuine `stateClosed(m+1)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         m s_k_h s_v_h K V BK BV)
       (initialState := s)
@@ -889,7 +889,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
         stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV
           (m + 1) idx)) ∧
     -- (4) the final-state writeback realizes the genuine `stateClosed(T)` (masked)
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -912,6 +912,6 @@ theorem fused_recurrent_rwkv6_output_summary_general
   · exact fused_recurrent_rwkv6_final_state_closed_form BHFinal ht k v w h0
       USE_INITIAL_STATE s_k_h s_v_h K V BK BV T s hFinalInj hFinal
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel

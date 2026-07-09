@@ -23,7 +23,7 @@ theorem square_kernel_output_summary
     (h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs) :
     (∃ alg, (square_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := square_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
       (initialState := s)

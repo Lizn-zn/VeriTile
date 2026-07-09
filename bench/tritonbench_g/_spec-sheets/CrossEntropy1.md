@@ -40,7 +40,7 @@ theorem cross_entropy_fwd_output_summary
     (h_tail : s.pids 1 * (n+1) < n_cols)
     (hne : lse_ptr ≠ loss_ptr)
     (hLL : lse_ptr ≠ logits_ptr) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
         smoothing lse_square_scale ignored_index total_classes class_start_idx
         n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
@@ -49,7 +49,7 @@ theorem cross_entropy_fwd_output_summary
       (expected := fun _ =>
         partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
           (s.pids 1) h_tail Bool.false 0)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
         smoothing lse_square_scale ignored_index total_classes class_start_idx
         n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)

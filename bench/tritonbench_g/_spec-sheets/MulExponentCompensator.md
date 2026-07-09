@@ -21,7 +21,7 @@ theorem mul_kernel_output_summary
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s src BLOCK_SIZE xs) :
     (∃ alg, (mul_kernel src dst BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mul_kernel src dst BLOCK_SIZE)
       (initialState := s)
       (write := fun i : Fin BLOCK_SIZE =>

@@ -22,7 +22,7 @@ theorem softmax_kernel_output_summary
     (s : BlockState) :
     (∃ alg, (softmax_kernel output_ptr input_ptr mask_ptr row_stride
         n_cols BLOCK_SIZE HAS_MASK).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel output_ptr input_ptr mask_ptr row_stride
         n_cols BLOCK_SIZE HAS_MASK)
       (initialState := s)

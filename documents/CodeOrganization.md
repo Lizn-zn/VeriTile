@@ -157,15 +157,15 @@ VeriTile/
                             holds proof lemmas, NOT the `Kernel` type (that is in
                             Core/Ast).
     Correctness.lean        Top-level correctness/refinement surfaces:
-                            `Kernel.Correct`, `ComputeCorrect.*`,
+                            `Kernel.Correct_without_Rounding`, `ComputeCorrect.*`,
                             `ComputeRefine.*`, `WriteMap`, `OutputReadable`.
                             (Moved out of Float/; was
                             `VeriTile.Triton.Float.Correctness`.)
     Float/                  Floating-dtype machinery only: dtype erasure
                             (Erasure, StateErasure) + the rounding model
                             (RoundingModel, EvalOpR, StepR, Refine, Pipeline).
-                            The rounding surfaces `RealizesR`/`RefinesR`/
-                            `RefinesAtR` live in `Float/Refine.lean`.
+                            The rounding surfaces `Realizes`/`Refines`/
+                            `RefinesAt` live in `Float/Refine.lean`.
     Launch/                 Grid-launch composition: GridWriteFootprint,
                             GridFrames, mergeFrames, GridWritesDisjoint.
     Concurrency/            Grid-wide atomic-add correctness.

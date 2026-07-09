@@ -20,8 +20,8 @@ and the counts at the top of this file to refresh.
 | `bench/tritonbench_g/<kernel>/` directories | **184** |
 | With paired `.py` + `.lean` | **141** |
 | README-only scaffolds (no port yet) | **43** |
-| `ComputeCorrect.Realizes` proofs across bench | **742** |
-| `ComputeRefine.Realizes` proofs across bench | 0 |
+| `ComputeCorrect.Realizes_without_Rounding` proofs across bench | **742** |
+| `ComputeRefine.Refines_without_Rounding` proofs across bench | 0 |
 | `sorry` / `admit` across bench | **0** |
 | Theorems + lemmas across `VeriTile/` + `bench/` | **2,567** |
 
@@ -29,9 +29,9 @@ The zero-`sorry`, zero-`admit` invariant is enforced by
 [`scripts/check-artifact.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check-artifact.sh)
 in CI. Adding a `sorry` breaks the build.
 
-Why `ComputeRefine.Realizes` is zero across bench: the refinement surface
+Why `ComputeRefine.Refines_without_Rounding` is zero across bench: the refinement surface
 exists, but every bench port so far has been "kernel ↔ math spec" rather
-than "kernel ↔ kernel", so `ComputeCorrect.Realizes` is the right surface
+than "kernel ↔ kernel", so `ComputeCorrect.Realizes_without_Rounding` is the right surface
 for the current corpus.
 
 ## Bench coverage status
@@ -40,7 +40,7 @@ The 141 kernels with `.lean` ports fall into three coverage buckets.
 
 ### Fully closed
 
-Full `ComputeCorrect.Realizes` for every Python-tested output. Roughly half
+Full `ComputeCorrect.Realizes_without_Rounding` for every Python-tested output. Roughly half
 the ported bench. Examples: `add_example`, `cosine_compute`,
 `dropout_triton`, `swiglu_fwd`, `kldiv_compute`, `dequantize_rowwise`,
 `l2_norm_triton2`, `apply_penalty`, `destindex_copy{,_kv1,_kv2}`,
@@ -157,8 +157,8 @@ Re-run from repo root:
 ```bash
 # bench dirs / paired ports / README-only
 find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d | wc -l
-# ComputeCorrect.Realizes proof count
-grep -rh 'ComputeCorrect.Realizes\b' bench/tritonbench_g --include='*.lean' | wc -l
+# ComputeCorrect.Realizes_without_Rounding proof count
+grep -rh 'ComputeCorrect.Realizes_without_Rounding\b' bench/tritonbench_g --include='*.lean' | wc -l
 # sorry / admit hard zero
 grep -rE '(^|[^a-zA-Z_])(sorry|admit)( |$)' bench --include='*.lean' | wc -l
 # docs currency

@@ -44,7 +44,7 @@ bash bench/audit_tritonbench_g.sh
 ## 给一个文件加自审计
 
 把检查放在文件末尾(完整范式见 SwiGLU pilot
-[`bench/examples/Swiglu.lean`](../bench/examples/Swiglu.lean))。
+[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean))。
 它们在编译期运行——任何一道不过,文件就编译失败:
 
 ```lean

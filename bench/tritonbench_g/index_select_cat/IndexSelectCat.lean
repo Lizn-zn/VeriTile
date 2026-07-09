@@ -169,7 +169,7 @@ theorem index_select_cat_fwd_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
         outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
         num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
       (initialState := s)
@@ -205,7 +205,7 @@ theorem index_select_cat_fwd_kernel_output_summary
     (∃ alg, (index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
         num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX
         BLOCK_SIZE_COL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
         num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
       (initialState := s)

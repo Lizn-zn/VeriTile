@@ -30,7 +30,7 @@ theorem copy_to_kcache_seqlen_n1_surface_output_summary
         stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
         stride_kcs 0 stride_bts stride_btb block_size 1 0
         KCACHE_X).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
         seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
         stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0

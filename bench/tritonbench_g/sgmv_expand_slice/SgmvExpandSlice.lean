@@ -31,7 +31,7 @@ emitted value.
 ## Proof architecture (mirrors `matmul_triton1`/`AttentionForwardClosedForm`)
 
 ```
-sgmv_expand_slice_closed_form_correct            ← TOP THEOREM (ComputeCorrect.Realizes)
+sgmv_expand_slice_closed_form_correct            ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ sgmv_exec_closed_form                        ← exec-side closed form (every active cell = Σ_k a·b)
        ├─ sgmv_preLoop      (P 0: acc = 0, pointers/metadata seeded)
        ├─ sgmv_step         (one K-block: acc += dot advances the partial sum)
@@ -1025,7 +1025,7 @@ theorem sgmv_expand_slice_closed_form_correct
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat) (hBK : 0 < BLOCK_K)
     (hInj : Function.Injective (cOffset s b_seq_start_loc cm_stride cn_stride slice_offset BLOCK_M BLOCK_N))
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := sgmv_expand_slice_surface input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens
         lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
         lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K)
@@ -1069,7 +1069,7 @@ theorem sgmv_expand_slice_one_row_block_output_summary
     (∃ alg, (sgmv_expand_slice_surface input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens
         lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
         lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := sgmv_expand_slice_surface input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens
         lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
         lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K)

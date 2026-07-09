@@ -289,7 +289,7 @@ theorem softmax_kernel_inner_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -311,7 +311,7 @@ theorem softmax_kernel_inner_one_tile_compute_correct
 This block provides offset/value defs and a substantive `_writes_at_idx`
 lemma showing that, for in-range lanes, the kernel writes exactly the
 softmax-of-column value at every `(n, k)` lane. The full
-`ComputeCorrect.Realizes` lift to a math-level spec for the 2D non-inner
+`ComputeCorrect.Realizes_without_Rounding` lift to a math-level spec for the 2D non-inner
 softmax is left as future work — the underlying difficulty is the per-column
 streaming reduction along axis 0 with a precomputed-tile dependence. -/
 
@@ -450,7 +450,7 @@ theorem softmax_kernel_non_inner_one_tile_compute_correct
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)
     (hRange : s.pids 1 * TILE_K + TILE_K ≤ K) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_kernel_non_inner_one_tile_surface
         output_ptr input_ptr N K TILE_N TILE_K)
       (initialState := s)
@@ -605,7 +605,7 @@ theorem softmax_backward_kernel_inner_one_tile_compute_correct
     (s : BlockState)
     (hOffInj : Function.Injective
       (fun idx : TileIndex [TILE_M, TILE_N] => innerBwdOffset s N TILE_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_backward_kernel_inner_one_tile_surface
         out_ptr out_grad_ptr in_grad_ptr M N TILE_M TILE_N)
       (initialState := s)
@@ -721,7 +721,7 @@ theorem softmax_backward_kernel_non_inner_one_tile_compute_correct
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)
     (hRange : s.pids 1 * TILE_K + TILE_K ≤ K) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := softmax_backward_kernel_non_inner_one_tile_surface
         out_ptr out_grad_ptr in_grad_ptr N K TILE_N TILE_K)
       (initialState := s)

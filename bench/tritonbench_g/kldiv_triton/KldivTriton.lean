@@ -323,7 +323,7 @@ theorem kldiv_backward_default_compute_correct
     (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s input_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kldiv_backward_default input_ptr target_ptr
         input_stride target_stride n_cols BLOCK_SIZE)
       (initialState := s)
@@ -352,7 +352,7 @@ theorem kldiv_backward_log_target_compute_correct
     (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s input_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kldiv_backward_log_target input_ptr target_ptr
         input_stride target_stride n_cols BLOCK_SIZE)
       (initialState := s)
@@ -420,7 +420,7 @@ theorem kldiv_forward_default_none_compute_correct
     (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kldiv_forward_default_none y_ptr gt_ptr loss_ptr
         y_stride gt_stride loss_stride n_cols BLOCK_SIZE)
       (initialState := s)
@@ -489,7 +489,7 @@ theorem kldiv_forward_log_target_none_compute_correct
     (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kldiv_forward_log_target_none y_ptr gt_ptr loss_ptr
         y_stride gt_stride loss_stride n_cols BLOCK_SIZE)
       (initialState := s)

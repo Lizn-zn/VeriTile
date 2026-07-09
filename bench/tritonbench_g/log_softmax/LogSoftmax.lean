@@ -196,7 +196,7 @@ theorem log_softmax_kernel_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -330,7 +330,7 @@ theorem log_softmax_backward_kernel_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := log_softmax_backward_kernel out_ptr out_grad_ptr in_grad_ptr
         M N K BLOCK_M BLOCK_N)
       (initialState := s)
@@ -361,7 +361,7 @@ theorem log_softmax_kernel_output_summary
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)) :
     (∃ alg, (log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

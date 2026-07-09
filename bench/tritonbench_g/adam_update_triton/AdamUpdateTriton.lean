@@ -159,7 +159,7 @@ theorem update_fn_kernel_exp_avg_compute_correct
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)
     (hRegions : exp_avg_ptr ≠ p_ptr) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -238,7 +238,7 @@ theorem update_fn_kernel_p_compute_correct
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)
     (hRegions : p_ptr ≠ exp_avg_ptr) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -265,7 +265,7 @@ theorem update_fn_kernel_all_outputs_compute_correct
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)
     (hRegions : p_ptr ≠ exp_avg_ptr) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -274,7 +274,7 @@ theorem update_fn_kernel_all_outputs_compute_correct
         (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -319,7 +319,7 @@ theorem update_fn_kernel_output_summary
     (∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
       lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -328,7 +328,7 @@ theorem update_fn_kernel_output_summary
         (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)

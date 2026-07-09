@@ -72,7 +72,7 @@ theorem rotary_emb_nopad_output_summary_general
       surf_k_head_stride surf_head_dim_stride surf_cos_token_stride
       surf_cos_stride surf_q_total_tokens surf_Q_HEAD_NUM surf_KV_GROUP_NUM
       surf_HEAD_DIM surf_BLOCK_TOKENS).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -85,7 +85,7 @@ theorem rotary_emb_nopad_output_summary_general
       (expected := fun idx =>
         rotaryNopadQ0FullSpec s Q Cos Sin q_token_stride q_head_stride
           head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_q_surface Q Cos Sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
@@ -98,7 +98,7 @@ theorem rotary_emb_nopad_output_summary_general
       (expected := fun idx =>
         rotaryNopadQ1FullSpec s Q Cos Sin q_token_stride q_head_stride
           head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
@@ -112,7 +112,7 @@ theorem rotary_emb_nopad_output_summary_general
         rotaryNopadK0FullSpec s K Cos Sin k_token_stride k_head_stride
           head_dim_stride cos_token_stride cos_stride KV_GROUP_NUM
           BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rotary_embedding_k_surface K Cos Sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)

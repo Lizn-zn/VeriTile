@@ -387,7 +387,7 @@ theorem layernorm_backward_dx_compute_correct
     (eps : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dXOutOffset s dY_row_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_backward dY X W bias r mu dY_row_stride
         X_row_stride n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -415,7 +415,7 @@ theorem layernorm_forward_y_compute_correct
     (hYr : Y ≠ r) (hYmu : Y ≠ mu)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -496,14 +496,14 @@ theorem layernorm_forward_inv_var_compute_correct
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
     (hRY : r ≠ Y) (hRmu : r ≠ mu) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
       (write := fun _ : PUnit => some (r, s.pid))
       (expected := fun _ =>
         invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -550,14 +550,14 @@ theorem layernorm_forward_mean_compute_correct
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
     (hMuY : mu ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
       (write := fun _ : PUnit => some (mu, s.pid))
       (expected := fun _ =>
         meanFullSpec s X X_row_stride n_cols BLOCK_SIZE) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -593,12 +593,12 @@ theorem layernorm_forward_inv_var_store_slice_correct
 
 theorem layernorm_forward_inv_var_store_slice_compute_correct
     (InvVarPre r : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward_inv_var_store_slice InvVarPre r)
       (initialState := s)
       (write := fun _ : PUnit => some (r, rOutOffset s))
       (expected := fun _ => invVarStoreSpec s InvVarPre) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layernorm_forward_inv_var_store_slice]
   intro s0 s' hExec hs0
@@ -630,12 +630,12 @@ theorem layernorm_forward_mean_store_slice_correct
 
 theorem layernorm_forward_mean_store_slice_compute_correct
     (MeanPre mu : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward_mean_store_slice MeanPre mu)
       (initialState := s)
       (write := fun _ : PUnit => some (mu, rOutOffset s))
       (expected := fun _ => meanStoreSpec s MeanPre) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layernorm_forward_mean_store_slice]
   intro s0 s' hExec hs0
@@ -659,7 +659,7 @@ theorem layernorm_forward_output_summary
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
     (∃ alg, (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -668,14 +668,14 @@ theorem layernorm_forward_output_summary
         (fun i => (Y, yOutOffset s Y_row_stride i)))
       (expected := fun i =>
         layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)
       (write := fun _ : PUnit => some (r, s.pid))
       (expected := fun _ =>
         invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
         n_cols eps BLOCK_SIZE)
       (initialState := s)

@@ -299,7 +299,7 @@ theorem swiglu_bwd_kernel_compute_correct
     (h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i)
     (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i)
     (h_dout : ∀ i : Fin BLOCK_N, s.readMem DOUT (swigluOffset s stride_dout_row BLOCK_N i) = douts i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
         stride_x_row stride_y_row stride_dout_row stride_out_row
         stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT)
@@ -379,7 +379,7 @@ theorem swiglu_bwd_kernel_output_summary
         stride_x_row stride_y_row stride_dout_row stride_out_row
         stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
         stride_x_row stride_y_row stride_dout_row stride_out_row
         stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT)

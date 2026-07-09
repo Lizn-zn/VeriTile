@@ -33,7 +33,7 @@ theorem swiglu_bwd_kernel_output_summary
         stride_x_row stride_y_row stride_dout_row stride_out_row
         stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
         stride_x_row stride_y_row stride_dout_row stride_out_row
         stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT)

@@ -26,7 +26,7 @@ theorem chunk_cumsum_vector_output_summary_general
       ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
         singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
           singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

@@ -28,7 +28,7 @@ independent batched vector-matrix reference
 emitted value.
 
 ```
-batched_vecmat_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+batched_vecmat_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ vecmat_exec_closed_form                       ← exec-side closed form (every cell = ∑ A·B)
        ├─ vecmat_preLoop      (P 0: vecmat = 0, scalar regs seeded)
        ├─ vecmat_step         (one K-block: vecmat += trans(reduceSum(a·b)) advances the partial sum)
@@ -72,7 +72,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
 
@@ -254,7 +254,7 @@ theorem batched_vecmat_one_row_block_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_block A B output dim_n dim_k N K
         BLOCK_N BLOCK_K)
       (initialState := s)
@@ -412,7 +412,7 @@ theorem batched_vecmat_one_row_k_block_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_k_block A B output dim_n dim_k N K
         BLOCK_N BLOCK_K)
       (initialState := s)
@@ -562,7 +562,7 @@ theorem batched_vecmat_one_row_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_k_accum_slice AccPre A B Out
         dim_n dim_k N K BLOCK_N BLOCK_K)
       (initialState := s)
@@ -715,7 +715,7 @@ theorem batched_vecmat_one_row_const_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_const_k_accum_slice AccPre A B Out
         dim_n dim_k N K BLOCK_N BLOCK_K kIdx)
       (initialState := s)
@@ -743,7 +743,7 @@ theorem batched_vecmat_test_first_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_const_k_accum_slice AccPre A B Out
         dim_n dim_k N 128 BLOCK_N 64 0)
       (initialState := s)
@@ -764,7 +764,7 @@ theorem batched_vecmat_test_second_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_const_k_accum_slice AccPre A B Out
         dim_n dim_k N 128 BLOCK_N 64 1)
       (initialState := s)
@@ -858,7 +858,7 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         blockOutOffset s dim_n BLOCK_M BLOCK_N idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_block_output_store_slice VecmatPre output
         dim_n BLOCK_M BLOCK_N)
       (initialState := s)
@@ -866,7 +866,7 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
         some (output, blockOutOffset s dim_n BLOCK_M BLOCK_N idx))
       (expected := fun idx =>
         blockOutputStoreSpec s VecmatPre dim_n BLOCK_M BLOCK_N idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [batched_vecmat_block_output_store_slice]
   intro s0 s' hExec hs0
@@ -1485,7 +1485,7 @@ theorem batched_vecmat_closed_form_correct
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBK : 0 < BLOCK_K)
     (hInj : Function.Injective (vecmatOutOffset s dim_n BLOCK_M BLOCK_N))
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_surface A B output _dim_m dim_n (BLOCK_K * numKBlocks)
         BLOCK_M BLOCK_N BLOCK_K)
       (initialState := s)
@@ -1511,7 +1511,7 @@ theorem batched_vecmat_closed_form_correct
 `test_vecmat` runs `M = N = K = 128`, `block_m = 16`, `block_n = 32`,
 `block_k = 64`, so `numKBlocks = 128 / 64 = 2`. -/
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult

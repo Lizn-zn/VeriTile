@@ -25,7 +25,7 @@ destination-index injectivity is supplied as a no-collision lemma.
 ## Proof architecture
 
 ```
-destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOREM (ComputeCorrect.Realizes conjunction, symbolic dims/strides)
+destindex_copy_quantize_kv_group_output_summary_general       ← ★ MAIN THEOREM (ComputeCorrect.Realizes_without_Rounding conjunction, symbolic dims/strides)
   ├─ ..._group_real_surface_toAlgorithm_supported             surface lowers to the algorithm layer
   ├─ ..._group_real_surface_value_output_compute_correct      genuine int8 value readback
   │    ├─ scatter_readback_int_prop_masked_nd                 per-lane int store readback
@@ -441,7 +441,7 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] =>
         outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_group_value_store_slice K DestLoc Out
         OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
         stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
@@ -584,7 +584,7 @@ theorem destindex_copy_quantize_kv_group_scale_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_GROUP_NUM =>
         scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
         OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h
         group_size BLOCK_GROUP_NUM)
@@ -790,8 +790,8 @@ theorem destindex_copy_quantize_kv_group_real_surface_scale_output_compute_corre
 /-- **Dimension-general grouped summary (genuine, gap-free).** The symbolic
 grouped summary: all strides, `group_size`, `BLOCK_GROUP_NUM`, and
 `BLOCK_GROUP_DIM` are arbitrary `Nat` parameters. Stated on the standard
-`ComputeCorrect.Realizes` trust surface: the lowering conjunct plus one
-`Realizes` per stored output (the int8 value store and the real scale store),
+`ComputeCorrect.Realizes_without_Rounding` trust surface: the lowering conjunct plus one
+`Realizes_without_Rounding` per stored output (the int8 value store and the real scale store),
 each with a **total** write map so the inactive-lane guarantee lives inside
 `expected` (active lanes get the genuine input-derived spec, inactive lanes keep
 their prior memory). Honest hypotheses: `hD : 0 < BLOCK_GROUP_DIM` (nonempty
@@ -818,7 +818,7 @@ theorem destindex_copy_quantize_kv_group_output_summary_general
         stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
         BLOCK_GROUP_NUM BLOCK_GROUP_DIM).toAlgorithm? =
           Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
         stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
@@ -832,7 +832,7 @@ theorem destindex_copy_quantize_kv_group_output_summary_general
             stride_k_g group_size BLOCK_GROUP_DIM hD idx
         else s.readMemValue .int Out
           (outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
         stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
@@ -850,7 +850,7 @@ theorem destindex_copy_quantize_kv_group_output_summary_general
       DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
       stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM, ?_, ?_⟩
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [destindex_copy_quantize_kv_group_real_surface,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -862,7 +862,7 @@ theorem destindex_copy_quantize_kv_group_output_summary_general
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s hD hOut hOutInj idx
     rw [hExec] at h
     simpa using Option.some.inj h
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [destindex_copy_quantize_kv_group_real_surface,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]

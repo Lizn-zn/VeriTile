@@ -69,7 +69,7 @@ theorem chunk_delta_fwd_output_summary_general
         _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
           = Except.ok alg)
     -- (ii) the state-store face realizes the genuine chunk-start state recurrence
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_h_store_slice BH h i_t s_h_h s_h_t K V BK BV)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf
@@ -79,7 +79,7 @@ theorem chunk_delta_fwd_output_summary_general
           hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
             K V BT BV BK USE_INITIAL_STATE i_t idx))
     -- (iii) the corrected-value store face realizes the genuine `vNewValue`
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes
+    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_v_new_store_slice BVN v_new i_t 0
           s_vo_h s_vo_t s_vo_d T V BT BT BV)
         (initialState := s)
@@ -91,7 +91,7 @@ theorem chunk_delta_fwd_output_summary_general
           vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
             K V BT BV BK USE_INITIAL_STATE i_t idx))
     -- (iv) the final-state store face realizes `H_{NT}`
-    ∧ ComputeCorrect.Realizes
+    ∧ ComputeCorrect.Realizes_without_Rounding
         (kernel := chunk_delta_fwd_final_state_store_slice BHFinal final_state K V BK BV)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf

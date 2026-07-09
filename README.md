@@ -25,16 +25,18 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   specification*, `ComputeRefine.Refines` for *one kernel refining another*
   (writes-equality: the two final memories agree at every cell outside the
   declared scratch regions). Both project through `toAlgorithm?` and run on
-  `Kernel.Correct` / `Kernel.Refine` underneath.
+  `Kernel.Correct_without_Rounding` / `Kernel.Refine` underneath.
 - **Narrow-float / rounding-model layer** (#447): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, sole axiom `round_real = id`) threads a
   black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /
-  `execR`). The rounding-parametric surfaces `ComputeRefine.RealizesR` (single
-  kernel vs an R-annotated spec) and `RefinesR` / `RefinesAtR` (two kernels)
-  quantify over *every* rounding model; the bridge `RealizesR.toRealizes`
-  degenerates to ideal `ComputeCorrect.Realizes` at the trivial model. See the
+  `execR`). The unqualified surfaces are the rounding-parametric ones —
+  `ComputeRefine.Realizes` (single kernel vs an R-annotated spec) and
+  `Refines` / `RefinesAt` (two kernels) run under a `RoundingModel R`; the
+  exact-ℝ idealization is the qualified `*_without_Rounding` name, which the
+  bridge `Realizes.toRealizes` degenerates out to (as
+  `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
-  [`bench/examples/Swiglu.lean`](./bench/examples/Swiglu.lean).
+  [`bench/examples/FusedSwiglu.lean`](./bench/examples/FusedSwiglu.lean).
 - **Examples**: 151 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
@@ -72,7 +74,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | One kernel matches an output spec | `ComputeCorrect.Realizes` |
 | One kernel refines another (writes-equality) | `ComputeRefine.Refines` |
 | Two kernels agree pointwise per address | `ComputeRefine.RefinesAt` |
-| Same, under every rounding model (narrow-float) | `ComputeRefine.RealizesR` / `RefinesR` / `RefinesAtR` |
+| Single kernel / pairs under a rounding model (narrow-float) | `ComputeRefine.Realizes` / `Refines` / `RefinesAt` |
 | Value + index output (e.g. `tl.max(..., return_indices=True)`) | `ComputeCorrect.OutputPairWhere` |
 | Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
@@ -87,7 +89,7 @@ theorem add_kernel_correct
     (s : BlockState) (xs ys : Fin n → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg n) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg n) ys) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := addKernel xReg yReg outReg n)
       (initialState := s)
       (write := fun i : Fin n => some (outReg, s.pid * n + i.val))
@@ -150,7 +152,7 @@ VeriTile/
     Math/                  Pure `(Fin N → ℝ) → ...` operators (+ Math/Erf)
     KernelLemmas/          Reusable bench-proof helpers (was Triton/Kernel/)
     Correctness.lean       Top-level correctness/refinement surfaces
-                           (Kernel.Correct, ComputeCorrect.*, ComputeRefine.*)
+                           (Kernel.Correct_without_Rounding, ComputeCorrect.*, ComputeRefine.*)
     Float/                 Floating-dtype machinery: dtype erasure +
                            the rounding model (RoundingModel, execR, Refine,
                            Pipeline)

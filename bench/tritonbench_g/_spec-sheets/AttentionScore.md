@@ -27,7 +27,7 @@ theorem attention_score_python_case1_output_summary_general
       stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
       stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
       BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_score_kernel Q K M Out
         stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
         stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws

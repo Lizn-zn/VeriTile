@@ -131,8 +131,8 @@ Once translation is settled, pick a theorem surface. The chooser is in
 
 | Goal | Surface |
 |---|---|
-| One kernel matches an output spec | `ComputeCorrect.Realizes` |
-| Two kernels satisfy an output relation | `ComputeRefine.Realizes` |
+| One kernel matches an output spec | `ComputeCorrect.Realizes_without_Rounding` |
+| Two kernels satisfy an output relation | `ComputeRefine.Refines_without_Rounding` |
 | Value + index output (e.g. `return_indices=True`) | `ComputeCorrect.OutputPairWhere` |
 | Custom final-state postcondition | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states | `ComputeCorrect.General` / `ComputeRefine.General` |

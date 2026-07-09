@@ -42,7 +42,7 @@ theorem token_attn_mistral_output_summary_general
       stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
       kv_group_num sliding_window BLOCK_DMODEL BLOCK_N).toAlgorithm? =
         Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
         B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen
         stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs

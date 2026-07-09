@@ -99,7 +99,7 @@ substrate 队列前面?
 更整洁的答案尚未承诺的几条:
 
 1. **Refinement 在 bench 的覆盖** —— surface 在,但 `bench/` 里
-   `ComputeRefine.Realizes` 零调用。语料里有适合 "kernel ↔ kernel"
+   `ComputeRefine.Refines_without_Rounding` 零调用。语料里有适合 "kernel ↔ kernel"
    的对吗?还是这个 surface 只在 `VeriTile/Examples/` 里值回票价?
 2. **Manifest 作 source of truth** —— `KernelManifest.md` 记录"追踪
    什么";bench 状态(slice / full / substrate-blocked)是否应该编码

@@ -86,7 +86,7 @@ theorem fa1_boundaryD_refines_naive_reference_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := views.boundaryKernelD M Bd Bk numKVBlocks scale)
       (initialState := s)
       (write := fun idx : { idx : TileIndex [M, Bd] //
@@ -148,7 +148,7 @@ theorem fa1_causal_boundaryD_refines_naive_reference_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := views.causalBoundaryKernelD M Bd Bk numKVBlocks scale)
       (initialState := s)
       (write := fun idx : { idx : TileIndex [M, Bd] //

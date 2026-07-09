@@ -304,7 +304,7 @@ theorem layer_norm_liger_forward_y_compute_correct
     (hYMean : Y ≠ Mean) (hYRSTD : Y ≠ RSTD)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -356,12 +356,12 @@ theorem layer_norm_liger_forward_mean_store_slice_correct
 
 theorem layer_norm_liger_forward_mean_store_slice_compute_correct
     (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, meanRowOffset s Mean_row_stride))
       (expected := fun _ => meanStoreSpec s MeanPre Mean_row_stride) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_liger_forward_mean_store_slice]
   intro s0 s' hExec hs0
@@ -398,12 +398,12 @@ theorem layer_norm_liger_forward_rstd_store_slice_correct
 
 theorem layer_norm_liger_forward_rstd_store_slice_compute_correct
     (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride)
       (initialState := s)
       (write := fun _ : PUnit => some (RSTD, meanRowOffset s RSTD_row_stride))
       (expected := fun _ => rstdStoreSpec s RSTDPre RSTD_row_stride) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_liger_forward_rstd_store_slice]
   intro s0 s' hExec hs0
@@ -458,7 +458,7 @@ theorem layer_norm_liger_forward_inv_var_compute_correct
       BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
     (hRSTDY : RSTD ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -466,7 +466,7 @@ theorem layer_norm_liger_forward_inv_var_compute_correct
       (expected := fun _ =>
         WithBot.unbotD 0
           (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_liger_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -515,7 +515,7 @@ theorem layer_norm_liger_forward_mean_compute_correct
       BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
     (hMeanY : Mean ≠ Y) (hMeanRSTD : Mean ≠ RSTD) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -523,7 +523,7 @@ theorem layer_norm_liger_forward_mean_compute_correct
       (expected := fun _ =>
         WithBot.unbotD 0
           (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE)) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_liger_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -545,7 +545,7 @@ theorem layer_norm_liger_forward_all_outputs_compute_correct
     (hRSTDY : RSTD ≠ Y)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -554,7 +554,7 @@ theorem layer_norm_liger_forward_all_outputs_compute_correct
         (fun i => (Y, yOffset s Y_row_stride i)))
       (expected := fun i =>
         layernormYSpec s X W B X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -562,7 +562,7 @@ theorem layer_norm_liger_forward_all_outputs_compute_correct
       (expected := fun _ =>
         WithBot.unbotD 0
           (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -598,7 +598,7 @@ theorem layer_norm_liger_forward_output_summary
     (∃ alg, (layer_norm_liger_forward_surface Y Y_row_stride X
       X_row_stride W W_row_stride B B_row_stride Mean Mean_row_stride RSTD
       RSTD_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -607,7 +607,7 @@ theorem layer_norm_liger_forward_output_summary
         (fun i => (Y, yOffset s Y_row_stride i)))
       (expected := fun i =>
         layernormYSpec s X W B X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)
@@ -615,7 +615,7 @@ theorem layer_norm_liger_forward_output_summary
       (expected := fun _ =>
         WithBot.unbotD 0
           (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
         X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
       (initialState := s)

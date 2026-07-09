@@ -32,7 +32,7 @@ theorem context_attn_mistral_genuine_output_summary_general
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM sw : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_mistral_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
         rs hs 1 rs hs 1 rs hs 1 rs hs 1 1 sw BLK DM BLK)
       (initialState := s)

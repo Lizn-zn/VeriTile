@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 142 kernels, 242 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 151 kernels, 251 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`, optionally boundary-masked) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -8,9 +8,11 @@
 | 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
 | 300 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 10 | 0 | 246 | 24 |  |
 | 298 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 32 | 0 | 136 | 76 |  |
+| 291 | [FusedRecurrentDelta.md](FusedRecurrentDelta.md) | 44 | 2 | 147 | 14 |  |
 | 266 | [FlashAttn.md](FlashAttn.md) | 21 | 0 | 162 | 47 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
 | 249 | [TritonAttention.md](TritonAttention.md) | 37 | 0 | 123 | 35 |  |
+| 192 | [FusedRecurrentRetention.md](FusedRecurrentRetention.md) | 27 | 0 | 104 | 13 |  |
 | 175 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
 | 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
 | 163 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 0 | 79 | 15 |  |
@@ -38,6 +40,7 @@
 | 94 | [RopeBackwardTransform.md](RopeBackwardTransform.md) | 13 | 0 | 49 | 6 |  |
 | 93 | [KldivOps.md](KldivOps.md) | 9 | 0 | 58 | 8 |  |
 | 92 | [FastRmsLayernorm.md](FastRmsLayernorm.md) | 11 | 0 | 53 | 8 |  |
+| 91 | [TritonLinearActivation.md](TritonLinearActivation.md) | 17 | 0 | 42 | 4 |  |
 | 86 | [KvCacheFilling.md](KvCacheFilling.md) | 11 | 0 | 51 | 2 |  |
 | 85 | [QuantizeKvCopy.md](QuantizeKvCopy.md) | 12 | 0 | 47 | 4 |  |
 | 84 | [AttnFwdCausal.md](AttnFwdCausal.md) | 17 | 0 | 30 | 9 |  |
@@ -51,6 +54,8 @@
 | 74 | [QuantizeCopyKv.md](QuantizeCopyKv.md) | 12 | 0 | 36 | 4 |  |
 | 73 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 12 | 0 | 35 | 4 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 11 | 0 | 34 | 7 |  |
+| 72 | [LayerNormWelfold.md](LayerNormWelfold.md) | 11 | 0 | 37 | 4 |  |
+| 70 | [FusedLayernormTriton.md](FusedLayernormTriton.md) | 11 | 0 | 36 | 3 |  |
 | 69 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 0 | 44 | 5 |  |
 | 69 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 0 | 44 | 5 |  |
 | 68 | [BmmChunkBwd.md](BmmChunkBwd.md) | 16 | 0 | 22 | 2 |  |
@@ -81,12 +86,14 @@
 | 48 | [IvDependentMatmul.md](IvDependentMatmul.md) | 11 | 0 | 15 | 4 |  |
 | 48 | [MatmulTma.md](MatmulTma.md) | 6 | 0 | 30 | 4 |  |
 | 48 | [TokenSoftmaxBloom.md](TokenSoftmaxBloom.md) | 9 | 0 | 21 | 2 |  |
+| 47 | [RbeTritonTransform.md](RbeTritonTransform.md) | 7 | 0 | 24 | 2 |  |
 | 47 | [RmsnormImplementation.md](RmsnormImplementation.md) | 7 | 0 | 25 | 5 |  |
 | 46 | [AttentionKernel.md](AttentionKernel.md) | 11 | 0 | 18 | 5 |  |
 | 46 | [DestindexCopyKv1.md](DestindexCopyKv1.md) | 7 | 0 | 22 | 3 |  |
 | 46 | [DestindexCopyKv2.md](DestindexCopyKv2.md) | 7 | 0 | 22 | 3 |  |
 | 46 | [RmsnormFusedLlama.md](RmsnormFusedLlama.md) | 8 | 0 | 18 | 4 |  |
 | 45 | [RotaryEmb.md](RotaryEmb.md) | 7 | 0 | 20 | 4 |  |
+| 44 | [BgmvShrinkKernel.md](BgmvShrinkKernel.md) | 3 | 0 | 32 | 3 |  |
 | 44 | [DiagSsmTriton.md](DiagSsmTriton.md) | 10 | 0 | 12 | 2 |  |
 | 44 | [IndexSelectBwd.md](IndexSelectBwd.md) | 6 | 0 | 25 | 1 |  |
 | 44 | [L2NormTriton2.md](L2NormTriton2.md) | 6 | 0 | 26 | 2 |  |
@@ -118,7 +125,9 @@
 | 28 | [SoftmaxTriton3.md](SoftmaxTriton3.md) | 4 | 0 | 15 | 1 |  |
 | 27 | [SwigluFwd.md](SwigluFwd.md) | 2 | 0 | 17 | 4 |  |
 | 26 | [MatrixTranspose.md](MatrixTranspose.md) | 3 | 0 | 16 | 1 |  |
+| 26 | [PowScalarTensor.md](PowScalarTensor.md) | 2 | 0 | 17 | 3 |  |
 | 26 | [QuantTransposeKernel.md](QuantTransposeKernel.md) | 4 | 0 | 13 | 1 |  |
+| 26 | [ReluStridedBuffer.md](ReluStridedBuffer.md) | 2 | 0 | 17 | 3 |  |
 | 25 | [AttentionFwdTriton2.md](AttentionFwdTriton2.md) | 2 | 0 | 15 | 4 |  |
 | 25 | [SoftmaxTriton1.md](SoftmaxTriton1.md) | 3 | 0 | 15 | 1 |  |
 | 25 | [SoftmaxTriton2.md](SoftmaxTriton2.md) | 3 | 0 | 15 | 1 |  |

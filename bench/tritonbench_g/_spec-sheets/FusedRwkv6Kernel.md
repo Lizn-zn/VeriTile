@@ -51,7 +51,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
       s_k_h s_v_h B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
       Bool.false).toAlgorithm? = Except.ok alg) ∧
     -- (2) the output body realizes the genuine `outputClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
         m s_k_h s_v_h B H T K V BK BV scale)
       (initialState := s)
@@ -62,7 +62,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
         outputClosed s q k v w u h0 USE_INITIAL_STATE s_k_h s_v_h H K V BK BV
           scale m jv)) ∧
     -- (3) the state-update body realizes the genuine `stateClosed(m+1)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         m s_k_h s_v_h K V BK BV)
       (initialState := s)
@@ -72,7 +72,7 @@ theorem fused_recurrent_rwkv6_output_summary_general
         stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV
           (m + 1) idx)) ∧
     -- (4) the final-state writeback realizes the genuine `stateClosed(T)` (masked)
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

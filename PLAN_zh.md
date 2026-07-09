@@ -38,7 +38,7 @@ Algorithm 层(Lean 证明)             Compute-gap 层(外部测试)
 ────────────────────────             ──────────────────────
 ProjectedCorrect ck spec             GapPolicy.require contract
   := ck.toAlgorithm? = ok ∧            := Python 检查 ComputeKernel
-     Kernel.Correct ak spec               行为与投影后的 AlgKernel
+     Kernel.Correct_without_Rounding ak spec               行为与投影后的 AlgKernel
                                           行为在 contract tolerance 内匹配。
   Real / Int / Nat 语义。              外部 pipeline,不是 Lean 定理。
   无 IEEE rounding,无 NaN,
@@ -69,7 +69,7 @@ fast-math、exception flag)**永久不在 Lean 证明范围内**。这不是延�
    之后的算法层 kernel 上证明。
 3. 形式 Lean 层使用 `ComputeKernel.ComputeCorrect` /
    `ComputeKernel.ComputeRefine`,默认 `gap := .ignore`;当需要记录外部 compute-gap
-   检查时使用 `gap := .require contract`。现有 `Kernel.Correct` 证明在算法侧
+   检查时使用 `gap := .require contract`。现有 `Kernel.Correct_without_Rounding` 证明在算法侧
    kernel 上继续有效。
 
 ### Compute 层细节(测试)
@@ -219,7 +219,7 @@ block-local 任意 mask `_block_*` 对偶;
 ### 横向 infra ✅(超出原 PLAN scope,与 Tier 推进并行)
 
 - **双层架构**:`ComputeKernel` / `AlgorithmKernel` 用 `eraseDType` 桥接;
-  `Kernel.Correct` / `Kernel.Refine` 在算法侧 kernel 上证;`ProjectedCorrect` /
+  `Kernel.Correct_without_Rounding` / `Kernel.Refine` 在算法侧 kernel 上证;`ProjectedCorrect` /
   `ProjectedRefine` 是内部投影义务;`ComputeKernel.ComputeCorrect` /
   `ComputeKernel.ComputeRefine` 是 user-facing 入口;bitcast 通过 compute
   projection 路由

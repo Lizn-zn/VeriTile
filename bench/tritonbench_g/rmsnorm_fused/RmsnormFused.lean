@@ -234,7 +234,7 @@ theorem rms_norm_fwd_fused_compute_correct
     (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rms_norm_fwd_fused X Y W stride N BLOCK_SIZE eps)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -264,7 +264,7 @@ theorem rms_norm_fwd_fused_output_summary
       (fun i : Fin BLOCK_SIZE => yOffset s stride i)) :
     (∃ alg, (rms_norm_fwd_fused X Y W stride N BLOCK_SIZE eps).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rms_norm_fwd_fused X Y W stride N BLOCK_SIZE eps)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

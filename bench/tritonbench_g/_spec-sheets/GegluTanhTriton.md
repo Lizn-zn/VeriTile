@@ -25,7 +25,7 @@ theorem geglu_tanh_forward_kernel_output_summary
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i) :
     (∃ alg, (geglu_tanh_forward_kernel A B C stride n_cols BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := geglu_tanh_forward_kernel A B C stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -111,7 +111,7 @@ theorem geglu_tanh_backward_kernel_output_summary
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i) :
     (∃ alg, (geglu_tanh_backward_kernel DC A B stride n_cols BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := geglu_tanh_backward_kernel DC A B stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>

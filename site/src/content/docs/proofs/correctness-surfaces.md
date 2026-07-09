@@ -6,12 +6,35 @@ This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Surfaces live in
 [`VeriTile.Triton.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile.Triton.Correctness.lean).
 
+## The rounding default
+
+Read this first — it fixes what every surface name below means. The
+**unqualified** surface names (`Realizes`, `Refines`, `RefinesAt`, `Correct`)
+are the **rounding-model** surfaces: they take a `RoundingModel R` and execute
+under the R-threaded semantics `execR`. The **exact-ℝ idealization** — the
+older "everything is real arithmetic, no quantization" reading — is the
+explicitly-qualified `*_without_Rounding` surface
+(`ComputeCorrect.Realizes_without_Rounding`, `Refines_without_Rounding`,
+`Kernel.Correct_without_Rounding`, …).
+
+Rule of thumb: the unqualified name is what a kernel *actually* does on hardware
+(rounded); `*_without_Rounding` is the mathematician's idealization you fall
+back to when the rounding is irrelevant to the claim. The exact surface
+**degenerates out of** the rounding one at the trivial model `.triv` (where
+`execR` collapses onto `exec`), never the other way around. Most of the ported
+bench kernels are proven on `*_without_Rounding` (their outputs are exact-ℝ
+specs); the boundary-rounding showcase pairs under `bench/examples/` land on the
+rounding surface `Refines R`.
+
 ## Quick-Pick Table
 
 | Goal | Use |
 |---|---|
-| One kernel realizes an output spec | `ComputeCorrect.Realizes` |
-| Two kernels realize an output relation | `ComputeRefine.Realizes` |
+| One kernel realizes an output spec (rounded) | `ComputeCorrect.Realizes` |
+| … the exact-ℝ idealization of that spec | `ComputeCorrect.Realizes_without_Rounding` |
+| One kernel refines another, writes-equality (rounded) | `ComputeRefine.Refines` |
+| … the exact-ℝ idealization | `ComputeRefine.Refines_without_Rounding` |
+| Two kernels agree pointwise per declared address | `ComputeRefine.RefinesAt` (exact: `RefinesAt_without_Rounding`) |
 | Whole-grid launch (every program writes correctly) | `Kernel.ForAllProgramsSome` (temporary; see Grid section) |
 | Value/index pair on every lane | `ComputeCorrect.OutputPair` |
 | Value/index pair on active lanes only | `ComputeCorrect.OutputPairWhere` |

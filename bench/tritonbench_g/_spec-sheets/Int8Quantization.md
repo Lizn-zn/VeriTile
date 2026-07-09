@@ -42,7 +42,7 @@ theorem per_block_int8_output_summary_general
         L C BLK scale_stride).toAlgorithm? = Except.ok alg) ∧
      (∃ alg, (per_block_int8_scale_compute_store_slice X Scale
         L C BLK scale_stride preScale).toAlgorithm? = Except.ok alg)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

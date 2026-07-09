@@ -26,7 +26,7 @@ the grid; destination-index injectivity is supplied as a no-collision lemma.
 ## Proof architecture
 
 ```
-destindex_copy_quantize_kv_transform_output_summary_general             ← TOP THEOREM (dimension-general, Realizes)
+destindex_copy_quantize_kv_transform_output_summary_general             ← TOP THEOREM (dimension-general, Realizes_without_Rounding)
   ├─ ..._transform_real_surface_toAlgorithm_supported                    surface lowers to the algorithm layer
   ├─ ..._transform_real_surface_value_output_compute_correct            genuine int8 value readback (engine lemma)
   │    ├─ scatter_readback_int_prop_masked_nd                            per-lane int store readback (no-collision)
@@ -37,7 +37,7 @@ destindex_copy_quantize_kv_transform_output_summary_general             ← TOP 
 ```
 
 The top theorem is a single bundled headline: the lowering witness
-(`∃ alg, … = Except.ok alg`) plus two `ComputeCorrect.Realizes` conjuncts (one per
+(`∃ alg, … = Except.ok alg`) plus two `ComputeCorrect.Realizes_without_Rounding` conjuncts (one per
 stored output), each with a total write map whose inactive-lane guarantee is
 carried inside `expected`. The genuine value spec
 (`quantizeKvTransformSurfaceIntValue`) is the int8 cast of
@@ -46,7 +46,7 @@ genuine scale spec (`quantizeKvTransformScaleCell`) is the stored real value of
 `max(|src|, axis=1)/127` read back through `readMem OutScale`. Both are computed
 from the kernel inputs, so the summary is not self-referential. The two
 `..._compute_correct` engine lemmas prove the raw `(exec …).map = some (if …)`
-readback that each `Realizes` conjunct is discharged by. There are no pinned
+readback that each `Realizes_without_Rounding` conjunct is discharged by. There are no pinned
 per-shape summaries; the theorem is universally quantified over all strides and
 block dimensions.
 
@@ -508,10 +508,10 @@ theorem destindex_copy_quantize_kv_transform_real_surface_scale_output_compute_c
     subst this
     rfl
 
-/-- **Dimension-general output summary (`ComputeCorrect.Realizes` form).** For
+/-- **Dimension-general output summary (`ComputeCorrect.Realizes_without_Rounding` form).** For
 arbitrary strides / `head_num` / `head_dim` / `BLOCK_DMODEL` / `BLOCK_HEAD` (and
 any program ids in `s`), the destindex quantize-KV-transform surface lowers
-(`∃ alg, … = Except.ok alg`), and its two stored outputs each `Realizes` a
+(`∃ alg, … = Except.ok alg`), and its two stored outputs each `Realizes_without_Rounding` a
 genuine input-memory closed form:
 
 * the int8 value store to `Out` realizes the genuine per-cell int value
@@ -539,7 +539,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
     (∃ alg, (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD)
@@ -550,7 +550,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
         (if active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL idx then
             quantizeKvTransformSurfaceIntValue s K stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL hD idx
           else s.readMemValue .int Out (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx))) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD)
@@ -565,7 +565,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD, ?_, ?_⟩
   · -- value store to `Out` realizes `quantizeKvTransformSurfaceIntValue`
-    unfold ComputeCorrect.Realizes
+    unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [destindex_copy_quantize_kv_transform_real_surface,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -577,7 +577,7 @@ theorem destindex_copy_quantize_kv_transform_output_summary_general
     rw [hExec] at h
     simpa using Option.some.inj h
   · -- scale store to `OutScale` realizes `quantizeKvTransformScaleCell`
-    unfold ComputeCorrect.Realizes
+    unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [destindex_copy_quantize_kv_transform_real_surface,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]

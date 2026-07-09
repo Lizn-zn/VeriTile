@@ -642,7 +642,7 @@ theorem fa1_forward_correct_4D_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := views.kernel M Bk numKVBlocks scale)
       (initialState := s)
       (write := fun idx : TileIndex [M, D] =>
@@ -705,7 +705,7 @@ theorem fa1_forward_correct_4D_causal_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := views.causalKernel M Bk numKVBlocks scale)
       (initialState := s)
       (write := fun idx : TileIndex [M, D] =>

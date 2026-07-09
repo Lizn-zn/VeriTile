@@ -7213,7 +7213,7 @@ theorem fa1BackwardStrippedKernelStrided_correct_of_prefix
       rw [hExecTail]
       exact hTail.2.2 idx
 
-/-- User-facing `Realizes` wrapper for the strided stripped backward execution
+/-- User-facing `Realizes_without_Rounding` wrapper for the strided stripped backward execution
 shell.
 
 The index type is a three-way output channel:
@@ -7264,7 +7264,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_of_prefix
     (hInjK : Function.Injective kOff)
     (hInjV : Function.Injective vOff)
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
         stride_qb stride_qh stride_qs stride_qd
@@ -7374,7 +7374,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_of_math_state
           + idx.1.val * stride_dvn
           + idx.2.1.val * stride_dvd))
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
         stride_qb stride_qh stride_qs stride_qd
@@ -7526,7 +7526,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_of_math_suffix
           + idx.1.val * stride_dvn
           + idx.2.1.val * stride_dvd))
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
         stride_qb stride_qh stride_qs stride_qd
@@ -7703,7 +7703,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes
           + idx.1.val * stride_dvn
           + idx.2.1.val * stride_dvd))
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
         stride_qb stride_qh stride_qs stride_qd
@@ -7811,7 +7811,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence
         s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
           + idx.1.val * stride_dvn + idx.2.1.val * stride_dvd))
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg S_q S_k D
         stride_qb stride_qh stride_qs stride_qd
@@ -7988,7 +7988,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_4D_queryBlock
         s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
           + idx.1.val * stride_dvn + idx.2.1.val * stride_dvd))
     (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa1BackwardStrippedKernelStrided
         qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S_k D
         stride_qb stride_qh stride_qs stride_qd

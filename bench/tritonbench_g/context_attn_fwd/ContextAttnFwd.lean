@@ -59,7 +59,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful DSL port of `context_attn_fwd.py`'s `_fwd_kernel_int8kv`. -/
 def context_attn_fwd_kernel_int8kv_surface
@@ -2845,7 +2845,7 @@ theorem context_attn_fwd_surface_compute_correct_general
     (hOInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_fwd_kernel_int8kv_surface Q K V sm_scale Out
         B_Start_Loc B_Seqlen B_Prompt_Cache_Len
         stride_qbs stride_qh stride_qd stride_kb stride_kh stride_ks stride_kd
@@ -2881,7 +2881,7 @@ theorem context_attn_fwd_surface_compute_correct_general
   rw [if_pos hActive] at hb
   rw [hb]
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.ContextAttnFwd

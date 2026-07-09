@@ -31,7 +31,7 @@ theorem flash_decode2_llama_normalization_output_summary_general
       stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
       stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od BLOCK_SEQ
       BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_decode2_llama_normalization_store_kernel Acc SumExp O
         stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
         stride_obs stride_oh stride_od BLOCK_DMODEL)
@@ -204,7 +204,7 @@ theorem flash_decode2_llama_running_max_output_summary_general
       stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb'
       stride_mid_o_eh' stride_mid_o_es stride_obs stride_oh stride_od BLOCK_SEQ
       BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
         MaxLogic NewMaxLogic block_seq_n stride_mid_o_eb stride_mid_o_eh
         stride_logic_b stride_logic_h)

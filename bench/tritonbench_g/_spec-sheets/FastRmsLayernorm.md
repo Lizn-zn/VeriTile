@@ -25,7 +25,7 @@ theorem rms_layernorm_forward_output_summary
     (∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
       W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
         W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -35,7 +35,7 @@ theorem rms_layernorm_forward_output_summary
       (expected := fun i =>
         rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
           BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
         W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -206,7 +206,7 @@ theorem gemma_rms_layernorm_forward_output_summary
     (∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
       X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
         X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
       (initialState := s)
@@ -215,7 +215,7 @@ theorem gemma_rms_layernorm_forward_output_summary
         (fun i => (Y, yOutOffset s Y_row_stride i)))
       (expected := fun i =>
         gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
         X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
       (initialState := s)

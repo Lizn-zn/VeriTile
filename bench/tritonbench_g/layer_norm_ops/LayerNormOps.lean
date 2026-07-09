@@ -73,7 +73,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
 
@@ -399,7 +399,7 @@ theorem layer_norm_fwd_rms_one_block_y_compute_correct
     (hWRstd : W ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_one_block X Y W Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -503,7 +503,7 @@ theorem layer_norm_fwd_rms_bias_one_block_y_compute_correct
     (hBRstd : B ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_bias_one_block X Y W B Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -570,14 +570,14 @@ theorem layer_norm_fwd_rms_one_block_rstd_compute_correct
     (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_one_block X Y W Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, s.pid))
       (expected := fun _ =>
         rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_rms_one_block, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
@@ -617,14 +617,14 @@ theorem layer_norm_fwd_rms_bias_one_block_rstd_compute_correct
     (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_bias_one_block X Y W B Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, s.pid))
       (expected := fun _ =>
         rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_rms_bias_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -764,7 +764,7 @@ theorem layer_norm_fwd_plain_one_block_y_compute_correct
     (hWRstd : W ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_one_block X Y W Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -881,7 +881,7 @@ theorem layer_norm_fwd_plain_bias_one_block_y_compute_correct
     (hBRstd : B ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1061,7 +1061,7 @@ theorem layer_norm_fwd_plain_residual_one_block_y_compute_correct
     (hWRstd : W ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
         Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1125,7 +1125,7 @@ theorem layer_norm_fwd_plain_residual_one_block_mean_compute_correct
     (s : BlockState)
     (hMeanRstd : Mean ≠ Rstd)
     (hMeanY : Mean ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
         Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1133,7 +1133,7 @@ theorem layer_norm_fwd_plain_residual_one_block_mean_compute_correct
       (expected := fun _ =>
         plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_residual_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1188,7 +1188,7 @@ theorem layer_norm_fwd_plain_residual_one_block_rstd_compute_correct
     (stride_x_row stride_res_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_one_block X RESIDUAL Y W
         Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1196,7 +1196,7 @@ theorem layer_norm_fwd_plain_residual_one_block_rstd_compute_correct
       (expected := fun _ =>
         plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_residual_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1326,7 +1326,7 @@ theorem layer_norm_fwd_rms_residual_one_block_y_compute_correct
     (hWRstd : W ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_residual_one_block X RESIDUAL Y W Rstd
         stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1389,7 +1389,7 @@ theorem layer_norm_fwd_rms_residual_one_block_rstd_compute_correct
     (stride_x_row stride_res_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_residual_one_block X RESIDUAL Y W Rstd
         stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1397,7 +1397,7 @@ theorem layer_norm_fwd_rms_residual_one_block_rstd_compute_correct
       (expected := fun _ =>
         rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_rms_residual_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1504,7 +1504,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_y_compute_correct
     (hBRstd : B ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_residual_bias_one_block X RESIDUAL Y W
         B Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1560,7 +1560,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_rstd_compute_correct
     (stride_x_row stride_res_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_rms_residual_bias_one_block X RESIDUAL Y W
         B Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1568,7 +1568,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_rstd_compute_correct
       (expected := fun _ =>
         rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_rms_residual_bias_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1687,7 +1687,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_y_compute_correct
     (hBRstd : B ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
         W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1744,7 +1744,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_mean_compute_correct
     (s : BlockState)
     (hMeanRstd : Mean ≠ Rstd)
     (hMeanY : Mean ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
         W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1752,7 +1752,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_mean_compute_correct
       (expected := fun _ =>
         plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_residual_bias_one_block,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -1800,7 +1800,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_rstd_compute_correct
     (stride_x_row stride_res_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_residual_bias_one_block X RESIDUAL Y
         W B Mean Rstd stride_x_row stride_res_row stride_y_row N BLOCK_N eps)
       (initialState := s)
@@ -1808,7 +1808,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_rstd_compute_correct
       (expected := fun _ =>
         plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
           BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_residual_bias_one_block,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -1855,14 +1855,14 @@ theorem layer_norm_fwd_plain_one_block_mean_compute_correct
     (s : BlockState)
     (hMeanRstd : Mean ≠ Rstd)
     (hMeanY : Mean ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_one_block X Y W Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, s.pid))
       (expected := fun _ =>
         plainMeanFullSpec s X stride_x_row N BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1910,14 +1910,14 @@ theorem layer_norm_fwd_plain_one_block_rstd_compute_correct
     (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_one_block X Y W Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, s.pid))
       (expected := fun _ =>
         plainInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1960,14 +1960,14 @@ theorem layer_norm_fwd_plain_bias_one_block_mean_compute_correct
     (s : BlockState)
     (hMeanRstd : Mean ≠ Rstd)
     (hMeanY : Mean ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, s.pid))
       (expected := fun _ =>
         plainMeanFullSpec s X stride_x_row N BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_bias_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -2010,14 +2010,14 @@ theorem layer_norm_fwd_plain_bias_one_block_rstd_compute_correct
     (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
     (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_plain_bias_one_block X Y W B Mean Rstd
         stride_x_row stride_y_row N BLOCK_N eps)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, s.pid))
       (expected := fun _ =>
         plainInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_plain_bias_one_block, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -2054,12 +2054,12 @@ theorem layer_norm_ops_fwd_mean_store_slice_correct
 
 theorem layer_norm_ops_fwd_mean_store_slice_compute_correct
     (MeanPre Mean : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, meanRowOffset s))
       (expected := fun _ => meanStoreSpec s MeanPre) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_ops_fwd_mean_store_slice]
   intro s0 s' hExec hs0
@@ -2090,12 +2090,12 @@ theorem layer_norm_ops_fwd_rstd_store_slice_correct
 
 theorem layer_norm_ops_fwd_rstd_store_slice_compute_correct
     (RstdPre Rstd : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
       (expected := fun _ => rstdStoreSpec s RstdPre) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_ops_fwd_rstd_store_slice]
   intro s0 s' hExec hs0
@@ -2177,7 +2177,7 @@ theorem layer_norm_ops_bwd_row_vector_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_out_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_row_vector_store_slice ValuePre Out
         stride_out_row N BLOCK_N)
       (initialState := s)
@@ -2221,7 +2221,7 @@ theorem layer_norm_ops_bwd_dx_store_slice_compute_correct
     (DXPre DX : RegionName) (stride_dx_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_dx_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_dx_store_slice DXPre DX
         stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -2262,7 +2262,7 @@ theorem layer_norm_ops_bwd_dresidual_in_store_slice_compute_correct
     (stride_dres_in_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_dres_in_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_dresidual_in_store_slice DXPre
         DRESIDUAL_IN stride_dres_in_row N BLOCK_N)
       (initialState := s)
@@ -2300,7 +2300,7 @@ theorem layer_norm_ops_bwd_recompute_y_store_slice_compute_correct
     (YPre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_recompute_y_store_slice YPre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2360,7 +2360,7 @@ theorem layer_norm_ops_fwd_residual_out_store_slice_compute_correct
     (stride_res_out_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdResidualOutOffset s stride_res_out_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_residual_out_store_slice ValuePre
         RESIDUAL_OUT stride_res_out_row N BLOCK_N)
       (initialState := s)
@@ -2422,7 +2422,7 @@ theorem layer_norm_ops_fwd_y_store_slice_compute_correct
     (ValuePre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2451,7 +2451,7 @@ theorem layer_norm_ops_fwd_bias_y_store_slice_compute_correct
     (ValuePre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2469,7 +2469,7 @@ theorem layer_norm_ops_fwd_residual_y_store_slice_compute_correct
     (ValuePre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2487,7 +2487,7 @@ theorem layer_norm_ops_fwd_rms_bias_y_store_slice_compute_correct
     (ValuePre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2507,7 +2507,7 @@ theorem layer_norm_ops_fwd_residual_bias_y_store_slice_compute_correct
     (ValuePre Y : RegionName) (stride_y_row N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => fwdYOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -2580,7 +2580,7 @@ theorem layer_norm_ops_bwd_param_grad_store_slice_compute_correct
     (GradPre Out : RegionName) (N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_param_grad_store_slice GradPre Out N BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2621,7 +2621,7 @@ theorem layer_norm_ops_bwd_dw_store_slice_compute_correct
     (DWPre DW : RegionName) (N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_dw_store_slice DWPre DW N BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2655,7 +2655,7 @@ theorem layer_norm_ops_bwd_db_store_slice_compute_correct
     (DBPre DB : RegionName) (N BLOCK_N : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_db_store_slice DBPre DB N BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2807,7 +2807,7 @@ theorem layer_norm_ops_bwd_rms_one_row_dw_compute_correct
     (hDWDX : DW ≠ DX)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDWOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
         stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -2892,7 +2892,7 @@ theorem layer_norm_ops_bwd_bias_db_one_row_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB
         stride_dy_row N BLOCK_N)
       (initialState := s)
@@ -3082,7 +3082,7 @@ theorem layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
     (hDWDB : DW ≠ DB)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
         Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -3112,7 +3112,7 @@ theorem layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
     (hDBDW : DB ≠ DW)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
         Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -3259,7 +3259,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dx_compute_correct
     (hDXDresIn : DX ≠ DRESIDUAL_IN)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
         DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row
         N BLOCK_N)
@@ -3288,7 +3288,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_compute_correct
     (hDresInDX : DRESIDUAL_IN ≠ DX)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdDResidualInOffset s stride_dres_in_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
         DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row
         N BLOCK_N)
@@ -3388,7 +3388,7 @@ theorem layer_norm_ops_bwd_recompute_y_bias_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
         stride_xhat_row stride_y_row N BLOCK_N)
       (initialState := s)
@@ -3475,7 +3475,7 @@ theorem layer_norm_ops_bwd_recompute_y_no_bias_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRowVectorOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_recompute_y_no_bias_slice Xhat W Y
         stride_xhat_row stride_y_row N BLOCK_N)
       (initialState := s)
@@ -3582,7 +3582,7 @@ theorem layer_norm_ops_bwd_c1_reduction_slice_compute_correct
     (Xhat W DY C1 : RegionName)
     (stride_xhat_row stride_dy_row N BLOCK_N : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
         stride_xhat_row stride_dy_row N BLOCK_N)
       (initialState := s)
@@ -3590,7 +3590,7 @@ theorem layer_norm_ops_bwd_c1_reduction_slice_compute_correct
       (expected := fun _ =>
         bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row
           N BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_ops_bwd_c1_reduction_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -3626,14 +3626,14 @@ theorem layer_norm_ops_bwd_c2_reduction_slice_compute_correct
     (W DY C2 : RegionName)
     (stride_dy_row N BLOCK_N : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
         stride_dy_row N BLOCK_N)
       (initialState := s)
       (write := fun _ : PUnit => some (C2, s.pid))
       (expected := fun _ =>
         bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_ops_bwd_c2_reduction_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -3724,7 +3724,7 @@ theorem layer_norm_ops_bwd_rms_dx_from_c1_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd
         C1 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -3824,7 +3824,7 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => bwdRmsDXOffset s stride_dx_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY
         Rstd C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -3902,7 +3902,7 @@ theorem layer_norm_ops_fwd_residual_out_offset_general_injective
 theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
     (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -3911,12 +3911,12 @@ theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
         (fun i => (Y, fwdYOffset s stride_y_row i)))
       (expected := fun i : Fin BLOCK_N =>
         fwdYStoreSpec s ValuePre stride_y_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, meanRowOffset s))
       (expected := fun _ => meanStoreSpec s MeanPre)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
@@ -3935,7 +3935,7 @@ theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
 theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
     (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -3944,7 +3944,7 @@ theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
         (fun i => (Y, fwdYOffset s stride_y_row i)))
       (expected := fun i : Fin BLOCK_N =>
         fwdYStoreSpec s ValuePre stride_y_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
@@ -3965,7 +3965,7 @@ theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
     (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
     (s : BlockState)
     (stride_res_out_row stride_y_row N BLOCK_N : Nat) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_residual_out_store_slice ResidualPre
         RESIDUAL_OUT stride_res_out_row N BLOCK_N)
       (initialState := s)
@@ -3974,7 +3974,7 @@ theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
         (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s stride_res_out_row i)))
       (expected := fun i : Fin BLOCK_N =>
         fwdResidualOutStoreSpec s ResidualPre stride_res_out_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
         stride_y_row N BLOCK_N)
       (initialState := s)
@@ -3983,12 +3983,12 @@ theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
         (fun i => (Y, fwdYOffset s stride_y_row i)))
       (expected := fun i : Fin BLOCK_N =>
         fwdYStoreSpec s ValuePre stride_y_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
       (initialState := s)
       (write := fun _ : PUnit => some (Mean, meanRowOffset s))
       (expected := fun _ => meanStoreSpec s MeanPre)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
       (initialState := s)
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
@@ -4011,14 +4011,14 @@ theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
     (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
         stride_xhat_row stride_dy_row N BLOCK_N)
       (initialState := s)
       (write := fun _ : PUnit => some (C1, s.pid))
       (expected := fun _ : PUnit =>
         bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
         stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -4027,7 +4027,7 @@ theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
         (fun i => (DX, bwdRmsDXOffset s stride_dx_row i)))
       (expected := fun i : Fin BLOCK_N =>
         bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 stride_xhat_row stride_dy_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
         stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -4054,21 +4054,21 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
     (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
         stride_xhat_row stride_dy_row N BLOCK_N)
       (initialState := s)
       (write := fun _ : PUnit => some (C1, s.pid))
       (expected := fun _ : PUnit =>
         bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row N BLOCK_N)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
         stride_dy_row N BLOCK_N)
       (initialState := s)
       (write := fun _ : PUnit => some (C2, s.pid))
       (expected := fun _ : PUnit =>
         bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
         C1 C2 DX stride_xhat_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -4078,7 +4078,7 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
       (expected := fun i : Fin BLOCK_N =>
         bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 stride_xhat_row
           stride_dy_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
         stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -4088,7 +4088,7 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
       (expected := fun i : Fin BLOCK_N =>
         bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row N
           BLOCK_N i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
         stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
       (initialState := s)
@@ -4126,7 +4126,7 @@ theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
     (stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N : Nat)
     (hDXDresIn : DX ≠ DRESIDUAL_IN)
     (hDresInDX : DRESIDUAL_IN ≠ DX) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
         DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N)
       (initialState := s)
@@ -4135,7 +4135,7 @@ theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
         (fun i => (DX, bwdRmsDXOffset s stride_dx_row i)))
       (expected := fun i : Fin BLOCK_N =>
         bwdResidualAddSpec s DXBase DRESIDUAL stride_dx_row stride_dres_row i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
         DX DRESIDUAL_IN stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N)
       (initialState := s)
@@ -4203,7 +4203,7 @@ theorem layer_norm_fwd_1pass_surface_rms_only_y_compute_correct
     (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
         Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
         N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false)
@@ -4260,7 +4260,7 @@ theorem layer_norm_fwd_1pass_surface_rms_only_rstd_compute_correct
     (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
     (eps : ℝ) (s : BlockState)
     (hRstdY : Rstd ≠ Y) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
         Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
         N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false)
@@ -4268,7 +4268,7 @@ theorem layer_norm_fwd_1pass_surface_rms_only_rstd_compute_correct
       (write := fun _ : PUnit => some (Rstd, s.pid))
       (expected := fun _ =>
         rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [layer_norm_fwd_1pass_surface, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -5235,14 +5235,14 @@ theorem layer_norm_bwd_surface_zero_rows_db_zero
 
 /-- Compute-facing wrapper for the actual backward surface's degenerate
 `DB` writeback. This exposes the surface-level `HAS_BIAS=true` partial-bias
-store through the standard `ComputeCorrect.Realizes` interface. -/
+store through the standard `ComputeCorrect.Realizes_without_Rounding` interface. -/
 theorem layer_norm_bwd_surface_zero_rows_db_zero_compute_correct
     (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
     (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
       stride_dres_in_row M N BLOCK_N : Nat)
     (eps : ℝ) (s : BlockState)
     (hDBDW : DB ≠ DW) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
         DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
         stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
@@ -5314,7 +5314,7 @@ theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
     (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
       stride_dres_in_row M N BLOCK_N : Nat)
     (eps : ℝ) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
         DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
         stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
@@ -5337,7 +5337,7 @@ theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
     hExec i
   simpa [hActive] using h
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.LayerNormOps

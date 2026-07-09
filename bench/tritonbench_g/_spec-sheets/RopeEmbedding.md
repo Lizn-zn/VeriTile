@@ -33,7 +33,7 @@ theorem rope_embedding_forward_backward_summary_general
       (fun i : Fin BLOCK_SIZE => qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)) :
     (∃ alg, (rope_embedding_surface Q Q_row_stride cos cos_row_stride sin
       sin_row_stride seqlen head_dim n_heads Bool.false BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

@@ -64,7 +64,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `length`, `batch_size`, `dim` → Lean `Nat` parameters.
 
 The proof below connects the recurrence invariant across `tl.for t in length`
-to `ComputeCorrect.Realizes` under the stated no-collision/no-alias
+to `ComputeCorrect.Realizes_without_Rounding` under the stated no-collision/no-alias
 hypotheses. -/
 def diag_ssm_forward_kernel
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
@@ -2648,7 +2648,7 @@ theorem diag_ssm_forward_kernel_alg_post_of_exec
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
-  ComputeCorrect.Realizes
+  ComputeCorrect.Realizes_without_Rounding
     (kernel := diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
       length batch_size dim BLOCK_SIZE)
     (initialState := s)
@@ -2664,7 +2664,7 @@ def diag_ssm_backward_kernel_correct_target
     (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
       RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
-  ComputeCorrect.Realizes
+  ComputeCorrect.Realizes_without_Rounding
     (kernel := diag_ssm_backward_kernel s_ptr lambda_ptr y_ptr grad_s_ptr
       grad_x_ptr grad_lambda_ptr grad_y_ptr length batch_size dim BLOCK_SIZE)
     (initialState := s)

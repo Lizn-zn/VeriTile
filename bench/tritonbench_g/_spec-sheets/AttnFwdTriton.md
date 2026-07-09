@@ -42,7 +42,7 @@ theorem attn_fwd_triton_output_summary_general
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
       Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
         stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1

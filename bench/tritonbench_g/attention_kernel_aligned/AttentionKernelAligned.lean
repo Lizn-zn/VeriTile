@@ -71,7 +71,7 @@ set_option linter.unusedVariables false
 
 /-! **★ Main theorem:** `attention_kernel_aligned_output_summary_general` -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful DSL port of `attention_kernel_aligned.py`'s `_fwd_kernel_aligned`. -/
 def attention_kernel_aligned_fwd_kernel_aligned_surface
@@ -365,7 +365,7 @@ theorem attention_kernel_aligned_final_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s stride_oh stride_om stride_on BLOCK_M idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_kernel_aligned_final_store_slice Acc L Out
         stride_acc_h stride_acc_m stride_acc_k stride_l_h stride_l_m
         stride_oh stride_om stride_on BLOCK_M BLOCK_DMODEL)
@@ -2144,7 +2144,7 @@ theorem aligned_genuine_output_compute_correct_general
     (stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)
     (hKN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hHD : 0 < HEAD) (hnB : 1 ≤ nB)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
         stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1
         stride_b0h stride_b0m 2 4 (BLOCK_N * nB) 0 BIAS_LAST_SIZE 128 HEAD BLOCK_M BLOCK_N
@@ -2198,7 +2198,7 @@ theorem attention_kernel_aligned_output_summary_general
       stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1
       stride_b0h stride_b0m 2 4 (BLOCK_N * nB) 0 BIAS_LAST_SIZE 128 HEAD BLOCK_M BLOCK_N
       FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
         stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1 stride_qh HEAD 1
         stride_b0h stride_b0m 2 4 (BLOCK_N * nB) 0 BIAS_LAST_SIZE 128 HEAD BLOCK_M BLOCK_N
@@ -2219,6 +2219,6 @@ theorem attention_kernel_aligned_output_summary_general
       Q K V B0 Out s sm_scale stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB
       hKN hBM hHD hnB hundef
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.AttentionKernelAligned

@@ -42,7 +42,7 @@ theorem update_fn_kernel_output_summary
     (∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
       lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -51,7 +51,7 @@ theorem update_fn_kernel_output_summary
         (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
@@ -71,6 +71,9 @@ theorem update_fn_kernel_output_summary
 
 <details><summary><code>update_fn_kernel</code></summary>
 
+```
+/-- Faithful 1:1 transcription of `adam_update_triton.py`'s `update_fn_kernel`. -/
+```
 ```lean
 def update_fn_kernel
     (p_ptr grad_ptr exp_avg_ptr : RegionName)

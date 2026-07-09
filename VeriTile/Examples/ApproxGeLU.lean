@@ -95,7 +95,7 @@ theorem approx_gelu_kernel_correct_view
     (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := approxGeLUKernel xReg outReg blockSize)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.ofTensorView

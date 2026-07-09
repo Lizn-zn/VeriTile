@@ -10,10 +10,10 @@ public compute-facing APIs. See
   `ComputeCorrect.Realizes`, `ComputeCorrect.Post`, or
   `ComputeCorrect.General`.
 - Two-kernel equivalence or rewrite refinement uses
-  `ComputeRefine.Realizes`, `ComputeRefine.Post`, or
+  `ComputeRefine.Refines`, `ComputeRefine.Post`, or
   `ComputeRefine.General`.
 
-Projected algorithm lemmas may still mention `Kernel.Correct` or
+Projected algorithm lemmas may still mention `Kernel.Correct_without_Rounding` or
 `Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas
 should not be the exported example theorem named in
 `scripts/kernel-manifest.tsv`.
@@ -25,7 +25,7 @@ should not be the exported example theorem named in
 
 Execution-only helper lemmas may use an `_exec_view` suffix and can state direct
 `exec` equalities. The public theorem should wrap that helper in
-`ComputeCorrect.Realizes` or `ComputeRefine.Realizes` when it is an output
+`ComputeCorrect.Realizes` or `ComputeRefine.Refines` when it is an output
 observation theorem.
 
 Domain-specific theorem surfaces that are not ordinary single-kernel or

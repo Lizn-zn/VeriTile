@@ -63,7 +63,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `lightning_attention.py`'s `_fwd_kernel`.
 
@@ -260,7 +260,7 @@ theorem lightning_attention_forward_kv_step_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [D, BLOCK_MODEL] => kvOffset BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans V KVOut
         D BLOCK BLOCK_MODEL)
       (initialState := s)
@@ -375,7 +375,7 @@ theorem lightning_attention_forward_o_inter_dot_slice_compute_correct
     (Q KVPrev OInter : RegionName) (BLOCK D BLOCK_MODEL : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => oInterOffset BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
         BLOCK D BLOCK_MODEL)
       (initialState := s)
@@ -694,7 +694,7 @@ theorem lightning_attention_forward_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
         tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_store_slice OAcc Out n e BLOCK BLOCK_MODEL)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -802,7 +802,7 @@ theorem lightning_attention_forward_sum_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
         tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_sum_store_slice OIntra OInter Out
         n e BLOCK BLOCK_MODEL)
       (initialState := s)
@@ -922,7 +922,7 @@ theorem lightning_attention_bwd_grad_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] =>
         gradTileOffset s n width BLOCK WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK WIDTH)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1034,7 +1034,7 @@ theorem lightning_attention_bwd_dq_accum_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] =>
         gradTileOffset s n width BLOCK WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_dq_accum_store_slice DQInter DQ
         n width BLOCK WIDTH)
       (initialState := s)
@@ -1108,7 +1108,7 @@ theorem lightning_attention_bwd_dq_inter_dot_slice_compute_correct
     (DO KVTrans DQInter : RegionName) (BLOCK E WIDTH : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] => dqInterOffset WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_dq_inter_dot_slice DO KVTrans DQInter
         BLOCK E WIDTH)
       (initialState := s)
@@ -1116,7 +1116,7 @@ theorem lightning_attention_bwd_dq_inter_dot_slice_compute_correct
         some (DQInter, dqInterOffset WIDTH idx))
       (expected := fun idx : TileIndex [BLOCK, WIDTH] =>
         dqInterDotSpec s DO KVTrans BLOCK E WIDTH idx) := by
-  unfold ComputeCorrect.Realizes
+  unfold ComputeCorrect.Realizes_without_Rounding
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [lightning_attention_bwd_dq_inter_dot_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
@@ -1134,7 +1134,7 @@ theorem lightning_attention_bwd_dq_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] =>
         gradTileOffset s n width BLOCK WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_grad_store_slice DQPre DQ n width BLOCK WIDTH)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1152,7 +1152,7 @@ theorem lightning_attention_bwd_dk_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] =>
         gradTileOffset s n width BLOCK WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_grad_store_slice DKPre DK n width BLOCK WIDTH)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1170,7 +1170,7 @@ theorem lightning_attention_bwd_dv_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK, WIDTH] =>
         gradTileOffset s n width BLOCK WIDTH idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_bwd_grad_store_slice DVPre DV n width BLOCK WIDTH)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1242,7 +1242,7 @@ materialized carry buffer; no dimension is pinned. Exposes:
    that spec equals exactly `kvClosed (m+1)` — the running `Σ kᵀ·v` over the
    first `m+1` key blocks. This is the genuine standalone closed form over the
    input regions `K`, `V`, never an `exec` read-back.
-3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes its genuine spec
+3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes_without_Rounding its genuine spec
    `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
    the inter-block half of the causal linear-attention output row.
 
@@ -1271,7 +1271,7 @@ theorem lightning_attention_output_summary_general
     (∃ alg, (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
       _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK).toAlgorithm? = Except.ok alg) ∧
     -- (2) kv carry-fold body realizes kvStepSpec ...
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans Vreg KVOut
         d BLOCK BLOCK_MODEL)
       (initialState := s)
@@ -1284,7 +1284,7 @@ theorem lightning_attention_output_summary_general
       kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
         = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val) ∧
     -- (3) o_inter producer realizes its genuine spec oInterDotSpec
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
         BLOCK d BLOCK_MODEL)
       (initialState := s)
@@ -1317,6 +1317,6 @@ row tiles have width `128`. The pinned summaries below are now thin
 corollaries of the dimension-general headline
 `lightning_attention_output_summary_general`. -/
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.LightningAttention

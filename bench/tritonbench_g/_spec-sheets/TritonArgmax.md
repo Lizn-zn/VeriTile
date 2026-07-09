@@ -22,7 +22,7 @@ theorem argmax_kernel_1_value_compute_correct
     (M BLOCK_SIZE : Nat)
     (s : BlockState)
     (hRegions : mid_value ≠ (Region.cast mid_index : RegionName)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false)
       (initialState := s)
       (write := fun _ : PUnit => some (mid_value, s.pid))
@@ -114,7 +114,7 @@ theorem argmax_kernel_1_index_compute_correct
     (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false)
       (initialState := s)
       (write := fun _ : PUnit =>
@@ -205,7 +205,7 @@ theorem argmax_kernel_2_compute_correct
     (mid_value mid_index out : RegionName)
     (mid_size BLOCK_MID : Nat)
     (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := argmax_kernel_2 mid_value mid_index out mid_size BLOCK_MID)
       (initialState := s)
       (write := fun _ : PUnit => some (out, 0))
@@ -294,7 +294,7 @@ theorem argmax_kernel_dim_single_block_compute_correct
     (hNle : N ≤ BLOCK_N)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => argmaxKernelOutOffset s K BLOCK_M i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := argmax_kernel inp out_index M N K BLOCK_M BLOCK_N Bool.false)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

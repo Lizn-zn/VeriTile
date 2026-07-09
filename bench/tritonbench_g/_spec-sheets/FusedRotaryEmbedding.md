@@ -64,7 +64,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
       kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
       bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
       ).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         HALF_DIM)
@@ -75,7 +75,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
       (expected := fun i =>
         qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
           cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
         HALF_DIM)
@@ -87,7 +87,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
       (expected := fun i =>
         qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
           cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         HALF_DIM)
@@ -97,7 +97,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
       (expected := fun i =>
         kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
           cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
         k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
         HALF_DIM)
@@ -107,7 +107,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
       (expected := fun i =>
         kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
           cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel :=
         decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
           OutK0Pre k_cache
@@ -124,7 +124,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
             KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
             kcd_stride bts_stride btb_stride block_size i)))
       (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel :=
         decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
           OutK1Pre k_cache
@@ -141,7 +141,7 @@ theorem decoding_fused_rotary_embedding_output_summary_general
             KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
             kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
       (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
         LoadedV v_cache
         (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride

@@ -28,7 +28,7 @@ theorem fifth_order_fwd_surface_y00_output_summary
       (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)) :
     (∃ alg, (fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
         output_numel col_offset output_stride).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
         output_numel col_offset output_stride)
       (initialState := s)

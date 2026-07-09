@@ -137,7 +137,7 @@ theorem swiglu_forward_kernel_compute_correct
     (as bs : Fin BLOCK_SIZE → ℝ)
     (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i)
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -168,7 +168,7 @@ theorem swiglu_forward_kernel_output_summary
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
     (∃ alg, (swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -251,7 +251,7 @@ theorem swiglu_backward_kernel_compute_correct
     (h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (swigluOffset s stride i) = dcs i)
     (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i)
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>
@@ -301,7 +301,7 @@ theorem swiglu_backward_kernel_output_summary
     (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
     (∃ alg, (swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE)
       (initialState := s)
       (write := fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>

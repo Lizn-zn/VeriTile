@@ -23,7 +23,7 @@ theorem add_kernel_output_summary
     (h_y : InputLoadedAt s in_ptr1 BLOCK_SIZE ys) :
     (∃ alg, (add_kernel in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := add_kernel in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

@@ -26,7 +26,7 @@ the loaded `A`/`B` cells and the activation is the corresponding real function.
 ```
 triton_linear_activation_output_summary_general   ← TOP THEOREM (bundled, general)
   ├─ kernel_fma_surface_toAlgorithm_supported     surface lowers to the algorithm layer
-  ├─ kernel_fma_C_compute_correct                 C output (Realizes)
+  ├─ kernel_fma_C_compute_correct                 C output (Realizes_without_Rounding)
   │    └─ kernel_fma_exec_closed_form             exec-side closed forms (C + ACT_INPUTS)
   │         ├─ preLoop        (schedule scalars + pointers + acc = bias seed)
   │         │    ├─ preLoop_scalars   (L2 schedule + %-wrapped index vectors)
@@ -36,7 +36,7 @@ triton_linear_activation_output_summary_general   ← TOP THEOREM (bundled, gene
   │         └─ kernel_fma_postLoop    (save-store + activation gates + masked C store)
   │              ├─ saveIf_steps      (SHOULD_SAVE_ACT_INPUTS gate)
   │              └─ actTail_steps     (the four ACTIVATION == "…" gates)
-  └─ kernel_fma_act_inputs_compute_correct        ACT_INPUTS output (Realizes)
+  └─ kernel_fma_act_inputs_compute_correct        ACT_INPUTS output (Realizes_without_Rounding)
 ```
 
 ## Modeling boundary
@@ -1493,7 +1493,7 @@ theorem kernel_fma_C_compute_correct
     (hFitM : blockMIdx (s.pids 0) M N BM BN GM * BM + BM ≤ M)
     (hFitN : blockNIdx (s.pids 0) M N BM BN GM * BN + BN ≤ N)
     (hsno : sno = 1) (hble : BN ≤ smo) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kernel_fma_surface C ACT_INPUTS A B biasR M N smo sno saim sain
         sam sak sbn sbk BM GM BN BLOCK_K numKBlocks
         HAS_BIAS SHOULD_SAVE_ACT_INPUTS ACTIVATION)
@@ -1532,7 +1532,7 @@ theorem kernel_fma_act_inputs_compute_correct
     (hsno : sno = 1) (hble : BN ≤ smo)
     (hne : ACT_INPUTS ≠ C)
     (hsain : sain = 1) (hale : BN ≤ saim) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kernel_fma_surface C ACT_INPUTS A B biasR M N smo sno saim sain
         sam sak sbn sbk BM GM BN BLOCK_K numKBlocks
         HAS_BIAS Bool.true ACTIVATION)
@@ -1610,7 +1610,7 @@ theorem triton_linear_activation_output_summary_general
       BLOCK_M GROUP_M BLOCK_N BLOCK_K numKBlocks
       HAS_BIAS SHOULD_SAVE_ACT_INPUTS ACTIVATION).toAlgorithm? = Except.ok alg) ∧
     -- (2) C: genuine fused linear + activation
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := kernel_fma_surface C ACT_INPUTS A B bias M N output_m_stride output_n_stride
         act_inputs_m_stride act_inputs_n_stride a_m_stride a_k_stride b_n_stride b_k_stride
         BLOCK_M GROUP_M BLOCK_N BLOCK_K numKBlocks
@@ -1625,7 +1625,7 @@ theorem triton_linear_activation_output_summary_general
     -- (3) ACT_INPUTS (when saving): the genuine un-activated pre-activation values
     (SHOULD_SAVE_ACT_INPUTS = Bool.true → ACT_INPUTS ≠ C →
       act_inputs_n_stride = 1 → BLOCK_N ≤ act_inputs_m_stride →
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := kernel_fma_surface C ACT_INPUTS A B bias M N output_m_stride output_n_stride
           act_inputs_m_stride act_inputs_n_stride a_m_stride a_k_stride b_n_stride b_k_stride
           BLOCK_M GROUP_M BLOCK_N BLOCK_K numKBlocks

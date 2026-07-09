@@ -39,7 +39,7 @@ theorem flash_decode2_phi_masked_accumulator_output_summary_general
       stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
       stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od head_dim
       BLOCK_SEQ BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_decode2_phi_accumulator_step_kernel Mid_O Mid_O_LogExpSum
         AccIn MaxLogic NewMaxLogic AccOut block_seq_n head_dim stride_mid_ob
         stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb stride_mid_o_eh
@@ -54,7 +54,7 @@ theorem flash_decode2_phi_masked_accumulator_output_summary_general
           block_seq_n head_dim stride_mid_ob stride_mid_oh stride_mid_os
           stride_mid_od stride_mid_o_eb stride_mid_o_eh stride_acc_b stride_acc_h
           stride_acc_d stride_logic_b stride_logic_h i) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_decode2_phi_sum_exp_step_kernel Mid_O_LogExpSum SumExpIn
         MaxLogic NewMaxLogic SumExpOut block_seq_n stride_mid_o_eb stride_mid_o_eh
         stride_sum_b stride_sum_h stride_logic_b stride_logic_h)
@@ -474,7 +474,7 @@ theorem flash_decode2_phi_normalization_output_summary_general
       stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
       stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od head_dim
       BLOCK_SEQ BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_decode2_phi_normalization_store_kernel Acc SumExp Out
         head_dim stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
         stride_obs stride_oh stride_od BLOCK_DMODEL)

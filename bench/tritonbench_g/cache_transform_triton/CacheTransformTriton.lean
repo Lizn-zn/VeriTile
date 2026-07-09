@@ -292,7 +292,7 @@ theorem decoding_cache_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
         decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
       (initialState := s)
@@ -379,7 +379,7 @@ theorem decoding_cache_kernel_sin_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
         decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
       (initialState := s)
@@ -523,7 +523,7 @@ theorem decoding_cache_one_seq_block_compute_correct
       (fun i : Fin BLOCK_H => outOffset s cache_stride hidden_stride BLOCK_H i))
     (hSinInj : Function.Injective
       (fun i : Fin BLOCK_H => outOffset s cache_stride hidden_stride BLOCK_H i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_cache_one_seq_block cos_cache sin_cache lengths
         cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
         BLOCK_H)
@@ -646,7 +646,7 @@ theorem prefill_cache_cos_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin HIDDEN_DIM =>
         prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prefill_cache_cos_store_slice CosPre cos_output
         cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE)
       (initialState := s)
@@ -728,7 +728,7 @@ theorem prefill_cache_sin_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin HIDDEN_DIM =>
         prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prefill_cache_sin_store_slice SinPre sin_output
         cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE)
       (initialState := s)
@@ -882,7 +882,7 @@ theorem prefill_cache_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin HIDDEN_DIM =>
         prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
         sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
         BLOCK_SIZE)
@@ -949,7 +949,7 @@ theorem prefill_cache_kernel_output_summary
     (∃ alg, (prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
         sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
         BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
         sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
         BLOCK_SIZE)
@@ -997,7 +997,7 @@ theorem decoding_cache_kernel_output_summary
     (∃ alg, (decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
         BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
         sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
       (initialState := s)

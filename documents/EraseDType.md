@@ -34,7 +34,7 @@ meanings.
 ComputeKernel.ComputeCorrect ck post (gap := .ignore) :=
   True ∧
     match ck.toAlgorithm? with
-    | Except.ok ak => Kernel.Correct ak post
+    | Except.ok ak => Kernel.Correct_without_Rounding ak post
     | Except.error _ => False
 ```
 
@@ -45,13 +45,13 @@ gap, use a required gap contract:
 ComputeKernel.ComputeCorrect ck post (gap := .require contract) :=
   ExternalChecked contract ∧
     match ck.toAlgorithm? with
-    | Except.ok ak => Kernel.Correct ak post
+    | Except.ok ak => Kernel.Correct_without_Rounding ak post
     | Except.error _ => False
 ```
 
 `ComputeKernel.ComputeRefine` is the corresponding two-kernel surface with the
 same optional `GapPolicy`. Internal helper lemmas may still use
-`Kernel.Correct` / `Kernel.Refine` when they are specifically about projected
+`Kernel.Correct_without_Rounding` / `Kernel.Refine` when they are specifically about projected
 algorithm kernels.
 
 The transition lemmas are:
@@ -59,7 +59,7 @@ The transition lemmas are:
 ```lean
 ComputeKernel.computeCorrect_of_toAlgorithm_eq :
   ck.toAlgorithm? = Except.ok ak ->
-  Kernel.Correct ak post ->
+  Kernel.Correct_without_Rounding ak post ->
   ComputeKernel.ComputeCorrect ck post
 
 ComputeKernel.computeRefine_of_toAlgorithm_eq :

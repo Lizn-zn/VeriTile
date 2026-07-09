@@ -148,15 +148,15 @@ VeriTile/
                             Matmul、OffsetInjective、ScatterStore)。此目录由
                             `Triton/Kernel/` 改名而来;它装的是证明引理,
                             **不是** `Kernel` 类型(类型在 Core/Ast)。
-    Correctness.lean        顶层 correctness/refinement surface:`Kernel.Correct`、
+    Correctness.lean        顶层 correctness/refinement surface:`Kernel.Correct_without_Rounding`、
                             `ComputeCorrect.*`、`ComputeRefine.*`、`WriteMap`、
                             `OutputReadable`。(从 Float/ 移出;原
                             `VeriTile.Triton.Float.Correctness`。)
     Float/                  仅浮点 dtype 机制:dtype erasure(Erasure、
                             StateErasure)+ rounding model(RoundingModel、
-                            EvalOpR、StepR、Refine、Pipeline)。rounding surface
-                            `RealizesR`/`RefinesR`/`RefinesAtR` 在
-                            `Float/Refine.lean`。
+                            EvalOpR、StepR、Refine、Pipeline)。舍入 surface
+                            `Realizes`/`Refines`/`RefinesAt`(其精确实数镜像是
+                            `*_without_Rounding`)在 `Float/Refine.lean`。
     Launch/                 Grid-launch 组合:GridWriteFootprint、GridFrames、
                             mergeFrames、GridWritesDisjoint。
     Concurrency/            Grid 级 atomic-add 正确性。

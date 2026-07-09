@@ -338,7 +338,7 @@ theorem fill_k_cache_tile_compute_correct
       (fun idx : TileIndex [BLOCK_H, BLOCK_D] =>
         kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
           stride_kch stride_kcd stride_boff idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd
         stride_kcn stride_kcb stride_kch stride_kcd stride_boff
@@ -488,7 +488,7 @@ theorem fill_v_cache_tile_compute_correct
       (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
         vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
           stride_vch stride_vcd stride_boff idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
         stride_vcn stride_vcb stride_vch stride_vcd stride_boff
@@ -533,7 +533,7 @@ theorem fill_quant_k_cache_value_store_slice_compute_correct
       (fun idx : TileIndex [BLOCK_H, BLOCK_D] =>
         kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
           stride_kch stride_kcd stride_boff idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
         stride_kcn stride_kcb stride_kch stride_kcd stride_boff
@@ -568,7 +568,7 @@ theorem fill_quant_v_cache_value_store_slice_compute_correct
       (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
         vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
           stride_vch stride_vcd stride_boff idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
         stride_vcn stride_vcb stride_vch stride_vcd stride_boff
@@ -803,7 +803,7 @@ theorem fill_quant_meta_store_slice_compute_correct
       (fun i : Fin BLOCK_H =>
         metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
           stride_mh stride_md stride_boff i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets
         BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md
         stride_boff num_heads BLOCK_H)
@@ -839,7 +839,7 @@ theorem fill_quant_k_scale_store_slice_compute_correct
       (fun i : Fin BLOCK_H =>
         metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb
           stride_kszh stride_kszd stride_boff i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
         BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb stride_kszh stride_kszd
         stride_boff num_heads BLOCK_H)
@@ -866,7 +866,7 @@ theorem fill_quant_k_zero_store_slice_compute_correct
       (fun i : Fin BLOCK_H =>
         metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb
           stride_kszh stride_kszd stride_boff i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
         BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb stride_kszh stride_kszd
         stride_boff num_heads BLOCK_H)
@@ -893,7 +893,7 @@ theorem fill_quant_v_scale_store_slice_compute_correct
       (fun i : Fin BLOCK_H =>
         metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb
           stride_vszh stride_vszd stride_boff i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
         BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb stride_vszh stride_vszd
         stride_boff num_heads BLOCK_H)
@@ -920,7 +920,7 @@ theorem fill_quant_v_zero_store_slice_compute_correct
       (fun i : Fin BLOCK_H =>
         metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb
           stride_vszh stride_vszd stride_boff i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
         BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb stride_vszh stride_vszd
         stride_boff num_heads BLOCK_H)
@@ -967,7 +967,7 @@ theorem fill_kv_cache_output_summary_general
       stride_kcn stride_kcb stride_kch stride_kcd stride_vcn stride_vcb
       stride_vch stride_vcd stride_boff BLOCK BLOCK_D BLOCK_DV
       BLOCK_H).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd
         stride_kcn stride_kcb stride_kch stride_kcd stride_boff
@@ -981,7 +981,7 @@ theorem fill_kv_cache_output_summary_general
       (expected := fun idx =>
         s.readMem KStates
           (kSourceOffset s SIDX stride_kss stride_ksh stride_ksd idx))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
         stride_vcn stride_vcb stride_vch stride_vcd stride_boff

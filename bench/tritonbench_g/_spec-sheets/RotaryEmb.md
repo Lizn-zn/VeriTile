@@ -38,7 +38,7 @@ theorem rotary_emb_output_summary_general
       stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
       stride_sind max_total_len HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ
       BLOCK_DMODEL).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 

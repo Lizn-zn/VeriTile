@@ -40,7 +40,7 @@ theorem kv_cache_copy_seqlen1_output_summary_general
       stride_kcb stride_kch 0 stride_kcs _stride_kcd stride_vcb stride_vch
       stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
       HEAD_DIM).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
         context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch
         0 stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
@@ -53,7 +53,7 @@ theorem kv_cache_copy_seqlen1_output_summary_general
       (expected := fun i =>
         s.readMem K (kSourceOffset s 0 stride_kt stride_kh stride_kd
           HEAD_DIM i))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
         context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
         stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
@@ -367,7 +367,7 @@ theorem kv_cache_copy_split_x_output_summary_general
       stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
       KCACHE_X).toAlgorithm? = Except.ok alg) ∧
     (∀ split_x : Fin NUM_SPLITS,
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
           context_lengths split_x.val stride_kt stride_kh stride_kd stride_kcb
           stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
@@ -382,7 +382,7 @@ theorem kv_cache_copy_split_x_output_summary_general
         (expected := fun i =>
           s.readMem K (kSourceOffset s split_x.val stride_kt stride_kh stride_kd
             KCACHE_X i))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
         context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
         stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)

@@ -88,7 +88,7 @@ theorem block_sparse_attn_output_closed_form_summary_general
               vRowBSA s V num_heads num_kv_heads svb svh svn
                 (selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N jx.1.val) (BLOCK_D + jx.2.1.val))
             scale s (i - start_l + 1) st') :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := block_sparse_attention_kernel Out Q K V R C
         rowStrideH colStrideH num_layout scale sqb sqh sqm skb skh skn svb svh svn sob soh som
         num_heads num_kv_heads total_seq_len BLOCK_M BLOCK_N BLOCK_D 2 Bool.true Bool.true)
@@ -100,7 +100,7 @@ theorem block_sparse_attn_output_closed_form_summary_general
         blockSparseAttnClosedForm s Q K V C num_heads num_kv_heads sqb sqh sqm skb skh skn svb svh svn
           (s.pids 1 % num_heads % num_layout) num_heads start_l (end_l - start_l) (2 * BLOCK_D) BLOCK_M BLOCK_N
           0 scale idx.1 idx.2.1.val)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := block_sparse_attention_kernel Out Q K V R C
         rowStrideH colStrideH num_layout scale sqb sqh sqm skb skh skn svb svh svn sob soh som
         num_heads num_kv_heads total_seq_len BLOCK_M BLOCK_N BLOCK_D 2 Bool.true Bool.true)

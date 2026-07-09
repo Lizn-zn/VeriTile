@@ -133,7 +133,7 @@ theorem rowWiseSum_correct_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rowWiseSumKernel xReg yReg nCol blockSize)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.scalar yReg s.pid)
@@ -196,7 +196,7 @@ theorem rowWiseMax_correct_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rowWiseMaxKernel xReg yReg nCol blockSize)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.scalar yReg s.pid)

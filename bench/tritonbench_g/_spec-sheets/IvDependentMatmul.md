@@ -34,7 +34,7 @@ theorem iv_dependent_matmul_closed_form_correct
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) N BN) BM i < M)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) N BN) BN j < N)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := iv_dependent_matmul_pre_load_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>

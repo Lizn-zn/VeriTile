@@ -1084,7 +1084,7 @@ theorem rmsnorm_full_compute_correct
     (s : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)
     (hsok : 0 < sok) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
         sxb sxm sxk srw sob som sok N B eps)
       (initialState := s)
@@ -1112,7 +1112,7 @@ theorem rmsnorm_full_output_summary
     (hsok : 0 < sok) :
     (∃ alg, (VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
         sxb sxm sxk srw sob som sok N B eps).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := VeriTile.Bench.TritonBenchG.RmsnormTriton.rmsnorm_triton x w o
         sxb sxm sxk srw sob som sok N B eps)
       (initialState := s)

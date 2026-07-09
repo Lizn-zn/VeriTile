@@ -1015,7 +1015,7 @@ theorem gemv_compute_correct
     (s : BlockState) (hBN : 0 < BLOCK_N) (hKB : K ≤ BLOCK_K) (hol : out_ptr ≠ lora_ptr)
     (hundef : ∀ rg o, s.undef rg o = 0)
     (hcn : 0 < cn_stride) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K)
@@ -1050,7 +1050,7 @@ theorem gemv_full_output_summary
     (∃ alg, (bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K)

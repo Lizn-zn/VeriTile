@@ -90,7 +90,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- DSL port of `attention_score.py`'s `_score_kernel`.
 
@@ -324,7 +324,7 @@ theorem attention_score_final_store_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s stride_oz stride_oh BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_score_final_store_slice Score Out stride_score_z
         stride_score_h stride_score_n stride_oz stride_oh NKV_CTX BLOCK_N)
       (initialState := s)
@@ -2609,7 +2609,7 @@ output column — stated with **no reference to the kernel's own execution**. -/
 theorem attention_score_case1_genuine_compute_correct
     (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_score_kernel Q K M Out
         32768 8192 64 1 32768 8192 64 1 512 128 1
         2 4 4 128 128 128 0 64 64 64 64 sm_scale
@@ -2732,7 +2732,7 @@ theorem attention_score_case1_genuine_compute_correct_general
      BN BD : Nat) (sm_scale : ℝ)
     (hBNpos : 0 < BN) (hdvd : BN ∣ ROUND_CTX)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_score_kernel Q K M Out
         stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
         stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
@@ -2776,7 +2776,7 @@ theorem attention_score_python_case1_output_summary_general
       stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
       stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
       BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := attention_score_kernel Q K M Out
         stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
         stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
@@ -2798,7 +2798,7 @@ theorem attention_score_python_case1_output_summary_general
       stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale
       hBNpos hdvd s hundef
 
-end Correct
+end Correct_without_Rounding
 
 
 end VeriTile.Bench.TritonBenchG.AttentionScore

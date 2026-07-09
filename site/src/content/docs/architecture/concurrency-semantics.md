@@ -47,7 +47,7 @@ annotations if they are added.
 `AlgKernel` is the proof layer. It is the existing `Kernel` type with
 mathematical Real/Nat/Int semantics, possibly extended later with
 proof-facing abstract effect markers such as an algebraic `atomic_add`.
-`Kernel.Correct` / `Kernel.Refine` are proved here; the public compute-facing
+`Kernel.Correct_without_Rounding` / `Kernel.Refine` are proved here; the public compute-facing
 surface exposes those proofs through `ComputeKernel.ComputeCorrect` /
 `ComputeKernel.ComputeRefine`.
 
@@ -101,7 +101,7 @@ where the mathematical laws actually hold.
 
 | Feature class | Projected algorithm proof / ComputeCorrect | Runtime / differential testing |
 | --- | --- | --- |
-| Deterministic and algorithm-projectable | Yes, via `toAlgorithm?` and `Kernel.Correct` | Optional |
+| Deterministic and algorithm-projectable | Yes, via `toAlgorithm?` and `Kernel.Correct_without_Rounding` | Optional |
 | Atomic or reduction with algebraic abstraction | Yes, if `toAlgorithm?` projects to an abstract AlgKernel reduction marker and a theorem discharges it | Recommended |
 | Async/TMA with valid sequentialization discipline | Yes, if `toAlgorithm?` projects to a sequential AlgKernel form or an abstract sequentialization marker with a theorem | Recommended |
 | Non-sequential with no algorithm projection | No | Testing/runtime-only until a stronger semantics exists |

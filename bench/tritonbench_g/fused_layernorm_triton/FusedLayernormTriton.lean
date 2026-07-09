@@ -309,7 +309,7 @@ theorem fused_layernorm_triton_normalize_slice_correct
   · simp [hi, rowYSpec, rowElem, hmean, hrstd]
   · simp [hi, offsetFn]
 
-/-- `Realizes` face for the normalize loop: for **every** state whose
+/-- `Realizes_without_Rounding` face for the normalize loop: for **every** state whose
 mean/rstd cells hold the genuine closed forms (exactly what the reduction
 phase stores), one normalize-loop iteration realizes the genuine `rowYSpec`
 on its masked chunk — general over `rnumel`, `RBLOCK` and the chunk index
@@ -319,7 +319,7 @@ theorem fused_layernorm_triton_normalize_slice_compute_correct
     (rnumel RBLOCK : Nat) (s : BlockState)
     (hmean : s.readMem out_ptr0 (s.pids 0) = rowMeanSpec s in_ptr0 rnumel)
     (hrstd : s.readMem in_out_ptr0 (s.pids 0) = rowRstdSpec s in_ptr0 rnumel) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0
         in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK)
       (initialState := s)
@@ -628,7 +628,7 @@ theorem fused_layernorm_triton_reduce_slice_readback
       (fun r => s.readMem in_ptr0 (r + rnumel * s.pids 0))]
     simp [WithBot.realRsqrt, rowRstdSpec, rowVarSpec, rowMeanSpec, rowElem]
 
-/-- `Realizes` form of the reduction-phase slice: the two scalar stores hold
+/-- `Realizes_without_Rounding` form of the reduction-phase slice: the two scalar stores hold
 the **genuine** closed forms — mean `rowMeanSpec` at `out_ptr0[x0]` and rstd
 `rowRstdSpec` at `in_out_ptr0[x0]` — for every program id and all
 `rnumel ≤ RBLOCK`. -/
@@ -636,20 +636,20 @@ theorem fused_layernorm_triton_reduce_slice_compute_correct
     (in_out_ptr0 in_ptr0 out_ptr0 : RegionName)
     (rnumel RBLOCK : Nat) (hLe : rnumel ≤ RBLOCK) (s : BlockState)
     (hMeanRstd : out_ptr0 ≠ in_out_ptr0) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_layernorm_triton_reduce_slice in_out_ptr0 in_ptr0
         out_ptr0 rnumel RBLOCK)
       (initialState := s)
       (write := fun _ : PUnit => some (out_ptr0, s.pids 0))
       (expected := fun _ => rowMeanSpec s in_ptr0 rnumel)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_layernorm_triton_reduce_slice in_out_ptr0 in_ptr0
         out_ptr0 rnumel RBLOCK)
       (initialState := s)
       (write := fun _ : PUnit => some (in_out_ptr0, s.pids 0))
       (expected := fun _ => rowRstdSpec s in_ptr0 rnumel)) := by
   constructor
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [fused_layernorm_triton_reduce_slice, ComputeExpr.toAlgorithm?,
         ComputeOp.toAlgorithm?]
@@ -658,7 +658,7 @@ theorem fused_layernorm_triton_reduce_slice_compute_correct
     intro _
     exact (fused_layernorm_triton_reduce_slice_readback in_out_ptr0 in_ptr0
       out_ptr0 rnumel RBLOCK hLe s s' hMeanRstd hExec).1
-  · unfold ComputeCorrect.Realizes
+  · unfold ComputeCorrect.Realizes_without_Rounding
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [fused_layernorm_triton_reduce_slice, ComputeExpr.toAlgorithm?,
         ComputeOp.toAlgorithm?]
@@ -794,13 +794,13 @@ theorem fused_layernorm_triton_output_summary_general
         out_ptr0 out_ptr1 xnumel rnumel XBLOCK RBLOCK).toAlgorithm?
       = Except.ok alg) ∧
     -- (2) reduction phase: genuine mean and rstd, end-to-end from `in_ptr0`
-    ((ComputeCorrect.Realizes
+    ((ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_layernorm_triton_reduce_slice in_out_ptr0 in_ptr0
         out_ptr0 rnumel RBLOCK)
       (initialState := s)
       (write := fun _ : PUnit => some (out_ptr0, s.pids 0))
       (expected := fun _ => rowMeanSpec s in_ptr0 rnumel)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_layernorm_triton_reduce_slice in_out_ptr0 in_ptr0
         out_ptr0 rnumel RBLOCK)
       (initialState := s)
@@ -810,7 +810,7 @@ theorem fused_layernorm_triton_output_summary_general
     (∀ s' : BlockState,
       s'.readMem out_ptr0 (s'.pids 0) = rowMeanSpec s' in_ptr0 rnumel →
       s'.readMem in_out_ptr0 (s'.pids 0) = rowRstdSpec s' in_ptr0 rnumel →
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0
           in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK)
         (initialState := s')

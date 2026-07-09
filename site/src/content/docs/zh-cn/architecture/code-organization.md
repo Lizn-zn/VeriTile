@@ -125,4 +125,4 @@ reduction)会被多种 operator 复用。按机制命名,去重才对得上 —�
 - [`ProofConventions.md`](/VeriTile/zh-cn/proofs/proof-conventions/) —— 证明 tactic 约定,包括
   `erw` 作为 carrier-bridge 的 fallback。
 - [`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/) —— 用户面 theorem
-  surface(`Realizes`, `WriteMap`, `OutputReadable`)。
+  surface(`Realizes`, `Refines`, `WriteMap`, `OutputReadable`)。

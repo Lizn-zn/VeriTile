@@ -64,7 +64,7 @@ set_option linter.unusedSimpArgs false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful DSL port of `context_attn_nopad.py`'s `_fwd_kernel`. -/
 def context_attn_nopad_fwd_kernel_surface
@@ -3087,7 +3087,7 @@ instance activeGDecidable (s : BlockState) (B_Seqlen : RegionName) (BLK DM : Nat
     (idx : TileIndex [BLK, DM]) : Decidable (activeG s B_Seqlen BLK idx) := by
   unfold activeG; infer_instance
 
-end Correct
+end Correct_without_Rounding
 
 /-! # ══════════ GENERAL — dimension-general public summary ══════════ -/
 
@@ -3114,7 +3114,7 @@ theorem context_attn_nopad_output_summary_general
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
         rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK)
       (initialState := s)

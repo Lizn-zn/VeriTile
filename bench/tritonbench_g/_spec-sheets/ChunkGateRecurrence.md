@@ -52,7 +52,7 @@ theorem chunk_gate_recurrence_forward_output_summary_general
     (∃ alg, (chunk_gate_recurrence_fwd_surface S D O LastKv
       NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V
       Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_initial_last_kv_store_slice LastKv O
         NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
       (initialState := s)
@@ -62,7 +62,7 @@ theorem chunk_gate_recurrence_forward_output_summary_general
       (expected := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         fwdClosed s S D LastKv Bool.true NUM_BLOCK D_MODEL_K D_MODEL_V
           BLOCK_MODEL_K BLOCK_MODEL_V 0 idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_initial_zero_store_slice O NUM_BLOCK
         D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
       (initialState := s)
@@ -72,7 +72,7 @@ theorem chunk_gate_recurrence_forward_output_summary_general
       (expected := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         fwdClosed s S D LastKv Bool.false NUM_BLOCK D_MODEL_K D_MODEL_V
           BLOCK_MODEL_K BLOCK_MODEL_V 0 idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_forward_step_store_slice AccPrev S D O
         t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
       (initialState := s)
@@ -417,7 +417,7 @@ theorem chunk_gate_recurrence_backward_output_summary_general
           (chunk_gate_recurrence_bwd_surface S D DI DG DL DS
             NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
             BLOCK_MODEL_V).toAlgKernel) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_bwd_dacc_step_DI_store_slice DaccPrev
         DS D DI t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
         BLOCK_MODEL_V)
@@ -428,7 +428,7 @@ theorem chunk_gate_recurrence_backward_output_summary_general
       (expected := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         bwdDaccStepSpec s DaccPrev DS D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
           BLOCK_MODEL_K BLOCK_MODEL_V idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_bwd_dg_step_store_slice DaccPrev DS
         S D DG t_rel NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
         BLOCK_MODEL_V)
@@ -438,7 +438,7 @@ theorem chunk_gate_recurrence_backward_output_summary_general
       (expected := fun _ =>
         bwdDGStepSpec s DaccPrev DS S D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
           BLOCK_MODEL_K BLOCK_MODEL_V)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL
         D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
       (initialState := s)

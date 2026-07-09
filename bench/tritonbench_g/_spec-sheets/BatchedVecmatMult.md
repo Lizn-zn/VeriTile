@@ -19,7 +19,7 @@ theorem batched_vecmat_one_row_block_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_block A B output dim_n dim_k N K
         BLOCK_N BLOCK_K)
       (initialState := s)
@@ -145,7 +145,7 @@ theorem batched_vecmat_one_row_k_block_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_k_block A B output dim_n dim_k N K
         BLOCK_N BLOCK_K)
       (initialState := s)
@@ -281,7 +281,7 @@ theorem batched_vecmat_one_row_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_k_accum_slice AccPre A B Out
         dim_n dim_k N K BLOCK_N BLOCK_K)
       (initialState := s)
@@ -422,7 +422,7 @@ theorem batched_vecmat_one_row_const_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_one_row_const_k_accum_slice AccPre A B Out
         dim_n dim_k N K BLOCK_N BLOCK_K kIdx)
       (initialState := s)
@@ -593,7 +593,7 @@ theorem batched_vecmat_test_first_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 
@@ -629,7 +629,7 @@ theorem batched_vecmat_test_second_k_accum_slice_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s dim_n BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel
 ```
 
@@ -657,7 +657,7 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         blockOutOffset s dim_n BLOCK_M BLOCK_N idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := batched_vecmat_block_output_store_slice VecmatPre output
         dim_n BLOCK_M BLOCK_N)
       (initialState := s)

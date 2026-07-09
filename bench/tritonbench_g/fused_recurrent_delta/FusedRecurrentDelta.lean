@@ -139,7 +139,7 @@ set_option linter.unusedVariables false
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `fused_recurrent_delta.py`'s
 `fused_recurrent_fwd_kernel`.
@@ -658,7 +658,7 @@ theorem fused_recurrent_delta_vnew_step_slice_compute_correct
     (HPrev k v : RegionName) (t s_qk_h s_vo_h K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => vRowOffset s t s_vo_h V BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_vnew_step_slice HPrev k v
         t s_qk_h s_vo_h K V BK BV)
       (initialState := s)
@@ -846,7 +846,7 @@ theorem fused_recurrent_delta_state_step_slice_headwise_compute_correct
     (t s_qk_h s_vo_h T K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_state_step_slice_headwise HPrev k v beta
         HOut t s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
@@ -870,7 +870,7 @@ theorem fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct
     (t s_qk_h s_vo_h T K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta
         HOut t s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
@@ -983,7 +983,7 @@ theorem fused_recurrent_delta_output_step_slice_compute_correct
     (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => outOffset s t s_vo_h B H V BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_output_step_slice HNext q o
         t s_qk_h s_vo_h B H K V BK BV scale)
       (initialState := s)
@@ -1083,7 +1083,7 @@ theorem fused_recurrent_delta_final_state_store_slice_compute_correct
     (HFinal Ht : RegionName) (K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_final_state_store_slice HFinal Ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1193,7 +1193,7 @@ theorem fused_recurrent_delta_vnew_step_closed_form
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV m idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_vnew_step_slice HPrev k v
         m s_qk_h s_vo_h K V BK BV)
       (initialState := s)
@@ -1230,7 +1230,7 @@ theorem fused_recurrent_delta_state_step_closed_form
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV m idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_state_step_slice_headwise HPrev k v beta HOut
             m s_qk_h s_vo_h T K V BK BV
@@ -1277,7 +1277,7 @@ theorem fused_recurrent_delta_output_step_closed_form
       s.readMem HNext (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV (m + 1) idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_output_step_slice HNext q o
         m s_qk_h s_vo_h B H K V BK BV scale)
       (initialState := s)
@@ -1312,7 +1312,7 @@ theorem fused_recurrent_delta_final_state_closed_form
       s.readMem HFinal (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV T idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_final_state_store_slice HFinal Ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -1546,7 +1546,7 @@ theorem fused_recurrent_delta_bwd_dk_step_slice_compute_correct
     (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jk : Fin BK => dkRowOffset s t s_qk_h B H K BK jk)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dk_step_slice_headwise DHPrev q do_ v beta dk
             t s_qk_h s_vo_h B H T K V BK BV scale
@@ -1772,7 +1772,7 @@ theorem fused_recurrent_delta_bwd_dv_step_slice_compute_correct
     (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => outOffset s t s_vo_h B H V BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dv_step_slice_headwise DHPrev q do_ k beta dv
             t s_qk_h s_vo_h B H T K V BK BV scale
@@ -1981,7 +1981,7 @@ theorem fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct
     (t s_qk_h s_vo_h NK B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jv : Fin BV => dbetaRowOffset s t s_vo_h B H NK V BV jv)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_headwise DHPrev q do_ k v
         dbeta t s_qk_h s_vo_h NK B H T K V BK BV scale)
       (initialState := s)
@@ -2007,7 +2007,7 @@ theorem fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct
 theorem fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct
     (DHPrev q do_ k v dbeta : RegionName)
     (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta DHPrev q do_ k v
         dbeta t s_qk_h s_vo_h B H T K V BK BV scale)
       (initialState := s)
@@ -2121,7 +2121,7 @@ theorem fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct
     (t s_qk_h s_vo_h B H K V BK BV : Nat) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jk : Fin BK => dkRowOffset s t s_qk_h B H K BK jk)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HPrev dv dk
         t s_qk_h s_vo_h B H K V BK BV)
       (initialState := s)
@@ -2322,7 +2322,7 @@ theorem fused_recurrent_delta_bwd_dq_step_slice_compute_correct
     (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun jk : Fin BK => dkRowOffset s t s_qk_h B H K BK jk)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dq_step_slice_headwise HPrev k v beta do_ dq
             t s_qk_h s_vo_h B H T K V BK BV scale
@@ -2537,7 +2537,7 @@ theorem fused_recurrent_delta_output_summary_general
       dbeta h0 s_qk_h s_vo_h NK B H T K V BK BV scale USE_INITIAL_STATE
       IS_HEADWISE_BETA USE_DH0 USE_DHT).toAlgorithm? = Except.ok alg) ∧
     -- (3) the `v_new` writeback realizes the genuine delta `vNewClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_vnew_step_slice HPrev k v
         m s_qk_h s_vo_h K V BK BV)
       (initialState := s)
@@ -2548,7 +2548,7 @@ theorem fused_recurrent_delta_output_summary_general
         vNewClosed s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV m jv)) ∧
     -- (4) the state-update body realizes the genuine `deltaState(m+1)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_state_step_slice_headwise HPrev k v beta HOut
             m s_qk_h s_vo_h T K V BK BV
@@ -2562,7 +2562,7 @@ theorem fused_recurrent_delta_output_summary_general
         deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV (m + 1) idx)) ∧
     -- (5) the output body realizes the genuine `outputClosed(m)`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_output_step_slice HNext q o
         m s_qk_h s_vo_h B H K V BK BV scale)
       (initialState := s)
@@ -2573,7 +2573,7 @@ theorem fused_recurrent_delta_output_summary_general
         outputClosed s q k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV scale m jv)) ∧
     -- (6) the final-state writeback realizes the genuine `deltaState(T)` (masked)
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_final_state_store_slice HFinal ht K V BK BV)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2585,7 +2585,7 @@ theorem fused_recurrent_delta_output_summary_general
             s_qk_h s_vo_h T K V BK BV T idx
         else 0)) ∧
     -- (7) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dk_step_slice_headwise DHPrev q do_ v beta dk
             m s_qk_h s_vo_h B H T K V BK BV scale
@@ -2600,7 +2600,7 @@ theorem fused_recurrent_delta_output_summary_general
         dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
     -- (8) the backward loop-1 `dv` body realizes the genuine `dvStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dv_step_slice_headwise DHPrev q do_ k beta dv
             m s_qk_h s_vo_h B H T K V BK BV scale
@@ -2615,7 +2615,7 @@ theorem fused_recurrent_delta_output_summary_general
         dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jv)) ∧
     -- (9) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_headwise DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale)
       (initialState := s)
@@ -2625,7 +2625,7 @@ theorem fused_recurrent_delta_output_summary_general
       (expected := fun jv : Fin BV =>
         dbetaStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale jv)) ∧
     -- (10) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h B H T K V BK BV scale)
       (initialState := s)
@@ -2633,7 +2633,7 @@ theorem fused_recurrent_delta_output_summary_general
       (expected := fun _ =>
         dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale)) ∧
     -- (11) the backward loop-2 `dk` correction body realizes `dkCorrStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
         m s_qk_h s_vo_h B H K V BK BV)
       (initialState := s)
@@ -2643,7 +2643,7 @@ theorem fused_recurrent_delta_output_summary_general
       (expected := fun jk : Fin BK =>
         dkCorrStepSpec s HRec dv dk m s_qk_h s_vo_h B H K V BK BV jk)) ∧
     -- (12) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dq_step_slice_headwise HRec k v beta do_ dq
             m s_qk_h s_vo_h B H T K V BK BV scale
@@ -2699,6 +2699,6 @@ theorem fused_recurrent_delta_output_summary_general
   · exact fused_recurrent_delta_bwd_dq_step_slice_compute_correct HRec k v
       beta do_ dq IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentDelta

@@ -228,7 +228,7 @@ theorem quantize_global_transpose_scaled_store_slice_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         bOffset s stride_bm stride_bn BLOCK_M BLOCK_N idx)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := quantize_global_transpose_scaled_store_slice A AbsmaxInv B
         stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N scale127)
       (initialState := s)
@@ -272,7 +272,7 @@ theorem quantize_global_transpose_blocked_output_summary_general
     (∃ err, (quantize_global_transpose_real_surface A AbsmaxInv B
       stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N
       GROUP_M).toAlgorithm? = Except.error err) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := quantize_global_transpose_scaled_store_slice A AbsmaxInv B
         stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N scale127)
       (initialState := s)

@@ -22,7 +22,7 @@ theorem puzzle1_kernel_output_summary
     (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs) :
     (∃ alg, (puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value).toAlgorithm? =
         Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf

@@ -1602,7 +1602,7 @@ theorem fa2ScalarScoreMaxKernel_correct_view
     (scoreReg mReg : RegionName) (Bk : Nat) (hBk : 0 < Bk)
     (s : BlockState) (scores : Fin Bk → ℝ)
     (hScores : InputLoadedAt s scoreReg Bk scores) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarScoreMaxKernel scoreReg mReg Bk)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.scalar mReg s.pid)
@@ -1719,9 +1719,9 @@ theorem fa2ScalarScoreMaxKernel_loaded_of_agrees
     consumer.readMem mReg consumer.pid = tileMax hBk scores := by
   have hview := fa2ScalarScoreMaxKernel_correct_view
     scoreReg mReg Bk hBk s scores hScores
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   have hOut := hview s sMax hExec rfl PUnit.unit
@@ -1764,7 +1764,7 @@ theorem fa2ScalarMergedMaxKernel_correct_view
     (s : BlockState) (mLeft mRight : ℝ)
     (hmLeft : s.readMem mLeftReg s.pid = mLeft)
     (hmRight : s.readMem mRightReg s.pid = mRight) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarMergedMaxKernel mLeftReg mRightReg mMergedReg)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.scalar mMergedReg s.pid)
@@ -1797,9 +1797,9 @@ theorem fa2ScalarMergedMaxKernel_loaded_of_agrees
     consumer.readMem mMergedReg consumer.pid = max mLeft mRight := by
   have hview := fa2ScalarMergedMaxKernel_correct_view
     mLeftReg mRightReg mMergedReg s mLeft mRight hmLeft hmRight
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   have hOut := hview s sMerged hExec rfl PUnit.unit
@@ -1839,7 +1839,7 @@ theorem fa2ScalarValueFragmentKernel_correct_view
         V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarValueFragmentKernel vReg valueReg D Bk keyBlock d.val)
       (initialState := s)
       (write := fun j : Fin Bk =>
@@ -1889,9 +1889,9 @@ theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
           d, PUnit.unit)) := by
   have hview := fa2ScalarValueFragmentKernel_correct_view
     vReg valueReg keyBlock hKeyBlock d s V hV
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   intro j
@@ -1994,7 +1994,7 @@ theorem fa2ScalarFragmentSummaryKernel_correct_view
     (hValues : InputLoadedAt s valueReg Bk values)
     (hm : s.readMem mReg s.pid = m)
     (hOutNe : lReg ≠ oReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarFragmentSummaryKernel scoreReg valueReg mReg lReg oReg Bk)
       (initialState := s)
       (write := fun ch : Fin 2 =>
@@ -2121,7 +2121,7 @@ theorem fa2ScoreFragmentKernel_correct_view
       s.readMem kReg
           ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
         K idx) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale)
       (initialState := s)
       (write := fun idx : TileIndex [M, Bk] =>
@@ -2177,7 +2177,7 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
         K (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale)
       (initialState := s)
       (write := fun idx : TileIndex [M, Bk] =>
@@ -2197,9 +2197,9 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   intro idx
@@ -2241,9 +2241,9 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded
             (Nat.succ_le_iff.mpr hKeyBlock) j)) := by
   have hview := fa2ScoreFragmentKernel_scaledScore_correct_view
     qReg kReg scoreReg keyBlock hKeyBlock scale s Q K hQ hK
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   intro j
@@ -2415,7 +2415,7 @@ theorem fa2ScalarTwoBlockForwardKernel_correct_view
     (hmLeft : s.readMem mLeftReg s.pid = mLeft)
     (hmRight : s.readMem mRightReg s.pid = mRight)
     (hmMerged : s.readMem mMergedReg s.pid = mMerged) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2535,7 +2535,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
     (hmRight : s.readMem mRightReg s.pid = mRight)
     (hmMerged : s.readMem mMergedReg s.pid = mMerged)
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2560,9 +2560,9 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hcorrect
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hcorrect
   rcases hcorrect with ⟨_, hcorrect⟩
   simp at hcorrect
   have hOut := hcorrect s s' hExec rfl PUnit.unit
@@ -2631,7 +2631,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
     (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2698,7 +2698,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_vi
     (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2791,7 +2791,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producer
           (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2907,7 +2907,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_p
         StreamingAccumulator.scaledScore Q K scale idx.1
           (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -2986,7 +2986,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
     (hmMerged : s.readMem mMergedReg s.pid = mMerged)
     (hlFree :
       StreamingAccumulator.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
         mLeftReg mRightReg mMergedReg outReg Bk)
@@ -3096,9 +3096,9 @@ theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
       NumericDType.sub, NumericDType.div, WithBot.realExp, WithBot.realDiv,
       BlockState.writeMemTyped_real]
   refine ⟨s', hExec, ?_⟩
-  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+  unfold ComputeCorrect.Realizes_without_Rounding ComputeKernel.ExecCorrect
     ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
-    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+    ComputeKernel.AlgorithmCorrect_without_Rounding Kernel.Correct_without_Rounding at hview
   rcases hview with ⟨_, hview⟩
   simp at hview
   have hOut := hview sIdx s' hExec rfl PUnit.unit
@@ -3171,7 +3171,7 @@ theorem fa2ScalarTwoFragmentMergeKernel_correct_view
     (hlRight : s.readMem lRightReg s.pid = lRight)
     (hoRight : s.readMem oRightReg s.pid = oRight)
     (hmMerged : s.readMem mMergedReg s.pid = mMerged) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoFragmentMergeKernel
         mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg)
       (initialState := s)
@@ -3217,7 +3217,7 @@ theorem fa2ScalarTwoFragmentMergeKernel_attentionReal_view
     (hoRight :
       oRight = fa2TwoBlockNumerRight Q K V scale mRight idx)
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := fa2ScalarTwoFragmentMergeKernel
         mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg)
       (initialState := s)
@@ -3274,7 +3274,7 @@ theorem fa2_forward_correct_4D_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel :=
         fa2ForwardKernelStrided views.qReg views.kReg views.vReg views.outReg
           M D Bk numKVBlocks

@@ -25,10 +25,10 @@ statement covers every program of the grid.
 
 ```
 rope_backward_python_backward_output_summary_general  ← TOP THEOREM (genuine)
-  a conjunction of four `ComputeCorrect.Realizes` (one per stored output half),
+  a conjunction of four `ComputeCorrect.Realizes_without_Rounding` (one per stored output half),
   each with a `WriteMap.writeIf` masking the store to its active lanes; the
   projection-succeeds fact and the per-run `exec` quantification are internalized
-  by `Realizes` (discharged via `computeCorrect_of_toAlgKernel` + the surface's
+  by `Realizes_without_Rounding` (discharged via `computeCorrect_of_toAlgKernel` + the surface's
   `toAlgorithm?` reduction). Each conjunct closes on the raw per-store lemma:
   ├─ rope_backward_q0_backward_correct  → ropeBackwardKernelQ0Spec  (q1·cos + q2·sin)
   ├─ rope_backward_q1_backward_correct  → ropeBackwardKernelQ1Spec  (q2·cos − q1·sin)
@@ -557,7 +557,7 @@ theorem rope_backward_q0_head_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF => qOffset s HEAD_IDX q_row_stride hd (dimIndex i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
         q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
         BLOCK_HALF)
@@ -671,7 +671,7 @@ theorem rope_backward_q1_head_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
         q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
         BLOCK_HALF)
@@ -718,7 +718,7 @@ theorem rope_backward_k0_head_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF => qOffset s HEAD_IDX k_row_stride hd (dimIndex i))) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_backward_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
         k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF)
       (initialState := s)
@@ -740,7 +740,7 @@ theorem rope_backward_k1_head_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_HALF =>
         q1WriteOffset s HEAD_IDX k_row_stride hd HEAD_HALF i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := rope_backward_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
         k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF)
       (initialState := s)
@@ -1606,8 +1606,8 @@ first and second halves) reads back to the genuine rotary-backward closed form,
 NOT the kernel's own executed value, against the real `triton_rope_surface`
 kernel — under the honest `undef`-zero and `q_ptr ≠ k_ptr` side conditions.
 
-Stated in the standard `ComputeCorrect.Realizes` trust surface: the conclusion is
-a conjunction of one `Realizes` per stored output half. Each `Realizes` bundles
+Stated in the standard `ComputeCorrect.Realizes_without_Rounding` trust surface: the conclusion is
+a conjunction of one `Realizes_without_Rounding` per stored output half. Each `Realizes_without_Rounding` bundles
 the projection-succeeds and per-run `exec` quantification internally; the
 `WriteMap.writeIf` masks the store to exactly its active lanes and the
 `expected` map is the genuine rotary-backward closed form over INPUT memory.
@@ -1617,7 +1617,7 @@ theorem rope_backward_python_backward_output_summary_general
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.true)
@@ -1628,7 +1628,7 @@ theorem rope_backward_python_backward_output_summary_general
         (fun idx => (Q, qFullFirstOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)))
       (expected := fun idx =>
         ropeBackwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.true)
@@ -1639,7 +1639,7 @@ theorem rope_backward_python_backward_output_summary_general
         (fun idx => (Q, qFullSecondOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)))
       (expected := fun idx =>
         ropeBackwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.true)
@@ -1650,7 +1650,7 @@ theorem rope_backward_python_backward_output_summary_general
         (fun idx => (K, kFullFirstOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)))
       (expected := fun idx =>
         ropeBackwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.true)

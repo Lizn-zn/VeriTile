@@ -44,7 +44,7 @@ pointers and so compute the same product), but no surface is built for them.
 ## Proof architecture
 
 ```
-iv_dependent_matmul_closed_form_correct      ← TOP THEOREM (ComputeCorrect.Realizes)
+iv_dependent_matmul_closed_form_correct      ← TOP THEOREM (ComputeCorrect.Realizes_without_Rounding)
   └─ ivdm_exec_closed_form                    ← exec-side closed form (every active cell = fp16(∑_k A·B))
        ├─ ivdm_preLoop   (P 0: accumulator = 0, a_ptr/b_ptr bases seeded)
        ├─ ivdm_step      (one K-block: a_ptrs/b_ptrs recomputed = block k, accumulator += dot)
@@ -970,7 +970,7 @@ theorem iv_dependent_matmul_closed_form_correct
     (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) N BN) BM i < M)
     (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) N BN) BN j < N)
     (hundef : ∀ rg o, s.undef rg o = 0) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := iv_dependent_matmul_pre_load_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK)
       (initialState := s)
       (write := fun idx : TileIndex [BM, BN] =>

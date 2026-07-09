@@ -55,7 +55,7 @@ strides; honest side-conditions only). -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
-section Correct
+section Correct_without_Rounding
 
 /-- Faithful transcription of `matrix_vector_multip.py`'s `mv_kernel`.
 
@@ -229,7 +229,7 @@ theorem mv_kernel_one_block_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i)) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mv_kernel_one_block A B C N M stride_an stride_am stride_bm
         stride_cn BLOCK_N BLOCK_M)
       (initialState := s)
@@ -268,7 +268,7 @@ abbrev mv_kernel_general_prop
     (s : BlockState) : Prop :=
   (∃ alg, (mv_kernel A B C N M stride_an stride_am stride_bm stride_cn
       BLOCK_N BLOCK_M).toAlgorithm? = Except.ok alg) ∧
-  ComputeCorrect.Realizes
+  ComputeCorrect.Realizes_without_Rounding
     (kernel := mv_kernel_one_block A B C N M stride_an stride_am stride_bm
       stride_cn BLOCK_N BLOCK_M)
     (initialState := s)
@@ -302,6 +302,6 @@ theorem mv_kernel_output_summary_general
   · exact mv_kernel_one_block_compute_correct A B C N M stride_an stride_am
       stride_bm stride_cn BLOCK_N BLOCK_M s hOutInj
 
-end Correct
+end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip

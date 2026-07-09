@@ -44,7 +44,7 @@ theorem fill_kv_cache_output_summary_general
       stride_kcn stride_kcb stride_kch stride_kcd stride_vcn stride_vcb
       stride_vch stride_vcd stride_boff BLOCK BLOCK_D BLOCK_DV
       BLOCK_H).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd
         stride_kcn stride_kcb stride_kch stride_kcd stride_boff
@@ -58,7 +58,7 @@ theorem fill_kv_cache_output_summary_general
       (expected := fun idx =>
         s.readMem KStates
           (kSourceOffset s SIDX stride_kss stride_ksh stride_ksd idx))) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
         SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
         stride_vcn stride_vcb stride_vch stride_vcd stride_boff

@@ -107,7 +107,7 @@ theorem mul2_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -153,7 +153,7 @@ theorem mul2_inplace_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s ptr BLOCK_SIZE xs) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -184,7 +184,7 @@ theorem mul2_kernel_output_summary
     (h_xInplace : InputLoadedAt s ptr BLOCK_SIZE xsInplace) :
     ((∃ alg, (mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf
@@ -193,7 +193,7 @@ theorem mul2_kernel_output_summary
         (expected := fun i => 2 * xs i)) ∧
     ((∃ alg, (mul2_inplace_kernel ptr n_elements BLOCK_SIZE).toAlgorithm? =
         Except.ok alg) ∧
-      ComputeCorrect.Realizes
+      ComputeCorrect.Realizes_without_Rounding
         (kernel := mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
         (initialState := s)
         (write := ComputeCorrect.WriteMap.writeIf

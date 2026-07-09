@@ -4421,17 +4421,17 @@ symbolic block dims). Side conditions
 (`num_cols ≤ BLOCK_N`, per-active-lane positive online-softmax denominator,
 clean `undef`) are honest hypotheses; the spec reads INPUT memory only.
 
-**Why the raw `∃ sF, exec … ∧ …` form (not `ComputeCorrect.Realizes`) — honest
+**Why the raw `∃ sF, exec … ∧ …` form (not `ComputeCorrect.Realizes_without_Rounding`) — honest
 framework blocker, not a proof gap.** The `Out` cell is compared as a *decoded
-fp16 value* `sF.readMemValue .fp16 Out … = (some … : WithBot ℝ)`. `Realizes`
+fp16 value* `sF.readMemValue .fp16 Out … = (some … : WithBot ℝ)`. `Realizes_without_Rounding`
 requires an `OutputReadable` carrier for the readback type, and the framework
 provides carriers only for `MemCell`/`ℝ`/`Nat`/`Int` — there is no
 decoded-fp16-value (`TileCarrier .fp16 = WithBot ℝ`) carrier. The engine
 (`msa_execGS`) yields a *value*-level equality, so it cannot be wrapped by
-`Realizes` without a framework-level `ReadsAsValue`-style carrier. The statement
+`Realizes_without_Rounding` without a framework-level `ReadsAsValue`-style carrier. The statement
 is nonetheless genuine and non-self-referential (`mixedSparseAttnClosedForm`
 reads INPUT memory only), and the `∃ sF, exec … = some sF` conjunct is strictly
-stronger than `Realizes` (it asserts execution actually succeeds). See
+stronger than `Realizes_without_Rounding` (it asserts execution actually succeeds). See
 `bench/MAIN_THEOREM_CONVENTIONS.md` §4/§6. -/
 theorem mixed_sparse_attention_output_closed_form_summary_general
     (Q K V Out : RegionName)

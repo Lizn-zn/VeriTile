@@ -263,7 +263,7 @@ Real / Int / Nat semantics. No IEEE rounding, no NaN.
 
 * `eraseDType`: `fp32 → ℝ`, `int32 → ℤ`, `uint32 → ℕ`.
 * Computable bit-pattern decoder for `fp32` constants.
-* Existing `Kernel.Correct` proofs reused on the algorithm side.
+* Existing `Kernel.Correct_without_Rounding` proofs reused on the algorithm side.
 
 Catches *algorithm-structure bugs* — every wrong recurrence, wrong
 masking, wrong reduction is a failed Lean proof.
@@ -307,7 +307,7 @@ becoming a Lean theorem:
 * `toAlgorithm?` — `Except EraseDTypeError`
 * `AlgKernel` — ℝ / ℤ / ℕ AST
 * `exec` — `evalOp` · `stepStmt` · `forLoop_inv`
-* Theorem — `Correct` / `Refine`
+* Theorem — `Correct_without_Rounding` / `Refine`
 
 :::
 
@@ -473,7 +473,7 @@ inductive Op : TileDType → TileShape → Type
 ```
 def ProjectedCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   match ck.toAlgorithm? with
-  | .ok ak  => Kernel.Correct ak post
+  | .ok ak  => Kernel.Correct_without_Rounding ak post
   | .error _ => False
 
 def ComputeCorrect (ck) (post) (gap : GapPolicy := .ignore) : Prop :=
@@ -840,7 +840,7 @@ single-program proofs.
 :::cardBlue
 *Correctness · one kernel*
 
-`ComputeCorrect.Realizes` states the observable write map of one kernel:
+`ComputeCorrect.Realizes_without_Rounding` states the observable write map of one kernel:
 
 ```
 write : ι → Option MemCellAddr
@@ -854,7 +854,7 @@ expected : ι → α
 :::cardOrange
 *Refinement · two kernels*
 
-`ComputeRefine.Realizes` compares two write maps from the same logical output
+`ComputeRefine.Realizes_without_Rounding` compares two write maps from the same logical output
 index:
 
 ```
@@ -881,8 +881,8 @@ Original Triton kernel + an optimized rewrite, both inside the embedded
 :::cardOrange
 *2 · State the theorem*
 
-Use `ComputeCorrect.Realizes` for a kernel ↔ spec theorem, or
-`ComputeRefine.Realizes` for a kernel-pair relation. Most masked outputs use
+Use `ComputeCorrect.Realizes_without_Rounding` for a kernel ↔ spec theorem, or
+`ComputeRefine.Realizes_without_Rounding` for a kernel-pair relation. Most masked outputs use
 `WriteMap.writeIf mask addr`.
 
 :::
@@ -989,7 +989,7 @@ soundness backbone.
 :::cardOrange
 *Two-layer split is permanent*
 
-Algorithm correctness in Lean (`Kernel.Correct`); IEEE-754 fidelity via
+Algorithm correctness in Lean (`Kernel.Correct_without_Rounding`); IEEE-754 fidelity via
 external testing. The two never merge by Lean theorem — by design.
 `ComputeKernel` is the in-Lean proof-stating bridge to the algorithm side
 via `toAlgorithm?`.

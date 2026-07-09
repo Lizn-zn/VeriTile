@@ -30,7 +30,7 @@ theorem layernorm_fwd_triton_output_summary
         stride_x_N stride_x_hn stride_x_hd
         stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
         N BLOCK_SIZE eps).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := layernorm_fwd_triton X W Y
         stride_x_N stride_x_hn stride_x_hd
         stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd

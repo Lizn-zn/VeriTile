@@ -33,7 +33,7 @@ ComputeKernel.toAlgorithm? : ComputeKernel -> Except EraseDTypeError AlgKernel
 ComputeKernel.ComputeCorrect ck post (gap := .ignore) :=
   True ∧
     match ck.toAlgorithm? with
-    | Except.ok ak => Kernel.Correct ak post
+    | Except.ok ak => Kernel.Correct_without_Rounding ak post
     | Except.error _ => False
 ```
 
@@ -44,20 +44,20 @@ required gap contract:
 ComputeKernel.ComputeCorrect ck post (gap := .require contract) :=
   ExternalChecked contract ∧
     match ck.toAlgorithm? with
-    | Except.ok ak => Kernel.Correct ak post
+    | Except.ok ak => Kernel.Correct_without_Rounding ak post
     | Except.error _ => False
 ```
 
 `ComputeKernel.ComputeRefine` 是对应的双 kernel surface,带相同的可选
 `GapPolicy`。内部 helper 引理在专门处理投影后算法 kernel 时,仍可使用
-`Kernel.Correct` / `Kernel.Refine`。
+`Kernel.Correct_without_Rounding` / `Kernel.Refine`。
 
 转换引理:
 
 ```lean
 ComputeKernel.computeCorrect_of_toAlgorithm_eq :
   ck.toAlgorithm? = Except.ok ak ->
-  Kernel.Correct ak post ->
+  Kernel.Correct_without_Rounding ak post ->
   ComputeKernel.ComputeCorrect ck post
 
 ComputeKernel.computeRefine_of_toAlgorithm_eq :

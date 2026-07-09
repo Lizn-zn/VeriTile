@@ -13,10 +13,10 @@ row strides, sequence length, head counts, head dim, and `next_power_of_2`
 padding, each of the four Python-observable forward stores — Q/K first and
 second halves — reads back, on every active lane, to the genuine rotary closed
 form (`ropeForwardKernel{Q0,Q1,K0,K1}Spec`), NOT the kernel's own executed
-value. Stated on the public `ComputeCorrect.Realizes` trust surface (one
+value. Stated on the public `ComputeCorrect.Realizes_without_Rounding` trust surface (one
 conjunct per stored output half; the store mask is the per-half `activeQ/KFull`
 active-lane predicate, so a masked `WriteMap.writeIf` records exactly the cells
-the kernel writes). `Realizes` internalizes the `exec`/projection quantification,
+the kernel writes). `Realizes_without_Rounding` internalizes the `exec`/projection quantification,
 so the `s'`/`hExec` binders drop out of the headline. The general building-block
 lemmas (`rope_transform_q0/q1/k0/k1_forward_correct`) supply each per-lane store
 value once the surface is lowered and executed. -/
@@ -30,7 +30,7 @@ theorem rope_transform_output_summary_general
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.false)
@@ -43,7 +43,7 @@ theorem rope_transform_output_summary_general
       (expected := fun idx =>
         ropeForwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
           s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.false)
@@ -56,7 +56,7 @@ theorem rope_transform_output_summary_general
       (expected := fun idx =>
         ropeForwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
           s Q COS SIN q_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.false)
@@ -69,7 +69,7 @@ theorem rope_transform_output_summary_general
       (expected := fun idx =>
         ropeForwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
           s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
         cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
         pad_hd BLOCK_SIZE Bool.false)

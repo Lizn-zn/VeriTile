@@ -162,7 +162,7 @@ theorem mhcWidthConnection_correct_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
         1 1 1 0 tau)
       (initialState := s)
@@ -278,7 +278,7 @@ writes:
 theorem mhcDepthConnection_correct_view
     (resMixReg branchOutReg hPostReg outReg : RegionName)
     (tau : ℝ) (s : BlockState) :
-    ComputeCorrect.Realizes
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
         1 1 1 0 tau)
       (initialState := s)

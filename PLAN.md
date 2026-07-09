@@ -44,7 +44,7 @@ Algorithm layer (Lean proof)         Compute-gap layer (external testing)
 ────────────────────────────         ───────────────────────────────────
 ProjectedCorrect ck spec             GapPolicy.require contract
   := ck.toAlgorithm? = ok ∧            := Python check of the
-     Kernel.Correct ak spec               ComputeKernel behavior against
+     Kernel.Correct_without_Rounding ak spec               ComputeKernel behavior against
                                           the projected AlgKernel behavior
   Real / Int / Nat semantics.            within the contract tolerance.
   No IEEE rounding, no NaN,              Recorded in Lean as
@@ -80,7 +80,7 @@ Required compute gaps are and remain test-backed.
 3. The formal Lean layer uses `ComputeKernel.ComputeCorrect` /
    `ComputeKernel.ComputeRefine` with `gap := .ignore` by default, or
    `gap := .require contract` when an external compute-gap check should be
-   recorded. Existing `Kernel.Correct` proofs continue to work over
+   recorded. Existing `Kernel.Correct_without_Rounding` proofs continue to work over
    algorithm-side kernels.
 
 ### Compute-gap details (testing)
@@ -242,7 +242,7 @@ bundled as `strippedBackward_tile_bridges_complete`,
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)
 
 - **Two-layer architecture**: `ComputeKernel` / `AlgorithmKernel` bridged by
-  `eraseDType`; `Kernel.Correct` / `Kernel.Refine` proven on the algorithm
+  `eraseDType`; `Kernel.Correct_without_Rounding` / `Kernel.Refine` proven on the algorithm
   side; `ProjectedCorrect` / `ProjectedRefine` as the internal projection
   obligations; `ComputeKernel.ComputeCorrect` /
   `ComputeKernel.ComputeRefine` as the user-facing entries; bitcast routed

@@ -15,7 +15,7 @@ genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). 
 **Statement:**
 ```lean
 theorem decay_cumsum_backward_closed_output_summary_general :
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -23,7 +23,7 @@ theorem decay_cumsum_backward_closed_output_summary_general :
         (fun i => (DQInter, offset s s_qk_h DK t_rel.val BT BK i)))
       (expected := fun i : Fin BK =>
         bwdDQInterClosed s DQInner DQInter G s_qk_h DK BT BK t_rel i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -31,7 +31,7 @@ theorem decay_cumsum_backward_closed_output_summary_general :
         (fun i => (DKInter, offset s s_qk_h DK t_rel.val BT BK i)))
       (expected := fun i : Fin BK =>
         bwdDKInterClosed s DKInner DKInter G s_qk_h DK BT BK t_rel i)) ∧
-    (ComputeCorrect.Realizes
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)
       (initialState := s)
@@ -205,7 +205,7 @@ mandated per-statement architecture is required:
    (`scatter_readback_prop_masked_nd`,
    `scatter_prop_masked_preserves_other_{offset,region}`), peeling the later
    stores in reverse, exactly as the forward row-1 proof does.
-5. Bridge to `ComputeCorrect.Realizes` via `realizes_writeIf_iff` +
+5. Bridge to `ComputeCorrect.Realizes_without_Rounding` via `realizes_writeIf_iff` +
    `computeCorrect_of_toAlgKernel` (done; `decayBackwardSurfaceValue` deleted).
 
 This plan is now fully realized dimension-generally: `bwd_prologue_eval_general`

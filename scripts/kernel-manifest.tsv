@@ -4,7 +4,8 @@
 # id<TAB>file<TAB>theorem<TAB>kind<TAB>status<TAB>source<TAB>source_ref<TAB>config<TAB>label<TAB>notes
 #
 # `file` is the path where the theorem is DEFINED (post-refactor: some refine
-# theorems live in bench/examples/*Refine.lean, and FloatDType/FusedSiLU/
+# theorems live in bench/examples/*Refine.lean, and FloatDTypeCorrect/
+# FloatDTypeRefine/FusedSiLU/
 # LayerNormKernels relocated to bench/examples/). `theorem` is the FULLY-
 # QUALIFIED name so downstream trust tooling (VeriTile/Meta/TrustReport.lean,
 # bench/audit_trust.sh) resolves it unambiguously regardless of open namespaces.
@@ -15,13 +16,13 @@
 # Allowed status values:
 # proven, projected, test-gap, blocked, smoke
 id	file	theorem	kind	status	source	source_ref	config	label	notes
-softmax_stable_refine	bench/examples/SoftmaxEqRefine.lean	VeriTile.Examples.softmax_kernels_refinement_view	refine	proven	internal	-	-	Naive softmax vs stable softmax	stable shift-trick refinement
-log_sum_exp_shift_refine	bench/examples/LogSumExpEqRefine.lean	VeriTile.Examples.log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
-softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalRefine.lean	VeriTile.Examples.softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
+softmax_stable_refine	bench/examples/SoftmaxEqRefine.lean	VeriTile.Bench.Examples.Softmax.softmax_kernels_refinement_view	refine	proven	internal	-	-	Naive softmax vs stable softmax	stable shift-trick refinement
+log_sum_exp_shift_refine	bench/examples/LogSumExpEqRefine.lean	VeriTile.Bench.Examples.LogSumExp.log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
+softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalRefine.lean	VeriTile.Bench.Examples.SoftmaxReciprocal.softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
 vector_add_aligned	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_correct_view	correct	proven	internal	-	BLOCK_SIZE=N	Vector add aligned correctness	aligned single-block elementwise add
 vector_add_masked	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_masked_correct_view	correct	proven	internal	-	BLOCK_SIZE, n_elements	Vector add correctness	masked boundary variant
-float_add	bench/examples/FloatDType.lean	VeriTile.Examples.float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
-float_softmax_reciprocal	bench/examples/FloatDType.lean	VeriTile.Examples.float_softmax_reciprocal_refinement_view	refine	proven	internal	-	fp32 erased to real	Float dtype rewrite refinement	algorithm-layer Real proof through dtype erasure
+float_add	bench/examples/FloatDTypeCorrect.lean	VeriTile.Bench.Examples.FloatDTypeCorrect.float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
+float_softmax_reciprocal	bench/examples/FloatDTypeRefine.lean	VeriTile.Bench.Examples.FloatDTypeRefine.float_softmax_reciprocal_refinement_view	refine	proven	internal	-	fp32 erased to real	Float dtype rewrite refinement	algorithm-layer Real proof through dtype erasure
 argmax2_nat_store	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.argmax2_index_store_correct_view	correct	proven	internal	-	2 elements	Typed Nat memory store	smoke for Nat store
 nat_load_store	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.nat_load_store_correct_view	correct	proven	internal	-	1 scalar	Typed Nat memory load/store	smoke for typed HBM load/store
 indirect_load	VeriTile/Examples/TritonSmoke.lean	VeriTile.Examples.TritonSmoke.indirect_load_correct_view	correct	proven	internal	-	1 scalar	Indirect indexed load correctness	generic indirect view smoke
@@ -34,9 +35,9 @@ grid_rmw_xchg_launch	VeriTile/Examples/GridComposition.lean	VeriTile.Examples.Gr
 online_softmax	VeriTile/Examples/OnlineSoftmax.lean	VeriTile.Examples.online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
-fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Examples.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
-welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Examples.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
-layernorm_refine	bench/examples/LayerNormKernels.lean	VeriTile.Examples.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
+fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLU.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
+welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Bench.Examples.Welford.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
+layernorm_refine	bench/examples/LayerNormKernels.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	VeriTile.Examples.approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
 mhc_width_1x1	VeriTile/Examples/HyperConnections/Manifold.lean	VeriTile.Examples.HyperConnections.mhcWidthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank width correctness	first proof-covered width slice
 mhc_depth_1x1	VeriTile/Examples/HyperConnections/Manifold.lean	VeriTile.Examples.HyperConnections.mhcDepthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank depth correctness	first proof-covered depth slice
