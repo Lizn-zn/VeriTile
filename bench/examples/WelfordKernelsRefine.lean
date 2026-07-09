@@ -58,8 +58,8 @@ def twopassWelfordKernel (xReg meanReg varReg : RegionName)
   d      := x - μ
   s_d2   := tl.sum(d * d)
   v      := s_d2 / tl.toReal($(blockSize))
-  tl.store($(meanReg), μ)
-  tl.store($(varReg), v)
+  tl.store($(meanReg), (μ).to(tl.bfloat16))
+  tl.store($(varReg), (v).to(tl.bfloat16))
 }
 
 /-- Online Welford mean/variance kernel: the same population mean/variance via
@@ -77,8 +77,8 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
     delta2 := xi - M
     S      := S + delta * delta2
   }
-  tl.store($(meanReg), M)
-  tl.store($(varReg), S / tl.toReal($(blockSize)))
+  tl.store($(meanReg), (M).to(tl.bfloat16))
+  tl.store($(varReg), (S / tl.toReal($(blockSize))).to(tl.bfloat16))
 }
 
 end Welford.kernels
@@ -272,58 +272,6 @@ private def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List S
         (Op.mul .real .nil (Op.ref .real [] "delta")
           (Op.ref .real [] "delta2")))]
 
-/-- Per-row mean spec. Thin alias for `Triton.TiledReduction.welfordMean`. -/
-private noncomputable def welfordMeanSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.welfordMean xs
-
-/-- Per-row population variance spec. Thin alias for
-`Triton.TiledReduction.welfordVar`. -/
-private noncomputable def welfordVarSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Triton.TiledReduction.welfordVar xs
-
-private theorem twopass_welford_correct
-    (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (_h_x : InputLoadedAt s xReg blockSize xs)
-    (_h_mv : meanReg ≠ varReg) :
-    let final := exec (twopassWelfordKernel xReg meanReg varReg blockSize) s
-    final.bind (fun s' => some (s'.readMem meanReg 0))
-        = some (welfordMeanSpec xs)
-    ∧ final.bind (fun s' => some (s'.readMem varReg 0))
-        = some (welfordVarSpec xs) := by
-  constructor
-  · simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        Tile.natToReal, NumericDType.add,
-        NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordMeanSpec, Triton.TiledReduction.welfordMean,
-        Triton.TiledReduction.tileSum]
-    unfold InputLoadedAt at _h_x
-    simp_rw [_h_x]
-    repeat unfold evalOp
-    simp [Tile.reduceSum, Tile.reduceSumDrop,
-      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-      WithBot.realAdd, WithBot.realMul, WithBot.realSub, WithBot.realDiv, _h_mv]
-    rfl
-  · simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        Tile.natToReal, NumericDType.add,
-        NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordVarSpec, Triton.TiledReduction.welfordVar,
-        Triton.TiledReduction.welfordSumSq,
-        Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum]
-    unfold InputLoadedAt at _h_x
-    simp_rw [_h_x]
-    repeat unfold evalOp
-    simp [Tile.reduceSum, Tile.reduceSumDrop,
-      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-      WithBot.realAdd, WithBot.realMul, WithBot.realSub, WithBot.realDiv, _h_mv, pow_two]
-    rfl
-
 /-- Loop invariant for `onlineWelfordKernel`: after `k` body iterations,
     register `M` holds `welfordMean xs k`, register `S` holds `welfordS xs k`,
     register `pid` holds the original program id, and the input region is
@@ -381,145 +329,6 @@ private theorem online_welford_step
     rw [hpid] at hx
     exact hx
 
-private theorem online_welford_correct
-    (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : InputLoadedAt s xReg blockSize xs)
-    (h_mv : meanReg ≠ varReg) :
-    let final := exec (onlineWelfordKernel xReg meanReg varReg blockSize) s
-    final.bind (fun s' => some (s'.readMem meanReg 0))
-        = some (welfordMeanSpec xs)
-    ∧ final.bind (fun s' => some (s'.readMem varReg 0))
-        = some (welfordVarSpec xs) := by
-  let s0 :=
-    ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-      "M" .real [] (Tile.scalar 0)).setReg
-      "S" .real [] (Tile.scalar 0)
-  have h_init : P_welford xs xReg s.pid 0 s0 := by
-    simp [P_welford, s0, welfordMean, welfordS]
-    exact h_x
-  obtain ⟨sLoop, hLoop, hPloop⟩ :=
-    forLoop_inv
-      (idx := "i") (n := blockSize)
-      (body := onlineWelfordLoopBody xReg blockSize)
-      (P := P_welford xs xReg s.pid)
-      (s_init := s0)
-      h_init
-      (fun i st hi hP => online_welford_step xs xReg s.pid i st hi hP)
-  rcases hPloop with ⟨hM, hS, _hpidReg, _hpid, _hX⟩
-  obtain ⟨hMeanEq, hSEq⟩ := welford_eq_two_pass hN xs
-  have hLoopAux :
-      stepForLoopAux "i" 0 blockSize (onlineWelfordLoopBody xReg blockSize) s0 =
-        some sLoop := by
-    simpa [stepForLoopAux.forLoop_unfold] using hLoop
-  have hLoopAuxExpanded :
-      stepForLoopAux "i" 0 blockSize
-        [Stmt.assign .real [] "xi"
-            (Op.load .real (MemAccess.region xReg
-              (Op.add .nat .nil
-                (Op.mul .nat .nil (Op.ref .nat [] "pid")
-                  (Op.constNat blockSize))
-                (Op.ref .nat [] "i"))) MaskOpt.none),
-          Stmt.assign .real [] "delta"
-            (Op.sub .real .nil (Op.ref .real [] "xi")
-              (Op.ref .real [] "M")),
-          Stmt.assign .real [] "M"
-            (Op.add .real .nil (Op.ref .real [] "M")
-              (Op.div .real .nil (Op.ref .real [] "delta")
-                (Op.add .real .nil (Op.ref .nat [] "i").natToReal
-                  (Op.const 1)))),
-          Stmt.assign .real [] "delta2"
-            (Op.sub .real .nil (Op.ref .real [] "xi")
-              (Op.ref .real [] "M")),
-          Stmt.assign .real [] "S"
-            (Op.add .real .nil (Op.ref .real [] "S")
-              (Op.mul .real .nil (Op.ref .real [] "delta")
-                (Op.ref .real [] "delta2")))]
-        s0 = some sLoop := by
-    simpa [onlineWelfordLoopBody] using hLoopAux
-  have hExec :
-      exec (onlineWelfordKernel xReg meanReg varReg blockSize) s =
-        some ((sLoop.writeMem meanReg 0 (welfordMean xs blockSize)).writeMem
-          varReg 0 (welfordS xs blockSize / blockSize)) := by
-    -- Walk through pre-loop assigns, forLoop, post-loop stores explicitly.
-    have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
-                  = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
-      simp [stepStmt, evalOp]
-    have hM0 : stepStmt (.assign .real [] "M" (.const 0))
-                  (s.setReg "pid" .nat [] (Tile.scalar s.pid))
-                = some ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-                    "M" .real [] (Tile.scalar 0)) := by
-      simp [stepStmt, evalOp]
-      rfl
-    have hS0 : stepStmt (.assign .real [] "S" (.const 0))
-                  ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-                    "M" .real [] (Tile.scalar 0))
-                = some s0 := by
-      simp [stepStmt, evalOp, s0]
-      rfl
-    have hMeanStore : stepStmt
-        (.store .real [] (MemAccess.region meanReg (.constNat 0)) (.ref .real [] "M") MaskOpt.none) sLoop
-        = some (sLoop.writeMem meanReg 0 (welfordMean xs blockSize)) := by
-      simp [stepStmt, evalOp, hM]
-    set sMean : BlockState := sLoop.writeMem meanReg 0 (welfordMean xs blockSize)
-    have hSat_S : sMean.regs .real [] "S"
-                  = some (Tile.scalar (welfordS xs blockSize)) := by
-      show sLoop.regs .real [] "S" = _
-      exact hS
-    have hVarStore : stepStmt
-        (.store .real [] (MemAccess.region varReg (.constNat 0))
-            (.div .real .nil (.ref .real [] "S")
-              (.natToReal (.constNat blockSize))) MaskOpt.none) sMean
-        = some (sMean.writeMem varReg 0 (welfordS xs blockSize / blockSize)) := by
-      simp [stepStmt, evalOp, hSat_S, Tile.bop, NumericDType.div, Tile.natToReal,
-            WithBot.realDiv]
-    -- Chain: 3 assigns → s0; forLoop → sLoop; 2 stores → sMean.writeMem ...
-    show stepStmts (onlineWelfordKernel xReg meanReg varReg blockSize).body s = _
-    show stepStmts
-        [ .assign .nat [] "pid" (.programId 0)
-        , .assign .real [] "M" (.const 0)
-        , .assign .real [] "S" (.const 0)
-        , .forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)
-        , .store .real [] (MemAccess.region meanReg (.constNat 0)) (.ref .real [] "M") MaskOpt.none
-        , .store .real [] (MemAccess.region varReg (.constNat 0))
-            (.div .real .nil (.ref .real [] "S")
-              (.natToReal (.constNat blockSize))) MaskOpt.none
-        ] s = _
-    rw [stepStmts.cons_some hpid]
-    rw [stepStmts.cons_some hM0]
-    rw [stepStmts.cons_some hS0]
-    rw [stepStmts.cons_some hLoop]
-    rw [stepStmts.cons_some hMeanStore]
-    rw [stepStmts.cons_some hVarStore]
-    exact stepStmts.nil
-  constructor
-  · rw [hExec]
-    simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,
-      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
-      twoPassMean, hMeanEq]
-  · rw [hExec]
-    simp [BlockState.readMem, BlockState.writeMem, welfordVarSpec,
-      Triton.TiledReduction.welfordVar, Triton.TiledReduction.welfordSumSq,
-      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
-      twoPassS, twoPassMean, hSEq]
-
-private theorem welford_kernels_refinement
-    (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : InputLoadedAt s xReg blockSize xs)
-    (h_mv : meanReg ≠ varReg) :
-    let final_2p := exec (twopassWelfordKernel xReg meanReg varReg blockSize) s
-    let final_on := exec (onlineWelfordKernel xReg meanReg varReg blockSize) s
-    final_2p.bind (fun s' => some (s'.readMem meanReg 0))
-        = final_on.bind (fun s' => some (s'.readMem meanReg 0))
-    ∧ final_2p.bind (fun s' => some (s'.readMem varReg 0))
-        = final_on.bind (fun s' => some (s'.readMem varReg 0)) := by
-  obtain ⟨h_2p_mean, h_2p_var⟩ :=
-    twopass_welford_correct xReg meanReg varReg blockSize hN s xs h_x h_mv
-  obtain ⟨h_on_mean, h_on_var⟩ :=
-    online_welford_correct xReg meanReg varReg blockSize hN s xs h_x h_mv
-  exact ⟨h_2p_mean.trans h_on_mean.symm, h_2p_var.trans h_on_var.symm⟩
-
 /-- A successful `assign` step only touches registers, never memory. -/
 private theorem stepStmt_assign_mem {dtype : TileDType} {shape : TileShape}
     {name : RegName} {e : Op dtype shape} {t t' : BlockState}
@@ -569,26 +378,115 @@ private theorem onlineWelfordLoopBody_assigns (xReg : RegionName) (blockSize : N
   simp only [onlineWelfordLoopBody, List.mem_cons, List.not_mem_nil, or_false] at hst
   rcases hst with rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, _, _, _, rfl⟩
 
-/-- Explicit final-state characterization of the online kernel's execution:
-the loop only updates registers, then the two scalar stores land the Welford
-running mean and variance. -/
-private theorem online_exec_writes
+/-! ### Rounding-degeneration plumbing
+
+The online kernel's loop body carries no `castFloat`, so it steps identically
+under `execR R` and `exec`; only the two boundary bf16 output stores differ. -/
+
+/-- `stepForLoopAux` degenerates from `execR R` to `exec` whenever the loop body
+does. Arbitrary-`R` generalization of `stepForLoopAuxR_triv`. -/
+private theorem stepForLoopAuxR_castFree (R : RoundingModel) (body : List Stmt)
+    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
+    ∀ (start n : Nat) (s : BlockState),
+      stepForLoopAuxR R idx start n body s = stepForLoopAux idx start n body s
+  | start, n, s => by
+      rw [stepForLoopAuxR, stepForLoopAux]
+      simp only [hbody (s.setReg idx .nat [] (Tile.scalar start))]
+      split
+      · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
+        | none => rfl
+        | some s' => exact stepForLoopAuxR_castFree R body hbody idx (start + 1) n s'
+      · rfl
+  termination_by start n _ => n - start
+  decreasing_by omega
+
+/-- The online Welford loop body is cast-free: it steps identically under
+`execR R` and `exec`. -/
+private theorem onlineWelfordLoopBody_castFree (R : RoundingModel)
+    (xReg : RegionName) (blockSize : Nat) (t : BlockState) :
+    stepStmtsR R (onlineWelfordLoopBody xReg blockSize) t
+      = stepStmts (onlineWelfordLoopBody xReg blockSize) t := by
+  simp only [onlineWelfordLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp]
+  rfl
+
+/-- The online kernel's whole `forLoop` statement steps identically under
+`execR R` and `exec`. -/
+private theorem online_forLoop_castFree (R : RoundingModel)
+    (xReg : RegionName) (blockSize : Nat) (t : BlockState) :
+    stepStmtR R (.forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)) t
+      = stepStmt (.forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)) t := by
+  simp only [stepStmtR, stepStmt,
+    stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg blockSize)
+      (onlineWelfordLoopBody_castFree R xReg blockSize) "i" 0 blockSize t]
+
+/-- `writeMemAsR` only rewrites `mem`, so register reads pass through it — needed
+so the second (var) store can read its value register over the first store. -/
+@[simp] private theorem writeMemAsR_regs (R : RoundingModel) (s : BlockState)
+    (d : FloatDType) (reg : RegionName) (o : Nat) (v : TileCarrier d.toTileDType)
+    (dt : TileDType) (sh : TileShape) (nm : RegName) :
+    (s.writeMemAsR R d reg o v).regs dt sh nm = s.regs dt sh nm := rfl
+
+/-- The bf16-rounded scalar output-store cell: the boundary store double-rounds
+its ℝ value `v` (the `.to(bf16)` cast, then the buffer `storeValue`). -/
+private noncomputable def roundedCell (R : RoundingModel) (v : ℝ) : MemCell :=
+  MemCell.of FloatDType.bf16.toTileDType
+    (FloatDType.bf16.ofReal (R.storeValue FloatDType.bf16
+      (R.cast FloatDType.real FloatDType.bf16 (some v))))
+
+/-- Cell-level memory of the two-pass kernel under `execR R`: the var store wins
+at `(varReg, 0)`, the mean store at `(meanReg, 0)` (both bf16-rounded), and every
+other cell is untouched. -/
+private theorem twopass_execR_mem (R : RoundingModel)
     (xReg meanReg varReg : RegionName) (blockSize : Nat)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : InputLoadedAt s xReg blockSize xs) :
-    ∃ sLoop : BlockState,
-      (∀ r o, sLoop.mem r o = s.mem r o) ∧
-      exec (onlineWelfordKernel xReg meanReg varReg blockSize) s =
-        some ((sLoop.writeMem meanReg 0 (welfordMean xs blockSize)).writeMem
-          varReg 0 (welfordS xs blockSize / blockSize)) := by
+    (s lhs' : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_mv : meanReg ≠ varReg)
+    (hL : execR R (twopassWelfordKernel xReg meanReg varReg blockSize) s = some lhs')
+    (r : RegionName) (o : Nat) :
+    lhs'.mem r o =
+      if r = varReg ∧ o = 0 then roundedCell R (twoPassS xs / blockSize)
+      else if r = meanReg ∧ o = 0 then roundedCell R (twoPassMean xs)
+      else s.mem r o := by
+  simp [execR, twopassWelfordKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+    Tile.bop, Tile.natToReal, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComputeExpr.toAlgorithm?, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+    WithBot.realMul] at hL
+  unfold InputLoadedAt at h_x
+  subst hL
+  by_cases hvar : r = varReg ∧ o = 0
+  · obtain ⟨rfl, rfl⟩ := hvar
+    simp [BlockState.writeMemAsR_mem, roundedCell, twoPassS, twoPassMean, h_x, pow_two]
+    rfl
+  · by_cases hmean : r = meanReg ∧ o = 0
+    · obtain ⟨rfl, rfl⟩ := hmean
+      simp [BlockState.writeMemAsR_mem, roundedCell, twoPassMean, h_mv, h_x]
+      rfl
+    · simp [BlockState.writeMemAsR_mem, hvar, hmean]
+
+/-- Cell-level memory of the online kernel under `execR R`: same shape as
+`twopass_execR_mem` but keyed on the Welford running values. -/
+private theorem online_execR_mem (R : RoundingModel)
+    (xReg meanReg varReg : RegionName) (blockSize : Nat)
+    (s rhs' : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_mv : meanReg ≠ varReg)
+    (hR : execR R (onlineWelfordKernel xReg meanReg varReg blockSize) s = some rhs')
+    (r : RegionName) (o : Nat) :
+    rhs'.mem r o =
+      if r = varReg ∧ o = 0 then roundedCell R (welfordS xs blockSize / blockSize)
+      else if r = meanReg ∧ o = 0 then roundedCell R (welfordMean xs blockSize)
+      else s.mem r o := by
   let s0 :=
-    ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-      "M" .real [] (Tile.scalar 0)).setReg
-      "S" .real [] (Tile.scalar 0)
+    ((s.setReg "pid" .nat [] (Tile.scalar (s.pids 0))).setReg
+      "M" .real [] (Tile.scalar (some 0))).setReg
+      "S" .real [] (Tile.scalar (some 0))
   have h_init : P_welford xs xReg s.pid 0 s0 ∧ ∀ r o, s0.mem r o = s.mem r o := by
     refine ⟨?_, fun r o => rfl⟩
     simp [P_welford, s0, welfordMean, welfordS]
-    exact h_x
+    exact ⟨rfl, h_x⟩
   obtain ⟨sLoop, hLoop, hPloop, hMemLoop⟩ :=
     forLoop_inv
       (idx := "i") (n := blockSize)
@@ -604,112 +502,30 @@ private theorem online_exec_writes
           _ _ hstep r o]
         exact hMem r o)
   rcases hPloop with ⟨hM, hS, _hpidReg, _hpid, _hX⟩
-  refine ⟨sLoop, hMemLoop, ?_⟩
-  -- Walk through pre-loop assigns, forLoop, post-loop stores explicitly,
-  -- mirroring `online_welford_correct`.
-  have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
-                = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
-    simp [stepStmt]
-  have hM0 : stepStmt (.assign .real [] "M" (.const 0))
-                (s.setReg "pid" .nat [] (Tile.scalar s.pid))
-              = some ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-                  "M" .real [] (Tile.scalar 0)) := by
-    simp [stepStmt]
-    rfl
-  have hS0 : stepStmt (.assign .real [] "S" (.const 0))
-                ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
-                  "M" .real [] (Tile.scalar 0))
-              = some s0 := by
-    simp [stepStmt, s0]
-    rfl
-  have hMeanStore : stepStmt
-      (.store .real [] (MemAccess.region meanReg (.constNat 0)) (.ref .real [] "M") MaskOpt.none) sLoop
-      = some (sLoop.writeMem meanReg 0 (welfordMean xs blockSize)) := by
-    simp [stepStmt, hM]
-  set sMean : BlockState := sLoop.writeMem meanReg 0 (welfordMean xs blockSize)
-  have hSat_S : sMean.regs .real [] "S"
-                = some (Tile.scalar (welfordS xs blockSize)) := by
-    show sLoop.regs .real [] "S" = _
-    exact hS
-  have hVarStore : stepStmt
-      (.store .real [] (MemAccess.region varReg (.constNat 0))
-          (.div .real .nil (.ref .real [] "S")
-            (.natToReal (.constNat blockSize))) MaskOpt.none) sMean
-      = some (sMean.writeMem varReg 0 (welfordS xs blockSize / blockSize)) := by
-    simp [stepStmt, hSat_S, Tile.bop, NumericDType.div, Tile.natToReal,
-          WithBot.realDiv]
-  -- Chain: 3 assigns → s0; forLoop → sLoop; 2 stores → sMean.writeMem ...
-  show stepStmts (onlineWelfordKernel xReg meanReg varReg blockSize).body s = _
-  show stepStmts
-      [ .assign .nat [] "pid" (.programId 0)
-      , .assign .real [] "M" (.const 0)
-      , .assign .real [] "S" (.const 0)
-      , .forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)
-      , .store .real [] (MemAccess.region meanReg (.constNat 0)) (.ref .real [] "M") MaskOpt.none
-      , .store .real [] (MemAccess.region varReg (.constNat 0))
-          (.div .real .nil (.ref .real [] "S")
-            (.natToReal (.constNat blockSize))) MaskOpt.none
-      ] s = _
-  rw [stepStmts.cons_some hpid]
-  rw [stepStmts.cons_some hM0]
-  rw [stepStmts.cons_some hS0]
-  rw [stepStmts.cons_some hLoop]
-  rw [stepStmts.cons_some hMeanStore]
-  rw [stepStmts.cons_some hVarStore]
-  exact stepStmts.nil
-
-/-- Cell-level memory characterization of the online kernel's final state:
-the var store (last) wins at `(varReg, 0)`, the mean store at `(meanReg, 0)`,
-and every other cell is untouched. -/
-private theorem online_exec_mem
-    (xReg meanReg varReg : RegionName) (blockSize : Nat)
-    (s rhs' : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : InputLoadedAt s xReg blockSize xs)
-    (h_mv : meanReg ≠ varReg)
-    (hR : exec (onlineWelfordKernel xReg meanReg varReg blockSize) s = some rhs')
-    (r : RegionName) (o : Nat) :
-    rhs'.mem r o =
-      if r = varReg ∧ o = 0 then MemCell.real (rhs'.readMem varReg 0)
-      else if r = meanReg ∧ o = 0 then MemCell.real (rhs'.readMem meanReg 0)
-      else s.mem r o := by
-  obtain ⟨sLoop, hMemLoop, hExec⟩ :=
-    online_exec_writes xReg meanReg varReg blockSize s xs h_x
-  rw [hExec, Option.some.injEq] at hR
+  have hLoopR :
+      stepForLoopAuxR R "i" 0 blockSize (onlineWelfordLoopBody xReg blockSize) s0
+        = some sLoop := by
+    rw [stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg blockSize)
+      (onlineWelfordLoopBody_castFree R xReg blockSize) "i" 0 blockSize s0]
+    simpa [stepForLoopAux.forLoop_unfold] using hLoop
+  simp [execR, onlineWelfordKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+    Tile.bop, Tile.natToReal, ComputeExpr.toAlgorithm?] at hR
+  rw [show
+      (((s.setReg "pid" .nat [] (Tile.scalar (s.pids 0))).setReg
+        "M" .real [] (Tile.scalar (some 0))).setReg
+        "S" .real [] (Tile.scalar (some 0))) = s0 from rfl] at hR
+  simp only [onlineWelfordLoopBody] at hLoopR
+  rw [hLoopR] at hR
+  simp [NumericDType.div, hM, hS] at hR
   subst hR
   by_cases hvar : r = varReg ∧ o = 0
   · obtain ⟨rfl, rfl⟩ := hvar
-    simp [BlockState.writeMem_mem]
+    simp [BlockState.writeMemAsR_mem, roundedCell]
   · by_cases hmean : r = meanReg ∧ o = 0
     · obtain ⟨rfl, rfl⟩ := hmean
-      simp [BlockState.writeMem_mem, h_mv]
-    · simp [BlockState.writeMem_mem, hvar, hmean, hMemLoop r o]
-
-/-- Cell-level memory characterization of the two-pass kernel's final state. -/
-private theorem twopass_exec_mem
-    (xReg meanReg varReg : RegionName) (blockSize : Nat)
-    (s lhs' : BlockState)
-    (h_mv : meanReg ≠ varReg)
-    (hL : exec (twopassWelfordKernel xReg meanReg varReg blockSize) s = some lhs')
-    (r : RegionName) (o : Nat) :
-    lhs'.mem r o =
-      if r = varReg ∧ o = 0 then MemCell.real (lhs'.readMem varReg 0)
-      else if r = meanReg ∧ o = 0 then MemCell.real (lhs'.readMem meanReg 0)
-      else s.mem r o := by
-  simp [exec, twopassWelfordKernel, stepStmts, stepStmt,
-    Tile.bop, Tile.natToReal, NumericDType.add,
-    NumericDType.mul, NumericDType.sub, NumericDType.div] at hL
-  repeat unfold evalOp at hL
-  simp [Tile.reduceSum, Tile.reduceSumDrop,
-    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-    NumericDType.mul, WithBot.realMul] at hL
-  subst hL
-  by_cases hvar : r = varReg ∧ o = 0
-  · obtain ⟨rfl, rfl⟩ := hvar
-    simp [BlockState.writeMem_mem]
-  · by_cases hmean : r = meanReg ∧ o = 0
-    · obtain ⟨rfl, rfl⟩ := hmean
-      simp [BlockState.writeMem_mem, h_mv]
-    · simp [BlockState.writeMem_mem, hvar, hmean]
+      simp [BlockState.writeMemAsR_mem, roundedCell, h_mv]
+      rfl
+    · simp [BlockState.writeMemAsR_mem, hvar, hmean, hMemLoop r o]
 
 end Welford.lemmas
 
@@ -720,32 +536,37 @@ section Welford.theorems
 signature carries only its genuine hypotheses: the compact `InputLoadedAt`
 input contract and the `meanReg ≠ varReg` aliasing constraint. -/
 variable (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
-variable (s : BlockState) (xs : Fin blockSize → ℝ)
+variable (s : BlockState) (xs : Fin blockSize → ℝ) (R : RoundingModel)
 
 include hN in
-/-- **two-pass refines online** (`ComputeRefine.Refines_without_Rounding`, no scratch): from the
-same initial state, `twopassWelfordKernel` and `onlineWelfordKernel` perform the
-same writes — their final memories agree at every cell. The written mean/variance
-values coincide by Welford's identity (`welford_eq_two_pass`). -/
+/-- **two-pass refines online** (`ComputeRefine.Refines R`, no scratch): for the
+rounding model `R`, from the same initial state `twopassWelfordKernel` and
+`onlineWelfordKernel` perform the same writes — their final memories agree at
+every cell. Both compute the same per-lane ℝ mean/variance (Welford's identity
+`welford_eq_two_pass`) and round it at the shared bf16 output stores. -/
 theorem welford_kernels_refinement_view
     (h_x : InputLoadedAt s xReg blockSize xs)
     (h_mv : meanReg ≠ varReg) :
-    ComputeRefine.Refines_without_Rounding
+    ComputeRefine.Refines R
       (twopassWelfordKernel xReg meanReg varReg blockSize)
       (onlineWelfordKernel xReg meanReg varReg blockSize)
       s [] := by
-  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  obtain ⟨hMeanEq, hSEq⟩ := welford_eq_two_pass hN xs
+  apply ComputeKernel.computeRefineR_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   intro r _hr o
-  have hx := h_x
-  obtain ⟨hm, hv⟩ :=
-    welford_kernels_refinement xReg meanReg varReg blockSize hN s xs hx h_mv
-  rw [hL, hR] at hm hv
-  simp only [Option.bind_some, Option.some.injEq] at hm hv
-  rw [twopass_exec_mem xReg meanReg varReg blockSize s lhs' h_mv hL r o,
-    online_exec_mem xReg meanReg varReg blockSize s rhs' xs hx h_mv hR r o,
-    hm, hv]
+  rw [twopass_execR_mem R xReg meanReg varReg blockSize s lhs' xs h_x h_mv hL r o,
+    online_execR_mem R xReg meanReg varReg blockSize s rhs' xs h_x h_mv hR r o]
+  by_cases hvar : r = varReg ∧ o = 0
+  · simp only [if_pos hvar]
+    rw [show twoPassS xs / (blockSize : ℝ) = welfordS xs blockSize / (blockSize : ℝ) from by
+      rw [hSEq]]
+  · simp only [if_neg hvar]
+    by_cases hmean : r = meanReg ∧ o = 0
+    · simp only [if_pos hmean]
+      rw [show twoPassMean xs = welfordMean xs blockSize from hMeanEq.symm]
+    · simp only [if_neg hmean]
 
 /-! ## Trust audit (compile-time gate)
 
@@ -762,7 +583,7 @@ trusted statement) the file stops compiling. See
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset welford_kernels_refinement_view ⊆
   [twopassWelfordKernel, onlineWelfordKernel, InputLoadedAt,
-   ComputeRefine.Refines_without_Rounding, BlockState, RegionName]
+   ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
 
 end Welford.theorems
 
