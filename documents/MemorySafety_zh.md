@@ -42,8 +42,15 @@ predicate 覆盖 AST 中的三种内存寻址形式:
   越界的 lane 不参与 bound 义务。
 
 pointer-register provenance 在这里有意不解决。`VeriTile.Triton.Memory.Typing`
-中的可选 checker 之后可以为动态 pointer-address 安全性提供充分条件;
-bounds 这一层保持纯语义且可组合。
+中的可选 checker 提供 dtype/provenance 检查、block-pointer metadata rank 检查,
+以及静态 `tl.advance` underflow 诊断;统一的 `BlockPtrSummary` 保留静态 offsets
+时,这些信息也会跟随简单 block-pointer register assignment 传播。动态
+pointer-address safety 和 runtime bounds 仍由这一层的语义 predicate 表达;需要这些事实的 theorem statement 应保留
+`BlockPtr.WellFormed`、`BlockPtr.CheckedAxesValid` 和 `BlockPtr.AdvanceNonnegative`
+假设。
+当相关 metadata 是静态信息时,可用 `checkBoundaryAxes_ok`、
+`checkBlockPtrMetadata_ok`、`checkStaticAdvanceNonnegative_ok` 或 summary 层
+`BlockPtrSummary.*_ok` lemma 从成功的 checker 调用推出这些局部义务。
 
 ## Non-Goals
 

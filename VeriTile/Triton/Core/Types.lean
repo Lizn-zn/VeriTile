@@ -115,6 +115,32 @@ namespace BlockPtr
 private def nthD (xs : List Nat) (i : Nat) : Nat :=
   xs.getD i 0
 
+def metadataRanksValid
+    (parentRank strideRank offsetRank blockRank : Nat) : Bool :=
+  decide (parentRank = strideRank ∧
+    parentRank = offsetRank ∧
+    parentRank = blockRank)
+
+def metadataValid
+    (parentShape blockShape strides offsets : List Nat) : Bool :=
+  metadataRanksValid parentShape.length strides.length offsets.length blockShape.length
+
+def MetadataWellFormed
+    (parentShape blockShape strides offsets : List Nat) : Prop :=
+  metadataValid parentShape blockShape strides offsets = true
+
+def WellFormed (ptr : BlockPtr) : Prop :=
+  MetadataWellFormed ptr.parentShape ptr.blockShape ptr.strides ptr.offsets
+
+def axisInRank (rank axis : Nat) : Bool :=
+  decide (axis < rank)
+
+def checkedAxesValid (rank : Nat) (axes : List Nat) : Bool :=
+  axes.all (axisInRank rank)
+
+def CheckedAxesValid (ptr : BlockPtr) (axes : List Nat) : Prop :=
+  checkedAxesValid ptr.parentShape.length axes = true
+
 private def checkedInBounds (parentShape offsets idx : List Nat) (axis : Nat) : Bool :=
   nthD offsets axis + nthD idx axis < nthD parentShape axis
 
@@ -254,16 +280,27 @@ check" case (`tl.load` without `boundary_check`). -/
 private def nthDInt (xs : List Int) (i : Nat) : Int :=
   xs.getD i 0
 
+def advanceAxisNonnegative (offsets : List Nat) (deltas : List Int) (axis : Nat) : Bool :=
+  decide (0 ≤ ((nthD offsets axis : Int) + nthDInt deltas axis))
+
+def StaticAdvanceNonnegative (offsets : List Nat) (deltas : List Int) : Prop :=
+  (List.range (max offsets.length deltas.length)).all
+    (advanceAxisNonnegative offsets deltas) = true
+
+def AdvanceNonnegative (ptr : BlockPtr) (deltas : List Int) : Prop :=
+  StaticAdvanceNonnegative ptr.offsets deltas
+
+def advanceOffsets (offsets : List Nat) (deltas : List Int) : List Nat :=
+  (List.range (max offsets.length deltas.length)).map
+    (fun axis => ((nthD offsets axis : Int) + nthDInt deltas axis).toNat)
+
 /-- Advance a block pointer by per-axis **signed** offset deltas (Triton's
 `tl.advance`). Pointer offsets are non-negative addresses, so each advanced axis
 is `((offset : Int) + delta).toNat`; for the common non-negative delta this is
 just `offset + delta`, and signed deltas model a backward pointer rewind (used by
 e.g. multi-block backward attention). -/
 def advance (ptr : BlockPtr) (deltas : List Int) : BlockPtr :=
-  let offsets :=
-    (List.range (max ptr.offsets.length deltas.length)).map
-      (fun axis => ((nthD ptr.offsets axis : Int) + nthDInt deltas axis).toNat)
-  { ptr with offsets := offsets }
+  { ptr with offsets := advanceOffsets ptr.offsets deltas }
 
 /-- `advance` on a well-formed 2D block-pointer by **non-negative** (`Nat`-coerced)
 per-axis deltas adds them to the per-axis offsets (`[rowOff, colOff]` advanced by
@@ -281,9 +318,9 @@ deltas are non-negative (the vast majority); it preserves the pre-`Int` behavior
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [rowOff + dRow, colOff + dCol] } := by
-  simp only [BlockPtr.advance, nthD, nthDInt, List.range, List.range.loop,
+  simp only [BlockPtr.advance, advanceOffsets, nthD, nthDInt, List.range, List.range.loop,
     List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
-    List.getD_nil, List.length_cons, List.length_nil, BlockPtr.mk.injEq,
+    List.length_cons, List.length_nil, BlockPtr.mk.injEq,
     List.cons.injEq, and_true, true_and, Nat.max_self]
   omega
 
@@ -313,9 +350,9 @@ normalizers above then collapse the non-negative cases to `Nat` addition. -/
         { region := region, baseOffset := base, parentShape := [rows, cols],
           blockShape := [BT, BS], strides := [strideT, strideS],
           offsets := [((rowOff : Int) + dRow).toNat, ((colOff : Int) + dCol).toNat] } := by
-  simp only [BlockPtr.advance, nthD, nthDInt, List.range, List.range.loop,
+  simp only [BlockPtr.advance, advanceOffsets, nthD, nthDInt, List.range, List.range.loop,
     List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
-    List.getD_nil, List.length_cons, List.length_nil, Nat.max_self]
+    List.length_cons, List.length_nil, Nat.max_self]
 
 @[simp] theorem inBounds_empty_parent_axis0 (ptr : BlockPtr) (idx : List Nat) :
     BlockPtr.inBounds { ptr with parentShape := [0], offsets := [0] } idx [0] = false := by
