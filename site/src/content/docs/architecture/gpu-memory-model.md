@@ -121,6 +121,43 @@ The next proof-ergonomics layer is:
 - **Unrelated-frame helpers (#62):** convenience lemmas prove that cells or
   whole regions outside a single-program or grid footprint are preserved.
 
+### Address-layout realism roadmap
+
+Today each tensor lives in its own `RegionName` and the showcase kernels bake
+the addressing into the kernel AST (`pid * N + i` for row tiles, `i` for
+feature vectors): the layout is implicitly fixed to contiguous row-major, and
+non-aliasing between tensors holds *by construction* because distinct regions
+never overlap. The plan is to close the gap to real pointer-passing kernels in
+three stages, each building on — not replacing — the previous one:
+
+1. **Layout as an explicit parameter (near-term).** Kernels take stride/base
+   arguments the way real Triton kernels do (`stride_row`, …); input/output
+   contracts are stated through `TensorView.loaded`; the per-kernel stride
+   plumbing is bundled into a layout structure with a validity field,
+   following the existing `FA1Layout4D` precedent (16 Q/K/V/O strides +
+   `Offset.StridesValid`, derived `qView/kView/vView`, and a layout-level
+   headline wrapper). This matches the real kernel signature shape — a
+   "pointer" is a `(region, base)` pair — and aligns the showcases with the
+   bench ports, many of which already take stride arguments. The remaining
+   idealization is only that distinct tensors cannot alias.
+
+2. **Flat-memory bridge (mid-term).** Do *not* re-prove kernels over a single
+   flat address space — that would put pairwise range-disjointness obligations
+   into every proof. Instead pay the aliasing cost once: an allocation map
+   `RegionName → Nat` (base of each region in one flat region) plus pairwise
+   range-disjointness hypotheses, and a single bridge theorem that `exec`
+   commutes with the flattening. Every region-model theorem then transports to
+   a flat-memory corollary for free; the region model becomes a
+   separation-logic-style intermediate layer rather than a simplifying
+   assumption. The layout structures from stage 1 are where the disjointness
+   clauses slot in (the validity field grows; statement shapes stay).
+
+3. **Byte-granularity (long-term).** Current offsets are element-indexed and
+   cells are dtype-tagged `MemCell`s. A byte-level model scales offsets by
+   dtype size and adds alignment constraints, enabling reinterpret-cast and
+   mixed-dtype aliasing reasoning. Element-granularity strides from stages 1–2
+   carry over by a `sizeof` scaling.
+
 Longer-term extension points remain:
 
 - **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
