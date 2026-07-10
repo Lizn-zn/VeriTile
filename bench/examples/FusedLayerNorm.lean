@@ -22,9 +22,13 @@ three real sections below are `LayerNorm.kernels`, `LayerNorm.lemmas`,
 
 `twoPassLayerNormKernel` computes mean/variance with two `tl.sum` passes then the
 affine `(x − μ)/√(var+ε)·γ + β`; `fusedLayerNormKernel` computes mean/variance in
-a single Welford `for` loop then the same affine tail. Both **store the output
-row rounded to bf16** (`(y).to(tl.bfloat16)`); the mean/variance reductions and
-the affine arithmetic run in ℝ (no intermediate rounding). Both realize the same
+a single Welford `for` loop then the same affine tail. Like a real Triton
+layernorm, both kernels take a **`rowStride` argument** (stage 1 of the
+address-layout roadmap): the input/output rows live at
+`pid * rowStride + [0, N)` of an `M × rowStride` buffer (`InputRowLoadedAt`),
+while the per-feature `γ`/`β` vectors stay contiguous at `[0, N)`. Both **store
+the output row rounded to bf16** (`(y).to(tl.bfloat16)`); the mean/variance
+reductions and the affine arithmetic run in ℝ (no intermediate rounding). Both realize the same
 LayerNorm spec (Welford's running (M,S) = two-pass (μ,S) via
 `welford_eq_two_pass`), so from the same state they produce the same ℝ output
 row, and the only rounding is the shared bf16 output store, which quantizes
@@ -52,9 +56,10 @@ open VeriTile.Triton.TiledReduction.WelfordRec
 section LayerNorm.kernels
 /-- Two-pass LayerNorm kernel: `tl.sum` twice (mean and var), then affine. -/
 def twoPassLayerNormKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel := triton {
+    (xReg γReg βReg yReg : RegionName) (N rowStride : Nat) (ε : ℝ) :
+    ComputeKernel := triton {
   pid    := tl.program_id(0)
-  offs   := pid * $(N) + tl.arange($(N))
+  offs   := pid * $(rowStride) + tl.arange($(N))
   x      := tl.load($(xReg) + offs)
   s_x    := tl.sum(x)
   μ      := s_x / tl.toReal($(N))
@@ -70,12 +75,13 @@ def twoPassLayerNormKernel
 
 /-- Fused single-pass LayerNorm kernel: Welford `forLoop`, then affine. -/
 def fusedLayerNormKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel := triton {
+    (xReg γReg βReg yReg : RegionName) (N rowStride : Nat) (ε : ℝ) :
+    ComputeKernel := triton {
   pid := tl.program_id(0)
   M   := 0
   S   := 0
   tl.for i in $(N) {
-    xi      := tl.load($(xReg) + (pid * $(N) + i))
+    xi      := tl.load($(xReg) + (pid * $(rowStride) + i))
     delta   := xi - M
     M       := M + delta / (tl.toReal(i) + 1)
     delta2  := xi - M
@@ -87,7 +93,7 @@ def fusedLayerNormKernel
   -- Second pass to compute Y. The "fused" gain is that μ/var were
   -- computed in a single pass over `x`; the residual `(x − μ)` still
   -- needs the second read of x.
-  offs    := pid * $(N) + tl.arange($(N))
+  offs    := pid * $(rowStride) + tl.arange($(N))
   x       := tl.load($(xReg) + offs)
   γ       := tl.load($(γReg) + tl.arange($(N)))
   β       := tl.load($(βReg) + tl.arange($(N)))
@@ -103,7 +109,7 @@ them (`end <section>` only clears variables declared *inside* that section).
 Hoisted out of the declarations so each signature carries only its genuine
 hypotheses: the compact `InputLoadedAt` / `InputFeatureLoadedAt` input
 contracts. -/
-variable (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
+variable (xReg γReg βReg yReg : RegionName) (N rowStride : Nat) (hN : 0 < N) (ε : ℝ)
 variable (s : BlockState) (xs γs βs : Fin N → ℝ)
 
 /-! ## Supporting lemmas (private plumbing) -/
@@ -123,9 +129,9 @@ algorithm projection (after `pid`, `M := 0`, `S := 0`). Machine-checked by
 `rfl`, so the hand-written loop body need not be matched against the DSL by eye:
 review the DSL kernel, and this lemma certifies the transcription is faithful. -/
 private theorem onlineWelfordLoopBody_is_dsl_loop
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) :
-    (fusedLayerNormKernel xReg γReg βReg yReg N ε).body[3]?
-      = some (Stmt.forLoop "i" N (onlineWelfordLoopBody xReg N)) := rfl
+    (xReg γReg βReg yReg : RegionName) (N rowStride : Nat) (ε : ℝ) :
+    (fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε).body[3]?
+      = some (Stmt.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) := rfl
 
 /-- **Loop invariant** for the fused kernel's Welford pass: after `k` iterations
 of `onlineWelfordLoopBody`, the running `(M, S)` registers hold the Welford
@@ -133,7 +139,7 @@ recurrence values `welfordMean/welfordS xs k`, the block id is pinned, and every
 input stays loaded. Declared as a `structure` (not an anonymous `∧`-chain) so
 each clause is a *named field* — the invariant reads as an invariant and stands
 out from the surrounding plumbing `def`s. -/
-private structure LayerNormLoopInv {N : Nat}
+private structure LayerNormLoopInv {N : Nat} (rowStride : Nat)
     (xs γs βs : Fin N → ℝ) (xReg γReg βReg : RegionName)
     (origPid k : Nat) (s : BlockState) : Prop where
   /-- Running mean register `M` holds the Welford mean after `k` steps. -/
@@ -145,23 +151,23 @@ private structure LayerNormLoopInv {N : Nat}
   /-- The block id itself is pinned to `origPid`. -/
   pid_eq   : s.pid = origPid
   /-- The input row `x` is still loaded in `xReg`. -/
-  x_loaded : InputLoadedAt s xReg N xs
+  x_loaded : InputRowLoadedAt s xReg rowStride N xs
   /-- The scale vector `γ` is still loaded in `γReg`. -/
   γ_loaded : InputFeatureLoadedAt s γReg N γs
   /-- The bias vector `β` is still loaded in `βReg`. -/
   β_loaded : InputFeatureLoadedAt s βReg N βs
 
 private theorem layernorm_welford_step
-    {N : Nat} (xs γs βs : Fin N → ℝ)
+    {N : Nat} (rowStride : Nat) (xs γs βs : Fin N → ℝ)
     (xReg γReg βReg : RegionName) (origPid i : Nat)
     (s : BlockState) (hi : i < N)
-    (hP : LayerNormLoopInv xs γs βs xReg γReg βReg origPid i s) :
+    (hP : LayerNormLoopInv rowStride xs γs βs xReg γReg βReg origPid i s) :
     ∃ s',
-      stepStmts (onlineWelfordLoopBody xReg N)
+      stepStmts (onlineWelfordLoopBody xReg rowStride)
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
-      LayerNormLoopInv xs γs βs xReg γReg βReg origPid (i + 1) s' := by
+      LayerNormLoopInv rowStride xs γs βs xReg γReg βReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX, hγ, hβ⟩
-  let xi : ℝ := s.readMem xReg (origPid * N + i)
+  let xi : ℝ := s.readMem xReg (origPid * rowStride + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx
@@ -202,9 +208,9 @@ private theorem layernorm_welford_step
     · simp [s', hpid]
 
 private theorem layernorm_welford_loop
-    (xReg γReg βReg : RegionName) (N : Nat)
+    (xReg γReg βReg : RegionName) (N rowStride : Nat)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
-    (h_x : InputLoadedAt s xReg N xs)
+    (h_x : InputRowLoadedAt s xReg rowStride N xs)
     (h_γ : InputFeatureLoadedAt s γReg N γs)
     (h_β : InputFeatureLoadedAt s βReg N βs) :
     let s0 :=
@@ -212,10 +218,11 @@ private theorem layernorm_welford_loop
         "M" .real [] (Tile.scalar 0)).setReg
         "S" .real [] (Tile.scalar 0)
     ∃ sLoop,
-      stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg N)) s0 = some sLoop
-      ∧ LayerNormLoopInv xs γs βs xReg γReg βReg s.pid N sLoop := by
+      stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) s0
+        = some sLoop
+      ∧ LayerNormLoopInv rowStride xs γs βs xReg γReg βReg s.pid N sLoop := by
   intro s0
-  have h_init : LayerNormLoopInv xs γs βs xReg γReg βReg s.pid 0 s0 := by
+  have h_init : LayerNormLoopInv rowStride xs γs βs xReg γReg βReg s.pid 0 s0 := by
     refine ⟨?_, ?_, ?_, ?_, h_x, h_γ, h_β⟩
     · simp [s0, welfordMean]
     · simp [s0, welfordS]
@@ -223,12 +230,12 @@ private theorem layernorm_welford_loop
     · simp [s0]
   exact forLoop_inv
     (idx := "i") (n := N)
-    (body := onlineWelfordLoopBody xReg N)
-    (P := LayerNormLoopInv xs γs βs xReg γReg βReg s.pid)
+    (body := onlineWelfordLoopBody xReg rowStride)
+    (P := LayerNormLoopInv rowStride xs γs βs xReg γReg βReg s.pid)
     (s_init := s0)
     h_init
     (fun k st hk hP =>
-      layernorm_welford_step xs γs βs xReg γReg βReg s.pid k st hk hP)
+      layernorm_welford_step rowStride xs γs βs xReg γReg βReg s.pid k st hk hP)
 
 private theorem stepForLoopAux_mem_of_storeFree
     (idx : RegName) (body : List Stmt)
@@ -261,12 +268,12 @@ private theorem onlineWelfordLoopBody_storeFree (xReg : RegionName) (N : Nat) :
 /-- The fused kernel's `forLoop` statement steps identically under `execR R`
 and `exec`. -/
 private theorem layernorm_forLoop_castFree (R : RoundingModel)
-    (xReg : RegionName) (N : Nat) (t : BlockState) :
-    stepStmtR R (.forLoop "i" N (onlineWelfordLoopBody xReg N)) t
-      = stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg N)) t := by
+    (xReg : RegionName) (N rowStride : Nat) (t : BlockState) :
+    stepStmtR R (.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) t
+      = stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) t := by
   simp only [stepStmtR, stepStmt,
-    stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg N)
-      (onlineWelfordLoopBody_castFree R xReg N) "i" 0 N t]
+    stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg rowStride)
+      (onlineWelfordLoopBody_castFree R xReg rowStride) "i" 0 N t]
 
 /-- Two `writeMemAsR` scatters over the same offsets agree cell-by-cell when
 their per-lane values agree — the rounding-store analogue of
@@ -303,25 +310,26 @@ compute the same per-lane ℝ output `(x−μ)/√(var+ε)·γ+β` (Welford's id
 `welford_eq_two_pass`) and round it at the shared bf16 output store. -/
 theorem layernorm_kernels_refinement_view
     (R : RoundingModel)
-    (h_x : InputLoadedAt s xReg N xs)
+    (h_x : InputRowLoadedAt s xReg rowStride N xs)
     (h_γ : InputFeatureLoadedAt s γReg N γs)
     (h_β : InputFeatureLoadedAt s βReg N βs) :
     ComputeRefine.Refines R
-      (twoPassLayerNormKernel xReg γReg βReg yReg N ε)
-      (fusedLayerNormKernel xReg γReg βReg yReg N ε) s [] := by
+      (twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε)
+      (fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε) s [] := by
   obtain ⟨hMeanEq, hSEq⟩ := welford_eq_two_pass hN xs
   have h_inj : Function.Injective
-      (fun idx : TileIndex [N] => s.pid * N + idx.1.val) :=
-    injective_offset_singleton (s.pid * N)
+      (fun idx : TileIndex [N] => s.pid * rowStride + idx.1.val) :=
+    injective_offset_singleton (s.pid * rowStride)
   -- Fused-side loop bookkeeping: run the Welford loop once (its state is
   -- cast-free, so it steps identically under `execR R`).
   obtain ⟨sLoop, hLoop, hPloop⟩ :=
-    layernorm_welford_loop xReg γReg βReg N s xs γs βs h_x h_γ h_β
+    layernorm_welford_loop xReg γReg βReg N rowStride s xs γs βs h_x h_γ h_β
   have hMemLoop : sLoop.mem = s.mem := by
     have h := hLoop
     rw [stepForLoopAux.forLoop_unfold] at h
-    exact stepForLoopAux_mem_of_storeFree "i" (onlineWelfordLoopBody xReg N)
-      (onlineWelfordLoopBody_storeFree xReg N) 0 N
+    exact stepForLoopAux_mem_of_storeFree "i"
+      (onlineWelfordLoopBody xReg rowStride)
+      (onlineWelfordLoopBody_storeFree xReg rowStride) 0 N
       (((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
           "M" .real [] (Tile.scalar 0)).setReg "S" .real [] (Tile.scalar 0))
       sLoop h
@@ -330,9 +338,10 @@ theorem layernorm_kernels_refinement_view
     ((s.setReg "pid" .nat [] (Tile.scalar (s.pids 0))).setReg
       "M" .real [] (Tile.scalar (some 0))).setReg "S" .real [] (Tile.scalar (some 0))
   have hLoopR :
-      stepForLoopAuxR R "i" 0 N (onlineWelfordLoopBody xReg N) s0 = some sLoop := by
-    rw [stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg N)
-      (onlineWelfordLoopBody_castFree R xReg N) "i" 0 N s0]
+      stepForLoopAuxR R "i" 0 N (onlineWelfordLoopBody xReg rowStride) s0
+        = some sLoop := by
+    rw [stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg rowStride)
+      (onlineWelfordLoopBody_castFree R xReg rowStride) "i" 0 N s0]
     have h := hLoop
     rw [stepForLoopAux.forLoop_unfold] at h
     exact h
@@ -340,7 +349,7 @@ theorem layernorm_kernels_refinement_view
   intro s0' lhs' rhs' hL hR hs0
   subst s0'
   intro r hr o
-  unfold InputLoadedAt at hXl
+  unfold InputRowLoadedAt at hXl
   unfold InputFeatureLoadedAt at hγl hβl
   -- reduce the two-pass execution to one bf16 scatter
   simp [execR, twoPassLayerNormKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
@@ -370,7 +379,7 @@ theorem layernorm_kernels_refinement_view
   · -- per-lane written values agree (same ℝ output, rounded identically)
     intro k _
     refine congrArg (fun w : ℝ => R.cast FloatDType.real FloatDType.bf16 (some w)) ?_
-    unfold InputLoadedAt at h_x
+    unfold InputRowLoadedAt at h_x
     unfold InputFeatureLoadedAt at h_γ h_β
     rw [_hpidLoop] at hXl
     simp only [hXl, h_x, h_γ, h_β, hMeanEq, hSEq, twoPassMean, twoPassS, pow_two]
@@ -392,7 +401,7 @@ trusted statement) the file stops compiling. See
 -- ONLY the two kernels, the loaded-input contracts, the writes-equality surface,
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset layernorm_kernels_refinement_view ⊆
-  [twoPassLayerNormKernel, fusedLayerNormKernel, InputLoadedAt,
+  [twoPassLayerNormKernel, fusedLayerNormKernel, InputRowLoadedAt,
    InputFeatureLoadedAt, ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
 
 end LayerNorm.theorems
