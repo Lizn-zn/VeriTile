@@ -11,6 +11,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory
 import VeriTile.Triton.Correctness
+import VeriTile.Triton.Float.StepR
 
 namespace VeriTile.Examples
 
@@ -180,6 +181,50 @@ theorem injective_offset_singleton {n : Nat} (base : Nat) :
     Function.Injective (fun idx : TileIndex [n] => base + idx.1.val) := by
   rintro ⟨a, _⟩ ⟨b, _⟩ hab
   obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+  rfl
+
+/-! ## Shared online-Welford loop body
+
+The raw-AST loop body of the online-Welford `tl.for` loop, shared by the
+Welford and LayerNorm showcases (`bench/examples/`) and
+`VeriTile.Examples.WelfordKernels`. Its per-iteration effect is characterized
+per consumer (against that file's loop invariant); the body itself and its
+cast-free degeneration are consumer-independent. -/
+
+/-- Online Welford loop body: `xi := load x[pid*blockSize + i]`,
+`delta := xi − M`, `M += delta/(i+1)`, `delta2 := xi − M`, `S += delta·delta2`. -/
+def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
+  [Stmt.assign .real [] "xi"
+      (Op.load .real (MemAccess.region xReg
+        (Op.add .nat .nil
+          (Op.mul .nat .nil (Op.ref .nat [] "pid")
+            (Op.constNat blockSize))
+          (Op.ref .nat [] "i"))) MaskOpt.none),
+    Stmt.assign .real [] "delta"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "M"
+      (Op.add .real .nil (Op.ref .real [] "M")
+        (Op.div .real .nil (Op.ref .real [] "delta")
+          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
+            (Op.const 1)))),
+    Stmt.assign .real [] "delta2"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "S"
+      (Op.add .real .nil (Op.ref .real [] "S")
+        (Op.mul .real .nil (Op.ref .real [] "delta")
+          (Op.ref .real [] "delta2")))]
+
+/-- The online Welford loop body is cast-free: it steps identically under
+`execR R` and `exec`. Feed to `stepForLoopAuxR_castFree` to degenerate the
+whole loop. -/
+theorem onlineWelfordLoopBody_castFree (R : RoundingModel)
+    (xReg : RegionName) (blockSize : Nat) (t : BlockState) :
+    stepStmtsR R (onlineWelfordLoopBody xReg blockSize) t
+      = stepStmts (onlineWelfordLoopBody xReg blockSize) t := by
+  simp only [onlineWelfordLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp]
   rfl
 
 end VeriTile.Examples

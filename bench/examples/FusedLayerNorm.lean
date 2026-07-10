@@ -22,26 +22,31 @@ three real sections below are `LayerNorm.kernels`, `LayerNorm.lemmas`,
 
 `twoPassLayerNormKernel` computes mean/variance with two `tl.sum` passes then the
 affine `(x − μ)/√(var+ε)·γ + β`; `fusedLayerNormKernel` computes mean/variance in
-a single Welford `for` loop then the same affine tail. Both realize the same
+a single Welford `for` loop then the same affine tail. Both **store the output
+row rounded to bf16** (`(y).to(tl.bfloat16)`); the mean/variance reductions and
+the affine arithmetic run in ℝ (no intermediate rounding). Both realize the same
 LayerNorm spec (Welford's running (M,S) = two-pass (μ,S) via
-`welford_eq_two_pass`), so from the same state they write the same output row.
+`welford_eq_two_pass`), so from the same state they produce the same ℝ output
+row, and the only rounding is the shared bf16 output store, which quantizes
+equal values identically.
 
 ## The public result (bottom of file)
 
 The single public headline is **`layernorm_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines_without_Rounding`: from the same state the
-two-pass and fused kernels perform the same writes (no scratch regions, so the
-scratch list is `[]`). Its statement mentions only the two kernels, the
-loaded-input contracts, the writes-equality surface, and the state/region types
-— **no spec** (the `#stmtSurfaceSubset` gate below enforces this; the LayerNorm
-spec and per-kernel correctness lemmas are all `private`). For the
-rounding-model (∀R) analogue of this compositional pattern see
+kernel-vs-kernel refinement on `ComputeRefine.Refines R` (the rounding-model
+surface): for the rounding model `R`, from the same state the two-pass and fused
+kernels perform the same writes (no scratch regions, so the scratch list is
+`[]`). Its statement mentions only the two kernels, the loaded-input contracts,
+the writes-equality surface, and the state/region types — **no spec** (the
+`#stmtSurfaceSubset` gate below enforces this; the LayerNorm spec and per-kernel
+correctness lemmas are all `private`). The compositional rounding pattern is
 `bench/examples/FusedSwiglu.lean`.
 -/
 
 namespace VeriTile.Bench.Examples.LayerNorm
 
 open VeriTile.Triton VeriTile.Examples
+open VeriTile.Triton.TiledReduction.WelfordRec
 
 /-! ## Kernels -/
 section LayerNorm.kernels
@@ -95,244 +100,57 @@ end LayerNorm.kernels
 /-! ## Supporting lemmas (private plumbing) -/
 section LayerNorm.lemmas
 
-/-- Two-pass mean: μ = (∑ xᵢ) / n. -/
-private noncomputable def twoPassMean {n : Nat} (x : Fin n → ℝ) : ℝ :=
-  (∑ i, x i) / n
+-- Welford two-pass/recurrence math (twoPassMean/twoPassS/welfordMean/welfordS +
+-- welford_eq_two_pass) now lives in `VeriTile.Triton.TiledReduction.WelfordRec`,
+-- opened above; shared with the Welford showcase and VeriTile.Examples.WelfordKernels.
+-- `onlineWelfordLoopBody` + its cast-free degeneration are shared from
+-- `VeriTile.Examples.Common`; `stepForLoopAuxR_castFree` + `writeMemAsR_regs`
+-- live in the library (`VeriTile.Triton.Float.StepR`).
 
-/-- Two-pass sum-of-squared-deviations: S = ∑ (xᵢ − μ)². -/
-private noncomputable def twoPassS {n : Nat} (x : Fin n → ℝ) : ℝ :=
-  ∑ i, (x i - twoPassMean x) ^ 2
+/-- **Faithfulness bridge.** The raw-AST `onlineWelfordLoopBody` that the loop
+proofs below reason about is *exactly* the Welford `forLoop` body that the
+readable `fusedLayerNormKernel` DSL compiles to — statement index 3 of its
+algorithm projection (after `pid`, `M := 0`, `S := 0`). Machine-checked by
+`rfl`, so the hand-written loop body need not be matched against the DSL by eye:
+review the DSL kernel, and this lemma certifies the transcription is faithful. -/
+private theorem onlineWelfordLoopBody_is_dsl_loop
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) :
+    (fusedLayerNormKernel xReg γReg βReg yReg N ε).body[3]?
+      = some (Stmt.forLoop "i" N (onlineWelfordLoopBody xReg N)) := rfl
 
-/-- Welford recurrence: running mean M_k after processing x[0..k-1].
-    M_0 = 0, M_{k+1} = M_k + (x_k − M_k) / (k+1).
-    Returns 0 if k > n (out-of-range). -/
-private noncomputable def welfordMean {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
-  | 0     => 0
-  | k + 1 =>
-      if h : k < n then
-        let prev := welfordMean x k
-        prev + (x ⟨k, h⟩ - prev) / (k + 1)
-      else welfordMean x k
-
-/-- Welford recurrence: running sum-of-squared-deviations S_k.
-    S_0 = 0, S_{k+1} = S_k + (x_k − M_k) · (x_k − M_{k+1}). -/
-private noncomputable def welfordS {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
-  | 0     => 0
-  | k + 1 =>
-      if h : k < n then
-        let prevM := welfordMean x k
-        let curM  := welfordMean x (k + 1)
-        welfordS x k + (x ⟨k, h⟩ - prevM) * (x ⟨k, h⟩ - curM)
-      else welfordS x k
-
-/-- Helper: for any prefix length k ≤ n, the running Welford mean times k
-    equals the sum of the first k inputs. Used to derive the final
-    `welfordMean x n = twoPassMean x` claim. -/
-private theorem welford_mean_mul_eq_sum {n : Nat} (x : Fin n → ℝ) :
-    ∀ k : Nat, ∀ (h : k ≤ n),
-      welfordMean x k * k = ∑ i : Fin k, x (castFin h i) := by
-  intro k
-  induction k with
-  | zero =>
-    intro _
-    simp [welfordMean]
-  | succ j ih =>
-    intro hk
-    have hj : j ≤ n := Nat.le_of_succ_le hk
-    have hj_lt : j < n := hk
-    have ih' := ih hj
-    have hwm : welfordMean x (j + 1) =
-        welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / (j + 1) := by
-      simp [welfordMean, hj_lt]
-    rw [hwm]
-    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := by
-      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
-      linarith
-    have hcast : ((j + 1 : Nat) : ℝ) = (j : ℝ) + 1 := by push_cast; ring
-    rw [hcast]
-    have hlhs : (welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / ((j : ℝ) + 1))
-                  * ((j : ℝ) + 1) = welfordMean x j * j + x ⟨j, hj_lt⟩ := by
-      field_simp
-      ring
-    rw [hlhs]
-    rw [Fin.sum_univ_castSucc]
-    have h_last : x (castFin hk (Fin.last j)) = x ⟨j, hj_lt⟩ := by
-      rfl
-    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
-      intro i; rfl
-    simp only [h_cs, h_last]
-    rw [ih']
-
-/-- Welford's variance identity. For any prefix length k ≤ n,
-    the running Welford S_k equals the sum-of-squared-deviations from M_k. -/
-private theorem welford_S_eq_sum_sq_dev {n : Nat} (x : Fin n → ℝ) :
-    ∀ k : Nat, ∀ (hk : k ≤ n),
-      welfordS x k = ∑ i : Fin k, (x (castFin hk i) - welfordMean x k) ^ 2 := by
-  intro k
-  induction k with
-  | zero =>
-    intro _
-    simp [welfordS]
-  | succ j ih =>
-    intro hk
-    have hj : j ≤ n := Nat.le_of_succ_le hk
-    have hj_lt : j < n := hk
-    have ih' := ih hj
-    set M := welfordMean x j with hMdef
-    set M' := welfordMean x (j + 1) with hM'def
-    set xj := x ⟨j, hj_lt⟩ with hxjdef
-    have hM' : M' = M + (xj - M) / ((j : ℝ) + 1) := by
-      simp [hM'def, welfordMean, hj_lt, hMdef, hxjdef]
-    have hS' : welfordS x (j + 1) = welfordS x j + (xj - M) * (xj - M') := by
-      simp [welfordS, hj_lt, hMdef, hM'def, hxjdef]
-    have hjp1_pos : (0 : ℝ) < (j : ℝ) + 1 := by
-      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
-      linarith
-    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := ne_of_gt hjp1_pos
-    have hMean := welford_mean_mul_eq_sum x j hj
-    have hMM' : ((j : ℝ) + 1) * (M' - M) = xj - M := by
-      rw [hM']; field_simp; ring
-    have hxj_M' : xj - M' = (j : ℝ) * (M' - M) := by
-      have : xj - M' = (xj - M) - (M' - M) := by ring
-      rw [this, ← hMM']; ring
-    have hxj_M : xj - M = ((j : ℝ) + 1) * (M' - M) := hMM'.symm
-    rw [hS', ih']
-    rw [Fin.sum_univ_castSucc]
-    have h_last : x (castFin hk (Fin.last j)) = xj := rfl
-    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
-      intro i; rfl
-    simp only [h_cs, h_last]
-    have key :
-        (∑ i : Fin j, (x (castFin hj i) - M') ^ 2) -
-          (∑ i : Fin j, (x (castFin hj i) - M) ^ 2)
-        = (j : ℝ) * (M - M') ^ 2 := by
-      rw [← Finset.sum_sub_distrib]
-      have h_per : ∀ i : Fin j,
-          (x (castFin hj i) - M') ^ 2 - (x (castFin hj i) - M) ^ 2 =
-          (M - M') * (2 * x (castFin hj i) - M - M') := by
-        intro i; ring
-      simp_rw [h_per]
-      rw [← Finset.mul_sum]
-      have h_sum_split : ∀ i : Fin j,
-          2 * x (castFin hj i) - M - M' =
-            2 * x (castFin hj i) + (- M - M') := by
-        intro i; ring
-      simp_rw [h_sum_split]
-      rw [Finset.sum_add_distrib, ← Finset.mul_sum]
-      rw [Finset.sum_const]
-      simp only [Finset.card_univ, Fintype.card_fin, nsmul_eq_mul]
-      have hSumX : ∑ i : Fin j, x (castFin hj i) = M * j := hMean.symm
-      rw [hSumX]
-      ring
-    have lhs_alg : (xj - M) * (xj - M') - (xj - M') ^ 2
-                 = (j : ℝ) * (M - M') ^ 2 := by
-      rw [hxj_M, hxj_M']
-      ring
-    linarith [key, lhs_alg]
-
-/-- The load-bearing identity for Welford kernel refinement: after processing
-all `n` inputs, Welford's running `(M, S)` equals the two-pass `(μ, S)`. -/
-private theorem welford_eq_two_pass {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) :
-    welfordMean x n = twoPassMean x ∧ welfordS x n = twoPassS x := by
-  refine ⟨?_, ?_⟩
-  · have hMul := welford_mean_mul_eq_sum x n (le_refl n)
-    have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
-    have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
-    unfold twoPassMean
-    rw [eq_div_iff hn_ne, hMul]
-    apply Finset.sum_congr rfl
-    intro i _
-    rfl
-  · have hS := welford_S_eq_sum_sq_dev x n (le_refl n)
-    have hM : welfordMean x n = twoPassMean x := by
-      have hMul := welford_mean_mul_eq_sum x n (le_refl n)
-      have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
-      have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
-      unfold twoPassMean
-      rw [eq_div_iff hn_ne, hMul]
-      apply Finset.sum_congr rfl
-      intro i _; rfl
-    rw [hS, hM]
-    unfold twoPassS
-    apply Finset.sum_congr rfl
-    intro i _
-    rfl
-
-private def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
-  [Stmt.assign .real [] "xi"
-      (Op.load .real (MemAccess.region xReg
-        (Op.add .nat .nil
-          (Op.mul .nat .nil (Op.ref .nat [] "pid")
-            (Op.constNat blockSize))
-          (Op.ref .nat [] "i"))) MaskOpt.none),
-    Stmt.assign .real [] "delta"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "M"
-      (Op.add .real .nil (Op.ref .real [] "M")
-        (Op.div .real .nil (Op.ref .real [] "delta")
-          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
-            (Op.const 1)))),
-    Stmt.assign .real [] "delta2"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "S"
-      (Op.add .real .nil (Op.ref .real [] "S")
-        (Op.mul .real .nil (Op.ref .real [] "delta")
-          (Op.ref .real [] "delta2")))]
-
-private def layerNormAffineTailKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel :=
-  let body : List Stmt :=
-      [ .assign .real [] "μ" (.ref .real [] "M")
-      , .assign .real [] "v"
-          (.div .real .nil (.ref .real [] "S") (Op.natToReal (.constNat N)))
-      , .assign .real [] "σ_inv"
-          (.div .real .nil (.const 1)
-            (.sqrt (.add .real .nil (.ref .real [] "v") (.const ε))))
-      , .assign .nat [N] "offs"
-          (.add .nat .scalarL
-            (.mul .nat .nil (.ref .nat [] "pid") (.constNat N))
-            (.arange N))
-      , .assign .real [N] "x"
-          (.load .real (MemAccess.region xReg (.ref .nat [N] "offs")) MaskOpt.none)
-      , .assign .real [N] "γ"
-          (.load .real (MemAccess.region γReg (.arange N)) MaskOpt.none)
-      , .assign .real [N] "β"
-          (.load .real (MemAccess.region βReg (.arange N)) MaskOpt.none)
-      , .assign .real [N] "y"
-          (.add .real (.consSame .nil)
-            (.mul .real (.consSame .nil)
-              (.mul .real .scalarR
-                (.sub .real .scalarR (.ref .real [N] "x") (.ref .real [] "μ"))
-                (.ref .real [] "σ_inv"))
-              (.ref .real [N] "γ"))
-            (.ref .real [N] "β"))
-      , .store .bf16 [N] (MemAccess.region yReg (.ref .nat [N] "offs"))
-          (.castFloat .real .bf16 (.ref .real [N] "y")) MaskOpt.none
-      ]
-  ComputeKernel.fromKernelBody [xReg, γReg, βReg] [yReg] body
-
-private def P_layernorm {N : Nat}
+/-- **Loop invariant** for the fused kernel's Welford pass: after `k` iterations
+of `onlineWelfordLoopBody`, the running `(M, S)` registers hold the Welford
+recurrence values `welfordMean/welfordS xs k`, the block id is pinned, and every
+input stays loaded. Declared as a `structure` (not an anonymous `∧`-chain) so
+each clause is a *named field* — the invariant reads as an invariant and stands
+out from the surrounding plumbing `def`s. -/
+private structure LayerNormLoopInv {N : Nat}
     (xs γs βs : Fin N → ℝ) (xReg γReg βReg : RegionName)
-    (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
-  s.regs .real [] "M" = some (Tile.scalar (welfordMean xs k))
-  ∧ s.regs .real [] "S" = some (Tile.scalar (welfordS xs k))
-  ∧ s.regs .nat [] "pid" = some (Tile.scalar origPid)
-  ∧ s.pid = origPid
-  ∧ InputLoadedAt s xReg N xs
-  ∧ InputFeatureLoadedAt s γReg N γs
-  ∧ InputFeatureLoadedAt s βReg N βs
+    (origPid k : Nat) (s : BlockState) : Prop where
+  /-- Running mean register `M` holds the Welford mean after `k` steps. -/
+  M_eq     : s.regs .real [] "M" = some (Tile.scalar (welfordMean xs k))
+  /-- Running sum-of-squares register `S` holds the Welford `S` after `k` steps. -/
+  S_eq     : s.regs .real [] "S" = some (Tile.scalar (welfordS xs k))
+  /-- The block-id register is pinned to `origPid`. -/
+  pid_reg  : s.regs .nat [] "pid" = some (Tile.scalar origPid)
+  /-- The block id itself is pinned to `origPid`. -/
+  pid_eq   : s.pid = origPid
+  /-- The input row `x` is still loaded in `xReg`. -/
+  x_loaded : InputLoadedAt s xReg N xs
+  /-- The scale vector `γ` is still loaded in `γReg`. -/
+  γ_loaded : InputFeatureLoadedAt s γReg N γs
+  /-- The bias vector `β` is still loaded in `βReg`. -/
+  β_loaded : InputFeatureLoadedAt s βReg N βs
 
 private theorem layernorm_welford_step
     {N : Nat} (xs γs βs : Fin N → ℝ)
     (xReg γReg βReg : RegionName) (origPid i : Nat)
     (s : BlockState) (hi : i < N)
-    (hP : P_layernorm xs γs βs xReg γReg βReg origPid i s) :
+    (hP : LayerNormLoopInv xs γs βs xReg γReg βReg origPid i s) :
     ∃ s',
       stepStmts (onlineWelfordLoopBody xReg N)
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
-      P_layernorm xs γs βs xReg γReg βReg origPid (i + 1) s' := by
+      LayerNormLoopInv xs γs βs xReg γReg βReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX, hγ, hβ⟩
   let xi : ℝ := s.readMem xReg (origPid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
@@ -353,20 +171,26 @@ private theorem layernorm_welford_step
       "delta2" .real [] (Tile.scalar delta2)).setReg
       "S" .real [] (Tile.scalar ssum')
   refine ⟨s', ?_, ?_⟩
-  · simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
+  · simp [onlineWelfordLoopBody, stepStmts, stepStmt, Tile.bop,
       Tile.natToReal, NumericDType.add, NumericDType.mul, NumericDType.sub,
       NumericDType.div, hM, hS, hpidReg,
       xi, m, ssum, delta, m', delta2, ssum', s',
       WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv]
     rfl
-  · simp [P_layernorm, s', InputLoadedAt, InputFeatureLoadedAt, welfordMean,
-      welfordS, hi, xi, m, ssum, delta, m', delta2, ssum', hpidReg, hpid, hxi]
-    constructor
-    · intro j
-      have hx := hX j
-      rw [hpid] at hx
-      exact hx
-    · exact ⟨hγ, hβ⟩
+  · -- one-step unfoldings of the Welford recurrence at `i + 1`
+    have hWM : welfordMean xs (i + 1)
+        = welfordMean xs i + (xs ⟨i, hi⟩ - welfordMean xs i) / ((i : ℝ) + 1) := by
+      simp [welfordMean, hi]
+    have hWS : welfordS xs (i + 1)
+        = welfordS xs i + (xs ⟨i, hi⟩ - welfordMean xs i)
+            * (xs ⟨i, hi⟩ - welfordMean xs (i + 1)) := by
+      simp [welfordS, hi]
+    -- inputs stay loaded: `s'` only writes registers, preserving memory
+    refine ⟨?_, ?_, ?_, ?_, hX, hγ, hβ⟩
+    · simp [s', hWM, hxi, m, delta, m']
+    · simp [s', hWS, hWM, hxi, m, ssum, delta, m', delta2, ssum']
+    · simp [s', hpidReg]
+    · simp [s', hpid]
 
 private theorem layernorm_welford_loop
     (xReg γReg βReg : RegionName) (N : Nat)
@@ -380,15 +204,18 @@ private theorem layernorm_welford_loop
         "S" .real [] (Tile.scalar 0)
     ∃ sLoop,
       stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg N)) s0 = some sLoop
-      ∧ P_layernorm xs γs βs xReg γReg βReg s.pid N sLoop := by
+      ∧ LayerNormLoopInv xs γs βs xReg γReg βReg s.pid N sLoop := by
   intro s0
-  have h_init : P_layernorm xs γs βs xReg γReg βReg s.pid 0 s0 := by
-    simp [P_layernorm, s0, welfordMean, welfordS]
-    exact ⟨h_x, h_γ, h_β⟩
+  have h_init : LayerNormLoopInv xs γs βs xReg γReg βReg s.pid 0 s0 := by
+    refine ⟨?_, ?_, ?_, ?_, h_x, h_γ, h_β⟩
+    · simp [s0, welfordMean]
+    · simp [s0, welfordS]
+    · simp [s0]
+    · simp [s0]
   exact forLoop_inv
     (idx := "i") (n := N)
     (body := onlineWelfordLoopBody xReg N)
-    (P := P_layernorm xs γs βs xReg γReg βReg s.pid)
+    (P := LayerNormLoopInv xs γs βs xReg γReg βReg s.pid)
     (s_init := s0)
     h_init
     (fun k st hk hP =>
@@ -421,39 +248,6 @@ private theorem onlineWelfordLoopBody_storeFree (xReg : RegionName) (N : Nat) :
   simp [onlineWelfordLoopBody, storeFree]
 
 /-! ### Rounding-degeneration plumbing (loop cast-free + bf16-store congruence) -/
-
-/-- `writeMemAsR` only rewrites `mem`, so register reads pass through it. -/
-@[simp] private theorem writeMemAsR_regs (R : RoundingModel) (s : BlockState)
-    (d : FloatDType) (reg : RegionName) (o : Nat) (v : TileCarrier d.toTileDType)
-    (dt : TileDType) (sh : TileShape) (nm : RegName) :
-    (s.writeMemAsR R d reg o v).regs dt sh nm = s.regs dt sh nm := rfl
-
-/-- `stepForLoopAux` degenerates from `execR R` to `exec` when the loop body is
-cast-free. Arbitrary-`R` generalization of `stepForLoopAuxR_triv`. -/
-private theorem stepForLoopAuxR_castFree (R : RoundingModel) (body : List Stmt)
-    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
-    ∀ (start n : Nat) (s : BlockState),
-      stepForLoopAuxR R idx start n body s = stepForLoopAux idx start n body s
-  | start, n, s => by
-      rw [stepForLoopAuxR, stepForLoopAux]
-      simp only [hbody (s.setReg idx .nat [] (Tile.scalar start))]
-      split
-      · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
-        | none => rfl
-        | some s' => exact stepForLoopAuxR_castFree R body hbody idx (start + 1) n s'
-      · rfl
-  termination_by start n _ => n - start
-  decreasing_by omega
-
-/-- The online Welford loop body is cast-free: it steps identically under
-`execR R` and `exec`. -/
-private theorem onlineWelfordLoopBody_castFree (R : RoundingModel)
-    (xReg : RegionName) (N : Nat) (t : BlockState) :
-    stepStmtsR R (onlineWelfordLoopBody xReg N) t
-      = stepStmts (onlineWelfordLoopBody xReg N) t := by
-  simp only [onlineWelfordLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
-    evalOpR.eq_def, evalOp]
-  rfl
 
 /-- The fused kernel's `forLoop` statement steps identically under `execR R`
 and `exec`. -/

@@ -1926,7 +1926,7 @@ statement's reduction by `simp [stepStmt, evalOp, …]` only — never a whole-b
 `evalOp.eq_def` blast, never `rfl`/`whnf` over a nested `setReg` literal state.
 
 The next stage (full assembly) chains these via `stepStmts.cons_some` /
-`forRangeAux` invariants, exactly as `LayerNormKernels` chains its per-stmt
+`forRangeAux` invariants, exactly as `FusedLayerNorm` chains its per-stmt
 `have h_k : stepStmt … = some (… .setReg …)` facts. The backing surface
 definitions and the genuine closed forms (`bwdDQInterClosed`, `bwdDKInterClosed`,
 `bwdDGSummand`, `bwdDGClosed`) are already banked above, and the assembly that
