@@ -30,6 +30,7 @@ globs = [
   "VeriTile.Examples.LogSumExpEq",
   "VeriTile.Examples.SoftmaxReciprocal",
   "VeriTile.Examples.VectorAdd",
+  "VeriTile.Examples.FlatVectorAdd",
   "VeriTile.Examples.RowWise",
   "VeriTile.Examples.WelfordKernels",
   "VeriTile.Examples.OnlineSoftmax",
