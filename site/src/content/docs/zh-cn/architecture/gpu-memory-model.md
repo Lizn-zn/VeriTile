@@ -138,7 +138,10 @@ contiguous row-major,张量之间不别名是**构造上成立的**(不同 regio
    不相交假设,再证一条 `exec` 与 flatten 交换的桥定理。此后所有 region
    模型定理免费搬运为平铺内存推论;region 模型从"简化假设"变成分离逻辑式的
    中间层。stage 1 的 layout structure 正是 disjointness 子句的挂载点
-   (合法性字段扩充,定理语句形状不变)。
+   (合法性字段扩充,定理语句形状不变)。兑现桥时的一个发现:#48 契约按全状态量化,对掩码与地址**显式耦合**
+   的 kernel(内联寻址、block pointer)可卸,但对寄存器间接的
+   `offs := ...; tl.load(x + offs, ...)` 风格不可证——覆盖后者需要桥的
+   逐执行(trace 级)安全变体。
 
 3. **字节粒度(远期)。** 当前偏移按元素索引、cell 是带 dtype 标签的
    `MemCell`。字节级模型把偏移按 dtype 大小缩放并加入对齐约束,支持

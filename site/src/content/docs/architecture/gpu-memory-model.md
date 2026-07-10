@@ -150,7 +150,12 @@ three stages, each building on — not replacing — the previous one:
    a flat-memory corollary for free; the region model becomes a
    separation-logic-style intermediate layer rather than a simplifying
    assumption. The layout structures from stage 1 are where the disjointness
-   clauses slot in (the validity field grows; statement shapes stay).
+   clauses slot in (the validity field grows; statement shapes stay). A finding from instantiating the bridge: the #48 contracts quantify
+   over all states, so they are dischargeable for kernels whose masks and
+   addresses are *visibly coupled* (inline addressing, block pointers) but
+   not for the register-indirect `offs := ...; tl.load(x + offs, ...)` style
+   — covering those needs a per-execution (trace-level) safety variant of
+   the bridge.
 
 3. **Byte-granularity (long-term).** Current offsets are element-indexed and
    cells are dtype-tagged `MemCell`s. A byte-level model scales offsets by
