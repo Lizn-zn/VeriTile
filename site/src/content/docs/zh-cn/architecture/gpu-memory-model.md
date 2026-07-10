@@ -115,6 +115,36 @@ functional correctness。它不证明性能性质,也不证明 CUDA memory-syste
 - **Unrelated-frame helper (#62):** 便利引理,证明 single-program 或 grid
   footprint 之外的 cell 或整个 region 保持不变。
 
+### 地址布局真实性 roadmap
+
+目前每个张量各占一个 `RegionName`,showcase kernel 的寻址直接写死在 kernel
+AST 里(行 tile 用 `pid * N + i`,feature 向量用 `i`):布局被隐式固定为
+contiguous row-major,张量之间不别名是**构造上成立的**(不同 region 永不重叠)。
+向真实"指针传参" kernel 靠拢的计划分三个阶段,每一阶段都建立在前一阶段之上、
+而非推翻它:
+
+1. **布局显式参数化(近期)。** kernel 像真实 Triton kernel 一样接受
+   stride/base 参数(`stride_row` 等);输入/输出 contract 改用
+   `TensorView.loaded` 表述;per-kernel 的 stride 打包成带合法性字段的
+   layout structure,沿用现成的 `FA1Layout4D` 先例(16 个 Q/K/V/O stride +
+   `Offset.StridesValid`、派生 `qView/kView/vView`、layout 级 headline
+   wrapper)。这与真实 kernel 的签名形态一致——"指针"即 `(region, base)`
+   二元组——同时让 showcase 与 bench ports 对齐(后者大多已带 stride 参数)。
+   剩余的理想化仅是"不同张量不可能别名"。
+
+2. **平铺内存桥(中期)。** **不要**在单一平铺地址空间上重证 kernel——那会把
+   两两 range-disjoint 义务塞进每个证明。别名成本一次付清:一个分配映射
+   `RegionName → Nat`(每个 region 在单一平铺 region 中的基址)+ 两两区间
+   不相交假设,再证一条 `exec` 与 flatten 交换的桥定理。此后所有 region
+   模型定理免费搬运为平铺内存推论;region 模型从"简化假设"变成分离逻辑式的
+   中间层。stage 1 的 layout structure 正是 disjointness 子句的挂载点
+   (合法性字段扩充,定理语句形状不变)。
+
+3. **字节粒度(远期)。** 当前偏移按元素索引、cell 是带 dtype 标签的
+   `MemCell`。字节级模型把偏移按 dtype 大小缩放并加入对齐约束,支持
+   reinterpret-cast 与混合 dtype 别名推理。stage 1–2 的元素粒度 stride 经
+   `sizeof` 缩放直接沿用。
+
 更长期的扩展点:
 
 - **Paged KV / indirect addressing (#42):** 把当前 `IndirectView`
