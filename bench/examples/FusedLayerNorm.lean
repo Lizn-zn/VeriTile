@@ -126,58 +126,50 @@ private def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List S
         (Op.mul .real .nil (Op.ref .real [] "delta")
           (Op.ref .real [] "delta2")))]
 
-private def layerNormAffineTailKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel :=
-  let body : List Stmt :=
-      [ .assign .real [] "μ" (.ref .real [] "M")
-      , .assign .real [] "v"
-          (.div .real .nil (.ref .real [] "S") (Op.natToReal (.constNat N)))
-      , .assign .real [] "σ_inv"
-          (.div .real .nil (.const 1)
-            (.sqrt (.add .real .nil (.ref .real [] "v") (.const ε))))
-      , .assign .nat [N] "offs"
-          (.add .nat .scalarL
-            (.mul .nat .nil (.ref .nat [] "pid") (.constNat N))
-            (.arange N))
-      , .assign .real [N] "x"
-          (.load .real (MemAccess.region xReg (.ref .nat [N] "offs")) MaskOpt.none)
-      , .assign .real [N] "γ"
-          (.load .real (MemAccess.region γReg (.arange N)) MaskOpt.none)
-      , .assign .real [N] "β"
-          (.load .real (MemAccess.region βReg (.arange N)) MaskOpt.none)
-      , .assign .real [N] "y"
-          (.add .real (.consSame .nil)
-            (.mul .real (.consSame .nil)
-              (.mul .real .scalarR
-                (.sub .real .scalarR (.ref .real [N] "x") (.ref .real [] "μ"))
-                (.ref .real [] "σ_inv"))
-              (.ref .real [N] "γ"))
-            (.ref .real [N] "β"))
-      , .store .bf16 [N] (MemAccess.region yReg (.ref .nat [N] "offs"))
-          (.castFloat .real .bf16 (.ref .real [N] "y")) MaskOpt.none
-      ]
-  ComputeKernel.fromKernelBody [xReg, γReg, βReg] [yReg] body
+/-- **Faithfulness bridge.** The raw-AST `onlineWelfordLoopBody` that the loop
+proofs below reason about is *exactly* the Welford `forLoop` body that the
+readable `fusedLayerNormKernel` DSL compiles to — statement index 3 of its
+algorithm projection (after `pid`, `M := 0`, `S := 0`). Machine-checked by
+`rfl`, so the hand-written loop body need not be matched against the DSL by eye:
+review the DSL kernel, and this lemma certifies the transcription is faithful. -/
+private theorem onlineWelfordLoopBody_is_dsl_loop
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) :
+    (fusedLayerNormKernel xReg γReg βReg yReg N ε).body[3]?
+      = some (Stmt.forLoop "i" N (onlineWelfordLoopBody xReg N)) := rfl
 
-private def P_layernorm {N : Nat}
+/-- **Loop invariant** for the fused kernel's Welford pass: after `k` iterations
+of `onlineWelfordLoopBody`, the running `(M, S)` registers hold the Welford
+recurrence values `welfordMean/welfordS xs k`, the block id is pinned, and every
+input stays loaded. Declared as a `structure` (not an anonymous `∧`-chain) so
+each clause is a *named field* — the invariant reads as an invariant and stands
+out from the surrounding plumbing `def`s. -/
+private structure LayerNormLoopInv {N : Nat}
     (xs γs βs : Fin N → ℝ) (xReg γReg βReg : RegionName)
-    (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
-  s.regs .real [] "M" = some (Tile.scalar (welfordMean xs k))
-  ∧ s.regs .real [] "S" = some (Tile.scalar (welfordS xs k))
-  ∧ s.regs .nat [] "pid" = some (Tile.scalar origPid)
-  ∧ s.pid = origPid
-  ∧ InputLoadedAt s xReg N xs
-  ∧ InputFeatureLoadedAt s γReg N γs
-  ∧ InputFeatureLoadedAt s βReg N βs
+    (origPid k : Nat) (s : BlockState) : Prop where
+  /-- Running mean register `M` holds the Welford mean after `k` steps. -/
+  M_eq     : s.regs .real [] "M" = some (Tile.scalar (welfordMean xs k))
+  /-- Running sum-of-squares register `S` holds the Welford `S` after `k` steps. -/
+  S_eq     : s.regs .real [] "S" = some (Tile.scalar (welfordS xs k))
+  /-- The block-id register is pinned to `origPid`. -/
+  pid_reg  : s.regs .nat [] "pid" = some (Tile.scalar origPid)
+  /-- The block id itself is pinned to `origPid`. -/
+  pid_eq   : s.pid = origPid
+  /-- The input row `x` is still loaded in `xReg`. -/
+  x_loaded : InputLoadedAt s xReg N xs
+  /-- The scale vector `γ` is still loaded in `γReg`. -/
+  γ_loaded : InputFeatureLoadedAt s γReg N γs
+  /-- The bias vector `β` is still loaded in `βReg`. -/
+  β_loaded : InputFeatureLoadedAt s βReg N βs
 
 private theorem layernorm_welford_step
     {N : Nat} (xs γs βs : Fin N → ℝ)
     (xReg γReg βReg : RegionName) (origPid i : Nat)
     (s : BlockState) (hi : i < N)
-    (hP : P_layernorm xs γs βs xReg γReg βReg origPid i s) :
+    (hP : LayerNormLoopInv xs γs βs xReg γReg βReg origPid i s) :
     ∃ s',
       stepStmts (onlineWelfordLoopBody xReg N)
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
-      P_layernorm xs γs βs xReg γReg βReg origPid (i + 1) s' := by
+      LayerNormLoopInv xs γs βs xReg γReg βReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX, hγ, hβ⟩
   let xi : ℝ := s.readMem xReg (origPid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
@@ -198,20 +190,26 @@ private theorem layernorm_welford_step
       "delta2" .real [] (Tile.scalar delta2)).setReg
       "S" .real [] (Tile.scalar ssum')
   refine ⟨s', ?_, ?_⟩
-  · simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
+  · simp [onlineWelfordLoopBody, stepStmts, stepStmt, Tile.bop,
       Tile.natToReal, NumericDType.add, NumericDType.mul, NumericDType.sub,
       NumericDType.div, hM, hS, hpidReg,
       xi, m, ssum, delta, m', delta2, ssum', s',
       WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv]
     rfl
-  · simp [P_layernorm, s', InputLoadedAt, InputFeatureLoadedAt, welfordMean,
-      welfordS, hi, xi, m, ssum, delta, m', delta2, ssum', hpidReg, hpid, hxi]
-    constructor
-    · intro j
-      have hx := hX j
-      rw [hpid] at hx
-      exact hx
-    · exact ⟨hγ, hβ⟩
+  · -- one-step unfoldings of the Welford recurrence at `i + 1`
+    have hWM : welfordMean xs (i + 1)
+        = welfordMean xs i + (xs ⟨i, hi⟩ - welfordMean xs i) / ((i : ℝ) + 1) := by
+      simp [welfordMean, hi]
+    have hWS : welfordS xs (i + 1)
+        = welfordS xs i + (xs ⟨i, hi⟩ - welfordMean xs i)
+            * (xs ⟨i, hi⟩ - welfordMean xs (i + 1)) := by
+      simp [welfordS, hi]
+    -- inputs stay loaded: `s'` only writes registers, preserving memory
+    refine ⟨?_, ?_, ?_, ?_, hX, hγ, hβ⟩
+    · simp [s', hWM, hxi, m, delta, m']
+    · simp [s', hWS, hWM, hxi, m, ssum, delta, m', delta2, ssum']
+    · simp [s', hpidReg]
+    · simp [s', hpid]
 
 private theorem layernorm_welford_loop
     (xReg γReg βReg : RegionName) (N : Nat)
@@ -225,15 +223,18 @@ private theorem layernorm_welford_loop
         "S" .real [] (Tile.scalar 0)
     ∃ sLoop,
       stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg N)) s0 = some sLoop
-      ∧ P_layernorm xs γs βs xReg γReg βReg s.pid N sLoop := by
+      ∧ LayerNormLoopInv xs γs βs xReg γReg βReg s.pid N sLoop := by
   intro s0
-  have h_init : P_layernorm xs γs βs xReg γReg βReg s.pid 0 s0 := by
-    simp [P_layernorm, s0, welfordMean, welfordS]
-    exact ⟨h_x, h_γ, h_β⟩
+  have h_init : LayerNormLoopInv xs γs βs xReg γReg βReg s.pid 0 s0 := by
+    refine ⟨?_, ?_, ?_, ?_, h_x, h_γ, h_β⟩
+    · simp [s0, welfordMean]
+    · simp [s0, welfordS]
+    · simp [s0]
+    · simp [s0]
   exact forLoop_inv
     (idx := "i") (n := N)
     (body := onlineWelfordLoopBody xReg N)
-    (P := P_layernorm xs γs βs xReg γReg βReg s.pid)
+    (P := LayerNormLoopInv xs γs βs xReg γReg βReg s.pid)
     (s_init := s0)
     h_init
     (fun k st hk hP =>
