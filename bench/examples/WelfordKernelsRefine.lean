@@ -90,6 +90,15 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
 
 end Welford.kernels
 
+/- Variables shared by every lemma and the theorem below — declared **once**, at
+namespace scope, so both `Welford.lemmas` and `Welford.theorems` inherit them
+(`end <section>` only clears variables declared *inside* that section). Hoisted
+out of the declarations so each signature carries only its genuine hypotheses:
+the compact `InputLoadedAt` input contract and the `meanReg ≠ varReg` aliasing
+constraint. -/
+variable (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
+variable (s : BlockState) (xs : Fin blockSize → ℝ) (R : RoundingModel)
+
 /-! ## Supporting lemmas (private plumbing) -/
 section Welford.lemmas
 
@@ -325,12 +334,6 @@ end Welford.lemmas
 
 /-! ## The headline theorem -/
 section Welford.theorems
-
-/- Shared parameters of the headline. Hoisted to a `variable` block so the
-signature carries only its genuine hypotheses: the compact `InputLoadedAt`
-input contract and the `meanReg ≠ varReg` aliasing constraint. -/
-variable (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
-variable (s : BlockState) (xs : Fin blockSize → ℝ) (R : RoundingModel)
 
 include hN in
 /-- **two-pass refines online** (`ComputeRefine.Refines R`, no scratch): for the

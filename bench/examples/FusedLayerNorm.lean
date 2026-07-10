@@ -97,6 +97,15 @@ def fusedLayerNormKernel
 
 end LayerNorm.kernels
 
+/- Variables shared by every lemma and the theorem below — declared **once**, at
+namespace scope, so both `LayerNorm.lemmas` and `LayerNorm.theorems` inherit
+them (`end <section>` only clears variables declared *inside* that section).
+Hoisted out of the declarations so each signature carries only its genuine
+hypotheses: the compact `InputLoadedAt` / `InputFeatureLoadedAt` input
+contracts. -/
+variable (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
+variable (s : BlockState) (xs γs βs : Fin N → ℝ)
+
 /-! ## Supporting lemmas (private plumbing) -/
 section LayerNorm.lemmas
 
@@ -284,13 +293,6 @@ end LayerNorm.lemmas
 
 /-! ## The headline theorem -/
 section LayerNorm.theorems
-
-/- Shared parameters of the headline. Hoisted to a `variable` block so the
-signature carries only its genuine hypotheses: the compact `InputLoadedAt` /
-`InputFeatureLoadedAt` input contracts and the three `yReg ≠ ·` aliasing
-constraints (the output must not alias any input). -/
-variable (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
-variable (s : BlockState) (xs γs βs : Fin N → ℝ)
 
 include hN in
 set_option maxHeartbeats 1600000 in
