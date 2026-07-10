@@ -45,9 +45,18 @@ The predicate covers the three memory-addressing forms in the AST:
   out-of-bounds lanes are excluded from the bound obligation.
 
 Pointer-register provenance is intentionally not solved here. The optional
-checker in `VeriTile.Triton.Memory.Typing` can later provide sufficient
-conditions for dynamic pointer-address safety; the bounds layer stays semantic
-and composable.
+checker in `VeriTile.Triton.Memory.Typing` provides dtype/provenance checks,
+block-pointer metadata rank checks, and static `tl.advance` underflow
+diagnostics, including across simple block-pointer register assignments when
+the unified `BlockPtrSummary` preserves static offsets. Dynamic pointer-address
+safety and runtime bounds are still expressed by this semantic bounds layer, so
+theorem statements should keep `BlockPtr.WellFormed`,
+`BlockPtr.CheckedAxesValid`, and `BlockPtr.AdvanceNonnegative` assumptions when
+those facts are needed.
+Use `checkBoundaryAxes_ok`, `checkBlockPtrMetadata_ok`, and
+`checkStaticAdvanceNonnegative_ok`, or the summary-level
+`BlockPtrSummary.*_ok` lemmas, to discharge these local obligations from
+successful checker calls when the relevant metadata is static.
 
 ## Non-Goals
 

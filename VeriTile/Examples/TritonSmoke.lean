@@ -1079,6 +1079,28 @@ def blockPointerMetadataMismatchKernel (xReg : RegionName) : ComputeKernel :=
         (Op.makeBlockPtr xReg 0 [8] [1] [] [0]) ]
   ComputeKernel.fromKernelBody [xReg] [] body
 
+def blockPointerShortBlockShapeKernel (xReg : RegionName) : ComputeKernel :=
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.makeBlockPtr xReg 0 [8, 8] [1] [8, 1] [0, 0]) ]
+  ComputeKernel.fromKernelBody [xReg] [] body
+
+def blockPointerAdvanceUnderflowKernel (xReg : RegionName) : ComputeKernel :=
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.advanceBlockPtr
+          (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+          [-1]) ]
+  ComputeKernel.fromKernelBody [xReg] [] body
+
+def blockPointerRefAdvanceUnderflowKernel (xReg : RegionName) : ComputeKernel :=
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+    , Stmt.assign .blockPtr [1] "bp2"
+        (Op.advanceBlockPtr (Op.ref .blockPtr [1] "bp") [-1]) ]
+  ComputeKernel.fromKernelBody [xReg] [] body
+
 def blockPointerBoundaryMismatchKernel (xReg : RegionName) : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .blockPtr [1] "bp"
@@ -1151,9 +1173,117 @@ example :
 
 example :
     Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerShortBlockShapeKernel "x") =
+      .error (.blockPointerMetadataMismatch 2 2 2 1) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerAdvanceUnderflowKernel "x") =
+      .error (.blockPointerAdvanceUnderflow 0 0 (-1)) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerRefAdvanceUnderflowKernel "x") =
+      .error (.blockPointerAdvanceUnderflow 0 0 (-1)) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
       (blockPointerBoundaryMismatchKernel "x") =
       .error (.boundaryAxisOutOfRange 1 1) := by
   native_decide
+
+example :
+    BlockPtr.WellFormed
+      { region := "x", baseOffset := 0, parentShape := [8, 8],
+        blockShape := [1, 1], strides := [8, 1], offsets := [0, 0] } := by
+  rfl
+
+example :
+    BlockPtr.CheckedAxesValid
+      { region := "x", baseOffset := 0, parentShape := [8, 8],
+        blockShape := [1, 1], strides := [8, 1], offsets := [1, 0] }
+      [0, 1] := by
+  rfl
+
+example :
+    BlockPtr.AdvanceNonnegative
+      { region := "x", baseOffset := 0, parentShape := [8, 8],
+        blockShape := [1, 1], strides := [8, 1], offsets := [1, 0] }
+      [-1, 0] := by
+  rfl
+
+example :
+    BlockPtr.MetadataWellFormed [8, 8] [1, 1] [8, 1] [0, 0] :=
+  checkBlockPtrMetadata_ok (by rfl)
+
+example (i : Nat) (hmem : i ∈ [0, 1]) : i < 2 :=
+  checkBoundaryAxes_ok (by rfl) i hmem
+
+example :
+    BlockPtr.StaticAdvanceNonnegative [1, 0] [-1, 0] :=
+  checkStaticAdvanceNonnegative_ok (by rfl)
+
+example :
+    BlockPtr.MetadataWellFormed [8, 8] [1, 1] [8, 1] [0, 0] ∧
+      (BlockPtrSummary.mk "x" (some 2) (some [0, 0])).region = "x" ∧
+      (BlockPtrSummary.mk "x" (some 2) (some [0, 0])).parentRank = some 2 ∧
+      (BlockPtrSummary.mk "x" (some 2) (some [0, 0])).offsets = some [0, 0] :=
+  BlockPtrSummary.ofStaticChecked_ok
+    (summary := BlockPtrSummary.mk "x" (some 2) (some [0, 0]))
+    (region := "x")
+    (parentShape := [8, 8])
+    (blockShape := [1, 1])
+    (strides := [8, 1])
+    (offsets := [0, 0])
+    (by rfl)
+
+example :
+    [8, 8].length = [8, 1].length ∧
+      [8, 8].length = (2 : Nat) ∧
+      [8, 8].length = [1, 1].length ∧
+      (BlockPtrSummary.mk "x" (some 2) none).region = "x" ∧
+      (BlockPtrSummary.mk "x" (some 2) none).parentRank = some 2 ∧
+      (BlockPtrSummary.mk "x" (some 2) none).offsets = none :=
+  BlockPtrSummary.ofDynamicOffsetsChecked_ok
+    (summary := BlockPtrSummary.mk "x" (some 2) none)
+    (region := "x")
+    (parentShape := [8, 8])
+    (blockShape := [1, 1])
+    (strides := [8, 1])
+    (offsetRank := 2)
+    (by rfl)
+
+example :
+    BlockPtr.StaticAdvanceNonnegative [1, 0] [-1, 0] ∧
+      (BlockPtrSummary.mk "x" (some 2)
+        (some (BlockPtr.advanceOffsets [1, 0] [-1, 0]))).region = "x" ∧
+      (BlockPtrSummary.mk "x" (some 2)
+        (some (BlockPtr.advanceOffsets [1, 0] [-1, 0]))).parentRank = some 2 ∧
+      (BlockPtrSummary.mk "x" (some 2)
+        (some (BlockPtr.advanceOffsets [1, 0] [-1, 0]))).offsets =
+          some (BlockPtr.advanceOffsets [1, 0] [-1, 0]) :=
+  BlockPtrSummary.checkedAdvance_ok
+    (summary := BlockPtrSummary.mk "x" (some 2) (some [1, 0]))
+    (deltas := [-1, 0])
+    (summary' := BlockPtrSummary.mk "x" (some 2)
+      (some (BlockPtr.advanceOffsets [1, 0] [-1, 0])))
+    (by rfl)
+
+example (i : Nat) (hmem : i ∈ [0, 1]) : i < 2 :=
+  BlockPtrSummary.checkBoundary_ok
+    (summary := BlockPtrSummary.mk "x" (some 2) (some [0, 0]))
+    (axes := [0, 1])
+    (by rfl) i hmem
+
+example :
+    BlockPtrSummary.merge
+        (BlockPtrSummary.mk "x" (some 2) (some [0, 0]))
+        (BlockPtrSummary.mk "x" (some 2) (some [1, 0])) =
+      Except.ok (BlockPtrSummary.mk "x" (some 2) none) := by
+  rfl
 
 example : (MemCell.of .nat 7).readAs .nat = some 7 := by
   rfl

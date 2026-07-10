@@ -18,6 +18,7 @@ Documentation Map):
 | Question | Doc |
 |---|---|
 | Which Triton constructs are supported? | [TritonSubset.md](./TritonSubset.md) ([中文](./TritonSubset_zh.md)) |
+| What semantic caveats affect theorem interpretation? | [SemanticCaveats.md](./SemanticCaveats.md) ([中文](./SemanticCaveats_zh.md)) |
 | Where does my new lemma / definition belong? | [CodeOrganization.md](./CodeOrganization.md) ([中文](./CodeOrganization_zh.md)) |
 | Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./ProofConventions.md) ([中文](./ProofConventions_zh.md)) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |

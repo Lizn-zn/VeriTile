@@ -128,6 +128,7 @@ Task-oriented:
 | Question | Doc |
 |---|---|
 | Which Triton constructs are supported? | [TritonSubset.md](./documents/TritonSubset.md) |
+| What semantic caveats affect theorem interpretation? | [SemanticCaveats.md](./documents/SemanticCaveats.md) |
 | Where does my new lemma / definition belong? | [CodeOrganization.md](./documents/CodeOrganization.md) |
 | Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./documents/ProofConventions.md) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |

@@ -3,7 +3,7 @@ VeriTile.Meta.StatementAudit
 
 Machine-checkable trust audit for theorem statements. The soundness of a
 theorem depends ONLY on (a) the constants in its *statement* (type) and (b) its
-axiom footprint — never on the defs/lemmas used only in its *proof* (Lean's
+proof axiom footprint — never on the defs/lemmas used only in its *proof* (Lean's
 kernel checks the proof against the stated type). These commands automate that
 audit:
 

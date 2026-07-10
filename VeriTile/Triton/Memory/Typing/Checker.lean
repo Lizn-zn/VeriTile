@@ -35,13 +35,20 @@ inductive CheckError where
   | blockPointerMetadataMismatch
       (parentRank strideRank offsetRank blockRank : Nat)
   | boundaryAxisOutOfRange (axis rank : Nat)
+  | blockPointerAdvanceUnderflow (axis : Nat) (offset : Nat) (delta : Int)
+  deriving DecidableEq, Repr
+
+structure BlockPtrSummary where
+  region : RegionName
+  parentRank : Option Nat := none
+  offsets : Option (List Nat) := none
   deriving DecidableEq, Repr
 
 structure RegEntry where
   dtype : TileDType
   shape : TileShape
   ptrProvenance : Option RegionName := none
-  blockPtrProvenance : Option RegionName := none
+  blockPtrSummary : Option BlockPtrSummary := none
   deriving DecidableEq, Repr
 
 structure CheckCtx where
@@ -99,10 +106,18 @@ end CheckCtx
 def checkBoundaryAxes (rank : Nat) : List Nat → Except CheckError Unit
   | [] => .ok ()
   | axis :: rest =>
-      if axis < rank then
+      if BlockPtr.axisInRank rank axis then
         checkBoundaryAxes rank rest
       else
         .error (.boundaryAxisOutOfRange axis rank)
+
+def checkBlockPtrMetadataRanks
+    (parentRank strideRank offsetRank blockRank : Nat) :
+    Except CheckError Unit :=
+  if BlockPtr.metadataRanksValid parentRank strideRank offsetRank blockRank then
+    .ok ()
+  else
+    .error (.blockPointerMetadataMismatch parentRank strideRank offsetRank blockRank)
 
 def checkBlockPtrMetadata (parentShape : List Nat) (blockShape : TileShape)
     (strides offsets : List Nat) : Except CheckError Unit :=
@@ -110,10 +125,216 @@ def checkBlockPtrMetadata (parentShape : List Nat) (blockShape : TileShape)
   let strideRank := strides.length
   let offsetRank := offsets.length
   let blockRank := blockShape.length
-  if parentRank = strideRank ∧ parentRank = offsetRank ∧ blockRank ≤ parentRank then
-    .ok ()
+  checkBlockPtrMetadataRanks parentRank strideRank offsetRank blockRank
+
+private def nthDNat (xs : List Nat) (i : Nat) : Nat :=
+  xs.getD i 0
+
+private def nthDInt (xs : List Int) (i : Nat) : Int :=
+  xs.getD i 0
+
+def checkStaticAdvanceNonnegativeAxes
+    (offsets : List Nat) (deltas : List Int) : List Nat → Except CheckError Unit
+  | [] => .ok ()
+  | axis :: rest =>
+      let offset := nthDNat offsets axis
+      let delta := nthDInt deltas axis
+      if BlockPtr.advanceAxisNonnegative offsets deltas axis then
+        checkStaticAdvanceNonnegativeAxes offsets deltas rest
+      else
+        .error (.blockPointerAdvanceUnderflow axis offset delta)
+
+def checkStaticAdvanceNonnegative (offsets : List Nat) (deltas : List Int) :
+    Except CheckError Unit :=
+  checkStaticAdvanceNonnegativeAxes offsets deltas
+    (List.range (max offsets.length deltas.length))
+
+theorem checkBoundaryAxes_ok {rank : Nat} {axes : List Nat}
+    (h : checkBoundaryAxes rank axes = .ok ()) :
+    ∀ axis, axis ∈ axes → axis < rank := by
+  induction axes with
+  | nil =>
+      intro axis hmem
+      cases hmem
+  | cons head tail ih =>
+      simp [checkBoundaryAxes] at h
+      split at h
+      · rename_i hHead
+        intro axis hmem
+        simp at hmem
+        cases hmem with
+        | inl hEq =>
+            subst hEq
+            simpa [BlockPtr.axisInRank] using hHead
+        | inr hTail =>
+            exact ih h axis hTail
+      · contradiction
+
+theorem checkBlockPtrMetadataRanks_ok
+    {parentRank strideRank offsetRank blockRank : Nat}
+    (h : checkBlockPtrMetadataRanks parentRank strideRank offsetRank blockRank = .ok ()) :
+    parentRank = strideRank ∧ parentRank = offsetRank ∧ parentRank = blockRank := by
+  simp [checkBlockPtrMetadataRanks] at h
+  simpa [BlockPtr.metadataRanksValid] using h
+
+theorem checkBlockPtrMetadata_ok
+    {parentShape blockShape strides offsets : List Nat}
+    (h : checkBlockPtrMetadata parentShape blockShape strides offsets = .ok ()) :
+    BlockPtr.MetadataWellFormed parentShape blockShape strides offsets := by
+  simpa [checkBlockPtrMetadata, checkBlockPtrMetadataRanks,
+    BlockPtr.MetadataWellFormed, BlockPtr.metadataValid] using h
+
+theorem checkStaticAdvanceNonnegativeAxes_ok
+    {offsets : List Nat} {deltas : List Int} :
+    ∀ {axes : List Nat},
+      checkStaticAdvanceNonnegativeAxes offsets deltas axes = .ok () →
+        axes.all (BlockPtr.advanceAxisNonnegative offsets deltas) = true
+  | [], _ => rfl
+  | axis :: rest, h => by
+      simp [checkStaticAdvanceNonnegativeAxes] at h
+      split at h
+      · rename_i hAxis
+        simp [hAxis, checkStaticAdvanceNonnegativeAxes_ok h]
+      · contradiction
+
+theorem checkStaticAdvanceNonnegative_ok
+    {offsets : List Nat} {deltas : List Int}
+    (h : checkStaticAdvanceNonnegative offsets deltas = .ok ()) :
+    BlockPtr.StaticAdvanceNonnegative offsets deltas := by
+  exact checkStaticAdvanceNonnegativeAxes_ok h
+
+namespace BlockPtrSummary
+
+def ofStaticChecked (region : RegionName) (parentShape blockShape strides offsets : List Nat) :
+    Except CheckError BlockPtrSummary := do
+  checkBlockPtrMetadata parentShape blockShape strides offsets
+  .ok { region := region, parentRank := some parentShape.length, offsets := some offsets }
+
+def ofDynamicOffsetsChecked (region : RegionName)
+    (parentShape blockShape strides : List Nat) (offsetRank : Nat) :
+    Except CheckError BlockPtrSummary := do
+  checkBlockPtrMetadataRanks parentShape.length strides.length offsetRank blockShape.length
+  .ok { region := region, parentRank := some parentShape.length, offsets := none }
+
+def checkedAdvance (summary : BlockPtrSummary) (deltas : List Int) :
+    Except CheckError BlockPtrSummary := do
+  match summary.offsets with
+  | some offsets =>
+      checkStaticAdvanceNonnegative offsets deltas
+      .ok { summary with offsets := some (BlockPtr.advanceOffsets offsets deltas) }
+  | none => .ok { summary with offsets := none }
+
+def checkBoundary (summary : BlockPtrSummary) (axes : List Nat) :
+    Except CheckError Unit :=
+  match summary.parentRank with
+  | some rank => checkBoundaryAxes rank axes
+  | none => .ok ()
+
+def merge (left right : BlockPtrSummary) : Except CheckError BlockPtrSummary :=
+  if left.region = right.region then
+    .ok
+      { region := left.region
+      , parentRank := if left.parentRank = right.parentRank then left.parentRank else none
+      , offsets := if left.offsets = right.offsets then left.offsets else none }
   else
-    .error (.blockPointerMetadataMismatch parentRank strideRank offsetRank blockRank)
+    .error (.blockPointerProvenanceConflict left.region right.region)
+
+theorem ofStaticChecked_ok {region : RegionName}
+    {parentShape blockShape strides offsets : List Nat}
+    (h : ofStaticChecked region parentShape blockShape strides offsets = .ok summary) :
+    BlockPtr.MetadataWellFormed parentShape blockShape strides offsets ∧
+      summary.region = region ∧
+      summary.parentRank = some parentShape.length ∧
+      summary.offsets = some offsets := by
+  simp [ofStaticChecked] at h
+  cases hCheck : checkBlockPtrMetadata parentShape blockShape strides offsets with
+  | ok u =>
+      cases u
+      simp [hCheck] at h
+      cases h
+      exact ⟨checkBlockPtrMetadata_ok hCheck, rfl, rfl, rfl⟩
+  | error err =>
+      rw [hCheck] at h
+      cases h
+
+theorem ofDynamicOffsetsChecked_ok {region : RegionName}
+    {parentShape blockShape strides : List Nat} {offsetRank : Nat}
+    (h : ofDynamicOffsetsChecked region parentShape blockShape strides offsetRank = .ok summary) :
+    parentShape.length = strides.length ∧
+      parentShape.length = offsetRank ∧
+      parentShape.length = blockShape.length ∧
+      summary.region = region ∧
+      summary.parentRank = some parentShape.length ∧
+      summary.offsets = none := by
+  simp [ofDynamicOffsetsChecked] at h
+  cases hCheck :
+      checkBlockPtrMetadataRanks parentShape.length strides.length offsetRank blockShape.length with
+  | ok u =>
+      cases u
+      simp [hCheck] at h
+      cases h
+      rcases checkBlockPtrMetadataRanks_ok hCheck with ⟨hStride, hOffset, hBlock⟩
+      exact ⟨hStride, hOffset, hBlock, rfl, rfl, rfl⟩
+  | error err =>
+      rw [hCheck] at h
+      cases h
+
+theorem checkedAdvance_ok
+    (h : checkedAdvance summary deltas = .ok summary') :
+    match summary.offsets with
+    | some offsets =>
+        BlockPtr.StaticAdvanceNonnegative offsets deltas ∧
+          summary'.region = summary.region ∧
+          summary'.parentRank = summary.parentRank ∧
+          summary'.offsets = some (BlockPtr.advanceOffsets offsets deltas)
+    | none =>
+        summary'.region = summary.region ∧
+          summary'.parentRank = summary.parentRank ∧
+          summary'.offsets = none := by
+  cases summary with
+  | mk region parentRank offsets? =>
+      cases offsets? with
+      | none =>
+          simp [checkedAdvance] at h
+          subst h
+          simp
+      | some offsets =>
+          simp [checkedAdvance] at h
+          cases hCheck : checkStaticAdvanceNonnegative offsets deltas with
+          | ok u =>
+              cases u
+              simp [hCheck] at h
+              cases h
+              exact ⟨checkStaticAdvanceNonnegative_ok hCheck, rfl, rfl, rfl⟩
+          | error err =>
+              rw [hCheck] at h
+              cases h
+
+theorem checkBoundary_ok
+    (h : checkBoundary summary axes = .ok ()) :
+    match summary.parentRank with
+    | some rank => ∀ axis, axis ∈ axes → axis < rank
+    | none => True := by
+  cases summary with
+  | mk region parentRank offsets =>
+      cases parentRank with
+      | none =>
+          simp
+      | some rank =>
+          simp [checkBoundary] at h
+          exact checkBoundaryAxes_ok h
+
+theorem merge_ok
+    (h : merge left right = .ok summary) :
+    left.region = right.region ∧ summary.region = left.region := by
+  simp [merge] at h
+  split at h
+  · rename_i hRegion
+    cases h
+    exact ⟨hRegion, rfl⟩
+  · contradiction
+
+end BlockPtrSummary
 
 mutual
 
@@ -198,13 +419,10 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
       base.check ctx *> checkBlockPtrMetadata parentShape blockShape strides offsets
   | .makeBlockPtrDynOffsets _ base parentShape blockShape strides offsets =>
       base.check ctx *>
-      (if parentShape.length = strides.length ∧ parentShape.length = offsets.length ∧
-          blockShape.length ≤ parentShape.length then
-        .ok ()
-      else
-        .error (.blockPointerMetadataMismatch parentShape.length strides.length
-          offsets.length blockShape.length))
-  | .advanceBlockPtr ptr _ => ptr.check ctx
+      checkBlockPtrMetadataRanks parentShape.length strides.length offsets.length blockShape.length
+  | .advanceBlockPtr ptr deltas => do
+      ptr.check ctx
+      .ok ()
   | .load dtype mem mask => mem.check ctx dtype *> mask.check ctx
   | .natToReal a => a.check ctx
 termination_by op => sizeOf op
@@ -249,47 +467,57 @@ decreasing_by
     simp_wf
     try omega
 
-def Op.blockPtrProvenance (ctx : CheckCtx) :
-    Op dtype shape → Except CheckError RegionName
-  | .makeBlockPtr region _ parentShape blockShape strides offsets => do
-      checkBlockPtrMetadata parentShape blockShape strides offsets
-      .ok (Region.cast region)
+def Op.blockPtrSummary (ctx : CheckCtx) :
+    Op dtype shape → Except CheckError BlockPtrSummary
+  | .makeBlockPtr region _ parentShape blockShape strides offsets =>
+      BlockPtrSummary.ofStaticChecked
+        (Region.cast region) parentShape blockShape strides offsets
   | .makeBlockPtrDyn region base parentShape blockShape strides offsets => do
       base.check ctx
-      checkBlockPtrMetadata parentShape blockShape strides offsets
-      .ok region
+      BlockPtrSummary.ofStaticChecked region parentShape blockShape strides offsets
   | .makeBlockPtrDynOffsets region base parentShape blockShape strides offsets => do
       base.check ctx
-      if parentShape.length = strides.length ∧ parentShape.length = offsets.length ∧
-          blockShape.length ≤ parentShape.length then
-        .ok ()
-      else
-        .error (.blockPointerMetadataMismatch parentShape.length strides.length
-          offsets.length blockShape.length)
-      .ok region
-  | .advanceBlockPtr ptr _ => ptr.blockPtrProvenance ctx
-  | .broadcast ptr _ => ptr.blockPtrProvenance ctx
-  | .full _ ptr => ptr.blockPtrProvenance ctx
+      BlockPtrSummary.ofDynamicOffsetsChecked region parentShape blockShape strides offsets.length
+  | .advanceBlockPtr ptr deltas => do
+      let summary ← ptr.blockPtrSummary ctx
+      summary.checkedAdvance deltas
+  | .broadcast ptr _ => ptr.blockPtrSummary ctx
+  | .full _ ptr => ptr.blockPtrSummary ctx
   | .where c a b => do
       c.check ctx
-      let left ← a.blockPtrProvenance ctx
-      let right ← b.blockPtrProvenance ctx
-      if left = right then .ok left else .error (.blockPointerProvenanceConflict left right)
+      let left ← a.blockPtrSummary ctx
+      let right ← b.blockPtrSummary ctx
+      BlockPtrSummary.merge left right
   | .ite c a b => do
       c.check ctx
-      let left ← a.blockPtrProvenance ctx
-      let right ← b.blockPtrProvenance ctx
-      if left = right then .ok left else .error (.blockPointerProvenanceConflict left right)
-  | .transpose ptr => ptr.blockPtrProvenance ctx
-  | .expandDim _ ptr => ptr.blockPtrProvenance ctx
+      let left ← a.blockPtrSummary ctx
+      let right ← b.blockPtrSummary ctx
+      BlockPtrSummary.merge left right
+  | .transpose ptr => ptr.blockPtrSummary ctx
+  | .expandDim _ ptr => ptr.blockPtrSummary ctx
   | .ref .blockPtr shape name => do
       let entry ← ctx.checkRegRef name .blockPtr shape
-      match entry.blockPtrProvenance with
-      | some region => .ok region
+      match entry.blockPtrSummary with
+      | some summary => .ok summary
       | none => .error (.missingBlockPointerProvenance name)
   | _ => .error .unsupportedBlockPointerProvenance
 termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
+
+def Op.blockPtrProvenance (ctx : CheckCtx) :
+    Op dtype shape → Except CheckError RegionName := fun op => do
+  let summary ← op.blockPtrSummary ctx
+  .ok summary.region
+
+def Op.blockPtrParentRank? (ctx : CheckCtx) :
+    Op dtype shape → Except CheckError (Option Nat) := fun op => do
+  let summary ← op.blockPtrSummary ctx
+  .ok summary.parentRank
+
+def Op.blockPtrOffsets? (ctx : CheckCtx) :
+    Op dtype shape → Except CheckError (Option (List Nat)) := fun op => do
+  let summary ← op.blockPtrSummary ctx
+  .ok summary.offsets
 
 def MemAccess.check (ctx : CheckCtx) (dtype : TileDType) :
     MemAccess dtype shape → Except CheckError Unit
@@ -298,9 +526,10 @@ def MemAccess.check (ctx : CheckCtx) (dtype : TileDType) :
       let region ← ptr.ptrProvenance ctx
       ctx.checkRegion region dtype
   | .blockPtr ptr boundaryCheck => do
-      let region ← ptr.blockPtrProvenance ctx
+      let summary ← ptr.blockPtrSummary ctx
       checkBoundaryAxes shape.length boundaryCheck
-      ctx.checkRegion region dtype
+      summary.checkBoundary boundaryCheck
+      ctx.checkRegion summary.region dtype
 termination_by mem => sizeOf mem
 decreasing_by all_goals (simp_wf; try omega)
 
@@ -314,20 +543,21 @@ decreasing_by all_goals (simp_wf; try omega)
 end
 
 def pointerEntry (dtype : TileDType) (shape : TileShape)
-    (ptrProv blockProv : Option RegionName) : RegEntry :=
+    (ptrProv : Option RegionName)
+    (blockSummary : Option BlockPtrSummary := none) : RegEntry :=
   { dtype := dtype, shape := shape
-  , ptrProvenance := ptrProv, blockPtrProvenance := blockProv }
+  , ptrProvenance := ptrProv, blockPtrSummary := blockSummary }
 
 def Stmt.assignEntry (ctx : CheckCtx) (dtype : TileDType) (shape : TileShape)
     (e : Op dtype shape) : Except CheckError RegEntry :=
   match dtype with
   | .ptr => do
       let region ← e.ptrProvenance ctx
-      .ok (pointerEntry .ptr shape (some region) none)
+      .ok (pointerEntry .ptr shape (some region))
   | .blockPtr => do
-      let region ← e.blockPtrProvenance ctx
-      .ok (pointerEntry .blockPtr shape none (some region))
-  | dtype => .ok (pointerEntry dtype shape none none)
+      let summary ← e.blockPtrSummary ctx
+      .ok (pointerEntry .blockPtr shape none (some summary))
+  | dtype => .ok (pointerEntry dtype shape none)
 
 mutual
 
@@ -355,18 +585,18 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
       mem.check ctx dtype
       match dest with
       | none => .ok ctx
-      | some name => ctx.setReg name (pointerEntry dtype shape none none)
+      | some name => ctx.setReg name (pointerEntry dtype shape none)
   | .forLoop idx _ body => do
-      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
+      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none)
       StmtList.check ctx' body
   | .forRange idx _ _ _ body => do
-      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
+      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none)
       StmtList.check ctx' body
   | .forRangeDyn idx start stop step body => do
       start.check ctx
       stop.check ctx
       step.check ctx
-      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
+      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none)
       StmtList.check ctx' body
   | .ifThen cond body => do
       cond.check ctx

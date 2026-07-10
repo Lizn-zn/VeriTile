@@ -121,6 +121,7 @@ Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
 | 问题 | 文档 |
 |---|---|
 | 支持哪些 Triton 构造? | [TritonSubset_zh.md](./documents/TritonSubset_zh.md) |
+| 哪些语义 caveat 会影响 theorem 解释? | [SemanticCaveats_zh.md](./documents/SemanticCaveats_zh.md) |
 | 用哪个定理 surface? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |
 | dtype erasure 怎么工作? | [EraseDType.md](./documents/EraseDType.md) |
 | 内存安全 / framing 怎么工作? | [MemorySafety.md](./documents/MemorySafety.md) |

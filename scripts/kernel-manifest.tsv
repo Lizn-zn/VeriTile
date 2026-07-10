@@ -17,7 +17,7 @@
 # proven, projected, test-gap, blocked, smoke
 id	file	theorem	kind	status	source	source_ref	config	label	notes
 softmax_stable_refine	bench/examples/SoftmaxEqRefine.lean	VeriTile.Bench.Examples.Softmax.softmax_kernels_refinement_view	refine	proven	internal	-	-	Naive softmax vs stable softmax	stable shift-trick refinement
-log_sum_exp_shift_refine	bench/examples/LogSumExpEqRefine.lean	VeriTile.Bench.Examples.LogSumExp.log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
+log_sum_exp_shift_refine	bench/examples/StableLogSumExp.lean	VeriTile.Bench.Examples.LogSumExp.log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
 softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalRefine.lean	VeriTile.Bench.Examples.SoftmaxReciprocal.softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
 vector_add_aligned	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_correct_view	correct	proven	internal	-	BLOCK_SIZE=N	Vector add aligned correctness	aligned single-block elementwise add
 vector_add_masked	VeriTile/Examples/VectorAdd.lean	VeriTile.Examples.add_kernel_masked_correct_view	correct	proven	internal	-	BLOCK_SIZE, n_elements	Vector add correctness	masked boundary variant

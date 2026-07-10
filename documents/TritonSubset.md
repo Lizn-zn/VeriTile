@@ -232,6 +232,13 @@ Unknown kwargs are rejected. For block pointers, `boundary_check` is supported
 only on block-pointer `tl.load` / `tl.store`; it cannot be mixed with `mask` or
 `other`. The only modeled `padding_option` is `"zero"`.
 
+The executable checker rejects block-pointer metadata rank mismatches
+(`parentShape`, `blockShape`, `strides`, and `offsets` must have the same
+rank) and statically visible `tl.advance` underflow. Runtime execution remains
+total for unchecked terms; theorem statements should use `BlockPtr.WellFormed`,
+`BlockPtr.CheckedAxesValid`, and `BlockPtr.AdvanceNonnegative` when they rely
+on Triton-style well-formed block pointers.
+
 Masked load semantics:
 
 - If `mask` is true, read memory.
@@ -290,8 +297,26 @@ Kernel.checkStrict Γ k
 reports undeclared regions. The checker tracks register dtype/shape
 consistency, pointer and block-pointer provenance through assignments, direct
 and pointer-derived load/store dtype mismatches, and basic block-pointer
-metadata sanity. It deliberately does not prove bounds, aliasing, launch
-coverage, page ownership, or IEEE/hardware dtype fidelity.
+metadata sanity, including rank equality and static block-pointer advance
+underflow. A unified `BlockPtrSummary` carries block-pointer region, optional
+parent rank, and optional static offsets through simple expressions and
+registers, so checks continue across simple assignment and `tl.advance`
+chains. It deliberately does not prove bounds, aliasing,
+launch coverage, page ownership, or IEEE/hardware dtype fidelity.
+The first proof-facing bridges are available as
+`checkBlockPtrMetadata_ok`, `checkBoundaryAxes_ok`, and
+`checkStaticAdvanceNonnegative_ok`; summary-level bridges
+`BlockPtrSummary.ofStaticChecked_ok`,
+`BlockPtrSummary.ofDynamicOffsetsChecked_ok`,
+`BlockPtrSummary.checkedAdvance_ok`, and
+`BlockPtrSummary.checkBoundary_ok` cover construction and propagation. These
+lemmas turn successful local checker calls into the corresponding theorem-side
+block-pointer contracts.
+The convention for these local obligations is: checker code and decidable
+contracts share executable `BlockPtr.*Valid` / axis-level Bool helpers,
+theorem statements expose Prop wrappers such as `BlockPtr.WellFormed` and
+`BlockPtr.AdvanceNonnegative`, and `_ok` lemmas bridge successful checker
+results to those Prop contracts.
 
 Pointer values can be used inline, assigned, and reused:
 
@@ -309,7 +334,10 @@ shape, block shape, strides, and logical offsets. Block-pointer load/store
 computes each lane address from that layout; out-of-bounds checked load lanes
 return zero, and out-of-bounds checked store lanes leave memory unchanged. It
 does not yet model pointer casts, pointer comparison, hardware/TMA block-pointer
-behavior, or a typed address space.
+behavior, or a typed address space. For proof-facing contracts, use
+`BlockPtr.WellFormed` for metadata rank equality, `BlockPtr.CheckedAxesValid`
+for `boundary_check` axes, and `BlockPtr.AdvanceNonnegative` for signed
+`tl.advance` deltas.
 
 Offsets are explicit `.nat` expressions. For higher-dimensional tensors, the
 user supplies strided offset formulas such as:
@@ -325,7 +353,9 @@ then package the result as a `TensorView`. Aliasing is represented by choosing
 equal or distinct `RegionName`s; arbitrary pointer alias analysis beyond those
 named regions is not modeled. See
 [`GpuMemoryModel.md`](./GpuMemoryModel.md) for the GPU memory hierarchy scope
-and the sequential-consistency assumptions.
+and the sequential-consistency assumptions. See
+[`SemanticCaveats.md`](./SemanticCaveats.md) for the semantic assumptions that
+affect theorem interpretation.
 
 ## Floating-Point Model
 
@@ -340,7 +370,10 @@ Arithmetic is currently an `ℝ` abstraction:
 What this means: theorems prove real-valued mathematical correctness, not
 bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
 underflow, denormals, exception flags, hardware dot precision, and fast-math
-rewrites are not modeled.
+rewrites are not modeled. See
+[`SemanticCaveats.md`](./SemanticCaveats.md) for the review checklist around
+partial math functions, fixed-width integers, pointer offsets, and total
+memory reads.
 
 The core AST uses one dtype-indexed memory form:
 
@@ -457,13 +490,15 @@ A lifter is only useful for kernels whose operations are already representable.
 - Arbitrary pointer alias analysis beyond named-region equality.
 - General Python/Triton JIT semantics, decorators, meta-parameter execution,
   and Python control flow outside the embedded `triton { ... }` block.
-- Atomic operations.
+- Atomic-family members beyond the current limited `atomic_add` /
+  `atomic_xchg` / `atomic_cas` algorithm slices.
 - Async copy / TMA / shared-memory staging.
 - Barriers and inter-program or inter-warp synchronization.
 - Full grid launch execution. `GridIndex` / `Kernel.ForAllPrograms` provide a
   theorem surface for quantifying over every program instance in an ND grid,
   but VeriTile still does not model a sequential or concurrent launch executor,
-  global memory merge, overlapping writes, races, atomics, or scheduling.
+  overlapping ordinary writes, races, full CUDA atomic memory ordering, or
+  scheduling.
 - Caches and performance hints such as `cache_modifier`, `eviction_policy`,
   `volatile`, or `is_volatile`.
 - Higher-rank bracket slicing beyond the currently supported rank-1

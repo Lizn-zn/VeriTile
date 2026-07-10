@@ -207,6 +207,13 @@ bit-level / precision 语义。
 block-pointer `tl.load` / `tl.store` 上使用,不能和 `mask` / `other` 混用。
 当前唯一建模的 `padding_option` 是 `"zero"`。
 
+executable checker 会拒绝 block-pointer metadata rank mismatch
+(`parentShape`、`blockShape`、`strides`、`offsets` 必须同 rank),也会拒绝
+静态可见的 `tl.advance` underflow。未经过 checker 的 term 在 runtime 执行语义里
+仍保持 total;依赖 Triton-style well-formed block pointer 的 theorem statement
+应使用 `BlockPtr.WellFormed`、`BlockPtr.CheckedAxesValid` 和
+`BlockPtr.AdvanceNonnegative`。
+
 masked load 语义:
 
 - `mask=true` 时读内存。
@@ -262,8 +269,22 @@ Kernel.checkStrict Γ k
 `Kernel.check` 是 lax mode,未声明 region 会跳过;`checkStrict` 会把未声明 region
 报错。checker 跟踪 register dtype/shape 一致性、pointer / block-pointer
 provenance、直接和 pointer-derived load/store dtype mismatch,以及基本 block-pointer
-metadata sanity。它刻意不证明 bounds、alias、launch coverage、page ownership 或
-IEEE/hardware dtype fidelity。
+metadata sanity,包括 rank equality 和静态 block-pointer advance underflow。checker
+通过统一的 `BlockPtrSummary` 携带 block-pointer region、可选 parent rank 和可选
+静态 offsets,并让这些信息跟随简单 expression / register 传播,所以简单赋值和
+`tl.advance` 链之后仍能继续检查。它刻意不证明 bounds、alias、
+launch coverage、page ownership 或 IEEE/hardware dtype fidelity。
+第一批 proof-facing bridge 是 `checkBlockPtrMetadata_ok`、
+`checkBoundaryAxes_ok` 和 `checkStaticAdvanceNonnegative_ok`;summary 层还有
+`BlockPtrSummary.ofStaticChecked_ok`、
+`BlockPtrSummary.ofDynamicOffsetsChecked_ok`、
+`BlockPtrSummary.checkedAdvance_ok` 和
+`BlockPtrSummary.checkBoundary_ok` 覆盖构造和传播。它们把局部 checker 成功结果转成
+对应的 theorem-side block-pointer contract。
+这些局部义务采用统一约定:checker 代码和 decidable contract 共用 executable
+`BlockPtr.*Valid` / axis-level Bool helper;theorem statement 暴露
+`BlockPtr.WellFormed`、`BlockPtr.AdvanceNonnegative` 这类 Prop wrapper;`_ok`
+lemma 把成功的 checker result 桥接到这些 Prop contract。
 
 pointer value 可以 inline 使用、赋值和复用:
 
@@ -279,7 +300,10 @@ block pointer 建模为 first-class `.blockPtr` tile value,携带 base region、
 offset、parent shape、block shape、strides 和 logical offsets。block-pointer
 load/store 会逐 lane 计算地址;checked 维度越界的 load lane 返回 zero,checked 维度
 越界的 store lane 不写内存。pointer cast、pointer comparison、硬件/TMA block-pointer
-行为、typed address space 还没有建模。
+行为、typed address space 还没有建模。证明侧 contract 使用
+`BlockPtr.WellFormed` 表示 metadata rank equality,`BlockPtr.CheckedAxesValid`
+表示 `boundary_check` axis 合法性,`BlockPtr.AdvanceNonnegative` 表示 signed
+`tl.advance` delta 不 underflow。
 
 Offset 是显式 `.nat` 表达式。高维 tensor 通过用户写出的 strided offset 公式表示,
 例如:
@@ -292,6 +316,7 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 公式连接到数学 tensor slice。证明内部仍可使用更底层的 `InputAt` escape hatch
 表示任意 offset map,再把结果封装成 `TensorView`。aliasing 通过选择相同或不同的
 `RegionName` 表示;这些 named region 之外的通用 pointer alias analysis 还没有建模。
+语义假设如何影响 theorem 解释,见 [`SemanticCaveats_zh.md`](./SemanticCaveats_zh.md)。
 
 ## 浮点模型
 
@@ -304,7 +329,9 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 
 含义是:当前 theorem 证明的是实数数学正确性,不是 IEEE-754 bit-level 等价。
 rounding、NaN、signed zero、overflow、underflow、denormal、exception flag、
-硬件 dot precision、fast-math rewrite 都未建模。
+硬件 dot precision、fast-math rewrite 都未建模。关于 partial math function、
+fixed-width integer、pointer offset 和 total memory read 的 review checklist,
+见 [`SemanticCaveats_zh.md`](./SemanticCaveats_zh.md)。
 
 core AST 现在使用统一的 dtype-indexed memory form:
 
@@ -410,13 +437,14 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 - named-region equality 之外的通用 pointer alias analysis。
 - 完整 Python/Triton JIT 语义、decorator、meta-parameter execution,
   以及 `triton { ... }` 块外的 Python control flow。
-- atomic operations。
+- 当前 limited `atomic_add` / `atomic_xchg` / `atomic_cas` 算法切片之外的
+  atomic family 成员。
 - async copy / TMA / shared-memory staging。
 - barrier、跨 program 或跨 warp synchronization。
 - 完整 grid launch execution。`GridIndex` / `Kernel.ForAllPrograms` 提供
   ND grid 上每个 program instance 的 theorem surface,但 VeriTile 仍不建模
-  sequential/concurrent launch executor、global memory merge、overlapping
-  writes、race、atomic 或 scheduling。
+  sequential/concurrent launch executor、overlapping ordinary writes、race、
+  完整 CUDA atomic memory ordering 或 scheduling。
 - cache/performance hint,例如 `cache_modifier`, `eviction_policy`, `volatile`,
   `is_volatile`。
 - 高 rank bracket slicing。目前只支持 rank-1 的 `[:, None]` / `[None, :]`;

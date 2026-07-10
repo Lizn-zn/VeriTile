@@ -28,8 +28,9 @@ is_comment_or_blank() {
 theorem_exists() {
   local file="$1"
   local name="$2"
+  local short_name="${name##*.}"
   [[ -f "${file}" ]] || return 1
-  grep -Eq "^[[:space:]]*(private[[:space:]]+)?theorem[[:space:]]+${name}([[:space:]:{(]|$)" "${file}"
+  grep -Eq "^[[:space:]]*(private[[:space:]]+)?theorem[[:space:]]+${short_name}([[:space:]:{(]|$)" "${file}"
 }
 
 run_build_no_sorry() {
