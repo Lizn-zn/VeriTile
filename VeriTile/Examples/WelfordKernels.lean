@@ -126,28 +126,7 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
 -- welford_eq_two_pass) now lives in `VeriTile.Triton.TiledReduction.WelfordRec`,
 -- opened below; shared with the bench/examples Welford + LayerNorm showcases.
 
-def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
-  [Stmt.assign .real [] "xi"
-      (Op.load .real (MemAccess.region xReg
-        (Op.add .nat .nil
-          (Op.mul .nat .nil (Op.ref .nat [] "pid")
-            (Op.constNat blockSize))
-          (Op.ref .nat [] "i"))) MaskOpt.none),
-    Stmt.assign .real [] "delta"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "M"
-      (Op.add .real .nil (Op.ref .real [] "M")
-        (Op.div .real .nil (Op.ref .real [] "delta")
-          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
-            (Op.const 1)))),
-    Stmt.assign .real [] "delta2"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "S"
-      (Op.add .real .nil (Op.ref .real [] "S")
-        (Op.mul .real .nil (Op.ref .real [] "delta")
-          (Op.ref .real [] "delta2")))]
+-- `onlineWelfordLoopBody` is shared from `VeriTile.Examples.Common`.
 
 /-- Per-row mean spec. Thin alias for `Triton.TiledReduction.welfordMean`. -/
 noncomputable def welfordMeanSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=

@@ -328,6 +328,31 @@ theorem execR_triv (k : Kernel) (s : BlockState) :
     execR RoundingModel.triv k s = exec k s := by
   simp only [execR, exec, stepStmtsR_triv k.body s]
 
+/-! ## Cast-free degeneration
+
+A loop whose body steps identically under `execR R` and `exec` (e.g. a body
+with no `castFloat` / rounded store) folds identically too — the ∀-`R`
+analogue of `stepForLoopAuxR_triv`. Supply the body-level degeneration
+`hbody` by `simp only [body, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+evalOpR.eq_def, evalOp]; rfl` on the concrete cast-free body. -/
+
+/-- `forLoop` auxiliary cast-free degeneration: if the body steps identically
+under `stepStmtsR R` and `stepStmts`, so does the whole loop fold. -/
+theorem stepForLoopAuxR_castFree (R : RoundingModel) (body : List Stmt)
+    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
+    ∀ (start n : Nat) (s : BlockState),
+      stepForLoopAuxR R idx start n body s = stepForLoopAux idx start n body s
+  | start, n, s => by
+      rw [stepForLoopAuxR, stepForLoopAux]
+      simp only [hbody (s.setReg idx .nat [] (Tile.scalar start))]
+      split
+      · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
+        | none => rfl
+        | some s' => exact stepForLoopAuxR_castFree R body hbody idx (start + 1) n s'
+      · rfl
+  termination_by start n _ => n - start
+  decreasing_by omega
+
 /-! ## R-scatter readback (#447 Phase C)
 
 The `writeMemAsR` mirror of the fp16 `MemCell` scatter-readback family in
@@ -339,6 +364,13 @@ layer: the cell an active lane leaves behind is
 `MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype v))`. -/
 
 namespace BlockState
+
+/-- `writeMemAsR` only rewrites `mem`, so register reads pass through it —
+lets a later store's value register be read over an earlier store. -/
+@[simp] theorem writeMemAsR_regs (R : RoundingModel) (s : BlockState)
+    (d : FloatDType) (reg : RegionName) (o : Nat) (v : TileCarrier d.toTileDType)
+    (dt : TileDType) (sh : TileShape) (nm : RegName) :
+    (s.writeMemAsR R d reg o v).regs dt sh nm = s.regs dt sh nm := rfl
 
 /-- `writeMemTypedR` at a concrete narrow-float tag reduces to `writeMemAsR`
 (store-side rounding-event site). -/

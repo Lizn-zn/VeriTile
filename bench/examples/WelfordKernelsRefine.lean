@@ -47,7 +47,8 @@ namespace VeriTile.Bench.Examples.Welford
 open VeriTile.Triton
 
 open VeriTile.Triton.TiledReduction.WelfordRec
-open VeriTile.Examples (InputLoadedAt inputLoadedAt_of_programTileView_loaded programTileView castFin)
+open VeriTile.Examples (InputLoadedAt inputLoadedAt_of_programTileView_loaded programTileView castFin
+  onlineWelfordLoopBody onlineWelfordLoopBody_castFree)
 
 /-! ## Kernels -/
 section Welford.kernels
@@ -95,28 +96,9 @@ section Welford.lemmas
 -- Welford two-pass/recurrence math (twoPassMean/twoPassS/welfordMean/welfordS +
 -- welford_eq_two_pass) now lives in `VeriTile.Triton.TiledReduction.WelfordRec`,
 -- opened above; shared with the LayerNorm showcase and VeriTile.Examples.WelfordKernels.
-private def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
-  [Stmt.assign .real [] "xi"
-      (Op.load .real (MemAccess.region xReg
-        (Op.add .nat .nil
-          (Op.mul .nat .nil (Op.ref .nat [] "pid")
-            (Op.constNat blockSize))
-          (Op.ref .nat [] "i"))) MaskOpt.none),
-    Stmt.assign .real [] "delta"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "M"
-      (Op.add .real .nil (Op.ref .real [] "M")
-        (Op.div .real .nil (Op.ref .real [] "delta")
-          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
-            (Op.const 1)))),
-    Stmt.assign .real [] "delta2"
-      (Op.sub .real .nil (Op.ref .real [] "xi")
-        (Op.ref .real [] "M")),
-    Stmt.assign .real [] "S"
-      (Op.add .real .nil (Op.ref .real [] "S")
-        (Op.mul .real .nil (Op.ref .real [] "delta")
-          (Op.ref .real [] "delta2")))]
+-- `onlineWelfordLoopBody` + its cast-free degeneration are shared from
+-- `VeriTile.Examples.Common`; `stepForLoopAuxR_castFree` + `writeMemAsR_regs`
+-- live in the library (`VeriTile.Triton.Float.StepR`).
 
 /-- Loop invariant for `onlineWelfordKernel`: after `k` body iterations,
     register `M` holds `welfordMean xs k`, register `S` holds `welfordS xs k`,
@@ -229,33 +211,6 @@ private theorem onlineWelfordLoopBody_assigns (xReg : RegionName) (blockSize : N
 The online kernel's loop body carries no `castFloat`, so it steps identically
 under `execR R` and `exec`; only the two boundary bf16 output stores differ. -/
 
-/-- `stepForLoopAux` degenerates from `execR R` to `exec` whenever the loop body
-does. Arbitrary-`R` generalization of `stepForLoopAuxR_triv`. -/
-private theorem stepForLoopAuxR_castFree (R : RoundingModel) (body : List Stmt)
-    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
-    ∀ (start n : Nat) (s : BlockState),
-      stepForLoopAuxR R idx start n body s = stepForLoopAux idx start n body s
-  | start, n, s => by
-      rw [stepForLoopAuxR, stepForLoopAux]
-      simp only [hbody (s.setReg idx .nat [] (Tile.scalar start))]
-      split
-      · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
-        | none => rfl
-        | some s' => exact stepForLoopAuxR_castFree R body hbody idx (start + 1) n s'
-      · rfl
-  termination_by start n _ => n - start
-  decreasing_by omega
-
-/-- The online Welford loop body is cast-free: it steps identically under
-`execR R` and `exec`. -/
-private theorem onlineWelfordLoopBody_castFree (R : RoundingModel)
-    (xReg : RegionName) (blockSize : Nat) (t : BlockState) :
-    stepStmtsR R (onlineWelfordLoopBody xReg blockSize) t
-      = stepStmts (onlineWelfordLoopBody xReg blockSize) t := by
-  simp only [onlineWelfordLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
-    evalOpR.eq_def, evalOp]
-  rfl
-
 /-- The online kernel's whole `forLoop` statement steps identically under
 `execR R` and `exec`. -/
 private theorem online_forLoop_castFree (R : RoundingModel)
@@ -265,13 +220,6 @@ private theorem online_forLoop_castFree (R : RoundingModel)
   simp only [stepStmtR, stepStmt,
     stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg blockSize)
       (onlineWelfordLoopBody_castFree R xReg blockSize) "i" 0 blockSize t]
-
-/-- `writeMemAsR` only rewrites `mem`, so register reads pass through it — needed
-so the second (var) store can read its value register over the first store. -/
-@[simp] private theorem writeMemAsR_regs (R : RoundingModel) (s : BlockState)
-    (d : FloatDType) (reg : RegionName) (o : Nat) (v : TileCarrier d.toTileDType)
-    (dt : TileDType) (sh : TileShape) (nm : RegName) :
-    (s.writeMemAsR R d reg o v).regs dt sh nm = s.regs dt sh nm := rfl
 
 /-- The bf16-rounded scalar output-store cell: the boundary store double-rounds
 its ℝ value `v` (the `.to(bf16)` cast, then the buffer `storeValue`). -/
