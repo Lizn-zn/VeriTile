@@ -1302,7 +1302,12 @@ def Stmt.TraceSafeR (R : RoundingModel) (bounds : RegionBounds) : Stmt → Block
   | .atomicAdd _ _ mem val mask, s =>
       mem.SafeAtR R bounds s ∧ val.SafeAtR R bounds s ∧ mask.SafeAtR R bounds s ∧
       mem.ActiveAddressSafeR R bounds s (mask.ActiveR R s)
-  | .atomicRMW _ _ _ _ _ _ _ _, _ => False
+  | .atomicRMW _ _ _ mem input extra mask _, s =>
+      -- RMW delegates to the exact semantics, so its per-execution contract
+      -- is the exact-side one (see `stepStmtR`'s deliberate delegation).
+      mem.SafeAt bounds s ∧ input.SafeAt bounds s ∧
+      extra.elim True (·.SafeAt bounds s) ∧ mask.SafeAt bounds s ∧
+      mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop idx n body, s => Stmt.forLoopTraceSafeR R bounds idx 0 n body s
   | .forRange idx start stop step body, s =>
       Stmt.forRangeTraceSafeR R bounds idx start stop step body s
@@ -1856,7 +1861,8 @@ theorem stepStmtR_undef (R : RoundingModel) : ∀ (st : Stmt) (s s' : BlockState
                     obtain rfl := Option.some_inj.mp h
                     exact foldl_guarded_writeR_undef ..
   | .atomicRMW op d sh mem input extra mask dest, s, s', hok, h => by
-      simp only [Stmt.FlattenOk] at hok
+      simp only [stepStmtR] at h
+      exact stepStmt_undef _ s s' hok h
   | .forLoop idx n body, s, s', hok, h => by
       simp only [Stmt.FlattenOk] at hok
       simp only [stepStmtR] at h
@@ -2631,7 +2637,13 @@ theorem FlatAlloc.stepStmtR_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       FlatAlloc.trCarrier_blockPtr_inBounds]
                     rfl
   | .atomicRMW op d sh mem input extra mask dest, s, hms, hok, hu => by
-      simp only [Stmt.FlattenOk] at hok
+      simp only [Stmt.TraceSafeR] at hms
+      have h := A.stepStmt_flatten hd hcov
+        (.atomicRMW op d sh mem input extra mask dest) s
+        (by simp only [Stmt.TraceSafe]; exact hms) hok hu
+      simp only [FlatAlloc.flattenStmt] at h ⊢
+      simp only [stepStmtR]
+      exact h
   | .forLoop idx n body, s, hms, hok, hu => by
       simp only [Stmt.TraceSafeR] at hms
       simp only [Stmt.FlattenOk] at hok
