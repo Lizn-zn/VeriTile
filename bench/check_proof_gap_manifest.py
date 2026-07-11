@@ -86,10 +86,14 @@ ISSUE_BY_FAMILY = {
 
 SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
 
-# Public-headline discovery tiers, mirroring scripts/spec_sheet.py: the first
-# non-empty tier in a file is that file's public spec surface. This closes the
-# blind spot where a kernel's headline is named `*_closed_form_correct` /
-# `*_compute_correct` rather than `*output_summary*` (24 of 142 files).
+# Public-headline discovery tiers, mirroring scripts/spec_sheet.py. Discovery
+# is anchored on the file's LAST declaration (MAIN_THEOREM_CONVENTIONS.md #1:
+# the final theorem IS the headline): tiers above the anchor's tier are
+# skipped, so a helper suffix (e.g. `*_store_slice_compute_correct`) cannot
+# shadow the real lower-tier headline; within the winning tier, `_general`
+# variants win over their non-general helpers when both are present. This
+# closes the blind spot where a kernel's headline is named
+# `*_closed_form_correct` / `*_compute_correct` rather than `*output_summary*`.
 HEADLINE_TIERS = (
     lambda n: "summary" in n and "_general" in n,
     lambda n: "summary" in n,
@@ -410,10 +414,31 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     return level, family, issue, None
 
 
+def pick_tier_headlines(decls: list[str]) -> list[str]:
+    """Anchored `HEADLINE_TIERS` discovery (mirrored in scripts/spec_sheet.py):
+    the file's last declaration fixes the tier — tiers above it are helper
+    suffixes and are skipped; within the winning tier, `_general` variants
+    win over their non-general helpers when both are present."""
+    anchor = None
+    if decls:
+        for i, tier in enumerate(HEADLINE_TIERS):
+            if tier(decls[-1]):
+                anchor = i
+                break
+    for i, tier in enumerate(HEADLINE_TIERS):
+        if anchor is not None and i < anchor:
+            continue
+        hits = [n for n in decls if tier(n)]
+        if hits:
+            general = [n for n in hits if n.endswith("_general")]
+            return general if general else hits
+    return []
+
+
 def headline_names(full_text: str) -> set[str]:
     """Per-file public headline declarations: every `*output_summary*` decl,
-    plus the first non-empty `HEADLINE_TIERS` hit (spec_sheet.py's discovery),
-    so files whose headline is `*_closed_form_correct` / `*_compute_correct`
+    plus the anchored `HEADLINE_TIERS` pick (spec_sheet.py's discovery), so
+    files whose headline is `*_closed_form_correct` / `*_compute_correct`
     are not invisible to the manifest."""
     decls: list[str] = []
     for raw in full_text.splitlines():
@@ -421,11 +446,7 @@ def headline_names(full_text: str) -> set[str]:
         if m:
             decls.append(m.group(1))
     picked: set[str] = {n for n in decls if SUMMARY_RE.search(f"theorem {n} ")}
-    for tier in HEADLINE_TIERS:
-        hits = [n for n in decls if tier(n)]
-        if hits:
-            picked.update(hits)
-            break
+    picked.update(pick_tier_headlines(decls))
     return picked
 
 

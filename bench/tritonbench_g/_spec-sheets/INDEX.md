@@ -1,20 +1,19 @@
 # Spec-sheet index
 
-- 151 kernels, 251 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 151 kernels, 189 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`, optionally boundary-masked) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
 |---:|---|---:|---:|---:|---:|---|
-| 1278 | [LayerNormOps.md](LayerNormOps.md) | 93 | 0 | 863 | 136 |  |
+| 318 | [LayerNormOps.md](LayerNormOps.md) | 43 | 0 | 171 | 18 |  |
 | 300 | [NestedLoopsProcessing.md](NestedLoopsProcessing.md) | 10 | 0 | 246 | 24 |  |
 | 298 | [AttentionFwdTriton3.md](AttentionFwdTriton3.md) | 32 | 0 | 136 | 76 |  |
 | 291 | [FusedRecurrentDelta.md](FusedRecurrentDelta.md) | 44 | 2 | 147 | 14 |  |
-| 266 | [FlashAttn.md](FlashAttn.md) | 21 | 0 | 162 | 47 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
 | 249 | [TritonAttention.md](TritonAttention.md) | 37 | 0 | 123 | 35 |  |
 | 192 | [FusedRecurrentRetention.md](FusedRecurrentRetention.md) | 27 | 0 | 104 | 13 |  |
 | 175 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
-| 168 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 22 | 0 | 91 | 11 |  |
+| 173 | [FlashAttn.md](FlashAttn.md) | 15 | 0 | 95 | 39 |  |
 | 163 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 0 | 79 | 15 |  |
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
 | 148 | [RotaryEmbNopad.md](RotaryEmbNopad.md) | 14 | 0 | 96 | 10 |  |
@@ -26,7 +25,6 @@
 | 117 | [KldivTriton.md](KldivTriton.md) | 9 | 0 | 70 | 20 |  |
 | 114 | [CacheTransformTriton.md](CacheTransformTriton.md) | 11 | 0 | 76 | 5 |  |
 | 112 | [FastRopeEmbedding.md](FastRopeEmbedding.md) | 13 | 0 | 65 | 8 |  |
-| 109 | [SoftmaxReducev.md](SoftmaxReducev.md) | 22 | 0 | 39 | 8 |  |
 | 108 | [ChunkedCumsumFwd.md](ChunkedCumsumFwd.md) | 12 | 0 | 72 | 2 |  |
 | 106 | [FusedRwkv6Kernel.md](FusedRwkv6Kernel.md) | 19 | 0 | 47 | 8 |  |
 | 106 | [RotaryTransformOps.md](RotaryTransformOps.md) | 12 | 0 | 64 | 6 |  |
@@ -48,6 +46,7 @@
 | 81 | [FastCeLoss.md](FastCeLoss.md) | 9 | 0 | 53 | 5 |  |
 | 79 | [LightningAttention.md](LightningAttention.md) | 13 | 0 | 42 | 4 |  |
 | 78 | [TokenAttnMistral.md](TokenAttnMistral.md) | 14 | 0 | 31 | 5 |  |
+| 77 | [AttentionForwardTriton.md](AttentionForwardTriton.md) | 12 | 5 | 30 | 6 |  |
 | 76 | [DestindexCopy.md](DestindexCopy.md) | 8 | 0 | 49 | 3 |  |
 | 76 | [FlashDecode2Llama.md](FlashDecode2Llama.md) | 10 | 0 | 45 | 1 |  |
 | 75 | [LayerNormLiger.md](LayerNormLiger.md) | 10 | 0 | 38 | 7 |  |
@@ -55,6 +54,7 @@
 | 73 | [QuantizeKvTransform.md](QuantizeKvTransform.md) | 12 | 0 | 35 | 4 |  |
 | 72 | [FastLayernorm.md](FastLayernorm.md) | 11 | 0 | 34 | 7 |  |
 | 72 | [LayerNormWelfold.md](LayerNormWelfold.md) | 11 | 0 | 37 | 4 |  |
+| 71 | [SoftmaxReducev.md](SoftmaxReducev.md) | 16 | 0 | 20 | 7 |  |
 | 70 | [FusedLayernormTriton.md](FusedLayernormTriton.md) | 11 | 0 | 36 | 3 |  |
 | 69 | [CrossEntropy2.md](CrossEntropy2.md) | 8 | 0 | 44 | 5 |  |
 | 69 | [CrossEntropyOps.md](CrossEntropyOps.md) | 8 | 0 | 44 | 5 |  |
@@ -77,7 +77,6 @@
 | 53 | [KcacheCopyTriton.md](KcacheCopyTriton.md) | 8 | 0 | 27 | 2 |  |
 | 53 | [LayernormFwdTriton.md](LayernormFwdTriton.md) | 8 | 0 | 25 | 4 |  |
 | 52 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 25 | 0 |  |
-| 51 | [AttentionForwardTriton.md](AttentionForwardTriton.md) | 8 | 0 | 24 | 3 |  |
 | 51 | [CrossEntropy1.md](CrossEntropy1.md) | 7 | 0 | 31 | 3 |  |
 | 51 | [EmbeddingTritonKernel.md](EmbeddingTritonKernel.md) | 10 | 0 | 17 | 4 |  |
 | 50 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 0 | 21 | 5 |  |
@@ -109,6 +108,7 @@
 | 38 | [AdamUpdateTriton.md](AdamUpdateTriton.md) | 3 | 0 | 26 | 3 |  |
 | 38 | [LogSoftmax.md](LogSoftmax.md) | 7 | 0 | 15 | 2 |  |
 | 38 | [MatmulKernel.md](MatmulKernel.md) | 9 | 0 | 13 | 2 |  |
+| 37 | [BatchedVecmatMult.md](BatchedVecmatMult.md) | 7 | 0 | 15 | 5 |  |
 | 37 | [KsoftmaxTriton.md](KsoftmaxTriton.md) | 6 | 0 | 17 | 2 |  |
 | 37 | [RmsNormTriton.md](RmsNormTriton.md) | 7 | 0 | 16 | 2 |  |
 | 37 | [RmsnormFused.md](RmsnormFused.md) | 6 | 0 | 15 | 4 |  |
