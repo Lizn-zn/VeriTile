@@ -667,6 +667,112 @@ theorem evalOp_shiftAdd {sh : TileShape} (b : Nat) (off : Op .nat sh)
           simp [hoff, FlatAlloc.shiftBroadcast, Tile.bop, NumericDType.nat_add]
 
 
+/-! ## Per-state safety (bridge v1.2)
+
+`Op.MemorySafe` quantifies its active-address bounds over **all** states,
+which is dischargeable only when masks and addresses are visibly coupled
+(inline addressing, block pointers) — not for the register-indirect
+`offs := ...; tl.load(x + offs, ...)` style every DSL kernel uses. The
+bridge therefore takes the *per-execution* contracts below: `Op.SafeAt`
+bounds the active addresses in ONE state, and `Stmt.TraceSafe` threads it
+along the actual execution (each step safe in the state it actually runs
+in). `∀`-state `MemorySafe` users can always specialize. -/
+
+set_option maxHeartbeats 1600000 in
+/-- Single-state analogue of `Op.MemorySafe`: every load's active lanes are
+in bounds **in the given state** (subterms recurse at the same state, since
+expression evaluation never changes it). -/
+def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
+  | .const _ => True
+  | .constFloat _ _ => True
+  | .constNat _ => True
+  | .constInt _ => True
+  | .constBool _ => True
+  | .negInf => True
+  | .programId _ => True
+  | .numPrograms _ => True
+  | .ref _ _ _ => True
+  | .arange _ => True
+  | .broadcast e _ => e.SafeAt bounds s
+  | .full _ e => e.SafeAt bounds s
+  | .castFloat _ _ e => e.SafeAt bounds s
+  | .castNatToInt e => e.SafeAt bounds s
+  | .castIntToNat e => e.SafeAt bounds s
+  | .castRealToInt8 e => e.SafeAt bounds s
+  | .add _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .sub _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .mul _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .div _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .floorDiv _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .mod _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .bitAnd _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .bitOr _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .bitXor _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .shiftLeft _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .shiftRight _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .exp a => a.SafeAt bounds s
+  | .exp2 a => a.SafeAt bounds s
+  | .log a => a.SafeAt bounds s
+  | .log2 a => a.SafeAt bounds s
+  | .sigmoid a => a.SafeAt bounds s
+  | .sqrt a => a.SafeAt bounds s
+  | .rsqrt a => a.SafeAt bounds s
+  | .tanh a => a.SafeAt bounds s
+  | .sin a => a.SafeAt bounds s
+  | .cos a => a.SafeAt bounds s
+  | .tan a => a.SafeAt bounds s
+  | .atan a => a.SafeAt bounds s
+  | .cosh a => a.SafeAt bounds s
+  | .sinh a => a.SafeAt bounds s
+  | .erf a => a.SafeAt bounds s
+  | .lt _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .le _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .eq _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .gt _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .ge _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .ne _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .boolAnd _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .boolOr _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .boolNot a => a.SafeAt bounds s
+  | .max2 _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .pow _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .where c a b => c.SafeAt bounds s ∧ a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .ite c a b => c.SafeAt bounds s ∧ a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .reduceMax _ _ a => a.SafeAt bounds s
+  | .reduceMaxNat _ _ a => a.SafeAt bounds s
+  | .reduceSum _ _ a => a.SafeAt bounds s
+  | .scan _ _ _ a => a.SafeAt bounds s
+  | .argMax _ a => a.SafeAt bounds s
+  | .argMin _ a => a.SafeAt bounds s
+  | .sort _ a => a.SafeAt bounds s
+  | .dot a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .transpose a => a.SafeAt bounds s
+  | .reshape _ a => a.SafeAt bounds s
+  | .remap _ _ a => a.SafeAt bounds s
+  | .join a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .split _ a => a.SafeAt bounds s
+  | .expandDim _ a => a.SafeAt bounds s
+  | .ptrBase _ => True
+  | .ptrAdd _ ptr off => ptr.SafeAt bounds s ∧ off.SafeAt bounds s
+  | .ptrSub _ ptr off => ptr.SafeAt bounds s ∧ off.SafeAt bounds s
+  | .makeBlockPtr _ _ _ _ _ _ => True
+  | .makeBlockPtrDyn _ base _ _ _ _ => base.SafeAt bounds s
+  | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
+      base.SafeAt bounds s ∧ ∀ off ∈ offsets, off.SafeAt bounds s
+  | .advanceBlockPtr ptr _ => ptr.SafeAt bounds s
+  | .load _ mem mask =>
+      (match mem with
+        | .region _ off => off.SafeAt bounds s
+        | .ptr ptr => ptr.SafeAt bounds s
+        | .blockPtr ptr _ => ptr.SafeAt bounds s) ∧
+      (match mask with
+        | .none => True
+        | .mask m => m.SafeAt bounds s
+        | .maskOther m other => m.SafeAt bounds s ∧ other.SafeAt bounds s) ∧
+      mem.ActiveAddressSafe bounds s (mask.Active s)
+  | .natToReal a => a.SafeAt bounds s
+
+
 /-- `mapM`-level commutation for dynamic block-pointer offset lists: if every
 member op evaluates identically after translation, so does the scalar-offset
 `mapM`. -/
@@ -699,7 +805,7 @@ membership in the allocation's region list (regions outside it have extent
 theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
     ∀ {d : TileDType} {sh : TileShape} (e : Op d sh) (s : BlockState),
-      e.MemorySafe A.extent → e.FlattenOk → s.undef = (fun _ _ => 0) →
+      e.SafeAt A.extent s → e.FlattenOk → s.undef = (fun _ _ => 0) →
       evalOp (A.flattenOp e) (A.flattenState s)
         = (evalOp e s).map A.trTile
   | _, _, .const c, s, _, _, _ => by
@@ -724,24 +830,24 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
   | _, _, .arange n, s, _, _, _ => by
       simp only [flattenOp, evalOp, Option.map_some]; rfl
   | _, _, .broadcast e sh, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov e s hms hok hu]
       cases evalOp e s <;> rfl
   | _, _, .full sh e, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov e s hms hok hu]
       cases evalOp e s <;> rfl
   | _, _, .castFloat src dst a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data src.toTileDType_ne_ptr src.toTileDType_ne_blockPtr,
         A.trTileFun_data dst.toTileDType_ne_ptr dst.toTileDType_ne_blockPtr,
         Option.map_id, id_eq]
   | _, _, .add nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -750,7 +856,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .sub nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -759,7 +865,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .mul nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -768,7 +874,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .div nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -777,7 +883,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .floorDiv nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -786,7 +892,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .mod nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -795,7 +901,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data nd.ne_ptr nd.ne_blockPtr, Option.map_id, id_eq]
   | _, _, .lt nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -806,7 +912,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .le nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -817,7 +923,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .eq nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -828,7 +934,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .gt nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -839,7 +945,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .ge nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -850,7 +956,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .ne nd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -861,7 +967,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .bitAnd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -871,7 +977,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .bitOr bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -881,7 +987,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .bitXor bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -891,7 +997,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .shiftLeft bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -901,7 +1007,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .shiftRight bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -911,7 +1017,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .boolAnd bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -921,7 +1027,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .boolOr bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -931,7 +1037,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .max2 bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -941,7 +1047,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .pow bc a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -951,7 +1057,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .dot a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -961,175 +1067,175 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .exp a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .exp2 a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .log a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .log2 a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .sigmoid a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .sqrt a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .rsqrt a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .tanh a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .sin a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .cos a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .tan a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .atan a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .cosh a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .sinh a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .erf a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .boolNot a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .bool) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .natToReal a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .castNatToInt a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .castIntToNat a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .int) (by decide) (by decide),
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .castRealToInt8 a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .sort ax a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .scan op ax dir a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .argMax ax a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .argMin ax a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .reduceMax ax kd a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .reduceMaxNat ax kd a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .reduceSum ax kd a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .where c a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hmc, hma, hmb⟩ := hms
       obtain ⟨hkc, hka, hkb⟩ := hok
@@ -1141,7 +1247,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       cases evalOp c s <;> cases evalOp a s <;> cases evalOp b s <;>
         simp [A.trTile_select]
   | _, _, .ite c a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hmc, hma, hmb⟩ := hms
       obtain ⟨hkc, hka, hkb⟩ := hok
@@ -1154,23 +1260,23 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       | none => rfl
       | some vc => by_cases hb : vc.data PUnit.unit = true <;> simp [hb]
   | _, _, .transpose a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu]
       cases evalOp a s <;> simp [A.trTile_transpose]
   | _, _, .reshape outSh a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨⟨h1, h2⟩, hka⟩ := hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hka hu,
         A.trTileFun_data h1 h2, Option.map_id, id_eq]
   | _, _, .remap outSh f a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu]
       cases evalOp a s <;> rfl
   | _, _, .join a b, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
       obtain ⟨hka, hkb⟩ := hok
@@ -1179,12 +1285,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu]
       cases evalOp a s <;> cases evalOp b s <;> simp [A.trTile_join]
   | _, _, .split side a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu]
       cases evalOp a s <;> rfl
   | _, _, .expandDim ax a, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu]
       cases evalOp a s <;> rfl
@@ -1195,7 +1301,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
             = (A.flat, A.addr (Region.cast r) 0)
         simp [FlatAlloc.addr])
   | _, _, .ptrAdd bc p o, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hmp, hmo⟩ := hms
       obtain ⟨hkp, hko⟩ := hok
@@ -1205,7 +1311,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .nat) (by decide) (by decide), Option.map_id, id_eq]
       cases evalOp p s <;> cases evalOp o s <;> simp [A.trTile_ptrAdd]
   | _, _, .ptrSub bc p o, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hkp, hko, hnuf⟩ := hok
       simp only [flattenOp, evalOp,
@@ -1240,7 +1346,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
   | _, _, .makeBlockPtr r bo ps bs strides offs, s, _, _, _ => by
       simp only [flattenOp, evalOp, Option.map_some]; rfl
   | _, _, .makeBlockPtrDyn r bo ps bs strides offs, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp,
         evalOp_flatten A hd hcov bo s hms hok hu,
@@ -1251,7 +1357,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
           simp [Tile.bop, NumericDType.nat_add, FlatAlloc.trTile,
             FlatAlloc.trCarrier, FlatAlloc.addr]
   | _, _, .makeBlockPtrDynOffsets r bo ps bs strides offs, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hkb, hkoffs⟩ := hok
       obtain ⟨hmb, hmoffs⟩ := hms
@@ -1283,7 +1389,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
               simp [Tile.bop, NumericDType.nat_add, FlatAlloc.trTile,
                 FlatAlloc.trCarrier, FlatAlloc.addr]
   | _, _, .advanceBlockPtr p ds, s, hms, hok, hu => by
-      simp only [Op.MemorySafe] at hms
+      simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov p s hms hok hu]
       cases evalOp p s <;>
@@ -1294,10 +1400,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       | region r off =>
           cases mask with
           | none =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHoff : evalOp (A.flattenOp off) (A.flattenState s)
                   = evalOp off s := by
                 rw [evalOp_flatten A hd hcov off s hmsmem hokmem hu,
@@ -1313,7 +1421,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   refine congrArg some (Tile.ext fun i => ?_)
                   simp only [reduceIte, FlatAlloc.trTile, Region.cast_cast, Region.cast_self]
                   have hbound : offs.data i < A.extent (Region.cast r) :=
-                    haddr s offs hoffs i trivial
+                    haddr offs hoffs i trivial
                   have hreg : (Region.cast r : RegionName) ∈ A.regions := by
                     by_contra hnr
                     rw [hcov _ hnr] at hbound
@@ -1323,10 +1431,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   rw [A.flattenState_readMemValue hd s hreg hbound d hdt,
                     A.trCarrier_data hdt.1 hdt.2]
           | mask m =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHoff : evalOp (A.flattenOp off) (A.flattenState s)
                   = evalOp off s := by
                 rw [evalOp_flatten A hd hcov off s hmsmem hokmem hu,
@@ -1354,7 +1464,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       simp only [reduceIte, FlatAlloc.trTile, Region.cast_cast, Region.cast_self]
                       by_cases hact : ms.data i = true
                       · have hbound : offs.data i < A.extent (Region.cast r) :=
-                          haddr s offs hoffs i ⟨ms, hm, hact⟩
+                          haddr offs hoffs i ⟨ms, hm, hact⟩
                         have hreg : (Region.cast r : RegionName) ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hbound
@@ -1372,10 +1482,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           | exact absurd rfl hdt.2
                           | simp [hu, FlatAlloc.flattenState, FlatAlloc.trCarrier]
           | maskOther m other =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hkm, hko⟩ := hok
               obtain ⟨hmsmem, ⟨hmm, hmo⟩, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHoff : evalOp (A.flattenOp off) (A.flattenState s)
                   = evalOp off s := by
                 rw [evalOp_flatten A hd hcov off s hmsmem hokmem hu,
@@ -1414,7 +1526,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           by_cases hact : ms.data i = true
                           · have hbound : offs.data i
                                 < A.extent (Region.cast r) :=
-                              haddr s offs hoffs i ⟨ms, hm, hact⟩
+                              haddr offs hoffs i ⟨ms, hm, hact⟩
                             have hreg : (Region.cast r : RegionName)
                                 ∈ A.regions := by
                               by_contra hnr
@@ -1432,10 +1544,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       | ptr p =>
           cases mask with
           | none =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               cases hps : evalOp p s with
               | none =>
@@ -1447,7 +1561,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   refine congrArg some (Tile.ext fun i => ?_)
                   simp only [reduceIte, FlatAlloc.trTile, Region.cast_cast, Region.cast_self]
                   have hbound : (ps.data i).2 < A.extent (ps.data i).1 :=
-                    haddr s ps hps i trivial
+                    haddr.2 ps hps i trivial
                   have hreg : (ps.data i).1 ∈ A.regions := by
                     by_contra hnr
                     rw [hcov _ hnr] at hbound
@@ -1456,10 +1570,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   rw [A.flattenState_readMemValue hd s hreg hbound d hdt,
                     A.trCarrier_data hdt.1 hdt.2]
           | mask m =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               have IHm : evalOp (A.flattenOp m) (A.flattenState s)
                   = evalOp m s := by
@@ -1482,7 +1598,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       simp only [reduceIte, FlatAlloc.trTile, Region.cast_cast, Region.cast_self]
                       by_cases hact : ms.data i = true
                       · have hbound : (ps.data i).2 < A.extent (ps.data i).1 :=
-                          haddr s ps hps i ⟨ms, hm, hact⟩
+                          haddr.2 ps hps i ⟨ms, hm, hact⟩
                         have hreg : (ps.data i).1 ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hbound
@@ -1499,10 +1615,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           | exact absurd rfl hdt.2
                           | simp [hu, FlatAlloc.flattenState, FlatAlloc.trCarrier]
           | maskOther m other =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hkm, hko⟩ := hok
               obtain ⟨hmsmem, ⟨hmm, hmo⟩, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               have IHm : evalOp (A.flattenOp m) (A.flattenState s)
                   = evalOp m s := by
@@ -1536,7 +1654,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           by_cases hact : ms.data i = true
                           · have hbound : (ps.data i).2
                                 < A.extent (ps.data i).1 :=
-                              haddr s ps hps i ⟨ms, hm, hact⟩
+                              haddr.2 ps hps i ⟨ms, hm, hact⟩
                             have hreg : (ps.data i).1 ∈ A.regions := by
                               by_contra hnr
                               rw [hcov _ hnr] at hbound
@@ -1552,10 +1670,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       | blockPtr p bc =>
           cases mask with
           | none =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               cases hps : evalOp p s with
               | none =>
@@ -1570,7 +1690,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                     A.trCarrier_blockPtr_inBounds]
                   by_cases hib : (ps.data i).inBounds
                       (TileShape.indexToList _ i) bc = true
-                  · have hbound := haddr s ps hps i trivial hib
+                  · have hbound := haddr.2 ps hps i trivial hib
                     have hreg : (ps.data i).region ∈ A.regions := by
                       by_contra hnr
                       rw [hcov _ hnr] at hbound
@@ -1587,10 +1707,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                     simp only [hib, Bool.false_eq_true, if_false]
                     rw [A.trCarrier_data hdt.1 hdt.2]
           | mask m =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hokmask⟩ := hok
               obtain ⟨hmsmem, hmsmask, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               have IHm : evalOp (A.flattenOp m) (A.flattenState s)
                   = evalOp m s := by
@@ -1618,7 +1740,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       · simp only [hact, if_true]
                         by_cases hib : (ps.data i).inBounds
                             (TileShape.indexToList _ i) bc = true
-                        · have hbound := haddr s ps hps i ⟨ms, hm, hact⟩ hib
+                        · have hbound := haddr.2 ps hps i ⟨ms, hm, hact⟩ hib
                           have hreg : (ps.data i).region ∈ A.regions := by
                             by_contra hnr
                             rw [hcov _ hnr] at hbound
@@ -1642,10 +1764,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           | exact absurd rfl hdt.2
                           | simp [hu, FlatAlloc.flattenState, FlatAlloc.trCarrier]
           | maskOther m other =>
-              simp only [Op.MemorySafe] at hms
+              simp only [Op.SafeAt] at hms
               simp only [Op.FlattenOk] at hok
               obtain ⟨hdt, hokmem, hkm, hko⟩ := hok
               obtain ⟨hmsmem, ⟨hmm, hmo⟩, haddr⟩ := hms
+              simp only [MemAccess.ActiveAddressSafe,
+                memAccessActiveAddressSafe, Op.PointerAddressesSafeOn] at haddr
               have IHp := evalOp_flatten A hd hcov p s hmsmem hokmem hu
               have IHm : evalOp (A.flattenOp m) (A.flattenState s)
                   = evalOp m s := by
@@ -1683,7 +1807,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           · simp only [hact, if_true]
                             by_cases hib : (ps.data i).inBounds
                                 (TileShape.indexToList _ i) bc = true
-                            · have hbound := haddr s ps hps i ⟨ms, hm, hact⟩ hib
+                            · have hbound := haddr.2 ps hps i ⟨ms, hm, hact⟩ hib
                               have hreg : (ps.data i).region ∈ A.regions := by
                                 by_contra hnr
                                 rw [hcov _ hnr] at hbound
@@ -1820,6 +1944,711 @@ theorem flattenState_writeMemTyped (hd : A.Disjoint) (s : BlockState)
 end FlatAlloc
 
 
+
+
+
+/-- Address-form children are in the covered fragment. -/
+def MemAccess.FlattenOkC :
+    {d : TileDType} → {sh : TileShape} → MemAccess d sh → Prop
+  | _, _, .region _ off => off.FlattenOk
+  | _, _, .ptr p => p.FlattenOk
+  | _, _, .blockPtr p _ => p.FlattenOk
+
+/-- Mask children are in the covered fragment. -/
+def MaskOpt.FlattenOkC :
+    {d : TileDType} → {sh : TileShape} → MaskOpt d sh → Prop
+  | _, _, .none => True
+  | _, _, .mask m => m.FlattenOk
+  | _, _, .maskOther m o => m.FlattenOk ∧ o.FlattenOk
+
+/-- Address-form children are safe at `s`. -/
+def MemAccess.SafeAt (bounds : RegionBounds) (s : BlockState) :
+    {d : TileDType} → {sh : TileShape} → MemAccess d sh → Prop
+  | _, _, .region _ off => off.SafeAt bounds s
+  | _, _, .ptr p => p.SafeAt bounds s
+  | _, _, .blockPtr p _ => p.SafeAt bounds s
+
+/-- Mask children are safe at `s`. -/
+def MaskOpt.SafeAt (bounds : RegionBounds) (s : BlockState) :
+    {d : TileDType} → {sh : TileShape} → MaskOpt d sh → Prop
+  | _, _, .none => True
+  | _, _, .mask m => m.SafeAt bounds s
+  | _, _, .maskOther m o => m.SafeAt bounds s ∧ o.SafeAt bounds s
+
+/-! ## Per-execution statement safety (bridge v1.2, continued) -/
+
+mutual
+
+/-- Per-execution safety: the statement's own accesses are in bounds in the
+state it runs in, and every successor state reached by the actual execution
+is recursively safe. A failing step has no successors to constrain. -/
+def Stmt.TraceSafe (bounds : RegionBounds) : Stmt → BlockState → Prop
+  | .assign _ _ _ e, s => e.SafeAt bounds s
+  | .store _ _ mem val mask, s =>
+      mem.SafeAt bounds s ∧ val.SafeAt bounds s ∧ mask.SafeAt bounds s ∧
+      mem.ActiveAddressSafe bounds s (mask.Active s)
+  | .atomicAdd _ _ mem val mask, s =>
+      mem.SafeAt bounds s ∧ val.SafeAt bounds s ∧ mask.SafeAt bounds s ∧
+      mem.ActiveAddressSafe bounds s (mask.Active s)
+  | .atomicRMW _ _ _ mem input extra mask _, s =>
+      mem.SafeAt bounds s ∧ input.SafeAt bounds s ∧
+      extra.elim True (·.SafeAt bounds s) ∧ mask.SafeAt bounds s ∧
+      mem.ActiveAddressSafe bounds s (mask.Active s)
+  | .forLoop idx n body, s => Stmt.forLoopTraceSafe bounds idx 0 n body s
+  | .forRange idx start stop step body, s =>
+      Stmt.forRangeTraceSafe bounds idx start stop step body s
+  | .forRangeDyn idx start stop step body, s =>
+      start.SafeAt bounds s ∧ stop.SafeAt bounds s ∧ step.SafeAt bounds s ∧
+      (match evalOp start s, evalOp stop s, evalOp step s with
+        | some a, some b, some c =>
+            Stmt.forRangeTraceSafe bounds idx (a.data PUnit.unit)
+              (b.data PUnit.unit) (c.data PUnit.unit) body s
+        | _, _, _ => True)
+  | .ifThen c body, s =>
+      c.SafeAt bounds s ∧
+      (match evalOp c s with
+        | some vc => if vc.data PUnit.unit then Stmt.TraceSafeList bounds body s
+                     else True
+        | none => True)
+  | .ifThenElse c tb eb, s =>
+      c.SafeAt bounds s ∧
+      (match evalOp c s with
+        | some vc => if vc.data PUnit.unit then Stmt.TraceSafeList bounds tb s
+                     else Stmt.TraceSafeList bounds eb s
+        | none => True)
+  termination_by st _ => (sizeOf st, 0)
+  decreasing_by
+    all_goals simp_wf
+    all_goals (try omega)
+    all_goals (have : 0 < sizeOf idx := by cases idx; simp)
+    all_goals omega
+
+/-- Per-execution safety for a statement list. -/
+def Stmt.TraceSafeList (bounds : RegionBounds) : List Stmt → BlockState → Prop
+  | [], _ => True
+  | st :: rest, s =>
+      st.TraceSafe bounds s ∧
+      (match stepStmt st s with
+        | some s' => Stmt.TraceSafeList bounds rest s'
+        | none => True)
+  termination_by l _ => (sizeOf l, 0)
+  decreasing_by all_goals (simp_wf; omega)
+
+/-- Per-execution safety through a `forLoop` unrolling. -/
+def Stmt.forLoopTraceSafe (bounds : RegionBounds) (idx : RegName)
+    (start n : Nat) (body : List Stmt) (s : BlockState) : Prop :=
+  if start < n then
+    Stmt.TraceSafeList bounds body (s.setReg idx .nat [] (Tile.scalar start)) ∧
+    (match stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
+      | some s' => Stmt.forLoopTraceSafe bounds idx (start + 1) n body s'
+      | none => True)
+  else True
+  termination_by (sizeOf body + 1, n - start)
+  decreasing_by all_goals (simp_wf; omega)
+
+/-- Per-execution safety through a `forRange` unrolling. -/
+def Stmt.forRangeTraceSafe (bounds : RegionBounds) (idx : RegName)
+    (cur stop step : Nat) (body : List Stmt) (s : BlockState) : Prop :=
+  if step = 0 then True
+  else if cur < stop then
+    Stmt.TraceSafeList bounds body (s.setReg idx .nat [] (Tile.scalar cur)) ∧
+    (match stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) with
+      | some s' =>
+          Stmt.forRangeTraceSafe bounds idx (cur + step) stop step body s'
+      | none => True)
+  else True
+  termination_by (sizeOf body + 1, stop - cur)
+  decreasing_by all_goals (simp_wf; omega)
+
+end
+
+
+/-- Introduction form for `TraceSafeList` at a cons: prove the head safe and
+the tail safe for whatever successor the step actually produces. -/
+theorem Stmt.TraceSafeList.cons_intro {bounds : RegionBounds} {st : Stmt}
+    {rest : List Stmt} {s : BlockState}
+    (h1 : st.TraceSafe bounds s)
+    (h2 : ∀ s', stepStmt st s = some s' →
+      Stmt.TraceSafeList bounds rest s') :
+    Stmt.TraceSafeList bounds (st :: rest) s := by
+  rw [Stmt.TraceSafeList]
+  refine ⟨h1, ?_⟩
+  cases h : stepStmt st s with
+  | none => trivial
+  | some s' => exact h2 s' h
+
+/-- `TraceSafeList` of `[]` is trivial (registered for terminal steps). -/
+theorem Stmt.TraceSafeList.nil_intro {bounds : RegionBounds}
+    {s : BlockState} : Stmt.TraceSafeList bounds [] s := by
+  rw [Stmt.TraceSafeList]
+  trivial
+
+/-- Kernel-level per-execution safety. -/
+def Kernel.TraceSafe (bounds : RegionBounds) (k : Kernel)
+    (s : BlockState) : Prop :=
+  Stmt.TraceSafeList bounds k.body s
+
+
+/-! ## atomicRMW support (bridge v1.2)
+
+Only `xchg` and `cas` are live (`RMWOp.apply` returns `none` on
+`add`/`max`/`min`), and the event record never enters the final state, so
+the commutation only tracks the `(state, returned value)` pair. The `cas`
+cell-equality test survives relocation on every data dtype: the translation
+preserves the dtype tag, so tag-mismatched comparisons stay `false` on both
+sides and tag-matched data cells translate identically. -/
+
+namespace FlatAlloc
+
+variable (A : FlatAlloc)
+
+/-- Flattening commutes with a single in-bounds raw-cell write. -/
+theorem flattenState_writeCell (hd : A.Disjoint) (s : BlockState)
+    {r : RegionName} (hr : r ∈ A.regions) {o : Nat} (ho : o < A.extent r)
+    (cell : MemCell) :
+    A.flattenState (s.writeCell r o cell)
+      = (A.flattenState s).writeCell A.flat (A.addr r o) (A.trCell cell) := by
+  refine BlockState.ext (fun r' o' => ?_) (fun _ _ _ => rfl) (fun _ => rfl)
+    (fun _ _ => rfl) (fun _ => rfl)
+  show (if r' = A.flat then A.readFlat _ o' else MemCell.real 0) = _
+  simp only [BlockState.writeCell]
+  by_cases hrf : r' = A.flat
+  · subst hrf
+    rw [if_pos rfl, A.readFlat_update hd s hr ho]
+    by_cases heq : o' = A.addr r o
+    · subst heq
+      rw [if_pos rfl, if_pos ⟨rfl, rfl⟩]
+    · rw [if_neg heq, if_neg (fun h => heq h.2)]
+      show A.readFlat s o'
+          = if A.flat = A.flat then A.readFlat s o' else MemCell.real 0
+      rw [if_pos rfl]
+  · rw [if_neg hrf, if_neg (fun h => hrf h.1)]
+    show MemCell.real 0
+        = if r' = A.flat then A.readFlat s o' else MemCell.real 0
+    rw [if_neg hrf]
+
+/-- On data dtypes the cell translation reflects equality with a data cell
+(the translation preserves the dtype tag). -/
+theorem trCell_eq_data_iff {d : TileDType} (h1 : d ≠ .ptr)
+    (h2 : d ≠ .blockPtr) (old : MemCell) (v : TileCarrier d) :
+    A.trCell old = MemCell.of d v ↔ old = MemCell.of d v := by
+  constructor
+  · intro h
+    obtain ⟨cd, w⟩ := old
+    have htag : cd = d := congrArg Sigma.fst h
+    subst htag
+    rw [show A.trCell ⟨cd, w⟩ = ⟨cd, A.trCarrier cd w⟩ from rfl,
+      A.trCarrier_data h1 h2] at h
+    exact h
+  · intro h
+    rw [h]
+    show ⟨d, A.trCarrier d v⟩ = MemCell.of d v
+    rw [A.trCarrier_data h1 h2]
+    rfl
+
+/-- `BlockState.rmwReturnedValue` only reads the `result` cell through `readAs`, so a
+translated result cell returns the same data value. -/
+theorem BlockState.rmwReturnedValue_trCell {d : TileDType} (h1 : d ≠ .ptr)
+    (h2 : d ≠ .blockPtr) (ev : RMWEvent) :
+    BlockState.rmwReturnedValue d { ev with result := ev.result.map A.trCell }
+      = BlockState.rmwReturnedValue d ev := by
+  unfold BlockState.rmwReturnedValue
+  cases hres : ev.result with
+  | none => rfl
+  | some cell =>
+      simp only [Option.map_some]
+      rw [A.readAs_trCell]
+      cases hread : cell.readAs d with
+      | none => rfl
+      | some v =>
+          simp only [Option.map_some]
+          rw [A.trCarrier_data h1 h2]
+
+/-- One in-bounds RMW commutes with flattening on the `(state, ret)` pair,
+for the two live ops (`apply` is `none` on `add`/`max`/`min`). -/
+theorem flattenState_atomicRMWAt (hd : A.Disjoint) (s : BlockState)
+    {r : RegionName} (hr : r ∈ A.regions) {o : Nat} (ho : o < A.extent r)
+    (op : RMWOp) {d : TileDType} (h1 : d ≠ .ptr) (h2 : d ≠ .blockPtr)
+    (input : TileCarrier d) (extra : Option (TileCarrier d)) :
+    ((A.flattenState s).atomicRMWAt op d A.flat (A.addr r o) input extra).map
+        (fun x => (x.1, x.2.1))
+      = (s.atomicRMWAt op d r o input extra).map
+        (fun x => (A.flattenState x.1, x.2.1)) := by
+  have htr_of : A.trCell (MemCell.of d input) = MemCell.of d input := by
+    show (⟨d, A.trCarrier d input⟩ : MemCell) = MemCell.of d input
+    rw [A.trCarrier_data h1 h2]
+    rfl
+  have hret : ∀ old : MemCell,
+      BlockState.rmwReturnedValue d
+          (RMWEvent.withObservedResult
+            { cell := ((A.flat : RegionName), A.addr r o), op := op,
+              input := MemCell.of d input,
+              extraInput := extra.map (MemCell.of d) } (A.trCell old))
+        = BlockState.rmwReturnedValue d
+          (RMWEvent.withObservedResult
+            { cell := (r, o), op := op, input := MemCell.of d input,
+              extraInput := extra.map (MemCell.of d) } old) := by
+    intro old
+    unfold BlockState.rmwReturnedValue RMWEvent.withObservedResult
+    simp only []
+    rw [A.readAs_trCell]
+    cases hread : old.readAs d with
+    | none => rfl
+    | some v =>
+        simp only [Option.map_some]
+        rw [A.trCarrier_data h1 h2]
+  unfold BlockState.atomicRMWAt
+  rw [A.flattenState_mem_addr hd s hr ho]
+  cases op with
+  | add => rfl
+  | max => rfl
+  | min => rfl
+  | xchg =>
+      simp only [RMWOp.apply, Option.bind_eq_bind]
+      refine congrArg some (Prod.ext ?_ ?_)
+      · simp only []
+        rw [A.flattenState_writeCell hd s hr ho, htr_of]
+      · simp only []
+        exact hret (s.mem r o)
+  | cas =>
+      cases hex : extra with
+      | none => rfl
+      | some replacement =>
+          have htr_rep : A.trCell (MemCell.of d replacement)
+              = MemCell.of d replacement := by
+            show (⟨d, A.trCarrier d replacement⟩ : MemCell)
+                = MemCell.of d replacement
+            rw [A.trCarrier_data h1 h2]
+            rfl
+          simp only [RMWOp.apply, Option.map_some]
+          by_cases heq : s.mem r o = MemCell.of d input
+          · rw [dif_pos heq,
+              dif_pos ((A.trCell_eq_data_iff h1 h2 _ input).mpr heq)]
+            refine congrArg some (Prod.ext ?_ ?_)
+            · simp only []
+              rw [A.flattenState_writeCell hd s hr ho, htr_rep]
+            · simp only []
+              exact hret (s.mem r o)
+          · rw [dif_neg heq,
+              dif_neg (fun h => heq ((A.trCell_eq_data_iff h1 h2 _ input).mp h))]
+            refine congrArg some (Prod.ext ?_ ?_)
+            · simp only []
+              rw [A.flattenState_writeCell hd s hr ho]
+            · simp only []
+              exact hret (s.mem r o)
+
+end FlatAlloc
+
+
+namespace FlatAlloc
+
+variable (A : FlatAlloc)
+
+/-- The RMW fold commutes with flattening: same returned tile, flattened
+state, provided every active lane is in bounds. -/
+theorem flattenState_foldAtomicRMW (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    {sh : TileShape} (op : RMWOp) {d : TileDType}
+    (h1 : d ≠ .ptr) (h2 : d ≠ .blockPtr)
+    (regionFn : TileIndex sh → RegionName) (offsetFn : TileIndex sh → Nat)
+    (inputFn : TileIndex sh → TileCarrier d)
+    (extraFn : Option (TileIndex sh → TileCarrier d))
+    (active : TileIndex sh → Bool) :
+    ∀ (l : List (TileIndex sh)) (s : BlockState)
+      (retFn : TileIndex sh → TileCarrier d),
+      (∀ i ∈ l, active i = true → offsetFn i < A.extent (regionFn i)) →
+      foldAtomicRMWIndices op (fun _ => A.flat)
+          (fun i => A.addr (regionFn i) (offsetFn i)) inputFn extraFn active
+          l (A.flattenState s) retFn
+        = (foldAtomicRMWIndices op regionFn offsetFn inputFn extraFn active
+            l s retFn).map (fun x => (A.flattenState x.1, x.2))
+  | [], s, retFn, _ => rfl
+  | j :: rest, s, retFn, hbound => by
+      rw [foldAtomicRMWIndices, foldAtomicRMWIndices]
+      by_cases hj : active j = true
+      · rw [if_pos hj, if_pos hj]
+        have hb := hbound j (List.mem_cons_self ..) hj
+        have hrj : regionFn j ∈ A.regions := by
+          by_contra hnr
+          rw [hcov _ hnr] at hb
+          exact absurd hb (Nat.not_lt_zero _)
+        have hcomm := A.flattenState_atomicRMWAt hd s hrj hb op h1 h2
+          (inputFn j) (extraFn.map (fun f => f j))
+        cases hsrc : s.atomicRMWAt op d (regionFn j) (offsetFn j) (inputFn j)
+            (extraFn.map (fun f => f j)) with
+        | none =>
+            rw [hsrc] at hcomm
+            cases hflat : (A.flattenState s).atomicRMWAt op d A.flat
+                (A.addr (regionFn j) (offsetFn j)) (inputFn j)
+                (extraFn.map (fun f => f j)) with
+            | none => rfl
+            | some x =>
+                rw [hflat] at hcomm
+                exact absurd hcomm (by simp)
+        | some x =>
+            obtain ⟨s', ret, ev⟩ := x
+            rw [hsrc] at hcomm
+            cases hflat : (A.flattenState s).atomicRMWAt op d A.flat
+                (A.addr (regionFn j) (offsetFn j)) (inputFn j)
+                (extraFn.map (fun f => f j)) with
+            | none =>
+                rw [hflat] at hcomm
+                exact absurd hcomm (by simp)
+            | some y =>
+                obtain ⟨sf', retf, evf⟩ := y
+                rw [hflat] at hcomm
+                simp only [Option.map_some, Option.some_inj, Prod.mk.injEq]
+                  at hcomm
+                obtain ⟨hs', hret⟩ := hcomm
+                subst hret
+                rw [hs']
+                exact flattenState_foldAtomicRMW hd hcov op h1 h2 regionFn
+                  offsetFn inputFn extraFn active rest s' _
+                  (fun i hi hact => hbound i (List.mem_cons_of_mem _ hi) hact)
+      · rw [if_neg hj, if_neg hj]
+        exact flattenState_foldAtomicRMW hd hcov op h1 h2 regionFn offsetFn
+          inputFn extraFn active rest s retFn
+          (fun i hi hact => hbound i (List.mem_cons_of_mem _ hi) hact)
+
+/-- Flattening commutes with the pid-restoring wrapper. -/
+theorem flattenState_setPids (s base : BlockState) :
+    A.flattenState { s with pids := base.pids }
+      = { A.flattenState s with pids := base.pids } := by
+  refine BlockState.ext (fun _ _ => rfl) (fun _ _ _ => rfl) (fun _ => rfl)
+    (fun _ _ => rfl) (fun _ => rfl)
+
+end FlatAlloc
+
+/-! ### atomicRMW `undef` preservation -/
+
+@[simp] theorem BlockState.writeCell_undef (s : BlockState) (r : RegionName)
+    (o : Nat) (cell : MemCell) : (s.writeCell r o cell).undef = s.undef := rfl
+
+theorem atomicRMWAt_undef {s s' : BlockState} {op : RMWOp} {d : TileDType}
+    {r : RegionName} {o : Nat} {input : TileCarrier d}
+    {extra : Option (TileCarrier d)} {ret : TileCarrier d} {ev : RMWEvent}
+    (h : s.atomicRMWAt op d r o input extra = some (s', ret, ev)) :
+    s'.undef = s.undef := by
+  unfold BlockState.atomicRMWAt at h
+  simp only [] at h
+  cases happ : RMWOp.apply op (s.mem r o)
+      { cell := (r, o), op := op, input := MemCell.of d input,
+        extraInput := extra.map (MemCell.of d) } with
+  | none => rw [happ] at h; exact absurd h (by simp)
+  | some x =>
+      obtain ⟨nextCell, ev'⟩ := x
+      rw [happ] at h
+      replace h : some (s.writeCell r o nextCell,
+          BlockState.rmwReturnedValue d ev', ev') = some (s', ret, ev) := h
+      obtain ⟨h1, -, -⟩ := Prod.mk.injEq .. ▸ Option.some_inj.mp h
+      rw [← h1]
+      rfl
+
+theorem foldAtomicRMW_undef {sh : TileShape} {op : RMWOp} {d : TileDType}
+    {regionFn : TileIndex sh → RegionName} {offsetFn : TileIndex sh → Nat}
+    {inputFn : TileIndex sh → TileCarrier d}
+    {extraFn : Option (TileIndex sh → TileCarrier d)}
+    {active : TileIndex sh → Bool} :
+    ∀ (l : List (TileIndex sh)) (s s' : BlockState)
+      (retFn : TileIndex sh → TileCarrier d) (rets : Tile d sh),
+      foldAtomicRMWIndices op regionFn offsetFn inputFn extraFn active l s
+          retFn = some (s', rets) →
+      s'.undef = s.undef
+  | [], s, s', retFn, rets, h => by
+      rw [foldAtomicRMWIndices] at h
+      obtain ⟨h1, -⟩ := Prod.mk.injEq .. ▸ Option.some_inj.mp h
+      rw [← h1]
+  | j :: rest, s, s', retFn, rets, h => by
+      rw [foldAtomicRMWIndices] at h
+      by_cases hj : active j = true
+      · rw [if_pos hj] at h
+        cases hstep : s.atomicRMWAt op d (regionFn j) (offsetFn j) (inputFn j)
+            (extraFn.map (fun f => f j)) with
+        | none => rw [hstep] at h; exact absurd h (by simp)
+        | some x =>
+            obtain ⟨s1, ret, ev⟩ := x
+            rw [hstep] at h
+            replace h : foldAtomicRMWIndices op regionFn offsetFn inputFn
+                extraFn active rest s1 _ = some (s', rets) := h
+            rw [foldAtomicRMW_undef rest s1 s' _ rets h,
+              atomicRMWAt_undef hstep]
+      · rw [if_neg hj] at h
+        exact foldAtomicRMW_undef rest s s' retFn rets h
+
+
+
+/-- Inversion for a successful raw RMW step. -/
+theorem stepAtomicRMWRaw_inv {op : RMWOp} {dtype : TileDType}
+    {shape : TileShape} {mem : MemAccess dtype shape}
+    {input : Op dtype shape} {extraInput : Option (Op dtype shape)}
+    {mask : MaskOpt dtype shape} {dest : Option RegName} {s s' : BlockState}
+    (h : stepAtomicRMWRaw op dtype shape mem input extraInput mask dest s
+      = some s') :
+    ∃ inputs extraFn active s1 rets,
+      evalOp input s = some inputs ∧
+      rmwExtras extraInput s = some extraFn ∧
+      rmwActive mask s = some active ∧
+      rmwDispatch op mem inputs extraFn active s = some (s1, rets) ∧
+      rmwCommit dest s1 rets = some s' := by
+  unfold stepAtomicRMWRaw at h
+  cases h1 : evalOp input s with
+  | none => rw [h1] at h; exact absurd h (by simp)
+  | some inputs =>
+      rw [h1] at h
+      replace h : (rmwExtras extraInput s).bind (fun extraFn =>
+          (rmwActive mask s).bind (fun active =>
+            (rmwDispatch op mem inputs extraFn active s).bind (fun x =>
+              rmwCommit dest x.1 x.2))) = some s' := h
+      cases h2 : rmwExtras extraInput s with
+      | none => rw [h2] at h; exact absurd h (by simp)
+      | some extraFn =>
+          rw [h2] at h
+          replace h : (rmwActive mask s).bind (fun active =>
+              (rmwDispatch op mem inputs extraFn active s).bind (fun x =>
+                rmwCommit dest x.1 x.2)) = some s' := h
+          cases h3 : rmwActive mask s with
+          | none => rw [h3] at h; exact absurd h (by simp)
+          | some active =>
+              rw [h3] at h
+              replace h : (rmwDispatch op mem inputs extraFn active s).bind
+                  (fun x => rmwCommit dest x.1 x.2) = some s' := h
+              cases h4 : rmwDispatch op mem inputs extraFn active s with
+              | none => rw [h4] at h; exact absurd h (by simp)
+              | some x =>
+                  obtain ⟨s1, rets⟩ := x
+                  rw [h4] at h
+                  replace h : rmwCommit dest s1 rets = some s' := h
+                  exact ⟨inputs, extraFn, active, s1, rets,
+                    rfl, rfl, rfl, h4, h⟩
+
+/-- The RMW dispatch preserves `undef` (each branch is the fold). -/
+theorem rmwDispatch_undef {dtype : TileDType} {shape : TileShape}
+    {op : RMWOp} {mem : MemAccess dtype shape} {inputs : Tile dtype shape}
+    {extraFn : Option (TileIndex shape → TileCarrier dtype)}
+    {active : TileIndex shape → Bool} {s s' : BlockState}
+    {rets : Tile dtype shape}
+    (h : rmwDispatch op mem inputs extraFn active s = some (s', rets)) :
+    s'.undef = s.undef := by
+  cases mem with
+  | region r off =>
+      simp only [rmwDispatch] at h
+      cases hoffs : evalOp off s with
+      | none => rw [hoffs] at h; exact absurd h (by simp)
+      | some offs =>
+          rw [hoffs] at h
+          exact foldAtomicRMW_undef _ s s' _ rets h
+  | ptr p =>
+      simp only [rmwDispatch] at h
+      cases hps : evalOp p s with
+      | none => rw [hps] at h; exact absurd h (by simp)
+      | some ps =>
+          rw [hps] at h
+          exact foldAtomicRMW_undef _ s s' _ rets h
+  | blockPtr p bc =>
+      simp only [rmwDispatch] at h
+      cases hps : evalOp p s with
+      | none => rw [hps] at h; exact absurd h (by simp)
+      | some ps =>
+          rw [hps] at h
+          exact foldAtomicRMW_undef _ s s' _ rets h
+
+/-- The raw RMW step preserves `undef`. -/
+theorem stepAtomicRMWRaw_undef {op : RMWOp} {dtype : TileDType}
+    {shape : TileShape} {mem : MemAccess dtype shape}
+    {input : Op dtype shape} {extraInput : Option (Op dtype shape)}
+    {mask : MaskOpt dtype shape} {dest : Option RegName} {s s' : BlockState}
+    (h : stepAtomicRMWRaw op dtype shape mem input extraInput mask dest s
+      = some s') :
+    s'.undef = s.undef := by
+  obtain ⟨inputs, extraFn, active, s1, rets, -, -, -, h4, h5⟩ :=
+    stepAtomicRMWRaw_inv h
+  have hu1 := rmwDispatch_undef h4
+  cases dest with
+  | none =>
+      replace h5 : some s1 = some s' := h5
+      obtain rfl := Option.some_inj.mp h5
+      exact hu1
+  | some name =>
+      replace h5 : some (s1.setReg name dtype shape rets) = some s' := h5
+      obtain rfl := Option.some_inj.mp h5
+      exact hu1
+
+
+namespace FlatAlloc
+
+variable (A : FlatAlloc)
+
+/-- `rmwExtras` commutes with flattening on data dtypes. -/
+theorem rmwExtras_flatten (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    {d : TileDType} {sh : TileShape} (h1 : d ≠ .ptr) (h2 : d ≠ .blockPtr)
+    (extra : Option (Op d sh)) (s : BlockState)
+    (hms : extra.elim True (·.SafeAt A.extent s))
+    (hok : extra.elim True (·.FlattenOk))
+    (hu : s.undef = (fun _ _ => 0)) :
+    rmwExtras (extra.map A.flattenOp) (A.flattenState s)
+      = rmwExtras extra s := by
+  cases extra with
+  | none => rfl
+  | some e =>
+      simp only [Option.map_some, rmwExtras]
+      rw [A.evalOp_flatten hd hcov e s hms hok hu,
+        A.trTileFun_data h1 h2, Option.map_id, id_eq]
+
+/-- `rmwActive` commutes with flattening (masks are boolean). -/
+theorem rmwActive_flatten (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    {d : TileDType} {sh : TileShape} (mask : MaskOpt d sh) (s : BlockState)
+    (hms : mask.SafeAt A.extent s) (hok : mask.FlattenOkC)
+    (hu : s.undef = (fun _ _ => 0)) :
+    rmwActive (A.flattenMask mask) (A.flattenState s) = rmwActive mask s := by
+  cases mask with
+  | none => rfl
+  | mask m =>
+      simp only [flattenMask, rmwActive]
+      rw [A.evalOp_flatten hd hcov m s hms hok hu,
+        A.trTileFun_data (d := .bool) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | maskOther m o =>
+      simp only [flattenMask, rmwActive]
+      rw [A.evalOp_flatten hd hcov m s hms.1 hok.1 hu,
+        A.trTileFun_data (d := .bool) (by decide) (by decide),
+        Option.map_id, id_eq]
+
+end FlatAlloc
+
+/-- Successful `rmwActive` lanes are `Active` in the mask sense. -/
+theorem rmwActive_active {d : TileDType} {sh : TileShape}
+    {mask : MaskOpt d sh} {s : BlockState} {act : TileIndex sh → Bool}
+    (h : rmwActive mask s = some act) {i : TileIndex sh}
+    (hi : act i = true) : mask.Active s i := by
+  cases mask with
+  | none => trivial
+  | mask m =>
+      simp only [rmwActive] at h
+      cases hm : evalOp m s with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some ms =>
+          rw [hm] at h
+          replace h : some (fun i => ms.data i) = some act := h
+          obtain rfl := Option.some_inj.mp h
+          exact ⟨ms, hm, hi⟩
+  | maskOther m o =>
+      simp only [rmwActive] at h
+      cases hm : evalOp m s with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some ms =>
+          rw [hm] at h
+          replace h : some (fun i => ms.data i) = some act := h
+          obtain rfl := Option.some_inj.mp h
+          exact ⟨ms, hm, hi⟩
+
+namespace FlatAlloc
+
+variable (A : FlatAlloc)
+
+/-- The RMW dispatch commutes with flattening. -/
+theorem rmwDispatch_flatten (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    (op : RMWOp) {d : TileDType} {sh : TileShape}
+    (h1 : d ≠ .ptr) (h2 : d ≠ .blockPtr)
+    (mem : MemAccess d sh) (inputs : Tile d sh)
+    (extraFn : Option (TileIndex sh → TileCarrier d))
+    (act : TileIndex sh → Bool) (s : BlockState) {mask : MaskOpt d sh}
+    (hact : rmwActive mask s = some act)
+    (hmsmem : mem.SafeAt A.extent s) (hokmem : mem.FlattenOkC)
+    (haddr : mem.ActiveAddressSafe A.extent s (mask.Active s))
+    (hu : s.undef = (fun _ _ => 0)) :
+    rmwDispatch op (A.flattenAccess mem) inputs extraFn act
+        (A.flattenState s)
+      = (rmwDispatch op mem inputs extraFn act s).map
+        (fun x => (A.flattenState x.1, x.2)) := by
+  cases mem with
+  | region r off =>
+      simp only [MemAccess.SafeAt] at hmsmem
+      simp only [MemAccess.FlattenOkC] at hokmem
+      simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
+        at haddr
+      simp only [flattenAccess, rmwDispatch]
+      rw [evalOp_shiftAdd,
+        show evalOp (A.flattenOp off) (A.flattenState s) = evalOp off s from by
+          rw [A.evalOp_flatten hd hcov off s hmsmem hokmem hu,
+            A.trTileFun_data (d := .nat) (by decide) (by decide),
+            Option.map_id, id_eq]]
+      cases hoffs : evalOp off s with
+      | none => rfl
+      | some offs =>
+          exact A.flattenState_foldAtomicRMW hd hcov op h1 h2
+            (fun _ => (Region.cast r : RegionName)) (fun i => offs.data i)
+            (fun i => inputs.data i) extraFn act
+            (TileShape.allIndices sh) s (fun _ => BlockState.defaultCarrier d)
+            (fun i _ hia =>
+              haddr offs hoffs i (rmwActive_active hact hia))
+  | ptr p =>
+      simp only [MemAccess.SafeAt] at hmsmem
+      simp only [MemAccess.FlattenOkC] at hokmem
+      simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+        Op.PointerAddressesSafeOn] at haddr
+      simp only [flattenAccess, rmwDispatch]
+      rw [A.evalOp_flatten hd hcov p s hmsmem hokmem hu]
+      cases hps : evalOp p s with
+      | none => rfl
+      | some ps =>
+          exact A.flattenState_foldAtomicRMW hd hcov op h1 h2
+            (fun i => (ps.data i).1) (fun i => (ps.data i).2)
+            (fun i => inputs.data i) extraFn act
+            (TileShape.allIndices sh) s (fun _ => BlockState.defaultCarrier d)
+            (fun i _ hia =>
+              haddr.2 ps hps i (rmwActive_active hact hia))
+  | blockPtr p bc =>
+      simp only [MemAccess.SafeAt] at hmsmem
+      simp only [MemAccess.FlattenOkC] at hokmem
+      simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
+        at haddr
+      simp only [flattenAccess, rmwDispatch]
+      rw [A.evalOp_flatten hd hcov p s hmsmem hokmem hu]
+      cases hps : evalOp p s with
+      | none => rfl
+      | some ps =>
+          have hfold := A.flattenState_foldAtomicRMW hd hcov op h1 h2
+            (fun i => (ps.data i).region)
+            (fun i => (ps.data i).address (TileShape.indexToList sh i))
+            (fun i => inputs.data i) extraFn
+            (fun i => act i
+              && (ps.data i).inBounds (TileShape.indexToList sh i) bc)
+            (TileShape.allIndices sh) s (fun _ => BlockState.defaultCarrier d)
+            (fun i _ hia => by
+              simp only [Bool.and_eq_true] at hia
+              exact haddr.2 ps hps i (rmwActive_active hact hia.1) hia.2)
+          refine Eq.trans ?_ hfold
+          show foldAtomicRMWIndices op
+              (fun i => ((A.trTile ps).data i).region)
+              (fun i => BlockPtr.address ((A.trTile ps).data i)
+                (TileShape.indexToList sh i))
+              (fun i => inputs.data i) extraFn
+              (fun i => act i && BlockPtr.inBounds ((A.trTile ps).data i)
+                (TileShape.indexToList sh i) bc)
+              (TileShape.allIndices sh) (A.flattenState s)
+              (fun _ => BlockState.defaultCarrier d)
+            = _
+          congr 1
+          all_goals
+            first
+              | rfl
+              | (funext i
+                 simp only [FlatAlloc.trTile,
+                   FlatAlloc.trCarrier_blockPtr_region,
+                   FlatAlloc.trCarrier_blockPtr_address,
+                   FlatAlloc.trCarrier_blockPtr_inBounds]
+                 rfl)
+              | (funext i
+                 simp only [FlatAlloc.trTile,
+                   FlatAlloc.trCarrier_blockPtr_region,
+                   FlatAlloc.trCarrier_blockPtr_address,
+                   FlatAlloc.trCarrier_blockPtr_inBounds])
+
+end FlatAlloc
+
 /-! ## The flattenable statement fragment (B3b)
 
 `store`/`assign`/control flow are covered. The two atomics are deferred:
@@ -1852,7 +2681,10 @@ def Stmt.FlattenOk : Stmt → Prop
         | .none => True
         | .mask m => m.FlattenOk
         | .maskOther m o => m.FlattenOk ∧ o.FlattenOk)
-  | .atomicRMW _ _ _ _ _ _ _ _ => False
+  | .atomicRMW _ d _ mem input extra mask _ =>
+      (d ≠ .ptr ∧ d ≠ .blockPtr) ∧
+      mem.FlattenOkC ∧ input.FlattenOk ∧
+      extra.elim True (·.FlattenOk) ∧ mask.FlattenOkC
   | .forLoop _ _ body => StmtList.FlattenOk body
   | .forRange _ _ _ _ body => StmtList.FlattenOk body
   | .forRangeDyn _ start stop step body =>
@@ -2269,7 +3101,16 @@ theorem stepStmt_undef : ∀ (st : Stmt) (s s' : BlockState),
                     obtain rfl := Option.some_inj.mp h
                     exact foldl_guarded_write_undef ..
   | .atomicRMW op d sh mem input extra mask dest, s, s', hok, h => by
-      simp only [Stmt.FlattenOk] at hok
+      simp only [stepStmt] at h
+      unfold stepAtomicRMW at h
+      cases hraw : stepAtomicRMWRaw op d sh mem input extra mask dest s with
+      | none => rw [hraw] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [hraw] at h
+          replace h : some { s1 with pids := s.pids } = some s' := h
+          obtain rfl := Option.some_inj.mp h
+          show s1.undef = s.undef
+          exact stepAtomicRMWRaw_undef hraw
   | .forLoop idx n body, s, s', hok, h => by
       simp only [Stmt.FlattenOk] at hok
       simp only [stepStmt] at h
@@ -2412,11 +3253,11 @@ step. -/
 theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
     ∀ (st : Stmt) (s : BlockState),
-      st.MemorySafe A.extent → st.FlattenOk → s.undef = (fun _ _ => 0) →
+      st.TraceSafe A.extent s → st.FlattenOk → s.undef = (fun _ _ => 0) →
       stepStmt (A.flattenStmt st) (A.flattenState s)
         = (stepStmt st s).map A.flattenState
   | .assign d sh n e, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt, stepStmt]
       rw [A.evalOp_flatten hd hcov e s hms hok hu]
@@ -2426,7 +3267,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
           refine congrArg some ?_
           exact (A.flattenState_setReg s n d sh v).symm
   | .store d sh mem val mask, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt]
       rcases mask with _ | m | ⟨m, o⟩ <;> rcases mem with ⟨r, off⟩ | p | ⟨p, bc⟩ <;>
@@ -2451,7 +3292,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
             | some offs =>
                 refine congrArg some ?_
                 rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                  (fun i _ _ => haddr s offs hoffs i trivial)]
+                  (fun i _ _ => haddr offs hoffs i trivial)]
                 rfl
       -- none.ptr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2469,7 +3310,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
             | some ps =>
                 refine congrArg some ?_
                 rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                  (fun i _ _ => (haddr s).2 ps hps i trivial)]
+                  (fun i _ _ => haddr.2 ps hps i trivial)]
                 rfl
       -- none.blockPtr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2487,7 +3328,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
             | some ps =>
                 refine congrArg some ?_
                 rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                  (fun i _ hact => (haddr s).2 ps hps i trivial (by simpa using hact))]
+                  (fun i _ hact => haddr.2 ps hps i trivial (by simpa using hact))]
                 congr 1
                 funext acc i
                 simp only [FlatAlloc.trTile, FlatAlloc.trCarrier_blockPtr_region,
@@ -2521,7 +3362,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                 | some offs =>
                     refine congrArg some ?_
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                      (fun i _ hact => haddr s offs hoffs i ⟨ms, hm, hact⟩)]
+                      (fun i _ hact => haddr offs hoffs i ⟨ms, hm, hact⟩)]
                     rfl
       -- mask.ptr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2546,7 +3387,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                 | some ps =>
                     refine congrArg some ?_
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                      (fun i _ hact => (haddr s).2 ps hps i ⟨ms, hm, hact⟩)]
+                      (fun i _ hact => haddr.2 ps hps i ⟨ms, hm, hact⟩)]
                     rfl
       -- mask.blockPtr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2573,7 +3414,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
                       (fun i _ hact => by
                     simp only [Bool.and_eq_true] at hact
-                    exact (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)]
+                    exact haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)]
                     congr 1
                     funext acc i
                     simp only [FlatAlloc.trTile,
@@ -2608,7 +3449,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                 | some offs =>
                     refine congrArg some ?_
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                      (fun i _ hact => haddr s offs hoffs i ⟨ms, hm, hact⟩)]
+                      (fun i _ hact => haddr offs hoffs i ⟨ms, hm, hact⟩)]
                     rfl
       -- mask.ptr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2633,7 +3474,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                 | some ps =>
                     refine congrArg some ?_
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
-                      (fun i _ hact => (haddr s).2 ps hps i ⟨ms, hm, hact⟩)]
+                      (fun i _ hact => haddr.2 ps hps i ⟨ms, hm, hact⟩)]
                     rfl
       -- mask.blockPtr
       · obtain ⟨hmsmem, hmsval, hmsmask, haddr⟩ := hms
@@ -2660,7 +3501,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                     rw [A.flattenState_foldl_store hd hcov _ s _ _ _ _
                       (fun i _ hact => by
                     simp only [Bool.and_eq_true] at hact
-                    exact (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)]
+                    exact haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)]
                     congr 1
                     funext acc i
                     simp only [FlatAlloc.trTile,
@@ -2669,7 +3510,7 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       FlatAlloc.trCarrier_blockPtr_inBounds]
                     rfl
   | .atomicAdd nd sh mem val mask, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt]
       rcases mask with _ | m | ⟨m, o⟩ <;> rcases mem with ⟨r, off⟩ | p | ⟨p, bc⟩ <;>
@@ -2699,10 +3540,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   (off := fun i => offs.data i)
                   (v := fun acc i => nd.add (acc.readMemValue _ (Region.cast r) (offs.data i)) (values.data i))
                   (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (Region.cast r) (offs.data i))) (values.data i))
-                  (fun i _ _ => haddr s offs hoffs i trivial)
+                  (fun i _ _ => haddr offs hoffs i trivial)
                   (fun acc i _ _ => by
                     simp only []
-                    have hb2 := haddr s offs hoffs i trivial
+                    have hb2 := haddr offs hoffs i trivial
                     have hr2 : (Region.cast r : RegionName) ∈ A.regions := by
                       by_contra hnr
                       rw [hcov _ hnr] at hb2
@@ -2733,10 +3574,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   (off := fun i => (ps.data i).2)
                   (v := fun acc i => nd.add (acc.readMemValue _ (ps.data i).1 (ps.data i).2) (values.data i))
                   (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).1 (ps.data i).2)) (values.data i))
-                  (fun i _ _ => (haddr s).2 ps hps i trivial)
+                  (fun i _ _ => haddr.2 ps hps i trivial)
                   (fun acc i _ _ => by
                     simp only []
-                    have hb2 := (haddr s).2 ps hps i trivial
+                    have hb2 := haddr.2 ps hps i trivial
                     have hr2 : (ps.data i).1 ∈ A.regions := by
                       by_contra hnr
                       rw [hcov _ hnr] at hb2
@@ -2769,11 +3610,11 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                   (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).region ((ps.data i).address (TileShape.indexToList sh i)))) (values.data i))
                   (fun i _ hact => by
                     simp only [Bool.and_eq_true] at hact
-                    exact (haddr s).2 ps hps i trivial hact.2)
+                    exact haddr.2 ps hps i trivial hact.2)
                   (fun acc i _ hact => by
                     simp only []
                     simp only [Bool.and_eq_true] at hact
-                    have hb2 := (haddr s).2 ps hps i trivial hact.2
+                    have hb2 := haddr.2 ps hps i trivial hact.2
                     have hr2 : (ps.data i).region ∈ A.regions := by
                       by_contra hnr
                       rw [hcov _ hnr] at hb2
@@ -2821,10 +3662,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (off := fun i => offs.data i)
                       (v := fun acc i => nd.add (acc.readMemValue _ (Region.cast r) (offs.data i)) (values.data i))
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (Region.cast r) (offs.data i))) (values.data i))
-                      (fun i _ hact => haddr s offs hoffs i ⟨ms, hm, hact⟩)
+                      (fun i _ hact => haddr offs hoffs i ⟨ms, hm, hact⟩)
                       (fun acc i _ hact => by
                         simp only []
-                        have hb2 := haddr s offs hoffs i ⟨ms, hm, hact⟩
+                        have hb2 := haddr offs hoffs i ⟨ms, hm, hact⟩
                         have hr2 : (Region.cast r : RegionName) ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -2862,10 +3703,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (off := fun i => (ps.data i).2)
                       (v := fun acc i => nd.add (acc.readMemValue _ (ps.data i).1 (ps.data i).2) (values.data i))
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).1 (ps.data i).2)) (values.data i))
-                      (fun i _ hact => (haddr s).2 ps hps i ⟨ms, hm, hact⟩)
+                      (fun i _ hact => haddr.2 ps hps i ⟨ms, hm, hact⟩)
                       (fun acc i _ hact => by
                         simp only []
-                        have hb2 := (haddr s).2 ps hps i ⟨ms, hm, hact⟩
+                        have hb2 := haddr.2 ps hps i ⟨ms, hm, hact⟩
                         have hr2 : (ps.data i).1 ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -2905,11 +3746,11 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).region ((ps.data i).address (TileShape.indexToList sh i)))) (values.data i))
                       (fun i _ hact => by
                         simp only [Bool.and_eq_true] at hact
-                        exact (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)
+                        exact haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)
                       (fun acc i _ hact => by
                         simp only []
                         simp only [Bool.and_eq_true] at hact
-                        have hb2 := (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2
+                        have hb2 := haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2
                         have hr2 : (ps.data i).region ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -2957,10 +3798,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (off := fun i => offs.data i)
                       (v := fun acc i => nd.add (acc.readMemValue _ (Region.cast r) (offs.data i)) (values.data i))
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (Region.cast r) (offs.data i))) (values.data i))
-                      (fun i _ hact => haddr s offs hoffs i ⟨ms, hm, hact⟩)
+                      (fun i _ hact => haddr offs hoffs i ⟨ms, hm, hact⟩)
                       (fun acc i _ hact => by
                         simp only []
-                        have hb2 := haddr s offs hoffs i ⟨ms, hm, hact⟩
+                        have hb2 := haddr offs hoffs i ⟨ms, hm, hact⟩
                         have hr2 : (Region.cast r : RegionName) ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -2998,10 +3839,10 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (off := fun i => (ps.data i).2)
                       (v := fun acc i => nd.add (acc.readMemValue _ (ps.data i).1 (ps.data i).2) (values.data i))
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).1 (ps.data i).2)) (values.data i))
-                      (fun i _ hact => (haddr s).2 ps hps i ⟨ms, hm, hact⟩)
+                      (fun i _ hact => haddr.2 ps hps i ⟨ms, hm, hact⟩)
                       (fun acc i _ hact => by
                         simp only []
-                        have hb2 := (haddr s).2 ps hps i ⟨ms, hm, hact⟩
+                        have hb2 := haddr.2 ps hps i ⟨ms, hm, hact⟩
                         have hr2 : (ps.data i).1 ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -3041,11 +3882,11 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (vf := fun acc i => nd.add (acc.readMemValue _ A.flat (A.addr (ps.data i).region ((ps.data i).address (TileShape.indexToList sh i)))) (values.data i))
                       (fun i _ hact => by
                         simp only [Bool.and_eq_true] at hact
-                        exact (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)
+                        exact haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2)
                       (fun acc i _ hact => by
                         simp only []
                         simp only [Bool.and_eq_true] at hact
-                        have hb2 := (haddr s).2 ps hps i ⟨ms, hm, hact.1⟩ hact.2
+                        have hb2 := haddr.2 ps hps i ⟨ms, hm, hact.1⟩ hact.2
                         have hr2 : (ps.data i).region ∈ A.regions := by
                           by_contra hnr
                           rw [hcov _ hnr] at hb2
@@ -3062,19 +3903,63 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       FlatAlloc.trCarrier_blockPtr_inBounds]
                     rfl
   | .atomicRMW op d sh mem input extra mask dest, s, hms, hok, hu => by
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
+      obtain ⟨hdt, hokmem, hokin, hokex, hokmask⟩ := hok
+      obtain ⟨hmsmem, hmsin, hmsex, hmsmask, haddr⟩ := hms
+      simp only [FlatAlloc.flattenStmt, stepStmt]
+      unfold stepAtomicRMW stepAtomicRMWRaw
+      rw [show evalOp (A.flattenOp input) (A.flattenState s)
+          = evalOp input s from by
+          rw [A.evalOp_flatten hd hcov input s hmsin hokin hu,
+            A.trTileFun_data hdt.1 hdt.2, Option.map_id, id_eq],
+        A.rmwExtras_flatten hd hcov hdt.1 hdt.2 extra s hmsex hokex hu,
+        A.rmwActive_flatten hd hcov mask s hmsmask hokmask hu]
+      cases hin : evalOp input s with
+      | none => rfl
+      | some inputs =>
+          simp only [Option.bind_eq_bind, Option.bind_some]
+          cases hex : rmwExtras extra s with
+          | none => rfl
+          | some extraFn =>
+              simp only [Option.bind_eq_bind, Option.bind_some]
+              cases hact : rmwActive mask s with
+              | none => rfl
+              | some act =>
+                  simp only [Option.bind_eq_bind, Option.bind_some]
+                  rw [A.rmwDispatch_flatten hd hcov op hdt.1 hdt.2 mem inputs
+                    extraFn act s hact hmsmem hokmem haddr hu]
+                  cases hdis : rmwDispatch op mem inputs extraFn act s with
+                  | none => rfl
+                  | some x =>
+                      obtain ⟨s1, rets⟩ := x
+                      simp only [Option.bind_eq_bind, Option.map_some,
+                        Option.bind_some]
+                      cases dest with
+                      | none =>
+                          simp only [rmwCommit, Option.map_some]
+                          refine congrArg some ?_
+                          rw [A.flattenState_setPids s1 s]
+                          rfl
+                      | some name =>
+                          simp only [rmwCommit, Option.map_some]
+                          refine congrArg some ?_
+                          rw [A.flattenState_setPids (s1.setReg name d sh rets) s,
+                            A.flattenState_setReg s1 name d sh rets,
+                            A.trTileFun_data hdt.1 hdt.2, id_eq]
+                          rfl
   | .forLoop idx n body, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt, stepStmt]
       exact A.stepForLoopAux_flatten hd hcov idx 0 n body s hms hok hu
   | .forRange idx start stop step body, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt, stepStmt]
       exact A.stepForRangeAux_flatten hd hcov idx start stop step body s hms hok hu
   | .forRangeDyn idx start stop step body, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       obtain ⟨hms1, hms2, hms3, hmsb⟩ := hms
       obtain ⟨hok1, hok2, hok3, hokb⟩ := hok
@@ -3101,10 +3986,14 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
               cases h3 : evalOp step s with
               | none => rfl
               | some c =>
+                  rw [h1, h2, h3] at hmsb
+                  replace hmsb : Stmt.forRangeTraceSafe A.extent idx
+                      (a.data PUnit.unit) (b.data PUnit.unit)
+                      (c.data PUnit.unit) body s := hmsb
                   exact A.stepForRangeAux_flatten hd hcov idx _ _ _ body s
                     hmsb hokb hu
   | .ifThen c body, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt, stepStmt]
       rw [show evalOp (A.flattenOp c) (A.flattenState s) = evalOp c s from by
@@ -3119,13 +4008,18 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
               else some (A.flattenState s))
             = (if vc.data PUnit.unit = true then stepStmts body s
               else some s).map A.flattenState
+          have hbody := hms.2
+          rw [hc] at hbody
           by_cases hb : vc.data PUnit.unit = true
           · rw [if_pos hb, if_pos hb]
-            exact A.stepStmts_flatten hd hcov body s hms.2 hok.2 hu
+            replace hbody : (if vc.data PUnit.unit = true
+                then Stmt.TraceSafeList A.extent body s else True) := hbody
+            rw [if_pos hb] at hbody
+            exact A.stepStmts_flatten hd hcov body s hbody hok.2 hu
           · rw [if_neg hb, if_neg hb]
             rfl
   | .ifThenElse c tb eb, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafe] at hms
+      simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmt, stepStmt]
       rw [show evalOp (A.flattenOp c) (A.flattenState s) = evalOp c s from by
@@ -3140,11 +4034,18 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
               else stepStmts (A.flattenStmts eb) (A.flattenState s))
             = (if vc.data PUnit.unit = true then stepStmts tb s
               else stepStmts eb s).map A.flattenState
+          have hbody := hms.2
+          rw [hc] at hbody
+          replace hbody : (if vc.data PUnit.unit = true
+              then Stmt.TraceSafeList A.extent tb s
+              else Stmt.TraceSafeList A.extent eb s) := hbody
           by_cases hb : vc.data PUnit.unit = true
           · rw [if_pos hb, if_pos hb]
-            exact A.stepStmts_flatten hd hcov tb s hms.2.1 hok.2.1 hu
+            rw [if_pos hb] at hbody
+            exact A.stepStmts_flatten hd hcov tb s hbody hok.2.1 hu
           · rw [if_neg hb, if_neg hb]
-            exact A.stepStmts_flatten hd hcov eb s hms.2.2 hok.2.2 hu
+            rw [if_neg hb] at hbody
+            exact A.stepStmts_flatten hd hcov eb s hbody hok.2.2 hu
   termination_by st _ _ _ _ => (sizeOf st, 0)
   decreasing_by
     all_goals simp_wf
@@ -3156,14 +4057,14 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
 theorem FlatAlloc.stepStmts_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
     ∀ (l : List Stmt) (s : BlockState),
-      Stmt.MemorySafeList A.extent l → StmtList.FlattenOk l →
+      Stmt.TraceSafeList A.extent l s → StmtList.FlattenOk l →
       s.undef = (fun _ _ => 0) →
       stepStmts (A.flattenStmts l) (A.flattenState s)
         = (stepStmts l s).map A.flattenState
   | [], s, _, _, _ => by
       simp only [FlatAlloc.flattenStmts, stepStmts, Option.map_some]
   | st :: rest, s, hms, hok, hu => by
-      simp only [Stmt.MemorySafeList] at hms
+      simp only [Stmt.TraceSafeList] at hms
       simp only [StmtList.FlattenOk] at hok
       simp only [FlatAlloc.flattenStmts, stepStmts]
       rw [A.stepStmt_flatten hd hcov st s hms.1 hok.1 hu]
@@ -3172,7 +4073,10 @@ theorem FlatAlloc.stepStmts_flatten (A : FlatAlloc) (hd : A.Disjoint)
       | some s1 =>
           have hu1 : s1.undef = (fun _ _ => 0) := by
             rw [stepStmt_undef st s s1 hok.1 h1, hu]
-          exact A.stepStmts_flatten hd hcov rest s1 hms.2 hok.2 hu1
+          have hrest := hms.2
+          rw [h1] at hrest
+          replace hrest : Stmt.TraceSafeList A.extent rest s1 := hrest
+          exact A.stepStmts_flatten hd hcov rest s1 hrest hok.2 hu1
   termination_by l _ _ _ _ => (sizeOf l, 0)
   decreasing_by all_goals (simp_wf; omega)
 
@@ -3180,27 +4084,34 @@ theorem FlatAlloc.stepStmts_flatten (A : FlatAlloc) (hd : A.Disjoint)
 theorem FlatAlloc.stepForLoopAux_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
     ∀ (idx : RegName) (start n : Nat) (body : List Stmt) (s : BlockState),
-      Stmt.MemorySafeList A.extent body → StmtList.FlattenOk body →
-      s.undef = (fun _ _ => 0) →
+      Stmt.forLoopTraceSafe A.extent idx start n body s →
+      StmtList.FlattenOk body → s.undef = (fun _ _ => 0) →
       stepForLoopAux idx start n (A.flattenStmts body) (A.flattenState s)
         = (stepForLoopAux idx start n body s).map A.flattenState
   | idx, start, n, body, s, hms, hok, hu => by
       rw [stepForLoopAux, stepForLoopAux]
+      rw [Stmt.forLoopTraceSafe] at hms
       split
-      · have hset : (A.flattenState s).setReg idx .nat [] (Tile.scalar start)
+      next hlt =>
+        rw [if_pos hlt] at hms
+        obtain ⟨hbody, hnext⟩ := hms
+        have hset : (A.flattenState s).setReg idx .nat [] (Tile.scalar start)
             = A.flattenState (s.setReg idx .nat [] (Tile.scalar start)) :=
           (A.flattenState_setReg s idx .nat [] (Tile.scalar start)).symm
         rw [hset, A.stepStmts_flatten hd hcov body
-          (s.setReg idx .nat [] (Tile.scalar start)) hms hok hu]
+          (s.setReg idx .nat [] (Tile.scalar start)) hbody hok hu]
         cases h1 : stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
         | none => rfl
         | some s1 =>
             have hu1 : s1.undef = (fun _ _ => 0) := by
               rw [stepStmts_undef body _ s1 hok h1]
               exact hu
+            rw [h1] at hnext
+            replace hnext : Stmt.forLoopTraceSafe A.extent idx (start + 1) n
+                body s1 := hnext
             exact A.stepForLoopAux_flatten hd hcov idx (start + 1) n body s1
-              hms hok hu1
-      · rfl
+              hnext hok hu1
+      next => rfl
   termination_by _ start n body _ _ _ _ => (sizeOf body + 1, n - start)
   decreasing_by all_goals (simp_wf; omega)
 
@@ -3209,30 +4120,39 @@ theorem FlatAlloc.stepForRangeAux_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
     ∀ (idx : RegName) (cur stop step : Nat) (body : List Stmt)
       (s : BlockState),
-      Stmt.MemorySafeList A.extent body → StmtList.FlattenOk body →
-      s.undef = (fun _ _ => 0) →
+      Stmt.forRangeTraceSafe A.extent idx cur stop step body s →
+      StmtList.FlattenOk body → s.undef = (fun _ _ => 0) →
       stepForRangeAux idx cur stop step (A.flattenStmts body)
           (A.flattenState s)
         = (stepForRangeAux idx cur stop step body s).map A.flattenState
   | idx, cur, stop, step, body, s, hms, hok, hu => by
       rw [stepForRangeAux, stepForRangeAux]
+      rw [Stmt.forRangeTraceSafe] at hms
       split
-      · rfl
-      · split
-        · have hset : (A.flattenState s).setReg idx .nat [] (Tile.scalar cur)
+      next => rfl
+      next hz =>
+        rw [if_neg hz] at hms
+        split
+        next hlt =>
+          rw [if_pos hlt] at hms
+          obtain ⟨hbody, hnext⟩ := hms
+          have hset : (A.flattenState s).setReg idx .nat [] (Tile.scalar cur)
               = A.flattenState (s.setReg idx .nat [] (Tile.scalar cur)) :=
             (A.flattenState_setReg s idx .nat [] (Tile.scalar cur)).symm
           rw [hset, A.stepStmts_flatten hd hcov body
-            (s.setReg idx .nat [] (Tile.scalar cur)) hms hok hu]
+            (s.setReg idx .nat [] (Tile.scalar cur)) hbody hok hu]
           cases h1 : stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) with
           | none => rfl
           | some s1 =>
               have hu1 : s1.undef = (fun _ _ => 0) := by
                 rw [stepStmts_undef body _ s1 hok h1]
                 exact hu
+              rw [h1] at hnext
+              replace hnext : Stmt.forRangeTraceSafe A.extent idx (cur + step)
+                  stop step body s1 := hnext
               exact A.stepForRangeAux_flatten hd hcov idx (cur + step) stop step
-                body s1 hms hok hu1
-        · rfl
+                body s1 hnext hok hu1
+        next => rfl
   termination_by _ cur stop step body _ _ _ _ => (sizeOf body + 1, stop - cur)
   decreasing_by all_goals (simp_wf; omega)
 
@@ -3244,7 +4164,7 @@ run. Every region-model execution theorem transports along this equation to
 a single flat address space. -/
 theorem FlatAlloc.exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) (k : Kernel)
-    (s : BlockState) (hms : k.MemorySafe A.extent) (hok : k.FlattenOk)
+    (s : BlockState) (hms : k.TraceSafe A.extent s) (hok : k.FlattenOk)
     (hu : s.undef = (fun _ _ => 0)) :
     exec (A.flattenKernel k) (A.flattenState s)
       = (exec k s).map A.flattenState := by
