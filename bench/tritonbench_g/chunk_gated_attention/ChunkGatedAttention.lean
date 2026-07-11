@@ -828,7 +828,7 @@ noncomputable def producedChunkGatedAttentionHStateValue
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (i_t : Fin 4) (idx : TileIndex [16, 16]) : ℝ :=
   hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    (s_k_h := 4096) (s_k_t := 1) (s_k_d := 128)
+    (s_k_h := 4096) (s_k_t := 128) (s_k_d := 1)
     (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
     (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
     (m := i_t.val) idx
@@ -840,7 +840,7 @@ noncomputable def producedChunkGatedAttentionFinalStateValue
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (idx : TileIndex [16, 16]) : ℝ :=
   hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    (s_k_h := 4096) (s_k_t := 1) (s_k_d := 128)
+    (s_k_h := 4096) (s_k_t := 128) (s_k_d := 1)
     (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
     (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
     (m := 4) idx
