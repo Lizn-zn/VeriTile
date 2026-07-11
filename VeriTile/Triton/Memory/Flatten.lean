@@ -2044,6 +2044,27 @@ def Stmt.forRangeTraceSafe (bounds : RegionBounds) (idx : RegName)
 
 end
 
+
+/-- Introduction form for `TraceSafeList` at a cons: prove the head safe and
+the tail safe for whatever successor the step actually produces. -/
+theorem Stmt.TraceSafeList.cons_intro {bounds : RegionBounds} {st : Stmt}
+    {rest : List Stmt} {s : BlockState}
+    (h1 : st.TraceSafe bounds s)
+    (h2 : ∀ s', stepStmt st s = some s' →
+      Stmt.TraceSafeList bounds rest s') :
+    Stmt.TraceSafeList bounds (st :: rest) s := by
+  rw [Stmt.TraceSafeList]
+  refine ⟨h1, ?_⟩
+  cases h : stepStmt st s with
+  | none => trivial
+  | some s' => exact h2 s' h
+
+/-- `TraceSafeList` of `[]` is trivial (registered for terminal steps). -/
+theorem Stmt.TraceSafeList.nil_intro {bounds : RegionBounds}
+    {s : BlockState} : Stmt.TraceSafeList bounds [] s := by
+  rw [Stmt.TraceSafeList]
+  trivial
+
 /-- Kernel-level per-execution safety. -/
 def Kernel.TraceSafe (bounds : RegionBounds) (k : Kernel)
     (s : BlockState) : Prop :=
