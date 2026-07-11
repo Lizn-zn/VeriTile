@@ -2867,4 +2867,51 @@ theorem FlatAlloc.execR_flatten (A : FlatAlloc) (hd : A.Disjoint)
   simp only [execR, FlatAlloc.flattenKernel]
   exact A.stepStmtsR_flatten hd hcov R k.body s hms hok hu
 
+/-- The flat image's memory is determined by the source memory: states that
+agree cell-for-cell flatten to states that agree cell-for-cell. -/
+theorem FlatAlloc.flattenState_mem_congr (A : FlatAlloc) {s t : BlockState}
+    (h : ∀ r o, s.mem r o = t.mem r o) (r' : RegionName) (o' : Nat) :
+    (A.flattenState s).mem r' o' = (A.flattenState t).mem r' o' := by
+  show (if r' = A.flat then A.readFlat s o' else MemCell.real 0)
+    = (if r' = A.flat then A.readFlat t o' else MemCell.real 0)
+  by_cases hr : r' = A.flat
+  · rw [if_pos hr, if_pos hr]
+    unfold FlatAlloc.readFlat
+    cases A.decode o' with
+    | none => rfl
+    | some p => exact congrArg A.trCell (h p.1 p.2)
+  · rw [if_neg hr, if_neg hr]
+
+/-- **Refinement transports across the bridge**: if the region-model runs of
+`lhs` and `rhs` from `s` perform the same writes (the `Refines R … []`
+conclusion shape — final memories agree at every cell), then the flat-model
+runs of their translations from the flattened state do too. The safety and
+fragment side conditions are per kernel, exactly as in `execR_flatten`. -/
+theorem FlatAlloc.refineR_mem_flatten (A : FlatAlloc) (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) (R : RoundingModel)
+    (lhs rhs : Kernel) (s : BlockState)
+    (hmsL : lhs.TraceSafeR R A.extent s) (hokL : lhs.FlattenOk)
+    (hmsR : rhs.TraceSafeR R A.extent s) (hokR : rhs.FlattenOk)
+    (hu : s.undef = (fun _ _ => 0))
+    (h : ∀ lhs' rhs', execR R lhs s = some lhs' →
+      execR R rhs s = some rhs' → ∀ r o, lhs'.mem r o = rhs'.mem r o) :
+    ∀ lhs' rhs',
+      execR R (A.flattenKernel lhs) (A.flattenState s) = some lhs' →
+      execR R (A.flattenKernel rhs) (A.flattenState s) = some rhs' →
+      ∀ r o, lhs'.mem r o = rhs'.mem r o := by
+  intro lhs' rhs' hL hR
+  rw [A.execR_flatten hd hcov R lhs s hmsL hokL hu] at hL
+  rw [A.execR_flatten hd hcov R rhs s hmsR hokR hu] at hR
+  cases hLs : execR R lhs s with
+  | none => rw [hLs] at hL; exact absurd hL (by simp)
+  | some sL =>
+      cases hRs : execR R rhs s with
+      | none => rw [hRs] at hR; exact absurd hR (by simp)
+      | some sR =>
+          rw [hLs, Option.map_some] at hL
+          rw [hRs, Option.map_some] at hR
+          obtain rfl := Option.some_inj.mp hL
+          obtain rfl := Option.some_inj.mp hR
+          exact fun r o => A.flattenState_mem_congr (h sL sR hLs hRs) r o
+
 end VeriTile.Triton
