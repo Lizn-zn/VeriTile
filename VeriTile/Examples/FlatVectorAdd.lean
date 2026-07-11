@@ -10,14 +10,18 @@ assumed. The result: running the translated kernel (one flat address space,
 real pointer arithmetic `base + pid*B + i`) on the flattened state is the
 flattening of the region-model run.
 
-Why the addresses and masks are written *inline* (rather than the usual
-`offs := ...; tl.load(x + offs, mask=offs < n)` register style): the #48
-`MemorySafe` contract quantifies over **all** states, and a register-indirect
-address is unconstrained in an arbitrary state — the contract is only
-provable when the mask and the address are visibly coupled (here through the
-shared `program_id(0)` subterm). Register-style kernels need a
-per-execution (trace-level) safety variant of the bridge; that is the
-documented next step on the address-layout roadmap.
+Two kernels demonstrate the two safety regimes:
+
+- `flatAddKernel` writes its addresses and masks *inline*, so its bounds
+  contract holds in **every** state (mask and address share the
+  `program_id(0)` subterm) — the shape the ∀-state #48 contracts were made
+  for.
+- `addKernelMasked` (the ordinary DSL kernel from `VectorAdd.lean`) uses the
+  register-indirect `offs := ...; tl.load(x + offs, mask=offs < n)` style,
+  which no ∀-state contract can cover. Bridge **v1.2** takes the
+  per-execution `Kernel.TraceSafe` contract instead, and this file
+  discharges it by walking the actual seven-statement execution — the
+  template for putting real DSL kernels through the bridge.
 -/
 
 import VeriTile.Triton
@@ -68,43 +72,39 @@ private theorem active_lane_bound (B n : Nat) (s : BlockState)
   subst hmasks
   simpa using hdata
 
-/-- The kernel is memory-safe at any extent map covering `n` on all three
-regions. -/
-theorem flatAddKernel_memorySafe (xReg yReg outReg : RegionName) (B n : Nat)
-    (bounds : RegionBounds)
+/-- The inline kernel is trace-safe from any start state whose extents cover
+`n` (in fact each step is safe in *every* state — the inline shape). -/
+theorem flatAddKernel_traceSafe (xReg yReg outReg : RegionName) (B n : Nat)
+    (bounds : RegionBounds) (s : BlockState)
     (hx : n ≤ bounds xReg) (hy : n ≤ bounds yReg) (hout : n ≤ bounds outReg) :
-    (flatAddKernel xReg yReg outReg B n).MemorySafe bounds := by
-  have msOffs : (offsExpr B).MemorySafe bounds := by
-    simp [offsExpr, Op.MemorySafe]
-  have msMaskE : (maskExpr B n).MemorySafe bounds := by
-    simp [maskExpr, offsExpr, Op.MemorySafe]
-  have msVal : (Op.add .real (.consSame .nil)
-      (.ref .real [B] "x") (.ref .real [B] "y")).MemorySafe bounds := by
-    simp [Op.MemorySafe]
-  have bnd : ∀ (reg : RegionName), n ≤ bounds reg → ∀ (s : BlockState),
+    (flatAddKernel xReg yReg outReg B n).TraceSafe bounds s := by
+  have msOffs : ∀ t : BlockState, (offsExpr B).SafeAt bounds t := by
+    intro t; simp [offsExpr, Op.SafeAt]
+  have msMaskE : ∀ t : BlockState, (maskExpr B n).SafeAt bounds t := by
+    intro t; simp [maskExpr, offsExpr, Op.SafeAt]
+  have bnd : ∀ (reg : RegionName), n ≤ bounds reg → ∀ (t : BlockState),
       MemAccess.ActiveAddressSafe bounds
-        (MemAccess.region reg (offsExpr B)) s
-        ((MaskOpt.mask (dtype := .real) (maskExpr B n)).Active s) := by
-    intro reg hreg s
+        (MemAccess.region reg (offsExpr B)) t
+        ((MaskOpt.mask (dtype := .real) (maskExpr B n)).Active t) := by
+    intro reg hreg t
     simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
     intro offsets hoffs i hact
     rw [evalOp_offsExpr] at hoffs
     obtain rfl := Option.some_inj.mp hoffs
-    have hlt := active_lane_bound B n s i hact
+    have hlt := active_lane_bound B n t i hact
     simp only [Region.cast_self]
     exact lt_of_lt_of_le hlt hreg
-  unfold Kernel.MemorySafe flatAddKernel
-  unfold StmtList.MemorySafe
-  simp only [Stmt.MemorySafeList, Stmt.MemorySafe, Op.MemorySafe]
-  repeat' apply And.intro
-  all_goals first
-    | trivial
-    | exact msOffs
-    | exact msVal
-    | exact msMaskE
-    | exact bnd xReg hx
-    | exact bnd yReg hy
-    | exact bnd outReg hout
+  unfold Kernel.TraceSafe flatAddKernel
+  simp only [Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MemAccess.SafeAt, MaskOpt.SafeAt]
+  refine ⟨⟨msOffs s, msMaskE s, bnd xReg hx s⟩, ?_⟩
+  split
+  · refine ⟨⟨msOffs _, msMaskE _, bnd yReg hy _⟩, ?_⟩
+    split
+    · refine ⟨⟨msOffs _, by simp [Op.SafeAt], msMaskE _, bnd outReg hout _⟩, ?_⟩
+      split <;> trivial
+    · trivial
+  · trivial
 
 /-- The kernel sits inside the bridge's covered fragment. -/
 theorem flatAddKernel_flattenOk (xReg yReg outReg : RegionName) (B n : Nat) :
@@ -129,7 +129,7 @@ theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
         (A.flattenState s)
       = (exec (flatAddKernel xReg yReg outReg B n) s).map A.flattenState :=
   A.exec_flatten hd hcov _ s
-    (flatAddKernel_memorySafe xReg yReg outReg B n A.extent hx hy hout)
+    (flatAddKernel_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
     (flatAddKernel_flattenOk xReg yReg outReg B n) hu
 
 end VeriTile.Examples.FlatVectorAdd
