@@ -2,102 +2,158 @@
 
 **Python source:** `bench/tritonbench_g/attention_forward_triton/attention_forward_triton.py`
 
-## Public theorem: `attention_forward_triton_final_store_slice_compute_correct`
+## Public theorem: `attention_forward_triton_closed_form_correct`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Compute-facing correctness for the attention-forward final output store. -/
+/-- **Closed-form correctness for `attention_forward_triton` (general statement).**
+
+For arbitrary batch/head strides, head count, block sizes, KV-block count,
+head/active dimensions and arbitrary `q_scale`/`k_scale`, every active output
+lane of `Out` (`mIndex < N_CTX ∧ head < HEAD_ACTIVE`) equals
+`attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under the per-block key
+scale — the genuine base-2, per-key-scaled attention output, NOT the kernel's own
+executed value. Inactive lanes are unconstrained (masked out by the write map).
+
+Layout contracts: `N_CTX = BLOCK_N · numKVBlocks`, `stride_qm = stride_kn =
+HEAD_DIM` and head stride `1` (so the per-block pointer advance composes into a
+per-key address), `0 < BLOCK_N`, `HEAD_ACTIVE ≤ BLOCK_DMODEL`. The Python test
+case (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64,
+HEAD_ACTIVE=96`, `q_scale = k_scale = 1`) is the special case.
+
+**Proven sorry-free**: bridges (via `realizes_writeIf_iff` +
+`computeCorrect_of_toAlgKernel`) to
+`VeriTile.Examples.AttentionForwardClosedForm.attention_forward_triton_closed_form_correct`,
+whose full `exec`-side loop unfolding (preLoop + per-block step + postLoop) and
+math core (`Math/Attention.lean`) are both complete. Extra preconditions:
+`HEAD_ACTIVE ≤ HEAD_DIM` (store-offset injectivity), clean initial `undef`.
+Tracked as `attention-forward-online-softmax-recurrence`, #162. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-theorem attention_forward_triton_final_store_slice_compute_correct
-    (Acc Out : RegionName)
-    (H N_CTX HEAD_ACTIVE
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-      stride_qz stride_qh stride_qm stride_qk
-      BLOCK_M BLOCK_DMODEL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
+theorem attention_forward_triton_closed_form_correct
+    (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
+    (hBN : 0 < BLOCK_N) (hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL)
+    (hHD : HEAD_ACTIVE ≤ HEAD_DIM) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
-      (kernel := attention_forward_triton_final_store_slice Acc Out H N_CTX
-        HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-        stride_qz stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL)
+      (kernel := attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s N_CTX HEAD_ACTIVE BLOCK_M idx)
+          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx)
         (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)))
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)))
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        s.readMem Acc
-          (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-            BLOCK_M idx))
+        if h : idx.2.1.val < HEAD_ACTIVE then
+          attentionRealBase2PerKeyScale
+            (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+            (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N
+              (BLOCK_N * numKVBlocks))
+            (idx.1, ⟨idx.2.1.val, h⟩, PUnit.unit)
+        else (0 : ℝ))
 ```
 
 **Assumptions / layout contracts:**
-- `hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)`
+- `hBN : 0 < BLOCK_N`
+- `hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL`
+- `hHD : HEAD_ACTIVE ≤ HEAD_DIM`
+- `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s N_CTX HEAD_ACTIVE BLOCK_M idx`
+          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx`
 - `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)`
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 
-**Closed-form spec defs (transitive):** `outOffset`, `attention_forward_triton_final_store_slice`, `active`, `accOffset`, `offZ`, `offH`, `mIndex`, `kIndex`
+**Closed-form spec defs (transitive):** `attention_forward_triton_surface`, `active`, `outOffset`, `qTile`, `kTile`, `vTile`, `keyScale`, `mIndex`, `kIndex`, `offZ`, `offH`, `baseOffset`
 
-<details><summary><code>outOffset</code></summary>
-
-```lean
-def outOffset
-    (s : BlockState)
-    (H stride_qz stride_qh stride_qm stride_qk BLOCK_M : Nat)
-    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
-  offZ s H * stride_qz + offH s H * stride_qh +
-    mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
-```
-</details>
-
-<details><summary><code>attention_forward_triton_final_store_slice</code></summary>
+<details><summary><code>attention_forward_triton_surface</code></summary>
 
 ```
-/-- Surface transcription/proof-oriented final output-store slice of `attention_forward_triton.py`'s
-`_attn_fwd`.
+/-- Full Lean port of `attention_forward_triton.py`'s `_attn_fwd`.
 
-The full kernel computes a tiled attention accumulator with Q/K/V block loads,
-quantization scales, and a streaming softmax reduction. This slice starts after
-`acc = acc / l_i[:, None]` with a precomputed `Acc` tile and proves the final
-masked writeback into `Out`. It preserves the source program-id decomposition
-and the source store mask `(offs_m < N_CTX) & (offs_k < 96)`. The source forms
-`O_block_ptr` with the Q strides, so this slice names those as the output store
-strides. The inner `tl.float32` accumulator and `p.to(tl.float16)` dot-input
-cast are outside this slice. -/
+The upstream kernel calls a separate `@triton.jit` helper `_attn_fwd_inner` to
+run the K/V streaming-softmax loop. The DSL has no function-call surface, so the
+helper body is inlined verbatim into the outer kernel; semantically the two
+forms are identical for this fixed-stage path.
+
+The literal `128` and `96` in the upstream kernel correspond to the
+`BLOCK_DMODEL` / `HEAD_ACTIVE` parameters threaded through the bundled tests
+(`head_dim = 128`, with the inner dot using only the first 96 lanes of the head
+dimension). They appear here as explicit Lean parameters. -/
 ```
 ```lean
-def attention_forward_triton_final_store_slice
-    (Acc Out : RegionName)
-    (H N_CTX HEAD_ACTIVE
-      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
-      stride_qz stride_qh stride_qm stride_qk
-      BLOCK_M BLOCK_DMODEL : Nat) :
+def attention_forward_triton_surface
+    (Q K V Q_scale K_scale Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      _stride_kz _stride_kh stride_kn _stride_kk
+      _stride_vz _stride_vh _stride_vk _stride_vn
+      _stride_oz _stride_oh _stride_om _stride_on
+      _Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE _STAGE : Nat) :
     ComputeKernel := triton {
   start_m = tl.program_id(0)
   off_hz = tl.program_id(1)
+
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
+  qvk_offset = (off_z).to(tl.int64) * $(stride_qz) + (off_h).to(tl.int64) * $(stride_qh)
+  vk_offset = qvk_offset // $(stride_qm)
+  q_scale_offset = off_hz * tl.cdiv($(N_CTX), $(BLOCK_M))
+  k_scale_offset = off_hz * tl.cdiv($(N_CTX), $(BLOCK_N))
+
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_n = tl.arange(0, $(BLOCK_N))
   offs_k = tl.arange(0, $(BLOCK_DMODEL))
-  mask = (offs_m[:, None] < $(N_CTX)) & (offs_k[None, :] < $(HEAD_ACTIVE))
-  acc = tl.load(Acc + off_z * $(stride_acc_z) + off_h * $(stride_acc_h) +
-      offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k),
-      mask=mask, other=0.0)
-  tl.store(Out + off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh) +
-      offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk),
-      (acc).to(Out.dtype.element_ty), mask=mask)
+  Q_ptrs = Q + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  Q_scale_ptr = Q_scale + q_scale_offset + start_m
+  K_ptrs = K + qvk_offset + offs_k[:, None] + offs_n[None, :] * $(stride_kn)
+  K_scale_ptr = K_scale + k_scale_offset
+  V_ptrs = V + qvk_offset + offs_n[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  O_block_ptr = Out + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
+  l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + 1.0
+  acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+  q = tl.load(Q_ptrs,
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+  q_scale = tl.load(Q_scale_ptr)
+  for start_n in range(0, $(N_CTX), $(BLOCK_N)) {
+    start_n = tl.multiple_of(start_n, $(BLOCK_N))
+    k_mask = (offs_n[None, :] < ($(N_CTX) - start_n)) &
+      (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[:, None]
+    k = tl.load(K_ptrs, mask=k_mask)
+    k_scale = tl.load(K_scale_ptr)
+    qk = (tl.dot(q, k)).to(tl.float32) * q_scale * k_scale
+    m_ij = tl.maximum(m_i, tl.max(qk, 1))
+    qk = qk - m_ij[:, None]
+    p = tl.math.exp2(qk)
+    l_ij = tl.sum(p, 1)
+    alpha = tl.math.exp2(m_i - m_ij)
+    l_i = l_i * alpha + l_ij
+    acc = acc * alpha[:, None]
+    v = tl.load(V_ptrs,
+      mask=(offs_n[:, None] < ($(N_CTX) - start_n)) &
+        (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+    p = (p).to(tl.float16)
+    acc += tl.dot(p, v, out_dtype=tl.float16)
+    m_i = m_ij
+    K_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+    K_scale_ptr += $(1)
+    V_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+  }
+  acc = acc / l_i[:, None]
+  tl.store(O_block_ptr, (acc).to(Out.type.element_ty),
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
 }
 ```
 </details>
@@ -112,31 +168,65 @@ def active
 ```
 </details>
 
-<details><summary><code>accOffset</code></summary>
+<details><summary><code>outOffset</code></summary>
 
 ```lean
-def accOffset
+def outOffset
     (s : BlockState)
-    (H stride_acc_z stride_acc_h stride_acc_m stride_acc_k BLOCK_M : Nat)
+    (H stride_qz stride_qh stride_qm stride_qk BLOCK_M : Nat)
     (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
-  offZ s H * stride_acc_z + offH s H * stride_acc_h +
-    mIndex s BLOCK_M idx.1 * stride_acc_m + kIndex idx * stride_acc_k
+  offZ s H * stride_qz + offH s H * stride_qh +
+    mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 ```
 </details>
 
-<details><summary><code>offZ</code></summary>
+<details><summary><code>qTile</code></summary>
 
 ```lean
-def offZ (s : BlockState) (H : Nat) : Nat :=
-  s.pids 1 / H
+noncomputable def qTile (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE : Nat) :
+    TileIndex [BLOCK_M, HEAD_ACTIVE] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q (baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i * HEAD_DIM + e.val)
 ```
 </details>
 
-<details><summary><code>offH</code></summary>
+<details><summary><code>kTile</code></summary>
 
 ```lean
-def offH (s : BlockState) (H : Nat) : Nat :=
-  s.pids 1 % H
+noncomputable def kTile (s : BlockState) (K : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + e.val)
+```
+</details>
+
+<details><summary><code>vTile</code></summary>
+
+```lean
+noncomputable def vTile (s : BlockState) (V : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + d.val)
+```
+</details>
+
+<details><summary><code>keyScale</code></summary>
+
+```
+/-- Per-key scale `q_scale · k_scale[block(j)]`, `block(j) = j / BLOCK_N`.
+`q_scale` is read at `off_hz · cdiv(N_CTX, BLOCK_M) + pid₀`; `k_scale[b]` at
+`off_hz · cdiv(N_CTX, BLOCK_N) + b`. -/
+```
+```lean
+noncomputable def keyScale (s : BlockState) (Q_scale K_scale : RegionName)
+    (N_CTX BLOCK_M BLOCK_N S : Nat) :
+    Fin S → ℝ :=
+  fun j =>
+    s.readMem Q_scale (s.pids 1 * cdiv N_CTX BLOCK_M + s.pids 0) *
+      s.readMem K_scale (s.pids 1 * cdiv N_CTX BLOCK_N + j.val / BLOCK_N)
 ```
 </details>
 
@@ -156,5 +246,32 @@ def kIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
 ```
 </details>
 
+<details><summary><code>offZ</code></summary>
+
+```lean
+def offZ (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 / H
+```
+</details>
+
+<details><summary><code>offH</code></summary>
+
+```lean
+def offH (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 % H
+```
+</details>
+
+<details><summary><code>baseOffset</code></summary>
+
+```
+/-- Batch/head base offset `off_z · stride_qz + off_h · stride_qh`. -/
+```
+```lean
+def baseOffset (s : BlockState) (H stride_qz stride_qh : Nat) : Nat :=
+  offZ s H * stride_qz + offH s H * stride_qh
+```
+</details>
+
 ## Also present (pinned special-case summaries)
-- `attention_forward_triton_closed_form_correct`
+- `attention_forward_triton_final_store_slice_compute_correct`
