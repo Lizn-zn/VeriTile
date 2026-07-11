@@ -406,5 +406,450 @@ trusted statement) the file stops compiling. See
 
 end LayerNorm.theorems
 
+/-! ## Flat-memory corollary — the bridge (stage 2 + execR) applied
+
+Both LayerNorm kernels are register-indirect (`offs := …; tl.load(x + offs)`),
+so this is bridge **v1.2** territory: the per-execution `Kernel.TraceSafeR`
+contracts are discharged below by walking the actual executions (including the
+fused kernel's Welford `forLoop`), and `FlatAlloc.refineR_mem_flatten`
+transports the writes-equality headline to the flat address space: one flat
+region, real pointer arithmetic, same refinement. -/
+section LayerNorm.flat
+
+/-- Inversion for a successful `assign` step under `R`. -/
+private theorem stepStmtR_assign_inv {R : RoundingModel} {d : TileDType}
+    {sh : TileShape} {nm : RegName} {e : Op d sh} {t t' : BlockState}
+    (h : stepStmtR R (.assign d sh nm e) t = some t') :
+    ∃ v, evalOpR R e t = some v ∧ t' = t.setReg nm d sh v := by
+  simp only [stepStmtR] at h
+  cases hv : evalOpR R e t with
+  | none => rw [hv] at h; exact absurd h (by simp)
+  | some v =>
+      rw [hv] at h
+      replace h : some (t.setReg nm d sh v) = some t' := h
+      exact ⟨v, rfl, (Option.some_inj.mp h).symm⟩
+
+/-- Bounds discharge for accesses through the `offs` register: any state whose
+`offs` register holds the row offsets `pid₀ * rowStride + i` addresses below
+`pid₀ * rowStride + N`. -/
+private theorem offs_activeAddressSafeR (R : RoundingModel)
+    (bounds : RegionBounds) (pid₀ : Nat) (t : BlockState)
+    (active : TileIndex [N] → Prop)
+    (hread : t.regs .nat [N] "offs"
+      = some ⟨fun i => pid₀ * rowStride + i.1.val⟩)
+    (reg : RegionName) (hreg : pid₀ * rowStride + N ≤ bounds reg) :
+    memAccessActiveAddressSafeR R bounds
+      (MemAccess.region reg (Op.ref .nat [N] "offs")) t active := by
+  simp only [memAccessActiveAddressSafeR]
+  intro offsets hoffs i _
+  rw [show evalOpR R (Op.ref .nat [N] "offs") t
+      = some ⟨fun i => pid₀ * rowStride + i.1.val⟩ from by
+    simp [evalOpR.eq_def, hread]] at hoffs
+  obtain rfl := Option.some_inj.mp hoffs
+  simp only [Region.cast_self]
+  exact lt_of_lt_of_le (Nat.add_lt_add_left i.1.isLt _) hreg
+
+/-- Bounds discharge for the contiguous `tl.arange` accesses (`γ`/`β`). -/
+private theorem arange_activeAddressSafeR (R : RoundingModel)
+    (bounds : RegionBounds) (t : BlockState)
+    (active : TileIndex [N] → Prop)
+    (reg : RegionName) (hreg : N ≤ bounds reg) :
+    memAccessActiveAddressSafeR R bounds
+      (MemAccess.region reg (Op.arange N)) t active := by
+  simp only [memAccessActiveAddressSafeR]
+  intro offsets hoffs i _
+  rw [show evalOpR R (Op.arange N) t = some ⟨fun i => i.1.val⟩ from by
+    simp [evalOpR.eq_def, Tile.vec]] at hoffs
+  obtain rfl := Option.some_inj.mp hoffs
+  simp only [Region.cast_self]
+  exact lt_of_lt_of_le i.1.isLt hreg
+
+set_option maxHeartbeats 1600000 in
+/-- The two-pass kernel is trace-safe: its three loads and one store stay
+inside `bounds` along the actual execution. -/
+private theorem twoPass_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (hxb : s.pids 0 * rowStride + N ≤ bounds xReg)
+    (hγb : N ≤ bounds γReg) (hβb : N ≤ bounds βReg)
+    (hyb : s.pids 0 * rowStride + N ≤ bounds yReg) :
+    Kernel.TraceSafeR R bounds
+      ((twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)
+      s := by
+  unfold Kernel.TraceSafeR
+  -- pid := program_id(0)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s1 hs1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv hs1
+  rw [show evalOpR R (Op.programId 0) s = some (Tile.scalar (s.pids 0)) from by
+    simp [evalOpR.eq_def]] at hv1
+  obtain rfl := Option.some_inj.mp hv1
+  -- offs := pid * rowStride + arange N
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s2 hs2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv hs2
+  rw [show evalOpR R (Op.add .nat .scalarL
+      (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat rowStride))
+      (Op.arange N)) (s.setReg "pid" .nat [] (Tile.scalar (s.pids 0)))
+      = some ⟨fun i => s.pids 0 * rowStride + i.1.val⟩ from by
+    simp [evalOpR.eq_def, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+      Tile.vec, BlockState.setReg]] at hv2
+  obtain rfl := Option.some_inj.mp hv2
+  -- x := load(xReg + offs)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial,
+      offs_activeAddressSafeR N rowStride R bounds (s.pids 0) _ _
+        (by simp [BlockState.setReg]) xReg hxb⟩
+  intro s3 hs3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv hs3
+  -- s_x := sum(x)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s4 hs4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv hs4
+  -- μ := s_x / N
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s5 hs5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmtR_assign_inv hs5
+  -- d := x - μ
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s6 hs6
+  obtain ⟨v6, hv6, rfl⟩ := stepStmtR_assign_inv hs6
+  -- s_d2 := sum(d * d)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s7 hs7
+  obtain ⟨v7, hv7, rfl⟩ := stepStmtR_assign_inv hs7
+  -- v := s_d2 / N
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s8 hs8
+  obtain ⟨v8, hv8, rfl⟩ := stepStmtR_assign_inv hs8
+  -- γ := load(γReg + arange N)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial, arange_activeAddressSafeR N R bounds _ _ γReg hγb⟩
+  intro s9 hs9
+  obtain ⟨v9, hv9, rfl⟩ := stepStmtR_assign_inv hs9
+  -- β := load(βReg + arange N)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial, arange_activeAddressSafeR N R bounds _ _ βReg hβb⟩
+  intro s10 hs10
+  obtain ⟨v10, hv10, rfl⟩ := stepStmtR_assign_inv hs10
+  -- σ_inv := 1 / sqrt(v + ε)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s11 hs11
+  obtain ⟨v11, hv11, rfl⟩ := stepStmtR_assign_inv hs11
+  -- y := (x - μ) * σ_inv * γ + β
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s12 hs12
+  obtain ⟨v12, hv12, rfl⟩ := stepStmtR_assign_inv hs12
+  -- store(yReg + offs, y.to(bf16))
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => .nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR]
+  refine ⟨trivial, by simp [Op.SafeAtR.eq_def], trivial,
+    offs_activeAddressSafeR N rowStride R bounds (s.pids 0) _ _ ?_
+      (Region.cast yReg) (by simpa [Region.cast_self] using hyb)⟩
+  simp [BlockState.setReg]
+
+/-- The two-pass kernel sits inside the bridge's covered fragment. -/
+private theorem twoPass_flattenOk :
+    ((twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε
+      ).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [twoPassLayerNormKernel, ComputeKernel.toAlgKernel, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### The fused kernel: walking the Welford loop -/
+
+/-- Inversion for a successful statement-list step at a cons. -/
+private theorem stepStmtsR_cons_inv {R : RoundingModel} {st : Stmt}
+    {rest : List Stmt} {t t' : BlockState}
+    (h : stepStmtsR R (st :: rest) t = some t') :
+    ∃ t1, stepStmtR R st t = some t1 ∧ stepStmtsR R rest t1 = some t' := by
+  rw [stepStmtsR] at h
+  cases h1 : stepStmtR R st t with
+  | none => rw [h1] at h; exact absurd h (by simp)
+  | some t1 => rw [h1] at h; exact ⟨t1, rfl, h⟩
+
+private theorem stepStmtsR_nil_inv {R : RoundingModel} {t t' : BlockState}
+    (h : stepStmtsR R [] t = some t') : t' = t := by
+  rw [stepStmtsR] at h
+  exact (Option.some_inj.mp h).symm
+
+/-- One Welford iteration is trace-safe when the `pid` register is pinned:
+its single scalar load reads `pid₀ * rowStride + k < pid₀ * rowStride + N`. -/
+private theorem welfordBody_traceSafeR (xReg : RegionName) (N rowStride : Nat)
+    (R : RoundingModel) (bounds : RegionBounds) (pid₀ k : Nat) (hk : k < N)
+    (hxb : pid₀ * rowStride + N ≤ bounds xReg)
+    (t : BlockState) (hpid : t.regs .nat [] "pid" = some (Tile.scalar pid₀)) :
+    Stmt.TraceSafeListR R bounds (onlineWelfordLoopBody xReg rowStride)
+      (t.setReg "i" .nat [] (Tile.scalar k)) := by
+  unfold onlineWelfordLoopBody
+  -- xi := load(x + (pid * rowStride + i))
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    refine ⟨by simp, trivial, ?_⟩
+    simp only [memAccessActiveAddressSafeR]
+    intro offsets hoffs i _
+    rw [show evalOpR R (Op.add .nat .nil
+        (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat rowStride))
+        (Op.ref .nat [] "i")) (t.setReg "i" .nat [] (Tile.scalar k))
+        = some (Tile.scalar (pid₀ * rowStride + k)) from by
+      simp [evalOpR.eq_def, Tile.bop, NumericDType.nat_add,
+        NumericDType.nat_mul, BlockState.setReg, hpid]] at hoffs
+    obtain rfl := Option.some_inj.mp hoffs
+    simp only [Region.cast_self]
+    exact lt_of_lt_of_le (Nat.add_lt_add_left hk _) hxb
+  intro t1 ht1
+  obtain ⟨w1, hw1, rfl⟩ := stepStmtR_assign_inv ht1
+  -- delta := xi - M
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro t2 ht2
+  obtain ⟨w2, hw2, rfl⟩ := stepStmtR_assign_inv ht2
+  -- M := M + delta / (toReal i + 1)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro t3 ht3
+  obtain ⟨w3, hw3, rfl⟩ := stepStmtR_assign_inv ht3
+  -- delta2 := xi - M
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro t4 ht4
+  obtain ⟨w4, hw4, rfl⟩ := stepStmtR_assign_inv ht4
+  -- S := S + delta * delta2
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun _ _ => .nil_intro)
+
+/-- The Welford body writes only `xi`/`delta`/`M`/`delta2`/`S`: the `pid`
+register survives one iteration. -/
+private theorem welfordBody_pid_preserved (xReg : RegionName) (rowStride : Nat)
+    {R : RoundingModel} {t t' : BlockState}
+    (h : stepStmtsR R (onlineWelfordLoopBody xReg rowStride) t = some t') :
+    t'.regs .nat [] "pid" = t.regs .nat [] "pid" := by
+  unfold onlineWelfordLoopBody at h
+  obtain ⟨t1, h1, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨w1, _, rfl⟩ := stepStmtR_assign_inv h1
+  obtain ⟨t2, h2, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨w2, _, rfl⟩ := stepStmtR_assign_inv h2
+  obtain ⟨t3, h3, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨w3, _, rfl⟩ := stepStmtR_assign_inv h3
+  obtain ⟨t4, h4, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨w4, _, rfl⟩ := stepStmtR_assign_inv h4
+  obtain ⟨t5, h5, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨w5, _, rfl⟩ := stepStmtR_assign_inv h5
+  obtain rfl := stepStmtsR_nil_inv h
+  simp [BlockState.setReg]
+
+/-- The whole Welford loop is trace-safe from any `pid`-pinned state. -/
+private theorem welfordLoop_traceSafeR (xReg : RegionName) (N rowStride : Nat)
+    (R : RoundingModel) (bounds : RegionBounds) (pid₀ : Nat)
+    (hxb : pid₀ * rowStride + N ≤ bounds xReg) :
+    ∀ (fuel k : Nat) (t : BlockState), N - k ≤ fuel →
+      t.regs .nat [] "pid" = some (Tile.scalar pid₀) →
+      Stmt.forLoopTraceSafeR R bounds "i" k N
+        (onlineWelfordLoopBody xReg rowStride) t
+  | 0, k, t, hf, hpid => by
+      rw [Stmt.forLoopTraceSafeR]
+      rw [if_neg (by omega)]
+      trivial
+  | fuel + 1, k, t, hf, hpid => by
+      rw [Stmt.forLoopTraceSafeR]
+      split
+      next hlt =>
+        refine ⟨welfordBody_traceSafeR xReg N rowStride R bounds pid₀ k hlt
+          hxb t hpid, ?_⟩
+        split
+        next s' hs' =>
+          refine welfordLoop_traceSafeR xReg N rowStride R bounds pid₀ hxb
+            fuel (k + 1) s' (by omega) ?_
+          rw [welfordBody_pid_preserved xReg rowStride hs']
+          simp [BlockState.setReg, hpid]
+        next => trivial
+      next => trivial
+
+/-- The Welford loop preserves the `pid` register. -/
+private theorem welfordLoop_pid_preserved (xReg : RegionName) (rowStride : Nat)
+    (R : RoundingModel) :
+    ∀ (fuel k n : Nat) (t t' : BlockState), n - k ≤ fuel →
+      stepForLoopAuxR R "i" k n (onlineWelfordLoopBody xReg rowStride) t
+        = some t' →
+      t'.regs .nat [] "pid" = t.regs .nat [] "pid"
+  | fuel, k, n, t, t', hf, h => by
+      rw [stepForLoopAuxR] at h
+      split at h
+      next hlt =>
+        cases fuel with
+        | zero => omega
+        | succ fuel =>
+            cases hb : stepStmtsR R (onlineWelfordLoopBody xReg rowStride)
+                (t.setReg "i" .nat [] (Tile.scalar k)) with
+            | none =>
+                rw [hb] at h
+                exact absurd h (by simp)
+            | some s1 =>
+                rw [hb] at h
+                replace h : stepForLoopAuxR R "i" (k + 1) n
+                    (onlineWelfordLoopBody xReg rowStride) s1 = some t' := h
+                rw [welfordLoop_pid_preserved xReg rowStride R fuel (k + 1) n
+                    s1 t' (by omega) h,
+                  welfordBody_pid_preserved xReg rowStride hb]
+                simp [BlockState.setReg]
+      next =>
+        obtain rfl := Option.some_inj.mp h
+        rfl
+
+set_option maxHeartbeats 1600000 in
+/-- The fused kernel is trace-safe: the Welford loop's `N` scalar loads and
+the tail's loads/store stay inside `bounds` along the actual execution. -/
+private theorem fused_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (hxb : s.pids 0 * rowStride + N ≤ bounds xReg)
+    (hγb : N ≤ bounds γReg) (hβb : N ≤ bounds βReg)
+    (hyb : s.pids 0 * rowStride + N ≤ bounds yReg) :
+    Kernel.TraceSafeR R bounds
+      ((fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)
+      s := by
+  unfold Kernel.TraceSafeR
+  -- pid := program_id(0)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s1 hs1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv hs1
+  rw [show evalOpR R (Op.programId 0) s = some (Tile.scalar (s.pids 0)) from by
+    simp [evalOpR.eq_def]] at hv1
+  obtain rfl := Option.some_inj.mp hv1
+  -- M := 0
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s2 hs2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv hs2
+  -- S := 0
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s3 hs3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv hs3
+  -- for i in N { … Welford … }
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR]
+    exact welfordLoop_traceSafeR xReg N rowStride R bounds (s.pids 0) hxb
+      N 0 _ (by omega) (by simp [BlockState.setReg])
+  intro s4 hs4
+  have hpid4 : s4.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)) := by
+    simp only [stepStmtR] at hs4
+    rw [welfordLoop_pid_preserved xReg rowStride R N 0 N _ s4 (by omega) hs4]
+    simp [BlockState.setReg]
+  -- μ := M
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s5 hs5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmtR_assign_inv hs5
+  -- v := S / N
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s6 hs6
+  obtain ⟨v6, hv6, rfl⟩ := stepStmtR_assign_inv hs6
+  -- σ_inv := 1 / sqrt(v + ε)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s7 hs7
+  obtain ⟨v7, hv7, rfl⟩ := stepStmtR_assign_inv hs7
+  -- offs := pid * rowStride + arange N
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s8 hs8
+  obtain ⟨v8, hv8, rfl⟩ := stepStmtR_assign_inv hs8
+  rw [show evalOpR R (Op.add .nat .scalarL
+      (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat rowStride))
+      (Op.arange N))
+      (((s4.setReg "μ" .real [] v5).setReg "v" .real [] v6).setReg
+        "σ_inv" .real [] v7)
+      = some ⟨fun i => s.pids 0 * rowStride + i.1.val⟩ from by
+    simp [evalOpR.eq_def, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+      Tile.vec, BlockState.setReg, hpid4]] at hv8
+  obtain rfl := Option.some_inj.mp hv8
+  -- x := load(xReg + offs)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial,
+      offs_activeAddressSafeR N rowStride R bounds (s.pids 0) _ _
+        (by simp [BlockState.setReg]) xReg hxb⟩
+  intro s9 hs9
+  obtain ⟨v9, hv9, rfl⟩ := stepStmtR_assign_inv hs9
+  -- γ := load(γReg + arange N)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial, arange_activeAddressSafeR N R bounds _ _ γReg hγb⟩
+  intro s10 hs10
+  obtain ⟨v10, hv10, rfl⟩ := stepStmtR_assign_inv hs10
+  -- β := load(βReg + arange N)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, trivial, arange_activeAddressSafeR N R bounds _ _ βReg hβb⟩
+  intro s11 hs11
+  obtain ⟨v11, hv11, rfl⟩ := stepStmtR_assign_inv hs11
+  -- y := (x - μ) * σ_inv * γ + β
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR]) ?_
+  intro s12 hs12
+  obtain ⟨v12, hv12, rfl⟩ := stepStmtR_assign_inv hs12
+  -- store(yReg + offs, y.to(bf16))
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => .nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR]
+  refine ⟨trivial, by simp [Op.SafeAtR.eq_def], trivial,
+    offs_activeAddressSafeR N rowStride R bounds (s.pids 0) _ _ ?_
+      (Region.cast yReg) (by simpa [Region.cast_self] using hyb)⟩
+  simp [BlockState.setReg]
+
+/-- The fused kernel sits inside the bridge's covered fragment. -/
+private theorem fused_flattenOk :
+    ((fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε
+      ).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fusedLayerNormKernel, ComputeKernel.toAlgKernel, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk, Op.FlattenOk.eq_def, onlineWelfordLoopBody]
+
+include hN in
+set_option maxHeartbeats 1600000 in
+/-- **Flat-memory LayerNorm refinement** — the full composition: stage 1
+(stride-parameterized addressing), stage 2 (the flat-memory bridge), and the
+rounding model. For any disjoint allocation of the four regions whose extents
+cover the accessed row and feature ranges, the *translated* kernels — one flat
+address space, real pointer arithmetic `base + pid·rowStride + i` — still
+perform the same writes from the flattened state: two-pass and fused LayerNorm
+agree cell-for-cell in flat memory. The per-execution safety contracts and
+fragment membership are discharged above, not assumed. -/
+theorem layernorm_kernels_refinement_flat
+    (A : FlatAlloc) (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) (R : RoundingModel)
+    (h_x : InputRowLoadedAt s xReg rowStride N xs)
+    (h_γ : InputFeatureLoadedAt s γReg N γs)
+    (h_β : InputFeatureLoadedAt s βReg N βs)
+    (hxb : s.pids 0 * rowStride + N ≤ A.extent xReg)
+    (hγb : N ≤ A.extent γReg) (hβb : N ≤ A.extent βReg)
+    (hyb : s.pids 0 * rowStride + N ≤ A.extent yReg)
+    (hu : s.undef = (fun _ _ => 0)) :
+    ∀ lhs' rhs',
+      execR R (A.flattenKernel ((twoPassLayerNormKernel
+          xReg γReg βReg yReg N rowStride ε).toAlgKernel))
+        (A.flattenState s) = some lhs' →
+      execR R (A.flattenKernel ((fusedLayerNormKernel
+          xReg γReg βReg yReg N rowStride ε).toAlgKernel))
+        (A.flattenState s) = some rhs' →
+      ∀ r o, lhs'.mem r o = rhs'.mem r o := by
+  refine A.refineR_mem_flatten hd hcov R _ _ s
+    (twoPass_traceSafeR xReg γReg βReg yReg N rowStride ε s R A.extent
+      hxb hγb hβb hyb)
+    (twoPass_flattenOk xReg γReg βReg yReg N rowStride ε)
+    (fused_traceSafeR xReg γReg βReg yReg N rowStride ε s R A.extent
+      hxb hγb hβb hyb)
+    (fused_flattenOk xReg γReg βReg yReg N rowStride ε) hu ?_
+  intro lhs' rhs' hL hR r o
+  obtain ⟨-, hproj⟩ := layernorm_kernels_refinement_view xReg γReg βReg yReg
+    N rowStride hN ε s xs γs βs R h_x h_γ h_β
+  replace hproj : Kernel.RefineR R
+      ((twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)
+      ((fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)
+      (fun s0 lhs' rhs' => s0 = s →
+        ∀ r, r ∉ ([] : List RegionName) → ∀ o, lhs'.mem r o = rhs'.mem r o) :=
+    hproj
+  exact hproj s lhs' rhs' hL hR rfl r (by simp) o
+
+-- Trust audit for the flat corollary.
+#axiomsClean layernorm_kernels_refinement_flat
+
+end LayerNorm.flat
+
 end VeriTile.Bench.Examples.LayerNorm
 
