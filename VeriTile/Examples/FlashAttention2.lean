@@ -15,6 +15,7 @@ import VeriTile.Examples.FlashAttention1.Backward
 import VeriTile.Triton.Semantics.StreamingAccumulator
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Triton.Launch.Grid
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

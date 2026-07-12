@@ -6,6 +6,7 @@ Score-variant Real specs and online score recurrence lemmas.
 
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Kernels
 import VeriTile.Examples.FlashAttention1.Backward.Math
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

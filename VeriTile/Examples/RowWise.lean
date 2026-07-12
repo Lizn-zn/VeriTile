@@ -19,6 +19,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Reduction
 import VeriTile.Examples.Common
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

@@ -5,6 +5,7 @@ FA-1 backward Real math surface and tile bridge lemmas.
 -/
 
 import VeriTile.Examples.FlashAttention1.Common
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

@@ -41,6 +41,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

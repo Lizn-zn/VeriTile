@@ -11,6 +11,7 @@ algorithm contract consumed by FA-1 backward kernels.
 import VeriTile.Examples.FlashAttention1.Backward.Math
 import VeriTile.Triton.Concurrency.Atomic
 import VeriTile.Triton.Float
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

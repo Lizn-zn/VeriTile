@@ -6,6 +6,7 @@ Step 4 of issue #39: make the naive/reference refinement surface explicit.
 
 import VeriTile.Triton.Float
 import VeriTile.Examples.FlashAttention1.NaiveKernel
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

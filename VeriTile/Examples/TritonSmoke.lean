@@ -12,6 +12,7 @@ import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.Launch
 import VeriTile.Triton.Concurrency
 import VeriTile.Triton.DSL
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.TritonSmoke
 

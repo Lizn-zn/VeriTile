@@ -6,6 +6,7 @@ Launcher-facing backward wrappers for FA-1 score variants.
 
 import VeriTile.Examples.FlashAttention1.Backward
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Math
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

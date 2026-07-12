@@ -5,6 +5,7 @@ Representative Layer-2a write-footprint / frame examples.
 -/
 
 import VeriTile.Triton.Memory.Footprint
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.MemoryFrame
 

@@ -7,6 +7,7 @@ Representative whole-grid disjoint-frame composition smoke.
 import VeriTile.Triton.Memory.Footprint
 import VeriTile.Triton.Launch.Composition
 import VeriTile.Triton.Concurrency.Atomic
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.GridComposition
 

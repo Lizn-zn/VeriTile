@@ -12,6 +12,7 @@ import VeriTile.Triton.KernelLemmas
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

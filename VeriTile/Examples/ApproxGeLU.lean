@@ -39,6 +39,7 @@ For example, `7978845608028654 / 10000000000000000` represents the usual
 -/
 
 import VeriTile.Examples.ApproxGeLU.Certified
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

@@ -6,6 +6,7 @@ FlashAttention-1 v0/full-tile proof surface.
 
 import VeriTile.Triton.Float
 import VeriTile.Examples.FlashAttention1.Core.Forward
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 

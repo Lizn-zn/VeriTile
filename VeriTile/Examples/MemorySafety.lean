@@ -6,6 +6,7 @@ Representative Layer-1 memory-bounds safety examples.
 
 import VeriTile.Triton.Memory.Bounds
 import Mathlib.Tactic
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.MemorySafety
 
