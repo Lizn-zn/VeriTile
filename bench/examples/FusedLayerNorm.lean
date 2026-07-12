@@ -308,7 +308,7 @@ rounding model `R`, from the same initial state the two-pass and fused LayerNorm
 kernels perform the same writes — their final memories agree at every cell. Both
 compute the same per-lane ℝ output `(x−μ)/√(var+ε)·γ+β` (Welford's identity
 `welford_eq_two_pass`) and round it at the shared bf16 output store. -/
-theorem layernorm_kernels_refinement_view
+specification layernorm_kernels_refinement_view
     (R : RoundingModel)
     (h_x : InputRowLoadedAt s xReg rowStride N xs)
     (h_γ : InputFeatureLoadedAt s γReg N γs)
@@ -810,7 +810,7 @@ address space, real pointer arithmetic `base + pid·rowStride + i` — still
 perform the same writes from the flattened state: two-pass and fused LayerNorm
 agree cell-for-cell in flat memory. The per-execution safety contracts and
 fragment membership are discharged above, not assumed. -/
-theorem layernorm_kernels_refinement_flat
+specification layernorm_kernels_refinement_flat
     (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) (R : RoundingModel)
     (h_x : InputRowLoadedAt s xReg rowStride N xs)

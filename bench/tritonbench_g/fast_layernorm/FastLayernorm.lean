@@ -648,7 +648,7 @@ the algorithm layer, and the kernel is compute-correct on all three
 Python-observable outputs — the masked `Y` store (every active lane holds the
 affine LayerNorm spec `layernormYSpec`), the scalar reciprocal-std store into `r`
 (`invVarFullSpec`), and the scalar mean store into `mu` (`meanFullSpec`). -/
-theorem layernorm_forward_output_summary
+specification layernorm_forward_output_summary
     (Y X W bias r mu : RegionName)
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)

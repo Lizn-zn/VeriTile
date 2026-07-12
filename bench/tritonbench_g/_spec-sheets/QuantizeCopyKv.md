@@ -40,7 +40,7 @@ separate declarations. -/
 
 **Statement:**
 ```lean
-theorem destindex_copy_quantize_kv_output_summary_general
+specification destindex_copy_quantize_kv_output_summary_general
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD : Nat)

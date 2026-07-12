@@ -25,7 +25,7 @@ test shape (`sm_scale = 1.0`, `stride_qh = 8192`, `stride_b0h = 8192`,
 
 **Statement:**
 ```lean
-theorem attention_kernel_aligned_output_summary_general
+specification attention_kernel_aligned_output_summary_general
     (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     (stride_qh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)
     (hKN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hHD : 0 < HEAD) (hnB : 1 ≤ nB)

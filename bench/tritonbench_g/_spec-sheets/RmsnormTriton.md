@@ -16,7 +16,7 @@ global lane `k < N_SIZE`. Holds for arbitrary `N_SIZE` — no
 
 **Statement:**
 ```lean
-theorem rmsnorm_full_output_summary
+specification rmsnorm_full_output_summary
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
     (s : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)

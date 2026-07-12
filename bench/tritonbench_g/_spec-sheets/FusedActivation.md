@@ -17,7 +17,7 @@ preserved. -/
 
 **Statement:**
 ```lean
-theorem fused_add_mul_activation_kernel_output_summary
+specification fused_add_mul_activation_kernel_output_summary
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
     (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool)

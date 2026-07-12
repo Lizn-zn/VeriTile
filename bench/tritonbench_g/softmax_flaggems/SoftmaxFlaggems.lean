@@ -285,7 +285,7 @@ theorem softmax_kernel_inner_one_tile_correct
   · exact False.elim (hT (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
 /-- Compute-facing correctness for the inner one-tile FlagGems softmax. -/
-theorem softmax_kernel_inner_one_tile_compute_correct
+specification softmax_kernel_inner_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
@@ -445,7 +445,7 @@ theorem softmax_kernel_non_inner_one_tile_correct
   · exact False.elim (hN (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 
 /-- Compute-facing correctness for the non-inner one-tile FlagGems softmax. -/
-theorem softmax_kernel_non_inner_one_tile_compute_correct
+specification softmax_kernel_non_inner_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)
@@ -599,7 +599,7 @@ theorem softmax_backward_kernel_inner_one_tile_correct
 
 /-- Compute-facing correctness for the inner one-tile FlagGems softmax
 backward. -/
-theorem softmax_backward_kernel_inner_one_tile_compute_correct
+specification softmax_backward_kernel_inner_one_tile_compute_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (M N TILE_M TILE_N : Nat)
     (s : BlockState)
@@ -716,7 +716,7 @@ theorem softmax_backward_kernel_non_inner_one_tile_correct
 
 /-- Compute-facing correctness for the non-inner one-tile FlagGems softmax
 backward. -/
-theorem softmax_backward_kernel_non_inner_one_tile_compute_correct
+specification softmax_backward_kernel_non_inner_one_tile_compute_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)

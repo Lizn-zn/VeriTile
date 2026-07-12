@@ -21,7 +21,7 @@ clean initial `undef`. -/
 
 **Statement:**
 ```lean
-theorem bmm_chunk_bwd_output_summary_general
+specification bmm_chunk_bwd_output_summary_general
     (A Dout Db : RegionName) (s : BlockState)
     (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K : Nat) (hBCS : 0 < BCS)
     (hInj : Function.Injective (dbOffset (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)

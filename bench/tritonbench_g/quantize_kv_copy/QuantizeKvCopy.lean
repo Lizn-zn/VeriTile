@@ -799,7 +799,7 @@ reduce axis), `hOut : Out ≠ OutScale` (no aliasing), and the value/scale
 destination-offset injectivity (no-collision) hypotheses the genuine readbacks
 need. Both expected values are computed from the kernel **inputs**, so this
 summary is not self-referential. -/
-theorem destindex_copy_quantize_kv_group_output_summary_general
+specification destindex_copy_quantize_kv_group_output_summary_general
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d

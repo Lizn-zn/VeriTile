@@ -17,7 +17,7 @@ from `x` to `y`.
 
 **Statement:**
 ```lean
-theorem ksoftmax_forward_plain_output_summary
+specification ksoftmax_forward_plain_output_summary
     (Y X M : RegionName)
     (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
     (s : BlockState)

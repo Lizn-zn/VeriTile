@@ -261,7 +261,7 @@ lane, leaving out-of-range lanes unchanged. This holds over arbitrary (symbolic)
 dimensions. Output-address injectivity for the transposed writeback is taken as a
 hypothesis (`hOutInj`). The `llrint` rounding / int8 cast remain the honest,
 unmodeled blocker. -/
-theorem quantize_global_transpose_blocked_output_summary_general
+specification quantize_global_transpose_blocked_output_summary_general
     (A AbsmaxInv B : RegionName)
     (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat)
     (scale127 : ℝ)

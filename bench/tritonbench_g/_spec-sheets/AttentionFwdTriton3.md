@@ -13,7 +13,7 @@
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton3_python_case1_output_summary_general
+specification attention_fwd_triton3_python_case1_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
@@ -455,7 +455,7 @@ noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × �
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton3_python_case2_output_summary_general
+specification attention_fwd_triton3_python_case2_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
@@ -897,7 +897,7 @@ noncomputable def aft3OsStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × �
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton3_python_case3_output_summary_general
+specification attention_fwd_triton3_python_case3_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN : Nat) (s : BlockState)
@@ -1302,7 +1302,7 @@ finalize into `M`. The resume seed is read from `M`/`L`/`Out` at the initial sta
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton3_python_case4_output_summary_general
+specification attention_fwd_triton3_python_case4_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)

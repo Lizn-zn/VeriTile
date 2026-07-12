@@ -15,7 +15,7 @@ lane holds `Real.cos (xs i)`, out-of-bounds lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem cos_func_output_summary
+specification cos_func_output_summary
     (a b : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

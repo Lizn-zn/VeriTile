@@ -84,25 +84,49 @@ ISSUE_BY_FAMILY = {
     "self-referential-output-value": "#146",
 }
 
-SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
+def strip_lean_comments(text: str) -> str:
+    """Blank out `--` line comments and (nested) `/- ... -/` block comments,
+    preserving line structure, so keyword-at-line-start decl scans cannot
+    match prose (e.g. a docstring line starting with "specification of...")."""
+    out: list[str] = []
+    depth = 0
+    i, n = 0, len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if depth == 0 and two == "--":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/-":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0 and two == "-/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
 
-# Public-headline discovery tiers, mirroring scripts/spec_sheet.py. Discovery
-# is anchored on the file's LAST declaration (MAIN_THEOREM_CONVENTIONS.md #1:
-# the final theorem IS the headline): tiers above the anchor's tier are
-# skipped, so a helper suffix (e.g. `*_store_slice_compute_correct`) cannot
-# shadow the real lower-tier headline; within the winning tier, `_general`
-# variants win over their non-general helpers when both are present. This
-# closes the blind spot where a kernel's headline is named
-# `*_closed_form_correct` / `*_compute_correct` rather than `*output_summary*`.
-HEADLINE_TIERS = (
-    lambda n: "summary" in n and "_general" in n,
-    lambda n: "summary" in n,
-    lambda n: bool(re.search(r"_compute_correct(_general)?$", n)),
-    lambda n: bool(re.search(r"_closed_form_correct(_general)?$", n)),
-    lambda n: bool(re.search(r"_correct_general$", n)),
-)
 
-DECL_LINE_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*(?:theorem|abbrev)\s+([A-Za-z0-9_'.]+)")
+SUMMARY_RE = re.compile(r"\b(?:theorem|specification|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
+
+# Public-headline discovery keys on the `specification` declaration keyword
+# (VeriTile/Meta/Specification.lean): a headline IS a `specification` decl.
+# This retires the name-suffix HEADLINE_TIERS heuristics (which could be
+# shadowed by helper suffixes) — mirroring scripts/spec_sheet.py.
+
+DECL_LINE_RE = re.compile(
+    r"^(?:noncomputable\s+|private\s+)*(?:theorem|specification|abbrev)\s+([A-Za-z0-9_'.]+)")
+SPEC_LINE_RE = re.compile(
+    r"^(?:noncomputable\s+|private\s+)*specification\s+([A-Za-z0-9_'.]+)")
 
 # Explicit per-summary coverage annotation, written in the summary docstring:
 #   coverage: public_summary_with_proof_gap family=<blocker-family> -- <evidence>
@@ -126,9 +150,9 @@ COVERAGE_ANNOTATION_RE = re.compile(
 # summaries must be recorded as proof gaps, not `full_value_candidate`.
 SELF_REF_EXEC_RE = re.compile(r"\bmatch\s+exec\b")
 DECL_SPLIT_RE = re.compile(
-    r"\n(?=(?:noncomputable\s+|private\s+)*(?:def|theorem|abbrev)\s|/--|@\[|namespace\s|end\s)")
+    r"\n(?=(?:noncomputable\s+|private\s+)*(?:def|theorem|specification|abbrev)\s|/--|@\[|namespace\s|end\s)")
 _DECL_HEAD_RE = re.compile(
-    r"^(?:noncomputable\s+|private\s+)*(def|theorem|abbrev)\s+([A-Za-z0-9_']+)")
+    r"^(?:noncomputable\s+|private\s+)*(def|theorem|specification|abbrev)\s+([A-Za-z0-9_']+)")
 DEF_NAME_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*def\s+([A-Za-z0-9_']+)")
 
 
@@ -414,39 +438,20 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     return level, family, issue, None
 
 
-def pick_tier_headlines(decls: list[str]) -> list[str]:
-    """Anchored `HEADLINE_TIERS` discovery (mirrored in scripts/spec_sheet.py):
-    the file's last declaration fixes the tier — tiers above it are helper
-    suffixes and are skipped; within the winning tier, `_general` variants
-    win over their non-general helpers when both are present."""
-    anchor = None
-    if decls:
-        for i, tier in enumerate(HEADLINE_TIERS):
-            if tier(decls[-1]):
-                anchor = i
-                break
-    for i, tier in enumerate(HEADLINE_TIERS):
-        if anchor is not None and i < anchor:
-            continue
-        hits = [n for n in decls if tier(n)]
-        if hits:
-            general = [n for n in hits if n.endswith("_general")]
-            return general if general else hits
-    return []
-
-
 def headline_names(full_text: str) -> set[str]:
-    """Per-file public headline declarations: every `*output_summary*` decl,
-    plus the anchored `HEADLINE_TIERS` pick (spec_sheet.py's discovery), so
-    files whose headline is `*_closed_form_correct` / `*_compute_correct`
-    are not invisible to the manifest."""
+    """Per-file public headline declarations: every `specification` decl
+    (the keyword marks the public spec surface), plus every
+    `*output_summary*` decl for backward compatibility."""
     decls: list[str] = []
-    for raw in full_text.splitlines():
+    picked: set[str] = set()
+    for raw in strip_lean_comments(full_text).splitlines():
         m = DECL_LINE_RE.match(raw)
-        if m:
-            decls.append(m.group(1))
-    picked: set[str] = {n for n in decls if SUMMARY_RE.search(f"theorem {n} ")}
-    picked.update(pick_tier_headlines(decls))
+        if not m:
+            continue
+        decls.append(m.group(1))
+        if SPEC_LINE_RE.match(raw):
+            picked.add(m.group(1))
+    picked.update(n for n in decls if SUMMARY_RE.search(f"theorem {n} "))
     return picked
 
 

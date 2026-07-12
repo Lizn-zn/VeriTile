@@ -1780,7 +1780,7 @@ Honest side-conditions only: `0 < BLOCK_N`, the contiguous
 layout hyps `stride_pbs = 1` / `stride_req_to_tokens_s = 1` (faithful to the
 checked test's contiguous `Prob`/`Req_to_tokens`), output-offset injectivity
 `hOutInj`, and a clean `undef` state `hundef`. -/
-theorem token_attn_mistral_output_summary_general
+specification token_attn_mistral_output_summary_general
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
     (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)

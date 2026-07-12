@@ -132,7 +132,7 @@ theorem kernel_compute_correct
 algorithm layer, and the cellwise store to `Out` is compute-correct — every
 output cell `idx` holds the transposed matrix cell, under the no-alias side
 condition `hOutInj`. -/
-theorem kernel_output_summary
+specification kernel_output_summary
     (M Out : RegionName)
     (matrix_stridex matrix_stridey out_stridex out_stridey
       SIZE_M D_HEAD : Nat)

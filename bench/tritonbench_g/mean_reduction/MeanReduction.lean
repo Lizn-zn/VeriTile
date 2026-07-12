@@ -879,7 +879,7 @@ theorem mean_dim_kernel_compute_correct
 the algorithm layer, and the masked store to `Mean` is compute-correct — every
 active row lane holds the row mean `meanSpec`, out-of-bounds rows are preserved.
 The only side condition is `BLOCK_N ≠ 0`. -/
-theorem mean_dim_kernel_output_summary
+specification mean_dim_kernel_output_summary
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
     (hStepNe : BLOCK_N ≠ 0) :

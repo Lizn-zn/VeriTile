@@ -193,7 +193,7 @@ surface lowers to the algorithm layer, and the in-place masked store to `x_ptr`
 is compute-correct — every active lane holds `fusedActivationSpec` (the selected
 activation of `multiplier · input + x + bias`), out-of-bounds lanes are
 preserved. -/
-theorem fused_add_mul_activation_kernel_output_summary
+specification fused_add_mul_activation_kernel_output_summary
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
     (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool)

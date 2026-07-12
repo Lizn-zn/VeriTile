@@ -33,7 +33,7 @@ invariant of the `NUM_BLOCK` driver. -/
 
 **Statement:**
 ```lean
-theorem lightning_attention_output_summary_general
+specification lightning_attention_output_summary_general
     (Q K V Out DO DQ DK DV KVPrev KTrans Vreg KVOut OInter : RegionName)
     (s : BlockState)
     (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL m : Nat)

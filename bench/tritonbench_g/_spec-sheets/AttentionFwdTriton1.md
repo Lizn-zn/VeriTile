@@ -38,7 +38,7 @@ Python test shape (`s_qh = 131072`, `s_hh = 524288`, `s_ht = 128`, `BT = 32`,
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton1_output_summary_general
+specification attention_fwd_triton1_output_summary_general
     (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
     (BT BD NT : Nat) (hBT : 0 < BT) (s : BlockState)
     (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :

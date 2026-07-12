@@ -6,6 +6,7 @@ Launcher-facing backward wrappers for FA-1 score variants.
 
 import VeriTile.Examples.FlashAttention1.Backward
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Math
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 
@@ -17,7 +18,7 @@ namespace FA1Score
 /-- Generic full launcher-facing correctness for score-variant atomic FA-1
 backward.  The caller supplies the trace-to-score-contribution relation and
 ordinary `dK`/`dV` per-block readback for the concrete kernel. -/
-theorem gridLaunchedAtomic_scoreVariant_backward_correct
+specification gridLaunchedAtomic_scoreVariant_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -130,7 +131,7 @@ theorem gridLaunchedAtomic_scoreVariant_backward_correct
       simpa [observeTileAt, off] using hDVBlock block idx
 
 /-- ALiBi specialization of `gridLaunchedAtomic_scoreVariant_backward_correct`. -/
-theorem gridLaunchedAtomic_alibi_backward_correct
+specification gridLaunchedAtomic_alibi_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (slope scale : ℝ) (s sFinal : BlockState)
@@ -214,7 +215,7 @@ theorem gridLaunchedAtomic_alibi_backward_correct
 
 /-- Sliding-window specialization of
 `gridLaunchedAtomic_scoreVariant_backward_correct`. -/
-theorem gridLaunchedAtomic_slidingWindow_backward_correct
+specification gridLaunchedAtomic_slidingWindow_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart window : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -296,7 +297,7 @@ theorem gridLaunchedAtomic_slidingWindow_backward_correct
       (by intro block idx; simpa [attentionBackwardRealSlidingWindow] using hDVBlock block idx)
 
 /-- Softcap specialization of `gridLaunchedAtomic_scoreVariant_backward_correct`. -/
-theorem gridLaunchedAtomic_softcap_backward_correct
+specification gridLaunchedAtomic_softcap_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (softcap scale : ℝ) (s sFinal : BlockState)
@@ -381,7 +382,7 @@ theorem gridLaunchedAtomic_softcap_backward_correct
 
 /-- Combined ALiBi + sliding-window + softcap specialization of
 `gridLaunchedAtomic_scoreVariant_backward_correct`. -/
-theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
+specification gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart window : Nat) (slope softcap scale : ℝ) (s sFinal : BlockState)

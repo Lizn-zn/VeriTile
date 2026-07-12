@@ -31,7 +31,7 @@ The host launch remains the trusted boundary. -/
 
 **Statement:**
 ```lean
-theorem rotary_transform_ops_output_summary_general
+specification rotary_transform_ops_output_summary_general
     (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat)
     (SEQLEN_OFFSETS_SCALAR seqlen rotary_dim seqlen_ro
       stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim

@@ -41,7 +41,7 @@ footprint injectivity; torch strides of a non-degenerate output are ≥ 1). -/
 
 **Statement:**
 ```lean
-theorem bgmv_shrink_kernel_output_summary_general
+specification bgmv_shrink_kernel_output_summary_general
     (input_ptr lora_ptr out_ptr : RegionName)
     (N K : Nat) (lora_indices_int : Region .int) (lora_indices : Region .nat)
     (scaling : ℝ)

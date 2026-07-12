@@ -218,7 +218,7 @@ to the algorithm layer, and the data-dependent compaction scatter to `out_ptr` i
 compute-correct — under the no-duplicate-destination hypothesis `hOutInj`, every
 active (in-bounds and selected) lane scatters its input value to its compacted
 slot. -/
-theorem masked_select_kernel_output_summary
+specification masked_select_kernel_output_summary
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)

@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH = os.path.join(ROOT, "bench", "tritonbench_g")
 
 DECL_KW = r"(?:noncomputable\s+|private\s+|protected\s+|partial\s+|@\[[^\]]*\]\s*)*" \
-          r"(def|theorem|lemma|abbrev|instance)"
+          r"(def|theorem|specification|lemma|abbrev|instance)"
 # A top-level decl starts at column 0 (these files put decls at col 0 even
 # inside namespace/section).
 DECL_RE = re.compile(r"^(" + DECL_KW + r")\s+([A-Za-z_][A-Za-z0-9_'?!.]*)", re.M)
@@ -178,16 +178,12 @@ def resolve_decl(d, names):
     return sorted(set(cand), key=len)[:1] if cand else []
 
 
-# Headline-detection tiers, highest priority first. Discovery is anchored on
-# the file's LAST theorem (MAIN_THEOREM_CONVENTIONS.md #1: the final theorem IS
-# the headline): tiers above the anchor's tier are skipped, so a helper suffix
-# (e.g. `*_store_slice_compute_correct`) cannot shadow the real lower-tier
-# headline; within the winning tier, `_general` variants win over their
-# non-general helpers. Non-winning matches become "also present". Plain
-# `_correct` (without compute_/closed_form_/_general) is deliberately excluded —
-# ~1000 of those are internal step lemmas.
-HEADLINE_TIERS = [
-    lambda n: "summary" in n and "_general" in n,
+# Headline discovery keys on the `specification` declaration keyword
+# (VeriTile/Meta/Specification.lean) — a headline IS a `specification` decl;
+# the name-suffix tier heuristics are retired. The suffix patterns below only
+# feed the "also present" listing (candidate-looking theorems that are NOT
+# declared as specifications).
+HEADLINE_SUFFIX_RE = [
     lambda n: "summary" in n,
     lambda n: bool(re.search(r"_compute_correct(_general)?$", n)),
     lambda n: bool(re.search(r"_closed_form_correct(_general)?$", n)),
@@ -196,33 +192,13 @@ HEADLINE_TIERS = [
 
 
 def is_headline(n):
-    return any(t(n) for t in HEADLINE_TIERS)
-
-
-def pick_tier_headlines(names):
-    """Anchored HEADLINE_TIERS discovery (mirrored in
-    bench/check_proof_gap_manifest.py): the file's last theorem fixes the
-    tier — tiers above it are helper suffixes and are skipped; within the
-    winning tier, `_general` variants win over their non-general helpers."""
-    anchor = None
-    if names:
-        for i, tier in enumerate(HEADLINE_TIERS):
-            if tier(names[-1]):
-                anchor = i
-                break
-    for i, tier in enumerate(HEADLINE_TIERS):
-        if anchor is not None and i < anchor:
-            continue
-        hits = [n for n in names if tier(n)]
-        if hits:
-            general = [n for n in hits if n.endswith("_general")]
-            return general if general else hits
-    return []
+    return any(t(n) for t in HEADLINE_SUFFIX_RE)
 
 
 def find_summary_theorems(decls, manifest_decls):
-    thms = {d["name"]: d for d in decls if d["kind"] in ("theorem", "lemma")}
-    headline_names = pick_tier_headlines(list(thms))
+    thms = {d["name"]: d for d in decls
+            if d["kind"] in ("theorem", "specification", "lemma")}
+    headline_names = [n for n, d in thms.items() if d["kind"] == "specification"]
     # fallback for files whose public theorem matches no tier: manifest seed
     if not headline_names:
         for d in manifest_decls:

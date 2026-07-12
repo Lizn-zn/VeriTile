@@ -44,7 +44,7 @@ second pass reloads the row after the mean store). -/
 
 **Statement:**
 ```lean
-theorem layer_norm_welfold_output_summary_general
+specification layer_norm_welfold_output_summary_general
     (in_out_ptr0 in_out_ptr1 in_ptr0 in_ptr1 in_ptr2 out_ptr0 : RegionName)
     (xnumel rnumel XBLOCK RBLOCK : Nat) (hLe : rnumel ≤ RBLOCK)
     (s : BlockState)

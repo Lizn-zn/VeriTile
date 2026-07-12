@@ -36,7 +36,7 @@ dimension-generalization of the recurrence store faces. -/
 
 **Statement:**
 ```lean
-theorem chunk_delta_fwd_output_summary_general
+specification chunk_delta_fwd_output_summary_general
     (k v d v_new h initial_state final_state BH BVN BHFinal : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
       _H T K V BT BC BK BV NT : Nat)

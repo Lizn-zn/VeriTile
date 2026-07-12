@@ -15,7 +15,7 @@
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
     (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
     (ComputeCorrect.Realizes_without_Rounding
@@ -185,7 +185,7 @@ noncomputable def bwdRowVectorStoreSpec
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
     (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
     (ComputeCorrect.Realizes_without_Rounding
@@ -327,7 +327,7 @@ arbitrary `RESIDUAL_OUT`/`Y` row strides, feature dim `N`, and tile width
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
     (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
     (s : BlockState)
     (stride_res_out_row stride_y_row N BLOCK_N : Nat) :
@@ -547,7 +547,7 @@ dim `N`, and tile width `BLOCK_N`. -/
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
+specification layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
     (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) :
@@ -843,7 +843,7 @@ arbitrary row strides, feature dim `N`, and tile width `BLOCK_N`. -/
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
+specification layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
     (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
@@ -1204,7 +1204,7 @@ observable row-vector stores (`DX` and `DRESIDUAL_IN`) produced by the
 
 **Statement:**
 ```lean
-theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
+specification layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
     (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
     (stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N : Nat)
     (hDXDresIn : DX ≠ DRESIDUAL_IN)

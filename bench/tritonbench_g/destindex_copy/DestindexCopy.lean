@@ -463,7 +463,7 @@ theorem fwd_kernel_destindex_copy_kv_rope_compute_correct
 surface lowers to the algorithm layer, and both dest-indexed scatters are
 compute-correct — every `O_nope` cell holds the matching `KV_nope` cell and
 every `O_rope` cell holds the matching `KV_rope` cell. -/
-theorem fwd_kernel_destindex_copy_kv_output_summary
+specification fwd_kernel_destindex_copy_kv_output_summary
     (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d

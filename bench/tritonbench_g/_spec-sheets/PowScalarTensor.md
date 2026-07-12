@@ -37,7 +37,7 @@ where CUDA returns NaN for a negative base with non-integer exponent. -/
 
 **Statement:**
 ```lean
-theorem pow_scalar_tensor_output_summary_general
+specification pow_scalar_tensor_output_summary_general
     (val0 : ℝ) (in0_ptr out0_ptr : RegionName)
     (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
     (s : BlockState)

@@ -100,7 +100,7 @@ include hN in
 rounding model `R`, from the same initial state the naive and stable softmax
 kernels perform the same writes. Both compute the same per-lane ℝ softmax value
 (shift-cancellation) and round it at the same bf16 store. -/
-theorem softmax_kernels_refinement_view :
+specification softmax_kernels_refinement_view :
     ComputeRefine.Refines R
       (naiveSoftmaxKernel xReg yReg blockSize)
       (stableSoftmaxKernel xReg yReg blockSize) s [] := by

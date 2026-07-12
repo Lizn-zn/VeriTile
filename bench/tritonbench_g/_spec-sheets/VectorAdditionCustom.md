@@ -15,7 +15,7 @@ lane holds `as i + bs i`, out-of-bounds lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem add_kernel_output_summary
+specification add_kernel_output_summary
     (A B C : RegionName)
     (size BLOCK : Nat) (hBlock : 0 < BLOCK)
     (s : BlockState) (as bs : Fin BLOCK → ℝ)

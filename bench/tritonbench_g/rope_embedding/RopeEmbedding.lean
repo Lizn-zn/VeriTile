@@ -634,7 +634,7 @@ theorem rope_embedding_backward_second_half_compute_correct
 genuine rotary specs `ropeFirst/SecondSpec` on `Q`, and symmetrically the backward
 surface lowers and both backward half-kernels realize `ropeBackwardFirst/SecondSpec`
 on `dY` — under the honest offset-injectivity side conditions. -/
-theorem rope_embedding_forward_backward_summary_general
+specification rope_embedding_forward_backward_summary_general
     (Q dY cos sin : RegionName)
     (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
       ROPE_GROUP_SIZE BLOCK_SIZE : Nat)

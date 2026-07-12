@@ -176,7 +176,7 @@ lower to the algorithm layer, and both masked stores are compute-correct — eve
 active lane holds `2 * xs i`, out-of-bounds lanes are preserved. The first
 conjunct covers the out-of-place `mul2_kernel` store to `out_ptr`; the second
 covers the in-place `mul2_inplace_kernel` store to `ptr`. -/
-theorem mul2_kernel_output_summary
+specification mul2_kernel_output_summary
     (in_ptr0 out_ptr ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs xsInplace : Fin BLOCK_SIZE → ℝ)

@@ -39,6 +39,7 @@ For example, `7978845608028654 / 10000000000000000` represents the usual
 -/
 
 import VeriTile.Examples.ApproxGeLU.Certified
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 
@@ -89,7 +90,7 @@ theorem approx_gelu_kernel_correct_exec_view
     using approx_gelu_kernel_correct xReg outReg blockSize hN s xs hx idx.1
 
 /-- Compute-facing view-level surface for `approx_gelu_kernel_correct`. -/
-theorem approx_gelu_kernel_correct_view
+specification approx_gelu_kernel_correct_view
     (xReg outReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
     (xs : Fin blockSize → ℝ)

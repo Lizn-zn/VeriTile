@@ -259,7 +259,7 @@ theorem index_select_cat_bwd_kernel_compute_correct
 lowers to the algorithm layer, and the indexed scatter into `grad_source` is
 compute-correct — under the no-duplicate-destination hypothesis `hStoreInj`, every
 active cell writes `grad_output[row, col]` to `grad_source[index[row], col]`. -/
-theorem index_select_cat_bwd_kernel_output_summary
+specification index_select_cat_bwd_kernel_output_summary
     (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
     (num_rows num_indices num_cols stride0 stride1
       BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)

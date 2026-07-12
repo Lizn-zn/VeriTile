@@ -19,7 +19,7 @@ compute-correct — every active row lane `i` holds the row-wise maximum
 
 **Statement:**
 ```lean
-theorem max_kernel_output_summary
+specification max_kernel_output_summary
     (inp out_value out_index : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

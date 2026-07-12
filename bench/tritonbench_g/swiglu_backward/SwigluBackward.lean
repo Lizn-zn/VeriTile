@@ -364,7 +364,7 @@ every active lane writes `swigluBwdA` to `DX`, `swigluBwdB` to `DY`, and, when
 `RECOMPUTE_OUTPUT`, the forward `swiglu` to `OUT`; channels are indexed by `Sum`
 and out-of-bounds / disabled lanes are preserved. Assumes the three output
 regions are pairwise distinct. -/
-theorem swiglu_bwd_kernel_output_summary
+specification swiglu_bwd_kernel_output_summary
     (X Y DOUT OUT DX DY : RegionName)
     (stride_x_row stride_y_row stride_dout_row stride_out_row
       stride_dx_row stride_dy_row ncols BLOCK_N : Nat)

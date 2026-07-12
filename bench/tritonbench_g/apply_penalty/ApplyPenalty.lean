@@ -479,7 +479,7 @@ theorem apply_penalty_compute_correct
 /-- **Per-kernel output summary for `apply_penalty`.** The DSL surface lowers to
 the algorithm layer, and (under distinct active token ids) the masked in-place
 `Logits` store is compute-correct against the Lion penalty value. -/
-theorem apply_penalty_output_summary
+specification apply_penalty_output_summary
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat) (s : BlockState)

@@ -152,7 +152,7 @@ include hBlockSize in
 the fp32-annotated add kernel, projected to the erased algorithm kernel,
 computes `addSpec` at every lane. Proved through the Real VectorAdd theorem via
 the erasure bridge. -/
-theorem float_add_kernel_correct_view
+specification float_add_kernel_correct_view
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1))
     (h_y : TensorView.loaded s (programTileView s yReg blockSize)

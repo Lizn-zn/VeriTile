@@ -2,6 +2,17 @@
 
 **Python source:** `bench/tritonbench_g/fused_recurrent_retention/fused_recurrent_retention.py`
 
+## Public theorem: `over`
+
+**Statement:**
+```lean
+specification over the input regions `k, v, initial_state` — never a read-back
+of the kernel's own output. Shared by the forward loop and the backward
+phase-1 loop (same recurrence, same flat state layout). -/
+```
+
+> ⚠ statement references **no local spec def** — spec may be inlined or stated against an opaque value.
+
 ## Public theorem: `fused_recurrent_retention_output_summary_general`
 
 <details><summary>docstring</summary>
@@ -53,7 +64,7 @@ load), and clause 7 advances the reverse invariant downward from
 
 **Statement:**
 ```lean
-theorem fused_recurrent_retention_output_summary_general
+specification fused_recurrent_retention_output_summary_general
     (q k v o do_ dq dk dv initial_state final_state
       HPrev HOut HFinal DHPrev DHOut : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
@@ -811,6 +822,10 @@ noncomputable def stateSeed (s : BlockState) (h0 : RegionName)
     (USE_INITIAL_STATE : Bool) (DK DV BK BV : Nat)
     (jk : Fin BK) (jv : Fin BV) : ℝ :=
   if USE_INITIAL_STATE then s.readMem h0 (stateOffset s DK DV BK BV jk jv) else 0
+
+/-- **Genuine closed form for the retention state after `m` steps** (key lane
+`j_k`, value lane `j_v`):
+`seed · b_b^m + Σ_{t<m} k_t[j_k]·v_t[j_v] · b_b^(m−1−t)`. A standalone
 ```
 </details>
 

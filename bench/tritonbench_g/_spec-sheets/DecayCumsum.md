@@ -2,6 +2,15 @@
 
 **Python source:** `bench/tritonbench_g/decay_cumsum/decay_cumsum.py`
 
+## Public theorem: `of`
+
+**Statement:**
+```lean
+specification of the `q *= exp2(g) * scale` map (here `scale = 1`). -/
+```
+
+> ⚠ statement references **no local spec def** — spec may be inlined or stated against an opaque value.
+
 ## Public theorem: `decay_cumsum_backward_closed_output_summary_general`
 
 <details><summary>docstring</summary>
@@ -14,7 +23,7 @@ genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). 
 
 **Statement:**
 ```lean
-theorem decay_cumsum_backward_closed_output_summary_general :
+specification decay_cumsum_backward_closed_output_summary_general :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)

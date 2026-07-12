@@ -18,7 +18,7 @@ hardcoded shape literals. Side condition: output-footprint injectivity. -/
 
 **Statement:**
 ```lean
-theorem flash_decode2_llama_normalization_output_summary_general
+specification flash_decode2_llama_normalization_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
@@ -192,7 +192,7 @@ hardcoded shape literals. -/
 
 **Statement:**
 ```lean
-theorem flash_decode2_llama_running_max_output_summary_general
+specification flash_decode2_llama_running_max_output_summary_general
     (B_Seqlen : Region .nat)
     (Mid_O Mid_O_LogExpSum MaxLogic NewMaxLogic O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od

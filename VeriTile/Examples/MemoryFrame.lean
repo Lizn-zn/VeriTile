@@ -5,6 +5,7 @@ Representative Layer-2a write-footprint / frame examples.
 -/
 
 import VeriTile.Triton.Memory.Footprint
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.MemoryFrame
 
@@ -128,7 +129,7 @@ theorem maskedFalseStore_writesWithin_activeTileImage
       funext i
       simp)
 
-theorem blockPtrOOBStore_writesWithin_checkedFootprint
+specification blockPtrOOBStore_writesWithin_checkedFootprint
     (outReg : RegionName) (s : BlockState) :
     (blockPtrOOBStoreKernel outReg).ExecWritesWithin s
       (WriteFootprint.activeAddrTileImage

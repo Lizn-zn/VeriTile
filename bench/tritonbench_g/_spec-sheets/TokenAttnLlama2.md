@@ -27,7 +27,7 @@ test shapes are recovered as instances. -/
 
 **Statement:**
 ```lean
-theorem token_attn_llama2_output_summary_general
+specification token_attn_llama2_output_summary_general
     (Q K : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
     (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd

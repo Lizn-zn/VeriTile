@@ -2049,7 +2049,7 @@ under the kernel's genuine bias-augmented per-key score `fscore` — NOT the
 kernel's own executed output. Genuinely general over
 `BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE numKVBlocks sm_scale` and the head/bias
 strides (`P_SEQ = 0`, contiguous Q/K/V/Out layout per `qRaw`/`kFlat`/`vFlat`). -/
-theorem attention_kernel_genuine_output_compute_correct_general
+specification attention_kernel_genuine_output_compute_correct_general
     (Q K V B0 Out : RegionName) (s : BlockState) (sm_scale : ℝ)
     (stride_qh stride_kh stride_b0h BLOCK_M BLOCK_N HEAD BIAS_LAST_SIZE stride_b0m nB : Nat)
     (hKN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hHD : 0 < HEAD) (hnB : 1 ≤ nB)

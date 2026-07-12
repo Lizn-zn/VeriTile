@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.FlatVectorAdd
+bench/examples/FlatVectorAdd
 
 **Stage 1 + stage 2 combined**: a masked, bounds-checked vector-add kernel
 whose flat-memory corollary is obtained by *instantiating* the flat-memory
@@ -22,13 +22,21 @@ Two kernels demonstrate the two safety regimes:
   per-execution `Kernel.TraceSafe` contract instead, and this file
   discharges it by walking the actual seven-statement execution — the
   template for putting real DSL kernels through the bridge.
+
+The **headline** is `add_kernel_masked_flat_correct_view` (the file's last
+theorem): flat-memory *correctness* on the standard
+`ComputeCorrect.Realizes` trust surface — the flattened kernel, run from
+the flattened state, stores `xs i + ys i` at every masked lane of the flat
+output region. The `exec_flatten` corollaries are the translation steps it
+composes with the region-model correctness theorem.
 -/
 
 import VeriTile.Triton
 import VeriTile.Triton.Memory.Flatten
 import VeriTile.Examples.VectorAdd
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples.FlatVectorAdd
+namespace VeriTile.Bench.Examples.FlatVectorAdd
 
 open VeriTile.Triton
 
@@ -59,7 +67,7 @@ def flatAddKernel (xReg yReg outReg : RegionName) (B n : Nat) : Kernel where
 /-- The offsets evaluate to `pid*B + i` in every state. -/
 private theorem evalOp_offsExpr (B : Nat) (s : BlockState) :
     evalOp (offsExpr B) s = some ⟨fun i => s.pids 0 * B + i.1.val⟩ := by
-  simp [offsExpr, evalOp, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+  simp [offsExpr, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
     Tile.vec]
 
 /-- Any active lane of the inline mask has its address below `n` — in every
@@ -69,7 +77,7 @@ private theorem active_lane_bound (B n : Nat) (s : BlockState)
     (hact : (MaskOpt.mask (dtype := .real) (maskExpr B n)).Active s i) :
     s.pids 0 * B + i.1.val < n := by
   obtain ⟨masks, hmasks, hdata⟩ := hact
-  simp [maskExpr, evalOp, evalOp_offsExpr, Tile.cop] at hmasks
+  simp [maskExpr, evalOp_offsExpr, Tile.cop] at hmasks
   subst hmasks
   simpa using hdata
 
@@ -102,7 +110,7 @@ theorem flatAddKernel_traceSafe (xReg yReg outReg : RegionName) (B n : Nat)
   split
   · refine ⟨⟨msOffs _, msMaskE _, bnd yReg hy _⟩, ?_⟩
     split
-    · refine ⟨⟨msOffs _, by simp [Op.SafeAt], msMaskE _, bnd outReg hout _⟩, ?_⟩
+    · refine ⟨⟨msOffs _, by simp, msMaskE _, bnd outReg hout _⟩, ?_⟩
       split <;> trivial
     · trivial
   · trivial
@@ -120,7 +128,7 @@ regions whose extents cover `n`, the translated kernel — one flat region,
 addresses `base + pid*B + i` — run on the flattened state is the flattening
 of the region-model run. Stage 1 (explicit addressing) + stage 2 (the
 bridge), with every side condition discharged above. -/
-theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+specification flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -178,7 +186,7 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
       (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat B))
       (Op.arange B)) (s.setReg "pid" .nat [] v1)
       = some ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩ from by
-    simp [evalOp, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+    simp [Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
       Tile.vec]] at hv2
   obtain rfl := Option.some_inj.mp hv2
   -- statement 3: mask := offsets < n
@@ -190,7 +198,7 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
       ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
         ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩)
       = some ⟨fun i => ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
-    simp [evalOp, Tile.cop, BlockState.setReg]] at hv3
+    simp [Tile.cop, BlockState.setReg]] at hv3
   obtain rfl := Option.some_inj.mp hv3
   -- shared register-readback facts at the state before the loads
   set sm := ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
@@ -209,14 +217,14 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
     intro offsets hoffs i hact
     rw [show evalOp (Op.ref .nat [B] "offsets") t
         = some ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩ from by
-      simp [evalOp, hframe .nat [B] "offsets" (Or.inl rfl), hsm,
+      simp [hframe .nat [B] "offsets" (Or.inl rfl), hsm,
         BlockState.setReg]] at hoffs
     obtain rfl := Option.some_inj.mp hoffs
     obtain ⟨masks, hm, hd⟩ := hact
     rw [show evalOp (Op.ref .bool [B] "mask") t
         = some ⟨fun i =>
           ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
-      simp [evalOp, hframe .bool [B] "mask" (Or.inr rfl), hsm,
+      simp [hframe .bool [B] "mask" (Or.inr rfl), hsm,
         BlockState.setReg]] at hm
     obtain rfl := Option.some_inj.mp hm
     rw [ComparableDType.nat_lt_eq_true] at hd
@@ -226,14 +234,14 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
   · refine ?_
     simp only [Stmt.TraceSafe, Op.SafeAt]
-    exact ⟨by simp [Op.SafeAt], by simp [Op.SafeAt],
+    exact ⟨by simp, by simp,
       hAAS sm (fun _ _ _ _ => rfl) xReg hx⟩
   intro s4 hs4
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
   -- statement 5: y := load(yReg + offsets, mask)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
   · simp only [Stmt.TraceSafe, Op.SafeAt]
-    refine ⟨by simp [Op.SafeAt], by simp [Op.SafeAt],
+    refine ⟨by simp, by simp,
       hAAS _ (fun dt sh nm hnm => ?_) yReg hy⟩
     rcases hnm with rfl | rfl <;> simp [BlockState.setReg]
   intro s5 hs5
@@ -260,7 +268,7 @@ theorem addKernelMasked_flattenOk (xReg yReg outReg : RegionName)
 
 /-- **Flat-memory masked vector add, register style**: the bridge applied to
 an ordinary DSL kernel, with the per-execution safety discharged above. -/
-theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+specification addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -275,5 +283,92 @@ theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
     (addKernelMasked_flattenOk xReg yReg outReg B n) hu
 
+/-! ## Part 3 — the headline: flat-memory compute correctness
 
-end VeriTile.Examples.FlatVectorAdd
+The `exec_flatten` corollaries above are *translation* statements. The
+headline below is the actual **correctness** theorem on the standard trust
+surface: the flattened masked vector add — one flat region, real pointer
+arithmetic `A.base r + pid*B + i` — repackaged as a `ComputeKernel` and
+stated with `ComputeCorrect.Realizes_without_Rounding`: every masked lane
+of the flat output holds `xs i + ys i`. The proof composes the region-model
+correctness theorem (`add_kernel_masked_correct`) with the bridge
+(`exec_flatten`) and the flat read-back lemma below. -/
+
+/-- The flattened masked vector add, repackaged on the compute surface
+(`toAlgorithm?` recovers exactly `A.flattenKernel` of the original). -/
+noncomputable def addKernelMaskedFlat (A : FlatAlloc)
+    (xReg yReg outReg : RegionName) (B n : Nat) : ComputeKernel :=
+  let fk := A.flattenKernel
+    ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel)
+  ComputeKernel.fromKernelBody fk.inputs fk.outputs fk.body
+
+/-- Scalar `readMem` at a translated in-bounds address reads the region-model
+cell (the `.real` carrier translates identically). -/
+private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
+    (s : BlockState) {r : RegionName} (hr : r ∈ A.regions) {o : Nat}
+    (ho : o < A.extent r) :
+    (A.flattenState s).readMem A.flat (A.addr r o) = s.readMem r o := by
+  unfold BlockState.readMem
+  rw [A.flattenState_mem_addr hd s hr ho, A.readAs_trCell]
+  cases hcell : (s.mem r o).readAs .real with
+  | none => rfl
+  | some v => cases v <;> rfl
+
+/-- **Flat-memory vector-add correctness**: for any disjoint allocation whose
+extents cover `n`, the translated kernel run from the flattened state stores
+`xs i + ys i` at every masked lane of the flat output region — stated on the
+standard `ComputeCorrect.Realizes` trust surface. -/
+specification add_kernel_masked_flat_correct_view
+    (A : FlatAlloc) (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)
+    (houtr : outReg ∈ A.regions)
+    (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
+    (hout : n ≤ A.extent outReg)
+    (s : BlockState) (hu : s.undef = (fun _ _ => 0))
+    (xs ys : Fin B → ℝ)
+    (h_x : VeriTile.Examples.InputLoadedAt s xReg B xs)
+    (h_y : VeriTile.Examples.InputLoadedAt s yReg B ys) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := addKernelMaskedFlat A xReg yReg outReg B n)
+      (initialState := A.flattenState s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [B] => s.pid * B + idx.1.val < n)
+        (fun idx => (A.flat, A.addr outReg (s.pid * B + idx.1.val))))
+      (expected := fun idx => xs idx.1 + ys idx.1) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have hak : (addKernelMaskedFlat A xReg yReg outReg B n).toAlgKernel
+      = A.flattenKernel
+        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
+    simp [addKernelMaskedFlat]
+  rw [hak, A.exec_flatten hd hcov _ s
+    (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
+    (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
+  cases hsrc : exec
+      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+  | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
+  | some s1 =>
+      rw [hsrc] at hExec
+      replace hExec : some (A.flattenState s1) = some s' := hExec
+      obtain rfl := (Option.some_inj.mp hExec).symm
+      have hobs := VeriTile.Examples.add_kernel_masked_correct
+        xReg yReg outReg B n hB s xs ys h_x h_y idx.1
+      rw [show exec (VeriTile.Examples.addKernelMasked xReg yReg outReg B n) s
+          = exec ((VeriTile.Examples.addKernelMasked
+              xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
+      simp only [VeriTile.Examples.observeAt, Option.map_some,
+        Option.some_inj, if_pos hActive] at hobs
+      simpa [flattenState_readMem A hd s1 houtr
+        (lt_of_lt_of_le hActive hout)] using hobs
+
+/-! ## Trust gates -/
+
+#axiomsClean flatAddKernel_exec_flatten
+#axiomsClean addKernelMasked_exec_flatten
+#axiomsClean add_kernel_masked_flat_correct_view
+
+end VeriTile.Bench.Examples.FlatVectorAdd

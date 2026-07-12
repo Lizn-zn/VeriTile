@@ -1075,7 +1075,7 @@ value.
 all tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`), making the
 modular addressing the identity and the store mask all-true; output-address
 injectivity; clean initial `undef`. -/
-theorem matmul_leakyrelu_closed_form_correct
+specification matmul_leakyrelu_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) (hBK : 0 < BK)
     (hscn : SCN = 1) (hbnle : BN ≤ SCM)

@@ -425,7 +425,7 @@ and the lowering to the algorithm layer. All value specs read INPUT memory, neve
 region-distinctness and one-valid-lane hypotheses are the only side-conditions.
 The softcapping branch is out of scope (see `fastCeTransform`'s `⊥`-propagation
 note); the `-100` ignore label is dead under the cast-to-`Nat` erasure. -/
-theorem cross_entropy_forward_output_summary
+specification cross_entropy_forward_output_summary
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE logits_row_stride : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)
@@ -897,7 +897,7 @@ Each `ComputeCorrect.Realizes_without_Rounding` internalizes the execution (`exe
 and the lowering to the algorithm layer. All value specs read INPUT memory;
 non-self-referential. The softcapping branch is out of scope; the `-100` ignore
 label is dead under cast-to-`Nat` erasure. -/
-theorem chunked_cross_entropy_forward_output_summary
+specification chunked_cross_entropy_forward_output_summary
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE N_CHUNKS logits_row_stride : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)

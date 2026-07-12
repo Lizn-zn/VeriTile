@@ -963,7 +963,7 @@ all-true; output-address injectivity, supplied concretely by `stride_cn = 1`
 (`hcn`) and `BN ≤ stride_cm` (`hbnle`); clean initial `undef`. The four remaining
 scheduling modes load the same per-block tiles and therefore compute the same
 product. -/
-theorem iv_dependent_matmul_closed_form_correct
+specification iv_dependent_matmul_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N SAM SAK SBK SBN SCM SCN BM BN BK numKBlocks : Nat) (hBK : 0 < BK)
     (hcn : SCN = 1) (hbnle : BN ≤ SCM)

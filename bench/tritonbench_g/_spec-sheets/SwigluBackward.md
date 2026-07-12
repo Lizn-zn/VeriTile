@@ -18,7 +18,7 @@ regions are pairwise distinct. -/
 
 **Statement:**
 ```lean
-theorem swiglu_bwd_kernel_output_summary
+specification swiglu_bwd_kernel_output_summary
     (X Y DOUT OUT DX DY : RegionName)
     (stride_x_row stride_y_row stride_dout_row stride_out_row
       stride_dx_row stride_dy_row ncols BLOCK_N : Nat)

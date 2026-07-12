@@ -944,7 +944,7 @@ conjuncts expose the masked K/V cache tile writebacks at the selected
 source/cache block positions. The Python test shapes (`num_heads = 4`,
 `head_dim = head_dim_v = 16`, `BLOCK = 8`) are just an instance of this
 theorem. -/
-theorem fill_kv_cache_output_summary_general
+specification fill_kv_cache_output_summary_general
     (KStates VStates KCaches VCaches QStartLoc QSeqLens KVSeqLens
       BlockOffsets : RegionName)
     (SIDX BIDX KV_BLOCK_IDX

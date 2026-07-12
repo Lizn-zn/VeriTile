@@ -1,6 +1,6 @@
 # Spec-sheet index
 
-- 151 kernels, 189 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
+- 151 kernels, 192 headline theorems, 0 with self-ref tokens, 0 with no summary theorem found.
 - Ranked by **review-cost** proxy `score = 3·defs + flat_offset_reads + stmt_lines + hyps` (hardest specs to audit first). Documented single-read element accessors (docstring + body = one `readMem`, optionally boundary-masked) are exempt from `flat_offset_reads` and count 1 (not 3) in the `defs` term — they are readability aids, not tax.
 
 | score | kernel | defs | flat-reads | stmt-lines | hyps | flags |
@@ -11,8 +11,8 @@
 | 291 | [FusedRecurrentDelta.md](FusedRecurrentDelta.md) | 44 | 2 | 147 | 14 |  |
 | 252 | [FusedRotaryEmbedding.md](FusedRotaryEmbedding.md) | 35 | 0 | 135 | 12 |  |
 | 249 | [TritonAttention.md](TritonAttention.md) | 37 | 0 | 123 | 35 |  |
-| 192 | [FusedRecurrentRetention.md](FusedRecurrentRetention.md) | 27 | 0 | 104 | 13 |  |
-| 175 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 103 | 5 |  |
+| 195 | [FusedRecurrentRetention.md](FusedRecurrentRetention.md) | 27 | 0 | 107 | 13 |  |
+| 179 | [ChunkGateRecurrence.md](ChunkGateRecurrence.md) | 23 | 0 | 107 | 5 |  |
 | 173 | [FlashAttn.md](FlashAttn.md) | 15 | 0 | 95 | 39 |  |
 | 163 | [BlockSparseAttn.md](BlockSparseAttn.md) | 25 | 0 | 79 | 15 |  |
 | 151 | [KvCacheCopy.md](KvCacheCopy.md) | 15 | 0 | 98 | 8 |  |
@@ -74,9 +74,9 @@
 | 54 | [MatmulLeakyreluFp8.md](MatmulLeakyreluFp8.md) | 13 | 0 | 15 | 4 |  |
 | 54 | [SwigluBackward.md](SwigluBackward.md) | 2 | 0 | 41 | 7 |  |
 | 53 | [ChunkGlaSimple.md](ChunkGlaSimple.md) | 13 | 0 | 18 | 6 |  |
+| 53 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 26 | 0 |  |
 | 53 | [KcacheCopyTriton.md](KcacheCopyTriton.md) | 8 | 0 | 27 | 2 |  |
 | 53 | [LayernormFwdTriton.md](LayernormFwdTriton.md) | 8 | 0 | 25 | 4 |  |
-| 52 | [DecayCumsum.md](DecayCumsum.md) | 9 | 0 | 25 | 0 |  |
 | 51 | [CrossEntropy1.md](CrossEntropy1.md) | 7 | 0 | 31 | 3 |  |
 | 51 | [EmbeddingTritonKernel.md](EmbeddingTritonKernel.md) | 10 | 0 | 17 | 4 |  |
 | 50 | [AttentionKernelAligned.md](AttentionKernelAligned.md) | 10 | 0 | 21 | 5 |  |

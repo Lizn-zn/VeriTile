@@ -13,7 +13,7 @@
 
 **Statement:**
 ```lean
-theorem softmax_kernel_inner_one_tile_compute_correct
+specification softmax_kernel_inner_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
@@ -106,7 +106,7 @@ noncomputable def softmaxFlaggemsInputTile
 
 **Statement:**
 ```lean
-theorem softmax_kernel_non_inner_one_tile_compute_correct
+specification softmax_kernel_non_inner_one_tile_compute_correct
     (output_ptr input_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)
@@ -238,7 +238,7 @@ backward. -/
 
 **Statement:**
 ```lean
-theorem softmax_backward_kernel_inner_one_tile_compute_correct
+specification softmax_backward_kernel_inner_one_tile_compute_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (M N TILE_M TILE_N : Nat)
     (s : BlockState)
@@ -389,7 +389,7 @@ backward. -/
 
 **Statement:**
 ```lean
-theorem softmax_backward_kernel_non_inner_one_tile_compute_correct
+specification softmax_backward_kernel_non_inner_one_tile_compute_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)
     (s : BlockState)

@@ -20,7 +20,7 @@ consume within-family offset injectivity, taken here as hypotheses. -/
 
 **Statement:**
 ```lean
-theorem rotary_emb_output_summary_general
+specification rotary_emb_output_summary_general
     (Q K Cos Sin : RegionName)
     (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
       stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len

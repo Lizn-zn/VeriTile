@@ -34,7 +34,7 @@ instantiations, not a single collapsed one. -/
 
 **Statement:**
 ```lean
-theorem token_attn_reducev_output_summary_general
+specification token_attn_reducev_output_summary_general
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
     (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs

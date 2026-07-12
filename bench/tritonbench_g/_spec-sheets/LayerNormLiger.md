@@ -15,7 +15,7 @@ forward outputs `Y`, `Mean`, and `RSTD`. -/
 
 **Statement:**
 ```lean
-theorem layer_norm_liger_forward_output_summary
+specification layer_norm_liger_forward_output_summary
     (Y X W B Mean RSTD : RegionName)
     (Y_row_stride X_row_stride W_row_stride B_row_stride
       Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE : Nat)

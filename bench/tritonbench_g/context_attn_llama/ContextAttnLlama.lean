@@ -2936,7 +2936,7 @@ boundary-masked causal-softmax closed form `ctxFwdGenuineOutValueG` of the Llama
 `Req_to_tokens`-gathered Q/K/V memory — a pure function of memory, NOT the kernel's
 executed readback. Side conditions: `0 < BLOCK_DMODEL`, `0 < BLOCK_N`, output-offset
 injectivity. -/
-theorem context_attn_llama_surface_compute_correct_general
+specification context_attn_llama_surface_compute_correct_general
     (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName)
     (sm_scale : ℝ)
     (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd

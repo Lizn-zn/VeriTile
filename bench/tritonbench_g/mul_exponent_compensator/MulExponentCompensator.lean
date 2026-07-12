@@ -110,7 +110,7 @@ theorem mul_kernel_compute_correct
 /-- Per-kernel output summary for `mul_kernel`: the DSL surface lowers to the
 algorithm layer, and the unmasked store to `dst` is compute-correct — every lane
 holds `xs i * exponentCompensator`. -/
-theorem mul_kernel_output_summary
+specification mul_kernel_output_summary
     (src dst : RegionName)
     (BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

@@ -136,7 +136,7 @@ theorem swiglu_fwd_kernel_compute_correct
 the algorithm layer, and the masked store to `OUT` is compute-correct — every
 active lane holds `TiledActivation.swiglu (xs i) (ys i)`, out-of-bounds lanes are
 preserved. -/
-theorem swiglu_fwd_kernel_output_summary
+specification swiglu_fwd_kernel_output_summary
     (X Y OUT : RegionName)
     (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat)
     (s : BlockState)

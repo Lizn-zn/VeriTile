@@ -257,7 +257,7 @@ theorem fwd_kernel_destindex_copy_kv_compute_correct
 surface lowers to the algorithm layer, and the dest-indexed masked scatter to
 `Out` is compute-correct — every active `[head, dim]` cell holds the matching
 cell of `K`, inactive cells are preserved. -/
-theorem fwd_kernel_destindex_copy_kv_output_summary
+specification fwd_kernel_destindex_copy_kv_output_summary
     (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)

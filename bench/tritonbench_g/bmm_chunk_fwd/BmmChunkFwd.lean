@@ -1416,7 +1416,7 @@ Preconditions: `0 < BK`; all tile rows/cols in-bounds
 (`PM·BM+i < chunk_size`, `PN·BN+j < chunk_size`), making the load/store masks
 all-true; output-address injectivity; clean initial `undef`. `PB/PC/PH/PM/PN`
 are the kernel's own derived program coordinates. -/
-theorem bmm_chunk_fwd_output_summary_general
+specification bmm_chunk_fwd_output_summary_general
     (A B Out : RegionName) (s : BlockState)
     (chunk_size ngroups SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK numKBlocks : Nat)
     (hBK : 0 < BK)

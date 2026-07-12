@@ -13,6 +13,7 @@ autograd, or an arbitrary user branch.  The branch is split at the DSL boundary:
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.HyperConnections
 
@@ -158,7 +159,7 @@ Real-valued width-side outputs:
 * `resMixReg[b, 0, 0] = exp(hRes[0, 0] / tau) * residual[b, 0, 0]`;
 * `branchInReg[b, 0, 0] = exp(hPre[0, 0] / tau) * residual[b, 0, 0]`.
 -/
-theorem mhcWidthConnection_correct_view
+specification mhcWidthConnection_correct_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
@@ -275,7 +276,7 @@ writes:
 
 `outReg[b, 0, 0] = resMixReg[b, 0, 0] + exp(hPost[0, 0] / tau) * branchOutReg[b, 0, 0]`.
 -/
-theorem mhcDepthConnection_correct_view
+specification mhcDepthConnection_correct_view
     (resMixReg branchOutReg hPostReg outReg : RegionName)
     (tau : ℝ) (s : BlockState) :
     ComputeCorrect.Realizes_without_Rounding

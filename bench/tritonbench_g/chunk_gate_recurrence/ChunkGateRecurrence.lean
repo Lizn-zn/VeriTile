@@ -1151,7 +1151,7 @@ output `O`:
 Side conditions are honest: per-store output-offset injectivity
 (`hOutInj0`, `hOutInjStep`) and the carry invariant `hAcc*`. The cross-chunk
 fold over `range(NUM_BLOCK-1)` is the trusted boundary. -/
-theorem chunk_gate_recurrence_forward_output_summary_general
+specification chunk_gate_recurrence_forward_output_summary_general
     (AccPrev S D O LastKv : RegionName) (HAS_LAST_KV : Bool) (t_rel : Nat)
     (NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
     (s : BlockState)
@@ -1234,7 +1234,7 @@ read-back of the kernel's own outputs.
 Side conditions are honest: per-store output-offset injectivity
 (`hDIInj` for `DI`, `hDLInj` for `DL`; the scalar `DG` store needs none). The
 cross-chunk reverse fold over `range(NUM_BLOCK-1)` is the trusted boundary. -/
-theorem chunk_gate_recurrence_backward_output_summary_general
+specification chunk_gate_recurrence_backward_output_summary_general
     (DaccPrev DaccPre DS S D DI DG DL : RegionName) (t_rel : Nat)
     (NUM_HEAD NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
       BLOCK_MODEL_V : Nat)

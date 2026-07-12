@@ -32,7 +32,7 @@ stores) and `0 < s.numPids 0` (a launched grid has at least one program). -/
 
 **Statement:**
 ```lean
-theorem relu_strided_buffer_output_summary_general
+specification relu_strided_buffer_output_summary_general
     (in0_ptr out0_ptr : RegionName)
     (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
     (s : BlockState)

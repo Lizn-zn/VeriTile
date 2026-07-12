@@ -14,7 +14,7 @@ Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 
 **Statement:**
 ```lean
-theorem kldiv_backward_default_compute_correct
+specification kldiv_backward_default_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -106,7 +106,7 @@ Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 
 **Statement:**
 ```lean
-theorem kldiv_backward_log_target_compute_correct
+specification kldiv_backward_log_target_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -195,7 +195,7 @@ def inOffset (s : BlockState) (target_stride : Nat) (i : Fin BLOCK_SIZE) :
 
 **Statement:**
 ```lean
-theorem kldiv_forward_default_none_compute_correct
+specification kldiv_forward_default_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -295,7 +295,7 @@ Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 
 **Statement:**
 ```lean
-theorem kldiv_forward_log_target_none_compute_correct
+specification kldiv_forward_log_target_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

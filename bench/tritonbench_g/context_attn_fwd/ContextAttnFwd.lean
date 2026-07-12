@@ -2835,7 +2835,7 @@ Every active observable `Out` write holds the genuine boundary-masked causal-sof
 closed form `ctxFwdGenuineOutValueG` of the loaded Q/K/V memory — a pure function of
 memory, NOT the kernel's executed readback. Side conditions: `0 < BLOCK_DMODEL`,
 `0 < BLOCK_N`, and output-offset injectivity. -/
-theorem context_attn_fwd_surface_compute_correct_general
+specification context_attn_fwd_surface_compute_correct_general
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
     (sm_scale : ℝ)
     (stride_qbs stride_qh stride_qd stride_kb stride_kh stride_ks stride_kd

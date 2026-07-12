@@ -35,7 +35,7 @@ is recovered by projecting the subset of clauses its `STORE_FINAL_STATE` /
 
 **Statement:**
 ```lean
-theorem fused_recurrent_rwkv6_output_summary_general
+specification fused_recurrent_rwkv6_output_summary_general
     (q k v w u o h0 ht BHPrev BHOut BHFinal : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (s_k_h s_v_h B H T K V BK BV m : Nat) (scale : ℝ) (s : BlockState)

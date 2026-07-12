@@ -35,7 +35,7 @@ grid_rmw_xchg_launch	VeriTile/Examples/GridComposition.lean	VeriTile.Examples.Gr
 online_softmax	VeriTile/Examples/OnlineSoftmax.lean	VeriTile.Examples.online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	VeriTile/Examples/RowWise.lean	VeriTile.Examples.rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
-fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLU.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
+fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLURounded.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
 welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Bench.Examples.Welford.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
 layernorm_refine	bench/examples/FusedLayerNorm.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	VeriTile.Examples.approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface

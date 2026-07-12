@@ -15,7 +15,7 @@ active lane holds `xs i + value`, out-of-bounds lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem puzzle1_kernel_output_summary
+specification puzzle1_kernel_output_summary
     (x_ptr output_ptr : RegionName)
     (N BLOCK_SIZE : Nat) (value : ℝ) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

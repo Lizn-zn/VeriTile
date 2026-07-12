@@ -314,7 +314,7 @@ theorem kldiv_backward_log_target_correct
   · simp [h]
 /-- Compute-facing correctness for the default backward kernel under the
 Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
-theorem kldiv_backward_default_compute_correct
+specification kldiv_backward_default_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -343,7 +343,7 @@ theorem kldiv_backward_default_compute_correct
   simpa [hActive] using h
 /-- Compute-facing correctness for the log-target backward kernel under the
 Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
-theorem kldiv_backward_log_target_compute_correct
+specification kldiv_backward_log_target_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -411,7 +411,7 @@ theorem kldiv_forward_default_none_correct
 /-- Compute-facing correctness for the forward `log_target=False`,
 `reduction=0` kernel under the Python-tested single-chunk regime
 `0 < n_cols ≤ BLOCK_SIZE`. -/
-theorem kldiv_forward_default_none_compute_correct
+specification kldiv_forward_default_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -480,7 +480,7 @@ theorem kldiv_forward_log_target_none_correct
 
 /-- Compute-facing correctness for the forward log-target kernel under the
 Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
-theorem kldiv_forward_log_target_none_compute_correct
+specification kldiv_forward_log_target_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

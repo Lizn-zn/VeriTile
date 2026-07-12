@@ -140,7 +140,7 @@ theorem relu_kernel_compute_correct
 algorithm layer, and the `pid == 0`-gated masked store to `out_ptr` is
 compute-correct — every active lane (with `pid = 0` and in bounds) holds
 `TiledActivation.relu (xs i)`, all other observed cells are preserved. -/
-theorem relu_kernel_output_summary
+specification relu_kernel_output_summary
     (x_ptr out_ptr : RegionName)
     (N block_size : Nat) (hBlockSize : 0 < block_size)
     (s : BlockState) (xs : Fin block_size → ℝ)

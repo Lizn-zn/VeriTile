@@ -21,7 +21,7 @@ injectivity. -/
 
 **Statement:**
 ```lean
-theorem bgmv_full_output_summary
+specification bgmv_full_output_summary
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)
     (li K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat)

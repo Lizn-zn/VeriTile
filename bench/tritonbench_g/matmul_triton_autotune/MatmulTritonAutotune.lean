@@ -1151,7 +1151,7 @@ Layout: `A[i,k]` at `A + offs_am(i)·stride_am + k·stride_ak`, `B[k,j]` at
 the kernel's L2-grouping schedule, `offs_am(i) = (pid_m·BM + i) % M`,
 `offs_bn(j) = (pid_n·BN + j) % N` (the row-major pointer arithmetic with index
 wrap). Preconditions: output-offset injectivity and clean initial `undef`. -/
-theorem matmul_autotune_closed_form_correct
+specification matmul_autotune_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N BM BN GM sam sak sbk sbn scm scn BLOCK_K numKBlocks : Nat) (K : Nat)
     (hK : K = BLOCK_K * numKBlocks) (ACTIVATION : Bool)

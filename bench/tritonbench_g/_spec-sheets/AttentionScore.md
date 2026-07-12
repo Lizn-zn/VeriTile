@@ -16,7 +16,7 @@ the dimension-parameterized case-1 output summary (symbolic shape/strides). -/
 
 **Statement:**
 ```lean
-theorem attention_score_python_case1_output_summary_general
+specification attention_score_python_case1_output_summary_general
     (Q K M Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws

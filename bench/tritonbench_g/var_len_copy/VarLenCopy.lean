@@ -405,7 +405,7 @@ Python-tested small-length regime `0 < length ≤ BLOCK_SIZE`: the DSL surface
 lowers to the algorithm layer, and the masked segment copy to `new_a_location`
 is compute-correct — every active lane (`< length`) holds the matching
 `old_a_location` lane, out-of-segment lanes are preserved. -/
-theorem var_len_copy_kernel_triton_small_length_output_summary
+specification var_len_copy_kernel_triton_small_length_output_summary
     (old_a_start old_a_len : Region .nat) (old_a_location : RegionName)
     (new_a_start : Region .nat) (new_a_location : RegionName)
     (BLOCK_SIZE : Nat)

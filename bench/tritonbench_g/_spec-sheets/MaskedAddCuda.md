@@ -16,7 +16,7 @@ compute-correct — every active lane (in-bounds and `p_mask` false) holds
 
 **Statement:**
 ```lean
-theorem masked_add_kernel_output_summary
+specification masked_add_kernel_output_summary
     (grad_ptr p_ptr p_mask_ptr : RegionName)
     (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat)
     (s : BlockState) :

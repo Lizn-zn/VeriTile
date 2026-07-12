@@ -29,7 +29,7 @@ discharged internally from the lane index. -/
 
 **Statement:**
 ```lean
-theorem rope_embedding_output_summary_general
+specification rope_embedding_output_summary_general
     (Q K QGrad KGrad cos sin : RegionName)
     (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
       BLOCK_SIZE : Nat)

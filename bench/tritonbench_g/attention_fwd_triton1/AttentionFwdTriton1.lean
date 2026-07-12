@@ -1153,7 +1153,7 @@ on: Q/V/O block strides `(BD, 1)`, K block strides `(1, BD)`, recurrent stride
 `(s_ht, 1)`, and the dynamic bound `cdiv(NT·BT, BT) = NT` (needs `0 < BT`). The
 Python test shape (`s_qh = 131072`, `s_hh = 524288`, `s_ht = 128`, `BT = 32`,
 `BD = 128`, `NT = 32`, `scale = 1/√128`) is the special case. -/
-theorem attention_fwd_triton1_output_summary_general
+specification attention_fwd_triton1_output_summary_general
     (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
     (BT BD NT : Nat) (hBT : 0 < BT) (s : BlockState)
     (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :

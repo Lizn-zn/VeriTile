@@ -1780,7 +1780,7 @@ self-propagating: clause 4 advances `stateClosed(m) ↦ stateClosed(m+1)` from
 the seed `stateClosed(0) = stateSeed` (`tl.zeros` + optional `initial_state`
 load), and clause 7 advances the reverse invariant downward from
 `b_b·dStateClosed(T) = 0`. -/
-theorem fused_recurrent_retention_output_summary_general
+specification fused_recurrent_retention_output_summary_general
     (q k v o do_ dq dk dv initial_state final_state
       HPrev HOut HFinal DHPrev DHOut : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)

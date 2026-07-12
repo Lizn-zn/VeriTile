@@ -1328,7 +1328,7 @@ Both value specs read INPUT memory, never `exec(...).readMem`, so this summary i
 non-self-referential. The region-distinctness hypotheses are the only framing
 side-conditions (the LSE store must not overwrite the logits it just read, and
 the two side outputs are distinct buffers). -/
-theorem cross_entropy_fwd_output_summary
+specification cross_entropy_fwd_output_summary
     (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
     (smoothing lse_square_scale : ℝ) (ignored_index : Int)
     (total_classes : Nat) (class_start_idx : Int)

@@ -17,7 +17,7 @@ slot. -/
 
 **Statement:**
 ```lean
-theorem masked_select_kernel_output_summary
+specification masked_select_kernel_output_summary
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)

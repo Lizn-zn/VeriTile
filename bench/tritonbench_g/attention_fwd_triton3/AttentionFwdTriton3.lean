@@ -6482,7 +6482,7 @@ noncomputable def attentionFwdTriton3Case4MSpecG
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 1 general genuine output summary.** -/
-theorem attention_fwd_triton3_python_case1_output_summary_general
+specification attention_fwd_triton3_python_case1_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
@@ -6560,7 +6560,7 @@ theorem attention_fwd_triton3_python_case1_output_summary_general
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 2 general genuine output summary.** -/
-theorem attention_fwd_triton3_python_case2_output_summary_general
+specification attention_fwd_triton3_python_case2_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
@@ -6639,7 +6639,7 @@ theorem attention_fwd_triton3_python_case2_output_summary_general
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **Case 3 general genuine output summary.** -/
-theorem attention_fwd_triton3_python_case3_output_summary_general
+specification attention_fwd_triton3_python_case3_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN : Nat) (s : BlockState)
@@ -6720,7 +6720,7 @@ resume + sliding window). The executed surface writes the GENUINE
 softmax, read over INPUT `Q`/`K`/`V` and the resume buffers `M`/`L`/`Out` — **no
 self-reference** to this program's own executed output) into `O`, and the `m+log2 l`
 finalize into `M`. The resume seed is read from `M`/`L`/`Out` at the initial state. -/
-theorem attention_fwd_triton3_python_case4_output_summary_general
+specification attention_fwd_triton3_python_case4_output_summary_general
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
       Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)

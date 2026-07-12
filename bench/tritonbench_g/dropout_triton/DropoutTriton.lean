@@ -135,7 +135,7 @@ theorem dropout_kernel_compute_correct
 algorithm layer, and the masked store to `output_ptr` is compute-correct — every
 active lane holds `dropoutSpec` (the keep-gated scaled input), out-of-bounds
 lanes are preserved. -/
-theorem dropout_kernel_output_summary
+specification dropout_kernel_output_summary
     (x_ptr x_keep_ptr output_ptr : RegionName)
     (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat)
     (s : BlockState) :

@@ -393,7 +393,7 @@ from the same state performs THE SAME WRITES — the final memories agree at
 every cell outside the scratch tensor `S`. Idempotence (`round ∘ round =
 round`, a defining field of `RoundingModel`) is what makes the two kernels'
 matched rounding sites coincide; no hypothesis is needed. -/
-theorem swiglu_fused_refines_unfused
+specification swiglu_fused_refines_unfused
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ComputeRefine.Refines R

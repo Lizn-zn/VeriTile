@@ -25,7 +25,7 @@ injectivity; clean initial `undef`. -/
 
 **Statement:**
 ```lean
-theorem matmul_leakyrelu_closed_form_correct
+specification matmul_leakyrelu_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) (hBK : 0 < BK)
     (hscn : SCN = 1) (hbnle : BN ≤ SCM)

@@ -4433,7 +4433,7 @@ is nonetheless genuine and non-self-referential (`mixedSparseAttnClosedForm`
 reads INPUT memory only), and the `∃ sF, exec … = some sF` conjunct is strictly
 stronger than `Realizes_without_Rounding` (it asserts execution actually succeeds). See
 `bench/MAIN_THEOREM_CONVENTIONS.md` §4/§6. -/
-theorem mixed_sparse_attention_output_closed_form_summary_general
+specification mixed_sparse_attention_output_closed_form_summary_general
     (Q K V Out : RegionName)
     (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
     (BM BN BD : Nat) (hBN : 0 < BN) (hBN16 : 16 ≤ BN)

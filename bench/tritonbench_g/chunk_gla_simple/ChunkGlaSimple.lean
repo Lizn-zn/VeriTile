@@ -1068,7 +1068,7 @@ NOT a self-referential exec read-back). Discharged via
 `chunk_gla_simple_fwd_surface_toAlgorithm_supported` (lowering) and
 `chunk_gla_simple_exec_glaOutput` (per-lane readback). The pinned per-Python-case
 summaries are specializations of this theorem at their literal dimensions. -/
-theorem chunk_gla_simple_output_summary_general
+specification chunk_gla_simple_output_summary_general
     (q k v h g o : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
     (scale : ℝ) (T K V BT BK BV : Nat) (s : BlockState)

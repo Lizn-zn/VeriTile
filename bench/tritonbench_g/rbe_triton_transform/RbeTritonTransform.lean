@@ -587,7 +587,7 @@ strides, `start_token_position`, `THETA`, `DIM`, `BLOCK_SIZE_M`,
 Honest side conditions: the even-offset output footprint is injective
 (`hOutInj`) and even-offset cells never collide with odd-offset (`+ 1`) cells
 (`hRI`) — both hold for the wrapper's contiguous row-major layout. -/
-theorem rbe_triton_transform_output_summary_general
+specification rbe_triton_transform_output_summary_general
     (x_ptr out_ptr : RegionName)
     (M K stride_x_batch stride_x_m stride_x_n
       stride_out_batch stride_out_m stride_out_n

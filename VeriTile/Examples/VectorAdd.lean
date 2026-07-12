@@ -41,6 +41,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples
 
@@ -156,7 +157,7 @@ theorem add_kernel_compute_correct
     observeTileAt] using hview
 
 /-- Manifest-compatible view-level surface for `add_kernel_compute_correct`. -/
-theorem add_kernel_correct_view
+specification add_kernel_correct_view
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (hBlockSize : 0 < blockSize)
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
@@ -282,7 +283,7 @@ theorem add_kernel_masked_correct_exec_view
       hBlockSize s xs ys hx hy idx.1
 
 /-- Compute-facing view-level surface for `add_kernel_masked_correct`. -/
-theorem add_kernel_masked_correct_view
+specification add_kernel_masked_correct_view
     (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
     (s : BlockState) (xs ys : Fin blockSize → ℝ)

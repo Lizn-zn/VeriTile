@@ -30,7 +30,7 @@ trusted runtime boundary, as in #290). No dimension is pinned. -/
 
 **Statement:**
 ```lean
-theorem chunk_gated_attention_output_summary_general
+specification chunk_gated_attention_output_summary_general
     (SReg GCum K V G H H0 Ht BH BHFinal : RegionName)
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (i_t NT : Nat)

@@ -22,7 +22,7 @@ injectivity. -/
 
 **Statement:**
 ```lean
-theorem flash_decode2_phi_masked_accumulator_output_summary_general
+specification flash_decode2_phi_masked_accumulator_output_summary_general
     (B_Seqlen : Region .nat)
     (Mid_O Mid_O_LogExpSum AccIn SumExpIn MaxLogic NewMaxLogic AccOut SumExpOut
       Out : RegionName)
@@ -340,7 +340,7 @@ input memory). No hardcoded shape literals. -/
 
 **Statement:**
 ```lean
-theorem flash_decode2_phi_running_max_output_summary_general
+specification flash_decode2_phi_running_max_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Out : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
@@ -461,7 +461,7 @@ one closed form — see the module Scope note). -/
 
 **Statement:**
 ```lean
-theorem flash_decode2_phi_normalization_output_summary_general
+specification flash_decode2_phi_normalization_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp Out : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od

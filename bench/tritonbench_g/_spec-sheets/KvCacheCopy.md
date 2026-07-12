@@ -18,7 +18,7 @@ the K and V cache stores is supplied as hypotheses. -/
 
 **Statement:**
 ```lean
-theorem kv_cache_copy_seqlen1_output_summary_general
+specification kv_cache_copy_seqlen1_output_summary_general
     (K V KCache VCache : RegionName)
     (BLOCK_TABLES context_lengths : Region .nat)
     (stride_kt stride_kh stride_kd
@@ -343,7 +343,7 @@ K-cache offset-injectivity and the V-cache offset-injectivity are hypotheses. -/
 
 **Statement:**
 ```lean
-theorem kv_cache_copy_split_x_output_summary_general
+specification kv_cache_copy_split_x_output_summary_general
     (K V KCache VCache : RegionName)
     (BLOCK_TABLES context_lengths : Region .nat)
     (stride_kt stride_kh stride_kd

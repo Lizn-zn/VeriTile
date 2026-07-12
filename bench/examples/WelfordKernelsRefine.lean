@@ -346,7 +346,7 @@ rounding model `R`, from the same initial state `twopassWelfordKernel` and
 `onlineWelfordKernel` perform the same writes — their final memories agree at
 every cell. Both compute the same per-lane ℝ mean/variance (Welford's identity
 `welford_eq_two_pass`) and round it at the shared bf16 output stores. -/
-theorem welford_kernels_refinement_view
+specification welford_kernels_refinement_view
     (h_x : InputRowLoadedAt s xReg rowStride blockSize xs)
     (h_mv : meanReg ≠ varReg) :
     ComputeRefine.Refines R

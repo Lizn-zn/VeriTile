@@ -1226,7 +1226,7 @@ Honest side conditions only: `NewDO ≠ Delta` (the two stores hit distinct
 regions, so the `Delta` store cannot clobber the `NewDO` readback) and
 injectivity of the `NewDO` tile offset map (`hOutInj`). The expected values are
 genuine input-memory closed forms, **not** a self-referential executed readback. -/
-theorem triton_attention_bwd_preprocess_genuine_output_summary_general
+specification triton_attention_bwd_preprocess_genuine_output_summary_general
     (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
     (hND : NewDO ≠ Delta)
     (hOutInj : Function.Injective
@@ -10267,7 +10267,7 @@ specs `fwdOutSpecG`/`fwdLSpecG`/`fwdMSpecG` — defined purely over the **input*
 conditions: positive block dims, `BLOCK_N ∣ (pids0+1)·BLOCK_M`, contiguous
 strides, output-offset injectivity, and the boundary
 `pids1·(stride_qh/BLOCK_DMODEL) + (pids0+1)·BLOCK_M ≤ D0`. -/
-theorem triton_attention_forward_output_summary_general
+specification triton_attention_forward_output_summary_general
     (Q K V L M Out : RegionName) (s : BlockState) (sc : ℝ)
     (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
@@ -10377,7 +10377,7 @@ streaming boundary `bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride
 arithmetic `hbase`, input/output region disjointness, and the honest pids grid. All
 specs are defined purely over the **input** `Q`/`K`/`V`/`DO`/`M`/`Delta`/`DQ`
 memory — never over the kernel's own `exec` readback. -/
-theorem triton_attention_bwd_grads_genuine_output_summary_general
+specification triton_attention_bwd_grads_genuine_output_summary_general
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)
     (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ bwdKBase s)

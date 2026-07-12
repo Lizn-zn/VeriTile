@@ -3899,7 +3899,7 @@ theorem layer_norm_ops_fwd_residual_out_offset_general_injective
 /-- Plain layer-norm forward, **dimension-general**: exposes the genuine `Y`,
 `Mean`, and `Rstd` outputs together for arbitrary feature dim `N`, tile width
 `BLOCK_N`, and `Y` row stride `stride_y_row`. -/
-theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
     (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
     (ComputeCorrect.Realizes_without_Rounding
@@ -3932,7 +3932,7 @@ theorem layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- RMS layer-norm forward with bias, **dimension-general**: exposes the genuine
 `Y` and `Rstd` outputs together. -/
-theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
     (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState)
     (stride_y_row N BLOCK_N : Nat) :
     (ComputeCorrect.Realizes_without_Rounding
@@ -3961,7 +3961,7 @@ theorem layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
 the genuine `RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` outputs together for
 arbitrary `RESIDUAL_OUT`/`Y` row strides, feature dim `N`, and tile width
 `BLOCK_N`. -/
-theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
+specification layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
     (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
     (s : BlockState)
     (stride_res_out_row stride_y_row N BLOCK_N : Nat) :
@@ -4007,7 +4007,7 @@ theorem layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general
 /-- RMS backward, **dimension-general**: exposes the genuine `c1` reduction,
 `DX`, and partial `DW` store slices together for arbitrary row strides, feature
 dim `N`, and tile width `BLOCK_N`. -/
-theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
+specification layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
     (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) :
@@ -4049,7 +4049,7 @@ theorem layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
 /-- Plain+bias backward, **dimension-general**: exposes the genuine `c1`/`c2`
 reductions, `DX`, partial `DW`, and partial `DB` store slices together for
 arbitrary row strides, feature dim `N`, and tile width `BLOCK_N`. -/
-theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
+specification layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
     (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
     (stride_xhat_row stride_dy_row stride_x_row stride_dx_row N BLOCK_N : Nat)
     (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
@@ -4121,7 +4121,7 @@ theorem layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
 observable row-vector stores (`DX` and `DRESIDUAL_IN`) produced by the
 `dx += dres` branch, for arbitrary row strides, feature dim `N`, and tile width
 `BLOCK_N`. -/
-theorem layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
+specification layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general
     (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
     (stride_dx_row stride_dres_row stride_dres_in_row N BLOCK_N : Nat)
     (hDXDresIn : DX ≠ DRESIDUAL_IN)

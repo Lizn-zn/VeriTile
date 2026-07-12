@@ -1504,7 +1504,7 @@ the algorithm layer, and the full embedding-gather loop is compute-correct — u
 the no-duplicate-destination hypothesis `hOutInj`, the chunking `hOne`, and the
 alias side conditions, every store-active cell holds the gathered weight row
 `embeddingSpecFull`. -/
-theorem embedding_kernel_output_summary
+specification embedding_kernel_output_summary
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)

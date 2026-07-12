@@ -1536,7 +1536,7 @@ Each `ComputeCorrect.Realizes_without_Rounding` internalizes the execution (`exe
 and the lowering to the algorithm layer. All value specs read INPUT memory, never
 `exec(...).readMem`, so this summary is non-self-referential. The
 region-distinctness hypotheses are the only framing side-conditions. -/
-theorem cross_entropy_fwd_output_summary
+specification cross_entropy_fwd_output_summary
     (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
     (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
     (total_classes : Nat) (class_start_idx : Int)

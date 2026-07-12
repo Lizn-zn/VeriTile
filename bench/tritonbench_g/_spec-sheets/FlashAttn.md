@@ -14,7 +14,7 @@
 
 **Statement:**
 ```lean
-theorem flash_attn_genuine_output_compute_correct_general
+specification flash_attn_genuine_output_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -295,7 +295,7 @@ def flashBaseOffset (s : BlockState) (stride_q_head : Nat) : Nat :=
 
 **Statement:**
 ```lean
-theorem flash_attn_genuine_l_compute_correct_general
+specification flash_attn_genuine_l_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -556,7 +556,7 @@ def flashBaseOffset (s : BlockState) (stride_q_head : Nat) : Nat :=
 
 **Statement:**
 ```lean
-theorem flash_attn_python_case1_genuine_compute_correct_general
+specification flash_attn_python_case1_genuine_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -857,7 +857,7 @@ def flashBaseOffset (s : BlockState) (stride_q_head : Nat) : Nat :=
 
 **Statement:**
 ```lean
-theorem flash_attn_python_case2_genuine_compute_correct_general
+specification flash_attn_python_case2_genuine_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)

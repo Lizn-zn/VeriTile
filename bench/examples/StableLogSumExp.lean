@@ -81,7 +81,7 @@ the rounding model `R`, from the same initial state the direct and shift-trick
 LSE kernels perform the same writes — their final memories agree at every cell.
 Both compute the same ℝ log-sum-exp (shift-invariance) and round it at the same
 bf16 store, so `R` quantizes equal values equally. -/
-theorem log_sum_exp_refinement_view :
+specification log_sum_exp_refinement_view :
     ComputeRefine.Refines R
       (directLSEKernel xReg yReg N)
       (stableLSEKernel xReg yReg N) s [] := by

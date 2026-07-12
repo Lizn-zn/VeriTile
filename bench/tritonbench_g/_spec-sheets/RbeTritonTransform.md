@@ -34,7 +34,7 @@ Honest side conditions: the even-offset output footprint is injective
 
 **Statement:**
 ```lean
-theorem rbe_triton_transform_output_summary_general
+specification rbe_triton_transform_output_summary_general
     (x_ptr out_ptr : RegionName)
     (M K stride_x_batch stride_x_m stride_x_n
       stride_out_batch stride_out_m stride_out_n

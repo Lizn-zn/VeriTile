@@ -993,7 +993,7 @@ contiguity/aliasing-freedom hypothesis on the strides) and the
 buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
 the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
 trusted runtime boundary, as in #290). No dimension is pinned. -/
-theorem chunk_gated_attention_output_summary_general
+specification chunk_gated_attention_output_summary_general
     (SReg GCum K V G H H0 Ht BH BHFinal : RegionName)
     (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
     (i_t NT : Nat)

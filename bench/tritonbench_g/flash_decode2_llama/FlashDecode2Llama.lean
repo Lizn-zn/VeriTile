@@ -440,7 +440,7 @@ flash-decode stage2 surface lowers, and the normalization writeback *realizes*
 the genuine closed form `O[d] = acc[d] / sum_exp` (`normalizedStoreValue`,
 reading the loop-produced `Acc`/`SumExp` input memory) at each output lane. No
 hardcoded shape literals. Side condition: output-footprint injectivity. -/
-theorem flash_decode2_llama_normalization_output_summary_general
+specification flash_decode2_llama_normalization_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
@@ -480,7 +480,7 @@ flash-decode stage2 surface lowers, and one recurrence step *realizes* the
 genuine closed form `new_max_logic = max(tlogic, max_logic)`
 (`runningMaxStepValue`, reading `Mid_O_LogExpSum`/`MaxLogic` input memory). No
 hardcoded shape literals. -/
-theorem flash_decode2_llama_running_max_output_summary_general
+specification flash_decode2_llama_running_max_output_summary_general
     (B_Seqlen : Region .nat)
     (Mid_O Mid_O_LogExpSum MaxLogic NewMaxLogic O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od

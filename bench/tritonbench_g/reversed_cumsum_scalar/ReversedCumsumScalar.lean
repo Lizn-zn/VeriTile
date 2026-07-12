@@ -813,7 +813,7 @@ holds the genuine suffix total when the body of chunk `c` runs — is the
 *trusted runtime boundary*, exactly as in the sibling `reversed_cumsum`
 (#290-style carried register); its algebraic content is
 `revStoreValue_eq_globalRevCumsumClosed`. -/
-theorem reversed_cumsum_scalar_output_summary_general
+specification reversed_cumsum_scalar_output_summary_general
     (S Carry O : RegionName) (T BT : Nat) (hT : T ≤ BT) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BT => singleBlockVecOffset s T i)) :
     -- (1) the full reverse-traversal surface lowers to the algorithm layer

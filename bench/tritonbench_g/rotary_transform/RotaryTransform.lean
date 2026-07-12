@@ -679,7 +679,7 @@ active lane of the second-half (`o1`) store equals `rotaryO1Spec`
 (`x0·sin + x1·cos`) — the genuine rotary form read from `COS`/`SIN`, NOT the
 kernel's re-executed value — under the honest offset-injectivity,
 `stride_out_headdim ≠ 0`, and `BLOCK_HALF ≤ rotary_dim_half` side conditions. -/
-theorem rotary_transform_python_output_summary_general
+specification rotary_transform_python_output_summary_general
     (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS_REGION : Region .nat)
     (SEQLEN_OFFSETS_SCALAR seqlen_surf nheads rotary_dim seqlen_ro_surf CACHE_KEY_SEQLEN
       surf_stride_out_batch surf_stride_out_seqlen surf_stride_out_nheads surf_stride_out_headdim

@@ -19,7 +19,7 @@ finite running max `mr`. -/
 
 **Statement:**
 ```lean
-theorem softmax_reducev_genuine_output_compute_correct_general
+specification softmax_reducev_genuine_output_compute_correct_general
     (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : Region .nat)
     (mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N : Nat)
     (other_kv_index : Int)

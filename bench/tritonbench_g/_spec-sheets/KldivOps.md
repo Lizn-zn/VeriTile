@@ -13,7 +13,7 @@
 
 **Statement:**
 ```lean
-theorem kldiv_backward_default_compute_correct
+specification kldiv_backward_default_compute_correct
     (target_ptr new_grads_ptr : RegionName)
     (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -95,7 +95,7 @@ def inOffset (s : BlockState) (target_stride : Nat) (i : Fin BLOCK_SIZE) :
 
 **Statement:**
 ```lean
-theorem kldiv_backward_log_target_compute_correct
+specification kldiv_backward_log_target_compute_correct
     (target_ptr new_grads_ptr : RegionName)
     (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -172,7 +172,7 @@ def inOffset (s : BlockState) (target_stride : Nat) (i : Fin BLOCK_SIZE) :
 
 **Statement:**
 ```lean
-theorem kldiv_forward_default_none_compute_correct
+specification kldiv_forward_default_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
     (s : BlockState)
@@ -261,7 +261,7 @@ def inOffset (s : BlockState) (target_stride : Nat) (i : Fin BLOCK_SIZE) :
 
 **Statement:**
 ```lean
-theorem kldiv_forward_log_target_none_compute_correct
+specification kldiv_forward_log_target_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

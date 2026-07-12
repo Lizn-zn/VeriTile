@@ -16,7 +16,7 @@ block-table / seq-length-selected cache slot. -/
 
 **Statement:**
 ```lean
-theorem copy_to_kcache_seqlen_n1_surface_output_summary
+specification copy_to_kcache_seqlen_n1_surface_output_summary
     (K KCache BLOCK_TABLES seq_lengths : RegionName)
     (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
       stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat)

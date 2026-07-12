@@ -113,7 +113,7 @@ theorem add_kernel_compute_correct
 /-- Per-kernel output summary for `add_kernel`: the DSL surface lowers to the
 algorithm layer, and the masked store to `output_ptr` is compute-correct — every
 active lane holds `xs i + ys i`, out-of-bounds lanes are preserved. -/
-theorem add_kernel_output_summary
+specification add_kernel_output_summary
     (x_ptr y_ptr output_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)

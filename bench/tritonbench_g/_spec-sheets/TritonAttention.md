@@ -24,7 +24,7 @@ genuine input-memory closed forms, **not** a self-referential executed readback.
 
 **Statement:**
 ```lean
-theorem triton_attention_bwd_preprocess_genuine_output_summary_general
+specification triton_attention_bwd_preprocess_genuine_output_summary_general
     (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
     (hND : NewDO ≠ Delta)
     (hOutInj : Function.Injective
@@ -157,7 +157,7 @@ strides, output-offset injectivity, and the boundary
 
 **Statement:**
 ```lean
-theorem triton_attention_forward_output_summary_general
+specification triton_attention_forward_output_summary_general
     (Q K V L M Out : RegionName) (s : BlockState) (sc : ℝ)
     (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
@@ -500,7 +500,7 @@ memory — never over the kernel's own `exec` readback. -/
 
 **Statement:**
 ```lean
-theorem triton_attention_bwd_grads_genuine_output_summary_general
+specification triton_attention_bwd_grads_genuine_output_summary_general
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)
     (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ bwdKBase s)

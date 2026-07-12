@@ -1479,7 +1479,7 @@ Layout: `A[m,kk]` at `A + m·dim_k + kk`, `B[m,n,kk]` at
 `B + m·dim_n·dim_k + n·dim_k + kk`, `out[m,n]` at `output + m·dim_n + n` (the
 kernel's row-major pointer arithmetic). Preconditions: `0 < BLOCK_M`,
 `0 < BLOCK_N`, `0 < BLOCK_K`, output-offset injectivity, clean initial `undef`. -/
-theorem batched_vecmat_closed_form_correct
+specification batched_vecmat_closed_form_correct
     (A B output : RegionName) (s : BlockState)
     (_dim_m dim_n BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBK : 0 < BLOCK_K)

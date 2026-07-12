@@ -32,7 +32,7 @@ BLOCK_N=64, HEAD_ACTIVE=96, numKVBlocks=2`) is the special case. -/
 
 **Statement:**
 ```lean
-theorem attention_fwd_triton2_output_summary_general
+specification attention_fwd_triton2_output_summary_general
     (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
       HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)

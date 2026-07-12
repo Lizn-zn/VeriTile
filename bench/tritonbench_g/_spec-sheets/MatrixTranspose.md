@@ -16,7 +16,7 @@ condition `hOutInj`. -/
 
 **Statement:**
 ```lean
-theorem kernel_output_summary
+specification kernel_output_summary
     (M Out : RegionName)
     (matrix_stridex matrix_stridey out_stridex out_stridey
       SIZE_M D_HEAD : Nat)

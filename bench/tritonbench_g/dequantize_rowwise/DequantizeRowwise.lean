@@ -140,7 +140,7 @@ active lane `i < BLOCK_SIZE` of the output realizes the genuine per-row
 dequantized value `dequantizeRowwiseSpec` (`x[i] * state_x[row] * inv_127`),
 NOT a self-referential read-back. The Python cases (`(2,4)`, `(N,16)`, `(N,8)`,
 `(N,32)`) are special cases. -/
-theorem dequantize_rowwise_output_summary_general
+specification dequantize_rowwise_output_summary_general
     (x_ptr state_x output_ptr : RegionName) (inv_127 : ℝ)
     (n_elements BLOCK_SIZE P2 : Nat) (s : BlockState) :
     (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr inv_127

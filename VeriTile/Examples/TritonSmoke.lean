@@ -12,6 +12,7 @@ import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.Launch
 import VeriTile.Triton.Concurrency
 import VeriTile.Triton.DSL
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.TritonSmoke
 
@@ -908,7 +909,7 @@ theorem argmax2_index_store_exec_correct
     ComparableDType.lt, Tile.cop, Tile.select, Option.bind, Option.map,
     MemCell.readAs_of_same, WithBot.some_eq_coe, WithBot.coe_lt_coe]
 
-theorem argmax2_index_store_correct_view
+specification argmax2_index_store_correct_view
     (xReg outReg : RegionName) (s : BlockState) :
     ComputeCorrect.General
       ((argmax2IndexStoreCoreKernel xReg outReg))
@@ -931,7 +932,7 @@ theorem nat_load_store_exec_correct
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
 
-theorem nat_load_store_correct_view
+specification nat_load_store_correct_view
     (idxReg outReg : RegionName) (s : BlockState) :
     ComputeCorrect.General
       ((natLoadStoreCoreKernel idxReg outReg))
@@ -975,7 +976,7 @@ theorem indirect_load_correct_exec_view
     congr
     exact Fin.ext h
 
-theorem indirect_load_correct_view
+specification indirect_load_correct_view
     (idxReg dataReg outReg : RegionName) (N stride : Nat)
     (s : BlockState) (i : TileIndex [N]) :
     ComputeCorrect.General
@@ -997,7 +998,7 @@ theorem indirect_load_correct_view
 def launchNoopKernel : ComputeKernel :=
   ComputeKernel.mk [] [] []
 
-theorem launch_noop_for_all_programs_some
+specification launch_noop_for_all_programs_some
     (g : Grid) (s : BlockState) :
     Kernel.ForAllProgramsSome launchNoopKernel g s
       (fun idx s' => s'.pids = idx.toPids) := by

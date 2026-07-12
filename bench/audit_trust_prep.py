@@ -32,9 +32,41 @@ HEADLINE_SUFFIXES = (
     "_output_summary",
 )
 
+def strip_lean_comments(text: str) -> str:
+    """Blank out `--` line comments and (nested) `/- ... -/` block comments,
+    preserving line structure, so keyword-at-line-start decl scans cannot
+    match prose (e.g. a docstring line starting with "specification of...")."""
+    out: list[str] = []
+    depth = 0
+    i, n = 0, len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if depth == 0 and two == "--":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/-":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0 and two == "-/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth > 0:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 decl_re = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+|scoped\s+)*"
-    r"(theorem|lemma|def|abbrev)\s+([A-Za-z_][A-Za-z0-9_'\.]*)"
+    r"(theorem|specification|lemma|def|abbrev)\s+([A-Za-z_][A-Za-z0-9_'\.]*)"
 )
 ns_re = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_'\.]*)")
 end_named_re = re.compile(r"^\s*end\s+([A-Za-z_][A-Za-z0-9_'\.]*)\s*$")
@@ -89,12 +121,15 @@ def main():
     text = path.read_text()
     lines = text.splitlines()
 
-    decls = parse_decls(lines)
+    decls = parse_decls(strip_lean_comments(text).splitlines())
 
-    # headline theorems by suffix convention
+    # headline theorems: every `specification` decl (the keyword marks the
+    # public surface), plus the legacy suffix net (kept as a superset so the
+    # gate only ever widens, never narrows)
     headline = []
     for kind, name, fq, _ in decls:
-        if kind in ("theorem", "lemma") and name.endswith(HEADLINE_SUFFIXES):
+        if kind == "specification" or (
+            kind in ("theorem", "lemma") and name.endswith(HEADLINE_SUFFIXES)):
             headline.append(fq)
     # plus fully-qualified manifest names for this file
     headline.extend(manifest_names_for(rel))

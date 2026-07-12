@@ -1105,7 +1105,7 @@ theorem rmsnorm_full_compute_correct
 masked store realizes the genuine multi-block RMS-norm closed form at every
 global lane `k < N_SIZE`. Holds for arbitrary `N_SIZE` — no
 `N_SIZE ≤ BLOCK_N_SIZE` hypothesis. -/
-theorem rmsnorm_full_output_summary
+specification rmsnorm_full_output_summary
     (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
     (s : BlockState) (hB : 0 < B) (hNpos : 0 < N)
     (hox : o ≠ x) (how : o ≠ w)

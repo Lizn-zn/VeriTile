@@ -17,7 +17,7 @@ store. -/
 
 **Statement:**
 ```lean
-theorem argmax_kernel_1_value_compute_correct
+specification argmax_kernel_1_value_compute_correct
     (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -110,7 +110,7 @@ noncomputable def argmaxKernel1InputTile
 
 **Statement:**
 ```lean
-theorem argmax_kernel_1_index_compute_correct
+specification argmax_kernel_1_index_compute_correct
     (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat)
     (s : BlockState) :
@@ -201,7 +201,7 @@ noncomputable def argmaxKernel1InputTile
 
 **Statement:**
 ```lean
-theorem argmax_kernel_2_compute_correct
+specification argmax_kernel_2_compute_correct
     (mid_value mid_index out : RegionName)
     (mid_size BLOCK_MID : Nat)
     (s : BlockState) :
@@ -285,7 +285,7 @@ tile. -/
 
 **Statement:**
 ```lean
-theorem argmax_kernel_dim_single_block_compute_correct
+specification argmax_kernel_dim_single_block_compute_correct
     (inp : RegionName) (out_index : Region .int)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

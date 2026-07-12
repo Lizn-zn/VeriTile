@@ -526,7 +526,7 @@ carried inside `expected`. Honest side conditions: offset injectivity for the
 value tile (`hValInj`) and the per-head scale (`hScaleInj`), and region
 distinctness `hOut`. The general version assumes full tile injectivity, which
 holds whenever `BLOCK_DMODEL = head_dim` and `BLOCK_HEAD = head_num`. -/
-theorem destindex_copy_quantize_kv_transform_output_summary_general
+specification destindex_copy_quantize_kv_transform_output_summary_general
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)

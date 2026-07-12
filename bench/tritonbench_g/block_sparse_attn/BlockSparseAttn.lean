@@ -3811,7 +3811,7 @@ This is **not** the self-referential executed value: the streaming
 `m_i`/`l_i`/`acc`/`acc2` recurrence is unfolded statement-by-statement
 (`bsa_execG`) and proven to collapse to the closed form
 (`bsa_streaming_eq_closedFormG`). -/
-theorem block_sparse_attn_output_closed_form_summary_general
+specification block_sparse_attn_output_closed_form_summary_general
     (Out Q K V : RegionName) (R C : Region .nat) (s : BlockState)
     (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
     (rowStrideH colStrideH sqb sqh sqm skb skh skn svb svh svn sob soh som : Nat) (scale : ℝ)

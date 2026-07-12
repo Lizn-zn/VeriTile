@@ -910,7 +910,7 @@ injectivity — every output slice realizes its genuine specification, with the
 removes the test-shape pin: the statement is universally quantified over all
 `Nat` dimension/stride parameters (cf. the symbolic sibling
 `chunk_cumsum_scalar_output_summary_general`, generalized over `T`, `BT`). -/
-theorem chunked_cumsum_fwd_summary_general
+specification chunked_cumsum_fwd_summary_general
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (batch seqlen nheads chunk_size : Nat)

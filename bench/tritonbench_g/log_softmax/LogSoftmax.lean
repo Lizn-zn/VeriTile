@@ -353,7 +353,7 @@ theorem log_softmax_backward_kernel_compute_correct
 the algorithm layer, and the masked store to `output_ptr` is compute-correct —
 every active cell holds `logSoftmaxSpec ...`, inactive cells are preserved.
 Conditional on the output-offset injectivity side hypothesis `hOutInj`. -/
-theorem log_softmax_kernel_output_summary
+specification log_softmax_kernel_output_summary
     (output_ptr input_ptr : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

@@ -18,7 +18,7 @@ that holds at the Python test shapes is taken as an explicit hypothesis here. -/
 
 **Statement:**
 ```lean
-theorem token_softmax_llama_output_summary_general
+specification token_softmax_llama_output_summary_general
     (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
     (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE : Nat)
     (s : BlockState)

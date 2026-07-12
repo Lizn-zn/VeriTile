@@ -6,6 +6,7 @@ Representative Layer-1 memory-bounds safety examples.
 
 import VeriTile.Triton.Memory.Bounds
 import Mathlib.Tactic
+import VeriTile.Meta.Specification
 
 namespace VeriTile.Examples.MemorySafety
 
@@ -73,7 +74,7 @@ theorem maskedTailAdd_memorySafe
   · exact hy
   · exact hout
 
-theorem blockPtrBoundary_memorySafe
+specification blockPtrBoundary_memorySafe
     (bounds : RegionBounds) (xReg outReg : RegionName) :
     (blockPtrBoundaryKernel xReg outReg).MemorySafe bounds := by
   simp [blockPtrBoundaryKernel, Kernel.MemorySafe, StmtList.MemorySafe,

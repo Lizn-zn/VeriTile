@@ -2,6 +2,59 @@
 
 **Python source:** `bench/tritonbench_g/chunk_gate_recurrence/chunk_gate_recurrence.py`
 
+## Public theorem: `over`
+
+**Statement:**
+```lean
+specification over the *input* regions `S`, `D`, `last_kv` — never a read-back of
+the kernel's own output `O`.
+
+`fwdGate s D NUM_BLOCK j
+```
+
+**Closed-form spec defs (transitive):** `fwdGate`, `dOffset`
+
+<details><summary><code>fwdGate</code></summary>
+
+```
+/-! ## Genuine forward closed form (the gated-recurrence fold)
+
+`chunk_gate_recurrence.py`'s `_fwd_recurrence` seeds `acc` from `last_kv` (or
+zero), stores it into output chunk `0`, and then for each chunk `t` runs the
+gated update `acc = acc * d_t + S_t` and stores the new `acc` into output chunk
+`t+1`. The scalar gate `d_t = D[offset_bh·NUM_BLOCK + t]` broadcasts over the
+whole `[BLOCK_MODEL_K, BLOCK_MODEL_V]` state tile.
+
+Unrolling the recurrence gives the **genuine closed form** for output chunk `m`
+at tile element `idx`:
+
+```
+O[m][idx] = seed[idx] · ∏_{j<m} d_j  +  Σ_{t<m} S_t[idx] · ∏_{t<j<m} d_j
+```
+
+where `seed[idx] = last_kv[idx]` if `HAS_LAST_KV` else `0`. This is a standalone
+specification over the *input* regions `S`, `D`, `last_kv` — never a read-back of
+the kernel's own output `O`.
+
+`fwdGate s D NUM_BLOCK j := D[offset_bh·NUM_BLOCK + j]` is the scalar gate at
+chunk `j`; `fwdSeed` is the seeded initial state; `fwdClosed` is the closed form
+above. -/
+```
+```lean
+noncomputable def fwdGate
+    (s : BlockState) (D : RegionName) (NUM_BLOCK j : Nat) : ℝ :=
+  s.readMem D (dOffset s j NUM_BLOCK)
+```
+</details>
+
+<details><summary><code>dOffset</code></summary>
+
+```lean
+def dOffset (s : BlockState) (t_rel NUM_BLOCK : Nat) : Nat :=
+  s.pids 0 * NUM_BLOCK + t_rel
+```
+</details>
+
 ## Public theorem: `chunk_gate_recurrence_forward_output_summary_general`
 
 <details><summary>docstring</summary>
@@ -29,7 +82,7 @@ fold over `range(NUM_BLOCK-1)` is the trusted boundary. -/
 
 **Statement:**
 ```lean
-theorem chunk_gate_recurrence_forward_output_summary_general
+specification chunk_gate_recurrence_forward_output_summary_general
     (AccPrev S D O LastKv : RegionName) (HAS_LAST_KV : Bool) (t_rel : Nat)
     (NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
     (s : BlockState)
@@ -398,7 +451,7 @@ cross-chunk reverse fold over `range(NUM_BLOCK-1)` is the trusted boundary. -/
 
 **Statement:**
 ```lean
-theorem chunk_gate_recurrence_backward_output_summary_general
+specification chunk_gate_recurrence_backward_output_summary_general
     (DaccPrev DaccPre DS S D DI DG DL : RegionName) (t_rel : Nat)
     (NUM_HEAD NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
       BLOCK_MODEL_V : Nat)

@@ -1824,7 +1824,7 @@ theorem conv2d_closed_form_correct
 the genuine convolution `convSpec` on every active output lane. The convolution
 dot-accumulator, the per-block padding/boundary masking, and the masked
 writeback are all proven; only the host launch / scheduling is trusted. -/
-theorem conv2d_output_summary
+specification conv2d_output_summary
     (Input Weight Output : RegionName)
     (batch_dim in_feat_dim in_height in_width out_feat_dim out_height out_width
       IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS

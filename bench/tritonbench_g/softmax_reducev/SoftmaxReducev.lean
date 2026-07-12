@@ -2621,7 +2621,7 @@ dimension-parameterized: `BLOCK_N` (key block), `BLOCK_DMODEL` (channel), and al
 strides. Side conditions: `0 < BLOCK_N`, `0 < BLOCK_DMODEL`, `BLOCK_N ∣ srSeqLen`
 (`% = 0`), `0 < srSeqLen`, contiguous output offset injectivity, `hundef`, and the
 finite running max `mr`. -/
-theorem softmax_reducev_genuine_output_compute_correct_general
+specification softmax_reducev_genuine_output_compute_correct_general
     (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : Region .nat)
     (mil slh slb svbs svh svd sob soh sod sb ss BLOCK_DMODEL BLOCK_N : Nat)
     (other_kv_index : Int)
