@@ -37,6 +37,24 @@ def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.readMem region (s.pid * N + i.val) = xs i
 
+/-- All listed inputs are loaded (the list form of `InputLoadedAt`):
+`InputsLoaded s N [(xReg, xs), (yReg, ys)]` says region `xReg` holds tile
+`xs` and region `yReg` holds tile `ys`, each at the current program's
+offsets. Specifications take one `InputsLoaded` hypothesis instead of one
+`InputLoadedAt` line per input. -/
+def InputsLoaded (s : BlockState) (N : Nat) :
+    List (RegionName × (Fin N → ℝ)) → Prop
+  | [] => True
+  | p :: ps => InputLoadedAt s p.1 N p.2 ∧ InputsLoaded s N ps
+
+@[simp] theorem inputsLoaded_nil (s : BlockState) (N : Nat) :
+    InputsLoaded s N [] := trivial
+
+@[simp] theorem inputsLoaded_cons (s : BlockState) (N : Nat)
+    (p : RegionName × (Fin N → ℝ)) (ps : List (RegionName × (Fin N → ℝ))) :
+    InputsLoaded s N (p :: ps) ↔
+      InputLoadedAt s p.1 N p.2 ∧ InputsLoaded s N ps := Iff.rfl
+
 /-- Write map for the current program's masked 1-D output tile: lane `i`
 writes `region` at `s.pid * N + i.val`, active exactly when the column bound
 admits it (`s.pid * N + i.val < cols`). The output-side counterpart of

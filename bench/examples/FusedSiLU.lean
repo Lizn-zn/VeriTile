@@ -308,15 +308,17 @@ declared scratch regions `zReg`/`siluReg`. Both compute the same per-lane ℝ
 output `residual + silu(x·gate)` and round it at the shared bf16 output store, so
 `R` quantizes equal values equally. -/
 specification silu_kernels_refinement_view
-    (h_x : InputLoadedAt s xReg blockSize xs)
-    (h_g : InputLoadedAt s gateReg blockSize gates)
-    (h_res : InputLoadedAt s residualReg blockSize residuals)
-    (h_zRes : zReg ≠ residualReg)
-    (h_siluRes : siluReg ≠ residualReg) :
+    (hin : InputsLoaded s blockSize
+      [(xReg, xs), (gateReg, gates), (residualReg, residuals)])
+    (hscratch : residualReg ∉ [zReg, siluReg]) :
     ComputeRefine.Refines R
       (fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
       (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
       s [zReg, siluReg] := by
+  obtain ⟨h_x, h_g, h_res, -⟩ := hin
+  simp only [List.mem_cons, List.not_mem_nil, or_false, not_or] at hscratch
+  have h_zRes : zReg ≠ residualReg := fun h => hscratch.1 h.symm
+  have h_siluRes : siluReg ≠ residualReg := fun h => hscratch.2 h.symm
   have hx := h_x
   have hg := h_g
   have hres := h_res
@@ -421,7 +423,7 @@ trusted statement) the file stops compiling. See `VeriTile.Meta.StatementAudit`.
 -- ONLY the two kernels, the loaded-input contract, the rounding-model surface,
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset silu_kernels_refinement_view ⊆
-  [fusedSiLUKernel, unfusedSiLUKernel, InputLoadedAt,
+  [fusedSiLUKernel, unfusedSiLUKernel, InputsLoaded, InputLoadedAt,
    ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
 
 end FusedSiLURounded.theorems

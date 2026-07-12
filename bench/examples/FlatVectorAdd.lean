@@ -314,33 +314,38 @@ private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
   | none => rfl
   | some v => cases v <;> rfl
 
-/-- **Flat-memory vector-add correctness**: for any disjoint allocation whose
-extents cover `n`, the translated kernel run from the flattened state stores
-`xs i + ys i` at every masked lane of the flat output region — stated on the
-standard `ComputeCorrect.Realizes` trust surface. -/
+/-- **Flat-memory vector-add correctness**: for any flat layout covering the
+three regions and any launch state loaded with the inputs, the translated
+kernel stores `xs i + ys i` at every masked lane of the flat output region —
+stated on the standard `ComputeCorrect.Realizes` trust surface. Every
+hypothesis line is spec content: the layout, the launch state, the inputs. -/
 specification add_kernel_masked_flat_correct_view
-    (A : FlatAlloc) (hd : A.Disjoint)
-    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)
-    (houtr : outReg ∈ A.regions)
-    (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
-    (hout : n ≤ A.extent outReg)
-    (s : BlockState) (hu : s.undef = (fun _ _ => 0))
-    (xs ys : Fin B → ℝ)
-    (h_x : VeriTile.Examples.InputLoadedAt s xReg B xs)
-    (h_y : VeriTile.Examples.InputLoadedAt s yReg B ys) :
+    (L : FlatLayout [(xReg, n), (yReg, n), (outReg, n)])
+    (s : LaunchState) (xs ys : Fin B → ℝ)
+    (hin : VeriTile.Examples.InputsLoaded s B [(xReg, xs), (yReg, ys)]) :
     ComputeCorrect.Realizes_without_Rounding
-      (kernel := addKernelMaskedFlat A xReg yReg outReg B n)
-      (initialState := A.flattenState s)
+      (kernel := addKernelMaskedFlat L.alloc xReg yReg outReg B n)
+      (initialState := L.alloc.flattenState s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [B] => s.pid * B + idx.1.val < n)
-        (fun idx => (A.flat, A.addr outReg (s.pid * B + idx.1.val))))
+        (fun idx : TileIndex [B] => (s : BlockState).pid * B + idx.1.val < n)
+        (fun idx =>
+          (L.alloc.flat, L.alloc.addr outReg ((s : BlockState).pid * B + idx.1.val))))
       (expected := fun idx => xs idx.1 + ys idx.1) := by
+  obtain ⟨A, hd, hcov, hcovers⟩ := L
+  obtain ⟨s, hu⟩ := s
+  obtain ⟨h_x, h_y, -⟩ := hin
+  have hx : n ≤ A.extent xReg := hcovers (xReg, n) (by simp)
+  have hy : n ≤ A.extent yReg := hcovers (yReg, n) (by simp)
+  have hout : n ≤ A.extent outReg := hcovers (outReg, n) (by simp)
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
+  have houtr : outReg ∈ A.regions := by
+    by_contra hn
+    exact absurd (hcov outReg hn) (by omega)
   have hak : (addKernelMaskedFlat A xReg yReg outReg B n).toAlgKernel
       = A.flattenKernel
         ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
