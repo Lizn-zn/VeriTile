@@ -132,7 +132,7 @@ regions whose extents cover `n`, the translated kernel — one flat region,
 addresses `base + pid*B + i` — run on the flattened state is the flattening
 of the region-model run. Stage 1 (explicit addressing) + stage 2 (the
 bridge), with every side condition discharged above. -/
-specification flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -272,7 +272,7 @@ theorem addKernelMasked_flattenOk (xReg yReg outReg : RegionName)
 
 /-- **Flat-memory masked vector add, register style**: the bridge applied to
 an ordinary DSL kernel, with the per-execution safety discharged above. -/
-specification addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
