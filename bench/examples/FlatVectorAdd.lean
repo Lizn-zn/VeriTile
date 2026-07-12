@@ -22,6 +22,13 @@ Two kernels demonstrate the two safety regimes:
   per-execution `Kernel.TraceSafe` contract instead, and this file
   discharges it by walking the actual seven-statement execution — the
   template for putting real DSL kernels through the bridge.
+
+The **headline** is `add_kernel_masked_flat_correct_view` (the file's last
+theorem): flat-memory *correctness* on the standard
+`ComputeCorrect.Realizes` trust surface — the flattened kernel, run from
+the flattened state, stores `xs i + ys i` at every masked lane of the flat
+output region. The `exec_flatten` corollaries are the translation steps it
+composes with the region-model correctness theorem.
 -/
 
 import VeriTile.Triton
@@ -276,9 +283,92 @@ theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
     (addKernelMasked_flattenOk xReg yReg outReg B n) hu
 
+/-! ## Part 3 — the headline: flat-memory compute correctness
+
+The `exec_flatten` corollaries above are *translation* statements. The
+headline below is the actual **correctness** theorem on the standard trust
+surface: the flattened masked vector add — one flat region, real pointer
+arithmetic `A.base r + pid*B + i` — repackaged as a `ComputeKernel` and
+stated with `ComputeCorrect.Realizes_without_Rounding`: every masked lane
+of the flat output holds `xs i + ys i`. The proof composes the region-model
+correctness theorem (`add_kernel_masked_correct`) with the bridge
+(`exec_flatten`) and the flat read-back lemma below. -/
+
+/-- The flattened masked vector add, repackaged on the compute surface
+(`toAlgorithm?` recovers exactly `A.flattenKernel` of the original). -/
+noncomputable def addKernelMaskedFlat (A : FlatAlloc)
+    (xReg yReg outReg : RegionName) (B n : Nat) : ComputeKernel :=
+  let fk := A.flattenKernel
+    ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel)
+  ComputeKernel.fromKernelBody fk.inputs fk.outputs fk.body
+
+/-- Scalar `readMem` at a translated in-bounds address reads the region-model
+cell (the `.real` carrier translates identically). -/
+private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
+    (s : BlockState) {r : RegionName} (hr : r ∈ A.regions) {o : Nat}
+    (ho : o < A.extent r) :
+    (A.flattenState s).readMem A.flat (A.addr r o) = s.readMem r o := by
+  unfold BlockState.readMem
+  rw [A.flattenState_mem_addr hd s hr ho, A.readAs_trCell]
+  cases hcell : (s.mem r o).readAs .real with
+  | none => rfl
+  | some v => cases v <;> rfl
+
+/-- **Flat-memory vector-add correctness**: for any disjoint allocation whose
+extents cover `n`, the translated kernel run from the flattened state stores
+`xs i + ys i` at every masked lane of the flat output region — stated on the
+standard `ComputeCorrect.Realizes` trust surface. -/
+theorem add_kernel_masked_flat_correct_view
+    (A : FlatAlloc) (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
+    (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)
+    (houtr : outReg ∈ A.regions)
+    (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
+    (hout : n ≤ A.extent outReg)
+    (s : BlockState) (hu : s.undef = (fun _ _ => 0))
+    (xs ys : Fin B → ℝ)
+    (h_x : VeriTile.Examples.InputLoadedAt s xReg B xs)
+    (h_y : VeriTile.Examples.InputLoadedAt s yReg B ys) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := addKernelMaskedFlat A xReg yReg outReg B n)
+      (initialState := A.flattenState s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [B] => s.pid * B + idx.1.val < n)
+        (fun idx => (A.flat, A.addr outReg (s.pid * B + idx.1.val))))
+      (expected := fun idx => xs idx.1 + ys idx.1) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have hak : (addKernelMaskedFlat A xReg yReg outReg B n).toAlgKernel
+      = A.flattenKernel
+        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
+    simp [addKernelMaskedFlat]
+  rw [hak, A.exec_flatten hd hcov _ s
+    (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
+    (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
+  cases hsrc : exec
+      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+  | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
+  | some s1 =>
+      rw [hsrc] at hExec
+      replace hExec : some (A.flattenState s1) = some s' := hExec
+      obtain rfl := (Option.some_inj.mp hExec).symm
+      have hobs := VeriTile.Examples.add_kernel_masked_correct
+        xReg yReg outReg B n hB s xs ys h_x h_y idx.1
+      rw [show exec (VeriTile.Examples.addKernelMasked xReg yReg outReg B n) s
+          = exec ((VeriTile.Examples.addKernelMasked
+              xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
+      simp only [VeriTile.Examples.observeAt, Option.map_some,
+        Option.some_inj, if_pos hActive] at hobs
+      simpa [flattenState_readMem A hd s1 houtr
+        (lt_of_lt_of_le hActive hout)] using hobs
+
 /-! ## Trust gates -/
 
 #axiomsClean flatAddKernel_exec_flatten
 #axiomsClean addKernelMasked_exec_flatten
+#axiomsClean add_kernel_masked_flat_correct_view
 
 end VeriTile.Bench.Examples.FlatVectorAdd
