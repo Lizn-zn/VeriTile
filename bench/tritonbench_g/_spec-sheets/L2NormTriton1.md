@@ -16,7 +16,7 @@ are preserved. -/
 
 **Statement:**
 ```lean
-theorem l2_norm_fwd_1pass_kernel_output_summary
+specification l2_norm_fwd_1pass_kernel_output_summary
     (X Y : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat)
     (s : BlockState) :

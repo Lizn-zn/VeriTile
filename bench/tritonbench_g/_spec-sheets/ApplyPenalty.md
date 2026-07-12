@@ -15,7 +15,7 @@ the algorithm layer, and (under distinct active token ids) the masked in-place
 
 **Statement:**
 ```lean
-theorem apply_penalty_output_summary
+specification apply_penalty_output_summary
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat) (s : BlockState)

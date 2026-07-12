@@ -585,7 +585,7 @@ theorem layer_norm_liger_forward_all_outputs_compute_correct
 /-- Public forward summary for Liger layer norm: the full Python forward surface
 lowers, and the checked forward kernel characterizes all Python-observable
 forward outputs `Y`, `Mean`, and `RSTD`. -/
-theorem layer_norm_liger_forward_output_summary
+specification layer_norm_liger_forward_output_summary
     (Y X W B Mean RSTD : RegionName)
     (Y_row_stride X_row_stride W_row_stride B_row_stride
       Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE : Nat)

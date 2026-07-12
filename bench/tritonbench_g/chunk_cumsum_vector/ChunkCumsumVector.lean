@@ -994,7 +994,7 @@ For any single-Python-chunk shape (`T ≤ BT`, so the loop runs once with carry
 prefix sum `singleBlockCumsumVectorClosed` — a standalone `Finset.sum`, never a
 read-back of the kernel's own output. The active-lane collision-freedom of the
 block address map is the explicit hypothesis. -/
-theorem chunk_cumsum_vector_output_summary_general
+specification chunk_cumsum_vector_output_summary_general
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
     (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
       ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →

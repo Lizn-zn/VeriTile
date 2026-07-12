@@ -214,7 +214,7 @@ every in-range lane and the per-row `output_maxs` writeback
 `scale127`. The `max(|x|)` reduction is
 taken as the precomputed `MaxVals` input; the `llrint` rounding / int8 cast
 remain the honest, unmodeled blocker. -/
-theorem quantize_rowwise_blocked_output_summary_general
+specification quantize_rowwise_blocked_output_summary_general
     (x_ptr output_ptr MaxVals output_maxs : RegionName)
     (_n_elements BLOCK_SIZE P2 : Nat) (scale127 : ℝ) (s : BlockState) :
     (∃ err,

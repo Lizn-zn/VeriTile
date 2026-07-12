@@ -726,7 +726,7 @@ the faithful single-chunk surface writes into every active lane `(i, j)` the
 genuine reversed cumulative sum `Σ_{k ≥ i, k < T} x[k, j]` (`reversedCumsumClosed`,
 a standalone `Finset.sum`, not a read-back of the kernel output). The active-lane
 collision-freedom of the block address map is the explicit hypothesis. -/
-theorem reversed_cumsum_output_summary_general
+specification reversed_cumsum_output_summary_general
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
     (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
       ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →

@@ -28,7 +28,7 @@ tiling — this discharges output-offset injectivity via
 
 **Statement:**
 ```lean
-theorem matmul_kernel_closed_form_correct
+specification matmul_kernel_closed_form_correct
     (C A B : RegionName) (s : BlockState)
     (BM BN BLOCK_K numKBlocks : Nat)
     (hBN : BN ≤ 4096)

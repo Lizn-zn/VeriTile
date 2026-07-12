@@ -73,7 +73,7 @@ theorem maskedTailAdd_memorySafe
   · exact hy
   · exact hout
 
-theorem blockPtrBoundary_memorySafe
+specification blockPtrBoundary_memorySafe
     (bounds : RegionBounds) (xReg outReg : RegionName) :
     (blockPtrBoundaryKernel xReg outReg).MemorySafe bounds := by
   simp [blockPtrBoundaryKernel, Kernel.MemorySafe, StmtList.MemorySafe,

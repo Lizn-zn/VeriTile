@@ -1595,7 +1595,7 @@ genuinely collide (the store mask tests the already-wrapped offsets, so it
 never masks an overhanging lane). Unit minor stride and `BLOCK_N ≤` major
 stride (`output_n_stride = 1`, `BLOCK_N ≤ output_m_stride`; the wrapper's
 contiguous row-major outputs) give store-footprint injectivity. -/
-theorem triton_linear_activation_output_summary_general
+specification triton_linear_activation_output_summary_general
     (C ACT_INPUTS A B bias : RegionName) (s : BlockState)
     (M N output_m_stride output_n_stride act_inputs_m_stride act_inputs_n_stride
       a_m_stride a_k_stride b_n_stride b_k_stride

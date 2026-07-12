@@ -16,7 +16,7 @@ lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem l2_norm_bwd_kernel_output_summary
+specification l2_norm_bwd_kernel_output_summary
     (X DY DX : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat)
     (s : BlockState) :

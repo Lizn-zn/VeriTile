@@ -31,7 +31,7 @@ same as normalizing by the merged max directly.
 -/
 
 /-- Scalar delayed-rescale identity for the softmax denominator. -/
-theorem fa2_delayed_rescale_sum_eq {ι : Type} [Fintype ι]
+specification fa2_delayed_rescale_sum_eq {ι : Type} [Fintype ι]
     (scores : ι → ℝ) (mBlock mNew : ℝ) :
     Real.exp (mBlock - mNew) *
         (Finset.univ.sum fun j : ι => Real.exp (scores j - mBlock)) =
@@ -44,7 +44,7 @@ theorem fa2_delayed_rescale_sum_eq {ι : Type} [Fintype ι]
   ring_nf
 
 /-- Weighted delayed-rescale identity for the softmax numerator. -/
-theorem fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
+specification fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
     (scores values : ι → ℝ) (mBlock mNew : ℝ) :
     Real.exp (mBlock - mNew) *
         (Finset.univ.sum fun j : ι => Real.exp (scores j - mBlock) * values j) =
@@ -58,7 +58,7 @@ theorem fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
 
 /-- Two-fragment denominator merge: FA-2 can combine two block-local
 denominators by rescaling each to the merged max and adding them. -/
-theorem fa2_two_fragment_denominator_merge_eq_flat
+specification fa2_two_fragment_denominator_merge_eq_flat
     {ι κ : Type} [Fintype ι] [Fintype κ]
     (scoresLeft : ι → ℝ) (scoresRight : κ → ℝ)
     (mLeft mRight mMerged : ℝ) :
@@ -73,7 +73,7 @@ theorem fa2_two_fragment_denominator_merge_eq_flat
 
 /-- Two-fragment numerator merge: FA-2 can combine two block-local weighted
 numerators by rescaling each to the merged max and adding them. -/
-theorem fa2_two_fragment_numerator_merge_eq_flat
+specification fa2_two_fragment_numerator_merge_eq_flat
     {ι κ : Type} [Fintype ι] [Fintype κ]
     (scoresLeft valuesLeft : ι → ℝ) (scoresRight valuesRight : κ → ℝ)
     (mLeft mRight mMerged : ℝ) :
@@ -90,7 +90,7 @@ theorem fa2_two_fragment_numerator_merge_eq_flat
 the same as the flat attention ratio over both fragments.  This is the scalar
 per-output-coordinate form; vector outputs use this pointwise for each `D`
 coordinate. -/
-theorem fa2_two_fragment_attention_ratio_eq_flat
+specification fa2_two_fragment_attention_ratio_eq_flat
     {ι κ : Type} [Fintype ι] [Fintype κ]
     (scoresLeft valuesLeft : ι → ℝ) (scoresRight valuesRight : κ → ℝ)
     (mLeft mRight mMerged : ℝ) :
@@ -112,7 +112,7 @@ theorem fa2_two_fragment_attention_ratio_eq_flat
     fa2_two_fragment_denominator_merge_eq_flat scoresLeft scoresRight mLeft mRight mMerged]
 
 /-- Fully masked blocks contribute zero to the softmax denominator. -/
-theorem fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
+specification fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
     (visible : ι → Bool) (scores : ι → ℝ) (m : ℝ)
     (hInvisible : ∀ j : ι, visible j = Bool.false) :
     (Finset.univ.sum fun j : ι =>
@@ -120,7 +120,7 @@ theorem fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
   simp [hInvisible]
 
 /-- Fully masked blocks contribute zero to the softmax numerator. -/
-theorem fa2_masked_weighted_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
+specification fa2_masked_weighted_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
     (visible : ι → Bool) (scores values : ι → ℝ) (m : ℝ)
     (hInvisible : ∀ j : ι, visible j = Bool.false) :
     (Finset.univ.sum fun j : ι =>
@@ -239,7 +239,7 @@ private theorem fa2_two_block_numerator_common_shift {M D Bk : Nat}
 /-- Two-fragment FA-2 forward equals the flat FA-1 attention spec over the
 same two-block KV domain.  This is the partitioned-forward math bridge that
 the executable FA-2 kernel will target. -/
-theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
+specification fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
     (scale : ℝ) (mLeft mRight mMerged : ℝ) (idx : TileIndex [M, D])
     (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
@@ -273,7 +273,7 @@ theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
 /-- 4D slice-facing version of the two-fragment FA-2 forward bridge.  This is
 the theorem shape that later FA-2 kernels can use at a fixed
 `(batch, head, query, d)` coordinate. -/
-theorem fa2_two_block_forward_eq_attentionReal4D
+specification fa2_two_block_forward_eq_attentionReal4D
     {B H S_q D Bk : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
@@ -292,7 +292,7 @@ theorem fa2_two_block_forward_eq_attentionReal4D
 /-- Headline spec-level FA-1/FA-2 equality for the two-fragment forward
 surface: the flat FA-1 4D attention spec equals the delayed-rescale FA-2
 two-block partitioned spec at the same coordinate. -/
-theorem fa1_eq_fa2_two_block_forward4D
+specification fa1_eq_fa2_two_block_forward4D
     {B H S_q D Bk : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
@@ -329,14 +329,14 @@ noncomputable def fa2BackwardCausalReal {M S D : Nat}
 
 /-- FA-1 and FA-2 backward share the same Real mathematical target; they differ
 in work partitioning and scheduling. -/
-theorem fa1_backward_eq_fa2_backward {M S D : Nat}
+specification fa1_backward_eq_fa2_backward {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     FA1Backward.attentionBackwardReal Q K V dO LSE scale =
       fa2BackwardReal Q K V dO LSE scale := rfl
 
 /-- Causal FA-1/FA-2 backward baseline equivalence. -/
-theorem fa1_causal_backward_eq_fa2_causal_backward {M S D : Nat}
+specification fa1_causal_backward_eq_fa2_causal_backward {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     FA1Backward.attentionBackwardRealCausal Q K V dO LSE scale =
@@ -361,7 +361,7 @@ noncomputable def fa2BackwardCausalReal4D {B H S_q S_k D : Nat}
   FA1Backward.attentionBackwardReal4DCausal Q K V dO LSE scale
 
 /-- 4D FA-1/FA-2 backward baseline equivalence. -/
-theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
+specification fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, S_k, D] → ℝ)
     (dO : TileIndex [B, H, S_q, D] → ℝ)
@@ -370,7 +370,7 @@ theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
       fa2BackwardReal4D Q K V dO LSE scale := rfl
 
 /-- 4D causal FA-1/FA-2 backward baseline equivalence. -/
-theorem fa1_causal_backward_eq_fa2_causal_backward4D {B H S_q S_k D : Nat}
+specification fa1_causal_backward_eq_fa2_causal_backward4D {B H S_q S_k D : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, S_k, D] → ℝ)
     (dO : TileIndex [B, H, S_q, D] → ℝ)
@@ -392,7 +392,7 @@ noncomputable def fa2TwoBlockBackwardDQSpec {M D Bk : Nat}
 
 /-- The two-block FA-2 backward `dQ` partition is the same closed-form `dQ`
 as the FA-1 backward Real spec. -/
-theorem fa2_two_block_backward_dQ_eq_fa1_backward {M D Bk : Nat}
+specification fa2_two_block_backward_dQ_eq_fa1_backward {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * 2, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
@@ -404,7 +404,7 @@ theorem fa2_two_block_backward_dQ_eq_fa1_backward {M D Bk : Nat}
 
 /-- FA-2-facing spelling of the same two-block `dQ` theorem, targeting the
 FA-2 backward baseline name. -/
-theorem fa2_two_block_backward_dQ_eq_fa2_backward {M D Bk : Nat}
+specification fa2_two_block_backward_dQ_eq_fa2_backward {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * 2, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
@@ -424,7 +424,7 @@ noncomputable def fa2TwoBlockCausalBackwardDQSpec {M D Bk : Nat}
 
 /-- The causal two-block FA-2 backward `dQ` partition is the same closed-form
 causal `dQ` as the FA-2 causal backward Real spec. -/
-theorem fa2_two_block_causal_backward_dQ_eq_fa2_causal_backward {M D Bk : Nat}
+specification fa2_two_block_causal_backward_dQ_eq_fa2_causal_backward {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * 2, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
@@ -448,7 +448,7 @@ noncomputable def fa2TwoBlockBackwardDQSpec4D {B H S_q D Bk : Nat}
 
 /-- The 4D two-block FA-2 backward `dQ` partition agrees with the 4D FA-1
 backward baseline on each batch/head slice. -/
-theorem fa2_two_block_backward_dQ4D_eq_fa1_backward4D {B H S_q D Bk : Nat}
+specification fa2_two_block_backward_dQ4D_eq_fa1_backward4D {B H S_q D Bk : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
     (dO : TileIndex [B, H, S_q, D] → ℝ)
@@ -462,7 +462,7 @@ theorem fa2_two_block_backward_dQ4D_eq_fa1_backward4D {B H S_q D Bk : Nat}
     (sliceBH dO b h) (FA1Backward.sliceBHLSE LSE b h) scale idx
 
 /-- FA-2-facing spelling of the 4D two-block `dQ` theorem. -/
-theorem fa2_two_block_backward_dQ4D_eq_fa2_backward4D {B H S_q D Bk : Nat}
+specification fa2_two_block_backward_dQ4D_eq_fa2_backward4D {B H S_q D Bk : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
     (dO : TileIndex [B, H, S_q, D] → ℝ)
@@ -488,7 +488,7 @@ noncomputable def fa2TwoBlockCausalBackwardDQSpec4D {B H S_q D Bk : Nat}
 
 /-- The 4D causal two-block FA-2 backward `dQ` partition agrees with the 4D
 FA-2 causal backward baseline on each batch/head slice. -/
-theorem fa2_two_block_causal_backward_dQ4D_eq_fa2_causal_backward4D
+specification fa2_two_block_causal_backward_dQ4D_eq_fa2_causal_backward4D
     {B H S_q D Bk : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
@@ -514,7 +514,7 @@ def fa2BackwardAtomicDQKernel
     M D Bk numKVBlocks scale
 
 /-- Launcher-facing FA-2 `dQ` correctness for the atomic backward kernel. -/
-theorem fa2BackwardAtomicDQKernel_gridLaunched_dQ_correct
+specification fa2BackwardAtomicDQKernel_gridLaunched_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -556,7 +556,7 @@ theorem fa2BackwardAtomicDQKernel_gridLaunched_dQ_correct
 /-- Full launcher-facing FA-2 correctness for the proof-oriented atomic
 backward kernel.  This packages atomic `dQ` plus ordinary per-block `dK`/`dV`
 under the FA-2 baseline name. -/
-theorem fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -644,7 +644,7 @@ def fa2BackwardAtomicDQTwoBlockKernel
 
 /-- Full launcher-facing correctness for the FA-2 two-block atomic backward
 kernel. -/
-theorem fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -851,7 +851,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContributi
 
 /-- Atomic `dQ` contribution extraction for one program of the FA-2-specific
 two-block backward partition kernel from a full `exec` fact. -/
-theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs_of_exec
+specification fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs_of_exec
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (tid : ThreadId) (s final : BlockState)
@@ -935,7 +935,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContributi
 /-- Full launcher-facing correctness for the FA-2-specific two-block backward
 work-partition kernel.  The target is the existing two-block FA-2 backward
 partition surface, which is already bridged to the FA-2 Real baseline. -/
-theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1077,7 +1077,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_toAlgorithm_eq_toAlgKer
 
 /-- Atomic `dQ` contribution extraction for one program of the FA-2-specific
 causal two-block backward partition kernel. -/
-theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs
+specification fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (tid : ThreadId) (s final : BlockState)
@@ -1145,7 +1145,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_statefulTrace_blockCont
 
 /-- Full launcher-facing correctness for the FA-2-specific causal two-block
 backward work-partition kernel. -/
-theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_correct
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1226,7 +1226,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_c
 /-- 4D slice-facing wrapper for the FA-2-specific non-causal two-block backward
 partition kernel.  A single launched 2D kernel instance is interpreted as the
 `(b,h)` slice of the 4D FA-2 backward baseline. -/
-theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct_4D_slice
+specification fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct_4D_slice
     {B H S_q Bk D : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1317,7 +1317,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
 
 /-- 4D slice-facing wrapper for the FA-2-specific causal two-block backward
 partition kernel. -/
-theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_correct_4D_slice
+specification fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_correct_4D_slice
     {B H S_q Bk D : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1424,7 +1424,7 @@ def fa2BackwardAtomicDQCausalTwoBlockKernel
 
 /-- Full launcher-facing FA-2 correctness for the proof-oriented causal atomic
 backward kernel. -/
-theorem fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1505,7 +1505,7 @@ theorem fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
 
 /-- Full launcher-facing correctness for the FA-2 causal two-block atomic
 backward kernel. -/
-theorem fa2BackwardAtomicDQCausalTwoBlockKernel_gridLaunched_backward_correct
+specification fa2BackwardAtomicDQCausalTwoBlockKernel_gridLaunched_backward_correct
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -1598,7 +1598,7 @@ def fa2ScalarScoreMaxKernel (scoreReg mReg : RegionName) (Bk : Nat) :
 }
 
 /-- Correctness of the executable scalar score-row max producer. -/
-theorem fa2ScalarScoreMaxKernel_correct_view
+specification fa2ScalarScoreMaxKernel_correct_view
     (scoreReg mReg : RegionName) (Bk : Nat) (hBk : 0 < Bk)
     (s : BlockState) (scores : Fin Bk → ℝ)
     (hScores : InputLoadedAt s scoreReg Bk scores) :
@@ -1709,7 +1709,7 @@ theorem fa2ScalarScoreMaxKernel_correct_view
 /-- State-parametric handoff for a score-row max producer.  If a later consumer
 state has the same scalar pid and agrees with the max producer final state on
 `mReg`, then the consumer can read the produced row max. -/
-theorem fa2ScalarScoreMaxKernel_loaded_of_agrees
+specification fa2ScalarScoreMaxKernel_loaded_of_agrees
     (scoreReg mReg : RegionName) (Bk : Nat) (hBk : 0 < Bk)
     (s sMax consumer : BlockState) (scores : Fin Bk → ℝ)
     (hExec : exec (fa2ScalarScoreMaxKernel scoreReg mReg Bk).toAlgKernel s = some sMax)
@@ -1759,7 +1759,7 @@ def fa2ScalarMergedMaxKernel
 }
 
 /-- Correctness of the executable scalar merged-max producer. -/
-theorem fa2ScalarMergedMaxKernel_correct_view
+specification fa2ScalarMergedMaxKernel_correct_view
     (mLeftReg mRightReg mMergedReg : RegionName)
     (s : BlockState) (mLeft mRight : ℝ)
     (hmLeft : s.readMem mLeftReg s.pid = mLeft)
@@ -1783,7 +1783,7 @@ theorem fa2ScalarMergedMaxKernel_correct_view
   exact unbotD_optionMax_some_eq_real_max mLeft mRight
 
 /-- State-parametric handoff for a scalar merged-max producer. -/
-theorem fa2ScalarMergedMaxKernel_loaded_of_agrees
+specification fa2ScalarMergedMaxKernel_loaded_of_agrees
     (mLeftReg mRightReg mMergedReg : RegionName)
     (s sMerged consumer : BlockState) (mLeft mRight : ℝ)
     (hExec :
@@ -1829,7 +1829,7 @@ def fa2ScalarValueFragmentKernel
 }
 
 /-- Correctness of the executable scalar value-fragment staging producer. -/
-theorem fa2ScalarValueFragmentKernel_correct_view
+specification fa2ScalarValueFragmentKernel_correct_view
     {D Bk N : Nat}
     (vReg valueReg : RegionName)
     (keyBlock : Nat) (hKeyBlock : keyBlock < N) (d : Fin D)
@@ -1867,7 +1867,7 @@ theorem fa2ScalarValueFragmentKernel_correct_view
 /-- State-parametric handoff for a staged value fragment.  If a later consumer
 state has the same scalar pid and agrees with the value producer final state on
 `valueReg`, the staged values are available as `InputLoadedAt`. -/
-theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
+specification fa2ScalarValueFragmentKernel_loaded_of_agrees
     {D Bk N : Nat}
     (vReg valueReg : RegionName)
     (keyBlock : Nat) (hKeyBlock : keyBlock < N) (d : Fin D)
@@ -1906,7 +1906,7 @@ theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
       simpa using hOut
 
 /-- Two-block value-fragment handoff for the scalar fused-forward consumer. -/
-theorem fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees
+specification fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees
     {D Bk : Nat}
     (vReg valueLeftReg valueRightReg : RegionName) (d : Fin D)
     (s sLeft sRight consumer : BlockState)
@@ -1987,7 +1987,7 @@ noncomputable def fa2ScalarFragmentNumer {Bk : Nat}
 
 /-- The scalar fragment-summary kernel writes the fragment denominator and
 numerator consumed by the FA-2 merge stage. -/
-theorem fa2ScalarFragmentSummaryKernel_correct_view
+specification fa2ScalarFragmentSummaryKernel_correct_view
     (scoreReg valueReg mReg lReg oReg : RegionName) (Bk : Nat)
     (s : BlockState) (scores values : Fin Bk → ℝ) (m : ℝ)
     (hScores : InputLoadedAt s scoreReg Bk scores)
@@ -2050,7 +2050,7 @@ noncomputable def fa2ScoreFragmentSpec {M D Bk : Nat}
       Q (idx.1, d, PUnit.unit) * K (idx.2.1, d, PUnit.unit)) * scale
 
 /-- Tile-level QK score-fragment bridge for FA-2 forward. -/
-theorem fa2_score_fragment_tile_eq {M D Bk : Nat}
+specification fa2_score_fragment_tile_eq {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk, D] → ℝ)
     (scale : ℝ) :
     Tile.bop NumericDType.real.mul Broadcast.scalarR
@@ -2066,7 +2066,7 @@ theorem fa2_score_fragment_tile_eq {M D Bk : Nat}
 /-- Local score-fragment spec agrees with the global `scaledScore` view used by
 the FA-1/FA-2 attention specs when the local key fragment is a block slice of
 the global K tensor. -/
-theorem fa2ScoreFragmentSpec_eq_scaledScore {M D Bk N : Nat}
+specification fa2ScoreFragmentSpec_eq_scaledScore {M D Bk N : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
     (scale : ℝ) (keyBlock : Nat) (hKeyBlock : keyBlock < N)
     (idx : TileIndex [M, Bk]) :
@@ -2109,7 +2109,7 @@ def fa2ScoreFragmentKernel
 
 /-- Correctness of the executable FA-2 score-fragment producer for one program
 instance. -/
-theorem fa2ScoreFragmentKernel_correct_view
+specification fa2ScoreFragmentKernel_correct_view
     (qReg kReg scoreReg : RegionName)
     (M D Bk keyBlock : Nat) (scale : ℝ) (s : BlockState)
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk, D] → ℝ)
@@ -2161,7 +2161,7 @@ theorem fa2ScoreFragmentKernel_correct_view
 K fragment is the `keyBlock` slice of a global K tensor, the executable score
 producer writes the global `StreamingAccumulator.scaledScore` values expected by the later
 attention pipeline. -/
-theorem fa2ScoreFragmentKernel_scaledScore_correct_view
+specification fa2ScoreFragmentKernel_scaledScore_correct_view
     {M D Bk N : Nat}
     (qReg kReg scoreReg : RegionName)
     (keyBlock : Nat) (hKeyBlock : keyBlock < N)
@@ -2212,7 +2212,7 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
 kernel: after producing the `[M, Bk]` score tile for query block `s.pid`, row
 `row` can be consumed as a standard `InputLoadedAt` tile by a scalar kernel
 whose `pid` is `s.pid * M + row`. -/
-theorem fa2ScoreFragmentKernel_scaledScore_row_loaded
+specification fa2ScoreFragmentKernel_scaledScore_row_loaded
     {M D Bk N : Nat}
     (qReg kReg scoreReg : RegionName)
     (keyBlock : Nat) (hKeyBlock : keyBlock < N)
@@ -2259,7 +2259,7 @@ consumer state.  If `consumer` has the scalar fused-forward program id
 `queryBlock * M + row` and agrees with the score producer final state on
 `scoreReg`, the produced row is available as the consumer's `InputLoadedAt`
 score tile. -/
-theorem fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
+specification fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
     {M D Bk N : Nat}
     (qReg kReg scoreReg : RegionName)
     (keyBlock : Nat) (hKeyBlock : keyBlock < N)
@@ -2297,7 +2297,7 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
 This packages the left/right score-row transfer obligations into exactly the
 two `InputLoadedAt` hypotheses consumed by
 `fa2ScalarTwoBlockForwardKernel_attentionReal_view`. -/
-theorem fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
+specification fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
     {M D Bk : Nat}
     (qReg kReg scoreLeftReg scoreRightReg : RegionName)
     (scale : ℝ) (s sLeft sRight consumer : BlockState)
@@ -2402,7 +2402,7 @@ set_option maxHeartbeats 4000000
 
 /-- Correctness of the fused scalar two-block FA-2 forward slice against its
 tile-level score/value spec. -/
-theorem fa2ScalarTwoBlockForwardKernel_correct_view
+specification fa2ScalarTwoBlockForwardKernel_correct_view
     (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
     (Bk : Nat) (s : BlockState)
@@ -2509,7 +2509,7 @@ theorem fa2ScalarTwoBlockForwardKernel_correct_view
 the score/value buffers contain the two Q/K/V fragments for one output
 coordinate, the executable fused scalar kernel writes the flat `attentionReal`
 result. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal_view
     {M D Bk : Nat}
     (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -2594,7 +2594,7 @@ The left/right score inputs are discharged from two executable
 `fa2ScoreFragmentKernel` producer runs plus score-buffer agreement with the
 consumer state; value buffers and max registers remain explicit consumer-side
 inputs. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
     {M D Bk : Nat}
     (qReg kReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -2651,7 +2651,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
 /-- Producer-consumer wrapper that discharges both score-buffer and value-buffer
 inputs for the fused scalar two-block FA-2 forward slice from executable
 producer kernels.  Max registers remain explicit consumer-side assumptions. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view
     {M D Bk : Nat}
     (qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -2722,7 +2722,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_vi
 /-- Producer-consumer wrapper that also discharges the left/right max-register
 inputs from executable score-row max producers.  The merged max remains an
 explicit consumer-side input, matching the next composition boundary. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view
     {M D Bk : Nat}
     (qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -2826,7 +2826,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producer
 executable merged-max producer.  This is the scalar FA-2 handoff where score,
 value, left/right max, and merged max registers are all produced by executable
 producer kernels before the fused scalar consumer runs. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_producers_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_producers_view
     {M D Bk : Nat}
     (qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -2956,7 +2956,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_p
 /-- 4D-facing wrapper for the fused scalar two-block FA-2 forward slice.  The
 kernel still writes one scalar output coordinate, but the theorem is stated in
 the same `(batch, head, query, d)` language as the forward user surface. -/
-theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
+specification fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
     {B H S_q D Bk : Nat}
     (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -3007,7 +3007,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
 Every program instance may correspond to a different 4D output coordinate; the
 kernel writes that coordinate's `attentionReal4D` result at its scalar output
 slot. -/
-theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
+specification fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
     {B H S_q D Bk : Nat} {g : Grid}
     (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
       mLeftReg mRightReg mMergedReg outReg : RegionName)
@@ -3160,7 +3160,7 @@ theorem fa2ScalarTwoFragmentMergeKernel_correct
     BlockState.writeMemTyped_real]
 
 /-- Compute-facing surface for the scalar FA-2 merge-stage kernel. -/
-theorem fa2ScalarTwoFragmentMergeKernel_correct_view
+specification fa2ScalarTwoFragmentMergeKernel_correct_view
     (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName)
     (s : BlockState)
     (mLeft lLeft oLeft mRight lRight oRight mMerged : ℝ)
@@ -3193,7 +3193,7 @@ theorem fa2ScalarTwoFragmentMergeKernel_correct_view
 if the fragment buffers contain the left/right denominator and numerator
 contributions for a Q/K/V two-block domain, the executable merge-stage kernel
 writes the flat `attentionReal` result. -/
-theorem fa2ScalarTwoFragmentMergeKernel_attentionReal_view
+specification fa2ScalarTwoFragmentMergeKernel_attentionReal_view
     {M D Bk : Nat}
     (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName)
     (s : BlockState)
@@ -3261,7 +3261,7 @@ def fa2ForwardKernelStrided
     stride_ob stride_oh stride_om stride_od scale
 
 /-- FA-2 forward baseline correctness over bundled 4D tensor views. -/
-theorem fa2_forward_correct_4D_views
+specification fa2_forward_correct_4D_views
     {B H S_q S_k D Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (hSk : Bk * numKVBlocks = S_k)

@@ -17,7 +17,7 @@ affine LayerNorm spec `layernormYSpec`), the scalar reciprocal-std store into `r
 
 **Statement:**
 ```lean
-theorem layernorm_forward_output_summary
+specification layernorm_forward_output_summary
     (Y X W bias r mu : RegionName)
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)

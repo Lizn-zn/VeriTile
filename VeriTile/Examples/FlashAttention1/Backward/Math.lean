@@ -481,7 +481,7 @@ noncomputable def attentionBackwardRealCausalBoundary {S_q S_k D M : Nat}
 
 /-- Boundary backward is the generic masked backward spec with the
 query-boundary visibility predicate. -/
-theorem attentionBackwardRealBoundary_eq_masked {S_q S_k D M : Nat}
+specification attentionBackwardRealBoundary_eq_masked {S_q S_k D M : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
     (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
@@ -493,7 +493,7 @@ theorem attentionBackwardRealBoundary_eq_masked {S_q S_k D M : Nat}
 
 /-- Causal boundary backward is the generic masked backward spec with the
 query-boundary + causal visibility predicate. -/
-theorem attentionBackwardRealCausalBoundary_eq_masked {S_q S_k D M : Nat}
+specification attentionBackwardRealCausalBoundary_eq_masked {S_q S_k D M : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
     (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
@@ -531,7 +531,7 @@ noncomputable def attentionBackwardRealCausalBoundaryD {S_q S_k D Bd M : Nat}
     (padHeadD (Bd := Bd) dO)
     LSE scale
 
-theorem attentionBackwardRealBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
+specification attentionBackwardRealBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
     (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
@@ -543,7 +543,7 @@ theorem attentionBackwardRealBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
         (padHeadD (Bd := Bd) dO)
         LSE scale := rfl
 
-theorem attentionBackwardRealCausalBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
+specification attentionBackwardRealCausalBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
     (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
@@ -601,7 +601,7 @@ theorem attentionBackwardRealCausalBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
         (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dV idx := rfl
 
 /-- Bundled 4D arbitrary-mask slice equation for all three backward outputs. -/
-theorem attentionBackwardReal4DMasked_slice {B H S_q S_k D : Nat}
+specification attentionBackwardReal4DMasked_slice {B H S_q S_k D : Nat}
     (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
     (Q : TileIndex [B, H, S_q, D] → ℝ)
     (K V : TileIndex [B, H, S_k, D] → ℝ)
@@ -818,7 +818,7 @@ noncomputable def dQBlockContributionCausalBoundary {S_q D M Bk numKVBlocks : Na
 
 /-- Summing boundary block-local `dQ` contributions over all KV blocks recovers
 the query-boundary closed-form `dQ`. -/
-theorem dQBlockContributionBoundary_sum_eq_attentionBackwardRealBoundary
+specification dQBlockContributionBoundary_sum_eq_attentionBackwardRealBoundary
     {S_q D M Bk numKVBlocks : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ)
@@ -833,7 +833,7 @@ theorem dQBlockContributionBoundary_sum_eq_attentionBackwardRealBoundary
 
 /-- Summing causal-boundary block-local `dQ` contributions over all KV blocks
 recovers the causal query-boundary closed-form `dQ`. -/
-theorem dQBlockContributionCausalBoundary_sum_eq_attentionBackwardRealCausalBoundary
+specification dQBlockContributionCausalBoundary_sum_eq_attentionBackwardRealCausalBoundary
     {S_q D M Bk numKVBlocks : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ)
@@ -879,7 +879,7 @@ noncomputable def dQBlockContributionCausalBoundaryD {S_q D Bd M Bk numKVBlocks 
 
 /-- Summing D-tail boundary block-local `dQ` contributions over all KV blocks
 recovers the D-tail query-boundary closed-form `dQ`. -/
-theorem dQBlockContributionBoundaryD_sum_eq_attentionBackwardRealBoundaryD
+specification dQBlockContributionBoundaryD_sum_eq_attentionBackwardRealBoundaryD
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ)
@@ -895,7 +895,7 @@ theorem dQBlockContributionBoundaryD_sum_eq_attentionBackwardRealBoundaryD
 
 /-- Summing D-tail causal-boundary block-local `dQ` contributions over all KV
 blocks recovers the D-tail causal query-boundary closed-form `dQ`. -/
-theorem dQBlockContributionCausalBoundaryD_sum_eq_attentionBackwardRealCausalBoundaryD
+specification dQBlockContributionCausalBoundaryD_sum_eq_attentionBackwardRealCausalBoundaryD
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qStart : Nat)
     (Q : TileIndex [S_q, D] → ℝ)
@@ -1697,7 +1697,7 @@ theorem dV_block_tile_some_eq_attentionBackwardRealCausal {M D Bk numKVBlocks : 
 /-- Bundled arbitrary-mask block-local bridge surface for the atomic backward
 prefix proof: the per-block `dQ_part`, `dK_block`, and `dV_block` tile
 computations match the masked Real backward semantics. -/
-theorem maskedBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
+specification maskedBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
@@ -1750,7 +1750,7 @@ theorem maskedBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
 /-- Bundled causal block-local bridge surface for the causal atomic backward
 prefix proof: the per-block `dQ_part`, `dK_block`, and `dV_block` tile
 computations match the causal masked Real backward semantics. -/
-theorem causalBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
+specification causalBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
@@ -1995,7 +1995,7 @@ theorem dV_tile_some_eq_attentionBackwardRealCausal {M S D : Nat}
     attentionBackwardRealMasked]
 
 /-- Bundled causal tile bridge surface for the causal backward prefix proof. -/
-theorem causalBackward_tile_bridges_complete {M S D : Nat}
+specification causalBackward_tile_bridges_complete {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     (∀ idx : TileIndex [M, D],

@@ -19,7 +19,7 @@ theorems. -/
 
 **Statement:**
 ```lean
-theorem fifth_order_fwd_surface_y00_output_summary
+specification fifth_order_fwd_surface_y00_output_summary
     (coord_ptr output_ptr : RegionName)
     (block_size coord_numel output_numel col_offset output_stride : Nat)
     (s : BlockState)

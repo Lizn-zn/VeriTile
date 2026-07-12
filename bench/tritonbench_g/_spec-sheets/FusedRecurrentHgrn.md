@@ -41,7 +41,7 @@ step slice as a materialized buffer, and the forward carry invariant
 
 **Statement:**
 ```lean
-theorem fused_recurrent_hgrn_output_summary_general
+specification fused_recurrent_hgrn_output_summary_general
     (X G O H0 Ht DX DG DO BHPrev BHFinal DHPrev BO : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (i_t T D BD : Nat) (s : BlockState) (hBD : 0 < BD)

@@ -170,7 +170,7 @@ noncomputable def argmaxKernel1IndexSpec
 between the real `mid_value` buffer and the int `mid_index` buffer at the same
 offset; without it the `.nat` index store could overwrite the `.real` value
 store. -/
-theorem argmax_kernel_1_value_compute_correct
+specification argmax_kernel_1_value_compute_correct
     (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -205,7 +205,7 @@ theorem argmax_kernel_1_value_compute_correct
 
 /-- Compute-facing correctness for the index channel of `argmax_kernel_1`
 (`INT64_INDEX=false` branch). -/
-theorem argmax_kernel_1_index_compute_correct
+specification argmax_kernel_1_index_compute_correct
     (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat)
     (s : BlockState) :
@@ -254,7 +254,7 @@ noncomputable def argmaxKernel2Spec
     (argmaxKernel2IndexOffset s mid_value mid_size BLOCK_MID)
 
 /-- Compute-facing correctness for `argmax_kernel_2`. -/
-theorem argmax_kernel_2_compute_correct
+specification argmax_kernel_2_compute_correct
     (mid_value mid_index out : RegionName)
     (mid_size BLOCK_MID : Nat)
     (s : BlockState) :
@@ -487,7 +487,7 @@ noncomputable def argmaxKernelDimSingleBlockPreStoreState
 single-block regime exercised by the Python tests (`0 < N ≤ BLOCK_N`). This
 covers the output index store for every active `(m, k)` lane in the launch
 tile. -/
-theorem argmax_kernel_dim_single_block_compute_correct
+specification argmax_kernel_dim_single_block_compute_correct
     (inp : RegionName) (out_index : Region .int)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

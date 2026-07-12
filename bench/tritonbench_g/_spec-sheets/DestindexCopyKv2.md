@@ -16,7 +16,7 @@ matching cell of `K`, inactive head rows are preserved. -/
 
 **Statement:**
 ```lean
-theorem fwd_kernel_destindex_copy_kv_output_summary
+specification fwd_kernel_destindex_copy_kv_output_summary
     (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num BLOCK_DMODEL BLOCK_HEAD : Nat)

@@ -74,7 +74,7 @@ theorem fa1_boundaryD_refines_naive_reference_exec_views
 
 /-- Compute-facing FA-1 boundary+D-tail correctness against the naive direct
 FA reference. -/
-theorem fa1_boundaryD_refines_naive_reference_views
+specification fa1_boundaryD_refines_naive_reference_views
     {B H S_q S_k D Bd Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
     (hDLe : D ≤ Bd)
@@ -136,7 +136,7 @@ theorem fa1_causal_boundaryD_refines_naive_reference_exec_views
 
 /-- Compute-facing causal FA-1 boundary+D-tail correctness against the naive
 direct causal FA reference. -/
-theorem fa1_causal_boundaryD_refines_naive_reference_views
+specification fa1_causal_boundaryD_refines_naive_reference_views
     {B H S_q S_k D Bd Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
     (hDLe : D ≤ Bd)

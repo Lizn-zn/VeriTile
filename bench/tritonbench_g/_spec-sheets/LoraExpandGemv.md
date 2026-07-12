@@ -16,7 +16,7 @@ algorithm layer, and the masked store realizes the genuine matrix-vector product
 
 **Statement:**
 ```lean
-theorem gemv_full_output_summary
+specification gemv_full_output_summary
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
     (K split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride BLOCK_N BLOCK_K : Nat)

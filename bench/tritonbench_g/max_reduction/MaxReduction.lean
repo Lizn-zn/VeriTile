@@ -321,7 +321,7 @@ compute-correct — every active row lane `i` holds the row-wise maximum
 `out_index`. Carries the existing side conditions of
 `max_kernel_compute_correct`: `hOutInj` (injective output offsets) and
 `hOutRegions` (`out_value ≠ out_index`). -/
-theorem max_kernel_output_summary
+specification max_kernel_output_summary
     (inp out_value out_index : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

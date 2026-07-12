@@ -22,7 +22,7 @@ rounding / int8 cast remain the honest, unmodeled blocker. -/
 
 **Statement:**
 ```lean
-theorem quantize_global_blocked_output_summary_general
+specification quantize_global_blocked_output_summary_general
     (x_ptr absmax_inv_ptr output_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (scale127 : ℝ) (s : BlockState) :
     (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr

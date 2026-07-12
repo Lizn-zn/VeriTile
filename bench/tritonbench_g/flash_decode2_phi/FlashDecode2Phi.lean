@@ -756,7 +756,7 @@ vector accumulator update `accumulatorStepValue` (=
 `Mid_O`/`Mid_O_LogExpSum`/`AccIn`/`SumExpIn`/`MaxLogic`/`NewMaxLogic` input
 memory. No hardcoded shape literals. Side condition: accumulator-footprint
 injectivity. -/
-theorem flash_decode2_phi_masked_accumulator_output_summary_general
+specification flash_decode2_phi_masked_accumulator_output_summary_general
     (B_Seqlen : Region .nat)
     (Mid_O Mid_O_LogExpSum AccIn SumExpIn MaxLogic NewMaxLogic AccOut SumExpOut
       Out : RegionName)
@@ -822,7 +822,7 @@ dimension-parameterized over every stride, `head_dim`, `BLOCK_SEQ`, and
 `runningMaxAfter` — it starts at `-inf` and each iteration joins the next
 `Mid_O_LogExpSum` element at contiguous `offs_logic + block_seq_n` (reading
 input memory). No hardcoded shape literals. -/
-theorem flash_decode2_phi_running_max_output_summary_general
+specification flash_decode2_phi_running_max_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Out : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
@@ -862,7 +862,7 @@ literals. Side condition: output-footprint injectivity.
 This is the kernel's headline output store; the running-max / accumulator faces
 above are the supporting loop-invariant faces (the full loop is not unrolled into
 one closed form — see the module Scope note). -/
-theorem flash_decode2_phi_normalization_output_summary_general
+specification flash_decode2_phi_normalization_output_summary_general
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp Out : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
       stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od

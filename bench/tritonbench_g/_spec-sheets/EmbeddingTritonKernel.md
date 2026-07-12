@@ -17,7 +17,7 @@ alias side conditions, every store-active cell holds the gathered weight row
 
 **Statement:**
 ```lean
-theorem embedding_kernel_output_summary
+specification embedding_kernel_output_summary
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)

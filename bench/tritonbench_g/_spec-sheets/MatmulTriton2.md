@@ -19,7 +19,7 @@ kernel's own executed value. -/
 
 **Statement:**
 ```lean
-theorem matmul_triton2_output_summary_general
+specification matmul_triton2_output_summary_general
     (A B C : RegionName) (s : BlockState)
     (M N BM BN GM SAM SAK SBK SBN SCM SCN BK numKBlocks : Nat) (hBK : 0 < BK)
     (hInj : Function.Injective (cOffset s M N BM BN GM SCM SCN))

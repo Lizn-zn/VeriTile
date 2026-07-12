@@ -25,7 +25,7 @@ concrete Python test shape. -/
 
 **Statement:**
 ```lean
-theorem context_attn_nopad_output_summary_general
+specification context_attn_nopad_output_summary_general
     (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)

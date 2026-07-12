@@ -8,12 +8,23 @@ adding, reviewing, or hardening a kernel.
 
 ---
 
+## 0. Keyword — a headline is declared `specification`
+
+Every headline is declared with the **`specification`** keyword
+(`VeriTile/Meta/Specification.lean`, imported via `VeriTile.Triton`), not
+`theorem`. It elaborates identically to `theorem` (same kernel object, same
+axiom footprint); the keyword is the machine-readable marker the audit
+tooling keys headline discovery on (`scripts/spec_sheet.py`,
+`bench/check_proof_gap_manifest.py`, `bench/audit_trust_prep.py` — no
+name-suffix heuristics). Helper lemmas stay `theorem`; do **not** declare
+internal lemmas as `specification`.
+
 ## 1. Position — the last theorem is the main theorem
 
-The **final `theorem` in the file must be the headline**. A reviewer should be
-able to read the last theorem, then walk *up* to the lemmas it references, and
-see the whole trust chain. No pinned corollaries, dead helpers, or stray lemmas
-after it.
+The **final theorem in the file must be the headline** (declared
+`specification`, per #0). A reviewer should be able to read the last theorem,
+then walk *up* to the lemmas it references, and see the whole trust chain. No
+pinned corollaries, dead helpers, or stray lemmas after it.
 
 ## 2. Dimension-general — no test shapes
 

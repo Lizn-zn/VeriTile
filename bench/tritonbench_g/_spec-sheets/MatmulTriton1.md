@@ -26,7 +26,7 @@ plus a clean initial `undef`. -/
 
 **Statement:**
 ```lean
-theorem matmul_triton1_closed_form_correct
+specification matmul_triton1_closed_form_correct
     (X Y Z : RegionName) (s : BlockState)
     (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
     (hN : N ≤ NS)

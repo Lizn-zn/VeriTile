@@ -3414,7 +3414,7 @@ decoded statement-by-statement and proven to collapse to the closed form. Side
 conditions: `0 < BLK`, `0 < DM`, `DM ≤ rs` (output-offset injectivity), `hundef`.
 Instantiating `BLK = DM = 128`, `rs = 768`, `hs = 128`, `sm_scale = (√128)⁻¹`,
 `sw ∈ {10, 20}` recovers the Python test-shape summary. -/
-theorem context_attn_mistral_genuine_output_summary_general
+specification context_attn_mistral_genuine_output_summary_general
     (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
     (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM sw : Nat)
     (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)

@@ -451,7 +451,7 @@ the kernel's own executed value. Layout: `A[i,e]` at
 `A + i·stride_am + e·stride_ak`, `B[e,j]` at `B + e·stride_bk + j·stride_bn`,
 `C[i,j]` at `C + i·stride_cm + j·stride_cn` (the block pointers' offset-`(0,0)`
 addresses). Precondition: output-offset injectivity. -/
-theorem matmul_tma_f32_closed_form_correct
+specification matmul_tma_f32_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
@@ -596,7 +596,7 @@ theorem matmul_tma_f16_exec_closed_form
 /-- **Closed-form correctness for the fp16 `matmul_tma`.** Every output cell of
 the computed tile equals `fp16(Σ_{e<BLOCK_K} A[i,e]·B[e,j])` — the genuine
 matrix product over ℝ cast to float16. -/
-theorem matmul_tma_f16_closed_form_correct
+specification matmul_tma_f16_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)

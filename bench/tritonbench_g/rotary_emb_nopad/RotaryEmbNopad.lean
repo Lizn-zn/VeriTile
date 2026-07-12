@@ -2114,7 +2114,7 @@ lanes — the actual embedding read from the precomputed `cos`/`sin` cache, NOT
 the kernel's own re-executed value.
 
 The host launch remains the trusted boundary. -/
-theorem rotary_emb_nopad_output_summary_general
+specification rotary_emb_nopad_output_summary_general
     (Q K Cos Sin : RegionName) (s : BlockState)
     (surf_q_token_stride surf_q_head_stride surf_k_token_stride surf_k_head_stride
       surf_head_dim_stride surf_cos_token_stride surf_cos_stride

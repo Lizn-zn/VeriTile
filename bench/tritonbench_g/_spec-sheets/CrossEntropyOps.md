@@ -32,7 +32,7 @@ region-distinctness hypotheses are the only framing side-conditions. -/
 
 **Statement:**
 ```lean
-theorem cross_entropy_fwd_output_summary
+specification cross_entropy_fwd_output_summary
     (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
     (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
     (total_classes : Nat) (class_start_idx : Int)

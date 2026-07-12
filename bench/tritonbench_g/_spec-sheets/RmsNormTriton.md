@@ -15,7 +15,7 @@ lane holds `rmsNormSpec`, out-of-bounds lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem rms_norm_kernel_output_summary
+specification rms_norm_kernel_output_summary
     (Y X W : RegionName)
     (y_stride_r y_stride_c x_stride_r x_stride_c N BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)

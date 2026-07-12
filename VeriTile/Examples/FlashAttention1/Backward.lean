@@ -20,14 +20,14 @@ open BigOperators
 namespace FA1Backward
 
 /-- Forward LSE bridge kept in this file for the artifact theorem surface. -/
-theorem streamingLSE_eq_lseReal {M D Bk : Nat} (hBk : 0 < Bk)
+specification streamingLSE_eq_lseReal {M D Bk : Nat} (hBk : 0 < Bk)
     (hN : 0 < numKVBlocks) (Q : TileIndex [M, D] → ℝ)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) (i : Fin M) :
     streamingLSE Q numKVBlocks K scale i = lseReal Q K scale i :=
   streamingLSE_eq_lseReal_impl hBk hN Q K scale i
 
 /-- Reverse-mode spec identity kept in this file for the artifact theorem surface. -/
-theorem attentionBackwardReal_eq_reverseMode {M S D : Nat}
+specification attentionBackwardReal_eq_reverseMode {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     attentionBackwardReal Q K V dO LSE scale =
@@ -37,7 +37,7 @@ theorem attentionBackwardReal_eq_reverseMode {M S D : Nat}
 /-- Mask-aware backward spec bridge kept in this file for the artifact theorem
 surface.  It records that the explicit visibility-mask spec is a conservative
 extension of the existing non-masked backward spec. -/
-theorem attentionBackwardRealMasked_allVisible {M S D : Nat}
+specification attentionBackwardRealMasked_allVisible {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     attentionBackwardRealMasked (fun _ _ => Bool.true) Q K V dO LSE scale =
@@ -45,7 +45,7 @@ theorem attentionBackwardRealMasked_allVisible {M S D : Nat}
   attentionBackwardRealMasked_allVisible_impl Q K V dO LSE scale
 
 /-- Softmax JVP identity kept in this file for the artifact theorem surface. -/
-theorem softmax_jvp_identity {S : Nat}
+specification softmax_jvp_identity {S : Nat}
     (P dPRow : Fin S → ℝ) (j : Fin S) :
     softmaxJacobianJVP P dPRow j = softmaxJVP P dPRow j :=
   softmax_jvp_identity_impl P dPRow j
@@ -53,7 +53,7 @@ theorem softmax_jvp_identity {S : Nat}
 /-- Mask-aware multi-block `dQ` bridge kept in this file for the artifact
 theorem surface.  It is the math identity needed by masked atomic-dQ backward:
 block-local masked contributions sum to the closed-form masked backward `dQ`. -/
-theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked
+specification dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked
     {M D Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
     (Q : TileIndex [M, D] → ℝ)
@@ -67,7 +67,7 @@ theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked
     visible Q K V dO LSE scale idx
 
 /-- Causal multi-block `dQ` corollary for FA-1 backward. -/
-theorem dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal
+specification dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal
     {M D Bk numKVBlocks : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
@@ -3527,7 +3527,7 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs
 /-- Input-level causal stateful trace theorem for one block-program, modulo the
 ordinary tail execution.  The concrete causal prefix is discharged from the
 tensor input assumptions and produces the causal block contribution payload. -/
-theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs
+specification fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (tid : ThreadId) (s final : BlockState)
@@ -3585,7 +3585,7 @@ theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inp
 
 /-- Input-level stateful trace theorem for one block-program using the ordinary
 `exec = some final` surface instead of an explicit tail-step hypothesis. -/
-theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of_exec
+specification fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of_exec
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (tid : ThreadId) (s final : BlockState)
@@ -4337,7 +4337,7 @@ set_option linter.unusedSimpArgs false in
 backward block program.  The `dQ` result is handled by the atomic trace/merge
 theorems; this lemma closes the ordinary tail stores for the same full kernel
 execution. -/
-theorem fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
+specification fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s : BlockState)
@@ -4514,7 +4514,7 @@ set_option linter.unusedSimpArgs false in
 atomic-`dQ` backward block program.  The `dQ` result is handled by the causal
 atomic trace/merge theorem; this lemma closes the ordinary tail stores for the
 same full causal kernel execution. -/
-theorem fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
+specification fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s : BlockState)
@@ -4676,7 +4676,7 @@ theorem fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
 This is the #88 surface over the same atomic `dQ` composition theorem above:
 the caller supplies a `GridLaunchedAtomic` witness rather than raw
 `frames`/`contributors`/`atomicTrace` arguments. -/
-theorem fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
+specification fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -4724,7 +4724,7 @@ This theorem separates the concurrency composition from the kernel-specific
 trace extraction: once a `GridLaunchedAtomic` witness says the atomic events
 contribute the masked block-local `dQ` terms, the final memory cell is the
 closed-form masked backward `dQ`. -/
-theorem gridLaunchedAtomic_masked_dQ_correct
+specification gridLaunchedAtomic_masked_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg : RegionName)
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -4769,7 +4769,7 @@ backward atomic kernel.  This specializes the generic masked
 `GridLaunchedAtomic` composition surface to `fa1BackwardAtomicDQKernel`, while
 leaving the kernel-specific trace-to-masked-contribution relation explicit in
 `hAtomicContrib`. -/
-theorem fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct
+specification fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -4818,7 +4818,7 @@ ordinary `dK`/`dV` per-block final-state readback.
 
 The theorem is kernel-agnostic: concrete masked kernels can plug in by proving
 `hDKBlock` / `hDVBlock` for each owning program frame. -/
-theorem gridLaunchedAtomic_masked_backward_correct
+specification gridLaunchedAtomic_masked_backward_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -4929,7 +4929,7 @@ This is the launcher-facing boundary theorem for any kernel whose atomic trace
 and ordinary tail stores are already expressed as boundary-padded block-local
 backward contributions.  It does not assume a particular concrete boundary
 kernel implementation. -/
-theorem gridLaunchedAtomic_boundary_backward_correct
+specification gridLaunchedAtomic_boundary_backward_correct
     {S_q D M Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -5206,7 +5206,7 @@ readback facts.  They provide the concrete boundary kernel's pre-atomic
 register facts plus the post-prefix tail execution for each owner frame, and
 the ordinary-store readback is derived by
 `fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic`. -/
-theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
+specification fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
     {S_q D M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -5320,7 +5320,7 @@ theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
 
 /-- Causal-boundary specialization of
 `gridLaunchedAtomic_masked_backward_correct`. -/
-theorem gridLaunchedAtomic_causalBoundary_backward_correct
+specification gridLaunchedAtomic_causalBoundary_backward_correct
     {S_q D M Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -5584,7 +5584,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
     owner hDKWrite hDVWrite hDKBlock hDVBlock
 
 /-- Owner- and tail-factored causal-boundary concrete wrapper. -/
-theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
+specification fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
     {S_q D M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -5701,7 +5701,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of
 
 The launcher obligations are stated over the padded head dimension `Bd`; logical
 inputs remain width `D` and are lifted through `padHeadD`. -/
-theorem gridLaunchedAtomic_boundaryD_backward_correct
+specification gridLaunchedAtomic_boundaryD_backward_correct
     {S_q D Bd M Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -5972,7 +5972,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
     owner hDKWrite hDVWrite hDKBlock hDVBlock
 
 /-- Owner- and tail-factored D-tail boundary concrete wrapper. -/
-theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
+specification fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -6089,7 +6089,7 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owne
 
 /-- D-tail causal-boundary specialization of
 `gridLaunchedAtomic_causalBoundary_backward_correct`. -/
-theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
+specification gridLaunchedAtomic_causalBoundaryD_backward_correct
     {S_q D Bd M Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -6360,7 +6360,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
     owner hDKWrite hDVWrite hDKBlock hDVBlock
 
 /-- Owner- and tail-factored causal D-tail boundary concrete wrapper. -/
-theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
+specification fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -6476,7 +6476,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_o
     simpa [observeTileAt] using hTail
 
 /-- Causal specialization of `gridLaunchedAtomic_masked_dQ_correct`. -/
-theorem gridLaunchedAtomic_causal_dQ_correct
+specification gridLaunchedAtomic_causal_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (k : Kernel) (dQReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -6523,7 +6523,7 @@ theorem gridLaunchedAtomic_causal_dQ_correct
 kernel.  This specializes the generic causal `GridLaunchedAtomic` composition
 surface to `fa1BackwardAtomicDQCausalKernel`, so downstream users can cite the
 kernel-specific theorem instead of manually instantiating `k`. -/
-theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct
+specification fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -6569,7 +6569,7 @@ theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct
 kernel.  This combines the grid-composed atomic `dQ` theorem with the ordinary
 per-block `dK`/`dV` tail-store readback, so the public surface covers all three
 backward outputs from the same `GridLaunchedAtomic` final state. -/
-theorem fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
+specification fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -6689,7 +6689,7 @@ theorem fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
 /-- Full launcher-facing correctness for the causal atomic FA-1 backward
 kernel.  This combines causal grid-composed atomic `dQ` with the ordinary
 per-block causal `dK`/`dV` tail-store readback from the same grid final state. -/
-theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
+specification fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s sFinal : BlockState)
@@ -7648,7 +7648,7 @@ theorem fa1BackwardStrippedKernelStrided_realizes_of_math_suffix
     stride_dvb stride_dvh stride_dvn stride_dvd
     Q K V dO LSE scale s hPre hInjQ hInjK hInjV hdQdK hdQdV hdKdV
 
-theorem fa1BackwardStrippedKernelStrided_realizes
+specification fa1BackwardStrippedKernelStrided_realizes
     {M S D : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (stride_qb stride_qh stride_qs stride_qd : Nat)
@@ -7770,7 +7770,7 @@ Unlike FA-1 forward, backward `dK`/`dV` for a slice depends on all query rows.
 Therefore this wrapper fixes the query-block axis to the full sequence case:
 `M = S_q` and `program_id(0) = 0`. Under that condition, the stripped kernel's
 single `(batch, head)` program computes the complete 4D backward slice. -/
-theorem fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence
+specification fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence
     {B H S_q S_k D : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (stride_qb stride_qh stride_qs stride_qd : Nat)
@@ -7946,7 +7946,7 @@ local 4D backward contribution for the current `(batch, head, query-block)`
 slice.  Its `dK`/`dV` stores are the local contribution from that query block,
 not the complete 4D `dK`/`dV` over all query rows.  The full-sequence theorem
 above is the special case where this local contribution is the complete output. -/
-theorem fa1BackwardStrippedKernelStrided_realizes_4D_queryBlock
+specification fa1BackwardStrippedKernelStrided_realizes_4D_queryBlock
     {B H S_q S_k D M : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (stride_qb stride_qh stride_qs stride_qd : Nat)
@@ -8142,7 +8142,7 @@ Connects:
   `dQ_tile_eq_attentionBackwardReal` / `dK_tile_eq_attentionBackwardReal`);
 - the store-stage readback helper (`store_stage_readback_rowMajor2D`);
 - through the `fa1BackwardStrippedKernel` execution path. -/
-theorem fa1BackwardStrippedKernel_correct
+specification fa1BackwardStrippedKernel_correct
     {M S D : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)

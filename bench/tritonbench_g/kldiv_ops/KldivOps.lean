@@ -302,7 +302,7 @@ theorem kldiv_backward_log_target_correct
   · simp [logTargetSpec, inOffset, h]
   · simp [h]
 /-- Compute-facing correctness for the default backward one-block slice. -/
-theorem kldiv_backward_default_compute_correct
+specification kldiv_backward_default_compute_correct
     (target_ptr new_grads_ptr : RegionName)
     (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -326,7 +326,7 @@ theorem kldiv_backward_default_compute_correct
     target_stride new_grads_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
 /-- Compute-facing correctness for the log-target backward one-block slice. -/
-theorem kldiv_backward_log_target_compute_correct
+specification kldiv_backward_log_target_compute_correct
     (target_ptr new_grads_ptr : RegionName)
     (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -415,7 +415,7 @@ theorem kldiv_forward_default_none_correct
 
 /-- Compute-facing correctness for the forward `log_target=False`,
 `reduction=0` one-block slice. -/
-theorem kldiv_forward_default_none_compute_correct
+specification kldiv_forward_default_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
     (s : BlockState)
@@ -475,7 +475,7 @@ theorem kldiv_forward_log_target_none_correct
   · simp [h]
 
 /-- Compute-facing correctness for the forward log-target one-block slice. -/
-theorem kldiv_forward_log_target_none_compute_correct
+specification kldiv_forward_log_target_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

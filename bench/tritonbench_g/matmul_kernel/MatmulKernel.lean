@@ -718,7 +718,7 @@ with `offs_am(i) = (pid_m·BM + i) % 4096`, `offs_bn(j) = (pid_n·BN + j) % 4096
 `BN ≤ 4096` (column-block width ≤ the row stride 4096, always true for a valid
 tiling — this discharges output-offset injectivity via
 `matmul_kernel_output_offset_injective`) and clean initial `undef`. -/
-theorem matmul_kernel_closed_form_correct
+specification matmul_kernel_closed_form_correct
     (C A B : RegionName) (s : BlockState)
     (BM BN BLOCK_K numKBlocks : Nat)
     (hBN : BN ≤ 4096)

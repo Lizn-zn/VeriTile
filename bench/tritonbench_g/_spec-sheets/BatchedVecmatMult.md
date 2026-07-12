@@ -24,7 +24,7 @@ kernel's row-major pointer arithmetic). Preconditions: `0 < BLOCK_M`,
 
 **Statement:**
 ```lean
-theorem batched_vecmat_closed_form_correct
+specification batched_vecmat_closed_form_correct
     (A B output : RegionName) (s : BlockState)
     (_dim_m dim_n BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat)
     (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBK : 0 < BLOCK_K)

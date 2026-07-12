@@ -1054,7 +1054,7 @@ every output lane `g < split_n_length`. Requires the active LoRA index
 (`lora_index = Int.ofNat li ≥ 0`, so the `-1` early return is not taken),
 out-of-place output (`out ≠ input`, `out ≠ lora`), and per-lane output-offset
 injectivity. -/
-theorem bgmv_full_output_summary
+specification bgmv_full_output_summary
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)
     (li K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat)

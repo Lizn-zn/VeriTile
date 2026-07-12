@@ -2700,7 +2700,7 @@ spherical-harmonic polynomial value `y00Spec`, inactive lanes are preserved.
 Mirrors `add_kernel_output_summary`. The remaining channels `Y01..Y10` are
 covered by the sibling `fifth_order_fwd_surface_y0k_compute_correct`
 theorems. -/
-theorem fifth_order_fwd_surface_y00_output_summary
+specification fifth_order_fwd_surface_y00_output_summary
     (coord_ptr output_ptr : RegionName)
     (block_size coord_numel output_numel col_offset output_stride : Nat)
     (s : BlockState)

@@ -89,7 +89,7 @@ theorem approx_gelu_kernel_correct_exec_view
     using approx_gelu_kernel_correct xReg outReg blockSize hN s xs hx idx.1
 
 /-- Compute-facing view-level surface for `approx_gelu_kernel_correct`. -/
-theorem approx_gelu_kernel_correct_view
+specification approx_gelu_kernel_correct_view
     (xReg outReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
     (xs : Fin blockSize → ℝ)

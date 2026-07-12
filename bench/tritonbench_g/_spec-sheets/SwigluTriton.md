@@ -16,7 +16,7 @@ preserved. -/
 
 **Statement:**
 ```lean
-theorem swiglu_forward_kernel_output_summary
+specification swiglu_forward_kernel_output_summary
     (A B C : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -92,7 +92,7 @@ two output regions are distinct (`A ≠ B`). -/
 
 **Statement:**
 ```lean
-theorem swiglu_backward_kernel_output_summary
+specification swiglu_backward_kernel_output_summary
     (DC A B : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

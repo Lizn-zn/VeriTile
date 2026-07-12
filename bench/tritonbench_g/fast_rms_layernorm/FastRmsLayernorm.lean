@@ -885,7 +885,7 @@ theorem gemma_rms_layernorm_forward_all_outputs_compute_correct
 /-- Public forward summary for regular RMS layernorm: the full Python forward
 surface lowers, and the checked forward kernel characterizes both
 Python-observable outputs `Y` and `r`. -/
-theorem rms_layernorm_forward_output_summary
+specification rms_layernorm_forward_output_summary
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
@@ -922,7 +922,7 @@ theorem rms_layernorm_forward_output_summary
 /-- Public forward summary for Gemma RMS layernorm: the full Python forward
 surface lowers, and the checked forward kernel characterizes both
 Python-observable outputs `Y` and `r`. -/
-theorem gemma_rms_layernorm_forward_output_summary
+specification gemma_rms_layernorm_forward_output_summary
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)

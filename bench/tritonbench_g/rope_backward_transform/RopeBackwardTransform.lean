@@ -1612,7 +1612,7 @@ the projection-succeeds and per-run `exec` quantification internally; the
 `WriteMap.writeIf` masks the store to exactly its active lanes and the
 `expected` map is the genuine rotary-backward closed form over INPUT memory.
 Concrete Python benchmark shapes are instantiations of this. -/
-theorem rope_backward_python_backward_output_summary_general
+specification rope_backward_python_backward_output_summary_general
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)

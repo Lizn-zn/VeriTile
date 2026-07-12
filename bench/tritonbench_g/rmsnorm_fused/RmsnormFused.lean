@@ -256,7 +256,7 @@ the algorithm layer, and the masked store to `Y` is compute-correct — every
 active lane (`i.val < N`) holds the RMSNorm spec `rmsnormSpec`, out-of-bounds
 lanes are preserved. Stated under the `0 < N ≤ BLOCK_SIZE` single-block launch
 precondition chosen by the Python wrapper. -/
-theorem rms_norm_fwd_fused_output_summary
+specification rms_norm_fwd_fused_output_summary
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
     (s : BlockState)
     (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)

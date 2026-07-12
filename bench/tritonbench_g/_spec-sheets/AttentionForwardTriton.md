@@ -34,7 +34,7 @@ Tracked as `attention-forward-online-softmax-recurrence`, #162. -/
 
 **Statement:**
 ```lean
-theorem attention_forward_triton_closed_form_correct
+specification attention_forward_triton_closed_form_correct
     (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
       HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)

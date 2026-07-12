@@ -36,7 +36,7 @@ stronger than `Realizes_without_Rounding` (it asserts execution actually succeed
 
 **Statement:**
 ```lean
-theorem mixed_sparse_attention_output_closed_form_summary_general
+specification mixed_sparse_attention_output_closed_form_summary_general
     (Q K V Out : RegionName)
     (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState)
     (BM BN BD : Nat) (hBN : 0 < BN) (hBN16 : 16 ≤ BN)

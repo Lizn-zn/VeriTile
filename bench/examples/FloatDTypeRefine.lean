@@ -152,7 +152,7 @@ include hN in
 view): the two fp32-annotated softmax kernels, projected to their erased
 algorithm kernels, perform the same per-lane writes. Proved through the Real
 reciprocal refinement via the erasure bridges. -/
-theorem float_softmax_reciprocal_refinement_view
+specification float_softmax_reciprocal_refinement_view
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
     ComputeRefine.General

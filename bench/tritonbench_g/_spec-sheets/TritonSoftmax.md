@@ -16,7 +16,7 @@ out-of-bounds lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem softmax_kernel_output_summary
+specification softmax_kernel_output_summary
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState) :

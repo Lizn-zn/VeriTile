@@ -16,7 +16,7 @@ Conditional on the output-offset injectivity side hypothesis `hOutInj`. -/
 
 **Statement:**
 ```lean
-theorem log_softmax_kernel_output_summary
+specification log_softmax_kernel_output_summary
     (output_ptr input_ptr : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat)
     (s : BlockState)

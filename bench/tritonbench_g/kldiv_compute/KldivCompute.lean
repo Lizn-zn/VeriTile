@@ -123,7 +123,7 @@ theorem kldivergence_kernel_compute_correct
 to the algorithm layer, and the masked store to `output_ptr` is compute-correct
 — every active lane holds `klDivSpec (xs i) (ys i)`, out-of-bounds lanes are
 preserved. -/
-theorem kldivergence_kernel_output_summary
+specification kldivergence_kernel_output_summary
     (x_ptr y_ptr output_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)

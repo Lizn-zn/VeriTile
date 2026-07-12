@@ -30,7 +30,7 @@ note); the `-100` ignore label is dead under the cast-to-`Nat` erasure. -/
 
 **Statement:**
 ```lean
-theorem cross_entropy_forward_output_summary
+specification cross_entropy_forward_output_summary
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE logits_row_stride : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)
@@ -232,7 +232,7 @@ label is dead under cast-to-`Nat` erasure. -/
 
 **Statement:**
 ```lean
-theorem chunked_cross_entropy_forward_output_summary
+specification chunked_cross_entropy_forward_output_summary
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE N_CHUNKS logits_row_stride : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool)

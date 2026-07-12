@@ -1537,7 +1537,7 @@ cases below are thin corollaries instantiating this at `BLOCK_DMODEL = 64`,
 (`128` for cases 1/3, `64` for case 2). That stride feeds `vLoc`/`vMasked`, so
 it genuinely enters the PV-reduction value spec; the cases are distinct
 instantiations, not a single collapsed one. -/
-theorem token_attn_reducev_output_summary_general
+specification token_attn_reducev_output_summary_general
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
     (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs

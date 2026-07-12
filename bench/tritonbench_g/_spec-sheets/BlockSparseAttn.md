@@ -33,7 +33,7 @@ This is **not** the self-referential executed value: the streaming
 
 **Statement:**
 ```lean
-theorem block_sparse_attn_output_closed_form_summary_general
+specification block_sparse_attn_output_closed_form_summary_general
     (Out Q K V : RegionName) (R C : Region .nat) (s : BlockState)
     (BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout total_seq_len : Nat)
     (rowStrideH colStrideH sqb sqh sqm skb skh skn svb svh svn sob soh som : Nat) (scale : ℝ)

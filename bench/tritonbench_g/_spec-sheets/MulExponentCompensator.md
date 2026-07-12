@@ -15,7 +15,7 @@ holds `xs i * exponentCompensator`. -/
 
 **Statement:**
 ```lean
-theorem mul_kernel_output_summary
+specification mul_kernel_output_summary
     (src dst : RegionName)
     (BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

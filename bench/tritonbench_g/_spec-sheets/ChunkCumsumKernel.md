@@ -28,7 +28,7 @@ headline; the `T = 4`, `BT = 16` Python benchmark shape is one instantiation. -/
 
 **Statement:**
 ```lean
-theorem chunk_cumsum_scalar_output_summary_general
+specification chunk_cumsum_scalar_output_summary_general
     (S O : RegionName) (T BT : Nat) (s : BlockState)
     (hSO : O ≠ S) (hBT : 0 < BT) :
     -- (1) the full surface lowers to the algorithm layer

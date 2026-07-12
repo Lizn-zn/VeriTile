@@ -20,7 +20,7 @@ removes the test-shape pin: the statement is universally quantified over all
 
 **Statement:**
 ```lean
-theorem chunked_cumsum_fwd_summary_general
+specification chunked_cumsum_fwd_summary_general
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (batch seqlen nheads chunk_size : Nat)

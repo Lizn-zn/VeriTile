@@ -16,7 +16,7 @@ standard mathematical row `LSE xs HAS_SCALE scale`. -/
 
 **Statement:**
 ```lean
-theorem logsumexp_fwd_kernel_output_summary
+specification logsumexp_fwd_kernel_output_summary
     (x z : RegionName)
     (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
     (s : BlockState)

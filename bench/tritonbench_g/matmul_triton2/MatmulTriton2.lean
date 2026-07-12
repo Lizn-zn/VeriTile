@@ -990,7 +990,7 @@ surface (1) lowers to the algorithm layer and (2) realizes the genuine matrix
 product `Σ_{k < BK·numKBlocks} A[i,k]·B[k,j]` (over ℝ, reading INPUT memory) on
 every active output lane. The `expected` is the closed-form `matmulSpec`, NOT the
 kernel's own executed value. -/
-theorem matmul_triton2_output_summary_general
+specification matmul_triton2_output_summary_general
     (A B C : RegionName) (s : BlockState)
     (M N BM BN GM SAM SAK SBK SBN SCM SCN BK numKBlocks : Nat) (hBK : 0 < BK)
     (hInj : Function.Injective (cOffset s M N BM BN GM SCM SCN))

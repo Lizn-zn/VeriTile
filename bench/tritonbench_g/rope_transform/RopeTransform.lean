@@ -2101,7 +2101,7 @@ the kernel writes). `Realizes_without_Rounding` internalizes the `exec`/projecti
 so the `s'`/`hExec` binders drop out of the headline. The general building-block
 lemmas (`rope_transform_q0/q1/k0/k1_forward_correct`) supply each per-lane store
 value once the surface is lowered and executed. -/
-theorem rope_transform_output_summary_general
+specification rope_transform_output_summary_general
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)

@@ -241,7 +241,7 @@ holds the stable-softmax value `softmaxOptimizeSpec`, out-of-bounds lanes are
 preserved. (Covers the `N ≤ TILE_N` collapsed-loop regime; the full online
 surface's exec-level value correctness is established separately, see
 `softmax_kernel_online_v2_surface_exec_correct`.) -/
-theorem softmax_kernel_online_v2_one_tile_output_summary
+specification softmax_kernel_online_v2_one_tile_output_summary
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
@@ -2521,7 +2521,7 @@ value read back there after any successful run is exactly the numerically
 stabilized full-row softmax of the loaded input row. Stated via
 `ComputeCorrect.Realizes_without_Rounding` (per `bench/MAIN_THEOREM_CONVENTIONS.md` §4), wrapping
 the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
-theorem softmax_kernel_online_v2_output_summary
+specification softmax_kernel_online_v2_output_summary
     (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
     (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
     (s : BlockState) :

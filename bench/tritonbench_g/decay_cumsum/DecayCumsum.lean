@@ -4150,7 +4150,7 @@ theorem bwd_decay_cumsum_dg_closed_compute_correct_general :
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 /-- **General `output_summary`.** The executed backward surface realizes all three
 genuine closed forms (`bwdDQInterClosed` / `bwdDKInterClosed` / `bwdDGClosed`). -/
-theorem decay_cumsum_backward_closed_output_summary_general :
+specification decay_cumsum_backward_closed_output_summary_general :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
         Q K G DG s_qk_h DK BT BK)

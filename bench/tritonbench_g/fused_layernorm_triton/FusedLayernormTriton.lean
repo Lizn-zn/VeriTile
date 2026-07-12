@@ -783,7 +783,7 @@ runtime boundary (as with `reversed_cumsum_scalar`'s carried `b_z`).
 Honest side conditions only: `rnumel ≤ RBLOCK` for the single-block
 reduction phase and mean/rstd output-region distinctness
 (`out_ptr0 ≠ in_out_ptr0`). -/
-theorem fused_layernorm_triton_output_summary_general
+specification fused_layernorm_triton_output_summary_general
     (in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 : RegionName)
     (xnumel rnumel XBLOCK RBLOCK : Nat) (hLe : rnumel ≤ RBLOCK)
     (s : BlockState)

@@ -21,7 +21,7 @@ theorem. -/
 
 **Statement:**
 ```lean
-theorem fill_kv_cache_output_summary_general
+specification fill_kv_cache_output_summary_general
     (KStates VStates KCaches VCaches QStartLoc QSeqLens KVSeqLens
       BlockOffsets : RegionName)
     (SIDX BIDX KV_BLOCK_IDX

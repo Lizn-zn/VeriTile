@@ -16,7 +16,7 @@ preserved. -/
 
 **Statement:**
 ```lean
-theorem swiglu_fwd_kernel_output_summary
+specification swiglu_fwd_kernel_output_summary
     (X Y OUT : RegionName)
     (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat)
     (s : BlockState)

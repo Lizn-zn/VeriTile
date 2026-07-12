@@ -195,7 +195,7 @@ theorem index_select_cat_fwd_kernel_compute_correct
 lowers to the algorithm layer, and the contiguous store to `output_ptr` is
 compute-correct — under the injectivity hypothesis `hOutInj`, every active cell
 holds the gathered value `source[index[i], col]`. -/
-theorem index_select_cat_fwd_kernel_output_summary
+specification index_select_cat_fwd_kernel_output_summary
     (output_ptr source_ptr index_ptr : RegionName)
     (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)

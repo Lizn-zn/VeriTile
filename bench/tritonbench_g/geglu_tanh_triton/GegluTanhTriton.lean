@@ -180,7 +180,7 @@ theorem geglu_tanh_forward_kernel_compute_correct
 lowers to the algorithm layer, and the masked store to `C` is compute-correct —
 every active lane holds `TiledActivation.geluTanhFwd (as i) (bs i)`, out-of-bounds
 lanes are preserved. -/
-theorem geglu_tanh_forward_kernel_output_summary
+specification geglu_tanh_forward_kernel_output_summary
     (A B C : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -313,7 +313,7 @@ lowers to the algorithm layer, and the two masked stores are compute-correct —
 every active lane writes `geluTanhBwdA` to `A` and `geluTanhBwdB` to `B`, with the
 two output channels indexed by `Sum`; out-of-bounds lanes are preserved. Assumes
 the two output regions are distinct (`A ≠ B`). -/
-theorem geglu_tanh_backward_kernel_output_summary
+specification geglu_tanh_backward_kernel_output_summary
     (DC A B : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

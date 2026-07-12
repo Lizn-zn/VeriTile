@@ -42,7 +42,7 @@ reduction phase and mean/rstd output-region distinctness
 
 **Statement:**
 ```lean
-theorem fused_layernorm_triton_output_summary_general
+specification fused_layernorm_triton_output_summary_general
     (in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 : RegionName)
     (xnumel rnumel XBLOCK RBLOCK : Nat) (hLe : rnumel ≤ RBLOCK)
     (s : BlockState)

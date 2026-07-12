@@ -31,7 +31,7 @@ self-reference). This general closed form holds over arbitrary dimensions
 
 **Statement:**
 ```lean
-theorem per_block_int8_output_summary_general
+specification per_block_int8_output_summary_general
     (X XInt8 Scale ScalePre : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) (s : BlockState)
     (hOutInj : Function.Injective

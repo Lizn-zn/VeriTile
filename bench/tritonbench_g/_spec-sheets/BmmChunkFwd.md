@@ -24,7 +24,7 @@ are the kernel's own derived program coordinates. -/
 
 **Statement:**
 ```lean
-theorem bmm_chunk_fwd_output_summary_general
+specification bmm_chunk_fwd_output_summary_general
     (A B Out : RegionName) (s : BlockState)
     (chunk_size ngroups SAB SAS SAH SAK SBB SBS SBH SBK SOB SOC SOH SOM SON BM BN BK numKBlocks : Nat)
     (hBK : 0 < BK)

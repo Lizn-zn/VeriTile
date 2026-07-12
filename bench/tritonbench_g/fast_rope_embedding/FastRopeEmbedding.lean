@@ -386,7 +386,7 @@ per-region first/second-half offsets are injective on the active lanes); these
 are exactly what the readback lemmas need and hold for any contiguous,
 in-range layout. `BLOCK_SIZE > 0` is *not* required as a hypothesis: it is
 discharged internally from the lane index. -/
-theorem rope_embedding_output_summary_general
+specification rope_embedding_output_summary_general
     (Q K QGrad KGrad cos sin : RegionName)
     (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
       BLOCK_SIZE : Nat)

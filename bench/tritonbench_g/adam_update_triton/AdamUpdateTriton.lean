@@ -311,7 +311,7 @@ Grid coverage, `cdiv n_elements BLOCK_SIZE`, and cross-program disjointness are
 separate whole-grid obligations handled by the worked example
 `VeriTile.Examples.AdamUpdateGridLaunch`, outside the scope of this per-kernel
 theorem. -/
-theorem update_fn_kernel_output_summary
+specification update_fn_kernel_output_summary
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
     (s : BlockState)

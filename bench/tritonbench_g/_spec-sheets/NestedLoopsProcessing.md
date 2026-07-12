@@ -23,7 +23,7 @@ layouts (`stride_m ∈ {8, 4, 16, 2}`, `stride_n = 1`) are instances. -/
 
 **Statement:**
 ```lean
-theorem nested3_output_summary_general
+specification nested3_output_summary_general
     (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
     (s : BlockState)
     (hInj0 : Function.Injective

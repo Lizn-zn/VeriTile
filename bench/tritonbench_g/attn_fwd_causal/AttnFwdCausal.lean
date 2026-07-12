@@ -4343,7 +4343,7 @@ writeback realizes the genuine closed-form causal attention
 INPUT memory) at every active output lane. Side conditions: positive blocks,
 `N_CTX = BLOCK_N · numKVBlocks` (`numKVBlocks > 0`), clean input (`undef = 0`), the
 `-1e6` sentinel score bound `afcScoreBoundG`, and output-offset injectivity. -/
-theorem attn_fwd_causal_output_summary_general
+specification attn_fwd_causal_output_summary_general
     (Q K V QScale KScale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE Z numKVBlocks : Nat)
     (hBD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M)

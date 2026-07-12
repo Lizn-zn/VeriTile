@@ -16,7 +16,7 @@ lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem dropout_kernel_output_summary
+specification dropout_kernel_output_summary
     (x_ptr x_keep_ptr output_ptr : RegionName)
     (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat)
     (s : BlockState) :

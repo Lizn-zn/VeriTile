@@ -28,7 +28,7 @@ summaries are specializations of this theorem at their literal dimensions. -/
 
 **Statement:**
 ```lean
-theorem chunk_gla_simple_output_summary_general
+specification chunk_gla_simple_output_summary_general
     (q k v h g o : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
     (scale : ℝ) (T K V BT BK BV : Nat) (s : BlockState)

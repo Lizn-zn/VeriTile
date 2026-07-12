@@ -189,7 +189,7 @@ theorem rms_norm_kernel_compute_correct
 /-- Per-kernel output summary for `rms_norm_kernel`: the DSL surface lowers to the
 algorithm layer, and the masked store to `Y` is compute-correct — every in-bounds
 lane holds `rmsNormSpec`, out-of-bounds lanes are preserved. -/
-theorem rms_norm_kernel_output_summary
+specification rms_norm_kernel_output_summary
     (Y X W : RegionName)
     (y_stride_r y_stride_c x_stride_r x_stride_c N BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)

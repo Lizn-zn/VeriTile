@@ -629,7 +629,7 @@ theorem fa1_forward_correct_4D_exec_views
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D idx
 
-theorem fa1_forward_correct_4D_views
+specification fa1_forward_correct_4D_views
     {B H S_q S_k D Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (hSk : Bk * numKVBlocks = S_k)
@@ -692,7 +692,7 @@ theorem fa1_forward_correct_4D_causal_exec_views
       hQ4D hK4D hV4D idx
 
 /-- Compute-facing causal FA-1 forward correctness over bundled tensor views. -/
-theorem fa1_forward_correct_4D_causal_views
+specification fa1_forward_correct_4D_causal_views
     {B H S_q S_k D Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (hSk : Bk * numKVBlocks = S_k)

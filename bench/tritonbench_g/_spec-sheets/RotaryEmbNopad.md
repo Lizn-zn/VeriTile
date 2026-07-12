@@ -30,7 +30,7 @@ The host launch remains the trusted boundary. -/
 
 **Statement:**
 ```lean
-theorem rotary_emb_nopad_output_summary_general
+specification rotary_emb_nopad_output_summary_general
     (Q K Cos Sin : RegionName) (s : BlockState)
     (surf_q_token_stride surf_q_head_stride surf_k_token_stride surf_k_head_stride
       surf_head_dim_stride surf_cos_token_stride surf_cos_stride

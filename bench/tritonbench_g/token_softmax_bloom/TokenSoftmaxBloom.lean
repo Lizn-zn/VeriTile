@@ -423,7 +423,7 @@ genuine closed-form stable-softmax value `tokenSoftmaxSpec` (a closed form read
 off the *input* `Logics` row, never `exec(...).readMem`), inactive lanes are
 preserved. The `Prob_Out`-offset injectivity side condition (discharged by the
 trusted host layout for any concrete shape) is taken as a hypothesis. -/
-theorem token_softmax_bloom_output_summary_general
+specification token_softmax_bloom_output_summary_general
     (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
     (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE : Nat)
     (s : BlockState)

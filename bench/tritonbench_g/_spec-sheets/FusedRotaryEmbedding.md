@@ -21,7 +21,7 @@ are the per-region store-offset injectivity hypotheses. -/
 
 **Statement:**
 ```lean
-theorem decoding_fused_rotary_embedding_output_summary_general
+specification decoding_fused_rotary_embedding_output_summary_general
     (q k v cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
       context_lengths : RegionName)
     (BLOCK_TABLES_nat context_lengths_nat : Region .nat)

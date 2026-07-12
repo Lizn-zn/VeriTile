@@ -151,7 +151,7 @@ theorem softmax_kernel_compute_correct
 /-- Per-kernel output summary for `softmax_kernel`: the DSL surface lowers to the
 algorithm layer, and the masked store to `output_ptr` is compute-correct — every
 in-bounds lane holds `softmaxSpec`, out-of-bounds lanes are preserved. -/
-theorem softmax_kernel_output_summary
+specification softmax_kernel_output_summary
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState) :

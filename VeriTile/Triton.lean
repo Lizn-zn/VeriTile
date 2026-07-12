@@ -11,6 +11,7 @@ worked examples import this single module in place of the individual
 `VeriTile.Triton.*` sub-umbrellas.
 -/
 
+import VeriTile.Meta.Specification
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory

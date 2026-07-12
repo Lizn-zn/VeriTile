@@ -862,7 +862,7 @@ Honest side-conditions: `0 < out0_stride0` (store-footprint injectivity —
 torch strides of a non-degenerate rank-1 buffer are ≥ 1), and for the
 grid-stride branch `in0_ptr ≠ out0_ptr` (later iterations load after earlier
 stores) and `0 < s.numPids 0` (a launched grid has at least one program). -/
-theorem relu_strided_buffer_output_summary_general
+specification relu_strided_buffer_output_summary_general
     (in0_ptr out0_ptr : RegionName)
     (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
     (s : BlockState)

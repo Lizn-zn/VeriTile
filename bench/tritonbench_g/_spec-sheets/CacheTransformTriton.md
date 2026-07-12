@@ -17,7 +17,7 @@ preserved. -/
 
 **Statement:**
 ```lean
-theorem prefill_cache_kernel_output_summary
+specification prefill_cache_kernel_output_summary
     (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
     (cos_output sin_output : RegionName)
     (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
@@ -190,7 +190,7 @@ source row, inactive cells are preserved. -/
 
 **Statement:**
 ```lean
-theorem decoding_cache_kernel_output_summary
+specification decoding_cache_kernel_output_summary
     (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
     (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
     (s : BlockState)

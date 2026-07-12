@@ -19,7 +19,7 @@ surface's exec-level value correctness is established separately, see
 
 **Statement:**
 ```lean
-theorem softmax_kernel_online_v2_one_tile_output_summary
+specification softmax_kernel_online_v2_one_tile_output_summary
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat)
     (s : BlockState) :
@@ -118,7 +118,7 @@ the exec-level engine lemma `softmax_kernel_online_v2_surface_exec_correct`. -/
 
 **Statement:**
 ```lean
-theorem softmax_kernel_online_v2_output_summary
+specification softmax_kernel_online_v2_output_summary
     (output_ptr input_ptr : RegionName) (M N TILE_N : Nat)
     (hN : 0 < N) (hT : 0 < TILE_N) (hne : output_ptr ≠ input_ptr)
     (s : BlockState) :

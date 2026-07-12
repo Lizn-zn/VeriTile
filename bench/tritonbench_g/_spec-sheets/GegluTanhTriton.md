@@ -16,7 +16,7 @@ lanes are preserved. -/
 
 **Statement:**
 ```lean
-theorem geglu_tanh_forward_kernel_output_summary
+specification geglu_tanh_forward_kernel_output_summary
     (A B C : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
@@ -100,7 +100,7 @@ the two output regions are distinct (`A ≠ B`). -/
 
 **Statement:**
 ```lean
-theorem geglu_tanh_backward_kernel_output_summary
+specification geglu_tanh_backward_kernel_output_summary
     (DC A B : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)

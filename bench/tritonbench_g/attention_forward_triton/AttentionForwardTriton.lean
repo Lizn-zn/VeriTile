@@ -455,7 +455,7 @@ whose full `exec`-side loop unfolding (preLoop + per-block step + postLoop) and
 math core (`Math/Attention.lean`) are both complete. Extra preconditions:
 `HEAD_ACTIVE ≤ HEAD_DIM` (store-offset injectivity), clean initial `undef`.
 Tracked as `attention-forward-online-softmax-recurrence`, #162. -/
-theorem attention_forward_triton_closed_form_correct
+specification attention_forward_triton_closed_form_correct
     (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
       HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)

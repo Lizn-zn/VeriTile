@@ -17,7 +17,7 @@ result; requires only `0 < BLOCK_SIZE` and output/input disjointness. -/
 
 **Statement:**
 ```lean
-theorem layernorm_fwd_triton_output_summary
+specification layernorm_fwd_triton_output_summary
     (X W Y : RegionName)
     (stride_x_N stride_x_hn stride_x_hd
       stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd

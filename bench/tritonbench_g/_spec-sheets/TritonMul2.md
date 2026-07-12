@@ -17,7 +17,7 @@ covers the in-place `mul2_inplace_kernel` store to `ptr`. -/
 
 **Statement:**
 ```lean
-theorem mul2_kernel_output_summary
+specification mul2_kernel_output_summary
     (in_ptr0 out_ptr ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs xsInplace : Fin BLOCK_SIZE → ℝ)

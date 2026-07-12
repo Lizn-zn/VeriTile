@@ -412,7 +412,7 @@ theorem online_softmax_correct_exec_view
   exact online_softmax_correct xReg yReg N hN s xs hx
 
 /-- Compute-facing view-level surface for `online_softmax_correct`. -/
-theorem online_softmax_correct_view
+specification online_softmax_correct_view
     (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
     (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)

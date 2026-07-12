@@ -128,7 +128,7 @@ theorem maskedFalseStore_writesWithin_activeTileImage
       funext i
       simp)
 
-theorem blockPtrOOBStore_writesWithin_checkedFootprint
+specification blockPtrOOBStore_writesWithin_checkedFootprint
     (outReg : RegionName) (s : BlockState) :
     (blockPtrOOBStoreKernel outReg).ExecWritesWithin s
       (WriteFootprint.activeAddrTileImage

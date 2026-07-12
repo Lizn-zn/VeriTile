@@ -17,7 +17,7 @@ precondition chosen by the Python wrapper. -/
 
 **Statement:**
 ```lean
-theorem rms_norm_fwd_fused_output_summary
+specification rms_norm_fwd_fused_output_summary
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
     (s : BlockState)
     (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)

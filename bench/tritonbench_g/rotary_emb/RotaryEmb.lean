@@ -825,7 +825,7 @@ lowers to the algorithm layer and each of the four Python-observable stores
 interleaved rotary closed form (`rotary{Q0,Q1,K0,K1}Spec`). The general
 block-level building blocks (`rotary_emb_q0/q1/k0/k1_block_compute_correct`)
 consume within-family offset injectivity, taken here as hypotheses. -/
-theorem rotary_emb_output_summary_general
+specification rotary_emb_output_summary_general
     (Q K Cos Sin : RegionName)
     (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
       stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len

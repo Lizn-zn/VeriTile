@@ -128,7 +128,7 @@ theorem rowWiseSum_correct_exec_view
     using rowWiseSum_correct xReg yReg nCol blockSize s xs hx
 
 /-- Compute-facing view-level surface for `rowWiseSum_correct`. -/
-theorem rowWiseSum_correct_view
+specification rowWiseSum_correct_view
     (xReg yReg : RegionName) (nCol blockSize : Nat)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
@@ -191,7 +191,7 @@ theorem rowWiseMax_correct_exec_view
     using rowWiseMax_correct xReg yReg nCol blockSize hN s xs hx
 
 /-- Compute-facing view-level surface for `rowWiseMax_correct`. -/
-theorem rowWiseMax_correct_view
+specification rowWiseMax_correct_view
     (xReg yReg : RegionName) (nCol blockSize : Nat) (hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)

@@ -5503,7 +5503,7 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
 set_option maxHeartbeats 1000000 in
 /-- **Genuine GENERAL `O`-store correctness** (both causal cases). Dimension-parameterized
 `flash_attn_genuine_output_compute_correct`. -/
-theorem flash_attn_genuine_output_compute_correct_general
+specification flash_attn_genuine_output_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -5542,7 +5542,7 @@ theorem flash_attn_genuine_output_compute_correct_general
 set_option maxHeartbeats 1000000 in
 /-- **Genuine GENERAL `L`-store correctness** (both causal cases). Dimension-parameterized
 `flash_attn_genuine_l_compute_correct`. -/
-theorem flash_attn_genuine_l_compute_correct_general
+specification flash_attn_genuine_l_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -5576,7 +5576,7 @@ theorem flash_attn_genuine_l_compute_correct_general
   exact hLrb i
 
 /-- **Python case 1 (causal) GENERAL genuine closed-form correctness.** -/
-theorem flash_attn_python_case1_genuine_compute_correct_general
+specification flash_attn_python_case1_genuine_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
@@ -5616,7 +5616,7 @@ theorem flash_attn_python_case1_genuine_compute_correct_general
       hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
 
 /-- **Python case 2 (non-causal) GENERAL genuine closed-form correctness.** -/
-theorem flash_attn_python_case2_genuine_compute_correct_general
+specification flash_attn_python_case2_genuine_compute_correct_general
     (Q K V L O : RegionName) (s : BlockState)
     (sm_scale : ℝ) (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat)
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)

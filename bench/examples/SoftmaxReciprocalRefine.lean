@@ -102,7 +102,7 @@ include hN in
 the rounding model `R`, from the same initial state the per-element-divide and
 precomputed-reciprocal kernels perform the same writes. Both compute the same
 per-lane ℝ value (`e / S = e · S⁻¹`) and round it at the same bf16 store. -/
-theorem softmax_reciprocal_refinement_view :
+specification softmax_reciprocal_refinement_view :
     ComputeRefine.Refines R
       (stableSoftmaxKernel xReg yReg N)
       (softmaxRecipKernel xReg yReg N) s [] := by

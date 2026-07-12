@@ -1852,7 +1852,7 @@ own output — for arbitrary `N`, `K`, `BLOCK_N`, `BLOCK_K`, `SPLIT_K`, strides,
 Honest side-conditions: `0 < BLOCK_K`, `0 < SPLIT_K` (a launched constexpr
 tile is nonempty — also the K-loop stride), and `0 < cn_stride` (output-lane
 footprint injectivity; torch strides of a non-degenerate output are ≥ 1). -/
-theorem bgmv_shrink_kernel_output_summary_general
+specification bgmv_shrink_kernel_output_summary_general
     (input_ptr lora_ptr out_ptr : RegionName)
     (N K : Nat) (lora_indices_int : Region .int) (lora_indices : Region .nat)
     (scaling : ℝ)

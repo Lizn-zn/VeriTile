@@ -1059,7 +1059,7 @@ algorithm layer **and** is compute-correct against the *genuine* rank-`K`
 contraction `sgmvSpec` on every active output lane — under the
 no-duplicate-destination hypothesis `hInj`. This is the closed-form GEMV
 reference `Σ_{k<K} input·loraB`, not the kernel's own emitted value. -/
-theorem sgmv_expand_slice_one_row_block_output_summary
+specification sgmv_expand_slice_one_row_block_output_summary
     (input_ptr lora_ptr out_ptr : RegionName)
     (b_seq_start_loc seq_lens lora_indices : Region .nat) (s : BlockState)
     (N xm_stride xk_stride l0_stride lora_k_stride lora_n_stride

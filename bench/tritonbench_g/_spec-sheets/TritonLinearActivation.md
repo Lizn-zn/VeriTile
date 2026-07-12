@@ -41,7 +41,7 @@ contiguous row-major outputs) give store-footprint injectivity. -/
 
 **Statement:**
 ```lean
-theorem triton_linear_activation_output_summary_general
+specification triton_linear_activation_output_summary_general
     (C ACT_INPUTS A B bias : RegionName) (s : BlockState)
     (M N output_m_stride output_n_stride act_inputs_m_stride act_inputs_n_stride
       a_m_stride a_k_stride b_n_stride b_k_stride

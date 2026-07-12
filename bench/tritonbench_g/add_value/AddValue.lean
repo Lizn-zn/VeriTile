@@ -120,7 +120,7 @@ theorem puzzle1_kernel_compute_correct
 /-- Per-kernel output summary for `puzzle1_kernel`: the DSL surface lowers to the
 algorithm layer, and the masked store to `output_ptr` is compute-correct — every
 active lane holds `xs i + value`, out-of-bounds lanes are preserved. -/
-theorem puzzle1_kernel_output_summary
+specification puzzle1_kernel_output_summary
     (x_ptr output_ptr : RegionName)
     (N BLOCK_SIZE : Nat) (value : ℝ) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

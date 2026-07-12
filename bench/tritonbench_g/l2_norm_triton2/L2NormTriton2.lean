@@ -306,7 +306,7 @@ theorem l2_norm_bwd_kernel_compute_correct
 lowers to the algorithm layer, and the masked store to `Y` is compute-correct —
 every active lane holds `l2FwdSpec` (the oracle L2-norm value), out-of-bounds
 lanes are preserved. -/
-theorem l2_norm_fwd_1pass_kernel_output_summary
+specification l2_norm_fwd_1pass_kernel_output_summary
     (X Y : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat)
     (s : BlockState) :
@@ -326,7 +326,7 @@ theorem l2_norm_fwd_1pass_kernel_output_summary
 the algorithm layer, and the masked store to `DX` is compute-correct — every
 active lane holds `l2BwdSpec` (the oracle L2-norm backward value), out-of-bounds
 lanes are preserved. -/
-theorem l2_norm_bwd_kernel_output_summary
+specification l2_norm_bwd_kernel_output_summary
     (X DY DX : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat)
     (s : BlockState) :

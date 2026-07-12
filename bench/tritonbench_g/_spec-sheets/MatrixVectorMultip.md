@@ -21,7 +21,7 @@ The only hypothesis is the honest output-offset injectivity condition
 
 **Statement:**
 ```lean
-theorem mv_kernel_output_summary_general
+specification mv_kernel_output_summary_general
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
     (s : BlockState)

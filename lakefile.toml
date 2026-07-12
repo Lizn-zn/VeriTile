@@ -17,6 +17,7 @@ globs = [
   # Statement-audit commands only (lightweight, imports just `Lean`). The
   # TrustReport driver lives in VeriTileFull because it audits ApproxGeLU,
   # which pulls the heavy analysis chain the lite target deliberately skips.
+  "VeriTile.Meta.Specification",
   "VeriTile.Meta.StatementAudit",
   "VeriTile.Examples.Common",
   "VeriTile.Examples.TritonSmoke",

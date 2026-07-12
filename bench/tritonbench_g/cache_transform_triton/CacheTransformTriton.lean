@@ -936,7 +936,7 @@ to the algorithm layer (including the `where`/`max` source-row reduction), and
 both masked cos/sin scatters are compute-correct — every active cell holds the
 matching cos/sin cache cell at the derived source row, inactive cells are
 preserved. -/
-theorem prefill_cache_kernel_output_summary
+specification prefill_cache_kernel_output_summary
     (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
     (cos_output sin_output : RegionName)
     (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
@@ -986,7 +986,7 @@ theorem prefill_cache_kernel_output_summary
 to the algorithm layer, and both masked cos/sin scatters are compute-correct —
 every active cell holds the matching cos/sin cache cell at the `lengths`-selected
 source row, inactive cells are preserved. -/
-theorem decoding_cache_kernel_output_summary
+specification decoding_cache_kernel_output_summary
     (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
     (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
     (s : BlockState)

@@ -23,7 +23,7 @@ remain the honest, unmodeled blocker. -/
 
 **Statement:**
 ```lean
-theorem quantize_rowwise_blocked_output_summary_general
+specification quantize_rowwise_blocked_output_summary_general
     (x_ptr output_ptr MaxVals output_maxs : RegionName)
     (_n_elements BLOCK_SIZE P2 : Nat) (scale127 : ℝ) (s : BlockState) :
     (∃ err,

@@ -2803,7 +2803,7 @@ lowers to the algorithm layer, and the time-step stores to `y_ptr` are
 compute-correct — after the `0..length` recurrent scan every active output
 offset holds the diagonal-SSM spec value `diagSsmForwardSpecAt`, and inactive
 lanes are preserved. Mirrors `add_kernel_output_summary`. -/
-theorem diag_ssm_forward_kernel_output_summary
+specification diag_ssm_forward_kernel_output_summary
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat)
     (s : BlockState)

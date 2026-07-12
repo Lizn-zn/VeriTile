@@ -852,7 +852,7 @@ logical extents, giving offset injectivity for the state face) and `0 < BV`
 through verbatim; clauses 2–4 hold for every flag setting, and each Python case
 is recovered by projecting the subset of clauses its `STORE_FINAL_STATE` /
 `USE_INITIAL_STATE` configuration exercises. -/
-theorem fused_recurrent_rwkv6_output_summary_general
+specification fused_recurrent_rwkv6_output_summary_general
     (q k v w u o h0 ht BHPrev BHOut BHFinal : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (s_k_h s_v_h B H T K V BK BV m : Nat) (scale : ℝ) (s : BlockState)

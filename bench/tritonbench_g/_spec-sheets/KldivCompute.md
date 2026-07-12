@@ -16,7 +16,7 @@ preserved. -/
 
 **Statement:**
 ```lean
-theorem kldivergence_kernel_output_summary
+specification kldivergence_kernel_output_summary
     (x_ptr y_ptr output_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)

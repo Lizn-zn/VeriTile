@@ -16,7 +16,7 @@ The only side condition is `BLOCK_N ≠ 0`. -/
 
 **Statement:**
 ```lean
-theorem mean_dim_kernel_output_summary
+specification mean_dim_kernel_output_summary
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
     (hStepNe : BLOCK_N ≠ 0) :

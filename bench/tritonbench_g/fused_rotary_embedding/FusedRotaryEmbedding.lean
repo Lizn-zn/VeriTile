@@ -1921,7 +1921,7 @@ Q/K rotary writebacks plus the `handle_kv`-guarded paged K/V cache stores driven
 by `context_lengths`/`BLOCK_TABLES` — realizes its genuine rotary closed form
 reading input memory. No hardcoded test-shape literals; the only side conditions
 are the per-region store-offset injectivity hypotheses. -/
-theorem decoding_fused_rotary_embedding_output_summary_general
+specification decoding_fused_rotary_embedding_output_summary_general
     (q k v cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
       context_lengths : RegionName)
     (BLOCK_TABLES_nat context_lengths_nat : Region .nat)

@@ -128,7 +128,7 @@ regions whose extents cover `n`, the translated kernel — one flat region,
 addresses `base + pid*B + i` — run on the flattened state is the flattening
 of the region-model run. Stage 1 (explicit addressing) + stage 2 (the
 bridge), with every side condition discharged above. -/
-theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+specification flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -268,7 +268,7 @@ theorem addKernelMasked_flattenOk (xReg yReg outReg : RegionName)
 
 /-- **Flat-memory masked vector add, register style**: the bridge applied to
 an ordinary DSL kernel, with the per-execution safety discharged above. -/
-theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+specification addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -318,7 +318,7 @@ private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
 extents cover `n`, the translated kernel run from the flattened state stores
 `xs i + ys i` at every masked lane of the flat output region — stated on the
 standard `ComputeCorrect.Realizes` trust surface. -/
-theorem add_kernel_masked_flat_correct_view
+specification add_kernel_masked_flat_correct_view
     (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)

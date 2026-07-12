@@ -798,7 +798,7 @@ surface lowers and (b) the complete genuine copy-correctness sweep — all 24
 shifted INPUT region to the shifted OUTPUT region (`expected` reads input
 memory, never `exec(...).readMem`). The Python wrapper's contiguous square
 layouts (`stride_m ∈ {8, 4, 16, 2}`, `stride_n = 1`) are instances. -/
-theorem nested3_output_summary_general
+specification nested3_output_summary_general
     (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
     (s : BlockState)
     (hInj0 : Function.Injective

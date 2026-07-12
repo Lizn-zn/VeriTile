@@ -17,7 +17,7 @@ is compute-correct — every active lane (`< length`) holds the matching
 
 **Statement:**
 ```lean
-theorem var_len_copy_kernel_triton_small_length_output_summary
+specification var_len_copy_kernel_triton_small_length_output_summary
     (old_a_start old_a_len : Region .nat) (old_a_location : RegionName)
     (new_a_start : Region .nat) (new_a_location : RegionName)
     (BLOCK_SIZE : Nat)

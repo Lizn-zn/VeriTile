@@ -124,7 +124,7 @@ theorem cos_func_compute_correct
 /-- Per-kernel output summary for `cos_func`: the DSL surface lowers to the
 algorithm layer, and the masked store to `b` is compute-correct — every active
 lane holds `Real.cos (xs i)`, out-of-bounds lanes are preserved. -/
-theorem cos_func_output_summary
+specification cos_func_output_summary
     (a b : RegionName)
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)

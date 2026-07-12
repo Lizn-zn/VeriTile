@@ -230,7 +230,7 @@ noncomputable def attentionBackwardRealScoreVariant {M S D : Nat}
 def unitScoreGrad {M S : Nat} : Fin M → Fin S → ℝ :=
   fun _ _ => 1
 
-theorem attentionBackwardRealScoreVariant_dotScore_eq_masked {M S D : Nat}
+specification attentionBackwardRealScoreVariant_dotScore_eq_masked {M S D : Nat}
     (visible : Fin M → Fin S → Bool)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
@@ -290,7 +290,7 @@ noncomputable def attentionBackwardRealAlibiSlidingSoftcap {M S D : Nat}
     (fun i j => softcapScore softcap (baseScore i j))
     (softcapScoreGradOf softcap baseScore) Q K V dO LSE scale
 
-theorem attentionBackwardRealAlibi_eq_scoreVariant {M S D : Nat}
+specification attentionBackwardRealAlibi_eq_scoreVariant {M S D : Nat}
     (qStart : Nat) (slope : ℝ)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
@@ -298,7 +298,7 @@ theorem attentionBackwardRealAlibi_eq_scoreVariant {M S D : Nat}
       attentionBackwardRealScoreVariant allVisible
         (alibiScore qStart slope Q K scale) unitScoreGrad Q K V dO LSE scale := rfl
 
-theorem attentionBackwardRealSlidingWindow_eq_scoreVariant {M S D : Nat}
+specification attentionBackwardRealSlidingWindow_eq_scoreVariant {M S D : Nat}
     (qStart window : Nat)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
@@ -306,7 +306,7 @@ theorem attentionBackwardRealSlidingWindow_eq_scoreVariant {M S D : Nat}
       attentionBackwardRealScoreVariant (slidingVisible window qStart)
         (dotScore Q K scale) unitScoreGrad Q K V dO LSE scale := rfl
 
-theorem attentionBackwardRealSoftcap_eq_scoreVariant {M S D : Nat}
+specification attentionBackwardRealSoftcap_eq_scoreVariant {M S D : Nat}
     (softcap : ℝ)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
@@ -315,7 +315,7 @@ theorem attentionBackwardRealSoftcap_eq_scoreVariant {M S D : Nat}
         (softcapDotScore softcap Q K scale) (softcapScoreGrad softcap Q K scale)
         Q K V dO LSE scale := rfl
 
-theorem attentionBackwardRealAlibiSlidingSoftcap_eq_scoreVariant {M S D : Nat}
+specification attentionBackwardRealAlibiSlidingSoftcap_eq_scoreVariant {M S D : Nat}
     (qStart window : Nat) (slope softcap : ℝ)
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
@@ -345,7 +345,7 @@ noncomputable def dQBlockContributionScoreVariant {M D Bk numKVBlocks : Nat}
 
 /-- Summing score-variant block-local `dQ` contributions over all KV blocks
 recovers the score-variant closed-form `dQ`. -/
-theorem dQBlockContributionScoreVariant_sum_eq_attentionBackwardRealScoreVariant
+specification dQBlockContributionScoreVariant_sum_eq_attentionBackwardRealScoreVariant
     {M D Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
     (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
@@ -374,7 +374,7 @@ theorem dQBlockContributionScoreVariant_sum_eq_attentionBackwardRealScoreVariant
           · intro j _
             rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
-theorem dQBlockContributionAlibi_sum_eq_attentionBackwardRealAlibi
+specification dQBlockContributionAlibi_sum_eq_attentionBackwardRealAlibi
     {M D Bk numKVBlocks : Nat}
     (qStart : Nat) (slope : ℝ)
     (Q : TileIndex [M, D] → ℝ)
@@ -391,7 +391,7 @@ theorem dQBlockContributionAlibi_sum_eq_attentionBackwardRealAlibi
       allVisible (alibiScore qStart slope Q K scale) unitScoreGrad
       Q K V dO LSE scale idx
 
-theorem dQBlockContributionSlidingWindow_sum_eq_attentionBackwardRealSlidingWindow
+specification dQBlockContributionSlidingWindow_sum_eq_attentionBackwardRealSlidingWindow
     {M D Bk numKVBlocks : Nat}
     (qStart window : Nat)
     (Q : TileIndex [M, D] → ℝ)
@@ -407,7 +407,7 @@ theorem dQBlockContributionSlidingWindow_sum_eq_attentionBackwardRealSlidingWind
       (slidingVisible window qStart) (dotScore Q K scale) unitScoreGrad
       Q K V dO LSE scale idx
 
-theorem dQBlockContributionSoftcap_sum_eq_attentionBackwardRealSoftcap
+specification dQBlockContributionSoftcap_sum_eq_attentionBackwardRealSoftcap
     {M D Bk numKVBlocks : Nat}
     (softcap : ℝ)
     (Q : TileIndex [M, D] → ℝ)

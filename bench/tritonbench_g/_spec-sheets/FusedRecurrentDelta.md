@@ -57,7 +57,7 @@ actual inputs. -/
 
 **Statement:**
 ```lean
-theorem fused_recurrent_delta_output_summary_general
+specification fused_recurrent_delta_output_summary_general
     (q k v beta o h0 ht dht dh0 do_ dq dk dv dbeta : RegionName)
     (HPrev HNext HOut HFinal DHPrev HRec : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE STORE_FINAL_STATE USE_DH0 USE_DHT : Bool)

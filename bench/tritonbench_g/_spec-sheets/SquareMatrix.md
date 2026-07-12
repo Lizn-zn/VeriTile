@@ -15,7 +15,7 @@ active column holds `xs i * xs i`, out-of-bounds columns are preserved. -/
 
 **Statement:**
 ```lean
-theorem square_kernel_output_summary
+specification square_kernel_output_summary
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
     (hBlockSize : 0 < BLOCK_SIZE)

@@ -23,7 +23,7 @@ the `@triton.autotune` configs) are concrete instantiations of this one theorem.
 
 **Statement:**
 ```lean
-theorem dequantize_matmul_output_summary_general
+specification dequantize_matmul_output_summary_general
     (b_ptr b_scale_ptr fpb_ptr : RegionName)
     (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
     (s : BlockState)

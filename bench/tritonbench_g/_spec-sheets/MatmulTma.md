@@ -21,7 +21,7 @@ addresses). Precondition: output-offset injectivity. -/
 
 **Statement:**
 ```lean
-theorem matmul_tma_f32_closed_form_correct
+specification matmul_tma_f32_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)
@@ -140,7 +140,7 @@ matrix product over ℝ cast to float16. -/
 
 **Statement:**
 ```lean
-theorem matmul_tma_f16_closed_form_correct
+specification matmul_tma_f16_closed_form_correct
     (A B C : RegionName) (s : BlockState)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat)

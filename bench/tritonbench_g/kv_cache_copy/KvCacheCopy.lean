@@ -1040,7 +1040,7 @@ Over arbitrary (symbolic) dimensions:
 the surface lowers, the legacy K-cache writeback covers the whole head in one
 x-block, and the V-cache writeback realizes its strides. Offset-injectivity for
 the K and V cache stores is supplied as hypotheses. -/
-theorem kv_cache_copy_seqlen1_output_summary_general
+specification kv_cache_copy_seqlen1_output_summary_general
     (K V KCache VCache : RegionName)
     (BLOCK_TABLES context_lengths : Region .nat)
     (stride_kt stride_kh stride_kd
@@ -1106,7 +1106,7 @@ Over arbitrary (symbolic) dimensions:
 the surface lowers, every `split_x` partition's K-cache writeback realizes its
 x-block, and the V-cache writeback realizes its strides. Per-`split_x`
 K-cache offset-injectivity and the V-cache offset-injectivity are hypotheses. -/
-theorem kv_cache_copy_split_x_output_summary_general
+specification kv_cache_copy_split_x_output_summary_general
     (K V KCache VCache : RegionName)
     (BLOCK_TABLES context_lengths : Region .nat)
     (stride_kt stride_kh stride_kd

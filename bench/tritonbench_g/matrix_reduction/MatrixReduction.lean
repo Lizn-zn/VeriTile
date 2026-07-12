@@ -135,7 +135,7 @@ theorem load_reduce_kernel_compute_correct
 /-- Per-kernel output summary for `load_reduce_kernel`: the DSL surface lowers to
 the algorithm layer, and the row-vector store to `y_ptr` is compute-correct —
 every row lane `i` holds the row-wise maximum `matrixReduceSpec`. -/
-theorem load_reduce_kernel_output_summary
+specification load_reduce_kernel_output_summary
     (x_ptr y_ptr : RegionName)
     (stride_xm stride_xn stride_y BLOCK_M BLOCK_N : Nat)
     (s : BlockState) :
