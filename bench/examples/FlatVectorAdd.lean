@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.FlatVectorAdd
+bench/examples/FlatVectorAdd
 
 **Stage 1 + stage 2 combined**: a masked, bounds-checked vector-add kernel
 whose flat-memory corollary is obtained by *instantiating* the flat-memory
@@ -27,8 +27,9 @@ Two kernels demonstrate the two safety regimes:
 import VeriTile.Triton
 import VeriTile.Triton.Memory.Flatten
 import VeriTile.Examples.VectorAdd
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples.FlatVectorAdd
+namespace VeriTile.Bench.Examples.FlatVectorAdd
 
 open VeriTile.Triton
 
@@ -59,7 +60,7 @@ def flatAddKernel (xReg yReg outReg : RegionName) (B n : Nat) : Kernel where
 /-- The offsets evaluate to `pid*B + i` in every state. -/
 private theorem evalOp_offsExpr (B : Nat) (s : BlockState) :
     evalOp (offsExpr B) s = some ⟨fun i => s.pids 0 * B + i.1.val⟩ := by
-  simp [offsExpr, evalOp, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+  simp [offsExpr, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
     Tile.vec]
 
 /-- Any active lane of the inline mask has its address below `n` — in every
@@ -69,7 +70,7 @@ private theorem active_lane_bound (B n : Nat) (s : BlockState)
     (hact : (MaskOpt.mask (dtype := .real) (maskExpr B n)).Active s i) :
     s.pids 0 * B + i.1.val < n := by
   obtain ⟨masks, hmasks, hdata⟩ := hact
-  simp [maskExpr, evalOp, evalOp_offsExpr, Tile.cop] at hmasks
+  simp [maskExpr, evalOp_offsExpr, Tile.cop] at hmasks
   subst hmasks
   simpa using hdata
 
@@ -102,7 +103,7 @@ theorem flatAddKernel_traceSafe (xReg yReg outReg : RegionName) (B n : Nat)
   split
   · refine ⟨⟨msOffs _, msMaskE _, bnd yReg hy _⟩, ?_⟩
     split
-    · refine ⟨⟨msOffs _, by simp [Op.SafeAt], msMaskE _, bnd outReg hout _⟩, ?_⟩
+    · refine ⟨⟨msOffs _, by simp, msMaskE _, bnd outReg hout _⟩, ?_⟩
       split <;> trivial
     · trivial
   · trivial
@@ -178,7 +179,7 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
       (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat B))
       (Op.arange B)) (s.setReg "pid" .nat [] v1)
       = some ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩ from by
-    simp [evalOp, Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+    simp [Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
       Tile.vec]] at hv2
   obtain rfl := Option.some_inj.mp hv2
   -- statement 3: mask := offsets < n
@@ -190,7 +191,7 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
       ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
         ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩)
       = some ⟨fun i => ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
-    simp [evalOp, Tile.cop, BlockState.setReg]] at hv3
+    simp [Tile.cop, BlockState.setReg]] at hv3
   obtain rfl := Option.some_inj.mp hv3
   -- shared register-readback facts at the state before the loads
   set sm := ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
@@ -209,14 +210,14 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
     intro offsets hoffs i hact
     rw [show evalOp (Op.ref .nat [B] "offsets") t
         = some ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩ from by
-      simp [evalOp, hframe .nat [B] "offsets" (Or.inl rfl), hsm,
+      simp [hframe .nat [B] "offsets" (Or.inl rfl), hsm,
         BlockState.setReg]] at hoffs
     obtain rfl := Option.some_inj.mp hoffs
     obtain ⟨masks, hm, hd⟩ := hact
     rw [show evalOp (Op.ref .bool [B] "mask") t
         = some ⟨fun i =>
           ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
-      simp [evalOp, hframe .bool [B] "mask" (Or.inr rfl), hsm,
+      simp [hframe .bool [B] "mask" (Or.inr rfl), hsm,
         BlockState.setReg]] at hm
     obtain rfl := Option.some_inj.mp hm
     rw [ComparableDType.nat_lt_eq_true] at hd
@@ -226,14 +227,14 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
   · refine ?_
     simp only [Stmt.TraceSafe, Op.SafeAt]
-    exact ⟨by simp [Op.SafeAt], by simp [Op.SafeAt],
+    exact ⟨by simp, by simp,
       hAAS sm (fun _ _ _ _ => rfl) xReg hx⟩
   intro s4 hs4
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
   -- statement 5: y := load(yReg + offsets, mask)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
   · simp only [Stmt.TraceSafe, Op.SafeAt]
-    refine ⟨by simp [Op.SafeAt], by simp [Op.SafeAt],
+    refine ⟨by simp, by simp,
       hAAS _ (fun dt sh nm hnm => ?_) yReg hy⟩
     rcases hnm with rfl | rfl <;> simp [BlockState.setReg]
   intro s5 hs5
@@ -275,5 +276,9 @@ theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
     (addKernelMasked_flattenOk xReg yReg outReg B n) hu
 
+/-! ## Trust gates -/
 
-end VeriTile.Examples.FlatVectorAdd
+#axiomsClean flatAddKernel_exec_flatten
+#axiomsClean addKernelMasked_exec_flatten
+
+end VeriTile.Bench.Examples.FlatVectorAdd
