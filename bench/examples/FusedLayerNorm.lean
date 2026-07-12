@@ -310,12 +310,17 @@ compute the same per-lane ℝ output `(x−μ)/√(var+ε)·γ+β` (Welford's id
 `welford_eq_two_pass`) and round it at the shared bf16 output store. -/
 specification layernorm_kernels_refinement_view
     (R : RoundingModel)
-    (h_x : InputRowLoadedAt s xReg rowStride N xs)
-    (h_γ : InputFeatureLoadedAt s γReg N γs)
-    (h_β : InputFeatureLoadedAt s βReg N βs) :
+    (hin : TensorView.ViewsLoaded s
+      [TensorView.slot (rowTileView s xReg rowStride N) xs,
+       TensorView.slot (featureView γReg N) γs,
+       TensorView.slot (featureView βReg N) βs]) :
     ComputeRefine.Refines R
       (twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε)
       (fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε) s [] := by
+  obtain ⟨h_x', h_γ', h_β', -⟩ := hin
+  have h_x := inputRowLoadedAt_of_rowTileView_loaded h_x'
+  have h_γ := inputFeatureLoadedAt_of_featureView_loaded h_γ'
+  have h_β := inputFeatureLoadedAt_of_featureView_loaded h_β'
   obtain ⟨hMeanEq, hSEq⟩ := welford_eq_two_pass hN xs
   have h_inj : Function.Injective
       (fun idx : TileIndex [N] => s.pid * rowStride + idx.1.val) :=
@@ -401,8 +406,10 @@ trusted statement) the file stops compiling. See
 -- ONLY the two kernels, the loaded-input contracts, the writes-equality surface,
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset layernorm_kernels_refinement_view ⊆
-  [twoPassLayerNormKernel, fusedLayerNormKernel, InputRowLoadedAt,
-   InputFeatureLoadedAt, ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
+  [twoPassLayerNormKernel, fusedLayerNormKernel, TensorView.ViewsLoaded,
+   TensorView.Slot, TensorView.slot, TensorView, rowTileView, featureView,
+   VeriTile.Triton.InputAt,
+   ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
 
 end LayerNorm.theorems
 
@@ -811,23 +818,35 @@ perform the same writes from the flattened state: two-pass and fused LayerNorm
 agree cell-for-cell in flat memory. The per-execution safety contracts and
 fragment membership are discharged above, not assumed. -/
 specification layernorm_kernels_refinement_flat
-    (A : FlatAlloc) (hd : A.Disjoint)
-    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) (R : RoundingModel)
-    (h_x : InputRowLoadedAt s xReg rowStride N xs)
-    (h_γ : InputFeatureLoadedAt s γReg N γs)
-    (h_β : InputFeatureLoadedAt s βReg N βs)
-    (hxb : s.pids 0 * rowStride + N ≤ A.extent xReg)
-    (hγb : N ≤ A.extent γReg) (hβb : N ≤ A.extent βReg)
-    (hyb : s.pids 0 * rowStride + N ≤ A.extent yReg)
-    (hu : s.undef = (fun _ _ => 0)) :
+    (R : RoundingModel) (sL : LaunchState)
+    (L : FlatLayout
+      [(xReg, (sL : BlockState).pids 0 * rowStride + N), (γReg, N), (βReg, N),
+       (yReg, (sL : BlockState).pids 0 * rowStride + N)])
+    (hin : TensorView.ViewsLoaded (sL : BlockState)
+      [TensorView.slot (rowTileView sL xReg rowStride N) xs,
+       TensorView.slot (featureView γReg N) γs,
+       TensorView.slot (featureView βReg N) βs]) :
     ∀ lhs' rhs',
-      execR R (A.flattenKernel ((twoPassLayerNormKernel
+      execR R (L.alloc.flattenKernel ((twoPassLayerNormKernel
           xReg γReg βReg yReg N rowStride ε).toAlgKernel))
-        (A.flattenState s) = some lhs' →
-      execR R (A.flattenKernel ((fusedLayerNormKernel
+        (L.alloc.flattenState sL) = some lhs' →
+      execR R (L.alloc.flattenKernel ((fusedLayerNormKernel
           xReg γReg βReg yReg N rowStride ε).toAlgKernel))
-        (A.flattenState s) = some rhs' →
+        (L.alloc.flattenState sL) = some rhs' →
       ∀ r o, lhs'.mem r o = rhs'.mem r o := by
+  have hview := hin
+  obtain ⟨A, hd, hcov, hcovers⟩ := L
+  obtain ⟨s, hu⟩ := sL
+  obtain ⟨h_x', h_γ', h_β', -⟩ := hin
+  have h_x := inputRowLoadedAt_of_rowTileView_loaded h_x'
+  have h_γ := inputFeatureLoadedAt_of_featureView_loaded h_γ'
+  have h_β := inputFeatureLoadedAt_of_featureView_loaded h_β'
+  have hxb : s.pids 0 * rowStride + N ≤ A.extent xReg :=
+    hcovers (xReg, s.pids 0 * rowStride + N) (by simp)
+  have hγb : N ≤ A.extent γReg := hcovers (γReg, N) (by simp)
+  have hβb : N ≤ A.extent βReg := hcovers (βReg, N) (by simp)
+  have hyb : s.pids 0 * rowStride + N ≤ A.extent yReg :=
+    hcovers (yReg, s.pids 0 * rowStride + N) (by simp)
   refine A.refineR_mem_flatten hd hcov R _ _ s
     (twoPass_traceSafeR xReg γReg βReg yReg N rowStride ε s R A.extent
       hxb hγb hβb hyb)
@@ -837,7 +856,7 @@ specification layernorm_kernels_refinement_flat
     (fused_flattenOk xReg γReg βReg yReg N rowStride ε) hu ?_
   intro lhs' rhs' hL hR r o
   obtain ⟨-, hproj⟩ := layernorm_kernels_refinement_view xReg γReg βReg yReg
-    N rowStride hN ε s xs γs βs R h_x h_γ h_β
+    N rowStride hN ε s xs γs βs R hview
   replace hproj : Kernel.RefineR R
       ((twoPassLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)
       ((fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε).toAlgKernel)

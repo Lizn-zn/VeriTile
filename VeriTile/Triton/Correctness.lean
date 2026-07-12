@@ -423,6 +423,20 @@ def writeIf {ι : Type} (mask : ι → Prop) [DecidablePred mask]
     (addr : ι → MemCellAddr) : WriteMap ι :=
   fun i => if mask i then some (addr i) else none
 
+/-- Build a masked write map through a tensor view: lane `idx` writes
+`view.offset idx` exactly when `mask idx.1` holds. The output-side
+counterpart of `TensorView.loadedArray`, so a specification's `write`
+speaks the same layout language as its input slots. -/
+def viewIf {n : Nat} (view : TensorView [n])
+    (mask : Fin n → Prop) [DecidablePred mask] : WriteMap (TileIndex [n]) :=
+  writeIf (fun idx => mask idx.1) (fun idx => (view.region, view.offset idx))
+
+@[simp] theorem viewIf_eq_writeIf {n : Nat} (view : TensorView [n])
+    (mask : Fin n → Prop) [DecidablePred mask] :
+    viewIf view mask =
+      writeIf (fun idx : TileIndex [n] => mask idx.1)
+        (fun idx => (view.region, view.offset idx)) := rfl
+
 end WriteMap
 
 /--
@@ -503,6 +517,19 @@ def Realizes_without_Rounding {ι : Type} {α : Type} [OutputReadable α]
     ∀ i : ι, match write i with
       | some addr => OutputReadable.read s' addr = expected i
       | none => True)
+
+/-- Frame-strengthened realization surface: the kernel realizes `expected`
+on `write` **and** every memory cell outside `write`'s image is preserved
+from the initial state. `Realizes_without_Rounding` promises nothing about
+unwritten cells; this surface adds that frame condition, so a reader knows
+the kernel touched nothing else. -/
+def RealizesFrame_without_Rounding {ι : Type} {α : Type} [OutputReadable α]
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (write : WriteMap ι) (expected : ι → α) : Prop :=
+  Realizes_without_Rounding kernel initialState write expected ∧
+  ComputeKernel.ExecCorrect kernel initialState (fun s' =>
+    ∀ addr : MemCellAddr, (∀ i : ι, write i ≠ some addr) →
+      s'.mem addr.1 addr.2 = initialState.mem addr.1 addr.2)
 
 @[simp] theorem realizes_writeIf_iff {ι : Type} {α : Type} [OutputReadable α]
     (kernel : ComputeKernel) (initialState : BlockState)
