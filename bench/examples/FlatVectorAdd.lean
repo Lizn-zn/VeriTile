@@ -43,6 +43,8 @@ import VeriTile.Meta.StatementAudit
 namespace VeriTile.Bench.Examples.FlatVectorAdd
 
 open VeriTile.Triton
+open VeriTile.Triton.TensorView (ViewsLoaded slot)
+open VeriTile.Examples (programTileView)
 
 /-- Per-lane offsets, written inline: `program_id(0) * B + arange B`. -/
 private def offsExpr (B : Nat) : Op .nat [B] :=
@@ -326,6 +328,14 @@ def flatOutTile (A : FlatAlloc) (outReg : RegionName) (pid B : Nat) :
     TensorView [B] :=
   { region := A.flat, base := A.addr outReg (pid * B), strides := [1] }
 
+/-- The flat output contract: lane `i` writes the flat output tile exactly
+when `pid*B + i < n` — the packaged `write` argument of the headline, the
+flat sibling of `VeriTile.Examples.outWritesTo`. -/
+def flatOutWrites (A : FlatAlloc) (outReg : RegionName) (pid B n : Nat) :
+    ComputeCorrect.WriteMap (TileIndex [B]) :=
+  ComputeCorrect.WriteMap.viewIf (flatOutTile A outReg pid B)
+    (fun i : Fin B => pid * B + i.val < n)
+
 /-- A masked scatter-store `foldl` leaves every memory cell it does not
 actively hit unchanged (cell-level companion of `foldl_store_preserve`). -/
 private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
@@ -376,16 +386,14 @@ specification add_kernel_masked_flat_correct_view
     (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)
     (L : FlatLayout [(xReg, n), (yReg, n), (outReg, n)])
     (s : LaunchState) (xs ys : Fin B → ℝ)
-    (hin : TensorView.ViewsLoaded s
-      [TensorView.slot (VeriTile.Examples.programTileView s xReg B) xs,
-       TensorView.slot (VeriTile.Examples.programTileView s yReg B) ys]) :
+    (hin : ViewsLoaded s [slot (programTileView s xReg B) xs,
+                          slot (programTileView s yReg B) ys]) :
     ComputeCorrect.RealizesFrame_without_Rounding
       (kernel := addKernelMaskedFlat L.alloc xReg yReg outReg B n)
       (initialState := L.alloc.flattenState s)
-      (write := ComputeCorrect.WriteMap.viewIf
-        (flatOutTile L.alloc outReg ((s : BlockState).pid) B)
-        (fun i : Fin B => (s : BlockState).pid * B + i.val < n))
+      (write := flatOutWrites L.alloc outReg s.pid B n)
       (expected := fun idx => xs idx.1 + ys idx.1) := by
+  unfold flatOutWrites LaunchState.pid
   obtain ⟨A, hd, hcov, hcovers⟩ := L
   obtain ⟨s, hu⟩ := s
   obtain ⟨h_x', h_y', -⟩ := hin
