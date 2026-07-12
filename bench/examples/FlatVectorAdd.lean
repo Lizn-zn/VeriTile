@@ -24,11 +24,15 @@ Two kernels demonstrate the two safety regimes:
   template for putting real DSL kernels through the bridge.
 
 The **headline** is `add_kernel_masked_flat_correct_view` (the file's last
-theorem): flat-memory *correctness* on the standard
-`ComputeCorrect.Realizes` trust surface — the flattened kernel, run from
-the flattened state, stores `xs i + ys i` at every masked lane of the flat
-output region. The `exec_flatten` corollaries are the translation steps it
-composes with the region-model correctness theorem.
+theorem): flat-memory correctness on the frame-strengthened
+`ComputeCorrect.RealizesFrame` trust surface — the flattened kernel, run
+from the flattened state, stores `xs i + ys i` at every masked lane of the
+flat output tile **and touches no other memory cell**. Inputs and output
+speak the same `TensorView` layout language (`ViewsLoaded` slots in,
+`WriteMap.viewIf` out); the layout/launch ceremony is bundled into
+`FlatLayout`/`LaunchState`, so every hypothesis line is spec content. The
+`exec_flatten` corollaries are the translation steps the proof composes
+with the region-model correctness theorem and the store-frame lemma.
 -/
 
 import VeriTile.Triton
@@ -39,6 +43,8 @@ import VeriTile.Meta.StatementAudit
 namespace VeriTile.Bench.Examples.FlatVectorAdd
 
 open VeriTile.Triton
+open VeriTile.Triton.TensorView (ViewsLoaded slot)
+open VeriTile.Examples (programTileView)
 
 /-- Per-lane offsets, written inline: `program_id(0) * B + arange B`. -/
 private def offsExpr (B : Nat) : Op .nat [B] :=
@@ -128,7 +134,7 @@ regions whose extents cover `n`, the translated kernel — one flat region,
 addresses `base + pid*B + i` — run on the flattened state is the flattening
 of the region-model run. Stage 1 (explicit addressing) + stage 2 (the
 bridge), with every side condition discharged above. -/
-specification flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -268,7 +274,7 @@ theorem addKernelMasked_flattenOk (xReg yReg outReg : RegionName)
 
 /-- **Flat-memory masked vector add, register style**: the bridge applied to
 an ordinary DSL kernel, with the per-execution safety discharged above. -/
-specification addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
+theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
     (xReg yReg outReg : RegionName) (B n : Nat)
     (hx : n ≤ A.extent xReg) (hy : n ≤ A.extent yReg)
@@ -314,6 +320,63 @@ private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
   | none => rfl
   | some v => cases v <;> rfl
 
+/-- The flat output tile: lane `i` of the current program's output block, at
+flat offset `A.addr outReg (pid*B) + i`. The output-side layout object — the
+`write` contract below speaks the same `TensorView` language as the input
+slots. -/
+def flatOutTile (A : FlatAlloc) (outReg : RegionName) (pid B : Nat) :
+    TensorView [B] :=
+  { region := A.flat, base := A.addr outReg (pid * B), strides := [1] }
+
+/-- The flat output contract: lane `i` writes the flat output tile exactly
+when `pid*B + i < n` — the packaged `write` argument of the headline, the
+flat sibling of `VeriTile.Examples.outWritesTo`. -/
+def flatOutWrites (A : FlatAlloc) (outReg : RegionName) (pid B n : Nat) :
+    ComputeCorrect.WriteMap (TileIndex [B]) :=
+  ComputeCorrect.WriteMap.viewIf (flatOutTile A outReg pid B)
+    (fun i : Fin B => pid * B + i.val < n)
+
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level companion of `foldl_store_preserve`). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+set_option maxHeartbeats 1600000 in
+/-- Frame for the register-style masked vector add: every memory cell not
+actively written by the output store is preserved. -/
+private theorem addKernelMasked_frame (xReg yReg outReg : RegionName)
+    (B n : Nat) (s s1 : BlockState)
+    (hExec : exec ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+      ).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ i : Fin B, s.pid * B + i.val < n →
+      ¬(outReg = r ∧ s.pid * B + i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, VeriTile.Examples.addKernelMasked, ComputeKernel.toAlgKernel,
+    stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+  intro k _ hmk hc
+  exact hmiss k.1 (by simpa using hmk) hc
+
 /-- **Flat-memory vector-add correctness**: for any flat layout covering the
 three regions and any launch state loaded with the inputs, the translated
 kernel stores `xs i + ys i` at every masked lane of the flat output region —
@@ -323,52 +386,109 @@ specification add_kernel_masked_flat_correct_view
     (xReg yReg outReg : RegionName) (B n : Nat) (hB : 0 < B)
     (L : FlatLayout [(xReg, n), (yReg, n), (outReg, n)])
     (s : LaunchState) (xs ys : Fin B → ℝ)
-    (hin : VeriTile.Examples.InputsLoaded s B [(xReg, xs), (yReg, ys)]) :
-    ComputeCorrect.Realizes_without_Rounding
+    (hin : ViewsLoaded s [slot (programTileView s xReg B) xs,
+                          slot (programTileView s yReg B) ys]) :
+    ComputeCorrect.RealizesFrame_without_Rounding
       (kernel := addKernelMaskedFlat L.alloc xReg yReg outReg B n)
       (initialState := L.alloc.flattenState s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [B] => (s : BlockState).pid * B + idx.1.val < n)
-        (fun idx =>
-          (L.alloc.flat, L.alloc.addr outReg ((s : BlockState).pid * B + idx.1.val))))
+      (write := flatOutWrites L.alloc outReg s.pid B n)
       (expected := fun idx => xs idx.1 + ys idx.1) := by
+  unfold flatOutWrites LaunchState.pid
   obtain ⟨A, hd, hcov, hcovers⟩ := L
   obtain ⟨s, hu⟩ := s
-  obtain ⟨h_x, h_y, -⟩ := hin
+  obtain ⟨h_x', h_y', -⟩ := hin
+  have h_x := VeriTile.Examples.inputLoadedAt_of_programTileView_loaded h_x'
+  have h_y := VeriTile.Examples.inputLoadedAt_of_programTileView_loaded h_y'
   have hx : n ≤ A.extent xReg := hcovers (xReg, n) (by simp)
   have hy : n ≤ A.extent yReg := hcovers (yReg, n) (by simp)
   have hout : n ≤ A.extent outReg := hcovers (outReg, n) (by simp)
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have houtr : outReg ∈ A.regions := by
-    by_contra hn
-    exact absurd (hcov outReg hn) (by omega)
   have hak : (addKernelMaskedFlat A xReg yReg outReg B n).toAlgKernel
       = A.flattenKernel
         ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
     simp [addKernelMaskedFlat]
-  rw [hak, A.exec_flatten hd hcov _ s
-    (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
-    (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
-  cases hsrc : exec
-      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
-  | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
-  | some s1 =>
-      rw [hsrc] at hExec
-      replace hExec : some (A.flattenState s1) = some s' := hExec
-      obtain rfl := (Option.some_inj.mp hExec).symm
-      have hobs := VeriTile.Examples.add_kernel_masked_correct
-        xReg yReg outReg B n hB s xs ys h_x h_y idx.1
-      rw [show exec (VeriTile.Examples.addKernelMasked xReg yReg outReg B n) s
-          = exec ((VeriTile.Examples.addKernelMasked
-              xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
-      simp only [VeriTile.Examples.observeAt, Option.map_some,
-        Option.some_inj, if_pos hActive] at hobs
-      simpa [flattenState_readMem A hd s1 houtr
-        (lt_of_lt_of_le hActive hout)] using hobs
+  have haddr : ∀ i : Fin B,
+      ((flatOutTile A outReg s.pid B).region,
+        (flatOutTile A outReg s.pid B).offset (i, PUnit.unit))
+      = (A.flat, A.addr outReg (s.pid * B + i.val)) := by
+    intro i
+    simp [flatOutTile, TensorView.offset, Offset.strided, FlatAlloc.addr,
+      Nat.add_assoc]
+  constructor
+  · -- the value half: every masked lane holds `xs i + ys i`
+    rw [show ComputeCorrect.WriteMap.viewIf
+          (flatOutTile A outReg s.pid B)
+          (fun i : Fin B => s.pid * B + i.val < n)
+        = ComputeCorrect.WriteMap.writeIf
+            (fun idx : TileIndex [B] => s.pid * B + idx.1.val < n)
+            (fun idx => (A.flat, A.addr outReg (s.pid * B + idx.1.val))) from by
+      funext idx
+      simp only [ComputeCorrect.WriteMap.viewIf, ComputeCorrect.WriteMap.writeIf]
+      split
+      · exact congrArg some (haddr idx.1)
+      · rfl]
+    rw [ComputeCorrect.realizes_writeIf_iff]
+    apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+    intro s0 s' hExec hs0
+    subst s0
+    intro idx hActive
+    have houtr : outReg ∈ A.regions := by
+      by_contra hn
+      exact absurd (hcov outReg hn) (by omega)
+    rw [hak, A.exec_flatten hd hcov _ s
+      (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
+      (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
+    cases hsrc : exec
+        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+    | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
+    | some s1 =>
+        rw [hsrc] at hExec
+        replace hExec : some (A.flattenState s1) = some s' := hExec
+        obtain rfl := (Option.some_inj.mp hExec).symm
+        have hobs := VeriTile.Examples.add_kernel_masked_correct
+          xReg yReg outReg B n hB s xs ys h_x h_y idx.1
+        rw [show exec (VeriTile.Examples.addKernelMasked xReg yReg outReg B n) s
+            = exec ((VeriTile.Examples.addKernelMasked
+                xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
+        simp only [VeriTile.Examples.observeAt, Option.map_some,
+          Option.some_inj, if_pos hActive] at hobs
+        simpa [flattenState_readMem A hd s1 houtr
+          (lt_of_lt_of_le hActive hout)] using hobs
+  · -- the frame half: every cell outside the write image is preserved
+    apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+    intro s0 s' hExec hs0
+    subst s0
+    intro addr hnw
+    rw [hak, A.exec_flatten hd hcov _ s
+      (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
+      (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
+    cases hsrc : exec
+        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+    | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
+    | some s1 =>
+        rw [hsrc] at hExec
+        replace hExec : some (A.flattenState s1) = some s' := hExec
+        obtain rfl := (Option.some_inj.mp hExec).symm
+        obtain ⟨raddr, oaddr⟩ := addr
+        show (if raddr = A.flat then A.readFlat s1 oaddr else MemCell.real 0)
+          = (if raddr = A.flat then A.readFlat s oaddr else MemCell.real 0)
+        by_cases hr : raddr = A.flat
+        · rw [if_pos hr, if_pos hr]
+          unfold FlatAlloc.readFlat
+          cases hdec : A.decode oaddr with
+          | none => rfl
+          | some p =>
+              obtain ⟨rr, j⟩ := p
+              obtain ⟨hrr, hoeq, hjlt⟩ := A.decode_sound hdec
+              simp only []
+              congr 1
+              refine addKernelMasked_frame xReg yReg outReg B n s s1 hsrc rr j
+                (fun i hi hc => ?_)
+              refine hnw (i, PUnit.unit) ?_
+              simp only [ComputeCorrect.WriteMap.viewIf,
+                ComputeCorrect.WriteMap.writeIf, if_pos hi, haddr i,
+                Option.some_inj]
+              rw [hr, hoeq, ← hc.1, ← hc.2]
+        · rw [if_neg hr, if_neg hr]
 
 /-! ## Trust gates -/
 

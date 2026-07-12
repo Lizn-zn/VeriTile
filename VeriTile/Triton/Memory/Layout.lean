@@ -56,4 +56,8 @@ instance : Coe LaunchState BlockState := ⟨Subtype.val⟩
 theorem LaunchState.undef_eq (s : LaunchState) :
     (s : BlockState).undef = fun _ _ => 0 := s.2
 
+/-- The current program id, read through the coercion — so specifications
+write `s.pid`, not `(s : BlockState).pid`. -/
+def LaunchState.pid (s : LaunchState) : Nat := (s : BlockState).pid
+
 end VeriTile.Triton

@@ -50,7 +50,7 @@ namespace VeriTile.Bench.Examples.Welford
 open VeriTile.Triton
 
 open VeriTile.Triton.TiledReduction.WelfordRec
-open VeriTile.Examples (InputRowLoadedAt inputLoadedAt_of_programTileView_loaded programTileView castFin
+open VeriTile.Examples (InputRowLoadedAt inputLoadedAt_of_programTileView_loaded programTileView rowTileView inputRowLoadedAt_of_rowTileView_loaded castFin
   onlineWelfordLoopBody onlineWelfordLoopBody_castFree)
 
 /-! ## Kernels -/
@@ -347,12 +347,15 @@ rounding model `R`, from the same initial state `twopassWelfordKernel` and
 every cell. Both compute the same per-lane ℝ mean/variance (Welford's identity
 `welford_eq_two_pass`) and round it at the shared bf16 output stores. -/
 specification welford_kernels_refinement_view
-    (h_x : InputRowLoadedAt s xReg rowStride blockSize xs)
+    (hin : TensorView.ViewsLoaded s
+      [TensorView.slot (rowTileView s xReg rowStride blockSize) xs])
     (h_mv : meanReg ≠ varReg) :
     ComputeRefine.Refines R
       (twopassWelfordKernel xReg meanReg varReg blockSize rowStride)
       (onlineWelfordKernel xReg meanReg varReg blockSize rowStride)
       s [] := by
+  obtain ⟨h_x', -⟩ := hin
+  have h_x := inputRowLoadedAt_of_rowTileView_loaded h_x'
   obtain ⟨hMeanEq, hSEq⟩ := welford_eq_two_pass hN xs
   apply ComputeKernel.computeRefineR_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
@@ -384,7 +387,9 @@ trusted statement) the file stops compiling. See
 -- ONLY the two kernels, the loaded-input contract, the writes-equality surface,
 -- and the state/region types — NO spec.
 #stmtSurfaceSubset welford_kernels_refinement_view ⊆
-  [twopassWelfordKernel, onlineWelfordKernel, InputRowLoadedAt,
+  [twopassWelfordKernel, onlineWelfordKernel, TensorView.ViewsLoaded,
+   TensorView.Slot, TensorView.slot, TensorView, VeriTile.Examples.rowTileView,
+   VeriTile.Triton.InputAt,
    ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
 
 end Welford.theorems

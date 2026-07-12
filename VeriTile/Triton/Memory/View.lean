@@ -395,6 +395,32 @@ def matchesArray {n : Nat} (s' : BlockState) (view : TensorView [n])
     (xs : Fin n → ℝ) : Prop :=
   equalsArray (some s') view xs
 
+/-- One input slot of a loaded-inputs contract: a 1-D view together with
+the array it holds. The dimension is existential so one contract lists
+inputs of different sizes. -/
+def Slot : Type := (n : Nat) × TensorView [n] × (Fin n → ℝ)
+
+/-- Build an input slot. -/
+def slot {n : Nat} (view : TensorView [n]) (xs : Fin n → ℝ) : Slot :=
+  ⟨n, view, xs⟩
+
+/-- The loaded-inputs contract: every listed view holds its array.
+`ViewsLoaded s [(v₁.slot xs), (v₂.slot ys), …]` is the single hypothesis a
+specification takes in place of one loaded-input line per input; each slot
+carries its own layout (`programTileView`, `rowTileView`, `featureView`,
+…), so continuous, strided and shared-parameter inputs all speak the same
+language. -/
+def ViewsLoaded (s : BlockState) : List Slot → Prop
+  | [] => True
+  | ⟨_, v, xs⟩ :: rest => loadedArray s v xs ∧ ViewsLoaded s rest
+
+@[simp] theorem viewsLoaded_nil (s : BlockState) : ViewsLoaded s [] := trivial
+
+@[simp] theorem viewsLoaded_cons (s : BlockState) {n : Nat}
+    (v : TensorView [n]) (xs : Fin n → ℝ) (rest : List Slot) :
+    ViewsLoaded s (slot v xs :: rest) ↔
+      loadedArray s v xs ∧ ViewsLoaded s rest := Iff.rfl
+
 /-- A loaded view reads back its logical tensor value from the same state. -/
 theorem readMem_of_loaded {shape : TileShape} {s : BlockState}
     {view : TensorView shape} {xs : TileIndex shape → ℝ}
