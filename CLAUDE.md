@@ -2,8 +2,11 @@
 
 Lean 4 formal verification of Triton GPU kernels: **151 ported TritonBench-G
 kernels** (`bench/tritonbench_g/<kernel>/`, each a faithful `.py` + `.lean`
-pair) plus worked examples under `VeriTile/Examples/` and the showcase
-refinement/rounding examples under `bench/examples/`.
+pair) plus worked examples and showcases under `bench/examples/` — one
+self-contained `.lean` per kernel correctness/refinement story (bench files
+never import each other). `VeriTile/Examples/` keeps only shared vocabulary
+(`Common.lean`), pure-math spec files, and the multi-file FlashAttention1 /
+ApproxGeLU stacks.
 
 ## Build targets (`lakefile.toml`)
 

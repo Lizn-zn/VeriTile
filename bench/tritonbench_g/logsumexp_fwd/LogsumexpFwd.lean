@@ -1,6 +1,5 @@
 import VeriTile.Triton
 import VeriTile.Examples.Common
-import VeriTile.Examples.LogSumExpEq
 
 /-!
 # `logsumexp_fwd` — strict per-kernel correctness

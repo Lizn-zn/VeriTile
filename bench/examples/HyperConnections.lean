@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.HyperConnections.Manifold
+bench/examples/HyperConnections
 
 Fixed-rank, inference-only DSL surface for the core tensor flow of
 manifold-constrained hyper-connections.
@@ -13,11 +13,14 @@ autograd, or an arbitrary user branch.  The branch is split at the DSL boundary:
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Examples.Common
 import VeriTile.Meta.Specification
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples.HyperConnections
+namespace VeriTile.Bench.Examples.HyperConnections
 
 open VeriTile.Triton
+open VeriTile.Examples
 
 /-!
 ## Layout convention
@@ -299,4 +302,9 @@ specification mhcDepthConnection_correct_view
   intro _
   simpa using hview
 
-end VeriTile.Examples.HyperConnections
+/-! ## Trust gates -/
+
+#axiomsClean mhcWidthConnection_correct_view
+#axiomsClean mhcDepthConnection_correct_view
+
+end VeriTile.Bench.Examples.HyperConnections

@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.RowWise
+bench/examples/RowWise.lean
 
 Worked correctness examples for row-wise reductions over a row-major 2D
 matrix. Each `program_id` processes one row: gathers `blockSize` consecutive
@@ -20,10 +20,12 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Reduction
 import VeriTile.Examples.Common
 import VeriTile.Meta.Specification
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+namespace VeriTile.Bench.Examples.RowWise
 
 open VeriTile.Triton
+open VeriTile.Examples
 
 /-! ## Source Triton shape
 
@@ -211,4 +213,9 @@ specification rowWiseMax_correct_view
   simpa [TensorView.observe, observeTileAt, scalarCellView, TensorView.offset,
     Offset.strided] using hview
 
-end VeriTile.Examples
+/-! ## Trust gates -/
+
+#axiomsClean rowWiseSum_correct_view
+#axiomsClean rowWiseMax_correct_view
+
+end VeriTile.Bench.Examples.RowWise

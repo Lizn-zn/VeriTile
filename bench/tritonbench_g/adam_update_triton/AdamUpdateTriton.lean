@@ -17,7 +17,7 @@ user wrote (`@triton.jit def update_fn_kernel`); the launch `kernel[grid](...)`,
 the grid size `triton.cdiv(...)`, and how the runtime composes per-program
 memories into one buffer are the *trusted boundary*, not proof obligations here.
 (A whole-grid / launch-composition treatment lives separately as the worked
-example `VeriTile.Examples.AdamUpdateGridLaunch`.)
+example `bench/examples/AdamUpdateGridLaunch.lean`.)
 
 ## Proof architecture
 
@@ -309,7 +309,7 @@ The side condition `p_ptr ≠ exp_avg_ptr` rules out aliasing between the two
 output regions, so the second masked store cannot overwrite the first output.
 Grid coverage, `cdiv n_elements BLOCK_SIZE`, and cross-program disjointness are
 separate whole-grid obligations handled by the worked example
-`VeriTile.Examples.AdamUpdateGridLaunch`, outside the scope of this per-kernel
+`bench/examples/AdamUpdateGridLaunch.lean`, outside the scope of this per-kernel
 theorem. -/
 specification update_fn_kernel_output_summary
     (p_ptr grad_ptr exp_avg_ptr : RegionName)

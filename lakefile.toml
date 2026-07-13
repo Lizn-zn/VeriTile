@@ -19,22 +19,13 @@ globs = [
   # which pulls the heavy analysis chain the lite target deliberately skips.
   "VeriTile.Meta.Specification",
   "VeriTile.Meta.StatementAudit",
+  # Worked-example KERNELS live in bench/examples/ (one self-contained .lean
+  # per kernel correctness/refinement story). The library keeps only shared
+  # vocabulary (Common), pure-math spec files (AttentionForwardClosedForm,
+  # FlashAttention2), and the multi-file FlashAttention1 stack (relocation
+  # pending).
   "VeriTile.Examples.Common",
-  "VeriTile.Examples.TritonSmoke",
-  "VeriTile.Examples.MemorySafety",
-  "VeriTile.Examples.MemoryFrame",
-  "VeriTile.Examples.GridComposition",
-  "VeriTile.Examples.AdamUpdateGridLaunch",
   "VeriTile.Examples.AttentionForwardClosedForm",
-  "VeriTile.Examples.LoopInvariant",
-  "VeriTile.Examples.SoftmaxEq",
-  "VeriTile.Examples.LogSumExpEq",
-  "VeriTile.Examples.SoftmaxReciprocal",
-  "VeriTile.Examples.VectorAdd",
-  "VeriTile.Examples.RowWise",
-  "VeriTile.Examples.WelfordKernels",
-  "VeriTile.Examples.OnlineSoftmax",
-  "VeriTile.Examples.HyperConnections.+",
   "VeriTile.Examples.FlashAttention1",
   "VeriTile.Examples.FlashAttention1.+",
   "VeriTile.Examples.FlashAttention2",

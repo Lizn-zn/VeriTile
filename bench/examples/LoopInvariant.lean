@@ -1,13 +1,15 @@
 /-
-VeriTile.Examples.LoopInvariant
+bench/examples/LoopInvariant.lean
 
 Small sanity proofs for the Triton `forLoop_inv` API.
 -/
 
 import VeriTile.Triton.KernelLemmas
+import VeriTile.Examples.Common
 
-namespace VeriTile.Examples.LoopInvariant
+namespace VeriTile.Bench.Examples.LoopInvariant
 
+open VeriTile.Examples
 open VeriTile.Triton
 
 /-! ### Single-loop sanity check
@@ -151,4 +153,4 @@ theorem nestedCounterKernel_correct
   refine ⟨s_final, ?_, hFinal⟩
   simp [nestedCounterKernel, exec, stepStmts, stepStmt, evalOp, s0, hLoop]
 
-end VeriTile.Examples.LoopInvariant
+end VeriTile.Bench.Examples.LoopInvariant

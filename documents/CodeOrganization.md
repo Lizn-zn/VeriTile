@@ -11,7 +11,7 @@ lemmas, and new kernel transcriptions.
 ```
                     ┌─────────────────────────────────────────────┐
                     │  bench/tritonbench_g/<kernel>/X.lean        │  ← per-kernel glue
-   per-kernel       │  VeriTile/Examples/X.lean                   │
+   per-kernel       │  bench/examples/X.lean                      │
                     │  - kernel definition (`triton { ... }`)     │
                     │  - kernel-specific *Spec, *Load, *Offset    │
                     │  - kernel correctness theorem               │
@@ -92,9 +92,15 @@ mechanism (e.g. masked reduction) is reused across operators. Mechanism-named
 files keep the deduplication right: `MaskedReduction.lean` holds bridges for
 softmax / log-sum-exp / L2 / max-with-mask alike.
 
-### `bench/tritonbench_g/<kernel>/`, `VeriTile/Examples/`
+### `bench/tritonbench_g/<kernel>/`, `bench/examples/`
 
-**Naming**: per-kernel (`L2NormTriton1.lean`, `FlashAttention1.lean`).
+**Naming**: per-kernel (`L2NormTriton1.lean`, `RowWise.lean`). Every showcased
+kernel is **self-contained in one bench file** (kernel definition +
+correctness/refinement stack + trust gates); bench files import library
+modules only, never each other. `VeriTile/Examples/` retains only shared
+vocabulary (`Common.lean`), pure-math spec files (`AttentionForwardClosedForm`,
+`FlashAttention2` identities), and the multi-file `FlashAttention1` /
+`ApproxGeLU` stacks (relocation pending).
 
 **Belongs here**:
 - The `triton { ... }` kernel transcription

@@ -16,7 +16,8 @@ Two kernels demonstrate the two safety regimes:
   contract holds in **every** state (mask and address share the
   `program_id(0)` subterm) — the shape the ∀-state #48 contracts were made
   for.
-- `addKernelMasked` (the ordinary DSL kernel from `VectorAdd.lean`) uses the
+- `addKernelMasked` (the ordinary DSL kernel, defined in this file — each
+  showcased kernel is self-contained in its showcase file) uses the
   register-indirect `offs := ...; tl.load(x + offs, mask=offs < n)` style,
   which no ∀-state contract can cover. Bridge **v1.2** takes the
   per-execution `Kernel.TraceSafe` contract instead, and this file
@@ -37,14 +38,15 @@ with the region-model correctness theorem and the store-frame lemma.
 
 import VeriTile.Triton
 import VeriTile.Triton.Memory.Flatten
-import VeriTile.Examples.VectorAdd
+import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.FlatVectorAdd
 
 open VeriTile.Triton
 open VeriTile.Triton.TensorView (ViewsLoaded slot)
-open VeriTile.Examples (programTileView)
+open VeriTile.Examples (programTileView InputLoadedAt observeAt
+  inputLoadedAt_of_programTileView_loaded)
 
 /-- Per-lane offsets, written inline: `program_id(0) * B + arange B`. -/
 private def offsExpr (B : Nat) : Op .nat [B] :=
@@ -149,12 +151,142 @@ theorem flatAddKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
 
 /-! ## Part 2 — the register-indirect DSL kernel (bridge v1.2 in action)
 
-`addKernelMasked` (from `VectorAdd.lean`) is the ordinary DSL shape every
-bench port uses: offsets and mask are computed into registers and the memory
-operations address through `Op.ref`. No ∀-state contract covers that; the
-per-execution `Kernel.TraceSafe` below is discharged by walking the actual
-seven-statement execution, reading the offset/mask registers back at each
-load and at the store. -/
+`addKernelMasked` (defined below) is the ordinary DSL shape every bench
+port uses: offsets and mask are computed into registers and the memory
+operations address through `Op.ref`. It handles arbitrary `n_elements` by
+computing `mask = offsets < n_elements` and threading it through the load
+and store, exactly mirroring the canonical Triton tutorial:
+
+```python
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+
+    output = x + y
+
+    tl.store(out_ptr + offsets, output, mask=mask)
+```
+
+No ∀-state contract covers register-indirect addressing; the per-execution
+`Kernel.TraceSafe` below is discharged by walking the actual seven-statement
+execution, reading the offset/mask registers back at each load and at the
+store. -/
+
+/-- Masked elementwise add. Lanes where `pid * blockSize + i < nElements` are
+    loaded, summed, and stored. Lanes outside the bound get Triton's
+    `other=None` undefined load value, but the store mask skips those lanes,
+    so the undefined values are not observed. -/
+def addKernelMasked (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) : ComputeKernel := triton {
+  pid     := tl.program_id(0)
+  offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  mask    := offsets < $(nElements)
+  x       := tl.load($(xReg) + offsets, mask=mask)
+  y       := tl.load($(yReg) + offsets, mask=mask)
+  output  := x + y
+  tl.store($(outReg) + offsets, output, mask=mask)
+}
+
+/-- **`addKernelMasked` region-model correctness.**
+
+For each lane `i ∈ Fin blockSize`:
+* In-bounds (`pid * blockSize + i < nElements`): the output region holds
+  `xs i + ys i` at `pid * blockSize + i`.
+* Out-of-bounds: the output region's value at `pid * blockSize + i` is
+  preserved from the initial state (mask=false → no store).
+
+The hypothesis `InputLoadedAt` constrains memory at every lane in the
+`blockSize`-length tile (including out-of-bounds lanes where the data
+is irrelevant semantically). This matches Triton's actual behavior:
+masked-off loads without `other=` do not read memory and produce
+undefined lane values; the matching masked store prevents those values
+from reaching memory.
+
+No region-disjointness hypothesis: the kernel reads `x` and `y` into
+local registers BEFORE the scatter to `outReg`, so even if `outReg`
+aliases `xReg` or `yReg`, the result is correct. -/
+theorem add_kernel_masked_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (_hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_y : InputLoadedAt s yReg blockSize ys) :
+    ∀ i : Fin blockSize,
+      let addr := s.pid * blockSize + i.val
+      observeAt (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+                outReg blockSize s.pid i
+        = some (if addr < nElements then xs i + ys i
+                else s.readMem outReg addr) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt]
+  unfold InputLoadedAt at h_x h_y
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  by_cases hi : s.pid * blockSize + i.val < nElements
+  · simp [hi, h_x, h_y]
+  · simp [hi]
+
+/-- View-level surface for `add_kernel_masked_correct`. -/
+theorem add_kernel_masked_correct_exec_view
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ∀ idx : TileIndex [blockSize],
+      let addr := s.pid * blockSize + idx.1.val
+      TensorView.observe (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+          (programTileView s outReg blockSize) idx
+        = some (if addr < nElements then xs idx.1 + ys idx.1
+                else s.readMem outReg addr) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using add_kernel_masked_correct xReg yReg outReg blockSize nElements
+      hBlockSize s xs ys hx hy idx.1
+
+/-- Compute-facing view-level surface for `add_kernel_masked_correct` — the
+region-model `Realizes` middleware the flat headline composes with. -/
+theorem add_kernel_masked_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := addKernelMasked xReg yReg outReg blockSize nElements)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [blockSize] =>
+          s.pid * blockSize + idx.1.val < nElements)
+        (fun idx => (outReg, s.pid * blockSize + idx.1.val)))
+      (expected := fun idx => xs idx.1 + ys idx.1) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have hview := add_kernel_masked_correct_exec_view xReg yReg outReg blockSize nElements
+    hBlockSize s xs ys h_x h_y idx
+  rw [hExec] at hview
+  simpa [TensorView.observe, observeTileAt, programTileView, TensorView.offset,
+    Offset.strided, hActive] using hview
 
 /-- Inversion for a successful `assign` step. -/
 private theorem stepStmt_assign_inv {d : TileDType} {sh : TileShape}
@@ -177,7 +309,7 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
     (hx : n ≤ bounds xReg) (hy : n ≤ bounds yReg)
     (hout : n ≤ bounds outReg) :
     Kernel.TraceSafe bounds
-      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel)
+      ((addKernelMasked xReg yReg outReg B n).toAlgKernel)
       s := by
   unfold Kernel.TraceSafe
   -- statement 1: pid := program_id(0)
@@ -266,10 +398,10 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
 /-- The register-style kernel sits inside the bridge's covered fragment. -/
 theorem addKernelMasked_flattenOk (xReg yReg outReg : RegionName)
     (B n : Nat) :
-    ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+    ((addKernelMasked xReg yReg outReg B n
       ).toAlgKernel).FlattenOk := by
   unfold Kernel.FlattenOk
-  simp [VeriTile.Examples.addKernelMasked, ComputeKernel.toAlgKernel,
+  simp [addKernelMasked, ComputeKernel.toAlgKernel,
     StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
 
 /-- **Flat-memory masked vector add, register style**: the bridge applied to
@@ -281,9 +413,9 @@ theorem addKernelMasked_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
     (hout : n ≤ A.extent outReg)
     (s : BlockState) (hu : s.undef = (fun _ _ => 0)) :
     exec (A.flattenKernel
-        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel))
+        ((addKernelMasked xReg yReg outReg B n).toAlgKernel))
         (A.flattenState s)
-      = (exec ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+      = (exec ((addKernelMasked xReg yReg outReg B n
           ).toAlgKernel) s).map A.flattenState :=
   A.exec_flatten hd hcov _ s
     (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
@@ -305,7 +437,7 @@ correctness theorem (`add_kernel_masked_correct`) with the bridge
 noncomputable def addKernelMaskedFlat (A : FlatAlloc)
     (xReg yReg outReg : RegionName) (B n : Nat) : ComputeKernel :=
   let fk := A.flattenKernel
-    ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel)
+    ((addKernelMasked xReg yReg outReg B n).toAlgKernel)
   ComputeKernel.fromKernelBody fk.inputs fk.outputs fk.body
 
 /-- The flat output tile: lane `i` of the current program's output block, at
@@ -351,13 +483,13 @@ set_option maxHeartbeats 1600000 in
 actively written by the output store is preserved. -/
 private theorem addKernelMasked_frame (xReg yReg outReg : RegionName)
     (B n : Nat) (s s1 : BlockState)
-    (hExec : exec ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+    (hExec : exec ((addKernelMasked xReg yReg outReg B n
       ).toAlgKernel) s = some s1)
     (r : RegionName) (o : Nat)
     (hmiss : ∀ i : Fin B, s.pid * B + i.val < n →
       ¬(outReg = r ∧ s.pid * B + i.val = o)) :
     s1.mem r o = s.mem r o := by
-  simp [exec, VeriTile.Examples.addKernelMasked, ComputeKernel.toAlgKernel,
+  simp [exec, addKernelMasked, ComputeKernel.toAlgKernel,
     stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop, NumericDType.add,
     NumericDType.mul, ComparableDType.lt] at hExec
   subst hExec
@@ -385,14 +517,14 @@ specification add_kernel_masked_flat_correct_view
   obtain ⟨A, hd, hcov, hcovers⟩ := L
   obtain ⟨s, hu⟩ := s
   obtain ⟨h_x', h_y', -⟩ := hin
-  have h_x := VeriTile.Examples.inputLoadedAt_of_programTileView_loaded h_x'
-  have h_y := VeriTile.Examples.inputLoadedAt_of_programTileView_loaded h_y'
+  have h_x := inputLoadedAt_of_programTileView_loaded h_x'
+  have h_y := inputLoadedAt_of_programTileView_loaded h_y'
   have hx : n ≤ A.extent xReg := hcovers (xReg, n) (by simp)
   have hy : n ≤ A.extent yReg := hcovers (yReg, n) (by simp)
   have hout : n ≤ A.extent outReg := hcovers (outReg, n) (by simp)
   have hak : (addKernelMaskedFlat A xReg yReg outReg B n).toAlgKernel
       = A.flattenKernel
-        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
+        ((addKernelMasked xReg yReg outReg B n).toAlgKernel) := by
     simp [addKernelMaskedFlat]
   have haddr : ∀ i : Fin B,
       ((flatOutTile A outReg s.pid B).region,
@@ -426,18 +558,18 @@ specification add_kernel_masked_flat_correct_view
       (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
       (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
     cases hsrc : exec
-        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+        ((addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
     | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
     | some s1 =>
         rw [hsrc] at hExec
         replace hExec : some (A.flattenState s1) = some s' := hExec
         obtain rfl := (Option.some_inj.mp hExec).symm
-        have hobs := VeriTile.Examples.add_kernel_masked_correct
+        have hobs := add_kernel_masked_correct
           xReg yReg outReg B n hB s xs ys h_x h_y idx.1
-        rw [show exec (VeriTile.Examples.addKernelMasked xReg yReg outReg B n) s
-            = exec ((VeriTile.Examples.addKernelMasked
+        rw [show exec (addKernelMasked xReg yReg outReg B n) s
+            = exec ((addKernelMasked
                 xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
-        simp only [VeriTile.Examples.observeAt, Option.map_some,
+        simp only [observeAt, Option.map_some,
           Option.some_inj, if_pos hActive] at hobs
         simpa [A.flattenState_readMem hd s1 houtr
           (lt_of_lt_of_le hActive hout)] using hobs
@@ -450,7 +582,7 @@ specification add_kernel_masked_flat_correct_view
       (addKernelMasked_traceSafe xReg yReg outReg B n A.extent s hx hy hout)
       (addKernelMasked_flattenOk xReg yReg outReg B n) hu] at hExec
     cases hsrc : exec
-        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
+        ((addKernelMasked xReg yReg outReg B n).toAlgKernel) s with
     | none => rw [hsrc] at hExec; exact absurd hExec (by simp)
     | some s1 =>
         rw [hsrc] at hExec
@@ -500,7 +632,7 @@ tile `[pid*B, pid*B + B)` of `"x"`/`"y"`, and lane `i` of the output tile
 read back from flat memory. All addressing lives inside `denoteKernel`. -/
 noncomputable denotation denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
     (i : Fin B) : Option ℝ :=
-  denoteKernel (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
+  denoteKernel (addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
     ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] pid
     [.ofFin ⟨"x"⟩ (pid * B) xs, .ofFin ⟨"y"⟩ (pid * B) ys]
     ⟨"out"⟩ (pid * B + i.val)
@@ -509,7 +641,7 @@ noncomputable denotation denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
 maps the input arrays to their elementwise sum. The statement mentions only
 elementary mathematics — every pointer, region, layout, and write-map concept
 is inside `denoteAddKernel`, audited once. -/
-specification add_kernel_denotation (B n pid : Nat) (hB : 0 < B)
+specification add_kernel_correctness (B n pid : Nat) (hB : 0 < B)
     (xs ys : Fin B → ℝ) (i : Fin B) (hi : pid * B + i.val < n) :
     denoteAddKernel B n pid xs ys i = some (xs i + ys i) := by
   have hnd : ((([(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] :
@@ -528,14 +660,14 @@ specification add_kernel_denotation (B n pid : Nat) (hB : 0 < B)
   have hsnd : (([DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
       DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]).map DenoteSlot.region).Nodup := by
     simp
-  have hloadX : VeriTile.Examples.InputLoadedAt
+  have hloadX : InputLoadedAt
       (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
         DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"x"⟩ B xs := by
     intro j
     simpa using DenoteSlot.state_read_ofFin (pid := pid)
       (region := (⟨"x"⟩ : RegionName)) (off := pid * B) (arr := xs)
       (by simp) hsnd j
-  have hloadY : VeriTile.Examples.InputLoadedAt
+  have hloadY : InputLoadedAt
       (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
         DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"y"⟩ B ys := by
     intro j
@@ -548,24 +680,24 @@ specification add_kernel_denotation (B n pid : Nat) (hB : 0 < B)
     ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n hx hy hout
     (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
       DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) rfl]
-  have hobs := VeriTile.Examples.add_kernel_masked_correct ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩
+  have hobs := add_kernel_masked_correct ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩
     B n hB (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
       DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) xs ys hloadX hloadY i
-  rw [show exec (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
+  rw [show exec (addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
       (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
         DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys])
-    = exec ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
+    = exec ((addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
         ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
         DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) from rfl] at hobs
-  cases hsrc : exec ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
+  cases hsrc : exec ((addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
       ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
         DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) with
   | none =>
       rw [hsrc] at hobs
-      simp [VeriTile.Examples.observeAt] at hobs
+      simp [observeAt] at hobs
   | some s1 =>
       rw [hsrc] at hobs
-      simp only [VeriTile.Examples.observeAt, Option.map_some, Option.some_inj,
+      simp only [observeAt, Option.map_some, Option.some_inj,
         DenoteSlot.state_pid, if_pos hi] at hobs
       simp only [Option.map_some, Option.some_inj]
       rw [FlatAlloc.flattenState_readMem _ hd s1
@@ -789,13 +921,14 @@ theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
 
 /-! ## Trust gates -/
 
+#axiomsClean add_kernel_masked_correct_view
 #axiomsClean flatAddKernel_exec_flatten
 #axiomsClean addKernelMasked_exec_flatten
 #axiomsClean add_kernel_masked_flat_correct_view
-#axiomsClean add_kernel_denotation
+#axiomsClean add_kernel_correctness
 
 /- The whole point of Part 4: the denotation headline's statement surface is
 ONE project constant — every addressing concept is inside `denoteAddKernel`. -/
-#stmtSurfaceSubset add_kernel_denotation ⊆ [denoteAddKernel]
+#stmtSurfaceSubset add_kernel_correctness ⊆ [denoteAddKernel]
 
 end VeriTile.Bench.Examples.FlatVectorAdd
