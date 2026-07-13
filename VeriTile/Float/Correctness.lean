@@ -595,6 +595,47 @@ def OutputPair {n : Nat}
 
 end ComputeCorrect
 
+/-! ## Stage-pipeline composition (fusion golden reference) -/
+
+/--
+The sequential composition of a stage pipeline: one compute kernel whose body
+is the concatenation of the stages' bodies, run left-to-right. This is the
+golden reference a fused kernel is proved against (property P2, fusion
+correctness — see `documents/FusionCorrectness.md`).
+
+**Register-persistence convention (D4).** Concatenation means a later stage
+executes with the earlier stage's final *register file*; only memory is reset
+between real launches. This is benign for stages that only read registers they
+themselves wrote — every real stage begins with `tl.load` — and matches the
+convention `FusedSiLU`'s hand-rolled pipeline already uses. It is a documented
+property of `seqCompose`, not a side condition of `FusionCorrect`.
+
+Kernel `inputs`/`outputs` metadata is concatenated too; only the `body` is
+operationally significant (`exec` ignores the region lists).
+-/
+def seqCompose (ks : List ComputeKernel) : ComputeKernel :=
+  ComputeKernel.fromAlgBody
+    (ks.flatMap ComputeKernel.inputs)
+    (ks.flatMap ComputeKernel.outputs)
+    (ks.flatMap ComputeKernel.body)
+
+/-- Executing a stage pipeline is the monadic left-fold of executing each stage
+in sequence, threading each stage's final state into the next. Proved once from
+the packaged `stepStmts.append` sequencing law so no fused example re-derives
+the body-splitting boilerplate. -/
+theorem exec_seqCompose (ks : List ComputeKernel) (s : BlockState) :
+    exec (seqCompose ks).toAlgKernel s =
+      ks.foldlM (fun s k => exec k.toAlgKernel s) s := by
+  have hbody : (seqCompose ks).toAlgKernel.body = ks.flatMap ComputeKernel.body := by
+    simp [seqCompose]
+  calc
+    exec (seqCompose ks).toAlgKernel s
+        = stepStmts (ks.flatMap ComputeKernel.body) s := by
+          unfold exec; rw [hbody]
+    _ = ks.foldlM (fun s k => stepStmts (ComputeKernel.body k) s) s :=
+          stepStmts.flatMap ComputeKernel.body ks s
+    _ = ks.foldlM (fun s k => exec k.toAlgKernel s) s := rfl
+
 namespace ComputeRefine
 
 /-! ## User-facing refinement realization combinators -/
@@ -686,6 +727,38 @@ def OutputPairEq {n : Nat}
     (lhsOffset rhsOffset : Fin n → Nat) : Prop :=
   OutputPairEqWhere lhs rhs s lhsValue lhsIndex rhsValue rhsIndex
     lhsOffset rhsOffset (fun _ => True)
+
+/-! ## Fusion correctness (property P2) -/
+
+/--
+`fused` is **fusion-correct** with respect to the stage pipeline `stages`: it
+exactly implements "run `stages` in sequence" on the declared outputs, at the
+algorithm (ℝ) layer. Definitionally a thin wrapper over `ComputeRefine.Realizes`
+with the stage pipeline `seqCompose stages` as the golden reference, the same
+write map on both sides, and pointwise equality of the observed cells.
+
+This says nothing about memory outside the declared outputs (the pipeline
+materializes intermediate buffers the fused kernel never writes — framing is a
+separate concern) and nothing about floating-point magnitudes (the eliminated
+intermediate rounding site is the FP-analysis layer's business, property P4).
+See `documents/FusionCorrectness.md` (§1 the definition, §2 decisions D1–D7).
+-/
+def FusionCorrect {ι α : Type} [ComputeCorrect.OutputReadable α]
+    (fused : ComputeKernel) (stages : List ComputeKernel)
+    (s : BlockState) (write : ComputeCorrect.WriteMap ι) : Prop :=
+  Realizes fused (seqCompose stages) s
+    write write (fun (_ : ι) (x y : α) => x = y)
+
+/-- The standard unfolding step for `FusionCorrect`: it is exactly a
+`ComputeRefine.Realizes` obligation against the stage pipeline, so every
+existing `Realizes` lemma and the `prove.sh` loop apply unchanged. -/
+@[simp] theorem fusionCorrect_iff {ι α : Type} [ComputeCorrect.OutputReadable α]
+    (fused : ComputeKernel) (stages : List ComputeKernel)
+    (s : BlockState) (write : ComputeCorrect.WriteMap ι) :
+    FusionCorrect (α := α) fused stages s write ↔
+      Realizes fused (seqCompose stages) s
+        write write (fun (_ : ι) (x y : α) => x = y) :=
+  Iff.rfl
 
 end ComputeRefine
 

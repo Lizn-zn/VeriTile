@@ -89,7 +89,7 @@ check_axioms() {
 
 valid_manifest_kind() {
   case "$1" in
-    correct|refine|math|launch|trace|safety|frame) return 0 ;;
+    correct|refine|fusion|math|launch|trace|safety|frame) return 0 ;;
     *) return 1 ;;
   esac
 }

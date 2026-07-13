@@ -312,6 +312,29 @@ theorem append_some_iff {l1 l2 : List Stmt} {s s' : BlockState} :
             rw [List.cons_append, cons_some hst]
             exact ih.mpr ⟨smid, hLeft, hRight⟩
 
+/-- Sequencing law in `bind` form: running the concatenation of two statement
+lists is running the first, then (on success) the second. This is the packaged
+version of `append_some` / `append_some_iff` used to reason about kernel body
+concatenation (`seqCompose`). -/
+theorem append (l1 l2 : List Stmt) (s : BlockState) :
+    stepStmts (l1 ++ l2) s = (stepStmts l1 s).bind (fun s' => stepStmts l2 s') := by
+  induction l1 generalizing s with
+  | nil => simp
+  | cons st rest ih =>
+      simp [stepStmts]
+      cases stepStmt st s <;> simp [ih]
+
+/-- Running a `flatMap`-concatenated body is the monadic left-fold of running
+each piece in sequence. The engine behind `exec_seqCompose`: a pipeline of `n`
+kernels executes as `foldlM` over the individual bodies. -/
+theorem flatMap {α : Type _} (f : α → List Stmt) (ks : List α) (s : BlockState) :
+    stepStmts (ks.flatMap f) s = ks.foldlM (fun s k => stepStmts (f k) s) s := by
+  induction ks generalizing s with
+  | nil => simp
+  | cons k rest ih =>
+      simp only [List.flatMap_cons, List.foldlM_cons, append]
+      cases stepStmts (f k) s <;> simp [ih]
+
 end stepStmts
 
 namespace stepForLoopAux

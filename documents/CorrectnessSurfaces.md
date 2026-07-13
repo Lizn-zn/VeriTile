@@ -10,6 +10,7 @@ properties of `ComputeKernel`s. Surfaces live in
 |---|---|
 | One kernel realizes an output spec | `ComputeCorrect.Realizes` |
 | Two kernels realize an output relation | `ComputeRefine.Realizes` |
+| A fused kernel matches its stage pipeline on declared outputs (fusion, P2) | `ComputeRefine.FusionCorrect` (over `seqCompose stages`) |
 | Whole-grid launch (every program writes correctly) | `Kernel.ForAllProgramsSome` (temporary; see Grid section) |
 | Value/index pair on every lane | `ComputeCorrect.OutputPair` |
 | Value/index pair on active lanes only | `ComputeCorrect.OutputPairWhere` |
@@ -175,6 +176,31 @@ ComputeRefine.OutputPairEqWhere lhs rhs s ... offset active
 ```
 
 Use the `Where` variant when the equality only needs to hold on active lanes.
+
+### Fusion correctness (property P2)
+
+A fused kernel is **fusion-correct** when it matches its stage pipeline on the
+declared outputs. The golden reference is the pipeline itself, packaged by
+`seqCompose`:
+
+```lean
+-- One kernel whose body is the concatenation of the stages' bodies.
+seqCompose stages : ComputeKernel
+
+-- exec (seqCompose stages) = run stage₀, then stage₁, … (exec_seqCompose)
+
+ComputeRefine.FusionCorrect (α := ℝ)
+  (fused := fusedKernel) (stages := [stageA, stageB]) (s := s)
+  (write := ComputeCorrect.WriteMap.ofTensorView outView)
+```
+
+`FusionCorrect` is a definitionally-thin wrapper over `ComputeRefine.Realizes`
+with the same write map on both sides and pointwise equality; `fusionCorrect_iff`
+(`@[simp]`) unfolds it, so every `Realizes` lemma applies unchanged. It observes
+declared outputs only (framing of untouched memory stays in `Memory/Frame/*`)
+and asserts ℝ-equality only (the eliminated intermediate rounding site is the
+FP-analysis layer's concern, property P4). Full design record:
+[`FusionCorrectness.md`](./FusionCorrectness.md).
 
 ## Escape Hatches
 
