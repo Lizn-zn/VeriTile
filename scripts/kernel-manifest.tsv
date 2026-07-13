@@ -4,7 +4,7 @@
 # id<TAB>file<TAB>theorem<TAB>kind<TAB>status<TAB>source<TAB>source_ref<TAB>config<TAB>label<TAB>notes
 #
 # Allowed kind values:
-# correct, refine, math, launch, trace, safety, frame
+# correct, refine, fusion, math, launch, trace, safety, frame
 #
 # Allowed status values:
 # proven, projected, test-gap, blocked, smoke
@@ -151,3 +151,4 @@ fa1_backward_causal_grid_launched_dq	VeriTile/Examples/FlashAttention1/Backward.
 fa1_backward_causal_kernel_grid_launched_dq	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct	correct	proven	internal	-	atomic dQ grid launch, causal	FA1 backward causal kernel grid-launched dQ correctness	kernel-specific launcher composition theorem for causal atomic dQ contributions
 fa1_backward_atomic_full_grid	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQKernel_gridLaunched_backward_correct	correct	proven	internal	-	atomic backward grid launch, dQ/dK/dV	FA1 backward full grid-launched correctness	non-causal atomic backward theorem combining grid-composed dQ with per-block ordinary dK/dV stores
 fa1_backward_causal_atomic_full_grid	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct	correct	proven	internal	-	atomic backward grid launch, causal, dQ/dK/dV	FA1 backward causal full grid-launched correctness	causal atomic backward theorem combining grid-composed dQ with per-block ordinary dK/dV stores
+swiglu_fusion	VeriTile/Examples/SwiGLU.lean	swiglu_fusion_view	fusion	proven	internal	-	-	SwiGLU fusion correctness	fused swiglu refines [siluStep, mulStep] pipeline (P2 headline example)
