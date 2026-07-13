@@ -308,18 +308,6 @@ noncomputable def addKernelMaskedFlat (A : FlatAlloc)
     ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n).toAlgKernel)
   ComputeKernel.fromKernelBody fk.inputs fk.outputs fk.body
 
-/-- Scalar `readMem` at a translated in-bounds address reads the region-model
-cell (the `.real` carrier translates identically). -/
-private theorem flattenState_readMem (A : FlatAlloc) (hd : A.Disjoint)
-    (s : BlockState) {r : RegionName} (hr : r ∈ A.regions) {o : Nat}
-    (ho : o < A.extent r) :
-    (A.flattenState s).readMem A.flat (A.addr r o) = s.readMem r o := by
-  unfold BlockState.readMem
-  rw [A.flattenState_mem_addr hd s hr ho, A.readAs_trCell]
-  cases hcell : (s.mem r o).readAs .real with
-  | none => rfl
-  | some v => cases v <;> rfl
-
 /-- The flat output tile: lane `i` of the current program's output block, at
 flat offset `A.addr outReg (pid*B) + i`. The output-side layout object — the
 `write` contract below speaks the same `TensorView` language as the input
@@ -451,7 +439,7 @@ specification add_kernel_masked_flat_correct_view
                 xReg yReg outReg B n).toAlgKernel) s from rfl, hsrc] at hobs
         simp only [VeriTile.Examples.observeAt, Option.map_some,
           Option.some_inj, if_pos hActive] at hobs
-        simpa [flattenState_readMem A hd s1 houtr
+        simpa [A.flattenState_readMem hd s1 houtr
           (lt_of_lt_of_le hActive hout)] using hobs
   · -- the frame half: every cell outside the write image is preserved
     apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
@@ -493,97 +481,29 @@ specification add_kernel_masked_flat_correct_view
 /-! ## Part 4 — the denotation: array in, array out
 
 The headline above still *mentions* layouts, launch states, and write maps.
-`denoteAddKernel` ("⟦addKernelMasked⟧") packages the whole ceremony — the
-canonical flat allocation, the canonical loaded start state, the flattening
-translation, the flat-memory execution, and the read-back of one output
-lane — into **one** audited definition. The denotation headline
+`denoteAddKernel` ("⟦addKernelMasked⟧") is a one-line instantiation of the
+generic denotation combinator `denoteKernel` (audited once, in
+`VeriTile.Triton.Memory.Denotation`), which packages the whole ceremony —
+the canonical flat allocation of a region table, the canonical start state
+loaded with a slot table, the flattening translation, the flat-memory
+execution, and the read-back of one output lane. What remains per kernel —
+the whole audit surface of the definition below — is the region table, the
+slot table, and the output address. The denotation headline
 `add_kernel_denotation` then speaks only elementary mathematics: `Nat`,
 `Fin`, `ℝ`, `Option`, `=`. The `#stmtSurfaceSubset` gate below pins its
 statement surface to the single constant `denoteAddKernel`. -/
 
-/-- Value held at lane `k` of a shifted `B`-tile: `arr k` in bounds, `0`
-outside. The memory-content formula of `canonicalState`. -/
-private def laneVal (B : Nat) (arr : Fin B → ℝ) (k : Nat) : ℝ :=
-  if h : k < B then arr ⟨k, h⟩ else 0
-
-/-- Canonical flat allocation for the three arrays: `"x"` at base `0`, `"y"`
-at base `n`, `"out"` at base `2*n`, each of extent `n`, all inside the single
-flat region `"flat"`. -/
-def canonicalAlloc (n : Nat) : FlatAlloc where
-  flat := ⟨"flat"⟩
-  regions := [⟨"x"⟩, ⟨"y"⟩, ⟨"out"⟩]
-  base := fun r =>
-    if r = (⟨"x"⟩ : RegionName) then 0
-    else if r = (⟨"y"⟩ : RegionName) then n
-    else if r = (⟨"out"⟩ : RegionName) then 2 * n
-    else 0
-  extent := fun r =>
-    if r = (⟨"x"⟩ : RegionName) ∨ r = (⟨"y"⟩ : RegionName)
-        ∨ r = (⟨"out"⟩ : RegionName) then n
-    else 0
-
-/-- Canonical region-model start state for program `pid`: `xs`/`ys` held at
-the program tile offsets `pid*B + i` of regions `"x"`/`"y"` (via the shifted
-lane formula `laneVal`), every other cell `0`, empty registers, clean
-`undef`. -/
-noncomputable def canonicalState (pid B : Nat) (xs ys : Fin B → ℝ) :
-    BlockState where
-  mem := fun r o =>
-    if r = (⟨"x"⟩ : RegionName) then MemCell.real (laneVal B xs (o - pid * B))
-    else if r = (⟨"y"⟩ : RegionName) then
-      MemCell.real (laneVal B ys (o - pid * B))
-    else MemCell.real 0
-  regs := fun _ _ _ => none
-  pids := fun _ => pid
-  undef := fun _ _ => 0
-  numPids := fun _ => 1
-
-/-- ⟦`addKernelMasked`⟧: run the **flattened** masked vector add (one flat
-memory, real pointer arithmetic `base + pid*B + i`) from the canonical
-flattened state holding `xs`/`ys`, and read lane `i` of the output array
-back from flat memory. All addressing lives inside this one definition. -/
+/-- ⟦`addKernelMasked`⟧: one instantiation of the generic `denoteKernel`.
+The tables are the audit surface — regions `"x"`/`"y"`/`"out"` of extent `n`
+laid end to end in one flat address space, `xs`/`ys` loaded at the program
+tile `[pid*B, pid*B + B)` of `"x"`/`"y"`, and lane `i` of the output tile
+read back from flat memory. All addressing lives inside `denoteKernel`. -/
 noncomputable def denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
     (i : Fin B) : Option ℝ :=
-  (exec ((canonicalAlloc n).flattenKernel
-      ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n).toAlgKernel))
-    ((canonicalAlloc n).flattenState (canonicalState pid B xs ys))).map
-    (fun sF => sF.readMem (canonicalAlloc n).flat
-      ((canonicalAlloc n).addr ⟨"out"⟩ (pid * B + i.val)))
-
-set_option linter.unnecessarySeqFocus false in
-/-- The three canonical intervals `[0,n)`, `[n,2n)`, `[2n,3n)` are disjoint. -/
-private theorem canonicalAlloc_disjoint (n : Nat) :
-    (canonicalAlloc n).Disjoint := by
-  intro r hr r' hr' hne
-  simp only [canonicalAlloc, List.mem_cons, List.not_mem_nil, or_false] at hr hr'
-  rcases hr with rfl | rfl | rfl <;> rcases hr' with rfl | rfl | rfl <;>
-    first
-      | exact absurd rfl hne
-      | simp [canonicalAlloc] <;> omega
-
-/-- Extent closure: regions outside the canonical allocation have extent 0. -/
-private theorem canonicalAlloc_closed (n : Nat) :
-    ∀ r, r ∉ (canonicalAlloc n).regions → (canonicalAlloc n).extent r = 0 := by
-  intro r hr
-  simp only [canonicalAlloc, List.mem_cons, List.not_mem_nil, or_false,
-    not_or] at hr
-  obtain ⟨h1, h2, h3⟩ := hr
-  simp [canonicalAlloc, h1, h2, h3]
-
-private theorem canonicalState_pid (pid B : Nat) (xs ys : Fin B → ℝ) :
-    (canonicalState pid B xs ys).pid = pid := rfl
-
-/-- The canonical state holds `xs` at the program tile of `"x"`. -/
-private theorem canonicalState_loadedX (pid B : Nat) (xs ys : Fin B → ℝ) :
-    VeriTile.Examples.InputLoadedAt (canonicalState pid B xs ys) ⟨"x"⟩ B xs := by
-  intro i
-  simp [canonicalState, BlockState.readMem, laneVal, i.isLt]
-
-/-- The canonical state holds `ys` at the program tile of `"y"`. -/
-private theorem canonicalState_loadedY (pid B : Nat) (xs ys : Fin B → ℝ) :
-    VeriTile.Examples.InputLoadedAt (canonicalState pid B xs ys) ⟨"y"⟩ B ys := by
-  intro i
-  simp [canonicalState, BlockState.readMem, laneVal, i.isLt]
+  denoteKernel (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
+    ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] pid
+    [.ofFin ⟨"x"⟩ (pid * B) xs, .ofFin ⟨"y"⟩ (pid * B) ys]
+    ⟨"out"⟩ (pid * B + i.val)
 
 /-- **The denotation headline**: on every in-bounds lane, ⟦`addKernelMasked`⟧
 maps the input arrays to their elementwise sum. The statement mentions only
@@ -592,34 +512,65 @@ is inside `denoteAddKernel`, audited once. -/
 specification add_kernel_denotation (B n pid : Nat) (hB : 0 < B)
     (xs ys : Fin B → ℝ) (i : Fin B) (hi : pid * B + i.val < n) :
     denoteAddKernel B n pid xs ys i = some (xs i + ys i) := by
-  have hd := canonicalAlloc_disjoint n
-  have hx : n ≤ (canonicalAlloc n).extent ⟨"x"⟩ := by simp [canonicalAlloc]
-  have hy : n ≤ (canonicalAlloc n).extent ⟨"y"⟩ := by simp [canonicalAlloc]
-  have hout : n ≤ (canonicalAlloc n).extent ⟨"out"⟩ := by simp [canonicalAlloc]
-  unfold denoteAddKernel
-  rw [addKernelMasked_exec_flatten (canonicalAlloc n) hd
-    (canonicalAlloc_closed n) ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n hx hy hout
-    (canonicalState pid B xs ys) rfl]
+  have hnd : ((([(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] :
+      List (RegionName × Nat))).map Prod.fst).Nodup := by simp
+  have hd := FlatAlloc.ofList_disjoint ⟨"flat"⟩
+    [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] hnd
+  have hx : n ≤ (FlatAlloc.ofList ⟨"flat"⟩
+      [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).extent ⟨"x"⟩ := by
+    simp [FlatAlloc.listExtent]
+  have hy : n ≤ (FlatAlloc.ofList ⟨"flat"⟩
+      [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).extent ⟨"y"⟩ := by
+    simp [FlatAlloc.listExtent]
+  have hout : n ≤ (FlatAlloc.ofList ⟨"flat"⟩
+      [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).extent ⟨"out"⟩ := by
+    simp [FlatAlloc.listExtent]
+  have hsnd : (([DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]).map DenoteSlot.region).Nodup := by
+    simp
+  have hloadX : VeriTile.Examples.InputLoadedAt
+      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"x"⟩ B xs := by
+    intro j
+    simpa using DenoteSlot.state_read_ofFin (pid := pid)
+      (region := (⟨"x"⟩ : RegionName)) (off := pid * B) (arr := xs)
+      (by simp) hsnd j
+  have hloadY : VeriTile.Examples.InputLoadedAt
+      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"y"⟩ B ys := by
+    intro j
+    simpa using DenoteSlot.state_read_ofFin (pid := pid)
+      (region := (⟨"y"⟩ : RegionName)) (off := pid * B) (arr := ys)
+      (by simp) hsnd j
+  unfold denoteAddKernel denoteKernel
+  rw [addKernelMasked_exec_flatten _ hd
+    (FlatAlloc.ofList_closed ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)])
+    ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n hx hy hout
+    (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) rfl]
   have hobs := VeriTile.Examples.add_kernel_masked_correct ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩
-    B n hB (canonicalState pid B xs ys) xs ys
-    (canonicalState_loadedX pid B xs ys) (canonicalState_loadedY pid B xs ys) i
+    B n hB (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) xs ys hloadX hloadY i
   rw [show exec (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
-      (canonicalState pid B xs ys)
+      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys])
     = exec ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
-        ).toAlgKernel) (canonicalState pid B xs ys) from rfl] at hobs
+        ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) from rfl] at hobs
   cases hsrc : exec ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
-      ).toAlgKernel) (canonicalState pid B xs ys) with
+      ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
+        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) with
   | none =>
       rw [hsrc] at hobs
       simp [VeriTile.Examples.observeAt] at hobs
   | some s1 =>
       rw [hsrc] at hobs
       simp only [VeriTile.Examples.observeAt, Option.map_some, Option.some_inj,
-        canonicalState_pid, if_pos hi] at hobs
+        DenoteSlot.state_pid, if_pos hi] at hobs
       simp only [Option.map_some, Option.some_inj]
-      rw [flattenState_readMem (canonicalAlloc n) hd s1
-        (r := ⟨"out"⟩) (by simp [canonicalAlloc])
-        (o := pid * B + i.val) (by simpa [canonicalAlloc] using hi)]
+      rw [FlatAlloc.flattenState_readMem _ hd s1
+        (r := ⟨"out"⟩) (by simp)
+        (o := pid * B + i.val) (by simpa [FlatAlloc.listExtent] using hi)]
       exact hobs
 
 /-! ## Trust gates -/
