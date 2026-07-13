@@ -121,14 +121,6 @@ def unfusedSiLUKernel
     (siluStepResidual siluReg residualReg outReg blockSize).body
   ComputeKernel.fromAlgBody [xReg, gateReg, residualReg] [outReg] body
 
-private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
-    stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by
-  induction xs generalizing s with
-  | nil => simp
-  | cons st rest ih =>
-      simp [stepStmts]
-      cases stepStmt st s <;> simp [ih]
-
 noncomputable def execUnfusedSiLU
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) (s : BlockState) : Option BlockState :=
@@ -144,7 +136,7 @@ theorem exec_unfusedSiLUKernel
     (blockSize : Nat) (s : BlockState) :
     exec (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize) s =
       execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s := by
-  simp [unfusedSiLUKernel, execUnfusedSiLU, exec, stepStmts_append]
+  simp [unfusedSiLUKernel, execUnfusedSiLU, exec, stepStmts.append]
   cases h1 : stepStmts (siluStepGate xReg gateReg zReg blockSize).body s <;> simp
   case some s1 =>
     cases h2 : stepStmts (siluStepSilu zReg siluReg blockSize).body s1 <;> simp
