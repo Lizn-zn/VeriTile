@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.TritonSmoke
+VeriTile.Bench.Examples.TritonSmoke
 
 Small smoke tests for the typed Triton core.
 -/
@@ -12,11 +12,14 @@ import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.Launch
 import VeriTile.Triton.Concurrency
 import VeriTile.Triton.DSL
+import VeriTile.Examples.Common
 import VeriTile.Meta.Specification
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples.TritonSmoke
+namespace VeriTile.Bench.Examples.TritonSmoke
 
 open VeriTile.Triton
+open VeriTile.Examples
 
 /-- Smoke test for scalar-pointer load/store syntax. -/
 def scalarCopyKernel (xReg yReg : RegionName) : ComputeKernel := triton {
@@ -1981,4 +1984,11 @@ example (theta t : ℝ) (N : Nat) (s : BlockState) (i : TileIndex [N]) :
   simp [Tile.bop_data]
   rfl
 
-end VeriTile.Examples.TritonSmoke
+/-! ## Trust gates -/
+
+#axiomsClean argmax2_index_store_correct_view
+#axiomsClean indirect_load_correct_view
+#axiomsClean launch_noop_for_all_programs_some
+#axiomsClean nat_load_store_correct_view
+
+end VeriTile.Bench.Examples.TritonSmoke

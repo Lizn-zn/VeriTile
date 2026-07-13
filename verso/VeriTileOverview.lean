@@ -774,7 +774,7 @@ Once these are proved, *concurrent ≡ sequential on final memory* follows by re
 ::::
 
 :::cardMuted
-*Worked example.* `Examples/GridComposition.lean` exercises the Layer-2b
+*Worked example.* `bench/examples/GridComposition.lean` exercises the Layer-2b
 disjoint merge end to end, on the same `programTileView` API used by
 single-program proofs.
 
@@ -783,7 +783,7 @@ single-program proofs.
 
 # Theorem library — what we actually prove
 
-`VeriTile/Examples/`
+`bench/examples/` (self-contained showcases; shared vocabulary stays in `VeriTile/Examples/Common.lean`)
 
 ::::cols
 :::cardBlue

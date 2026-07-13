@@ -1,3 +1,4 @@
+import VeriTile.Examples.Common
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
@@ -81,8 +82,9 @@ concurrently. These are the standard VeriTile conventions, shared with the
 FlashAttention examples.
 -/
 
-namespace VeriTile.Examples.AdamUpdateGridLaunch
+namespace VeriTile.Bench.Examples.AdamUpdateGridLaunch
 
+open VeriTile.Examples
 open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
@@ -769,4 +771,4 @@ theorem update_fn_kernel_launchCorrect
       exact (hcorrect k hk).2
     · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
 
-end VeriTile.Examples.AdamUpdateGridLaunch
+end VeriTile.Bench.Examples.AdamUpdateGridLaunch

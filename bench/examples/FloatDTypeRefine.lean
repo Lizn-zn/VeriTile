@@ -1,5 +1,5 @@
 import VeriTile.Triton
-import VeriTile.Examples.SoftmaxReciprocal
+import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
 /-!
@@ -34,9 +34,9 @@ and the exec-level view are `private` scaffolding.
 
 namespace VeriTile.Bench.Examples.FloatDTypeRefine
 
-open VeriTile.Triton
-open VeriTile.Examples (stableSoftmaxKernel softmaxRecipKernel
-  softmax_reciprocal_refinement_exec_view programTileView)
+open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile.Examples (programTileView InputLoadedAt
+  inputLoadedAt_of_programTileView_loaded observeAt injective_offset_singleton)
 
 /-- Local reduction helper: the algorithm-projection traversals
 (`ComputeStmt.toAlgorithm?` and friends) are written in `do` notation over
@@ -48,6 +48,37 @@ This discharges them for `simp`. -/
 
 /-! ## Kernels -/
 section FloatDTypeRefine.kernels
+
+/-- This file's own copy of the aligned Real per-element-divide stable softmax
+(each showcase is self-contained; the showcased original lives in
+`bench/examples/SoftmaxEqRefine.lean` as `stableSoftmaxKernelReal`). The
+fp32-annotated `floatStableSoftmaxKernel` below erases to this kernel. -/
+def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x    := tl.load($(xReg) + offs)
+  m    := tl.max(x, axis=0)
+  e    := tl.exp(x - m)
+  s    := tl.sum(e, axis=0)
+  y    := e / s
+  tl.store($(yReg) + offs, y)
+}
+
+/-- This file's own copy of the aligned Real reciprocal-form stable softmax
+(the showcased original lives in `bench/examples/SoftmaxReciprocalRefine.lean`
+as `softmaxRecipKernelReal`). The fp32-annotated `floatSoftmaxRecipKernel`
+below erases to this kernel. -/
+def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid    := tl.program_id(0)
+  offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x      := tl.load($(xReg) + offs)
+  m      := tl.max(x, axis=0)
+  e      := tl.exp(x - m)
+  s      := tl.sum(e, axis=0)
+  inv_s  := 1 / s
+  y      := e * inv_s
+  tl.store($(yReg) + offs, y)
+}
 
 /-- Stable softmax with explicit fp32 input/output annotations and per-element
 division `y = e / s`. The reductions still run in the Real abstraction after
@@ -115,6 +146,127 @@ private theorem float_softmax_recip_erases_to_real
     rw [Op.eraseDType.eq_def]
     simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
       Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
+
+/-! ### Local copy of the Real reciprocal refinement
+
+The erased equivalence reduces to the Real-valued reciprocal rewrite
+(`e / S = e · S⁻¹`). The showcased original of this chain lives in
+`bench/examples/SoftmaxReciprocalRefine.lean` (exact-ℝ companion section);
+each showcase is self-contained, so this file carries its own `private` copy.
+The math denotation (`stableSpec`, `tileMax`) lives in
+`VeriTile.Triton.Math.Softmax`. -/
+
+/-- The load-bearing math identity: division equals multiplication by
+    reciprocal (for non-zero divisor). -/
+private theorem div_eq_mul_inv_real (a s : ℝ) (hs : s ≠ 0) : a / s = a * (1 / s) := by
+  field_simp
+
+/-- Closed-form spec for `softmaxRecipKernel`'s `Y[pid*N+i]` cell. -/
+private noncomputable def stableRecipSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N) : ℝ :=
+  Real.exp (xs i - m) * (1 / ∑ j, Real.exp (xs j - m))
+
+/-- Closed form of the divide-side kernel (local copy of
+`softmax_stable_correct` from `bench/examples/SoftmaxEqRefine.lean`). -/
+private theorem softmax_stable_correct
+    (xReg yReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (_h_x : InputLoadedAt s xReg blockSize xs) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (stableSoftmaxKernel xReg yReg blockSize) s) yReg blockSize s.pid i
+        = some (stableSpec xs (tileMax hN xs) i) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
+  repeat unfold evalOp
+  simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  unfold InputLoadedAt at _h_x
+  simp [_h_x]
+  rfl
+
+/-- Closed form of the reciprocal-side kernel (local copy of
+`softmax_recip_correct` from `bench/examples/SoftmaxReciprocalRefine.lean`). -/
+private theorem softmax_recip_correct
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (_h_x : InputLoadedAt s xReg N xs) :
+    ∀ i : Fin N,
+      observeAt (exec (softmaxRecipKernel xReg yReg N) s) yReg N s.pid i
+        = some (stableRecipSpec xs (tileMax hN xs) i) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) :=
+    injective_offset_singleton (s.pid * (n + 1))
+  simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
+  repeat unfold evalOp
+  simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
+  unfold InputLoadedAt at _h_x
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  simp [_h_x]
+  rfl
+
+/-- Refinement (exact ℝ): per-element division ≡ precomputed reciprocal.
+Composes the two closed forms via `div_eq_mul_inv_real`. -/
+private theorem softmax_reciprocal_refinement
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : InputLoadedAt s xReg N xs) :
+    ∀ i : Fin N,
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i =
+      observeAt (exec (softmaxRecipKernel  xReg yReg N) s) yReg N s.pid i := by
+  intro i
+  rw [softmax_stable_correct xReg yReg N hN s xs h_x i,
+      softmax_recip_correct  xReg yReg N hN s xs h_x i]
+  congr 1
+  -- Goal: stableSpec xs (tileMax hN xs) i = stableRecipSpec xs (tileMax hN xs) i
+  -- These differ only by a / b vs a * (1/b).
+  unfold stableSpec stableRecipSpec
+  have h_sum_pos : 0 < ∑ j, Real.exp (xs j - tileMax hN xs) := by
+    apply Finset.sum_pos
+    · intro j _; exact Real.exp_pos _
+    · obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+      exact ⟨⟨0, hN⟩, Finset.mem_univ _⟩
+  exact div_eq_mul_inv_real _ _ (ne_of_gt h_sum_pos)
+
+/-- View-level surface for `softmax_reciprocal_refinement`. -/
+private theorem softmax_reciprocal_refinement_exec_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    ∀ idx : TileIndex [N],
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (softmaxRecipKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := N) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using softmax_reciprocal_refinement xReg yReg N hN s xs hx idx.1
 
 /-- Float-facing rewrite refinement, exec-level view: the fp32
 per-element-divide softmax and the fp32 reciprocal-form softmax are

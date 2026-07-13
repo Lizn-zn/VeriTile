@@ -13,7 +13,7 @@ A failure means a `proven` theorem's transitive proof depends on `sorryAx`
 or a non-standard axiom (footprint outside {propext, Classical.choice,
 Quot.sound}) — a real soundness finding, NOT something to paper over.
 
-Coverage: 134 library theorems across 16 modules.
+Coverage: 118 library theorems across 8 modules.
 Standalone bench ports + bench/examples are audited by bench/audit_trust.sh.
 -/
 import VeriTile.Meta.StatementAudit
@@ -25,14 +25,6 @@ import VeriTile.Examples.FlashAttention1.NaiveRefinement
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Backward
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Math
 import VeriTile.Examples.FlashAttention2
-import VeriTile.Examples.GridComposition
-import VeriTile.Examples.HyperConnections.Manifold
-import VeriTile.Examples.MemoryFrame
-import VeriTile.Examples.MemorySafety
-import VeriTile.Examples.OnlineSoftmax
-import VeriTile.Examples.RowWise
-import VeriTile.Examples.TritonSmoke
-import VeriTile.Examples.VectorAdd
 
 -- `#axiomsClean` is a global command registered by importing
 -- VeriTile.Meta.StatementAudit; fully-qualified names resolve without `open`.
@@ -170,36 +162,4 @@ import VeriTile.Examples.VectorAdd
 #axiomsClean VeriTile.Examples.fa2_two_fragment_attention_ratio_eq_flat
 #axiomsClean VeriTile.Examples.fa2_two_fragment_denominator_merge_eq_flat
 #axiomsClean VeriTile.Examples.fa2_two_fragment_numerator_merge_eq_flat
-
--- VeriTile.Examples.GridComposition
-#axiomsClean VeriTile.Examples.GridComposition.gridConstStore_launched_observe_written
-#axiomsClean VeriTile.Examples.GridComposition.gridLaunchedRMW_xchg_two_final
-#axiomsClean VeriTile.Examples.GridComposition.splitKAtomicAdd_launched_sum
-
--- VeriTile.Examples.HyperConnections.Manifold
-#axiomsClean VeriTile.Examples.HyperConnections.mhcDepthConnection_correct_view
-#axiomsClean VeriTile.Examples.HyperConnections.mhcWidthConnection_correct_view
-
--- VeriTile.Examples.MemoryFrame
-#axiomsClean VeriTile.Examples.MemoryFrame.blockPtrOOBStore_writesWithin_checkedFootprint
-
--- VeriTile.Examples.MemorySafety
-#axiomsClean VeriTile.Examples.MemorySafety.blockPtrBoundary_memorySafe
-
--- VeriTile.Examples.OnlineSoftmax
-#axiomsClean VeriTile.Examples.online_softmax_correct_view
-
--- VeriTile.Examples.RowWise
-#axiomsClean VeriTile.Examples.rowWiseMax_correct_view
-#axiomsClean VeriTile.Examples.rowWiseSum_correct_view
-
--- VeriTile.Examples.TritonSmoke
-#axiomsClean VeriTile.Examples.TritonSmoke.argmax2_index_store_correct_view
-#axiomsClean VeriTile.Examples.TritonSmoke.indirect_load_correct_view
-#axiomsClean VeriTile.Examples.TritonSmoke.launch_noop_for_all_programs_some
-#axiomsClean VeriTile.Examples.TritonSmoke.nat_load_store_correct_view
-
--- VeriTile.Examples.VectorAdd
-#axiomsClean VeriTile.Examples.add_kernel_correct_view
-#axiomsClean VeriTile.Examples.add_kernel_masked_correct_view
 

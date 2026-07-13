@@ -1,7 +1,12 @@
 /-
-VeriTile.Examples.OnlineSoftmax
+bench/examples/OnlineSoftmax.lean
 
 Online softmax recurrence and typed Triton kernel skeleton.
+
+The streaming `(M, L)` recurrence of online softmax is proven equal to the
+batch form `(tileMax, ∑ exp)` — with no range precondition on the input,
+thanks to the `WithBot ℝ` math model seeding `M` at `⊥` — and the typed
+Triton kernel is proven to compute exactly that recurrence.
 -/
 
 import VeriTile.Triton.Core
@@ -11,12 +16,32 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.KernelLemmas
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
-import VeriTile.Examples.SoftmaxEq
 import VeriTile.Meta.Specification
+import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Examples
+namespace VeriTile.Bench.Examples.OnlineSoftmax
 
 open VeriTile.Triton VeriTile.Triton.TiledSoftmax
+open VeriTile.Examples
+
+/-! ## Batch reference kernel
+
+`stableSoftmaxKernel` is this file's own copy of the max-subtracted softmax
+kernel (per the "each showcase self-contained" convention for
+`bench/examples/`; the original lived in `VeriTile.Examples.SoftmaxEq`). -/
+
+/-- Stable softmax: subtract the max before exponentiating.
+(This file's own copy — see the section header above.) -/
+def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x    := tl.load($(xReg) + offs)
+  m    := tl.max(x, axis=0)
+  e    := tl.exp(x - m)
+  s    := tl.sum(e, axis=0)
+  y    := e / s
+  tl.store($(yReg) + offs, y)
+}
 
 def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
   stableSoftmaxKernel xReg yReg N
@@ -433,4 +458,8 @@ specification online_softmax_correct_view
   rw [hExec] at hview
   simpa using hview
 
-end VeriTile.Examples
+/-! ## Trust gates -/
+
+#axiomsClean online_softmax_correct_view
+
+end VeriTile.Bench.Examples.OnlineSoftmax

@@ -1,5 +1,5 @@
 import VeriTile.Triton
-import VeriTile.Examples.VectorAdd
+import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
 /-!
@@ -35,7 +35,7 @@ view, and the region-typing facts (including the honest negation
 namespace VeriTile.Bench.Examples.FloatDTypeCorrect
 
 open VeriTile.Triton
-open VeriTile.Examples (addKernel addSpec add_kernel_correct_exec_view programTileView)
+open VeriTile.Examples  -- Common vocabulary: programTileView, InputLoadedAt, observeAt, …
 
 /-- Local reduction helper: the algorithm-projection traversals
 (`ComputeStmt.toAlgorithm?` and friends) are written in `do` notation over
@@ -47,6 +47,24 @@ This discharges them for `simp`. -/
 
 /-! ## Kernel -/
 section FloatDTypeCorrect.kernels
+
+/-- This file's own copy of the aligned Real `addKernel` (each showcase is
+self-contained; the showcased original lives in `bench/examples/VectorAdd.lean`).
+Elementwise add of two `blockSize`-element tiles, single-block, no boundary
+mask. The fp32-annotated `floatAddKernel` below erases to this kernel. -/
+def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x    := tl.load($(xReg) + offs)
+  y    := tl.load($(yReg) + offs)
+  out  := x + y
+  tl.store($(outReg) + offs, out)
+}
+
+/-- This file's own copy of the elementwise-add math denotation:
+`out[i] = xs[i] + ys[i]`. -/
+def addSpec {N : Nat} (xs ys : Fin N → ℝ) (i : Fin N) : ℝ :=
+  xs i + ys i
 
 /-- Elementwise add with fp32-annotated input/output memory.
 
@@ -65,6 +83,50 @@ end FloatDTypeCorrect.kernels
 
 /-! ## Supporting lemmas (private plumbing) -/
 section FloatDTypeCorrect.lemmas
+
+/-- This file's own copy of the aligned Real VectorAdd correctness theorem
+(each showcase is self-contained; the showcased original lives in
+`bench/examples/VectorAdd.lean`). -/
+theorem add_kernel_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (_hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (_h_x : InputLoadedAt s xReg blockSize xs)
+    (_h_y : InputLoadedAt s yReg blockSize ys) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (addKernel xReg yReg outReg blockSize) s) outReg blockSize s.pid i
+        = some (addSpec xs ys i) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, addKernel, stepStmts, stepStmt, Tile.bop,
+        NumericDType.add, NumericDType.mul, addSpec]
+  unfold InputLoadedAt at _h_x _h_y
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  simp [_h_x, _h_y]
+
+/-- This file's own copy of the view-level surface for `add_kernel_correct`. -/
+theorem add_kernel_correct_exec_view
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe (exec (addKernel xReg yReg outReg blockSize) s)
+          (programTileView s outReg blockSize) idx
+        = some (addSpec xs ys idx.1) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using add_kernel_correct xReg yReg outReg blockSize hBlockSize s xs ys hx hy idx.1
 
 /-- The fp32-annotated kernel erases to the existing Real VectorAdd kernel,
 at the algorithm-projection level: both sides project (via `toAlgKernel`) to

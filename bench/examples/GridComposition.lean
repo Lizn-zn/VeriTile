@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.GridComposition
+bench/examples/GridComposition
 
 Representative whole-grid disjoint-frame composition smoke.
 -/
@@ -8,10 +8,13 @@ import VeriTile.Triton.Memory.Footprint
 import VeriTile.Triton.Launch.Composition
 import VeriTile.Triton.Concurrency.Atomic
 import VeriTile.Meta.Specification
+import VeriTile.Meta.StatementAudit
+import VeriTile.Examples.Common
 
-namespace VeriTile.Examples.GridComposition
+namespace VeriTile.Bench.Examples.GridComposition
 
 open VeriTile.Triton
+open VeriTile.Examples
 
 /-- One-dimensional constant store indexed by `tl.program_id(0)`. -/
 def gridConstStoreKernel (outReg : RegionName) : Kernel :=
@@ -214,4 +217,10 @@ specification gridLaunchedRMW_xchg_two_final
   rw [hCell] at hObs
   exact hObs.trans hFinal
 
-end VeriTile.Examples.GridComposition
+/-! ## Trust gates -/
+
+#axiomsClean gridConstStore_launched_observe_written
+#axiomsClean splitKAtomicAdd_launched_sum
+#axiomsClean gridLaunchedRMW_xchg_two_final
+
+end VeriTile.Bench.Examples.GridComposition
