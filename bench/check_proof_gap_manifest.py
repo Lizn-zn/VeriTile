@@ -152,7 +152,7 @@ SELF_REF_EXEC_RE = re.compile(r"\bmatch\s+exec\b")
 DECL_SPLIT_RE = re.compile(
     r"\n(?=(?:noncomputable\s+|private\s+)*(?:def|theorem|specification|abbrev)\s|/--|@\[|namespace\s|end\s)")
 _DECL_HEAD_RE = re.compile(
-    r"^(?:noncomputable\s+|private\s+)*(def|theorem|specification|abbrev)\s+([A-Za-z0-9_']+)")
+    r"^(?:noncomputable\s+|private\s+)*(def|denotation|theorem|specification|abbrev)\s+([A-Za-z0-9_']+)")
 DEF_NAME_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*def\s+([A-Za-z0-9_']+)")
 
 

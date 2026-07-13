@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH = os.path.join(ROOT, "bench", "tritonbench_g")
 
 DECL_KW = r"(?:noncomputable\s+|private\s+|protected\s+|partial\s+|@\[[^\]]*\]\s*)*" \
-          r"(def|theorem|specification|lemma|abbrev|instance)"
+          r"(def|denotation|theorem|specification|lemma|abbrev|instance)"
 # A top-level decl starts at column 0 (these files put decls at col 0 even
 # inside namespace/section).
 DECL_RE = re.compile(r"^(" + DECL_KW + r")\s+([A-Za-z_][A-Za-z0-9_'?!.]*)", re.M)

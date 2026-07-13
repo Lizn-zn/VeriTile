@@ -498,7 +498,7 @@ The tables are the audit surface — regions `"x"`/`"y"`/`"out"` of extent `n`
 laid end to end in one flat address space, `xs`/`ys` loaded at the program
 tile `[pid*B, pid*B + B)` of `"x"`/`"y"`, and lane `i` of the output tile
 read back from flat memory. All addressing lives inside `denoteKernel`. -/
-noncomputable def denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
+noncomputable denotation denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
     (i : Fin B) : Option ℝ :=
   denoteKernel (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n)
     ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] pid

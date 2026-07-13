@@ -66,7 +66,7 @@ def strip_lean_comments(text: str) -> str:
 
 decl_re = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+|scoped\s+)*"
-    r"(theorem|specification|lemma|def|abbrev)\s+([A-Za-z_][A-Za-z0-9_'\.]*)"
+    r"(theorem|specification|lemma|def|denotation|abbrev)\s+([A-Za-z_][A-Za-z0-9_'\.]*)"
 )
 ns_re = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_'\.]*)")
 end_named_re = re.compile(r"^\s*end\s+([A-Za-z_][A-Za-z0-9_'\.]*)\s*$")
