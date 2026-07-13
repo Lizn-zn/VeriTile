@@ -117,9 +117,8 @@ theorem exec_seqComposeSwiGLU
                       mulStep siluReg bReg outReg blockSize]) s =
       execUnfusedSwiGLU aReg bReg siluReg outReg blockSize s := by
   rw [exec_seqCompose]
-  cases h : exec (siluStep aReg siluReg blockSize) s with
-  | none => simp [List.foldlM_cons, execUnfusedSwiGLU, h]
-  | some s1 => simp [List.foldlM_cons, execUnfusedSwiGLU, h]
+  cases h : exec (siluStep aReg siluReg blockSize) s <;>
+    simp [List.foldlM_cons, execUnfusedSwiGLU, h]
 
 /-! ## Per-lane specs -/
 
