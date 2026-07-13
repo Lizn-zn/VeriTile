@@ -478,4 +478,71 @@ theorem silu_kernels_refinement_view
   simpa [hL, ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
     observeTileAt] using hview
 
+/-- Executing the fused-SiLU stage pipeline via the shared `seqCompose` /
+`exec_seqCompose` machinery agrees with the hand-rolled `execUnfusedSiLU`.
+This is the bridge that lets the N-ary `FusionCorrect` restatement reuse the
+existing `unfused_silu_correct` / `silu_kernels_refinement_exec_view` content
+instead of re-deriving the three-stage body split. -/
+theorem exec_seqCompose_silu
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) (s : BlockState) :
+    exec (seqCompose
+        [siluStepGate xReg gateReg zReg blockSize,
+         siluStepSilu zReg siluReg blockSize,
+         siluStepResidual siluReg residualReg outReg blockSize]).toAlgKernel s =
+      execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s := by
+  rw [exec_seqCompose]
+  simp only [List.foldlM_cons, List.foldlM_nil]
+  unfold execUnfusedSiLU
+  cases exec (siluStepGate xReg gateReg zReg blockSize).toAlgKernel s with
+  | none => rfl
+  | some s1 =>
+    cases exec (siluStepSilu zReg siluReg blockSize).toAlgKernel s1 with
+    | none => rfl
+    | some s2 =>
+      cases exec (siluStepResidual siluReg residualReg outReg blockSize).toAlgKernel s2 <;>
+        rfl
+
+/-- **Property P2 (fusion correctness), N-ary instance.** The fused SiLU kernel
+is fusion-correct with respect to its three-stage pipeline
+`[gate, silu, residual]`, stated on the shared `ComputeRefine.FusionCorrect`
+surface (`documents/FusionCorrectness.md` §3). This is a restatement of the
+existing `silu_kernels_refinement_view`: the hand-rolled `unfusedSiLUKernel`
+collapses onto `seqCompose` and its bespoke `exec_unfusedSiLUKernel` onto
+`exec_seqCompose`, demonstrating the definition is not shaped around a single
+two-stage example. The original view-level theorem remains valid. -/
+theorem fusedsilu_fusion_view
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
+    (xs gates residuals : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_g : TensorView.loaded s (programTileView s gateReg blockSize)
+      (fun idx : TileIndex [blockSize] => gates idx.1))
+    (h_res : TensorView.loaded s (programTileView s residualReg blockSize)
+      (fun idx : TileIndex [blockSize] => residuals idx.1))
+    (h_zRes : zReg ≠ residualReg)
+    (h_siluRes : siluReg ≠ residualReg) :
+    ComputeRefine.FusionCorrect
+      (fused := fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
+      (stages :=
+        [siluStepGate xReg gateReg zReg blockSize,
+         siluStepSilu zReg siluReg blockSize,
+         siluStepResidual siluReg residualReg outReg blockSize])
+      (s := s)
+      (write := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (α := ℝ) := by
+  rw [ComputeRefine.fusionCorrect_iff]
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := silu_kernels_refinement_exec_view xReg gateReg residualReg zReg siluReg outReg
+    blockSize hN s xs gates residuals h_x h_g h_res h_zRes h_siluRes idx
+  have hSeq := exec_seqCompose_silu xReg gateReg residualReg zReg siluReg outReg blockSize s
+  rw [← hSeq, hR] at hview
+  simpa [hL, ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
+    observeTileAt] using hview
+
 end VeriTile.Examples

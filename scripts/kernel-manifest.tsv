@@ -29,6 +29,7 @@ online_softmax	VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	
 rowwise_sum	VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	VeriTile/Examples/RowWise.lean	rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
 fused_silu_refine	VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
+fused_silu_fusion	VeriTile/Examples/FusedSiLU.lean	fusedsilu_fusion_view	fusion	proven	internal	-	-	Fused SiLU fusion correctness (N-ary P2)	seqCompose restatement of fused_silu_refine on ComputeRefine.FusionCorrect
 welford_refine	VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
 layernorm_refine	VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
