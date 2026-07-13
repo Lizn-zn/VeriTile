@@ -111,7 +111,7 @@ v1 proves four equivalence properties over **user-level** kernel code:
 | # | Property | Status today |
 |---|---|---|
 | P1 | Single-kernel correctness vs. a math spec | Largely exists (`ComputeCorrect.Realizes`, ~151 proven kernels, FA-1 fwd) |
-| P2 | Fusion correctness of multiple kernels | Substrate exists (`ComputeRefine`); fusion story `TBD` — [Define fusion-correctness semantics](https://github.com/Lizn-zn/VeriTile/issues/461) |
+| P2 | Fusion correctness of multiple kernels | Defined ([FusionCorrectness.md](./FusionCorrectness.md)): fused kernel refines the stage pipeline (`seqCompose`) on declared outputs at the ℝ layer, via the thin `ComputeRefine.FusionCorrect` wrapper; running example SwiGLU (+ FusedSiLU N-ary retrofit). Lean surface + example proofs pending (fog opened) |
 | P3 | Parallel/async correctness | Abstract-only (`RefinesSequential`); operational interleaving is the research-grade gap ([#409](https://github.com/Lizn-zn/VeriTile/issues/409)). Running examples selected ([AsyncRunningExamples.md](./AsyncRunningExamples.md)); modeling approach `TBD` — [Async modeling: Lean state-machine vs TLA](https://github.com/Lizn-zn/VeriTile/issues/459) |
 | P4 | FP-precision **warning patterns** (not tight bounds) | Rounding model exists (`#447`); pattern catalog designed ([FpWarningCatalog.md](./FpWarningCatalog.md)) — a static diff over rounding-event structure; checker implementation pending |
 
@@ -189,7 +189,9 @@ milestone resolution only.
   ([AsyncRunningExamples.md](./AsyncRunningExamples.md)); FP-warning
   catalog designed ([FpWarningCatalog.md](./FpWarningCatalog.md));
   Tilelang↔core mapping settled
-  ([TilelangMapping.md](./TilelangMapping.md)).
+  ([TilelangMapping.md](./TilelangMapping.md)); fusion correctness (P2)
+  defined with SwiGLU as running example
+  ([FusionCorrectness.md](./FusionCorrectness.md)).
 
 ## 8. Venue
 
@@ -200,5 +202,8 @@ accumulated results (tracked in the map's *Not yet specified*).
 
 ## Changelog
 
+- **2026-07-13** — P2 fusion correctness defined; SwiGLU chosen as running
+  example ([FusionCorrectness.md](./FusionCorrectness.md),
+  [ticket](https://github.com/Lizn-zn/VeriTile/issues/461)).
 - **2026-07-07** — skeleton created
   ([ticket](https://github.com/Lizn-zn/VeriTile/issues/466)).

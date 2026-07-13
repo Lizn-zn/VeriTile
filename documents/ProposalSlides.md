@@ -3,9 +3,9 @@
 **Living slide skeleton.** One `##` heading = one slide; bullets are the
 slide's content gist, `[visual: …]` notes the intended figure. Maintained in
 lock-step with [Proposal.md](./Proposal.md) — same spine, talk resolution.
-This markdown outline is the source of truth; the rendering toolchain for
-the actual deck is `TBD` (verso is being deprecated for slides), so the
-outline stays cheap to react to.
+This markdown outline is the source of truth; the deck renders from it
+directly via [slides/build.sh](./slides/README.md) (Marp → HTML/PDF; verso
+deprecated for slides), so the outline stays cheap to react to.
 
 ---
 
@@ -58,8 +58,9 @@ outline stays cheap to react to.
 
 ## 7. Four properties
 
-- P1 single-kernel correctness · P2 fusion · P3 async/parallel · P4
-  FP-warning patterns (not bounds).
+- P1 single-kernel correctness · P2 fusion (fused kernel ≡ stage pipeline
+  on outputs, ℝ layer; SwiGLU) · P3 async/parallel · P4 FP-warning
+  patterns (not bounds).
 - [visual: 4-quadrant status card — exists / substrate / gap, from
   Proposal.md §3.2 table]
 
@@ -80,7 +81,7 @@ outline stays cheap to react to.
 
 - ~151 proven kernels, FA-1/FA-2 fwd+bwd closed, 0 `sorry`; rounding model
   landed; neutral core relocated; async examples selected; FP-warning
-  catalog + Tilelang mapping designed.
+  catalog + Tilelang mapping + fusion correctness designed.
 - [visual: repo-status strip or the §3.2 status table]
 
 ## 11. Plan

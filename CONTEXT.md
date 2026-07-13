@@ -22,6 +22,27 @@ _Avoid_: FP gap, numeric error
 The abstract, magnitude-free account of where rounding events occur in a kernel. It
 captures rounding structure inside Lean while magnitudes remain the compute gap's job.
 
+### Properties
+
+**Fusion correctness**:
+The property that a fused kernel exactly implements its stage pipeline on the declared
+outputs, at the algorithm layer. It says nothing about memory outside the declared
+outputs and nothing about floating-point magnitudes — the FP effect of eliminating an
+intermediate store/load (a removed rounding site) is the rounding model's and the
+compute gap's business.
+_Avoid_: fusion equivalence, kernel fusion soundness
+
+**Stage pipeline**:
+The sequential composition of the stage kernels a fusion replaces — run the first
+stage, then the next, each seeing the previous stage's memory. It is the golden
+reference a fused kernel is proved against.
+_Avoid_: unfused kernel, kernel chain
+
+**Stage kernel**:
+One kernel of the original multi-kernel computation that a fusion collapses; stages
+communicate only through intermediate regions.
+_Avoid_: sub-kernel, component kernel
+
 ### Foundation
 
 **Foundation**:
