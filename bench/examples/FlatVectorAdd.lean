@@ -573,6 +573,220 @@ specification add_kernel_denotation (B n pid : Nat) (hB : 0 < B)
         (o := pid * B + i.val) (by simpa [FlatAlloc.listExtent] using hi)]
       exact hobs
 
+/-! ## Part 5 — junk tolerance: locality of the flat run
+
+`add_kernel_denotation` runs the flattened kernel from the **canonical**
+flat state, whose memory is `0` outside the loaded windows. Real memory
+carries junk there. The execution-locality theorem
+(`VeriTile.Triton.exec_agreeOn`) closes that gap: the flattened kernel is
+trace-safe inside the flat window `[0, 3n)` of the canonical end-to-end
+allocation, so **any** start state agreeing with the canonical one inside
+that window — and holding arbitrary junk outside it — produces the same
+in-bounds read-back. -/
+
+set_option maxHeartbeats 1600000 in
+/-- The **flattened** register-style masked vector add is trace-safe for any
+flat bounds map covering the three relocated windows, from any start state:
+every load/store lands at `A.base r + (pid*B + i)` on a masked lane
+`pid*B + i < n`. Flat-side sibling of `addKernelMasked_traceSafe`. -/
+theorem addKernelMaskedFlat_traceSafe (A : FlatAlloc)
+    (xReg yReg outReg : RegionName) (B n : Nat) (fb : RegionBounds)
+    (s : BlockState)
+    (hx : A.base xReg + n ≤ fb A.flat) (hy : A.base yReg + n ≤ fb A.flat)
+    (hout : A.base outReg + n ≤ fb A.flat) :
+    Kernel.TraceSafe fb
+      (A.flattenKernel
+        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+          ).toAlgKernel)) s := by
+  have hbody : (A.flattenKernel
+      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+        ).toAlgKernel)).body
+      = [Stmt.assign .nat [] "pid" (Op.programId 0),
+         Stmt.assign .nat [B] "offsets"
+           (Op.add .nat .scalarL
+             (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat B))
+             (Op.arange B)),
+         Stmt.assign .bool [B] "mask"
+           (Op.lt .nat .scalarR (Op.ref .nat [B] "offsets") (Op.constNat n)),
+         Stmt.assign .real [B] "x"
+           (Op.load .real
+             (MemAccess.region A.flat
+               (Op.add .nat .scalarL (Op.constNat (A.base xReg))
+                 (Op.ref .nat [B] "offsets")))
+             (MaskOpt.mask (Op.ref .bool [B] "mask"))),
+         Stmt.assign .real [B] "y"
+           (Op.load .real
+             (MemAccess.region A.flat
+               (Op.add .nat .scalarL (Op.constNat (A.base yReg))
+                 (Op.ref .nat [B] "offsets")))
+             (MaskOpt.mask (Op.ref .bool [B] "mask"))),
+         Stmt.assign .real [B] "output"
+           (Op.add .real (.consSame .nil) (Op.ref .real [B] "x")
+             (Op.ref .real [B] "y")),
+         Stmt.store .real [B]
+           (MemAccess.region A.flat
+             (Op.add .nat .scalarL (Op.constNat (A.base outReg))
+               (Op.ref .nat [B] "offsets")))
+           (Op.ref .real [B] "output")
+           (MaskOpt.mask (Op.ref .bool [B] "mask"))] := by
+    simp [VeriTile.Examples.addKernelMasked, ComputeKernel.toAlgKernel,
+      FlatAlloc.flattenKernel, FlatAlloc.flattenStmts, FlatAlloc.flattenStmt,
+      FlatAlloc.flattenOp, FlatAlloc.flattenAccess, FlatAlloc.flattenMask,
+      FlatAlloc.shiftBroadcast]
+  unfold Kernel.TraceSafe
+  rw [hbody]
+  -- statement 1: pid := program_id(0)
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s1 hs1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmt_assign_inv hs1
+  -- statement 2: offsets := pid * B + arange B
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s2 hs2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmt_assign_inv hs2
+  rw [show evalOp (Op.add .nat .scalarL
+      (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat B))
+      (Op.arange B)) (s.setReg "pid" .nat [] v1)
+      = some ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩ from by
+    simp [Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+      Tile.vec]] at hv2
+  obtain rfl := Option.some_inj.mp hv2
+  -- statement 3: mask := offsets < n
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s3 hs3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmt_assign_inv hs3
+  rw [show evalOp (Op.lt .nat .scalarR (Op.ref .nat [B] "offsets")
+      (Op.constNat n))
+      ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
+        ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩)
+      = some ⟨fun i => ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
+    simp [Tile.cop, BlockState.setReg]] at hv3
+  obtain rfl := Option.some_inj.mp hv3
+  -- shared register-readback facts at the state before the loads
+  set sm := ((s.setReg "pid" .nat [] v1).setReg "offsets" .nat [B]
+      ⟨fun i => (v1.data PUnit.unit) * B + i.1.val⟩).setReg "mask" .bool [B]
+      ⟨fun i => ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩
+      with hsm
+  have hAAS : ∀ (t : BlockState),
+      (∀ dt sh nm, nm = "offsets" ∨ nm = "mask" →
+        t.regs dt sh nm = sm.regs dt sh nm) →
+      ∀ (base : Nat), base + n ≤ fb A.flat →
+      MemAccess.ActiveAddressSafe fb
+        (MemAccess.region A.flat
+          (Op.add .nat .scalarL (Op.constNat base)
+            (Op.ref .nat [B] "offsets"))) t
+        ((MaskOpt.mask (dtype := .real) (Op.ref .bool [B] "mask")).Active t) := by
+    intro t hframe base hbase
+    simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
+    intro offsets hoffs i hact
+    rw [show evalOp (Op.add .nat .scalarL (Op.constNat base)
+        (Op.ref .nat [B] "offsets")) t
+        = some ⟨fun i => base + ((v1.data PUnit.unit) * B + i.1.val)⟩ from by
+      simp [hframe .nat [B] "offsets" (Or.inl rfl), hsm,
+        BlockState.setReg, Tile.bop, NumericDType.nat_add]] at hoffs
+    obtain rfl := Option.some_inj.mp hoffs
+    obtain ⟨masks, hm, hd⟩ := hact
+    rw [show evalOp (Op.ref .bool [B] "mask") t
+        = some ⟨fun i =>
+          ComparableDType.nat.lt ((v1.data PUnit.unit) * B + i.1.val) n⟩ from by
+      simp [hframe .bool [B] "mask" (Or.inr rfl), hsm,
+        BlockState.setReg]] at hm
+    obtain rfl := Option.some_inj.mp hm
+    rw [ComparableDType.nat_lt_eq_true] at hd
+    show base + ((v1.data PUnit.unit) * B + i.1.val) < fb A.flat
+    omega
+  -- statement 4: x := load(flat + (base x + offsets), mask)
+  refine Stmt.TraceSafeList.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafe, Op.SafeAt]
+    exact ⟨by simp, by simp,
+      hAAS sm (fun _ _ _ _ => rfl) (A.base xReg) hx⟩
+  intro s4 hs4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
+  -- statement 5: y := load(flat + (base y + offsets), mask)
+  refine Stmt.TraceSafeList.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafe, Op.SafeAt]
+    refine ⟨by simp, by simp,
+      hAAS _ (fun dt sh nm hnm => ?_) (A.base yReg) hy⟩
+    rcases hnm with rfl | rfl <;> simp [BlockState.setReg]
+  intro s5 hs5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmt_assign_inv hs5
+  -- statement 6: output := x + y
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s6 hs6
+  obtain ⟨v6, hv6, rfl⟩ := stepStmt_assign_inv hs6
+  -- statement 7: store(flat + (base out + offsets), output, mask)
+  refine Stmt.TraceSafeList.cons_intro ?_ (fun _ _ => .nil_intro)
+  simp only [Stmt.TraceSafe, MemAccess.SafeAt, MaskOpt.SafeAt]
+  refine ⟨by simp [Op.SafeAt], by simp [Op.SafeAt], by simp [Op.SafeAt],
+    hAAS _ (fun dt sh nm hnm => ?_) (A.base outReg) hout⟩
+  rcases hnm with rfl | rfl <;> simp [BlockState.setReg]
+
+/-- **Junk tolerance of the denotation** (#487 step 2): running the
+flattened masked vector add from **any** flat state `sF` that agrees with
+the canonical denotation start state inside the allocated flat window
+`[0, 3n)` — with arbitrary junk outside it and in unrelated regions —
+reads back the same in-bounds answer `xs i + ys i`. The canonical
+zero-outside-the-slots start state of `denoteKernel` is therefore no
+idealization: out-of-window memory content cannot change the answer. -/
+theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
+    (xs ys : Fin B → ℝ) (i : Fin B) (hi : pid * B + i.val < n)
+    (sF : BlockState)
+    (hagree : ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).flattenState
+        (DenoteSlot.state pid [.ofFin ⟨"x"⟩ (pid * B) xs,
+          .ofFin ⟨"y"⟩ (pid * B) ys])).AgreeOn
+      (RegionBounds.Window fun r => if r = ⟨"flat"⟩ then 3 * n else 0) sF) :
+    (exec ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).flattenKernel
+        ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
+          ).toAlgKernel)) sF).map
+      (fun sF' => sF'.readMem ⟨"flat"⟩
+        ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).addr ⟨"out"⟩
+          (pid * B + i.val)))
+      = some (xs i + ys i) := by
+  set A := FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] with hA
+  set k := (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n).toAlgKernel
+    with hk
+  set sC := A.flattenState (DenoteSlot.state pid
+    [.ofFin ⟨"x"⟩ (pid * B) xs, .ofFin ⟨"y"⟩ (pid * B) ys]) with hsC
+  -- flat-side trace safety of the flattened kernel, window `[0, 3n)` of flat
+  have hbx : A.base ⟨"x"⟩ = 0 := by simp [hA, FlatAlloc.listBase]
+  have hby : A.base ⟨"y"⟩ = n := by simp [hA, FlatAlloc.listBase]
+  have hbout : A.base ⟨"out"⟩ = n + n := by simp [hA, FlatAlloc.listBase]
+  have hflat : A.flat = ⟨"flat"⟩ := rfl
+  have hts := addKernelMaskedFlat_traceSafe A ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
+    (fun r => if r = ⟨"flat"⟩ then 3 * n else 0) sC
+    (by rw [hbx, hflat]; simp; omega)
+    (by rw [hby, hflat]; simp; omega)
+    (by rw [hbout, hflat]; simp; omega)
+  -- locality: the junk state runs in lockstep with the canonical state
+  have hrel := exec_agreeOn (fun r => if r = ⟨"flat"⟩ then 3 * n else 0)
+    (A.flattenKernel k) sC sF hts hagree
+  -- the canonical run's read-back is the denotation headline
+  have hden := add_kernel_denotation B n pid hB xs ys i hi
+  unfold denoteAddKernel denoteKernel at hden
+  cases hC : exec (A.flattenKernel k) sC with
+  | none => rw [hC] at hden; simp at hden
+  | some sC' =>
+      rw [hC] at hrel hden
+      cases hF : exec (A.flattenKernel k) sF with
+      | none => rw [hF] at hrel; cases hrel
+      | some sF' =>
+          rw [hF] at hrel
+          cases hrel with
+          | some hag' =>
+              simp only [Option.map_some, Option.some_inj] at hden ⊢
+              rw [← hden]
+              -- the read-back cell sits inside the agreed window
+              refine (BlockState.readMem_congr (hag'.mem ?_)).symm
+              show A.addr ⟨"out"⟩ (pid * B + i.val)
+                < if (⟨"flat"⟩ : RegionName) = ⟨"flat"⟩ then 3 * n else 0
+              rw [if_pos rfl]
+              have : A.addr ⟨"out"⟩ (pid * B + i.val)
+                  = (n + n) + (pid * B + i.val) := by
+                rw [FlatAlloc.addr, hbout]
+              omega
+
+#axiomsClean addKernelMaskedFlat_traceSafe
+#axiomsClean add_kernel_denotation_junk
+
 /-! ## Trust gates -/
 
 #axiomsClean flatAddKernel_exec_flatten
