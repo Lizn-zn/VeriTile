@@ -166,6 +166,152 @@ theorem Implements.intro (io : KernelIO₂)
 
 end KernelIO₂
 
+/-- IO signature of a **masked** two-input / one-output kernel — the masked
+sibling of `KernelIO₂`. Each program instance owns a `B`-lane window but only
+its **active** lanes (`mask pid j`) touch memory: partial blocks at the end of
+a buffer deactivate the overhanging lanes. Inactive lanes carry **no
+obligations on either side** of the Hoare triple: the precondition constrains
+input memory only at active lanes (in the flat world an inactive lane's
+address may exceed the buffer or land in the next buffer, so requiring inputs
+there would be nonsense), and the postcondition asserts output values only at
+active lanes and frame everywhere else. -/
+structure MaskedKernelIO₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First input buffer. -/
+  in1 : RegionName
+  /-- Second input buffer. -/
+  in2 : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length: each program instance owns `B`-element windows. -/
+  B : Nat
+  /-- Where program `pid` reads its `in1` tile: active lanes of
+  `[read1 pid, read1 pid + B)`. -/
+  read1 : Nat → Nat
+  /-- Where program `pid` reads its `in2` tile. -/
+  read2 : Nat → Nat
+  /-- Where program `pid` writes its output tile. -/
+  write : Nat → Nat
+  /-- Program `pid`'s active lanes. Only these read, write, or carry spec
+  content; the rest of the window is dead. -/
+  mask : Nat → Fin B → Prop
+
+namespace MaskedKernelIO₂
+
+/-- `io.Implements f` — masked sibling of `KernelIO₂.Implements`. Same full
+Hoare triple, restricted to the active lanes: the window-in-bounds contract,
+the loaded-inputs precondition, and the output-value postcondition are all
+stated **lane-wise at active lanes only** (a partial block may overhang the
+buffer on its inactive lanes), and the frame covers every cell outside the
+active output lanes. -/
+def Implements (io : MaskedKernelIO₂)
+    (f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    -- ∀ base pointers: any disjoint allocation of exactly the three buffers
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    -- lane-wise bounds: every *active* lane lands inside its buffer
+    (∀ j : Fin io.B, io.mask pid j → io.read1 pid + j.val < A.extent io.in1) →
+    (∀ j : Fin io.B, io.mask pid j → io.read2 pid + j.val < A.extent io.in2) →
+    (∀ j : Fin io.B, io.mask pid j → io.write pid + j.val < A.extent io.out) →
+  ∀ (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
+    -- the launch state: program id set, undef launch-clean, inputs loaded at
+    -- the ACTIVE lanes only; everything else in s₀ arbitrary
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid j →
+      s₀.readMem io.in1 (io.read1 pid + j.val) = xs j) →
+    (∀ j : Fin io.B, io.mask pid j →
+      s₀.readMem io.in2 (io.read2 pid + j.val) = ys j) →
+    ∃ s',
+      -- termination of the translated pointer kernel …
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      -- … every active output lane holds f …
+      ∧ (∀ j : Fin io.B, io.mask pid j →
+          s'.readMem A.flat (A.addr io.out (io.write pid + j.val))
+            = f xs ys j)
+      -- … and every cell outside the active output lanes is untouched (frame)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ∀ j : Fin io.B, io.mask pid j →
+              o' ≠ A.addr io.out (io.write pid + j.val)) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₂.Implements
+
+/-- Assembly lemma — masked sibling of `KernelIO₂.Implements.intro`. The
+three per-kernel obligations take the **lane-wise** contracts: `hts` gets the
+active-lane bounds, `hrun` proves the region-model masked Hoare triple from
+active-lane inputs only. The flat-memory transport is done here, once; the
+per-lane extent bound feeding the flat read-back comes directly from the
+write-lane hypothesis. -/
+theorem Implements.intro (io : MaskedKernelIO₂)
+    {f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.read1 s.pid + j.val < bounds io.in1) →
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.read2 s.pid + j.val < bounds io.in2) →
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.write s.pid + j.val < bounds io.out) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask s₀.pid j →
+        s₀.readMem io.in1 (io.read1 s₀.pid + j.val) = xs j) →
+      (∀ j : Fin io.B, io.mask s₀.pid j →
+        s₀.readMem io.in2 (io.read2 s₀.pid + j.val) = ys j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.mask s₀.pid j →
+            s1.readMem io.out (io.write s₀.pid + j.val) = f xs ys j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.mask s₀.pid j →
+                o ≠ io.write s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid h1 h2 h3 xs ys s₀ hpid hu hx hy
+  subst hpid
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2 h3
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write s₀.pid + j.val < A.extent io.out := h3 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_)
+          by_cases hro : r = io.out
+          · subst hro
+            refine Or.inr fun j hj hoj => ?_
+            rcases hcond with hflat | hnadr
+            · exact hflat rfl
+            · exact hnadr j hj (by rw [hoeq, hoj])
+          · exact Or.inl hro
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end MaskedKernelIO₂
+
 /-- IO signature of a **one-input / one-output** kernel. Unlike `KernelIO₂`,
 the input and output tile lengths are independent (`Bin`/`Bout`) — this
 covers whole-tile maps (softmax: `Bin = Bout = B`) as well as reductions
