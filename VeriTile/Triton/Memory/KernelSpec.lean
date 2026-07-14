@@ -166,4 +166,113 @@ theorem Implements.intro (io : KernelIO₂)
 
 end KernelIO₂
 
+/-- IO signature of a **one-input / one-output** kernel. Unlike `KernelIO₂`,
+the input and output tile lengths are independent (`Bin`/`Bout`) — this
+covers whole-tile maps (softmax: `Bin = Bout = B`) as well as reductions
+that write a single cell per program (LSE, row-wise sum/max:
+`Bout = 1`). Same reading as `KernelIO₂`: `read` is the address half of
+the precondition, `write` of the postcondition; buffer sizes are not
+signature content. -/
+structure KernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Input tile length. -/
+  Bin : Nat
+  /-- Output tile length (`1` for scalar-per-program reductions). -/
+  Bout : Nat
+  /-- Where program `pid` reads its input tile: `[read pid, read pid + Bin)`. -/
+  read : Nat → Nat
+  /-- Where program `pid` writes its output tile. -/
+  write : Nat → Nat
+
+namespace KernelIO₁
+
+/-- `io.Implements f` — one-input sibling of `KernelIO₂.Implements`; see
+the module docstring for exactly what is quantified. -/
+def Implements (io : KernelIO₁)
+    (f : (Fin io.Bin → ℝ) → Fin io.Bout → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    io.read pid + io.Bin ≤ A.extent io.inp →
+    io.write pid + io.Bout ≤ A.extent io.out →
+  ∀ (xs : Fin io.Bin → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.Bin, s₀.readMem io.inp (io.read pid + j.val) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.Bout,
+          s'.readMem A.flat (A.addr io.out (io.write pid + j.val))
+            = f xs j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ∀ j : Fin io.Bout, o' ≠ A.addr io.out (io.write pid + j.val)) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₁.Implements
+
+/-- Assembly lemma — one-input sibling of `KernelIO₂.Implements.intro`. -/
+theorem Implements.intro (io : KernelIO₁)
+    {f : (Fin io.Bin → ℝ) → Fin io.Bout → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      io.read s.pid + io.Bin ≤ bounds io.inp →
+      io.write s.pid + io.Bout ≤ bounds io.out →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.Bin → ℝ),
+      (∀ j : Fin io.Bin, s₀.readMem io.inp (io.read s₀.pid + j.val) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.Bout,
+            s1.readMem io.out (io.write s₀.pid + j.val) = f xs j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨ ∀ j : Fin io.Bout, o ≠ io.write s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid h1 h2 xs s₀ hpid hu hx
+  subst hpid
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write s₀.pid + j.val < A.extent io.out := by
+      have := j.isLt; omega
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_)
+          by_cases hro : r = io.out
+          · subst hro
+            refine Or.inr fun j hoj => ?_
+            rcases hcond with hflat | hnadr
+            · exact hflat rfl
+            · exact hnadr j (by rw [hoeq, hoj])
+          · exact Or.inl hro
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end KernelIO₁
+
 end VeriTile.Triton
