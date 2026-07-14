@@ -32,9 +32,9 @@ memory_frame_blockptr_oob	bench/examples/MemoryFrame.lean	VeriTile.Bench.Example
 grid_const_store_launch	bench/examples/GridComposition.lean	VeriTile.Bench.Examples.GridComposition.gridConstStore_launched_observe_written	launch	proven	internal:#88	-	ND grid	Layer-2b ordinary whole-grid launch	GridLaunchedOrdinary smoke
 splitk_atomic_add_launch	bench/examples/GridComposition.lean	VeriTile.Bench.Examples.GridComposition.splitKAtomicAdd_launched_sum	trace	proven	internal:#88/#104	-	split-K toy grid	Minimal atomic-grid composition smoke	GridLaunchedAtomic consumer outside FA-1 backward
 grid_rmw_xchg_launch	bench/examples/GridComposition.lean	VeriTile.Bench.Examples.GridComposition.gridLaunchedRMW_xchg_two_final	trace	proven	internal:#82	-	single-cell xchg linearization	Order-sensitive RMW launcher smoke	GridLaunchedRMW consumer for two atomic_xchg events
-online_softmax	bench/examples/OnlineSoftmax.lean	VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
-rowwise_sum	bench/examples/RowWise.lean	VeriTile.Bench.Examples.RowWise.rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
-rowwise_max	bench/examples/RowWise.lean	VeriTile.Bench.Examples.RowWise.rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
+online_softmax	bench/examples/OnlineSoftmax.lean	VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
+rowwise_sum	bench/examples/RowWiseSum.lean	VeriTile.Bench.Examples.RowWiseSum.rowWiseSum_correctness	correct	proven	internal	-	-	Row-wise reductions	sum variant
+rowwise_max	bench/examples/RowWiseMax.lean	VeriTile.Bench.Examples.RowWiseMax.rowWiseMax_correctness	correct	proven	internal	-	-	Row-wise max	max variant
 fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLURounded.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
 welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Bench.Examples.Welford.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
 layernorm_refine	bench/examples/FusedLayerNorm.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite

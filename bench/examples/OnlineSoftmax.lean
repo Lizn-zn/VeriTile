@@ -1,12 +1,30 @@
 /-
-bench/examples/OnlineSoftmax.lean
+bench/examples/OnlineSoftmax
 
-Online softmax recurrence and typed Triton kernel skeleton.
+**Online softmax**: the streaming `(M, L)` recurrence, in three parts.
 
-The streaming `(M, L)` recurrence of online softmax is proven equal to the
-batch form `(tileMax, ∑ exp)` — with no range precondition on the input,
-thanks to the `WithBot ℝ` math model seeding `M` at `⊥` — and the typed
-Triton kernel is proven to compute exactly that recurrence.
+1. **The math** — `onlineSoftmaxM` / `onlineSoftmaxL`, the `WithBot ℝ`-valued
+   streaming recurrence (seeding `M` at `⊥` removes every range
+   precondition on the input), and `online_softmax_recurrence_eq_batch`:
+   the recurrence equals the batch form `(tileMax, ∑ exp)`.
+2. **The online kernel** — `onlineSoftmaxKernel`, a typed Triton loop that
+   maintains `(m, l)` in registers; `online_softmax_correct` proves those
+   registers hold exactly `onlineSoftmaxM/L` after the run.
+3. **The headline** — the file's single `specification`:
+
+       online_softmax_correctness : batchSoftmaxIO B ⊨ fun xs i =>
+         Real.exp (xs i - (onlineSoftmaxM xs B).unbotD 0)
+           / (onlineSoftmaxL xs B).unbotD 0
+
+   `⊨` is the audit-once Hoare-triple combinator (`KernelIO₁.Implements`):
+   ∀ disjoint buffer placement (∀ base pointers, ∀ sizes), ∀ program id in
+   bounds, ∀ launch state with the input window loaded and everything else
+   arbitrary — the pointer kernel terminates, the output window holds the
+   value pointwise, and every other cell is unchanged. The mathematical
+   function is the **online recurrence itself** — that is the point of the
+   file: the batch kernel provably implements the streaming formulation
+   (via part 1's identity), the streaming kernel provably computes it in
+   registers (part 2).
 -/
 
 import VeriTile.Triton.Core
@@ -14,6 +32,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.KernelLemmas
+import VeriTile.Triton.Memory.KernelSpec
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Meta.Specification
@@ -422,44 +441,320 @@ theorem online_softmax_correct
   · rw [hExec]
     simp [hl]
 
-/-- View-level surface for `online_softmax_correct`. -/
-theorem online_softmax_correct_exec_view
-    (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
-    (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    let final := exec (onlineSoftmaxKernel xReg yReg N) s
-    final.bind (fun s' => (s'.regs .real [] "m").map (fun t => t.data PUnit.unit))
-        = some (onlineSoftmaxM xs N)
-    ∧ final.bind (fun s' => (s'.regs .real [] "l").map (fun t => t.data PUnit.unit))
-        = some (onlineSoftmaxL xs N) := by
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := N) (xs := xs) h_x
-  exact online_softmax_correct xReg yReg N hN s xs hx
+/-! ## KernelIO spec — `batchSoftmaxIO ⊨` the online recurrence
 
-/-- Compute-facing view-level surface for `online_softmax_correct`. -/
-specification online_softmax_correct_view
-    (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
-    (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeCorrect.General
-      ((onlineSoftmaxKernel xReg yReg N))
-      (fun s0 s' =>
-        s0 = s →
-        (s'.regs .real [] "m").map (fun t => t.data PUnit.unit)
-            = some (onlineSoftmaxM xs N)
-        ∧ (s'.regs .real [] "l").map (fun t => t.data PUnit.unit)
-            = some (onlineSoftmaxL xs N)) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
-  intro s0 s' hExec hs0
-  subst s0
-  have hview := online_softmax_correct_exec_view xReg yReg N hN s xs h_x
-  rw [hExec] at hview
-  simpa using hview
+The `io ⊨ f` correctness headline for the batch kernel, following the
+canonical KernelIO showcase `bench/examples/VectorAdd.lean` (softmax is
+one-input/one-output, so `KernelIO₁`). The mathematical function `f` is the
+**online `(M, L)` recurrence itself** — `exp (xs i − M_B) / L_B` with
+`M_B = onlineSoftmaxM xs B` and `L_B = onlineSoftmaxL xs B` (read back from
+`WithBot ℝ` via `unbotD 0`; at step `B ≥ 1` both are genuine reals) — which
+is the whole point of this file: by `online_softmax_recurrence_eq_batch`
+this equals batch softmax, but the headline keeps the streaming
+formulation. Three parts, as in `VectorAdd`:
+
+1. **Region-model Hoare triple** (`batchSoftmax_region_run`) — termination,
+   output-window values (the online recurrence, via the batch closed form
+   plus the math identity), and the cell-level frame, from any launch state
+   whose input window is loaded. Exactly the `hrun` obligation of
+   `KernelIO₁.Implements.intro`.
+2. **Flat-memory bridge side conditions** — `TraceSafe` (the per-execution
+   safety walk: the register ops `max`/`exp`/`sum`/`div` are memory-silent;
+   only the one load and the one store carry bounds obligations, both
+   through the unmasked `offs` tile) and `FlattenOk` (bridge fragment
+   membership).
+3. **The spec** — `online_softmax_correctness : batchSoftmaxIO B ⊨ …`,
+   spelled out: for **every** disjoint placement of the two buffers in flat
+   memory, **every** program id whose windows are in bounds, and **every**
+   launch state whose input window holds `xs` — all other buffer cells and
+   all registers arbitrary — the translated pointer kernel terminates, its
+   output window holds the online-recurrence value pointwise, and every
+   other memory cell is unchanged. -/
+section OnlineSoftmax.kernelIO
+
+open VeriTile.Triton.KernelIO₁ (Implements)
+open scoped VeriTile.Triton.KernelIO₁
+
+/-! ### Part 1 — the region-model Hoare triple -/
+
+/-- Closed form of the batch kernel's stores: after the run, the output
+window holds the max-shifted softmax `stableSpec xs (tileMax hB xs)`.
+Statement-walk proof; the online-recurrence reading is layered on in
+`batchSoftmax_region_run` via `online_softmax_recurrence_eq_batch`. -/
+private theorem batchSoftmax_correct
+    (xReg yReg : RegionName)
+    (B : Nat) (hB : 0 < B) (s : BlockState) (xs : Fin B → ℝ)
+    (_h_x : InputLoadedAt s xReg B xs) :
+    ∀ i : Fin B,
+      observeAt (exec (batchSoftmaxKernel xReg yReg B) s) yReg B s.pid i
+        = some (stableSpec xs (tileMax hB xs) i) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, batchSoftmaxKernel, stableSoftmaxKernel, stepStmts,
+        stepStmt, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        NumericDType.div, stableSpec, tileMax]
+  repeat unfold evalOp
+  simp [Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  unfold InputLoadedAt at _h_x
+  simp [_h_x]
+  rfl
+
+/-- A scatter-store `foldl` leaves every memory cell it does not hit
+unchanged (cell-level frame for the unmasked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        acc.writeMem region (offsetFn k) (valueFn k)) s).mem r o
+      = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons,
+        ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_mem]
+      exact if_neg (fun hc =>
+        hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
+
+/-- Frame half: every memory cell other than the output window is preserved
+by the run. Non-emptiness is needed because `Tile.reduceMax` (hence the
+kernel's termination) is only defined on positive-length axes. -/
+private theorem batchSoftmax_frame (xReg yReg : RegionName)
+    (B : Nat) (hB : 0 < B) (s s1 : BlockState)
+    (hExec : exec ((batchSoftmaxKernel xReg yReg B).toAlgKernel) s
+      = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ i : Fin B, ¬(yReg = r ∧ s.pid * B + i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  simp [exec, batchSoftmaxKernel, stableSoftmaxKernel,
+    ComputeKernel.toAlgKernel, stepStmts,
+    stepStmt, Tile.bop, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    NumericDType.div] at hExec
+  repeat unfold evalOp at hExec
+  simp [Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ r o _ _ ?_) rfl
+  intro k _ hc
+  exact hmiss k.1 hc
+
+/-- **Region-model Hoare triple for the batch kernel** — termination, the
+output window holding the **online recurrence** `exp (xs j − M_B) / L_B`
+(the batch closed form rewritten through
+`online_softmax_recurrence_eq_batch`), and frame, from any launch state
+whose input window is loaded. This is what the `⊨` headline transports to
+flat memory. -/
+theorem batchSoftmax_region_run (B : Nat) (hB : 0 < B)
+    (s₀ : BlockState) (xs : Fin B → ℝ)
+    (hx : ∀ j : Fin B, s₀.readMem ⟨"x"⟩ (s₀.pid * B + j.val) = xs j) :
+    ∃ s1, exec ((batchSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B).toAlgKernel) s₀
+        = some s1
+      ∧ (∀ j : Fin B,
+          s1.readMem ⟨"y"⟩ (s₀.pid * B + j.val)
+            = Real.exp (xs j - (onlineSoftmaxM xs B).unbotD 0)
+                / (onlineSoftmaxL xs B).unbotD 0)
+      ∧ (∀ r o,
+          (r ≠ ⟨"y"⟩ ∨ ∀ j : Fin B, o ≠ s₀.pid * B + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  -- The online recurrence at step B collapses to the batch closed form.
+  have hM : (onlineSoftmaxM xs B).unbotD 0 = tileMax hB xs := by
+    rw [(online_softmax_recurrence_eq_batch hB xs).1]
+    exact WithBot.unbotD_coe 0 _
+  have hL : (onlineSoftmaxL xs B).unbotD 0
+      = ∑ k, Real.exp (xs k - tileMax hB xs) := by
+    rw [(online_softmax_recurrence_eq_batch hB xs).2]
+    exact WithBot.unbotD_coe 0 _
+  have hobs := batchSoftmax_correct ⟨"x"⟩ ⟨"y"⟩ B hB s₀ xs hx
+  rw [show exec (batchSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B) s₀
+      = exec ((batchSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B).toAlgKernel) s₀ from rfl]
+    at hobs
+  cases hsrc : exec ((batchSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B).toAlgKernel) s₀ with
+  | none =>
+      have := hobs ⟨0, hB⟩
+      rw [hsrc] at this
+      simp [observeAt] at this
+  | some s1 =>
+      refine ⟨s1, rfl, fun j => ?_, fun r o hcond => ?_⟩
+      · have := hobs j
+        rw [hsrc] at this
+        rw [hM, hL]
+        simpa [observeAt, stableSpec] using this
+      · refine batchSoftmax_frame ⟨"x"⟩ ⟨"y"⟩ B hB s₀ s1 hsrc r o
+          (fun i ⟨hr, ho⟩ => ?_)
+        rcases hcond with hne | hno
+        · exact hne hr.symm
+        · exact hno i ho.symm
+
+/-! ### Part 2 — flat-memory bridge side conditions -/
+
+/-- Inversion for a successful `assign` step. -/
+private theorem stepStmt_assign_inv {d : TileDType} {sh : TileShape}
+    {nm : RegName} {e : Op d sh} {s s' : BlockState}
+    (h : stepStmt (.assign d sh nm e) s = some s') :
+    ∃ v, evalOp e s = some v ∧ s' = s.setReg nm d sh v := by
+  simp only [stepStmt] at h
+  cases hv : evalOp e s with
+  | none => rw [hv] at h; exact absurd h (by simp)
+  | some v =>
+      rw [hv] at h
+      replace h : some (s.setReg nm d sh v) = some s' := h
+      exact ⟨v, rfl, (Option.some_inj.mp h).symm⟩
+
+/-- Bounds discharge for accesses through the `offs` register: in any state
+whose `offs` register holds the program tile's offsets
+`pid₀ * B + i`, all addressed cells lie below `pid₀ * B + B ≤ bounds reg`. -/
+private theorem offs_activeAddressSafe (B : Nat) (bounds : RegionBounds)
+    (pid₀ : Nat) (t : BlockState) (active : TileIndex [B] → Prop)
+    (hread : t.regs .nat [B] "offs" = some ⟨fun i => pid₀ * B + i.1.val⟩)
+    (reg : RegionName) (hreg : pid₀ * B + B ≤ bounds reg) :
+    MemAccess.ActiveAddressSafe bounds
+      (MemAccess.region reg (Op.ref .nat [B] "offs")) t active := by
+  simp only [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
+  intro offsets hoffs i _
+  rw [show evalOp (Op.ref .nat [B] "offs") t
+      = some ⟨fun i => pid₀ * B + i.1.val⟩ from by simp [hread]] at hoffs
+  obtain rfl := Option.some_inj.mp hoffs
+  simp only [Region.cast_self]
+  exact lt_of_lt_of_le (Nat.add_lt_add_left i.1.isLt _) hreg
+
+set_option maxHeartbeats 1600000 in
+/-- The batch kernel is trace-safe: of its eight statements, only the `x`
+load and the final store touch memory — both through the unmasked `offs`
+tile, so each region's bound must cover the whole program tile. The
+register ops (`max`/`exp`/`sum`/`div`) are memory-silent. -/
+theorem batchSoftmax_traceSafe (xReg yReg : RegionName)
+    (B : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hx : s.pid * B + B ≤ bounds xReg) (hy : s.pid * B + B ≤ bounds yReg) :
+    Kernel.TraceSafe bounds
+      ((batchSoftmaxKernel xReg yReg B).toAlgKernel)
+      s := by
+  unfold Kernel.TraceSafe batchSoftmaxKernel
+  -- statement 1: pid := program_id(0)
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s1 hs1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmt_assign_inv hs1
+  rw [show evalOp (Op.programId 0) s
+      = some (Tile.scalar (dtype := .nat) (s.pids 0)) from by simp] at hv1
+  obtain rfl := Option.some_inj.mp hv1
+  -- statement 2: offs := pid * B + arange B
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s2 hs2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmt_assign_inv hs2
+  rw [show evalOp (Op.add .nat .scalarL
+      (Op.mul .nat .nil (Op.ref .nat [] "pid") (Op.constNat B))
+      (Op.arange B))
+      (s.setReg "pid" .nat [] (Tile.scalar (dtype := .nat) (s.pids 0)))
+      = some ⟨fun i => s.pids 0 * B + i.1.val⟩ from by
+    simp [Tile.bop, NumericDType.nat_add, NumericDType.nat_mul,
+      Tile.vec]] at hv2
+  obtain rfl := Option.some_inj.mp hv2
+  -- statement 3: x := load(xReg + offs)   (unmasked: all lanes active)
+  refine Stmt.TraceSafeList.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafe, Op.SafeAt]
+    exact ⟨by simp, trivial,
+      offs_activeAddressSafe B bounds (s.pids 0) _ _
+        (by simp [BlockState.setReg]) xReg hx⟩
+  intro s3 hs3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmt_assign_inv hs3
+  -- statement 4: m := max(x, axis=0)   (register op)
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp [Stmt.TraceSafe, Op.SafeAt.eq_def]) ?_
+  intro s4 hs4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
+  -- statement 5: e := exp(x - m)   (register op)
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s5 hs5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmt_assign_inv hs5
+  -- statement 6: s := sum(e, axis=0)   (register op)
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp [Stmt.TraceSafe, Op.SafeAt.eq_def]) ?_
+  intro s6 hs6
+  obtain ⟨v6, hv6, rfl⟩ := stepStmt_assign_inv hs6
+  -- statement 7: y := e / s   (register op)
+  refine Stmt.TraceSafeList.cons_intro (by simp [Stmt.TraceSafe, Op.SafeAt]) ?_
+  intro s7 hs7
+  obtain ⟨v7, hv7, rfl⟩ := stepStmt_assign_inv hs7
+  -- statement 8: store(yReg + offs, y)   (unmasked)
+  refine Stmt.TraceSafeList.cons_intro ?_ (fun _ _ => .nil_intro)
+  simp only [Stmt.TraceSafe, MemAccess.SafeAt, MaskOpt.SafeAt]
+  refine ⟨by simp [Op.SafeAt], by simp [Op.SafeAt], trivial,
+    offs_activeAddressSafe B bounds (s.pids 0) _ _ ?_ yReg hy⟩
+  simp [BlockState.setReg]
+
+/-- The batch kernel sits inside the bridge's covered fragment. -/
+theorem batchSoftmax_flattenOk (xReg yReg : RegionName) (B : Nat) :
+    ((batchSoftmaxKernel xReg yReg B).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [batchSoftmaxKernel, stableSoftmaxKernel, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### Part 3 — the spec: `batchSoftmaxIO ⊨` the online recurrence -/
+
+/-- `batchSoftmaxKernel`'s **IO signature** — the whole kernel-specific
+audit surface of its headline: which buffer is the input (`x`) and which
+the output (`y`), the tile lengths (`Bin = Bout = B`: softmax is a
+whole-tile map), and where program `pid` reads/writes its tile (`pid * B`,
+the host-side launch convention `offs = pid * N + arange`). The windows are
+declared, not parsed from the kernel: the headline **proves** the kernel's
+actual addressing matches them. -/
+def batchSoftmaxIO (B : Nat) : KernelIO₁ where
+  kernel := batchSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B
+  inp := ⟨"x"⟩
+  out := ⟨"y"⟩
+  Bin := B
+  Bout := B
+  read := fun pid => pid * B
+  write := fun pid => pid * B
+
+/-- **The headline**: the batch softmax kernel implements the **online
+`(M, L)` recurrence**, pointwise `exp (xs i − M_B) / L_B` with
+`M_B = onlineSoftmaxM xs B` and `L_B = onlineSoftmaxL xs B` (read back from
+`WithBot ℝ` via `unbotD 0`), on its IO signature — see the section
+docstring for the full Hoare triple `⊨` unfolds to. This is the file's
+story stated as one `io ⊨ f` triple: the streaming recurrence *is* a
+correct softmax spec, and the batch kernel provably computes it. Proof:
+`Implements.intro` assembles the region-model triple (Part 1) with the
+bridge side conditions (Part 2). -/
+specification online_softmax_correctness (B : Nat) (hB : 0 < B) :
+    batchSoftmaxIO B ⊨ fun xs i =>
+      Real.exp (xs i - (onlineSoftmaxM xs B).unbotD 0)
+        / (onlineSoftmaxL xs B).unbotD 0 := by
+  refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact batchSoftmax_flattenOk ⟨"x"⟩ ⟨"y"⟩ B
+  · intro bounds s h1 h2
+    exact batchSoftmax_traceSafe ⟨"x"⟩ ⟨"y"⟩ B bounds s h1 h2
+  · intro s₀ xs hx
+    exact batchSoftmax_region_run B hB s₀ xs hx
+
+end OnlineSoftmax.kernelIO
 
 /-! ## Trust gates -/
 
-#axiomsClean online_softmax_correct_view
+-- No `sorry`, no smuggled axiom, in the headline's transitive proof
+-- (and in the online kernel's register-level theorem).
+#axiomsClean online_softmax_correctness
+#axiomsClean online_softmax_correct
+
+/- The headline's statement surface is the IO signature, the audit-once
+Hoare-triple combinator, and the online-recurrence math constants
+(`onlineSoftmaxM`/`onlineSoftmaxL`; `Real.exp` and `WithBot.unbotD` are
+core-listed; `Zero.toOfNat0` is the Mathlib numeral-`0` instance behind the
+`unbotD 0` default) — no other project constant. -/
+#stmtSurfaceSubset online_softmax_correctness ⊆
+  [batchSoftmaxIO, VeriTile.Triton.KernelIO₁.Implements,
+   VeriTile.Triton.KernelIO₁.Bin, VeriTile.Triton.KernelIO₁.Bout,
+   onlineSoftmaxM, onlineSoftmaxL, Zero.toOfNat0]
 
 end VeriTile.Bench.Examples.OnlineSoftmax
