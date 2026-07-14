@@ -621,7 +621,7 @@ loaded with a slot table, the flattening translation, the flat-memory
 execution, and the read-back of one output lane. What remains per kernel —
 the whole audit surface of the definition below — is the region table, the
 slot table, and the output address. The denotation headline
-`add_kernel_denotation` then speaks only elementary mathematics: `Nat`,
+`add_kernel_correctness` then speaks only elementary mathematics: `Nat`,
 `Fin`, `ℝ`, `Option`, `=`. The `#stmtSurfaceSubset` gate below pins its
 statement surface to the single constant `denoteAddKernel`. -/
 
@@ -707,7 +707,7 @@ specification add_kernel_correctness (B n pid : Nat) (hB : 0 < B)
 
 /-! ## Part 5 — junk tolerance: locality of the flat run
 
-`add_kernel_denotation` runs the flattened kernel from the **canonical**
+`add_kernel_correctness` runs the flattened kernel from the **canonical**
 flat state, whose memory is `0` outside the loaded windows. Real memory
 carries junk there. The execution-locality theorem
 (`VeriTile.Triton.exec_agreeOn`) closes that gap: the flattened kernel is
@@ -728,10 +728,10 @@ theorem addKernelMaskedFlat_traceSafe (A : FlatAlloc)
     (hout : A.base outReg + n ≤ fb A.flat) :
     Kernel.TraceSafe fb
       (A.flattenKernel
-        ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+        ((addKernelMasked xReg yReg outReg B n
           ).toAlgKernel)) s := by
   have hbody : (A.flattenKernel
-      ((VeriTile.Examples.addKernelMasked xReg yReg outReg B n
+      ((addKernelMasked xReg yReg outReg B n
         ).toAlgKernel)).body
       = [Stmt.assign .nat [] "pid" (Op.programId 0),
          Stmt.assign .nat [B] "offsets"
@@ -761,7 +761,7 @@ theorem addKernelMaskedFlat_traceSafe (A : FlatAlloc)
                (Op.ref .nat [B] "offsets")))
            (Op.ref .real [B] "output")
            (MaskOpt.mask (Op.ref .bool [B] "mask"))] := by
-    simp [VeriTile.Examples.addKernelMasked, ComputeKernel.toAlgKernel,
+    simp [addKernelMasked, ComputeKernel.toAlgKernel,
       FlatAlloc.flattenKernel, FlatAlloc.flattenStmts, FlatAlloc.flattenStmt,
       FlatAlloc.flattenOp, FlatAlloc.flattenAccess, FlatAlloc.flattenMask,
       FlatAlloc.shiftBroadcast]
@@ -859,7 +859,7 @@ the canonical denotation start state inside the allocated flat window
 reads back the same in-bounds answer `xs i + ys i`. The canonical
 zero-outside-the-slots start state of `denoteKernel` is therefore no
 idealization: out-of-window memory content cannot change the answer. -/
-theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
+theorem add_kernel_correctness_junk (B n pid : Nat) (hB : 0 < B)
     (xs ys : Fin B → ℝ) (i : Fin B) (hi : pid * B + i.val < n)
     (sF : BlockState)
     (hagree : ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).flattenState
@@ -867,14 +867,14 @@ theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
           .ofFin ⟨"y"⟩ (pid * B) ys])).AgreeOn
       (RegionBounds.Window fun r => if r = ⟨"flat"⟩ then 3 * n else 0) sF) :
     (exec ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).flattenKernel
-        ((VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
+        ((addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
           ).toAlgKernel)) sF).map
       (fun sF' => sF'.readMem ⟨"flat"⟩
         ((FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)]).addr ⟨"out"⟩
           (pid * B + i.val)))
       = some (xs i + ys i) := by
   set A := FlatAlloc.ofList ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] with hA
-  set k := (VeriTile.Examples.addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n).toAlgKernel
+  set k := (addKernelMasked ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n).toAlgKernel
     with hk
   set sC := A.flattenState (DenoteSlot.state pid
     [.ofFin ⟨"x"⟩ (pid * B) xs, .ofFin ⟨"y"⟩ (pid * B) ys]) with hsC
@@ -892,7 +892,7 @@ theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
   have hrel := exec_agreeOn (fun r => if r = ⟨"flat"⟩ then 3 * n else 0)
     (A.flattenKernel k) sC sF hts hagree
   -- the canonical run's read-back is the denotation headline
-  have hden := add_kernel_denotation B n pid hB xs ys i hi
+  have hden := add_kernel_correctness B n pid hB xs ys i hi
   unfold denoteAddKernel denoteKernel at hden
   cases hC : exec (A.flattenKernel k) sC with
   | none => rw [hC] at hden; simp at hden
@@ -916,12 +916,11 @@ theorem add_kernel_denotation_junk (B n pid : Nat) (hB : 0 < B)
                 rw [FlatAlloc.addr, hbout]
               omega
 
-#axiomsClean addKernelMaskedFlat_traceSafe
-#axiomsClean add_kernel_denotation_junk
-
 /-! ## Trust gates -/
 
 #axiomsClean add_kernel_masked_correct_view
+#axiomsClean addKernelMaskedFlat_traceSafe
+#axiomsClean add_kernel_correctness_junk
 #axiomsClean flatAddKernel_exec_flatten
 #axiomsClean addKernelMasked_exec_flatten
 #axiomsClean add_kernel_masked_flat_correct_view
