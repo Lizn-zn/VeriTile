@@ -33,6 +33,7 @@ per kernel.
 -/
 
 import VeriTile.Triton.Memory.Flatten
+import VeriTile.Triton.Memory.FlattenR
 import VeriTile.Triton.Memory.Denotation
 
 namespace VeriTile.Triton
@@ -196,6 +197,13 @@ structure MaskedKernelIO₂ where
   /-- Program `pid`'s active lanes. Only these read, write, or carry spec
   content; the rest of the window is dead. -/
   mask : Nat → Fin B → Prop
+  /-- This kernel's **private working buffers**, each with its per-program
+  window start (lane-masked by `mask`, tile length `B`, like the output).
+  They are allocated and the kernel may stage intermediates through them,
+  but their post-state is not part of any contract: `Implements` and
+  `Equiv` exclude them from the frame, and `Equiv` never compares them.
+  Empty for kernels that stage nothing through memory. -/
+  scratch : List (RegionName × (Nat → Nat)) := []
 
 namespace MaskedKernelIO₂
 
@@ -208,15 +216,18 @@ active output lanes. -/
 def Implements (io : MaskedKernelIO₂)
     (f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
   ∀ A : FlatAlloc,
-    -- ∀ base pointers: any disjoint allocation of exactly the three buffers
+    -- ∀ base pointers: any disjoint allocation of exactly the declared
+    -- buffers (the three interface buffers plus the private scratch)
     A.Disjoint →
-    A.regions = [io.in1, io.in2, io.out] →
+    A.regions = [io.in1, io.in2, io.out] ++ io.scratch.map Prod.fst →
     (∀ r, r ∉ A.regions → A.extent r = 0) →
   ∀ pid : Nat,
     -- lane-wise bounds: every *active* lane lands inside its buffer
     (∀ j : Fin io.B, io.mask pid j → io.read1 pid + j.val < A.extent io.in1) →
     (∀ j : Fin io.B, io.mask pid j → io.read2 pid + j.val < A.extent io.in2) →
     (∀ j : Fin io.B, io.mask pid j → io.write pid + j.val < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.mask pid j →
+      p.2 pid + j.val < A.extent p.1) →
   ∀ (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
     -- the launch state: program id set, undef launch-clean, inputs loaded at
     -- the ACTIVE lanes only; everything else in s₀ arbitrary
@@ -234,11 +245,14 @@ def Implements (io : MaskedKernelIO₂)
       ∧ (∀ j : Fin io.B, io.mask pid j →
           s'.readMem A.flat (A.addr io.out (io.write pid + j.val))
             = f xs ys j)
-      -- … and every cell outside the active output lanes is untouched (frame)
+      -- … and every cell outside the active output lanes and the active
+      -- scratch lanes is untouched (frame)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
-            ∀ j : Fin io.B, io.mask pid j →
-              o' ≠ A.addr io.out (io.write pid + j.val)) →
+            ((∀ j : Fin io.B, io.mask pid j →
+                o' ≠ A.addr io.out (io.write pid + j.val)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.mask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
 @[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₂.Implements
@@ -259,6 +273,8 @@ theorem Implements.intro (io : MaskedKernelIO₂)
         io.read2 s.pid + j.val < bounds io.in2) →
       (∀ j : Fin io.B, io.mask s.pid j →
         io.write s.pid + j.val < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.mask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
       Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
     (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
       (∀ j : Fin io.B, io.mask s₀.pid j →
@@ -272,13 +288,16 @@ theorem Implements.intro (io : MaskedKernelIO₂)
             (r ≠ io.out ∨
               ∀ j : Fin io.B, io.mask s₀.pid j →
                 o ≠ io.write s₀.pid + j.val) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.mask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
-  intro A hd hregs hcov pid h1 h2 h3 xs ys s₀ hpid hu hx hy
+  intro A hd hregs hcov pid h1 h2 h3 hsc xs ys s₀ hpid hu hx hy
   subst hpid
   obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
   have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3
+    hts A.extent s₀ h1 h2 h3 hsc
   have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
   refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
   · rw [hbridge, hexec, Option.map_some]
@@ -300,14 +319,206 @@ theorem Implements.intro (io : MaskedKernelIO₂)
           obtain ⟨r, o⟩ := p
           obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
           show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_)
-          by_cases hro : r = io.out
-          · subst hro
-            refine Or.inr fun j hj hoj => ?_
-            rcases hcond with hflat | hnadr
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
             · exact hflat rfl
-            · exact hnadr j hj (by rw [hoeq, hoj])
-          · exact Or.inl hro
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+/-- `io₁ ≡[R] io₂` — **kernel equivalence on a shared IO signature**, the
+`⊨`-grade form of the refinement surface. The interface (buffers, windows,
+mask) is read from `io₁` — instances share it by construction, e.g.
+`{ referenceIO with kernel := rewritten, scratch := [] }`; `io₂` contributes
+only its `kernel` and its private `scratch`. The claim: for every disjoint
+flat allocation of the interface buffers plus **both** kernels' scratch,
+every program id whose active lanes are in bounds, and **every** launch
+state (no input hypotheses at all — equal inputs are "the same `s₀`"), both
+kernels terminate under `execR R`, their active output lanes agree, and each
+kernel leaves every cell outside the active output window and its own active
+scratch windows untouched. Determinism makes this genuinely symmetric —
+"refines" and "is equivalent to" coincide. -/
+def Equiv (io₁ io₂ : MaskedKernelIO₂) (R : RoundingModel) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io₁.in1, io₁.in2, io₁.out]
+      ++ (io₁.scratch.map Prod.fst ++ io₂.scratch.map Prod.fst) →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    -- lane-wise bounds: every *active* lane of every window is in bounds
+    (∀ j : Fin io₁.B, io₁.mask pid j →
+      io₁.read1 pid + j.val < A.extent io₁.in1) →
+    (∀ j : Fin io₁.B, io₁.mask pid j →
+      io₁.read2 pid + j.val < A.extent io₁.in2) →
+    (∀ j : Fin io₁.B, io₁.mask pid j →
+      io₁.write pid + j.val < A.extent io₁.out) →
+    (∀ p ∈ io₁.scratch, ∀ j : Fin io₁.B, io₁.mask pid j →
+      p.2 pid + j.val < A.extent p.1) →
+    (∀ p ∈ io₂.scratch, ∀ j : Fin io₁.B, io₁.mask pid j →
+      p.2 pid + j.val < A.extent p.1) →
+  ∀ s₀ : BlockState,
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    ∃ s₁ s₂,
+      -- both translated pointer kernels terminate under execR R …
+      execR R (A.flattenKernel io₁.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s₁
+      ∧ execR R (A.flattenKernel io₂.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s₂
+      -- … their active output lanes agree …
+      ∧ (∀ j : Fin io₁.B, io₁.mask pid j →
+          s₁.readMem A.flat (A.addr io₁.out (io₁.write pid + j.val))
+            = s₂.readMem A.flat (A.addr io₁.out (io₁.write pid + j.val)))
+      -- … and each side frames outside the output window ∪ its own scratch
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io₁.B, io₁.mask pid j →
+                o' ≠ A.addr io₁.out (io₁.write pid + j.val)) ∧
+             (∀ p ∈ io₁.scratch, ∀ j : Fin io₁.B, io₁.mask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
+          s₁.mem r' o' = (A.flattenState s₀).mem r' o')
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io₁.B, io₁.mask pid j →
+                o' ≠ A.addr io₁.out (io₁.write pid + j.val)) ∧
+             (∀ p ∈ io₂.scratch, ∀ j : Fin io₁.B, io₁.mask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
+          s₂.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped notation:25 io₁ " ≡[" R "] " io₂ =>
+  MaskedKernelIO₂.Equiv io₁ io₂ R
+
+/-- Assembly lemma for `≡[R]` — the two-kernel sibling of
+`Implements.intro`. Per-kernel obligations: `FlattenOk` and the rounding
+trace-safety walk `TraceSafeR` (addresses don't round, but the walk runs
+under `execR R`'s states). The mathematical core `hrun` is the region-model
+equivalence: from **any** state, both kernels terminate, their active output
+lanes agree, and each frames outside the output window ∪ its own scratch —
+for existing refinement showcases this is a repackaging of the proven
+`ComputeRefine.Refines` theorem plus per-kernel frame lemmas. -/
+theorem Equiv.intro (io₁ io₂ : MaskedKernelIO₂) {R : RoundingModel}
+    (hok₁ : (io₁.kernel.toAlgKernel).FlattenOk)
+    (hok₂ : (io₂.kernel.toAlgKernel).FlattenOk)
+    (hts₁ : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.read1 s.pid + j.val < bounds io₁.in1) →
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.read2 s.pid + j.val < bounds io₁.in2) →
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.write s.pid + j.val < bounds io₁.out) →
+      (∀ p ∈ io₁.scratch, ∀ j : Fin io₁.B, io₁.mask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
+      (io₁.kernel.toAlgKernel).TraceSafeR R bounds s)
+    (hts₂ : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.read1 s.pid + j.val < bounds io₁.in1) →
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.read2 s.pid + j.val < bounds io₁.in2) →
+      (∀ j : Fin io₁.B, io₁.mask s.pid j →
+        io₁.write s.pid + j.val < bounds io₁.out) →
+      (∀ p ∈ io₂.scratch, ∀ j : Fin io₁.B, io₁.mask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
+      (io₂.kernel.toAlgKernel).TraceSafeR R bounds s)
+    (hrun : ∀ s₀ : BlockState,
+      ∃ s1 s2,
+        execR R (io₁.kernel.toAlgKernel) s₀ = some s1
+        ∧ execR R (io₂.kernel.toAlgKernel) s₀ = some s2
+        ∧ (∀ j : Fin io₁.B, io₁.mask s₀.pid j →
+            s1.readMem io₁.out (io₁.write s₀.pid + j.val)
+              = s2.readMem io₁.out (io₁.write s₀.pid + j.val))
+        ∧ (∀ r o,
+            (r ≠ io₁.out ∨
+              ∀ j : Fin io₁.B, io₁.mask s₀.pid j →
+                o ≠ io₁.write s₀.pid + j.val) →
+            (∀ p ∈ io₁.scratch, r = p.1 →
+              ∀ j : Fin io₁.B, io₁.mask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)
+        ∧ (∀ r o,
+            (r ≠ io₁.out ∨
+              ∀ j : Fin io₁.B, io₁.mask s₀.pid j →
+                o ≠ io₁.write s₀.pid + j.val) →
+            (∀ p ∈ io₂.scratch, r = p.1 →
+              ∀ j : Fin io₁.B, io₁.mask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
+            s2.mem r o = s₀.mem r o)) :
+    io₁.Equiv io₂ R := by
+  intro A hd hregs hcov pid h1 h2 h3 hsc1 hsc2 s₀ hpid hu
+  subst hpid
+  obtain ⟨s1, s2, hexec1, hexec2, hval, hframe1, hframe2⟩ := hrun s₀
+  have hts₁' : (io₁.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
+    hts₁ A.extent s₀ h1 h2 h3 hsc1
+  have hts₂' : (io₂.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
+    hts₂ A.extent s₀ h1 h2 h3 hsc2
+  have hbridge1 := A.execR_flatten hd hcov R _ s₀ hts₁' hok₁ hu
+  have hbridge2 := A.execR_flatten hd hcov R _ s₀ hts₂' hok₂ hu
+  have hmem : io₁.out ∈ A.regions := by rw [hregs]; simp
+  refine ⟨A.flattenState s1, A.flattenState s2, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hbridge1, hexec1, Option.map_some]
+  · rw [hbridge2, hexec2, Option.map_some]
+  · intro j hj
+    have hlt : io₁.write s₀.pid + j.val < A.extent io₁.out := h3 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt,
+        A.flattenState_readMem hd s2 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe1 r o ?_ ?_)
+          · by_cases hro : r = io₁.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s2).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s2.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe2 r o ?_ ?_)
+          · by_cases hro : r = io₁.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
     · simp only [FlatAlloc.flattenState, if_neg hr]
 
 end MaskedKernelIO₂
