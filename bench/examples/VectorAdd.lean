@@ -4,10 +4,9 @@ bench/examples/VectorAdd
 The aligned (unmasked) elementwise vector add — the smallest complete
 showcase of the standard trust stack, in four parts:
 
-1. **Kernel + math spec** — the Triton DSL kernel `addKernel` and
-   `addSpec : out[i] = xs[i] + ys[i]`.
-2. **Region-model headline** — `add_kernel_correct_view` on the
-   `ComputeCorrect.Realizes` surface.
+1. **Kernel** — the Triton DSL kernel `addKernel`.
+2. **Region-model correctness** — `add_kernel_correct`: from any state with
+   the inputs loaded, every output lane holds `xs i + ys i`.
 3. **Flat-memory bridge side conditions** — `TraceSafe` / `FlattenOk`,
    discharged for this kernel. Because the kernel is unmasked, every lane
    of the program tile is active, so the safety contract is the aligned
@@ -49,7 +48,7 @@ namespace VeriTile.Bench.Examples.VectorAdd
 open VeriTile.Triton
 open VeriTile.Examples
 
-/-! ## Part 1 — the kernel and its math spec -/
+/-! ## Part 1 — the kernel -/
 
 /-- Elementwise add of two `blockSize`-element tiles, single-block.
 
@@ -66,15 +65,10 @@ def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKernel 
   tl.store($(outReg) + offs, out)
 }
 
-/-- Elementwise add: `out[i] = xs[i] + ys[i]`. -/
-def addSpec {N : Nat} (xs ys : Fin N → ℝ) (i : Fin N) : ℝ :=
-  xs i + ys i
-
 /-! ## Part 2 — region-model correctness -/
 
-/-- `addKernel` correctness against `addSpec`, at the raw `observeAt` level:
-from any state with the inputs loaded, the kernel writes the elementwise sum
-to `outReg`. -/
+/-- `addKernel` correctness at the raw `observeAt` level: from any state
+with the inputs loaded, every output lane holds the elementwise sum. -/
 theorem add_kernel_correct
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (_hBlockSize : 0 < blockSize)
@@ -83,7 +77,7 @@ theorem add_kernel_correct
     (_h_y : InputLoadedAt s yReg blockSize ys) :
     ∀ i : Fin blockSize,
       observeAt (exec (addKernel xReg yReg outReg blockSize) s) outReg blockSize s.pid i
-        = some (addSpec xs ys i) := by
+        = some (xs i + ys i) := by
   intro i
   have h_inj : Function.Injective
       (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
@@ -91,56 +85,10 @@ theorem add_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [observeAt, exec, addKernel, stepStmts, stepStmt, Tile.bop,
-        NumericDType.add, NumericDType.mul, addSpec]
+        NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_x _h_y
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_y]
-
-/-- View-level middleware for `add_kernel_correct` (`TensorView.observe`
-in place of raw `observeAt`). -/
-theorem add_kernel_correct_exec_view
-    (xReg yReg outReg : RegionName)
-    (blockSize : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
-    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ∀ idx : TileIndex [blockSize],
-      TensorView.observe (exec (addKernel xReg yReg outReg blockSize) s)
-          (programTileView s outReg blockSize) idx
-        = some (addSpec xs ys idx.1) := by
-  intro idx
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := blockSize) (xs := xs) h_x
-  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
-    (N := blockSize) (xs := ys) h_y
-  simpa [TensorView.observe, observeTileAt, programTileView,
-         TensorView.offset, Offset.strided, observeAt]
-    using add_kernel_correct xReg yReg outReg blockSize hBlockSize s xs ys hx hy idx.1
-
-/-- **Region-model headline**: on the standard `ComputeCorrect.Realizes`
-surface, from any state with the inputs loaded at the program tiles, the
-kernel writes the view-level elementwise sum to `outReg`. -/
-theorem add_kernel_correct_view
-    (xReg yReg outReg : RegionName)
-    (blockSize : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
-    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := addKernel xReg yReg outReg blockSize)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.ofTensorView
-        (programTileView s outReg blockSize))
-      (expected := fun idx : TileIndex [blockSize] => addSpec xs ys idx.1) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  have hview := add_kernel_correct_exec_view xReg yReg outReg blockSize hBlockSize
-    s xs ys h_x h_y idx
-  rw [hExec] at hview
-  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
-    observeTileAt] using hview
 
 /-! ## Part 3 — flat-memory bridge side conditions
 
@@ -352,12 +300,11 @@ specification add_kernel_correctness (B n pid : Nat) (hB : 0 < B)
         (o := pid * B + i.val)
         (by have := i.isLt; simp only [FlatAlloc.ofList_extent]
             simp [FlatAlloc.listExtent]; omega)]
-      simpa [addSpec] using hobs
+      simpa using hobs
 
 /-! ## Trust gates -/
 
 -- No `sorry`, no smuggled axiom, in the public theorems' transitive proofs.
-#axiomsClean add_kernel_correct_view
 #axiomsClean addKernel_exec_flatten
 #axiomsClean add_kernel_correctness
 

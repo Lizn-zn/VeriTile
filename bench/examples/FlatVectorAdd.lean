@@ -238,56 +238,6 @@ theorem add_kernel_masked_correct
   · simp [hi, h_x, h_y]
   · simp [hi]
 
-/-- View-level surface for `add_kernel_masked_correct`. -/
-theorem add_kernel_masked_correct_exec_view
-    (xReg yReg outReg : RegionName)
-    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
-    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ∀ idx : TileIndex [blockSize],
-      let addr := s.pid * blockSize + idx.1.val
-      TensorView.observe (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
-          (programTileView s outReg blockSize) idx
-        = some (if addr < nElements then xs idx.1 + ys idx.1
-                else s.readMem outReg addr) := by
-  intro idx
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := blockSize) (xs := xs) h_x
-  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
-    (N := blockSize) (xs := ys) h_y
-  simpa [TensorView.observe, observeTileAt, programTileView,
-         TensorView.offset, Offset.strided, observeAt]
-    using add_kernel_masked_correct xReg yReg outReg blockSize nElements
-      hBlockSize s xs ys hx hy idx.1
-
-/-- Compute-facing view-level surface for `add_kernel_masked_correct` — the
-region-model `Realizes` middleware the flat headline composes with. -/
-theorem add_kernel_masked_correct_view
-    (xReg yReg outReg : RegionName)
-    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
-    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := addKernelMasked xReg yReg outReg blockSize nElements)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [blockSize] =>
-          s.pid * blockSize + idx.1.val < nElements)
-        (fun idx => (outReg, s.pid * blockSize + idx.1.val)))
-      (expected := fun idx => xs idx.1 + ys idx.1) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have hview := add_kernel_masked_correct_exec_view xReg yReg outReg blockSize nElements
-    hBlockSize s xs ys h_x h_y idx
-  rw [hExec] at hview
-  simpa [TensorView.observe, observeTileAt, programTileView, TensorView.offset,
-    Offset.strided, hActive] using hview
-
 /-- Inversion for a successful `assign` step. -/
 private theorem stepStmt_assign_inv {d : TileDType} {sh : TileShape}
     {nm : RegName} {e : Op d sh} {s s' : BlockState}
@@ -918,7 +868,6 @@ theorem add_kernel_correctness_junk (B n pid : Nat) (hB : 0 < B)
 
 /-! ## Trust gates -/
 
-#axiomsClean add_kernel_masked_correct_view
 #axiomsClean addKernelMaskedFlat_traceSafe
 #axiomsClean add_kernel_correctness_junk
 #axiomsClean flatAddKernel_exec_flatten
