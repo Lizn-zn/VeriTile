@@ -15,4 +15,5 @@ import VeriTile.Triton.Memory.FlattenR
 import VeriTile.Triton.Memory.Locality
 import VeriTile.Triton.Memory.Denotation
 import VeriTile.Triton.Memory.Layout
+import VeriTile.Triton.Memory.KernelSpec
 
