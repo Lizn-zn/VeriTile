@@ -1,23 +1,34 @@
 /-
 bench/examples/VectorAdd
 
-The aligned (unmasked) elementwise vector add — the smallest complete
-showcase of the standard trust stack, in four parts:
+**The canonical showcase of the KernelIO spec surface**: the aligned
+(unmasked) elementwise vector add, verified end to end. Four parts:
 
-1. **Kernel** — the Triton DSL kernel `addKernel`.
-2. **Region-model correctness** — `add_kernel_correct`: from any state with
-   the inputs loaded, every output lane holds `xs i + ys i`.
-3. **Flat-memory bridge side conditions** — `TraceSafe` / `FlattenOk`,
-   discharged for this kernel. Because the kernel is unmasked, every lane
-   of the program tile is active, so the safety contract is the aligned
-   bound `pid * B + B ≤ extent` per region.
-4. **Denotation headline** — `add_kernel_correctness`: ⟦`addKernel`⟧ maps
-   the input arrays to their elementwise sum. Every pointer, region,
-   layout, and start-state concept lives inside `denoteAddKernel` (a
-   one-line instantiation of the generic `denoteKernel` combinator), and
-   the statement mentions only `Nat` / `Fin` / `ℝ` / `Option` / `=`; the
-   `#stmtSurfaceSubset` gate pins its statement surface to that single
-   constant.
+1. **The kernel** — `addKernel`, the Triton DSL transcription.
+2. **Region-model Hoare triple** — `addKernel_region_run`: from any launch
+   state whose input windows are loaded, the kernel terminates, every
+   output-window lane holds `xs i + ys i`, and every other memory cell is
+   untouched. This is the mathematical core; it is proved against the
+   region model (named buffers, no pointers).
+3. **Flat-memory bridge side conditions** — `TraceSafe` (the per-execution
+   safety walk) and `FlattenOk` (bridge fragment membership), discharged
+   for this kernel. They license the transport of Part 2 to real pointer
+   arithmetic.
+4. **The spec** — the file's single `specification`:
+
+       add_kernel_correctness : addIO B ⊨ fun xs ys i => xs i + ys i
+
+   `addIO` is the kernel's **IO signature**: which buffer is which
+   argument, where each program reads its input tiles, where it writes its
+   output tile. `⊨` is the audit-once Hoare-triple combinator
+   (`KernelIO₂.Implements`, `VeriTile.Triton.Memory.KernelSpec`); spelled
+   out, the headline says: for **every** disjoint placement of the three
+   buffers in flat memory (∀ base pointers, ∀ buffer sizes), **every**
+   program id whose windows are in bounds, and **every** launch state
+   whose input windows hold `xs`/`ys` — all other buffer cells and all
+   registers arbitrary — the translated pointer kernel terminates, its
+   output window holds the pointwise sum, and every other memory cell is
+   unchanged.
 
 The masked boundary variant (`addKernelMasked`) lives in
 `bench/examples/FlatVectorAdd.lean` — each showcased kernel is
@@ -46,6 +57,8 @@ import VeriTile.Meta.StatementAudit
 namespace VeriTile.Bench.Examples.VectorAdd
 
 open VeriTile.Triton
+open VeriTile.Triton.KernelIO₂ (Implements)
+open scoped VeriTile.Triton.KernelIO₂
 open VeriTile.Examples
 
 /-! ## Part 1 — the kernel -/
@@ -65,10 +78,16 @@ def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKernel 
   tl.store($(outReg) + offs, out)
 }
 
-/-! ## Part 2 — region-model correctness -/
+/-! ## Part 2 — the region-model Hoare triple
 
-/-- `addKernel` correctness at the raw `observeAt` level: from any state
-with the inputs loaded, every output lane holds the elementwise sum. -/
+The mathematical core, proved against the region model (named buffers, no
+pointer arithmetic): a value lemma (`add_kernel_correct`), a frame lemma
+(`addKernel_frame`, via the scatter-store `foldl`), and their package
+`addKernel_region_run` — exactly the `hrun` obligation of
+`KernelIO₂.Implements.intro`. -/
+
+/-- Value half: from any state with the inputs loaded, every output lane
+holds the elementwise sum. -/
 theorem add_kernel_correct
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (_hBlockSize : 0 < blockSize)
@@ -89,6 +108,72 @@ theorem add_kernel_correct
   unfold InputLoadedAt at _h_x _h_y
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_y]
+
+/-- A scatter-store `foldl` leaves every memory cell it does not hit
+unchanged (cell-level frame for the unmasked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        acc.writeMem region (offsetFn k) (valueFn k)) s).mem r o
+      = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons,
+        ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_mem]
+      exact if_neg (fun hc =>
+        hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
+
+/-- Frame half: every memory cell other than the output window is preserved
+by the run. -/
+private theorem addKernel_frame (xReg yReg outReg : RegionName)
+    (B : Nat) (s s1 : BlockState)
+    (hExec : exec ((addKernel xReg yReg outReg B).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ i : Fin B, ¬(outReg = r ∧ s.pid * B + i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, addKernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+    evalOp, Tile.bop, NumericDType.add, NumericDType.mul] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ r o _ _ ?_) rfl
+  intro k _ hc
+  exact hmiss k.1 hc
+
+/-- **The region-model Hoare triple** — termination, output-window values,
+and frame, from any launch state whose input windows are loaded. This is
+what the `⊨` headline transports to flat memory. -/
+theorem addKernel_region_run (B : Nat) (hB : 0 < B)
+    (s₀ : BlockState) (xs ys : Fin B → ℝ)
+    (hx : ∀ j : Fin B, s₀.readMem ⟨"x"⟩ (s₀.pid * B + j.val) = xs j)
+    (hy : ∀ j : Fin B, s₀.readMem ⟨"y"⟩ (s₀.pid * B + j.val) = ys j) :
+    ∃ s1, exec ((addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin B,
+          s1.readMem ⟨"out"⟩ (s₀.pid * B + j.val) = xs j + ys j)
+      ∧ (∀ r o,
+          (r ≠ ⟨"out"⟩ ∨ ∀ j : Fin B, o ≠ s₀.pid * B + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  have hobs := add_kernel_correct ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B hB s₀ xs ys hx hy
+  rw [show exec (addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B) s₀
+      = exec ((addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B).toAlgKernel) s₀ from rfl]
+    at hobs
+  cases hsrc : exec ((addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B).toAlgKernel) s₀ with
+  | none =>
+      have := hobs ⟨0, hB⟩
+      rw [hsrc] at this
+      simp [observeAt] at this
+  | some s1 =>
+      refine ⟨s1, rfl, fun j => ?_, fun r o hcond => ?_⟩
+      · have := hobs j
+        rw [hsrc] at this
+        simpa [observeAt] using this
+      · refine addKernel_frame ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B s₀ s1 hsrc r o
+          (fun i ⟨hr, ho⟩ => ?_)
+        rcases hcond with hne | hno
+        · exact hne hr.symm
+        · exact hno i ho.symm
 
 /-! ## Part 3 — flat-memory bridge side conditions
 
@@ -196,120 +281,55 @@ theorem addKernel_flattenOk (xReg yReg outReg : RegionName) (B : Nat) :
   simp [addKernel, ComputeKernel.toAlgKernel,
     StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
 
-/-- **Flat-memory aligned vector add**: for any disjoint allocation of the
-three regions whose extents cover the whole program tile
-(`pid * B + B ≤ extent`), the translated kernel — one flat region, addresses
-`base + pid*B + i` — run on the flattened state is the flattening of the
-region-model run. -/
-theorem addKernel_exec_flatten (A : FlatAlloc) (hd : A.Disjoint)
-    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0)
-    (xReg yReg outReg : RegionName) (B : Nat) (s : BlockState)
-    (hx : s.pid * B + B ≤ A.extent xReg)
-    (hy : s.pid * B + B ≤ A.extent yReg)
-    (hout : s.pid * B + B ≤ A.extent outReg)
-    (hu : s.undef = (fun _ _ => 0)) :
-    exec (A.flattenKernel ((addKernel xReg yReg outReg B).toAlgKernel))
-        (A.flattenState s)
-      = (exec ((addKernel xReg yReg outReg B).toAlgKernel) s).map
-          A.flattenState :=
-  A.exec_flatten hd hcov _ s
-    (addKernel_traceSafe xReg yReg outReg B A.extent s hx hy hout)
-    (addKernel_flattenOk xReg yReg outReg B) hu
+/-! ## Part 4 — the spec: `addIO ⊨` pointwise addition -/
 
-/-! ## Part 4 — the denotation: array in, array out
+/-- `addKernel`'s **IO signature** — the whole kernel-specific audit
+surface of the headline:
 
-`denoteAddKernel` ("⟦addKernel⟧") is a one-line instantiation of the generic
-denotation combinator `denoteKernel` (audited once, in
-`VeriTile.Triton.Memory.Denotation`), which packages the whole ceremony —
-the canonical flat allocation of a region table, the canonical start state
-loaded with a slot table, the flattening translation, the flat-memory
-execution, and the read-back of one output lane. What remains per kernel —
-the whole audit surface of the definition below — is the region table, the
-slot table, and the output address. -/
+* `in1`/`in2`/`out` — which buffer is which argument (the wiring);
+* `B` — the tile length;
+* `read1`/`read2` — where program `pid` reads its input tiles (the address
+  half of the *pre*condition);
+* `write` — where program `pid` writes its output tile (the address half
+  of the *post*condition: values land there, frame holds everywhere else).
 
-/-- ⟦`addKernel`⟧: one instantiation of the generic `denoteKernel`. The
-tables are the audit surface — regions `"x"`/`"y"`/`"out"` of extent `n`
-laid end to end in one flat address space, `xs`/`ys` loaded at the program
-tile `[pid*B, pid*B + B)` of `"x"`/`"y"`, and lane `i` of the output tile
-read back from flat memory. All addressing lives inside `denoteKernel`. -/
-noncomputable denotation denoteAddKernel (B n pid : Nat) (xs ys : Fin B → ℝ)
-    (i : Fin B) : Option ℝ :=
-  denoteKernel (addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B)
-    ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] pid
-    [.ofFin ⟨"x"⟩ (pid * B) xs, .ofFin ⟨"y"⟩ (pid * B) ys]
-    ⟨"out"⟩ (pid * B + i.val)
+The windows are declared, not parsed from the kernel: they formalize the
+host-side launch convention (`offsets = pid * BLOCK_SIZE + arange`), and
+the headline **proves** the kernel's actual addressing matches them — a
+mis-declared window makes the proof fail, an addressing bug in the kernel
+likewise. Buffer sizes are not signature content: the headline quantifies
+over every allocation large enough for the windows. -/
+def addIO (B : Nat) : KernelIO₂ where
+  kernel := addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
+  in1 := ⟨"x"⟩
+  in2 := ⟨"y"⟩
+  out := ⟨"out"⟩
+  B := B
+  read1 := fun pid => pid * B
+  read2 := fun pid => pid * B
+  write := fun pid => pid * B
 
-/-- **The denotation headline**: whenever the program tile is in bounds
-(`pid * B + B ≤ n` — the aligned, unmasked contract), ⟦`addKernel`⟧ maps the
-input arrays to their elementwise sum on every lane. The statement mentions
-only elementary mathematics — every pointer, region, layout, and start-state
-concept is inside `denoteAddKernel`, audited once. -/
-specification add_kernel_correctness (B n pid : Nat) (hB : 0 < B)
-    (xs ys : Fin B → ℝ) (i : Fin B) (hn : pid * B + B ≤ n) :
-    denoteAddKernel B n pid xs ys i = some (xs i + ys i) := by
-  have hd := FlatAlloc.ofList_disjoint ⟨"flat"⟩
-    [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)] (by simp)
-  have hsnd : (([DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]).map DenoteSlot.region).Nodup := by
-    simp
-  have hloadX : InputLoadedAt
-      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"x"⟩ B xs := by
-    intro j
-    simpa using DenoteSlot.state_read_ofFin (pid := pid)
-      (region := (⟨"x"⟩ : RegionName)) (off := pid * B) (arr := xs)
-      (by simp) hsnd j
-  have hloadY : InputLoadedAt
-      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) ⟨"y"⟩ B ys := by
-    intro j
-    simpa using DenoteSlot.state_read_ofFin (pid := pid)
-      (region := (⟨"y"⟩ : RegionName)) (off := pid * B) (arr := ys)
-      (by simp) hsnd j
-  unfold denoteAddKernel denoteKernel
-  rw [addKernel_exec_flatten _ hd
-    (FlatAlloc.ofList_closed ⟨"flat"⟩ [(⟨"x"⟩, n), (⟨"y"⟩, n), (⟨"out"⟩, n)])
-    ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
-    (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys])
-    (by simpa [FlatAlloc.listExtent] using hn)
-    (by simpa [FlatAlloc.listExtent] using hn)
-    (by simpa [FlatAlloc.listExtent] using hn) rfl]
-  have hobs := add_kernel_correct ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩
-    B hB (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-      DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) xs ys hloadX hloadY i
-  rw [show exec (addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B)
-      (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys])
-    = exec ((addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
-        ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) from rfl] at hobs
-  cases hsrc : exec ((addKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
-      ).toAlgKernel) (DenoteSlot.state pid [DenoteSlot.ofFin ⟨"x"⟩ (pid * B) xs,
-        DenoteSlot.ofFin ⟨"y"⟩ (pid * B) ys]) with
-  | none =>
-      rw [hsrc] at hobs
-      simp [observeAt] at hobs
-  | some s1 =>
-      rw [hsrc] at hobs
-      simp only [observeAt, Option.map_some, Option.some_inj,
-        DenoteSlot.state_pid] at hobs
-      simp only [Option.map_some, Option.some_inj]
-      rw [FlatAlloc.flattenState_readMem _ hd s1
-        (r := ⟨"out"⟩) (by simp)
-        (o := pid * B + i.val)
-        (by have := i.isLt; simp only [FlatAlloc.ofList_extent]
-            simp [FlatAlloc.listExtent]; omega)]
-      simpa using hobs
+/-- **The headline**: `addKernel` implements pointwise addition on its IO
+signature — see the module docstring for the full Hoare triple `⊨`
+unfolds to. Proof: `Implements.intro` assembles the region-model triple
+(Part 2) with the bridge side conditions (Part 3). -/
+specification add_kernel_correctness (B : Nat) (hB : 0 < B) :
+    addIO B ⊨ fun xs ys i => xs i + ys i := by
+  refine KernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact addKernel_flattenOk ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
+  · intro bounds s h1 h2 h3
+    exact addKernel_traceSafe ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B bounds s h1 h2 h3
+  · intro s₀ xs ys hx hy
+    exact addKernel_region_run B hB s₀ xs ys hx hy
 
 /-! ## Trust gates -/
 
--- No `sorry`, no smuggled axiom, in the public theorems' transitive proofs.
-#axiomsClean addKernel_exec_flatten
+-- No `sorry`, no smuggled axiom, in the headline's transitive proof.
 #axiomsClean add_kernel_correctness
 
-/- The whole point of the denotation headline: its statement surface is ONE
-project constant — every addressing concept is inside `denoteAddKernel`. -/
-#stmtSurfaceSubset add_kernel_correctness ⊆ [denoteAddKernel]
+/- The headline's statement surface is the IO signature plus the audit-once
+Hoare-triple combinator — no other project constant. -/
+#stmtSurfaceSubset add_kernel_correctness ⊆
+  [addIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
 
 end VeriTile.Bench.Examples.VectorAdd
