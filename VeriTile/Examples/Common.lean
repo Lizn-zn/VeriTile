@@ -186,8 +186,8 @@ theorem injective_offset_singleton {n : Nat} (base : Nat) :
 /-! ## Shared online-Welford loop body
 
 The raw-AST loop body of the online-Welford `tl.for` loop, shared by the
-Welford and LayerNorm showcases (`bench/examples/`) and
-`VeriTile.Examples.WelfordKernels`. Its per-iteration effect is characterized
+Welford and LayerNorm showcases (`bench/examples/`).
+Its per-iteration effect is characterized
 per consumer (against that file's loop invariant); the body itself and its
 cast-free degeneration are consumer-independent. -/
 

@@ -6,11 +6,12 @@ import VeriTile.Meta.StatementAudit
 # Log-sum-exp: direct vs shift-trick — kernel equivalence `≡[R]`
 
 Self-contained showcase, read top to bottom: **kernels** first (what we
-built), the region-level refinement core next (`log_sum_exp_refinement_view`;
-the proof is direct, so there is no `private` lemma section), then the
-**flat-memory bridge side conditions**, the **specification**
-(one public headline `log_sum_exp_equiv` on the `≡[R]` surface), a
-compile-time **trust audit**, and the exact-ℝ companion layer last. The real
+built), the region-level refinement core next (`log_sum_exp_refinement_view`,
+proved directly — no `private` lemma section of its own), then the
+**flat-memory bridge side conditions**, the **specification** (private
+termination/frame plumbing plus one public headline `log_sum_exp_equiv` on
+the `≡[R]` surface), a compile-time **trust audit**, and the exact-ℝ
+companion layer last. The real
 sections below are `LogSumExp.kernels`, `LogSumExp.theorems`,
 `LogSumExp.bridge`, `LogSumExp.spec`, and `LogSumExp.exact` (dissolved from
 the former library example `VeriTile.Examples.LogSumExpEq`).
@@ -53,8 +54,9 @@ surface — **no spec, and no input precondition** (the `#stmtSurfaceSubset`
 gate below enforces this). The region-level refinement
 `log_sum_exp_refinement_view` (`ComputeRefine.Refines`, the rounding-model
 surface) is the mathematical core the headline's region-model obligation
-repackages. The compositional-rounding sibling (matched intermediate casts,
-scratch staging) is `bench/examples/FusedSwiglu.lean`.
+repackages — unpacked at each execution pair by the library's
+`ComputeRefine.Refines.out`. The compositional-rounding sibling (matched
+intermediate casts, scratch staging) is `bench/examples/FusedSwiglu.lean`.
 
 Alongside it, the `Exact` namespace (section `LogSumExp.exact`) keeps the
 exact-store layer of the dissolved library example: the same two kernels
@@ -102,8 +104,8 @@ end LogSumExp.kernels
 /-! ## The region-level refinement core -/
 section LogSumExp.theorems
 
-/- Shared parameters of the headline, hoisted to a `variable` block: the two
-regions, the block size (nonempty), the state, and the rounding model `R`. -/
+/- Shared parameters of the refinement core, hoisted to a `variable` block: the
+two regions, the block size (nonempty), the state, and the rounding model `R`. -/
 variable (xReg yReg : RegionName) (N : Nat) (hN : 0 < N) (s : BlockState)
 variable (R : RoundingModel)
 
@@ -160,9 +162,10 @@ contract covers them; the flat-memory bridge (v1.2, `execR` flavor) takes the
 per-execution `Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge
 fragment membership). Each kernel makes exactly two accesses — the unmasked
 whole-tile load at `[pid * B, pid * B + B)` and the single-cell store at
-`y[pid]` — and the reductions are memory-silent, so one computational unfold
-walks every statement, reducing the two accesses' address obligations to the
-window-bounds hypotheses. -/
+`y[pid]` — and every other statement (`program_id`, the offset arithmetic,
+`exp`/`log`, and the `sum`/`max` reductions) is memory-silent, so one
+computational unfold walks every statement, reducing the two accesses'
+address obligations to the window-bounds hypotheses. -/
 section LogSumExp.bridge
 
 /-- The direct kernel sits inside the bridge's covered fragment. -/
@@ -181,9 +184,10 @@ theorem stable_lse_flattenOk (xReg yReg : RegionName) (B : Nat) :
 
 set_option maxHeartbeats 1600000 in
 /-- Per-execution safety walk for the direct kernel under `R`: one
-computational unfold walks all seven statements (the reductions are
-memory-silent), reducing the whole-tile load and the single-cell store to the
-two window-bounds hypotheses. -/
+computational unfold walks all seven statements (the five besides the load
+and store — `program_id`, offsets, `exp`, `sum`, `log` — are memory-silent),
+reducing the whole-tile load and the single-cell store to the two
+window-bounds hypotheses. -/
 theorem direct_lse_traceSafeR (xReg yReg : RegionName) (n : Nat)
     (s : BlockState) (R : RoundingModel) (bounds : RegionBounds)
     (hx : s.pid * (n + 1) + (n + 1) ≤ bounds xReg)
@@ -205,8 +209,8 @@ theorem direct_lse_traceSafeR (xReg yReg : RegionName) (n : Nat)
 
 set_option maxHeartbeats 1600000 in
 /-- Per-execution safety walk for the shift-trick kernel under `R`: same
-computational unfold over its eight statements; the max reduction is
-memory-silent like the sum. -/
+computational unfold over its eight statements; the extra `max` reduction is
+memory-silent like the `sum`. -/
 theorem stable_lse_traceSafeR (xReg yReg : RegionName) (n : Nat)
     (s : BlockState) (R : RoundingModel) (bounds : RegionBounds)
     (hx : s.pid * (n + 1) + (n + 1) ≤ bounds xReg)
@@ -258,9 +262,9 @@ def lseDirectIO (B : Nat) : KernelIO₁ :=
 both kernels from **any** state (no input hypotheses), so termination cannot
 come from an input-conditioned realization — it holds outright (both bodies
 are straight-line statement lists whose every step is total once `B = n + 1`
-makes the reductions defined). The frames are one-`writeMem` arguments: each
-kernel performs a single scalar store at `y[pid]`, so everything else is
-untouched. -/
+makes the reductions defined). The frames are one-`writeMemAsR` arguments
+(single-cell `BlockState.writeMemAsR_mem`, no foldl): each kernel performs a
+single scalar store at `y[pid]`, so everything else is untouched. -/
 
 /-- The direct kernel terminates under `execR R` from every state. -/
 private theorem direct_lse_execR_isSome (xReg yReg : RegionName) (n : Nat)
@@ -320,24 +324,6 @@ private theorem stable_lse_frameR (xReg yReg : RegionName) (n : Nat)
   rw [BlockState.writeMemAsR_mem]
   exact if_neg hmiss
 
-/-- Unpack `ComputeRefine.Refines` at one successful execution pair of the
-two projected kernels — the two-kernel sibling of the library's
-`ComputeKernel.ExecCorrectR.out` (same helper as in
-`bench/examples/FusedSwiglu.lean`; bench files never import each other). -/
-private theorem refines_out {R : RoundingModel} {lhs rhs : ComputeKernel}
-    {s : BlockState} {scratch : List RegionName}
-    (h : ComputeRefine.Refines R lhs rhs s scratch)
-    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
-    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
-    {s1 s2 : BlockState}
-    (h1 : execR R lhs.toAlgKernel s = some s1)
-    (h2 : execR R rhs.toAlgKernel s = some s2) :
-    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
-  have h' := h.2
-  unfold ComputeKernel.ProjectedRefineR at h'
-  rw [hLAlg, hRAlg] at h'
-  exact h' s s1 s2 h1 h2 rfl
-
 /-- **The headline**: the direct LSE kernel is equivalent to the shift-trick
 kernel on their shared one-input IO signature, for **every** rounding model
 and **every** block size `0 < B` — see the module docstring for the full
@@ -346,8 +332,9 @@ single output cell `y[pid]` agrees, each frames outside it). `0 < B` is
 genuinely forced: the `tl.max` reduction has no value on an empty tile.
 Proof: `KernelIO₁.Equiv.intro` assembles the region-model equivalence —
 termination is unconditional, the output-agreement leg is the region-level
-refinement theorem's memory agreement (shift-invariance of log-sum-exp),
-the frames are one-`writeMem` arguments — with the flat-memory bridge side
+refinement theorem's memory agreement (shift-invariance of log-sum-exp,
+unpacked at the execution pair by `ComputeRefine.Refines.out`), the frames
+are one-`writeMemAsR` arguments — with the flat-memory bridge side
 conditions (`FlattenOk` + `TraceSafeR` per kernel). -/
 specification log_sum_exp_equiv (R : RoundingModel) (B : Nat) (hB : 0 < B) :
     lseDirectIO B ≡[R] lseStableIO B := by
@@ -373,8 +360,7 @@ specification log_sum_exp_equiv (R : RoundingModel) (B : Nat) (hB : 0 < B) :
     -- the region-level refinement: memories agree at EVERY cell (no scratch)
     have hmem12 : ∀ r, r ∉ ([] : List RegionName) →
         ∀ o, s1.mem r o = s2.mem r o :=
-      refines_out
-        (log_sum_exp_refinement_view ⟨"x"⟩ ⟨"y"⟩ (n + 1) n.succ_pos s₀ R)
+      (log_sum_exp_refinement_view ⟨"x"⟩ ⟨"y"⟩ (n + 1) n.succ_pos s₀ R).out
         rfl rfl hexec1 hexec2
     refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
     · -- the output cell y[pid] agrees

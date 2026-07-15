@@ -19,6 +19,26 @@ The per-kernel statement surface is just the `KernelIO₂` value (which buffer
 is which argument, buffer lengths, the per-program window) plus `f` — pure
 mathematics. `Implements` is the audit-once combinator.
 
+The module hosts **two relations** over these IO signatures:
+
+* **Correctness** — `io ⊨ f` (`Implements`, exact-ℝ `exec`): the kernel
+  computes the mathematical function `f` on its declared windows.
+* **Equivalence** — `io₁ ≡[R] io₂` (`Equiv`, rounding-model `execR R`): two
+  kernels sharing one IO signature make the same writes — the `⊨`-grade
+  form of the refinement surface. No `f` and **no input hypotheses** (equal
+  inputs are "the same launch state"); each kernel may declare private
+  `scratch` working buffers, which are allocated and writable but whose
+  post-state is outside every contract. Instances share the interface by
+  structure update (`{ referenceIO with kernel := …, scratch := … }`); the
+  relation reads the interface from its left argument.
+
+Arity/shape variants carry the same field vocabulary throughout:
+`KernelIO₂`/`₁`/`₃`/`₃ₓ₂`/`₁ₓ₂` and the masked `MaskedKernelIO₂`/`₃ₓ₂`
+(lane-wise contracts via a `mask`; `MaskedKernelIO₃ₓ₂` additionally
+decouples the allocation list from the argument roles so in-place updates
+are expressible). Not every struct carries every relation yet — relations
+are added when a showcase needs them.
+
 **Modeling boundary (read before trusting)**: the launch state is
 `A.flattenState s₀` for an arbitrary region state `s₀`. Concretely this
 means: every cell of every *allocated* buffer is arbitrary (in particular

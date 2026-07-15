@@ -14,12 +14,15 @@ import VeriTile.Meta.StatementAudit
 
 Self-contained showcase, read top to bottom: **kernels** first (the two
 LayerNorm kernels), the **supporting lemmas** in the middle (`private` plumbing
-— the Welford math, the loop invariant, the affine-tail decomposition), the
-region-level refinement core next (`layernorm_kernels_refinement_view`), then
-the **flat-memory bridge side conditions**, the **specification** last (one
-public headline `layernorm_equiv` on the `≡[R]` surface), and a compile-time
-**trust audit**. The real sections below are `LayerNorm.kernels`,
-`LayerNorm.lemmas`, `LayerNorm.theorems`, `LayerNorm.bridge`, `LayerNorm.spec`.
+— the Welford loop-invariant walk, store-freeness, the rounded-store
+congruence; the two-pass/Welford identity itself is shared library math,
+`TiledReduction.WelfordRec`), the region-level refinement next (the `private`
+raw-contract core `layernorm_refines_core` and its public form
+`layernorm_kernels_refinement_view`), then the **flat-memory bridge side
+conditions**, the **specification** last (one public headline
+`layernorm_equiv` on the `≡[R]` surface), and a compile-time **trust audit**.
+The real sections below are `LayerNorm.kernels`, `LayerNorm.lemmas`,
+`LayerNorm.theorems`, `LayerNorm.bridge`, `LayerNorm.spec`.
 
 `twoPassLayerNormKernel` computes mean/variance with two `tl.sum` passes then the
 affine `(x − μ)/√(var+ε)·γ + β`; `fusedLayerNormKernel` computes mean/variance in
@@ -52,7 +55,9 @@ feature window `[0, N)` fits in `γ` and `β`, and **every** launch state — **
 input hypotheses at all**, not even loaded inputs: "equal inputs" is simply
 "the same `s₀`" — both translated pointer kernels terminate under `execR R`,
 their `y` row windows hold equal values, and each kernel leaves every cell
-outside its `y` row window untouched.
+outside its `y` row window untouched. There is no `0 < N` hypothesis either:
+at `N = 0` every window is empty, so the row-agreement leg (∀ `j : Fin N`) is
+vacuous and the frames say the kernels write nothing.
 
 The statement mentions only the two IO signatures and the library equivalence
 surface — **no spec** (the `#stmtSurfaceSubset` gate below enforces this).
@@ -140,18 +145,9 @@ section LayerNorm.lemmas
 -- opened above; shared with the Welford showcase and VeriTile.Examples.WelfordKernels.
 -- `onlineWelfordLoopBody` + its cast-free degeneration are shared from
 -- `VeriTile.Examples.Common`; `stepForLoopAuxR_castFree` + `writeMemAsR_regs`
--- live in the library (`VeriTile.Triton.Float.StepR`).
-
-/-- **Faithfulness bridge.** The raw-AST `onlineWelfordLoopBody` that the loop
-proofs below reason about is *exactly* the Welford `forLoop` body that the
-readable `fusedLayerNormKernel` DSL compiles to — statement index 3 of its
-algorithm projection (after `pid`, `M := 0`, `S := 0`). Machine-checked by
-`rfl`, so the hand-written loop body need not be matched against the DSL by eye:
-review the DSL kernel, and this lemma certifies the transcription is faithful. -/
-private theorem onlineWelfordLoopBody_is_dsl_loop
-    (xReg γReg βReg yReg : RegionName) (N rowStride : Nat) (ε : ℝ) :
-    (fusedLayerNormKernel xReg γReg βReg yReg N rowStride ε).body[3]?
-      = some (Stmt.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) := rfl
+-- and the store-frame `BlockState.foldl_writeMemAsR_preserve_cell` live in
+-- `VeriTile.Triton.Float.StepR`; the `Refines` unpacker
+-- `ComputeRefine.Refines.out` in `VeriTile.Triton.Float.Refine`.
 
 /-- **Loop invariant** for the fused kernel's Welford pass: after `k` iterations
 of `onlineWelfordLoopBody`, the running `(M, S)` registers hold the Welford
@@ -283,17 +279,7 @@ private theorem onlineWelfordLoopBody_storeFree (xReg : RegionName) (N : Nat) :
     (onlineWelfordLoopBody xReg N).all (fun st => storeFree st) = Bool.true := by
   simp [onlineWelfordLoopBody, storeFree]
 
-/-! ### Rounding-degeneration plumbing (loop cast-free + bf16-store congruence) -/
-
-/-- The fused kernel's `forLoop` statement steps identically under `execR R`
-and `exec`. -/
-private theorem layernorm_forLoop_castFree (R : RoundingModel)
-    (xReg : RegionName) (N rowStride : Nat) (t : BlockState) :
-    stepStmtR R (.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) t
-      = stepStmt (.forLoop "i" N (onlineWelfordLoopBody xReg rowStride)) t := by
-  simp only [stepStmtR, stepStmt,
-    stepForLoopAuxR_castFree R (onlineWelfordLoopBody xReg rowStride)
-      (onlineWelfordLoopBody_castFree R xReg rowStride) "i" 0 N t]
+/-! ### Rounding-store congruence (the shared bf16 output scatter) -/
 
 /-- Two `writeMemAsR` scatters over the same offsets agree cell-by-cell when
 their per-lane values agree — the rounding-store analogue of
@@ -316,26 +302,6 @@ private theorem foldl_writeMemAsR_mem_congr {α : Type} (R : RoundingModel)
       · rw [if_pos hc, if_pos hc]
       · rw [if_neg hc, if_neg hc]; exact h
 
-/-- An **unmasked** `writeMemAsR` scatter `foldl` leaves every memory cell it
-does not hit unchanged — the rounding-store analogue of `VectorAdd.lean`'s
-`foldl_store_preserve_cell`, and the frame half of both kernels' single output
-scatter. -/
-private theorem foldl_writeMemAsR_preserve_cell {α : Type} (R : RoundingModel)
-    (dtype : FloatDType) {region : RegionName} (l : List α) (offsetFn : α → Nat)
-    (v : α → TileCarrier dtype.toTileDType) (r : RegionName) (o : Nat)
-    (hnot : ∀ k ∈ l, ¬(r = region ∧ o = offsetFn k)) :
-    ∀ s : BlockState,
-      (l.foldl (fun acc k =>
-          acc.writeMemAsR R dtype region (offsetFn k) (v k)) s).mem r o
-        = s.mem r o := by
-  induction l with
-  | nil => intro s; rfl
-  | cons hd tl ih =>
-      intro s
-      rw [List.foldl_cons,
-        ih (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
-        BlockState.writeMemAsR_mem, if_neg (hnot hd List.mem_cons_self)]
-
 end LayerNorm.lemmas
 
 /-! ## The headline theorem -/
@@ -343,10 +309,11 @@ section LayerNorm.theorems
 
 include hN in
 set_option maxHeartbeats 1600000 in
-/-- The refinement core on the raw loaded-input contracts — the version of
-`layernorm_kernels_refinement_view` that `layernorm_equiv`'s region-model
-obligation consumes directly (from an arbitrary `s₀` the contracts hold
-by `rfl` for the values `s₀` actually holds). -/
+/-- The refinement core on the raw loaded-input contracts
+(`InputRowLoadedAt` / `InputFeatureLoadedAt`) — all the mathematics of
+two-pass vs fused. `layernorm_kernels_refinement_view` repackages it on the
+`TensorView.ViewsLoaded` bundle; that is the form `layernorm_equiv`'s
+region-model obligation consumes. -/
 private theorem layernorm_refines_core (R : RoundingModel)
     (h_x : InputRowLoadedAt s xReg rowStride N xs)
     (h_γ : InputFeatureLoadedAt s γReg N γs)
@@ -433,9 +400,12 @@ compute the same per-lane ℝ output `(x−μ)/√(var+ε)·γ+β` (Welford's id
 `welford_eq_two_pass`) and round it at the shared bf16 output store.
 
 Formerly the file's headline (on the `TensorView.ViewsLoaded` input bundle);
-now the mathematical core the `≡[R]` specification's region-model obligation
-repackages (its `y`-agreement leg is exactly this memory agreement read at the
-output row window). -/
+now the citable region-level wrapper over `layernorm_refines_core` that the
+`≡[R]` specification's region-model obligation consumes via the library
+unpacker `ComputeRefine.Refines.out` — its `y`-agreement leg is exactly this
+memory agreement read at the output row window. From the obligation's bare
+`s₀` the views bundle holds by `rfl` once the arrays are instantiated with
+the values `s₀` holds at the views' own address maps. -/
 theorem layernorm_kernels_refinement_view
     (R : RoundingModel)
     (hin : TensorView.ViewsLoaded s
@@ -607,7 +577,7 @@ private theorem twoPass_flattenOk :
       ).toAlgKernel).FlattenOk := by
   unfold Kernel.FlattenOk
   simp [twoPassLayerNormKernel, ComputeKernel.toAlgKernel, StmtList.FlattenOk,
-    Stmt.FlattenOk, Op.FlattenOk, Op.FlattenOk.eq_def]
+    Stmt.FlattenOk, Op.FlattenOk.eq_def]
 
 /-! ### The fused kernel: walking the Welford loop -/
 
@@ -848,7 +818,7 @@ private theorem fused_flattenOk :
       ).toAlgKernel).FlattenOk := by
   unfold Kernel.FlattenOk
   simp [fusedLayerNormKernel, ComputeKernel.toAlgKernel, StmtList.FlattenOk,
-    Stmt.FlattenOk, Op.FlattenOk, Op.FlattenOk.eq_def, onlineWelfordLoopBody]
+    Stmt.FlattenOk, Op.FlattenOk.eq_def]
 
 end LayerNorm.bridge
 
@@ -892,8 +862,8 @@ private theorem twoPass_execR_run (R : RoundingModel) (s : BlockState) :
         WithBot.realMul] at hexec
   subst hexec
   refine Eq.trans
-    (foldl_writeMemAsR_preserve_cell R .bf16 _ _ _ r o
-      (fun k _ hc => hmiss k.1 hc) _) ?_
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _
+      (fun k _ hc => hmiss k.1 ⟨hc.1.symm, hc.2.symm⟩) _) ?_
   simp
 
 /-- The fused kernel terminates under `execR R` from every state and writes
@@ -962,27 +932,9 @@ private theorem fused_execR_run (R : RoundingModel) (s : BlockState) :
   simp [hM, hS, hpidReg, hγl, hβl] at hexec
   subst hexec
   refine Eq.trans
-    (foldl_writeMemAsR_preserve_cell R .bf16 _ _ _ r o
-      (fun k _ hc => hmiss k.1 hc) _) ?_
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _
+      (fun k _ hc => hmiss k.1 ⟨hc.1.symm, hc.2.symm⟩) _) ?_
   simp [hMemLoop]
-
-/-- Unpack `ComputeRefine.Refines` at one successful execution pair of the
-two projected kernels — the two-kernel sibling of the library's
-`ComputeKernel.ExecCorrectR.out` (same helper as in `FusedSwiglu.lean`;
-bench files never import each other). -/
-private theorem refines_out {R : RoundingModel} {lhs rhs : ComputeKernel}
-    {s : BlockState} {scratch : List RegionName}
-    (h : ComputeRefine.Refines R lhs rhs s scratch)
-    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
-    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
-    {s1 s2 : BlockState}
-    (h1 : execR R lhs.toAlgKernel s = some s1)
-    (h2 : execR R rhs.toAlgKernel s = some s2) :
-    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
-  have h' := h.2
-  unfold ComputeKernel.ProjectedRefineR at h'
-  rw [hLAlg, hRAlg] at h'
-  exact h' s s1 s2 h1 h2 rfl
 
 /-- The two-pass kernel's three-input **IO signature** — the whole
 kernel-specific audit surface of the headline: interface `x`, `γ`, `β` → `y`;
@@ -1020,10 +972,10 @@ unfolds to (both kernels terminate from any state, the `y` row windows
 agree, each frames outside its `y` row window; no scratch on either side).
 Proof: `KernelIO₃.Equiv.intro` assembles the region-model equivalence —
 termination and the frames are the run lemmas above, the `y`-agreement leg
-is the region-level refinement core's memory agreement (Welford's identity +
-the shared bf16 store; the `N = 0` degenerate window is vacuous) — with the
-flat-memory bridge side conditions (`FlattenOk` + `TraceSafeR` per
-kernel). -/
+is `layernorm_kernels_refinement_view`'s memory agreement, unpacked by the
+library `ComputeRefine.Refines.out` (Welford's identity + the shared bf16
+store; the `N = 0` degenerate window is vacuous) — with the flat-memory
+bridge side conditions (`FlattenOk` + `TraceSafeR` per kernel). -/
 specification layernorm_equiv (R : RoundingModel) (N rowStride : Nat) (ε : ℝ) :
     layerNormTwoPassIO N rowStride ε ≡[R] layerNormFusedIO N rowStride ε := by
   refine KernelIO₃.Equiv.intro _ _ ?_ ?_ ?_ ?_ ?_
@@ -1054,15 +1006,19 @@ specification layernorm_equiv (R : RoundingModel) (N rowStride : Nat) (ε : ℝ)
       rcases Nat.eq_zero_or_pos N with hN0 | hN
       · exact absurd j.isLt (by omega)
       · -- the region-level refinement: memories agree everywhere (no scratch);
-        -- the inputs both kernels see are whatever s₀ holds (contracts by rfl)
+        -- the inputs both kernels see are whatever s₀ holds at the views'
+        -- own address maps, so the ViewsLoaded bundle is rfl
         have hmem12 : ∀ r, r ∉ ([] : List RegionName) →
             ∀ o, s1.mem r o = s2.mem r o :=
-          refines_out
-            (layernorm_refines_core ⟨"x"⟩ ⟨"γ"⟩ ⟨"β"⟩ ⟨"y"⟩ N rowStride hN ε s₀
-              (fun j => s₀.readMem ⟨"x"⟩ (s₀.pid * rowStride + j.val))
-              (fun j => s₀.readMem ⟨"γ"⟩ j.val)
-              (fun j => s₀.readMem ⟨"β"⟩ j.val) R
-              (fun _ => rfl) (fun _ => rfl) (fun _ => rfl))
+          (layernorm_kernels_refinement_view ⟨"x"⟩ ⟨"γ"⟩ ⟨"β"⟩ ⟨"y"⟩ N rowStride
+              hN ε s₀
+              (fun j => s₀.readMem ⟨"x"⟩
+                ((rowTileView s₀ ⟨"x"⟩ rowStride N).offset (j, PUnit.unit)))
+              (fun j => s₀.readMem ⟨"γ"⟩
+                ((featureView ⟨"γ"⟩ N).offset (j, PUnit.unit)))
+              (fun j => s₀.readMem ⟨"β"⟩
+                ((featureView ⟨"β"⟩ N).offset (j, PUnit.unit)))
+              R ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, trivial⟩).out
             rfl rfl hexec1 hexec2
         have hmem := hmem12 ⟨"y"⟩ (by simp) (s₀.pid * rowStride + j.val)
         unfold BlockState.readMem
@@ -1089,8 +1045,8 @@ if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
 trusted statement) the file stops compiling. See
 `VeriTile.Meta.StatementAudit`. -/
 
--- (1) No `sorry`, no smuggled axiom — in the region-level core's and the
--- public headline's transitive proofs.
+-- (1) No `sorry`, no smuggled axiom — in the public region-level
+-- refinement's and the `≡[R]` headline's transitive proofs.
 #axiomsClean layernorm_kernels_refinement_view
 #axiomsClean layernorm_equiv
 

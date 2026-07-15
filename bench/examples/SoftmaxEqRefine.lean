@@ -6,13 +6,14 @@ import VeriTile.Meta.StatementAudit
 # Softmax: naive vs stable — kernel equivalence `≡[R]` on the shared IO surface
 
 Self-contained showcase, read top to bottom: **kernels** first, the
-**supporting lemmas** in the middle (`private` plumbing — bf16-scatter
-congruence and frame), the region-level refinement core next
-(`softmax_kernels_refinement_view`), then the **flat-memory bridge side
-conditions**, the **specification** last (one public headline
-`softmax_stable_equiv` on the `≡[R]` surface), and a compile-time **trust
-audit**. The real sections below are `Softmax.kernels`, `Softmax.lemmas`,
-`Softmax.theorems`, `Softmax.run`, `Softmax.bridge`, `Softmax.spec`.
+**supporting lemma** in the middle (`private` plumbing — bf16-scatter
+congruence), the region-level refinement core next
+(`softmax_kernels_refinement_view`), the **termination/frame lemmas**, the
+**flat-memory bridge side conditions**, the **specification** (one public
+headline `softmax_stable_equiv` on the `≡[R]` surface) with its compile-time
+**trust audit**, and the **exact-ℝ companion layer** last. The real sections
+below are `Softmax.kernels`, `Softmax.lemmas`, `Softmax.theorems`,
+`Softmax.run`, `Softmax.bridge`, `Softmax.spec`, `Softmax.theoremsReal`.
 
 Two block-parallel softmax kernels compute `y = exp(x) / Σ exp(x)` per row and
 **store the result rounded to bf16** (`(y).to(tl.bfloat16)`):
@@ -37,10 +38,11 @@ surface. Spelled out, the headline says: for **every** disjoint flat placement
 of the interface buffers `x`/`y` (∀ base pointers, ∀ buffer sizes — neither
 kernel stages anything through memory, so there is no scratch), **every**
 program id whose whole-tile windows `[pid * B, pid * B + B)` are in bounds,
-and **every** launch state — **no input hypotheses at all**, not even loaded
-inputs: "equal inputs" is simply "the same `s₀`" — both translated pointer
-kernels terminate under `execR R`, their output windows hold equal values, and
-each kernel leaves every cell outside the output window untouched.
+and **every** launch state of that program — **no input hypotheses at all**,
+not even loaded inputs: "equal inputs" is simply "the same `s₀`" — both
+translated pointer kernels terminate under `execR R`, their output windows
+hold equal values, and each kernel leaves every cell outside the output
+window untouched.
 Non-emptiness `0 < B` is required: the stable kernel's `max` reduction (like
 `Finset.sup'`) is only defined on non-empty tiles.
 
@@ -176,28 +178,6 @@ private theorem foldl_writeMemAsR_mem_congr {α : Type} (R : RoundingModel)
       · rw [if_pos hc, if_pos hc]
       · rw [if_neg hc, if_neg hc]; exact h
 
-/-- An unmasked `writeMemAsR` scatter `foldl` leaves every memory cell it does
-not hit unchanged — the rounding-store analogue of `VectorAdd.lean`'s
-`foldl_store_preserve_cell` (cell-level frame for the shared bf16 output
-store). -/
-private theorem foldl_writeMemAsR_preserve_cell {α : Type} (R : RoundingModel)
-    (dtype : FloatDType) {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
-    (r : RegionName) (o : Nat) (l : List α)
-    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
-    ∀ s : BlockState,
-      (l.foldl (fun acc k =>
-          acc.writeMemAsR R dtype region (offsetFn k) (valueFn k)) s).mem r o
-        = s.mem r o := by
-  induction l with
-  | nil => intro _; rfl
-  | cons hd tl ih =>
-      intro s
-      rw [List.foldl_cons,
-        ih (fun k hk => hnot k (List.mem_cons_of_mem hd hk)) _,
-        BlockState.writeMemAsR_mem]
-      exact if_neg (fun hc => hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
-
 end Softmax.lemmas
 
 /-! ## The region-level refinement core -/
@@ -258,7 +238,8 @@ Termination holds outright (both bodies are straight-line statement lists
 whose every step is total once the tile is non-empty — the stable kernel's
 `max` reduce is `none` on an empty axis, which is where `0 < blockSize`
 earns its keep); the frame lemmas walk the same exec closed forms and apply
-the unmasked-scatter cell frame `foldl_writeMemAsR_preserve_cell`. -/
+the library's unmasked-scatter cell frame
+`BlockState.foldl_writeMemAsR_preserve_cell`. -/
 section Softmax.run
 
 variable (xReg yReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
@@ -302,7 +283,8 @@ private theorem softmax_naive_frameR (s' : BlockState) (r : RegionName) (o : Nat
         ComputeExpr.toAlgorithm?, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
   subst s'
-  refine Eq.trans (foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
+  refine Eq.trans
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
   intro k _ hc
   rcases hcond with hne | hno
   · exact hne hc.1.symm
@@ -323,7 +305,8 @@ private theorem softmax_stable_frameR (s' : BlockState) (r : RegionName) (o : Na
         Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
   subst s'
-  refine Eq.trans (foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
+  refine Eq.trans
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
   intro k _ hc
   rcases hcond with hne | hno
   · exact hne hc.1.symm
@@ -339,7 +322,8 @@ flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
 `Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge fragment
 membership). Both accesses on both sides are **unmasked whole-tile**: the
 load's bound is the whole window `pid * B + B ≤ bounds x`, the store's
-`pid * B + B ≤ bounds y`; the reductions are memory-silent. -/
+`pid * B + B ≤ bounds y`; every other statement (`program_id`, the index
+arithmetic, the reductions) is memory-silent. -/
 section Softmax.bridge
 
 variable (xReg yReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
@@ -362,9 +346,9 @@ theorem softmax_stable_flattenOk :
 set_option maxHeartbeats 1600000 in
 include hN in
 /-- Per-execution safety walk for the naive kernel under `R`: one
-computational unfold walks all seven statements, discharging every load-free
-`SafeAtR` and reducing the two unmasked whole-tile accesses' address
-obligations to the window bounds hypotheses. -/
+computational unfold walks all seven statements, discharging every
+memory-silent statement's `SafeAtR` and reducing the two unmasked whole-tile
+accesses' address obligations to the window bounds hypotheses. -/
 theorem softmax_naive_traceSafeR (bounds : RegionBounds)
     (hx : s.pid * blockSize + blockSize ≤ bounds xReg)
     (hy : s.pid * blockSize + blockSize ≤ bounds yReg) :
@@ -434,24 +418,6 @@ verbatim), with the naive kernel plugged in. -/
 def softmaxNaiveIO (B : Nat) : KernelIO₁ :=
   { softmaxStableIO B with kernel := naiveSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B }
 
-/-- Unpack `ComputeRefine.Refines` at one successful execution pair of the
-two projected kernels — the two-kernel sibling of the library's
-`ComputeKernel.ExecCorrectR.out` (same shape as the `FusedSwiglu.lean`
-pilot's unpacker). -/
-private theorem refines_out {R : RoundingModel} {lhs rhs : ComputeKernel}
-    {s : BlockState} {scratch : List RegionName}
-    (h : ComputeRefine.Refines R lhs rhs s scratch)
-    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
-    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
-    {s1 s2 : BlockState}
-    (h1 : execR R lhs.toAlgKernel s = some s1)
-    (h2 : execR R rhs.toAlgKernel s = some s2) :
-    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
-  have h' := h.2
-  unfold ComputeKernel.ProjectedRefineR at h'
-  rw [hLAlg, hRAlg] at h'
-  exact h' s s1 s2 h1 h2 rfl
-
 /-- **The headline**: naive softmax is equivalent to stable softmax on their
 shared one-input IO signature, for **every** rounding model — see the module
 docstring for the full contract `≡[R]` unfolds to (both kernels terminate
@@ -487,7 +453,7 @@ specification softmax_stable_equiv (R : RoundingModel) (B : Nat) (hB : 0 < B) :
     -- the region-level refinement: memories agree EVERYWHERE (scratch = [])
     have hmem12 : ∀ r, r ∉ ([] : List RegionName) →
         ∀ o, s1.mem r o = s2.mem r o :=
-      refines_out
+      ComputeRefine.Refines.out
         (softmax_kernels_refinement_view ⟨"x"⟩ ⟨"y"⟩ B hB s₀ R)
         (by simp [naiveSoftmaxKernel, ComputeExpr.toAlgorithm?])
         (by simp [stableSoftmaxKernel, ComputeExpr.toAlgorithm?])
@@ -536,9 +502,10 @@ arm-in-lean's `tnum_const_refinement`:
 * the refinement theorem composes them via `naive_eq_stable`.
 
 The reusable math denotation (`naiveSoftmaxMath`, `stableSoftmaxMath`,
-`naive_eq_stable`, `naiveSpec`, `stableSpec`, `tileMax`) lives in
-`VeriTile.Triton.Math.Softmax`; the observation vocabulary (`InputLoadedAt`,
-`observeAt`, `programTileView`) in `VeriTile.Examples.Common`. -/
+`naive_eq_stable`, `naiveSpec`, `stableSpec`) lives in
+`VeriTile.Triton.Math.Softmax` (`tileMax` in `VeriTile.Triton.Math.Reduction`);
+the observation vocabulary (`InputLoadedAt`, `observeAt`, `programTileView`)
+in `VeriTile.Examples.Common`. -/
 section Softmax.theoremsReal
 
 open VeriTile.Examples

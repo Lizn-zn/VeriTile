@@ -21,7 +21,8 @@ next (`welford_kernels_refinement_view`), then the **flat-memory bridge side
 conditions**, the **specification** last (one public headline `welford_equiv`
 on the `≡[R]` surface), and a compile-time **trust audit**. The real sections
 below are `Welford.kernels`, `Welford.lemmas`, `Welford.theorems`,
-`Welford.bridge`, `Welford.spec`.
+`Welford.bridge`, `Welford.spec`, and — after the trust audit — the dissolved
+exact originals in `Welford.exact`.
 
 `twopassWelfordKernel` computes the row mean/variance with two `tl.sum` passes;
 `onlineWelfordKernel` uses Welford's one-pass recurrence inside a `for` loop.
@@ -62,11 +63,13 @@ scratch leg of the frame is vacuous).
 
 The statement mentions only the two IO signatures and the library equivalence
 surface — **no spec** (the `#stmtSurfaceSubset` gate below enforces this).
-Everything else — the loop invariant, the per-kernel cell-level memory
-characterizations that `hrun` reads at the two output cells (value agreement,
-via `welford_eq_two_pass`) and everywhere else (the one-cell frames), and the
-region-level refinement `welford_kernels_refinement_view` those same
-characterizations power — is scaffolding. The headline carries **no
+Everything else — the loop invariant and the per-kernel cell-level memory
+characterizations that `hrun` reads **directly**, at the two output cells
+(value agreement, via `welford_eq_two_pass`) and everywhere else (the
+one-cell frames) — is scaffolding. The same characterizations also power the
+region-level refinement `welford_kernels_refinement_view`, which is **not**
+on the headline's proof path; it is kept (and audited) as the named
+`ComputeRefine.Refines` region-level story. The headline carries **no
 positivity hypothesis**: at `blockSize = 0` both recurrences degenerate to
 `0` (`welford_eq_two_pass_total`). The compositional pattern is
 `bench/examples/FusedSwiglu.lean` (the `≡[R]` pilot).
@@ -88,7 +91,7 @@ open VeriTile.Triton
 open scoped VeriTile.Triton.KernelIO₁ₓ₂
 
 open VeriTile.Triton.TiledReduction.WelfordRec
-open VeriTile.Examples (InputRowLoadedAt inputLoadedAt_of_programTileView_loaded programTileView rowTileView inputRowLoadedAt_of_rowTileView_loaded castFin
+open VeriTile.Examples (InputRowLoadedAt inputLoadedAt_of_programTileView_loaded programTileView rowTileView inputRowLoadedAt_of_rowTileView_loaded
   onlineWelfordLoopBody onlineWelfordLoopBody_castFree InputLoadedAt scalarCellView)
 
 /-! ## Kernels -/
@@ -131,12 +134,14 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
 
 end Welford.kernels
 
-/- Variables shared by every lemma and the theorem below — declared **once**, at
-namespace scope, so both `Welford.lemmas` and `Welford.theorems` inherit them
-(`end <section>` only clears variables declared *inside* that section). Hoisted
-out of the declarations so each signature carries only its genuine hypotheses:
-the compact `InputRowLoadedAt` input contract and the `meanReg ≠ varReg`
-aliasing constraint. -/
+/- Interface variables for the sections below — declared **once**, at namespace
+scope, so `Welford.lemmas`, `Welford.theorems` and `Welford.bridge` can all
+draw on them (`end <section>` only clears variables declared *inside* that
+section). A declaration auto-includes only the variables it mentions; the
+`{N}`-generic plumbing re-binds its own copies where a more general signature
+is needed, and per-declaration hypotheses (the `InputRowLoadedAt` /
+`ViewsLoaded` input contracts, the `meanReg ≠ varReg` aliasing constraint)
+stay on the signatures that need them. -/
 variable (xReg meanReg varReg : RegionName) (blockSize rowStride : Nat) (hN : 0 < blockSize)
 variable (s : BlockState) (xs : Fin blockSize → ℝ) (R : RoundingModel)
 
@@ -145,7 +150,8 @@ section Welford.lemmas
 
 -- Welford two-pass/recurrence math (twoPassMean/twoPassS/welfordMean/welfordS +
 -- welford_eq_two_pass) now lives in `VeriTile.Triton.TiledReduction.WelfordRec`,
--- opened above; shared with the LayerNorm showcase and VeriTile.Examples.WelfordKernels.
+-- opened above; shared with the `FusedLayerNorm` showcase and this file's
+-- `Exact` section (the dissolved former `VeriTile.Examples.WelfordKernels`).
 -- `onlineWelfordLoopBody` + its cast-free degeneration are shared from
 -- `VeriTile.Examples.Common`; `stepForLoopAuxR_castFree` + `writeMemAsR_regs`
 -- live in the library (`VeriTile.Triton.Float.StepR`).
@@ -457,10 +463,13 @@ rounding model `R`, from the same initial state `twopassWelfordKernel` and
 every cell. Both compute the same per-lane ℝ mean/variance (Welford's identity
 `welford_eq_two_pass`) and round it at the shared bf16 output stores.
 
-Formerly the file's headline; now the region-level view of the mathematical
-core whose per-kernel memory characterizations the `≡[R]` specification's
-region-model obligation reads directly (value agreement at the two output
-cells + the one-cell frames). -/
+Formerly the file's headline; now the named region-level story. The `≡[R]`
+specification's region-model obligation does **not** route through this
+statement — it reads the same per-kernel memory characterizations directly
+(value agreement at the two output cells + the one-cell frames): `Refines`
+compares only the two final memories, so it cannot supply the per-kernel
+frames against the initial state, and this view carries the `0 < blockSize` /
+loaded-row hypotheses the total obligation avoids. -/
 theorem welford_kernels_refinement_view
     (hin : TensorView.ViewsLoaded s
       [TensorView.slot (rowTileView s xReg rowStride blockSize) xs])
@@ -845,7 +854,7 @@ frames outside the two one-cell output windows). Proof:
 termination is unconditional, the two value-agreement legs are the per-kernel
 memory characterizations glued by Welford's identity (`welford_eq_two_pass`,
 totalized at `blockSize = 0`), the frames are those same characterizations
-read off the two output cells — with the flat-memory bridge side conditions
+read everywhere outside the two output cells — with the flat-memory bridge side conditions
 (`FlattenOk` + `TraceSafeR` per kernel). -/
 specification welford_equiv (R : RoundingModel) (blockSize rowStride : Nat) :
     welfordTwoPassIO blockSize rowStride ≡[R] welfordOnlineIO blockSize rowStride := by
@@ -959,7 +968,11 @@ rounding, and the input row lives at `pid * blockSize` (no separate `rowStride`
 argument) — so they genuinely differ from the rounding-surface kernels above
 and are kept, with their theorems, under the `Exact` sub-namespace. The shared
 two-pass/recurrence Welford math is still single-sourced in
-`VeriTile.Triton.TiledReduction.WelfordRec` (opened above). -/
+`VeriTile.Triton.TiledReduction.WelfordRec` (opened above).
+(`Exact.P_welford` / `Exact.online_welford_step` mirror the private
+rounded-surface plumbing above at `rowStride = blockSize` under the legacy
+`InputLoadedAt` contract — duplicated kernel plumbing over the same
+recurrence, not duplicated Welford math.) -/
 section Welford.exact
 namespace Exact
 

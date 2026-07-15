@@ -325,6 +325,26 @@ theorem refines_triv_iff (lhs rhs : ComputeKernel) (initialState : BlockState)
   unfold Refines Refines_without_Rounding
   exact ComputeKernel.execRefineR_triv_iff _ _ _ _
 
+/-- Unpack a `Refines` fact at a pair of successful `execR` runs: the two
+final memories agree at every cell outside `scratch`. The `toAlgorithm?`
+hypotheses discharge the projection — for concrete DSL kernels they close by
+`simp`. This is the standard bridge from a proven `Refines` theorem to the
+per-execution memory agreement a `≡[R]` (`KernelIO*.Equiv`) obligation
+consumes. -/
+theorem Refines.out {R : RoundingModel} {lhs rhs : ComputeKernel}
+    {s : BlockState} {scratch : List RegionName}
+    (h : Refines R lhs rhs s scratch)
+    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    {s1 s2 : BlockState}
+    (h1 : execR R lhs.toAlgKernel s = some s1)
+    (h2 : execR R rhs.toAlgKernel s = some s2) :
+    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
+  have h' := h.2
+  unfold ComputeKernel.ProjectedRefineR at h'
+  rw [hLAlg, hRAlg] at h'
+  exact h' s s1 s2 h1 h2 rfl
+
 /-! ### Named invariant shapes -/
 
 /-- The spec is independent of the rounding model: the observed dataflow

@@ -5,16 +5,18 @@ import VeriTile.Meta.StatementAudit
 /-!
 # Softmax: per-element-divide vs precomputed-reciprocal — kernel equivalence `≡[R]`
 
-Self-contained showcase, read top to bottom: **kernels** first, the
-**supporting lemmas** in the middle (`private` plumbing — a bf16-scatter
-congruence and its cell-frame twin), the region-level refinement core next
-(`softmax_reciprocal_refinement_view`), then the **flat-memory bridge side
-conditions**, the **specification** last (one public headline
+Self-contained showcase, read top to bottom: **kernels** first, one
+**supporting lemma** in the middle (`private` plumbing — a bf16-scatter
+congruence; its cell-frame twin is the library's
+`BlockState.foldl_writeMemAsR_preserve_cell`), the region-level refinement
+core next (`softmax_reciprocal_refinement_view`), the **region-run
+plumbing** (termination + per-kernel frames), then the **flat-memory bridge
+side conditions**, the **specification** last (one public headline
 `softmax_reciprocal_equiv` on the `≡[R]` surface), and a compile-time
 **trust audit**. The rounding-layer sections are `SoftmaxReciprocal.kernels`,
 `SoftmaxReciprocal.lemmas`, `SoftmaxReciprocal.theorems`,
-`SoftmaxReciprocal.bridge`, `SoftmaxReciprocal.spec`; the exact-ℝ companions
-close the file.
+`SoftmaxReciprocal.regionRun`, `SoftmaxReciprocal.bridge`,
+`SoftmaxReciprocal.spec`; the exact-ℝ companions close the file.
 
 Both stable-softmax kernels compute `y = exp(x − m) / Σ exp(x − m)` per row and
 **store the result rounded to bf16** (`(y).to(tl.bfloat16)`):
@@ -157,26 +159,6 @@ private theorem foldl_writeMemAsR_mem_congr {α : Type} (R : RoundingModel)
       · rw [if_pos hc, if_pos hc]
       · rw [if_neg hc, if_neg hc]; exact h
 
-/-- A `writeMemAsR` scatter `foldl` leaves every memory cell it does not hit
-unchanged — the cell-level frame for the unmasked bf16 store (the `R`-store
-sibling of `VectorAdd`'s `foldl_store_preserve_cell`). -/
-private theorem foldl_writeMemAsR_preserve_cell {α : Type} (R : RoundingModel)
-    (dtype : FloatDType) {region : RegionName} (l : List α)
-    (offsetFn : α → Nat) (v : α → TileCarrier dtype.toTileDType)
-    (r : RegionName) (o : Nat)
-    (hnot : ∀ k ∈ l, ¬(r = region ∧ o = offsetFn k)) :
-    ∀ s : BlockState,
-      (l.foldl (fun acc k =>
-          acc.writeMemAsR R dtype region (offsetFn k) (v k)) s).mem r o
-        = s.mem r o := by
-  induction l with
-  | nil => intro s; rfl
-  | cons hd tl ih =>
-      intro s
-      rw [List.foldl_cons,
-          ih (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
-          BlockState.writeMemAsR_mem, if_neg (hnot hd List.mem_cons_self)]
-
 end SoftmaxReciprocal.lemmas
 
 /-! ## The region-level refinement core -/
@@ -233,7 +215,8 @@ a frame ("only the program's `y` window is written"). All four lemmas fall
 out of the same computational unfold the refinement core uses: `execR R`
 reduces each straight-line body to one `writeMemAsR` scatter over the
 program's `offs` tile (`0 < N` because `tl.max` over an empty tile has no
-value). -/
+value); the frames then close by the library scatter frame
+`BlockState.foldl_writeMemAsR_preserve_cell`. -/
 section SoftmaxReciprocal.regionRun
 
 variable (xReg yReg : RegionName) (N : Nat) (s : BlockState)
@@ -277,11 +260,12 @@ private theorem softmaxDiv_preservesR (hN : 0 < N) (s' : BlockState)
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
   subst s'
-  refine Eq.trans (foldl_writeMemAsR_preserve_cell R .bf16 _ _ _ r o ?_ _) rfl
-  rintro k - ⟨rfl, rfl⟩
+  refine Eq.trans
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
+  intro k _ hc
   rcases hcond with hne | hno
-  · exact hne rfl
-  · exact hno k.1 rfl
+  · exact hne hc.1.symm
+  · exact hno k.1 hc.2.symm
 
 /-- Frame lemma for the reciprocal kernel: every cell outside the program's
 `y` window is untouched. -/
@@ -299,11 +283,12 @@ private theorem softmaxRecip_preservesR (hN : 0 < N) (s' : BlockState)
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
   subst s'
-  refine Eq.trans (foldl_writeMemAsR_preserve_cell R .bf16 _ _ _ r o ?_ _) rfl
-  rintro k - ⟨rfl, rfl⟩
+  refine Eq.trans
+    (BlockState.foldl_writeMemAsR_preserve_cell R .bf16 _ _ r o _ ?_ _) rfl
+  intro k _ hc
   rcases hcond with hne | hno
-  · exact hne rfl
-  · exact hno k.1 rfl
+  · exact hne hc.1.symm
+  · exact hno k.1 hc.2.symm
 
 end SoftmaxReciprocal.regionRun
 
@@ -315,8 +300,9 @@ flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
 `Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge fragment
 membership). Each kernel makes exactly two accesses — the `x` load and the
 bf16 `y` store, both through the unmasked whole-tile `offs` window — so each
-buffer's bound must cover the program tile `[pid·B, pid·B + B)`; the register
-ops (`max`/`exp`/`sum`/`div`/reciprocal) are memory-silent. -/
+buffer's bound must cover the program tile `[pid·B, pid·B + B)`; every other
+statement (`program_id`, the `offs` index arithmetic, and the register ops
+`max`/`exp`/`sum`/`div`/reciprocal) is memory-silent. -/
 section SoftmaxReciprocal.bridge
 
 variable (xReg yReg : RegionName) (N : Nat) (s : BlockState)
@@ -413,23 +399,6 @@ shared verbatim), with the reciprocal-multiply kernel plugged in. -/
 def softmaxRecipIO (B : Nat) : KernelIO₁ :=
   { softmaxDivIO B with kernel := softmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B }
 
-/-- Unpack `ComputeRefine.Refines` at one successful execution pair of the
-two projected kernels — the two-kernel sibling of the library's
-`ComputeKernel.ExecCorrectR.out` (same helper as `FusedSwiglu.lean`). -/
-private theorem refines_out {R : RoundingModel} {lhs rhs : ComputeKernel}
-    {s : BlockState} {scratch : List RegionName}
-    (h : ComputeRefine.Refines R lhs rhs s scratch)
-    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
-    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
-    {s1 s2 : BlockState}
-    (h1 : execR R lhs.toAlgKernel s = some s1)
-    (h2 : execR R rhs.toAlgKernel s = some s2) :
-    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
-  have h' := h.2
-  unfold ComputeKernel.ProjectedRefineR at h'
-  rw [hLAlg, hRAlg] at h'
-  exact h' s s1 s2 h1 h2 rfl
-
 /-- **The headline**: the per-element-divide softmax is equivalent to the
 precomputed-reciprocal softmax on their shared IO signature, for **every**
 rounding model — see the module docstring for the full contract `≡[R]`
@@ -439,8 +408,9 @@ side). Proof: `KernelIO₁.Equiv.intro` assembles the region-model
 equivalence — termination and the frames from the computational unfold, the
 `y`-agreement leg from the region-level refinement core
 `softmax_reciprocal_refinement_view` (`e / S = e · S⁻¹` rounded at the same
-bf16 store) — with the flat-memory bridge side conditions (`FlattenOk` +
-`TraceSafeR` per kernel). -/
+bf16 store), unpacked at the execution pair by the library
+`ComputeRefine.Refines.out` — with the flat-memory bridge side conditions
+(`FlattenOk` + `TraceSafeR` per kernel). -/
 specification softmax_reciprocal_equiv (R : RoundingModel) (B : Nat)
     (hB : 0 < B) :
     softmaxDivIO B ≡[R] softmaxRecipIO B := by
@@ -465,8 +435,7 @@ specification softmax_reciprocal_equiv (R : RoundingModel) (B : Nat)
     -- the refinement core: the two final memories agree at EVERY cell
     have hmem12 : ∀ r, r ∉ ([] : List RegionName) →
         ∀ o, s1.mem r o = s2.mem r o :=
-      refines_out
-        (softmax_reciprocal_refinement_view ⟨"x"⟩ ⟨"y"⟩ B hB s₀ R)
+      (softmax_reciprocal_refinement_view ⟨"x"⟩ ⟨"y"⟩ B hB s₀ R).out
         rfl rfl hexec1 hexec2
     refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
     · -- the y windows agree (a fortiori: all cells agree)
