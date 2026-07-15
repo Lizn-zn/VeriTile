@@ -54,7 +54,7 @@ gate below enforces this). The region-level refinement
 surface) is the mathematical core the headline's region-model obligation
 repackages — unpacked at each execution pair by the library's
 `ComputeRefine.Refines.out`. The compositional-rounding sibling (matched
-intermediate casts, scratch staging) is `bench/examples/FusedSwiglu.lean`.
+intermediate casts, scratch staging) is `bench/examples/FusedSwigluEquiv.lean`.
 
 There is no separate exact layer: the headline quantifies over **every**
 rounding model, and at `R := .triv` the `castTo` store is inert

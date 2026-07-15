@@ -19,7 +19,7 @@ and the algorithmic equivalence theorem is discharged by **erasing** those
 annotations to the Real channel and reusing the Real-valued refinement (here
 the softmax reciprocal rewrite). This is the erased/ideal pathway — the
 complement of the rounding-model pathway (`ComputeRefine.*R`) demonstrated in
-`bench/examples/FusedSwiglu.lean`. The correctness counterpart of this policy
+`bench/examples/FusedSwigluEquiv.lean`. The correctness counterpart of this policy
 lives in `bench/examples/FloatDTypeCorrect.lean`.
 
 ## The public result (bottom of file)
@@ -50,8 +50,9 @@ This discharges them for `simp`. -/
 section FloatDTypeRefine.kernels
 
 /-- This file's own copy of the aligned Real per-element-divide stable softmax
-(each showcase is self-contained; the showcased original lives in
-`bench/examples/SoftmaxEqRefine.lean` as `stableSoftmaxKernelReal`). The
+(each showcase is self-contained; the bf16 sibling is showcased in
+`bench/examples/SoftmaxStableEquiv.lean` — its raw-store twin was retired
+there, the exact surface being the `≡[R]` headline at `R := .triv`). The
 fp32-annotated `floatStableSoftmaxKernel` below erases to this kernel. -/
 def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
@@ -65,9 +66,9 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
 }
 
 /-- This file's own copy of the aligned Real reciprocal-form stable softmax
-(the showcased original lives in `bench/examples/SoftmaxReciprocalRefine.lean`
-as `softmaxRecipKernelReal`). The fp32-annotated `floatSoftmaxRecipKernel`
-below erases to this kernel. -/
+(the bf16 sibling is showcased in `bench/examples/SoftmaxReciprocalEquiv.lean`;
+its raw-store twin was retired there). The fp32-annotated
+`floatSoftmaxRecipKernel` below erases to this kernel. -/
 def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
@@ -150,8 +151,9 @@ private theorem float_softmax_recip_erases_to_real
 /-! ### Local copy of the Real reciprocal refinement
 
 The erased equivalence reduces to the Real-valued reciprocal rewrite
-(`e / S = e · S⁻¹`). The showcased original of this chain lives in
-`bench/examples/SoftmaxReciprocalRefine.lean` (exact-ℝ companion section);
+(`e / S = e · S⁻¹`). The bf16 sibling of this chain is showcased in
+`bench/examples/SoftmaxReciprocalEquiv.lean` (whose exact-ℝ companion was
+retired — the exact surface there is the `≡[R]` headline at `R := .triv`);
 each showcase is self-contained, so this file carries its own `private` copy.
 The math denotation (`stableSpec`, `tileMax`) lives in
 `VeriTile.Triton.Math.Softmax`. -/
@@ -165,8 +167,8 @@ private theorem div_eq_mul_inv_real (a s : ℝ) (hs : s ≠ 0) : a / s = a * (1 
 private noncomputable def stableRecipSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N) : ℝ :=
   Real.exp (xs i - m) * (1 / ∑ j, Real.exp (xs j - m))
 
-/-- Closed form of the divide-side kernel (local copy of
-`softmax_stable_correct` from `bench/examples/SoftmaxEqRefine.lean`). -/
+/-- Closed form of the divide-side kernel (this file's private copy; the
+formerly-shared original was retired with SoftmaxStableEquiv's exact layer). -/
 private theorem softmax_stable_correct
     (xReg yReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
@@ -197,8 +199,9 @@ private theorem softmax_stable_correct
   simp [_h_x]
   rfl
 
-/-- Closed form of the reciprocal-side kernel (local copy of
-`softmax_recip_correct` from `bench/examples/SoftmaxReciprocalRefine.lean`). -/
+/-- Closed form of the reciprocal-side kernel (this file's private copy; the
+formerly-shared original was retired with SoftmaxReciprocalEquiv's exact
+layer). -/
 private theorem softmax_recip_correct
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)

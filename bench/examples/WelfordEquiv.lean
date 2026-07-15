@@ -71,7 +71,7 @@ on the headline's proof path; it is kept (and audited) as the named
 `ComputeRefine.Refines` region-level story. The headline carries **no
 positivity hypothesis**: at `blockSize = 0` both recurrences degenerate to
 `0` (`welford_eq_two_pass_total`). The compositional pattern is
-`bench/examples/FusedSwiglu.lean` (the `≡[R]` pilot).
+`bench/examples/FusedSwigluEquiv.lean` (the `≡[R]` pilot).
 
 ## The exact-ℝ surface
 

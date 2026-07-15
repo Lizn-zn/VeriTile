@@ -17,7 +17,7 @@ public compute-facing APIs. See
   mirrors, which degenerate out of them at the trivial model. Narrow-float
   showcase kernels land on the unqualified rounding surface directly; see
   [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) and the showcase
-  `bench/examples/FusedSwiglu.lean`.
+  `bench/examples/FusedSwigluEquiv.lean`.
 
 Projected algorithm lemmas may still mention `Kernel.Correct_without_Rounding`
 or `Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas

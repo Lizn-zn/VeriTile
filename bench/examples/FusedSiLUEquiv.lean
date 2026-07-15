@@ -26,7 +26,7 @@ kernel and the unfused pipeline compute the **same** per-lane ℝ output
 values identically at the shared bf16 output store — the writes agree outside
 the scratch temporaries.
 
-Contrast: `bench/examples/FusedSwiglu.lean` rounds the materialized
+Contrast: `bench/examples/FusedSwigluEquiv.lean` rounds the materialized
 **intermediate** too (bf16 scratch), needing idempotence; here the scratch is
 ℝ, so only the boundary store matters and no idempotence is used.
 

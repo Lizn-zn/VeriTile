@@ -22,7 +22,7 @@ row max first. The reductions run in ℝ (no intermediate rounding), so both
 kernels produce the **same** per-lane ℝ value — the shift-cancellation of
 softmax (`naive_eq_stable`) — and the only rounding is the shared bf16 output
 store, which quantizes equal values identically. No idempotence is needed
-(contrast `bench/examples/FusedSwiglu.lean`, where a re-round must collapse):
+(contrast `bench/examples/FusedSwigluEquiv.lean`, where a re-round must collapse):
 here the rounding *sites* already coincide one-for-one.
 
 ## The public result (bottom of file)

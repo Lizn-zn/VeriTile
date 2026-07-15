@@ -179,7 +179,7 @@ ComputeRefine.Refines R lhs rhs s scratch
 pair 的 `[S]`,或 `FusedSiLU` 里的 `zReg`/`siluReg` 临时区)。当两个 kernel 必须
 在整个 memory 上一致时传 `[]`。`bench/examples/` 里每个 `*_refinement_view` 定理
 都落在这个 surface 上;精确实数变体 `ComputeRefine.Refines_without_Rounding`
-(无 `R`,在 `exec` 下执行)是 `bench/examples/FusedSiLU.lean` 用的理想化。
+(无 `R`,在 `exec` 下执行)是 `bench/examples/FusedSiLUEquiv.lean` 用的理想化。
 
 ### Pointwise:`ComputeRefine.RefinesAt`
 
@@ -220,7 +220,7 @@ ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
 `ComputeCorrect.Realizes_without_Rounding`。退化引理 `refines_triv_iff` /
 `refinesAt_triv_iff` 以同样方式恢复 `Refines_without_Rounding` /
 `RefinesAt_without_Rounding`。∀R 组合模式的范例见
-[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean);边界舍入的
+[`bench/examples/FusedSwigluEquiv.lean`](../bench/examples/FusedSwigluEquiv.lean);边界舍入的
 showcase(LogSumExp、softmax、Welford、LayerNorm、FusedSiLU)对固定的 `R` 落在
 `Refines R` 上。
 

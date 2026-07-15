@@ -24,7 +24,7 @@ Both stable-softmax kernels compute `y = exp(x − m) / Σ exp(x − m)` per row
 precomputes `1 / Σ` once and multiplies. The reductions run in ℝ, so both
 produce the **same** per-lane ℝ value (`e / S = e · S⁻¹`), and the only rounding
 is the shared bf16 output store, which quantizes equal values identically — no
-idempotence argument is even needed (contrast `bench/examples/FusedSwiglu.lean`,
+idempotence argument is even needed (contrast `bench/examples/FusedSwigluEquiv.lean`,
 where the two sides' rounding sites differ by a redundant re-round).
 
 ## The public result (bottom of the rounding layer)

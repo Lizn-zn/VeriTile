@@ -68,7 +68,7 @@ and the region-level refinement `layernorm_kernels_refinement_view`
 definitions**: the expected per-lane output never appears as a named function,
 so a self-referential spec is impossible by construction (and there is no
 `#specNonCircular` gate to run). The masked-IO pilot of this conversion is
-`bench/examples/FusedSwiglu.lean`.
+`bench/examples/FusedSwigluEquiv.lean`.
 -/
 
 namespace VeriTile.Bench.Examples.LayerNorm
