@@ -83,7 +83,7 @@ bridged once in the library (`ComputeKernel.execR_seq_rel_execPipelineR`,
 concatenated kernel.
 -/
 
-namespace VeriTile.Bench.Examples.SwigluRounding
+namespace VeriTile.Bench.Examples.FusedSwigluEquiv
 
 open VeriTile.Triton
 open scoped VeriTile.Triton.MaskedKernelIO₂
@@ -799,4 +799,4 @@ trusted statement) the file stops compiling. See
 -- (There is no `#specNonCircular` gate: the file defines no specs at all, so a
 -- self-referential spec is impossible by construction.)
 
-end VeriTile.Bench.Examples.SwigluRounding
+end VeriTile.Bench.Examples.FusedSwigluEquiv

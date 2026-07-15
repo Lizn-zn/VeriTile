@@ -35,8 +35,8 @@ grid_rmw_xchg_launch	bench/examples/GridComposition.lean	VeriTile.Bench.Examples
 online_softmax	bench/examples/OnlineSoftmax.lean	VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	bench/examples/RowWiseSum.lean	VeriTile.Bench.Examples.RowWiseSum.rowWiseSum_correctness	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	bench/examples/RowWiseMax.lean	VeriTile.Bench.Examples.RowWiseMax.rowWiseMax_correctness	correct	proven	internal	-	-	Row-wise max	max variant
-fused_silu_refine	bench/examples/FusedSiLUEquiv.lean	VeriTile.Bench.Examples.FusedSiLURounded.silu_equiv	refine	proven	internal	-	-	Fused SiLU refinement	KernelIO ≡[R] equivalence headline, scratch z/silu
-fused_swiglu_equiv	bench/examples/FusedSwigluEquiv.lean	VeriTile.Bench.Examples.SwigluRounding.swiglu_equiv	refine	proven	internal	-	-	Fused SwiGLU equivalence	KernelIO ≡[R] equivalence headline, scratch S
+fused_silu_refine	bench/examples/FusedSiLUEquiv.lean	VeriTile.Bench.Examples.FusedSiLUEquiv.silu_equiv	refine	proven	internal	-	-	Fused SiLU refinement	KernelIO ≡[R] equivalence headline, scratch z/silu
+fused_swiglu_equiv	bench/examples/FusedSwigluEquiv.lean	VeriTile.Bench.Examples.FusedSwigluEquiv.swiglu_equiv	refine	proven	internal	-	-	Fused SwiGLU equivalence	KernelIO ≡[R] equivalence headline, scratch S
 welford_refine	bench/examples/WelfordEquiv.lean	VeriTile.Bench.Examples.Welford.welford_equiv	refine	proven	internal	-	-	Welford refinement	KernelIO ≡[R] equivalence headline, two outputs
 layernorm_refine	bench/examples/FusedLayerNormEquiv.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_equiv	refine	proven	internal	-	-	LayerNorm refinement	KernelIO ≡[R] equivalence headline
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	VeriTile.Examples.approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
