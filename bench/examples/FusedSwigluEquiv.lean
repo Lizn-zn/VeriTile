@@ -3,14 +3,15 @@ import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
 /-!
-# SwiGLU fused vs unfused — rounding-invariance pilot (#447 Phase C)
+# SwiGLU fused vs unfused — kernel equivalence `≡[R]` on the masked IO surface
 
 Self-contained showcase, read top to bottom: **kernels** first (what we
 built), the **supporting lemmas** in the middle (`private` plumbing — the
-grind), the **theorem** last (one public headline `swiglu_fused_refines_unfused`
-plus its `private` derivation steps), then a compile-time **trust audit**. The
-three real sections below are `Swiglu.kernels`, `Swiglu.lemmas`,
-`Swiglu.theorems`.
+grind), the region-level refinement core next (`swiglu_fused_refines_unfused`),
+then the **flat-memory bridge side conditions**, the **specification** last
+(one public headline `swiglu_equiv` on the `≡[R]` surface), and a compile-time
+**trust audit**. The real sections below are `Swiglu.kernels`, `Swiglu.lemmas`,
+`Swiglu.theorems`, `Swiglu.bridge`, `Swiglu.spec`.
 
 **Both kernels round at exactly the same sites.** `R.castTo .bf16 _` is one
 bf16 quantization (`RoundingModel.castTo` = the ℝ-level core of a `.to(bf16)`
@@ -37,28 +38,56 @@ abstract model `R`.
 Outputs are read at the `MemCell` layer (`floatCell .bf16 v`): bf16 stores are
 tag-exact, so a narrow-float cell is only observable as its typed `MemCell` —
 the classic fp16/bf16 convention (`rmsnorm_fused_llama`). The generic
-fixed-`R` unpacker used below (`ComputeKernel.ExecCorrectR.out`) is
-kernel-agnostic and lives in the library (`VeriTile.Triton.Float.Refine`).
+fixed-`R` unpackers used below (`ComputeKernel.ExecCorrectR.out` for a
+realization, `ComputeRefine.Refines.out` for a refinement) are
+kernel-agnostic and live in the library (`VeriTile.Triton.Float.Refine`).
 
 ## The public result (bottom of file)
 
-The single public headline is **`swiglu_fused_refines_unfused`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines`: for every rounding
-model `R`, from the same state the fused kernel and the unfused pipeline
-perform the same writes outside the scratch tensor `S`. Its statement
-mentions only the kernels, the loaded-input contract, the rounding-model
-surface, and the library refinement surface — **no spec** (the
-`#stmtSurfaceSubset` gate below enforces this). Everything else — the per-kernel
-realizations, frame lemmas and the pipeline split — is `private` scaffolding.
-There are **no spec definitions**: each kernel's expected per-lane output is
-written inline as a `castTo` closed form, so a self-referential spec is
-impossible by construction (and there is no `#specNonCircular` gate to run).
+The single public headline is **`swiglu_equiv`** — kernel equivalence on the
+shared masked IO signature:
+
+    swigluFusedIO ncols B ≡[R] swigluUnfusedIO ncols B
+
+`≡[R]` is the audit-once kernel-equivalence combinator
+(`MaskedKernelIO₂.Equiv`, `VeriTile.Triton.Memory.KernelSpec`), the `⊨`-grade
+form of the refinement surface. Spelled out, the headline says: for **every**
+disjoint flat placement of the interface buffers `X`/`Y`/`OUT` **plus the
+pipeline's private staging buffer `S`** (∀ base pointers, ∀ buffer sizes),
+**every** program id all of whose *active* lanes (`pid * B + j < ncols`) land
+inside their buffers, and **every** launch state (modulo the surface-wide
+launch-clean `undef` bookkeeping channel — the modeling boundary documented
+in `VeriTile.Triton.Memory.KernelSpec`) — **no input hypotheses at all**, not
+even loaded inputs: "equal inputs" is simply "the same `s₀`" —
+both translated pointer kernels terminate under `execR R`, their active `OUT`
+lanes hold equal values, and each kernel leaves every cell outside the active
+`OUT` window and its **own** active scratch windows untouched (the fused
+kernel has no scratch, so it frames outside `OUT` alone; the pipeline may
+additionally write the active `S` window, and `≡` never compares `S`).
+
+The statement mentions only the two IO signatures and the library equivalence
+surface — **no spec** (the `#stmtSurfaceSubset` gate below enforces this).
+Everything else — the per-kernel realizations, frame lemmas, the pipeline
+split, and the region-level refinement `swiglu_fused_refines_unfused` that
+`hrun` repackages — is scaffolding. There are **no spec definitions**: each
+kernel's expected per-lane output is written inline as a `castTo` closed
+form, so a self-referential spec is impossible by construction (and there is
+no `#specNonCircular` gate to run).
+
+**Honest boundary**: `swiglu_unfused` is the `ComputeKernel.seq`
+*single-launch concatenation* of the two step bodies — register bindings flow
+across the stage seam, which no real two-launch execution allows. The honest
+per-launch semantics is `execPipelineR`, and the register-leakage gap is
+bridged once in the library (`ComputeKernel.execR_seq_rel_execPipelineR`,
+`VeriTile.Triton.Float.Pipeline`); this file's headline is about the
+concatenated kernel.
 -/
 
 namespace VeriTile.Bench.Examples.SwigluRounding
 
 open VeriTile.Triton
-open VeriTile.Examples (InputLoadedAt outWritesTo floatCell InputCellsLoadedAt programLaneOffset)
+open scoped VeriTile.Triton.MaskedKernelIO₂
+open VeriTile.Examples (InputLoadedAt floatCell InputCellsLoadedAt programLaneOffset)
 
 /-! ## Kernels -/
 section Swiglu.kernels
@@ -101,16 +130,19 @@ def mul_step (S Y OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel := tri
 /-- The unfused pipeline `B ∘ A` as one kernel: `ComputeKernel.seq` of the
 two step kernels — the concatenation of their bodies (registers flowing
 across the seam; the honest per-launch semantics is `execPipelineR`, related
-by the launch bridge below). -/
+by the library launch bridge `ComputeKernel.execR_seq_rel_execPipelineR` —
+see the module docstring's honest-boundary note). -/
 def swiglu_unfused (X Y S OUT : RegionName) (ncols BLOCK_N : Nat) : ComputeKernel :=
   ComputeKernel.seq [X, Y] [OUT]
     [silu_step X S ncols BLOCK_N, mul_step S Y OUT ncols BLOCK_N]
 
 end Swiglu.kernels
 
-/- Variables shared by every lemma and the theorem below — declared **once**, at
-namespace scope, so both `Swiglu.lemmas` and `Swiglu.theorems` inherit them
-(`end <section>` only clears variables declared *inside* that section). Each
+/- Variables shared by every lemma and theorem below — declared **once**, at
+namespace scope, so the `Swiglu.lemmas`, `Swiglu.theorems`, and
+`Swiglu.bridge` sections all inherit them (`end <section>` only clears
+variables declared *inside* that section; `Swiglu.spec` instantiates the
+regions concretely instead). Each
 kernel's per-lane "expected output" is written inline as a closed form over
 `TiledActivation` + `RoundingModel.castTo` (one `castTo .bf16` = one bf16
 quantization) — there are deliberately **no** spec definitions. -/
@@ -139,9 +171,10 @@ private theorem exec_swiglu_unfusedR (R : RoundingModel)
 /-! ## Component realizations
 
 Input hypotheses use the shared `VeriTile.Examples.InputLoadedAt` contract
-(region holds `xs` at `s.pid * N + i`); output claims use its write-side
-counterpart `VeriTile.Examples.outWritesTo`. `programLaneOffset` is that same
-address, named for the proofs. -/
+(region holds `xs` at `s.pid * N + i`; `InputCellsLoadedAt` is its
+`MemCell`-typed sibling, used for the bf16 intermediate `S`). Output claims
+are stated directly through `ComputeCorrect.OutputReadable.read`.
+`programLaneOffset` is that same lane address, named for the proofs. -/
 
 /-- The fused kernel writes `c(c( c(silu x) · y ))` (three bf16 quantizations)
 at each active `OUT` lane, under rounding model `R`. -/
@@ -325,7 +358,13 @@ private theorem swiglu_unfused_realizesR
       have hout := hBout i (by rw [BlockState.pid_eq]; exact hAct1)
       simpa [programLaneOffset, hpids] using hout
 
-/-! ## Frame lemmas (the writes each kernel does NOT perform) -/
+/-! ## Frame lemmas (the writes each kernel does NOT perform)
+
+Every store in this file is lane-masked, so the cell-level frames go through
+the library's **masked** scatter frame
+`BlockState.foldl_writeMemAsR_preserve_masked_prop` (region-level:
+`BlockState.foldl_writeMemAsR_preserve_other_region`); its unmasked sibling
+`BlockState.foldl_writeMemAsR_preserve_cell` does not apply here. -/
 
 /-- Frame lemma for the fused kernel: every region other than `OUT` is
 untouched. -/
@@ -382,9 +421,54 @@ private theorem mul_step_preserves_unhitR (s' : BlockState)
       (fun k _ hPk => ho k.1 hPk)]
   rfl
 
+/-- Frame lemma for step A: `S` offsets not hit by an active lane are
+untouched — the in-region complement of `silu_step_preservesR`, needed
+because the `≡[R]` frame only cedes the *active* `S` window to the pipeline
+(the inactive overhang of a partial block stays framed). -/
+private theorem silu_step_preserves_unhitR (s' : BlockState)
+    (o : Nat)
+    (ho : ∀ i : Fin BLOCK_N, s.pids 0 * BLOCK_N + i.val < ncols →
+      programLaneOffset s BLOCK_N i ≠ o)
+    (hExec : execR R (silu_step X S ncols BLOCK_N) s = some s') :
+    s'.mem S o = s.mem S o := by
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMemAsR_preserve_masked_prop R .bf16 _ _ _ o _
+      (fun k _ hPk => ho k.1 hPk)]
+  rfl
+
+/-! ## Termination (unconditional, for the `≡[R]` contract)
+
+`≡[R]`'s region-model obligation starts from **any** state — no loaded
+inputs, no clean undef — so termination cannot come from the realization
+theorems (which take `InputLoadedAt`). It holds outright: both bodies are
+straight-line statement lists whose every step is total, so `execR R`
+computes to `some _` by the same computational unfold the realizations use. -/
+
+/-- The fused kernel terminates under `execR R` from every state. -/
+private theorem swiglu_fused_execR_isSome :
+    ∃ s', execR R ((swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel) s
+      = some s' := by
+  simp [execR, swiglu_fused, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?]
+
+/-- Step A terminates under `execR R` from every state. -/
+private theorem silu_step_execR_isSome :
+    ∃ s', execR R ((silu_step X S ncols BLOCK_N).toAlgKernel) s = some s' := by
+  simp [execR, silu_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?]
+
+/-- Step B terminates under `execR R` from every state. -/
+private theorem mul_step_execR_isSome :
+    ∃ s', execR R ((mul_step S Y OUT ncols BLOCK_N).toAlgKernel) s
+      = some s' := by
+  simp [execR, mul_step, stepStmtsR, stepStmtR, evalOpR.eq_def,
+        tile_elementwise, ComputeExpr.toAlgorithm?]
+
 end Swiglu.lemmas
 
-/-! ## The headline theorems -/
+/-! ## The region-level refinement core -/
 section Swiglu.theorems
 
 /-- **fused refines unfused** (`ComputeRefine.Refines`, scratch `[S]`): for
@@ -392,8 +476,12 @@ every rounding model `R`, running the fused kernel and the unfused pipeline
 from the same state performs THE SAME WRITES — the final memories agree at
 every cell outside the scratch tensor `S`. Idempotence (`round ∘ round =
 round`, a defining field of `RoundingModel`) is what makes the two kernels'
-matched rounding sites coincide; no hypothesis is needed. -/
-specification swiglu_fused_refines_unfused
+matched rounding sites coincide; no hypothesis is needed.
+
+Formerly the file's headline; now the mathematical core the `≡[R]`
+specification's region-model obligation repackages (its `OUT`-agreement leg
+is exactly this memory agreement read at the active output lanes). -/
+theorem swiglu_fused_refines_unfused
     (h_x : InputLoadedAt s X BLOCK_N xs) (h_y : InputLoadedAt s Y BLOCK_N ys)
     (h_SY : S ≠ Y) :
     ComputeRefine.Refines R
@@ -458,6 +546,236 @@ specification swiglu_fused_refines_unfused
           mul_step_preservesR Y S OUT ncols BLOCK_N s1 R rhs' r hrOUT hRB o
         rw [hLmem, hBmem, hA_mem o]
 
+end Swiglu.theorems
+
+/-! ## Flat-memory bridge side conditions
+
+Both kernels are register-indirect (`cols = start_col + tl.arange(…);
+tl.load(X + cols, mask=cols < ncols)`), so no ∀-state safety contract covers
+them; the flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
+`Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge fragment
+membership). Every access on both sides uses the same masked window: only the
+*active* lanes (`pid * BLOCK_N + j < ncols`) touch memory, so the bounds
+obligations are **lane-wise** — each active lane's address is below the bound
+of the buffer it touches, with no whole-window `ncols ≤ bounds` contract in
+sight. The fused kernel makes 3 accesses (load `X`, load `Y`, store `OUT`);
+the unfused pipeline — the concatenation of the two step bodies — makes 5
+(load `X`, store `S`, load `S`, load `Y`, store `OUT`), and its `S` bounds
+come from the `≡[R]` scratch-window hypothesis. -/
+section Swiglu.bridge
+
+/-- The fused kernel sits inside the bridge's covered fragment. -/
+theorem swiglu_fused_flattenOk :
+    ((swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [swiglu_fused, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- The concatenated unfused pipeline sits inside the bridge's covered
+fragment (concatenation adds no new statement forms). -/
+theorem swiglu_unfused_flattenOk :
+    ((swiglu_unfused X Y S OUT ncols BLOCK_N).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [swiglu_unfused, silu_step, mul_step, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk for the fused kernel under `R`: one
+computational unfold walks all seven statements — four are memory-silent
+(the `program_id` offset `start_col`, the lane vector `cols`, and the
+register binds `sil`/`out`), so their `SafeAtR` discharges outright — and
+reduces the three masked accesses (load `X`, load `Y`, store `OUT`) to the
+lane-wise bounds hypotheses. -/
+theorem swiglu_fused_traceSafeR (bounds : RegionBounds)
+    (hx : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds X)
+    (hy : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds Y)
+    (hout : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds OUT) :
+    Kernel.TraceSafeR R bounds
+      ((swiglu_fused X Y OUT ncols BLOCK_N).toAlgKernel) s := by
+  unfold Kernel.TraceSafeR
+  simp only [BlockState.pid_eq] at hx hy hout
+  simp [swiglu_fused, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+    MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise,
+    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+    MaskOpt.ActiveR, BlockState.setReg,
+    Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt]
+  exact ⟨fun a ha => hx a ha, fun a ha => hy a ha, fun a ha => hout a ha⟩
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk for the concatenated unfused pipeline under
+`R`: same computational unfold over the eleven concatenated statements — six
+are memory-silent (each step's `program_id` offset and lane vector, plus the
+register binds `s`/`out`); the five masked accesses (load `X`, store `S`,
+load `S`, load `Y`, store `OUT`) all address the shared active window. -/
+theorem swiglu_unfused_traceSafeR (bounds : RegionBounds)
+    (hx : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds X)
+    (hy : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds Y)
+    (hout : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds OUT)
+    (hs : ∀ j : Fin BLOCK_N, s.pid * BLOCK_N + j.val < ncols →
+      s.pid * BLOCK_N + j.val < bounds S) :
+    Kernel.TraceSafeR R bounds
+      ((swiglu_unfused X Y S OUT ncols BLOCK_N).toAlgKernel) s := by
+  unfold Kernel.TraceSafeR
+  simp only [BlockState.pid_eq] at hx hy hout hs
+  simp [swiglu_unfused, silu_step, mul_step, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+    MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise,
+    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+    MaskOpt.ActiveR, BlockState.setReg,
+    BlockState.foldl_writeMemAsR_masked_pids,
+    Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt]
+  -- (four obligations, not five: `simp` merges the S-store and S-load
+  -- windows' identical lane-bounds conjuncts)
+  exact ⟨fun a ha => hx a ha, fun a ha => hs a ha,
+    fun a ha => hy a ha, fun a ha => hout a ha⟩
+
+end Swiglu.bridge
+
+/-! ## The spec: `swigluFusedIO ≡[R] swigluUnfusedIO` -/
+section Swiglu.spec
+
+/-- The unfused pipeline's masked **IO signature** — the whole kernel-specific
+audit surface of the headline: interface `X`, `Y` → `OUT`, each program
+owning the window `[pid * B, pid * B + B)` with active lanes
+`pid * B + j < ncols` (partial blocks deactivate the overhang), **plus its
+private staging buffer `S`** (same per-program window, lane-masked like the
+output), declared as `scratch`: the pipeline may write its active `S` window,
+but `S`'s post-state is no part of the contract — `≡` never compares it. -/
+def swigluUnfusedIO (ncols B : Nat) : MaskedKernelIO₂ where
+  kernel := swiglu_unfused ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B
+  in1 := ⟨"X"⟩
+  in2 := ⟨"Y"⟩
+  out := ⟨"OUT"⟩
+  B := B
+  read1 := fun pid => pid * B
+  read2 := fun pid => pid * B
+  write := fun pid => pid * B
+  mask := fun pid j => pid * B + j.val < ncols
+  scratch := [(⟨"S"⟩, fun pid => pid * B)]
+
+/-- The fused kernel's IO signature: the **same interface by construction**
+(structure update of `swigluUnfusedIO` — buffers, windows, and mask shared
+verbatim), with the fused kernel plugged in and **no scratch** (it stages
+nothing through memory). -/
+def swigluFusedIO (ncols B : Nat) : MaskedKernelIO₂ :=
+  { swigluUnfusedIO ncols B with
+    kernel := swiglu_fused ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B
+    scratch := [] }
+
+/-- **The headline**: fused SwiGLU is equivalent to the unfused two-step
+pipeline on their shared masked IO signature, for **every** rounding model —
+see the module docstring for the full contract `≡[R]` unfolds to (both
+kernels terminate from any state, active `OUT` lanes agree, each frames
+outside `OUT` ∪ its own scratch). Proof: `MaskedKernelIO₂.Equiv.intro`
+assembles the region-model equivalence — termination is unconditional, the
+`OUT`-agreement leg is the region-level refinement theorem's memory
+agreement (idempotence of rounding), the frames are the masked scatter frame
+lemmas — with the flat-memory bridge side conditions (`FlattenOk` +
+`TraceSafeR` per kernel). -/
+specification swiglu_equiv (R : RoundingModel) (ncols B : Nat) :
+    swigluFusedIO ncols B ≡[R] swigluUnfusedIO ncols B := by
+  refine MaskedKernelIO₂.Equiv.intro _ _ ?_ ?_ ?_ ?_ ?_
+  · -- FlattenOk, fused
+    exact swiglu_fused_flattenOk ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B
+  · -- FlattenOk, unfused
+    exact swiglu_unfused_flattenOk ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B
+  · -- TraceSafeR, fused (its accesses need no scratch bounds)
+    intro bounds t h1 h2 h3 _
+    simp only [swigluFusedIO, swigluUnfusedIO] at h1 h2 h3 ⊢
+    exact swiglu_fused_traceSafeR ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B t R bounds
+      h1 h2 h3
+  · -- TraceSafeR, unfused (S bounds from the scratch-window hypothesis)
+    intro bounds t h1 h2 h3 hsc
+    simp only [swigluFusedIO, swigluUnfusedIO] at h1 h2 h3 hsc ⊢
+    exact swiglu_unfused_traceSafeR ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B t R
+      bounds h1 h2 h3
+      (fun j hj => hsc (⟨"S"⟩, fun pid => pid * B) (by simp) j hj)
+  · -- the region-model equivalence, from ANY state s₀ (no input hypotheses)
+    intro s₀
+    simp only [swigluFusedIO, swigluUnfusedIO]
+    -- termination of both sides
+    obtain ⟨s1, hexec1⟩ :=
+      swiglu_fused_execR_isSome ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B s₀ R
+    obtain ⟨sA, hexecA⟩ := silu_step_execR_isSome ⟨"X"⟩ ⟨"S"⟩ ncols B s₀ R
+    obtain ⟨s2, hexecB⟩ :=
+      mul_step_execR_isSome ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B sA R
+    have hexec2 : execR R
+        ((swiglu_unfused ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B).toAlgKernel) s₀
+        = some s2 := by
+      rw [exec_swiglu_unfusedR, hexecA]
+      exact hexecB
+    have hpids : sA.pids = s₀.pids :=
+      silu_step_execR_pids ⟨"X"⟩ ⟨"S"⟩ ncols B s₀ R sA hexecA
+    -- the inputs both kernels actually see: whatever s₀ holds (no hypotheses)
+    have hxs : InputLoadedAt s₀ ⟨"X"⟩ B
+        (fun j => s₀.readMem ⟨"X"⟩ (s₀.pid * B + j.val)) := fun _ => rfl
+    have hys : InputLoadedAt s₀ ⟨"Y"⟩ B
+        (fun j => s₀.readMem ⟨"Y"⟩ (s₀.pid * B + j.val)) := fun _ => rfl
+    -- the region-level refinement, unpacked at this execution pair by the
+    -- library `ComputeRefine.Refines.out`: memories agree outside S
+    have hmem12 : ∀ r, r ∉ [(⟨"S"⟩ : RegionName)] →
+        ∀ o, s1.mem r o = s2.mem r o :=
+      (swiglu_fused_refines_unfused ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B s₀
+          _ _ R hxs hys (by decide)).out
+        (by simp [swiglu_fused, ComputeExpr.toAlgorithm?])
+        (by simp [swiglu_unfused])
+        hexec1 hexec2
+    refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
+    · -- active OUT lanes agree (OUT ∉ [S])
+      intro j hj
+      have hmem := hmem12 ⟨"OUT"⟩ (by decide) (s₀.pid * B + j.val)
+      unfold BlockState.readMem
+      rw [hmem]
+    · -- fused frame: writes only the active OUT window (no scratch)
+      intro r o hcond _hscr
+      by_cases hrOUT : r = ⟨"OUT"⟩
+      · subst hrOUT
+        rcases hcond with hne | hno
+        · exact absurd rfl hne
+        · exact swiglu_fused_preserves_unhitR ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B s₀
+            R s1 o (fun i hi heq => hno i hi heq.symm) hexec1
+      · exact swiglu_fused_preservesR ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B s₀ R s1 r
+          hrOUT hexec1 o
+    · -- unfused frame: writes only active OUT ∪ active S (its scratch)
+      intro r o hcond hscr
+      have hA_mem : sA.mem r o = s₀.mem r o := by
+        by_cases hrS : r = ⟨"S"⟩
+        · subst hrS
+          exact silu_step_preserves_unhitR ⟨"X"⟩ ⟨"S"⟩ ncols B s₀ R sA o
+            (fun i hi heq =>
+              hscr (⟨"S"⟩, fun pid => pid * B) (by simp) rfl i hi heq.symm)
+            hexecA
+        · exact silu_step_preservesR ⟨"X"⟩ ⟨"S"⟩ ncols B s₀ R sA r hrS
+            hexecA o
+      have hB_mem : s2.mem r o = sA.mem r o := by
+        by_cases hrOUT : r = ⟨"OUT"⟩
+        · subst hrOUT
+          rcases hcond with hne | hno
+          · exact absurd rfl hne
+          · refine mul_step_preserves_unhitR ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B sA
+              R s2 o (fun i hi => ?_) hexecB
+            simp only [programLaneOffset, BlockState.pid_eq, hpids]
+            intro heq
+            exact hno i (by rwa [hpids] at hi) heq.symm
+        · exact mul_step_preservesR ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B sA R s2 r
+            hrOUT hexecB o
+      rw [hB_mem, hA_mem]
+
+end Swiglu.spec
+
 /-! ## Trust audit (compile-time gate)
 
 These commands re-audit the public result every time the file is elaborated —
@@ -465,20 +783,20 @@ if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
 trusted statement) the file stops compiling. See
 `VeriTile.Meta.StatementAudit`. -/
 
--- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+-- (1) No `sorry`, no smuggled axiom — in the region-level core's and the
+-- public headline's transitive proofs.
 #axiomsClean swiglu_fused_refines_unfused
+#axiomsClean swiglu_equiv
 
--- (2) The headline is a *kernel-vs-kernel* refinement: its statement may mention
--- ONLY the kernels, the loaded-input contract, the rounding-model surface, and
--- the library refinement surface — NO spec (there are none). If a spec-like
--- definition ever creeps into the statement, this fails.
-#stmtSurfaceSubset swiglu_fused_refines_unfused ⊆
-  [swiglu_fused, swiglu_unfused, InputLoadedAt, ComputeRefine.Refines,
-   RoundingModel, BlockState, RegionName]
+-- (2) The headline's statement surface is the two masked IO signatures plus
+-- the audit-once kernel-equivalence combinator — NO spec (there are none),
+-- no other project constant. If a spec-like definition ever creeps into the
+-- statement, this fails.
+#stmtSurfaceSubset swiglu_equiv ⊆
+  [swigluFusedIO, swigluUnfusedIO, VeriTile.Triton.MaskedKernelIO₂.Equiv,
+   RoundingModel]
 
 -- (There is no `#specNonCircular` gate: the file defines no specs at all, so a
 -- self-referential spec is impossible by construction.)
-
-end Swiglu.theorems
 
 end VeriTile.Bench.Examples.SwigluRounding

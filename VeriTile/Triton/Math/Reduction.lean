@@ -10,7 +10,7 @@ big-operator infrastructure and `Real.sqrt`; they do not touch `BlockState`,
 `RegionName`, or memory layout. The running Welford recurrence and its
 equivalence to the two-pass closed form live in the `WelfordRec` sub-namespace
 below — pure ℝ math, shared (via `open TiledReduction.WelfordRec`) by the
-`bench/examples` Welford/LayerNorm showcases and `VeriTile.Examples.WelfordKernels`.
+`bench/examples` Welford/LayerNorm showcases.
 -/
 
 import Mathlib.Data.Real.Basic
@@ -61,8 +61,8 @@ noncomputable def layerNorm {N : Nat}
 /-! ## Running Welford recurrence and its two-pass equivalence
 
 The kernel-internal running Welford recurrence, extracted as reusable pure-ℝ
-math (it does not interleave with kernel step semantics). The two `bench/examples`
-Welford/LayerNorm showcases and `VeriTile.Examples.WelfordKernels` all share this
+math (it does not interleave with kernel step semantics). The `bench/examples`
+Welford/LayerNorm showcases share this
 cluster via `open TiledReduction.WelfordRec`; the names shadow the closed-form
 `welfordMean`/`welfordSumSq` above only inside this sub-namespace. -/
 namespace WelfordRec

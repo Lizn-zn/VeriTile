@@ -367,10 +367,13 @@ specification mhc_depth_correctness (tau : ℝ) :
       resMix 0 + Real.exp (hPost 0 / tau) * branchOut 0 := by
   refine KernelIO₃.Implements.intro _ ?_ ?_ ?_
   · exact mhcDepth_flattenOk tau
-  · intro bounds s h1 h2 h3 h4
+  · intro bounds s h1 h2 h3 h4 _
     exact mhcDepth_traceSafe tau bounds s h1 h2 h3 h4
   · intro s₀ resMix branchOut hPost h1 h2 h3
-    exact mhcDepth_region_run tau s₀ resMix branchOut hPost h1 h2 h3
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      mhcDepth_region_run tau s₀ resMix branchOut hPost h1 h2 h3
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 /-! ## Trust gates -/
 

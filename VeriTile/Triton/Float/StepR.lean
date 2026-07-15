@@ -428,6 +428,28 @@ theorem foldl_writeMemAsR_preserve_masked {α : Type} (R : RoundingModel)
         simp only [hmaskhd', if_false, Bool.false_eq_true]
         exact ih _ htl
 
+/-- An unmasked `writeMemAsR` scatter `foldl` leaves every memory cell it
+does not hit unchanged — the cell-level frame for unmasked rounded stores
+(the `execR` sibling of the exact-store scatter frame, and the unmasked
+sibling of `foldl_writeMemAsR_preserve_masked`). -/
+theorem foldl_writeMemAsR_preserve_cell {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (r : RegionName) (o : Nat) (l : List α)
+    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
+    ∀ s : BlockState,
+      (l.foldl (fun acc k =>
+          acc.writeMemAsR R dtype region (offsetFn k) (valueFn k)) s).mem r o
+        = s.mem r o := by
+  induction l with
+  | nil => intro _; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons,
+        ih (fun k hk => hnot k (List.mem_cons_of_mem hd hk)) _,
+        BlockState.writeMemAsR_mem]
+      exact if_neg (fun hc => hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
+
 /-- Readback of a `P`-masked `writeMemAsR` scatter store at lane `i`'s offset:
 the `R`-rounded stored cell if `P i`, else the prior contents, given injective
 offsets. `R`-mirror of `scatter_memcell_fp16_prop_masked_nd`. -/

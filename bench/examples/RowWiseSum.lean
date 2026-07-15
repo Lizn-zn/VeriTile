@@ -291,10 +291,12 @@ specification rowWiseSum_correctness (nCol B : Nat) :
     rowWiseSumIO nCol B ⊨ fun xs _ => ∑ k, xs k := by
   refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact rowWiseSum_flattenOk ⟨"x"⟩ ⟨"y"⟩ nCol B
-  · intro bounds s h1 h2
+  · intro bounds s h1 h2 _
     exact rowWiseSum_traceSafe ⟨"x"⟩ ⟨"y"⟩ nCol B bounds s h1 h2
   · intro s₀ xs hx
-    exact rowWiseSum_region_run nCol B s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseSum_region_run nCol B s₀ xs hx
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 /-! ## Trust gates -/
 

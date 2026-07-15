@@ -18,7 +18,7 @@ and the algorithmic correctness theorem is discharged by **erasing** those
 annotations to the Real channel and reusing the Real-valued proof (here
 VectorAdd's). This is the erased/ideal pathway — the complement of the
 rounding-model pathway (`ComputeRefine.*R`) demonstrated in
-`bench/examples/FusedSwiglu.lean`. The refinement counterpart of this policy
+`bench/examples/FusedSwigluEquiv.lean`. The refinement counterpart of this policy
 lives in `bench/examples/FloatDTypeRefine.lean`.
 
 ## The public result (bottom of file)

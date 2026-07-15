@@ -405,10 +405,13 @@ specification add_kernel_masked_correctness (B n : Nat) (hB : 0 < B) :
     addMaskedIO B n ⊨ fun xs ys i => xs i + ys i := by
   refine MaskedKernelIO₂.Implements.intro _ ?_ ?_ ?_
   · exact addKernelMasked_flattenOk ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
-  · intro bounds s h1 h2 h3
+  · intro bounds s h1 h2 h3 _
     exact addKernelMasked_traceSafe ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n bounds s h1 h2 h3
   · intro s₀ xs ys hx hy
-    exact addKernelMasked_region_run B n hB s₀ xs ys hx hy
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      addKernelMasked_region_run B n hB s₀ xs ys hx hy
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 /-! ## Trust gates -/
 

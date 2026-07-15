@@ -16,9 +16,9 @@
 # Allowed status values:
 # proven, projected, test-gap, blocked, smoke
 id	file	theorem	kind	status	source	source_ref	config	label	notes
-softmax_stable_refine	bench/examples/SoftmaxEqRefine.lean	VeriTile.Bench.Examples.Softmax.softmax_kernels_refinement_view	refine	proven	internal	-	-	Naive softmax vs stable softmax	stable shift-trick refinement
-log_sum_exp_shift_refine	bench/examples/StableLogSumExp.lean	VeriTile.Bench.Examples.LogSumExp.log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
-softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalRefine.lean	VeriTile.Bench.Examples.SoftmaxReciprocal.softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
+softmax_stable_refine	bench/examples/SoftmaxStableEquiv.lean	VeriTile.Bench.Examples.Softmax.softmax_stable_equiv	refine	proven	internal	-	-	Naive softmax vs stable softmax	KernelIO ≡[R] equivalence headline
+log_sum_exp_shift_refine	bench/examples/StableLogSumExpEquiv.lean	VeriTile.Bench.Examples.LogSumExp.log_sum_exp_equiv	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	KernelIO ≡[R] equivalence headline
+softmax_reciprocal_refine	bench/examples/SoftmaxReciprocalEquiv.lean	VeriTile.Bench.Examples.SoftmaxReciprocal.softmax_reciprocal_equiv	refine	proven	internal	-	-	Stable softmax division vs reciprocal	KernelIO ≡[R] equivalence headline
 vector_add_aligned	bench/examples/VectorAdd.lean	VeriTile.Bench.Examples.VectorAdd.add_kernel_correctness	correct	proven	internal	-	BLOCK_SIZE=N	Vector add aligned correctness	aligned single-block elementwise add
 vector_add_masked	bench/examples/FlatVectorAdd.lean	VeriTile.Bench.Examples.FlatVectorAdd.add_kernel_masked_correctness	correct	proven	internal	-	BLOCK_SIZE, n_elements	Vector add correctness	masked boundary variant
 float_add	bench/examples/FloatDTypeCorrect.lean	VeriTile.Bench.Examples.FloatDTypeCorrect.float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
@@ -35,9 +35,10 @@ grid_rmw_xchg_launch	bench/examples/GridComposition.lean	VeriTile.Bench.Examples
 online_softmax	bench/examples/OnlineSoftmax.lean	VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	bench/examples/RowWiseSum.lean	VeriTile.Bench.Examples.RowWiseSum.rowWiseSum_correctness	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	bench/examples/RowWiseMax.lean	VeriTile.Bench.Examples.RowWiseMax.rowWiseMax_correctness	correct	proven	internal	-	-	Row-wise max	max variant
-fused_silu_refine	bench/examples/FusedSiLU.lean	VeriTile.Bench.Examples.FusedSiLURounded.silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
-welford_refine	bench/examples/WelfordKernelsRefine.lean	VeriTile.Bench.Examples.Welford.welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
-layernorm_refine	bench/examples/FusedLayerNorm.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
+fused_silu_refine	bench/examples/FusedSiLUEquiv.lean	VeriTile.Bench.Examples.FusedSiLURounded.silu_equiv	refine	proven	internal	-	-	Fused SiLU refinement	KernelIO ≡[R] equivalence headline, scratch z/silu
+fused_swiglu_equiv	bench/examples/FusedSwigluEquiv.lean	VeriTile.Bench.Examples.SwigluRounding.swiglu_equiv	refine	proven	internal	-	-	Fused SwiGLU equivalence	KernelIO ≡[R] equivalence headline, scratch S
+welford_refine	bench/examples/WelfordEquiv.lean	VeriTile.Bench.Examples.Welford.welford_equiv	refine	proven	internal	-	-	Welford refinement	KernelIO ≡[R] equivalence headline, two outputs
+layernorm_refine	bench/examples/FusedLayerNormEquiv.lean	VeriTile.Bench.Examples.LayerNorm.layernorm_equiv	refine	proven	internal	-	-	LayerNorm refinement	KernelIO ≡[R] equivalence headline
 approx_gelu	VeriTile/Examples/ApproxGeLU.lean	VeriTile.Examples.approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
 mhc_width_1x1	bench/examples/HyperConnectionsWidth.lean	VeriTile.Bench.Examples.HyperConnectionsWidth.mhc_width_correctness	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank width correctness	KernelIO ⊨ headline, first proof-covered width slice
 mhc_depth_1x1	bench/examples/HyperConnectionsDepth.lean	VeriTile.Bench.Examples.HyperConnectionsDepth.mhc_depth_correctness	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank depth correctness	KernelIO ⊨ headline, first proof-covered depth slice

@@ -298,10 +298,12 @@ specification rowWiseMax_correctness (nCol B : Nat) (hB : 0 < B) :
     rowWiseMaxIO nCol B ⊨ fun xs _ => Triton.TiledReduction.tileMax hB xs := by
   refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact rowWiseMax_flattenOk ⟨"x"⟩ ⟨"y"⟩ nCol B
-  · intro bounds s h1 h2
+  · intro bounds s h1 h2 _
     exact rowWiseMax_traceSafe ⟨"x"⟩ ⟨"y"⟩ nCol B bounds s h1 h2
   · intro s₀ xs hx
-    exact rowWiseMax_region_run nCol B hB s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseMax_region_run nCol B hB s₀ xs hx
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 /-! ## Trust gates -/
 

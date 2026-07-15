@@ -196,7 +196,7 @@ or the `zReg`/`siluReg` temporaries in `FusedSiLU`). Pass `[]` when the two
 kernels must agree on all of memory. This is the surface every
 `*_refinement_view` theorem in `bench/examples/` lands on; the exact-ℝ variant
 `ComputeRefine.Refines_without_Rounding` (no `R`, running under `exec`) is the
-idealization used by `bench/examples/FusedSiLU.lean`.
+idealization used by `bench/examples/FusedSiLUEquiv.lean`.
 
 ### Pointwise: `ComputeRefine.RefinesAt`
 
@@ -242,7 +242,7 @@ ordinary `ComputeCorrect.Realizes_without_Rounding` for `expected .triv`.
 Degeneration lemmas `refines_triv_iff` / `refinesAt_triv_iff` recover
 `Refines_without_Rounding` / `RefinesAt_without_Rounding` the same way. The
 gold-standard walkthrough for the ∀R compositional pattern is
-[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean); the
+[`bench/examples/FusedSwigluEquiv.lean`](../bench/examples/FusedSwigluEquiv.lean); the
 boundary-rounding showcases (LogSumExp, softmax, Welford, LayerNorm, FusedSiLU)
 land on `Refines R` for a fixed `R`.
 

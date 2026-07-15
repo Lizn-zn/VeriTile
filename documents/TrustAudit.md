@@ -46,7 +46,7 @@ The four commands:
 ## Add a self-audit to a file
 
 Put the checks at the end of the file (see the SwiGLU pilot,
-[`bench/examples/FusedSwiglu.lean`](../bench/examples/FusedSwiglu.lean),
+[`bench/examples/FusedSwigluEquiv.lean`](../bench/examples/FusedSwigluEquiv.lean),
 for the full pattern). They run at compile time, so the file stops compiling if
 any gate is violated:
 
