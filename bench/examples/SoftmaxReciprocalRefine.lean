@@ -54,15 +54,12 @@ Everything else — the region-level refinement `softmax_reciprocal_refinement_v
 mathematical core the `≡[R]` obligation repackages), the per-kernel frame
 lemmas, and the bridge side conditions — is scaffolding.
 
-## Exact-ℝ companions (bottom of file)
+## The exact-ℝ surface
 
-The file also carries the exact-ℝ (raw-store, no bf16 rounding) variants
-`stableSoftmaxKernelReal` / `softmaxRecipKernelReal` together with their
-ARM-in-Lean-style story: the reciprocal-side closed form
-(`softmax_recip_correct` against `stableRecipSpec`), the load-bearing math
-identity (`div_eq_mul_inv_real`), the pointwise `Y`-memory refinement
-(`softmax_reciprocal_refinement`), and its `TensorView` surface
-(`softmax_reciprocal_refinement_exec_view`).
+There is no separate exact layer: the headline quantifies over **every**
+rounding model, and at `R := .triv` the `castTo` stores are inert
+(`execR_triv`), so the exact-ℝ equivalence is the headline's degeneration —
+no raw-store twin kernels needed.
 -/
 
 namespace VeriTile.Bench.Examples.SoftmaxReciprocal
@@ -97,40 +94,6 @@ def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKerne
   inv_s  := 1 / s
   y      := e * inv_s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
-}
-
-/-! ### Exact-ℝ variants (raw store, no rounding)
-
-Term-identical to the bf16 kernels above except that the final store writes the
-raw ℝ value `y` instead of `(y).to(tl.bfloat16)`. These are the kernels of the
-exact-ℝ companion theorems at the bottom of the file. The divide-side kernel
-mirrors `stableSoftmaxKernelReal` in `bench/examples/SoftmaxEqRefine.lean`
-(bench showcases are self-contained, so this file carries its own copy). -/
-
-/-- Stable softmax, exact-ℝ store: `y = e / S` with per-lane division. -/
-def stableSoftmaxKernelReal (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg) + offs)
-  m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, y)
-}
-
-/-- Stable softmax with precomputed reciprocal, exact-ℝ store. Saves N-1
-    divisions vs the per-element-divide form (`stableSoftmaxKernelReal`). -/
-def softmaxRecipKernelReal (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid    := tl.program_id(0)
-  offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x      := tl.load($(xReg) + offs)
-  m      := tl.max(x, axis=0)
-  e      := tl.exp(x - m)
-  s      := tl.sum(e, axis=0)
-  inv_s  := 1 / s
-  y      := e * inv_s
-  tl.store($(yReg) + offs, y)
 }
 
 end SoftmaxReciprocal.kernels
@@ -471,140 +434,5 @@ trusted statement) the file stops compiling. See
   [softmaxDivIO, softmaxRecipIO, VeriTile.Triton.KernelIO₁.Equiv,
    RoundingModel]
 
-/-! ## Exact-ℝ companion theorems
-
-Real Triton optimization: replace `y = e/s` (per-element division) with
-`inv_s = 1/s; y = e * inv_s` (one division total + one multiply per element).
-Algorithmically equivalent in ℝ since `e/s = e * (1/s)` when `s ≠ 0`.
-
-The math denotation (`stableSpec`, `tileMax`) lives in
-`VeriTile.Triton.Math.Softmax`; the observation vocabulary (`InputLoadedAt`,
-`observeAt`, `programTileView`) in `VeriTile.Examples.Common`. The divide side
-of the comparison is `stableSoftmaxKernelReal`, proven correct against
-`stableSpec` in `bench/examples/SoftmaxEqRefine.lean`; this file carries a
-`private` copy of that closed form (bench showcases are self-contained). -/
-section SoftmaxReciprocal.theoremsReal
-
-open VeriTile.Examples
-
-/-- The load-bearing math identity: division equals multiplication by
-    reciprocal (for non-zero divisor). -/
-theorem div_eq_mul_inv_real (a s : ℝ) (hs : s ≠ 0) : a / s = a * (1 / s) := by
-  field_simp
-
-/-- Closed-form spec for `softmaxRecipKernelReal`'s `Y[pid*N+i]` cell. -/
-noncomputable def stableRecipSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N) : ℝ :=
-  Real.exp (xs i - m) * (1 / ∑ j, Real.exp (xs j - m))
-
-/-- Local copy of the divide-side closed form (plumbing; the showcased
-original is `softmax_stable_correct` in `bench/examples/SoftmaxEqRefine.lean`). -/
-private theorem softmax_stable_correct
-    (xReg yReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
-    (_h_x : InputLoadedAt s xReg blockSize xs) :
-    ∀ i : Fin blockSize,
-      observeAt (exec (stableSoftmaxKernelReal xReg yReg blockSize) s) yReg blockSize s.pid i
-        = some (stableSpec xs (tileMax hN xs) i) := by
-  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
-  simp [observeAt, exec, stableSoftmaxKernelReal, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
-        Tile.reduceMax, Tile.reduceMaxDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
-  repeat unfold evalOp
-  simp [observeAt, exec, stableSoftmaxKernelReal, stepStmts, stepStmt,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
-        Tile.reduceMax, Tile.reduceMaxDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
-  unfold InputLoadedAt at _h_x
-  simp [_h_x]
-  rfl
-
-/-- **Reciprocal-form softmax kernel correctness (exact ℝ).** -/
-theorem softmax_recip_correct
-    (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoadedAt s xReg N xs) :
-    ∀ i : Fin N,
-      observeAt (exec (softmaxRecipKernelReal xReg yReg N) s) yReg N s.pid i
-        = some (stableRecipSpec xs (tileMax hN xs) i) := by
-  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) :=
-    injective_offset_singleton (s.pid * (n + 1))
-  simp [observeAt, exec, softmaxRecipKernelReal, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
-        Tile.reduceMax, Tile.reduceMaxDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
-  repeat unfold evalOp
-  simp [observeAt, exec, softmaxRecipKernelReal, stepStmts, stepStmt,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
-        Tile.reduceMax, Tile.reduceMaxDrop,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
-  unfold InputLoadedAt at _h_x
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
-  simp [_h_x]
-  rfl
-
-/-- **Refinement (exact ℝ): stable softmax with per-element division ≡ stable
-    softmax with precomputed reciprocal.** Composes via `div_eq_mul_inv_real`. -/
-theorem softmax_reciprocal_refinement
-    (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : InputLoadedAt s xReg N xs) :
-    ∀ i : Fin N,
-      observeAt (exec (stableSoftmaxKernelReal xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (softmaxRecipKernelReal  xReg yReg N) s) yReg N s.pid i := by
-  intro i
-  rw [softmax_stable_correct xReg yReg N hN s xs h_x i,
-      softmax_recip_correct  xReg yReg N hN s xs h_x i]
-  congr 1
-  -- Goal: stableSpec xs (tileMax hN xs) i = stableRecipSpec xs (tileMax hN xs) i
-  -- These differ only by a / b vs a * (1/b).
-  unfold stableSpec stableRecipSpec
-  have h_sum_pos : 0 < ∑ j, Real.exp (xs j - tileMax hN xs) := by
-    apply Finset.sum_pos
-    · intro j _; exact Real.exp_pos _
-    · obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-      exact ⟨⟨0, hN⟩, Finset.mem_univ _⟩
-  exact div_eq_mul_inv_real _ _ (ne_of_gt h_sum_pos)
-
-/-- View-level surface for `softmax_reciprocal_refinement`. -/
-theorem softmax_reciprocal_refinement_exec_view
-    (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    ∀ idx : TileIndex [N],
-      TensorView.observe (exec (stableSoftmaxKernelReal xReg yReg N) s)
-          (programTileView s yReg N) idx =
-      TensorView.observe (exec (softmaxRecipKernelReal  xReg yReg N) s)
-          (programTileView s yReg N) idx := by
-  intro idx
-  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
-    (N := N) (xs := xs) h_x
-  simpa [TensorView.observe, observeTileAt, programTileView,
-         TensorView.offset, Offset.strided, observeAt]
-    using softmax_reciprocal_refinement xReg yReg N hN s xs hx idx.1
-
-/-! ### Trust audit for the exact-ℝ companions -/
-
-#axiomsClean div_eq_mul_inv_real
-#axiomsClean softmax_recip_correct
-#axiomsClean softmax_reciprocal_refinement
-#axiomsClean softmax_reciprocal_refinement_exec_view
-
-end SoftmaxReciprocal.theoremsReal
 
 end VeriTile.Bench.Examples.SoftmaxReciprocal
