@@ -14,7 +14,7 @@ the audited statement surface itself. The proof rides the erasure bridge
 kernel) down to the plain Real vector-add stack. This is the complement of
 the rounding-model pathway (`execR` / `≡[R]`, demonstrated in
 `bench/examples/FusedSwigluEquiv.lean`); the refinement counterpart of the
-erasure policy lives in `bench/examples/FloatDTypeRefine.lean`.
+erasure policy lives in `bench/examples/FloatDTypeEquiv.lean`.
 
 Four parts:
 
