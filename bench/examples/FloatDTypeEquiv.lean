@@ -5,14 +5,16 @@ import VeriTile.Meta.StatementAudit
 /-!
 # Float dtype erasure — the float-facing *refinement* policy, on the `≡[R]` surface
 
-Self-contained showcase, read top to bottom: the **kernels** first (two
-fp32-annotated softmaxes and the two plain Real kernels they erase to), the
-**erasure bridges** in the middle (`private` plumbing), the region-level
-refinement core next (`softmax_reciprocal_refinement_view`), the
-**region-run plumbing** (termination + per-kernel frames), then the
-**flat-memory bridge side conditions**, the **specification** last (one
-public headline `float_softmax_reciprocal_equiv` on the `≡[R]` surface), and
-a compile-time **trust audit**. The sections are `FloatDTypeEquiv.kernels`,
+Self-contained showcase, read top to bottom: the **kernels** first (the two
+fp32-annotated softmaxes — the only kernel definitions in this file), the
+**literal projected bodies** next (`private` plumbing: one lemma per kernel
+pinning the erased kernel's algorithm projection to its literal statement
+list), the region-level refinement core
+(`softmax_reciprocal_refinement_view`), the **region-run plumbing**
+(termination + per-kernel frames), then the **flat-memory bridge side
+conditions**, the **specification** last (one public headline
+`float_softmax_reciprocal_equiv` on the `≡[R]` surface), and a compile-time
+**trust audit**. The sections are `FloatDTypeEquiv.kernels`,
 `FloatDTypeEquiv.lemmas`, `FloatDTypeEquiv.theorems`,
 `FloatDTypeEquiv.regionRun`, `FloatDTypeEquiv.bridge`,
 `FloatDTypeEquiv.spec`.
@@ -24,11 +26,13 @@ stated about their **erasures** to the Real channel — the `kernel` fields of
 the IO signatures below are literally
 `(floatStableSoftmaxKernel …).eraseDType` /
 `(floatSoftmaxRecipKernel …).eraseDType`, so the erased/ideal pathway is
-visible in the audited statement surface itself. The erasure bridges prove
-those erasures are exactly the plain Real divide/reciprocal kernels
-(`stableSoftmaxKernel` / `softmaxRecipKernel` — raw stores, no casts), and
-every `≡[R]` obligation is transported along the bridges to the plain
-kernels.
+visible in the audited statement surface itself. One def per kernel: every
+proof obligation is stated about the erased kernels directly, and the two
+`private` literal-body lemmas (`floatStable_erased_toAlg` /
+`floatRecip_erased_toAlg`) pin each erased kernel's projected body to its
+literal statement list — and those literal bodies **are** the plain
+per-element-divide / precomputed-reciprocal stable softmaxes (raw stores;
+the float casts erase away), readable inline in the lemma statements.
 
 ## The public result (bottom of file)
 
@@ -60,9 +64,9 @@ the rounding-model (bf16) sibling of this same rewrite is
 
 The statement mentions only the two IO signatures and the library
 equivalence surface — **no spec** (the `#stmtSurfaceSubset` gate below
-enforces this). Everything else — the erasure bridges, the region-level
+enforces this). Everything else — the literal-body lemmas, the region-level
 refinement `softmax_reciprocal_refinement_view` (`ComputeRefine.Refines R`
-on the plain kernels), the per-kernel frame lemmas, and the bridge side
+on the erased kernels), the per-kernel frame lemmas, and the bridge side
 conditions — is scaffolding.
 -/
 
@@ -82,41 +86,13 @@ This discharges them for `simp`. -/
 /-! ## Kernels -/
 section FloatDTypeEquiv.kernels
 
-/-- This file's own copy of the aligned Real per-element-divide stable softmax
-(each showcase is self-contained; the bf16 sibling is showcased in
-`bench/examples/SoftmaxStableEquiv.lean` — its raw-store twin was retired
-there, the exact surface being the `≡[R]` headline at `R := .triv`). The
-fp32-annotated `floatStableSoftmaxKernel` below erases to this kernel. -/
-def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg) + offs)
-  m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, y)
-}
-
-/-- This file's own copy of the aligned Real reciprocal-form stable softmax
-(the bf16 sibling is showcased in `bench/examples/SoftmaxReciprocalEquiv.lean`;
-its raw-store twin was retired there). The fp32-annotated
-`floatSoftmaxRecipKernel` below erases to this kernel. -/
-def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid    := tl.program_id(0)
-  offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x      := tl.load($(xReg) + offs)
-  m      := tl.max(x, axis=0)
-  e      := tl.exp(x - m)
-  s      := tl.sum(e, axis=0)
-  inv_s  := 1 / s
-  y      := e * inv_s
-  tl.store($(yReg) + offs, y)
-}
-
 /-- Stable softmax with explicit fp32 input/output annotations and per-element
 division `y = e / s`. The reductions still run in the Real abstraction after
-the input load is cast to `tl.float64`. -/
+the input load is cast to `tl.float64`. The headline below is stated about
+this kernel's **erasure** (`.eraseDType`), whose projected body is the plain
+per-element-divide stable softmax (`floatStable_erased_toAlg` pins it to the
+literal statement list — casts erased, raw store). The bf16 sibling of the
+plain kernel is showcased in `bench/examples/SoftmaxStableEquiv.lean`. -/
 def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
@@ -129,7 +105,10 @@ def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Comput
 }
 
 /-- Optimized stable softmax: precompute `1 / s` and use multiplication,
-saving per-lane divisions versus `floatStableSoftmaxKernel`. -/
+saving per-lane divisions versus `floatStableSoftmaxKernel`. Its erasure's
+projected body is the plain reciprocal-form stable softmax
+(`floatRecip_erased_toAlg`). The bf16 sibling of the plain kernel is
+showcased in `bench/examples/SoftmaxReciprocalEquiv.lean`. -/
 def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
@@ -147,13 +126,41 @@ end FloatDTypeEquiv.kernels
 /-! ## Supporting lemmas (private plumbing) -/
 section FloatDTypeEquiv.lemmas
 
-/-- The fp32 per-element-divide softmax erases to the plain Real kernel,
-at the algorithm-projection level. -/
-private theorem float_stable_softmax_erases_to_real
-    (xReg yReg : RegionName) (blockSize : Nat) :
-    (floatStableSoftmaxKernel xReg yReg blockSize).eraseDType.toAlgKernel =
-      (stableSoftmaxKernel xReg yReg blockSize).toAlgKernel := by
-  simp [floatStableSoftmaxKernel, stableSoftmaxKernel, ComputeKernel.eraseDType,
+/-- The erased fp32 divide kernel's projected body, pinned to its literal
+statement list: the plain per-element-divide stable softmax — eight
+statements (`pid`, `offs`, `x`-load, running `max`, `exp`, `sum`, `y = e/s`,
+raw store), with the `.to(tl.float64)`/`.to(tl.float32)` casts erased. Every
+obligation below rewrites the erased kernel's projection along this equation
+first, then runs the plain computational walk on the literal body. -/
+private theorem floatStable_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
+    (floatStableSoftmaxKernel xReg yReg N).eraseDType.toAlgKernel
+      = Kernel.mk [xReg] [yReg]
+          [Stmt.assign TileDType.nat [] "pid" (Op.programId 0),
+           Stmt.assign TileDType.nat [N] "offs"
+             (Op.add NumericDType.nat Broadcast.scalarL
+               (Op.mul NumericDType.nat Broadcast.nil
+                 (Op.ref TileDType.nat [] "pid") (Op.constNat N))
+               (Op.arange N)),
+           Stmt.assign TileDType.real [N] "x"
+             (Op.load TileDType.real
+               (MemAccess.region xReg (Op.ref TileDType.nat [N] "offs"))
+               MaskOpt.none),
+           Stmt.assign TileDType.real [] "m"
+             (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
+               (Op.ref TileDType.real [N] "x")),
+           Stmt.assign TileDType.real [N] "e"
+             (Op.exp (Op.sub NumericDType.real Broadcast.scalarR
+               (Op.ref TileDType.real [N] "x") (Op.ref TileDType.real [] "m"))),
+           Stmt.assign TileDType.real [] "s"
+             (Op.reduceSum (shape := [N]) (0 : Fin (0 + 1)) Bool.false
+               (Op.ref TileDType.real [N] "e")),
+           Stmt.assign TileDType.real [N] "y"
+             (Op.div NumericDType.real Broadcast.scalarR
+               (Op.ref TileDType.real [N] "e") (Op.ref TileDType.real [] "s")),
+           Stmt.store TileDType.real [N]
+             (MemAccess.region yReg (Op.ref TileDType.nat [N] "offs"))
+             (Op.ref TileDType.real [N] "y") MaskOpt.none] := by
+  simp [floatStableSoftmaxKernel, ComputeKernel.eraseDType,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
@@ -163,14 +170,44 @@ private theorem float_stable_softmax_erases_to_real
     rw [Op.eraseDType.eq_def]
     simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
       Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
+    try rfl
 
-/-- The fp32 reciprocal-form softmax erases to the plain Real optimized
-kernel, at the algorithm-projection level. -/
-private theorem float_softmax_recip_erases_to_real
-    (xReg yReg : RegionName) (blockSize : Nat) :
-    (floatSoftmaxRecipKernel xReg yReg blockSize).eraseDType.toAlgKernel =
-      (softmaxRecipKernel xReg yReg blockSize).toAlgKernel := by
-  simp [floatSoftmaxRecipKernel, softmaxRecipKernel, ComputeKernel.eraseDType,
+/-- The erased fp32 reciprocal kernel's projected body, pinned to its literal
+statement list: the plain reciprocal-form stable softmax — nine statements
+(the same prefix, then `inv_s = 1/s`, `y = e·inv_s`, raw store), casts
+erased. -/
+private theorem floatRecip_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
+    (floatSoftmaxRecipKernel xReg yReg N).eraseDType.toAlgKernel
+      = Kernel.mk [xReg] [yReg]
+          [Stmt.assign TileDType.nat [] "pid" (Op.programId 0),
+           Stmt.assign TileDType.nat [N] "offs"
+             (Op.add NumericDType.nat Broadcast.scalarL
+               (Op.mul NumericDType.nat Broadcast.nil
+                 (Op.ref TileDType.nat [] "pid") (Op.constNat N))
+               (Op.arange N)),
+           Stmt.assign TileDType.real [N] "x"
+             (Op.load TileDType.real
+               (MemAccess.region xReg (Op.ref TileDType.nat [N] "offs"))
+               MaskOpt.none),
+           Stmt.assign TileDType.real [] "m"
+             (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
+               (Op.ref TileDType.real [N] "x")),
+           Stmt.assign TileDType.real [N] "e"
+             (Op.exp (Op.sub NumericDType.real Broadcast.scalarR
+               (Op.ref TileDType.real [N] "x") (Op.ref TileDType.real [] "m"))),
+           Stmt.assign TileDType.real [] "s"
+             (Op.reduceSum (shape := [N]) (0 : Fin (0 + 1)) Bool.false
+               (Op.ref TileDType.real [N] "e")),
+           Stmt.assign TileDType.real [] "inv_s"
+             (Op.div NumericDType.real Broadcast.nil (Op.const 1)
+               (Op.ref TileDType.real [] "s")),
+           Stmt.assign TileDType.real [N] "y"
+             (Op.mul NumericDType.real Broadcast.scalarR
+               (Op.ref TileDType.real [N] "e") (Op.ref TileDType.real [] "inv_s")),
+           Stmt.store TileDType.real [N]
+             (MemAccess.region yReg (Op.ref TileDType.nat [N] "offs"))
+             (Op.ref TileDType.real [N] "y") MaskOpt.none] := by
+  simp [floatSoftmaxRecipKernel, ComputeKernel.eraseDType,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
@@ -180,9 +217,10 @@ private theorem float_softmax_recip_erases_to_real
     rw [Op.eraseDType.eq_def]
     simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
       Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
+    try rfl
 
 /-- A scatter-store `foldl` leaves every memory cell it does not hit
-unchanged (cell-level frame for the plain kernels' raw unmasked stores;
+unchanged (cell-level frame for the erased kernels' raw unmasked stores;
 this file's copy of VectorAdd's helper — the exact-store sibling of the
 library `BlockState.foldl_writeMemAsR_preserve_cell`). -/
 private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
@@ -213,30 +251,33 @@ variable (R : RoundingModel)
 
 include hN in
 /-- **divide refines reciprocal** (`ComputeRefine.Refines R`, no scratch, on
-the plain Real kernels): from the same initial state the per-element-divide
+the erased fp32 kernels): from the same initial state the per-element-divide
 and precomputed-reciprocal kernels perform the same writes. Both compute the
 same per-lane ℝ value (`e / S = e · S⁻¹`) and store it raw — no rounding
 site, so `R` is inert. This is the mathematical core the `≡[R]`
-specification's region-model obligation repackages, reached from the
-fp32-annotated kernels through the erasure bridges. -/
+specification's region-model obligation repackages, run on the erased
+kernels' literal projected bodies (`float*_erased_toAlg`). -/
 theorem softmax_reciprocal_refinement_view :
     ComputeRefine.Refines R
-      (stableSoftmaxKernel xReg yReg N)
-      (softmaxRecipKernel xReg yReg N) s [] := by
+      ((floatStableSoftmaxKernel xReg yReg N).eraseDType)
+      ((floatSoftmaxRecipKernel xReg yReg N).eraseDType) s [] := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  apply ComputeKernel.computeRefineR_of_toAlgKernel rfl rfl
+  apply ComputeKernel.computeRefineR_of_toAlgKernel
+    (by simp [ComputeKernel.eraseDType]) (by simp [ComputeKernel.eraseDType])
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   intro r hr o
-  simp [execR, stableSoftmaxKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  rw [floatStable_erased_toAlg] at hL
+  rw [floatRecip_erased_toAlg] at hR
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         BlockState.writeMemTypedR, BlockState.writeMemTyped] at hL
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hL
-  simp [execR, softmaxRecipKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         BlockState.writeMemTypedR, BlockState.writeMemTyped] at hR
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hR
@@ -254,51 +295,58 @@ end FloatDTypeEquiv.theorems
 `≡[R]`'s region-model obligation starts from **any** state — no loaded
 inputs, no clean undef — and additionally wants, per kernel, termination and
 a frame ("only the program's `y` window is written"). All four lemmas fall
-out of the same computational unfold the refinement core uses: `execR R`
-reduces each straight-line body to one plain `writeMem` scatter over the
-program's `offs` tile (`0 < N` because `tl.max` over an empty tile has no
-value); the frames then close by the local scatter frame
-`foldl_store_preserve_cell`. -/
+out of the same computational unfold the refinement core uses: after the
+literal-body rewrite, `execR R` reduces each straight-line body to one plain
+`writeMem` scatter over the program's `offs` tile (`0 < N` because `tl.max`
+over an empty tile has no value); the frames then close by the local scatter
+frame `foldl_store_preserve_cell`. -/
 section FloatDTypeEquiv.regionRun
 
 variable (xReg yReg : RegionName) (N : Nat) (s : BlockState)
 variable (R : RoundingModel)
 
-/-- The plain divide kernel terminates under `execR R` from every state. -/
+/-- The erased divide kernel terminates under `execR R` from every state. -/
 private theorem softmaxDiv_execR_isSome (hN : 0 < N) :
-    ∃ s', execR R ((stableSoftmaxKernel xReg yReg N).toAlgKernel) s
+    ∃ s', execR R
+        (((floatStableSoftmaxKernel xReg yReg N).eraseDType).toAlgKernel) s
       = some s' := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  simp [execR, stableSoftmaxKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  rw [floatStable_erased_toAlg]
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
 
-/-- The plain reciprocal kernel terminates under `execR R` from every state. -/
+/-- The erased reciprocal kernel terminates under `execR R` from every
+state. -/
 private theorem softmaxRecip_execR_isSome (hN : 0 < N) :
-    ∃ s', execR R ((softmaxRecipKernel xReg yReg N).toAlgKernel) s
+    ∃ s', execR R
+        (((floatSoftmaxRecipKernel xReg yReg N).eraseDType).toAlgKernel) s
       = some s' := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  simp [execR, softmaxRecipKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  rw [floatRecip_erased_toAlg]
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
 
-/-- Frame lemma for the plain divide kernel: every cell outside the program's
-`y` window `[pid·N, pid·N + N)` is untouched. -/
+/-- Frame lemma for the erased divide kernel: every cell outside the
+program's `y` window `[pid·N, pid·N + N)` is untouched. -/
 private theorem softmaxDiv_preservesR (hN : 0 < N) (s' : BlockState)
-    (hExec : execR R ((stableSoftmaxKernel xReg yReg N).toAlgKernel) s
+    (hExec : execR R
+        (((floatStableSoftmaxKernel xReg yReg N).eraseDType).toAlgKernel) s
       = some s')
     (r : RegionName) (o : Nat)
     (hcond : r ≠ yReg ∨ ∀ j : Fin N, o ≠ s.pid * N + j.val) :
     s'.mem r o = s.mem r o := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp only [BlockState.pid_eq] at hcond
-  simp [execR, stableSoftmaxKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  rw [floatStable_erased_toAlg] at hExec
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         BlockState.writeMemTypedR, BlockState.writeMemTyped] at hExec
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
@@ -309,19 +357,21 @@ private theorem softmaxDiv_preservesR (hN : 0 < N) (s' : BlockState)
   · exact hne hc.1.symm
   · exact hno k.1 hc.2.symm
 
-/-- Frame lemma for the plain reciprocal kernel: every cell outside the
+/-- Frame lemma for the erased reciprocal kernel: every cell outside the
 program's `y` window is untouched. -/
 private theorem softmaxRecip_preservesR (hN : 0 < N) (s' : BlockState)
-    (hExec : execR R ((softmaxRecipKernel xReg yReg N).toAlgKernel) s
+    (hExec : execR R
+        (((floatSoftmaxRecipKernel xReg yReg N).eraseDType).toAlgKernel) s
       = some s')
     (r : RegionName) (o : Nat)
     (hcond : r ≠ yReg ∨ ∀ j : Fin N, o ≠ s.pid * N + j.val) :
     s'.mem r o = s.mem r o := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp only [BlockState.pid_eq] at hcond
-  simp [execR, softmaxRecipKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
+  rw [floatRecip_erased_toAlg] at hExec
+  simp [execR, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        NumericDType.div, ComputeExpr.toAlgorithm?,
+        NumericDType.div,
         BlockState.writeMemTypedR, BlockState.writeMemTyped] at hExec
   simp [Tile.reduceSumDrop, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
@@ -336,51 +386,50 @@ end FloatDTypeEquiv.regionRun
 
 /-! ## Flat-memory bridge side conditions
 
-Both plain kernels are register-indirect (`offs := pid * B + tl.arange(0, B);
-tl.load(x + offs)`), so no ∀-state safety contract covers them; the
-flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
+Both erased kernels are register-indirect (`offs := pid * B +
+tl.arange(0, B); tl.load(x + offs)`), so no ∀-state safety contract covers
+them; the flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
 `Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge fragment
 membership). Each kernel makes exactly two accesses — the `x` load and the
 raw `y` store, both through the unmasked whole-tile `offs` window — so each
 buffer's bound must cover the program tile `[pid·B, pid·B + B)`; every other
 statement (`program_id`, the `offs` index arithmetic, and the register ops
-`max`/`exp`/`sum`/`div`/reciprocal) is memory-silent. The headline
-discharges these for the plain kernels and transports them to the erased
-kernels along the erasure bridges. -/
+`max`/`exp`/`sum`/`div`/reciprocal) is memory-silent. All four lemmas are
+discharged on the erased kernels' literal projected bodies. -/
 section FloatDTypeEquiv.bridge
 
 variable (xReg yReg : RegionName) (N : Nat) (s : BlockState)
 variable (R : RoundingModel)
 
-/-- The plain divide kernel sits inside the bridge's covered fragment. -/
+/-- The erased divide kernel sits inside the bridge's covered fragment. -/
 theorem softmaxDiv_flattenOk :
-    ((stableSoftmaxKernel xReg yReg N).toAlgKernel).FlattenOk := by
+    (((floatStableSoftmaxKernel xReg yReg N).eraseDType).toAlgKernel).FlattenOk := by
+  rw [floatStable_erased_toAlg]
   unfold Kernel.FlattenOk
-  simp [stableSoftmaxKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
-    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  simp [StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
 
-/-- The plain reciprocal kernel sits inside the bridge's covered fragment. -/
+/-- The erased reciprocal kernel sits inside the bridge's covered fragment. -/
 theorem softmaxRecip_flattenOk :
-    ((softmaxRecipKernel xReg yReg N).toAlgKernel).FlattenOk := by
+    (((floatSoftmaxRecipKernel xReg yReg N).eraseDType).toAlgKernel).FlattenOk := by
+  rw [floatRecip_erased_toAlg]
   unfold Kernel.FlattenOk
-  simp [softmaxRecipKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
-    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  simp [StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
 
 set_option maxHeartbeats 1600000 in
-/-- Per-execution safety walk for the plain divide kernel under `R`: one
-computational unfold walks all eight statements, discharging every
-memory-silent `SafeAtR` and reducing the two unmasked accesses' address
-obligations to the whole-tile bounds hypotheses. -/
+/-- Per-execution safety walk for the erased divide kernel under `R`: one
+computational unfold walks all eight statements of the literal body,
+discharging every memory-silent `SafeAtR` and reducing the two unmasked
+accesses' address obligations to the whole-tile bounds hypotheses. -/
 theorem softmaxDiv_traceSafeR (hN : 0 < N) (bounds : RegionBounds)
     (hx : s.pid * N + N ≤ bounds xReg)
     (hy : s.pid * N + N ≤ bounds yReg) :
     Kernel.TraceSafeR R bounds
-      ((stableSoftmaxKernel xReg yReg N).toAlgKernel) s := by
+      (((floatStableSoftmaxKernel xReg yReg N).eraseDType).toAlgKernel) s := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  rw [floatStable_erased_toAlg]
   unfold Kernel.TraceSafeR
   simp only [BlockState.pid_eq] at hx hy
-  simp [stableSoftmaxKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
-    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+  simp [Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
     MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
     MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
     MaskOpt.ActiveR, BlockState.setReg,
@@ -392,19 +441,19 @@ theorem softmaxDiv_traceSafeR (hN : 0 < N) (bounds : RegionBounds)
     fun i => lt_of_lt_of_le (Nat.add_lt_add_left i.isLt _) hy⟩
 
 set_option maxHeartbeats 1600000 in
-/-- Per-execution safety walk for the plain reciprocal kernel under `R`: same
-computational unfold over its nine statements; the extra reciprocal
-statement is memory-silent. -/
+/-- Per-execution safety walk for the erased reciprocal kernel under `R`:
+same computational unfold over its nine literal statements; the extra
+reciprocal statement is memory-silent. -/
 theorem softmaxRecip_traceSafeR (hN : 0 < N) (bounds : RegionBounds)
     (hx : s.pid * N + N ≤ bounds xReg)
     (hy : s.pid * N + N ≤ bounds yReg) :
     Kernel.TraceSafeR R bounds
-      ((softmaxRecipKernel xReg yReg N).toAlgKernel) s := by
+      (((floatSoftmaxRecipKernel xReg yReg N).eraseDType).toAlgKernel) s := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  rw [floatRecip_erased_toAlg]
   unfold Kernel.TraceSafeR
   simp only [BlockState.pid_eq] at hx hy
-  simp [softmaxRecipKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
-    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+  simp [Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
     MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
     MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
     MaskOpt.ActiveR, BlockState.setReg,
@@ -454,49 +503,40 @@ rounding model — see the module docstring for the full contract `≡[R]`
 unfolds to (both erased kernels terminate from any state with a nonempty
 tile, `y` windows agree, each frames outside its `y` window; no scratch on
 either side). Proof: `KernelIO₁.Equiv.intro` assembles the region-model
-equivalence, with each of the five obligations first rewritten along the
-erasure bridges (`float_*_erases_to_real`) to the plain Real kernels —
-termination and the frames from the computational unfold, the `y`-agreement
-leg from the region-level refinement core
+equivalence, each of the five obligations already stated on the erased
+kernels — termination and the frames from the computational unfold, the
+`y`-agreement leg from the region-level refinement core
 `softmax_reciprocal_refinement_view` (`e / S = e · S⁻¹`, stored raw),
 unpacked at the execution pair by the library `ComputeRefine.Refines.out` —
 plus the flat-memory bridge side conditions (`FlattenOk` + `TraceSafeR` per
-kernel), also transported along the bridges. -/
+kernel). -/
 specification float_softmax_reciprocal_equiv (R : RoundingModel) (B : Nat)
     (hB : 0 < B) :
     floatSoftmaxDivIO B ≡[R] floatSoftmaxRecipIO B := by
-  have hbridge1 := float_stable_softmax_erases_to_real ⟨"x"⟩ ⟨"y"⟩ B
-  have hbridge2 := float_softmax_recip_erases_to_real ⟨"x"⟩ ⟨"y"⟩ B
   refine KernelIO₁.Equiv.intro _ _ ?_ ?_ ?_ ?_ ?_
-  · -- FlattenOk, divide (transported along the erasure bridge)
-    show ((floatStableSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B).eraseDType).toAlgKernel.FlattenOk
-    rw [hbridge1]
+  · -- FlattenOk, divide
     exact softmaxDiv_flattenOk ⟨"x"⟩ ⟨"y"⟩ B
   · -- FlattenOk, reciprocal
-    show ((floatSoftmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B).eraseDType).toAlgKernel.FlattenOk
-    rw [hbridge2]
     exact softmaxRecip_flattenOk ⟨"x"⟩ ⟨"y"⟩ B
   · -- TraceSafeR, divide
     intro bounds t h1 h2 _
     simp only [floatSoftmaxDivIO] at h1 h2 ⊢
-    rw [hbridge1]
     exact softmaxDiv_traceSafeR ⟨"x"⟩ ⟨"y"⟩ B t R hB bounds h1 h2
   · -- TraceSafeR, reciprocal (window hypotheses are io₁'s = the shared ones)
     intro bounds t h1 h2 _
     simp only [floatSoftmaxDivIO, floatSoftmaxRecipIO] at h1 h2 ⊢
-    rw [hbridge2]
     exact softmaxRecip_traceSafeR ⟨"x"⟩ ⟨"y"⟩ B t R hB bounds h1 h2
   · -- the region-model equivalence, from ANY state s₀ (no input hypotheses)
     intro s₀
     simp only [floatSoftmaxDivIO, floatSoftmaxRecipIO]
-    rw [hbridge1, hbridge2]
     obtain ⟨s1, hexec1⟩ := softmaxDiv_execR_isSome ⟨"x"⟩ ⟨"y"⟩ B s₀ R hB
     obtain ⟨s2, hexec2⟩ := softmaxRecip_execR_isSome ⟨"x"⟩ ⟨"y"⟩ B s₀ R hB
     -- the refinement core: the two final memories agree at EVERY cell
     have hmem12 : ∀ r, r ∉ ([] : List RegionName) →
         ∀ o, s1.mem r o = s2.mem r o :=
       (softmax_reciprocal_refinement_view ⟨"x"⟩ ⟨"y"⟩ B hB s₀ R).out
-        rfl rfl hexec1 hexec2
+        (by simp [ComputeKernel.eraseDType]) (by simp [ComputeKernel.eraseDType])
+        hexec1 hexec2
     refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
     · -- the y windows agree (a fortiori: all cells agree)
       intro j
