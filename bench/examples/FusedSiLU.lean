@@ -4,15 +4,17 @@ import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
 /-!
-# Fused SiLU ≡ three-kernel pipeline — rounding-invariant (boundary) refinement
+# Fused SiLU ≡ three-kernel pipeline — kernel equivalence `≡[R]` on the IO surface
 
-The **boundary-rounding** sibling of `bench/examples/FusedSiLU.lean` (the exact-ℝ
-template). Only the **output** store is rounded to bf16 (`(y).to(tl.bfloat16)`);
-the pipeline's scratch materializations (`zReg`/`siluReg`) stay in ℝ and are
-excluded from the refinement. Both the fused kernel and the unfused pipeline
-compute the **same** per-lane ℝ output `residual + silu(x·gate)`, so any
-rounding model `R` quantizes the two equal values identically at the shared bf16
-output store — the writes agree outside the scratch temporaries.
+The **boundary-rounding** SiLU story (the exact-ℝ template is
+`bench/examples/FusedSiLUReal.lean`), on the `⊨`-grade kernel-equivalence
+surface. Only the **output** store is rounded to bf16 (`(y).to(tl.bfloat16)`);
+the pipeline's scratch materializations (`z`/`silu`) stay in ℝ and are declared
+as private `scratch` buffers of the pipeline's IO signature. Both the fused
+kernel and the unfused pipeline compute the **same** per-lane ℝ output
+`residual + silu(x·gate)`, so any rounding model `R` quantizes the two equal
+values identically at the shared bf16 output store — the writes agree outside
+the scratch temporaries.
 
 Contrast: `bench/examples/FusedSwiglu.lean` rounds the materialized
 **intermediate** too (bf16 scratch), needing idempotence; here the scratch is
@@ -20,19 +22,46 @@ Contrast: `bench/examples/FusedSwiglu.lean` rounds the materialized
 
 ## The public result (bottom of file)
 
-The single public headline is **`silu_kernels_refinement_view`** — a
-kernel-vs-kernel refinement on `ComputeRefine.Refines R` (the rounding-model
-surface): for the rounding model `R`, from the same state the fused kernel and
-the unfused pipeline perform the same writes, agreeing at every cell outside the
-declared scratch regions `[zReg, siluReg]`. Its statement mentions only the two
-kernels, the loaded-input contract, the rounding-model refinement surface, and
-the state/region types — **no spec** (the `#stmtSurfaceSubset` gate enforces
-this).
+The single public headline is **`silu_equiv`** — kernel equivalence on the
+shared three-input IO signature:
+
+    siluFusedIO B ≡[R] siluUnfusedIO B
+
+`≡[R]` is the audit-once kernel-equivalence combinator (`KernelIO₃.Equiv`,
+`VeriTile.Triton.Memory.KernelSpec`), the `⊨`-grade form of the refinement
+surface. Spelled out, the headline says: for **every** disjoint flat placement
+of the interface buffers `x`/`gate`/`residual`/`out` **plus the pipeline's
+private staging buffers `z` and `silu`** (∀ base pointers, ∀ buffer sizes),
+**every** program id whose windows `[pid * B, pid * B + B)` land inside their
+buffers, and **every** launch state — **no input hypotheses at all**, not even
+loaded inputs: "equal inputs" is simply "the same `s₀`" — both translated
+pointer kernels terminate under `execR R`, their `out` windows hold equal
+values, and each kernel leaves every cell outside the output window and its
+**own** scratch windows untouched (the fused kernel has no scratch, so it
+frames outside `out` alone; the pipeline may additionally write its `z` and
+`silu` windows, and `≡` never compares them).
+
+The statement mentions only the two IO signatures and the library equivalence
+surface — **no spec** (the `#stmtSurfaceSubset` gate below enforces this).
+Everything else — the region-level refinement core
+`silu_kernels_refinement_view` (formerly the file's headline, now the theorem
+the `≡[R]` region-model obligation repackages: its memory agreement outside
+`[zReg, siluReg]`, read at the output window, is exactly the `out`-agreement
+leg), the frame lemmas, and the flat-memory bridge side conditions — is
+scaffolding.
+
+**Honest boundary**: `unfusedSiLUKernel` is the `ComputeKernel.seq`
+*single-launch concatenation* of the three step bodies — register bindings
+flow across the stage seams, which no real three-launch execution allows. The
+register-leakage gap is bridged once in the library
+(`ComputeKernel.execR_seq_rel_execPipelineR`, `VeriTile.Triton.Float.Pipeline`);
+this file's headline is about the concatenated kernel.
 -/
 
 namespace VeriTile.Bench.Examples.FusedSiLURounded
 
 open VeriTile.Triton VeriTile.Examples
+open scoped VeriTile.Triton.KernelIO₃
 
 /-! ## Kernels -/
 section FusedSiLURounded.kernels
@@ -295,9 +324,133 @@ private theorem siluR_step_residual_mem_frame {s' : BlockState}
   subst h
   exact foldl_writeMemAsR_preserve_other R .bf16 _ _ _ r hr o _
 
+/-! ### Unhit-cell frames (the offsets each store does NOT hit)
+
+The `≡[R]` contract cedes only the per-program windows `[pid*B, pid*B + B)` of
+`out` (both kernels) and of the pipeline's scratch `z`/`silu` to the writer —
+same-region cells outside the window must be framed too. These are the
+per-cell siblings of the whole-region frames above, via the unmasked scatter
+frame recipe (`bench/examples/VectorAdd.lean`, `foldl_store_preserve_cell`). -/
+
+/-- An unmasked `writeMemAsR` scatter `foldl` preserves every same-region
+offset it does not hit — the rounding-store analogue of
+`BlockState.foldl_writeMem_mem_preserve_unhit`. -/
+private theorem foldl_writeMemAsR_preserve_unhit {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName} (l : List α) (offsetFn : α → Nat)
+    (vf : α → TileCarrier dtype.toTileDType) (o : Nat)
+    (ho : ∀ k ∈ l, offsetFn k ≠ o) :
+    ∀ s0 : BlockState,
+      (l.foldl (fun acc k => acc.writeMemAsR R dtype region (offsetFn k) (vf k)) s0).mem region o
+        = s0.mem region o := by
+  induction l with
+  | nil => intro s0; rfl
+  | cons hd tl ih =>
+      intro s0
+      simp only [List.foldl_cons]
+      rw [ih (fun k hk => ho k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMemAsR_mem,
+          if_neg (fun hc => ho hd List.mem_cons_self hc.2.symm)]
+
+/-- An unmasked `writeMemTypedR` scatter `foldl` leaves the program ids
+untouched (needed by the pipeline's `TraceSafeR` walk to carry the lane
+addressing across the stage seams). -/
+private theorem foldl_writeMemTypedR_pids {α : Type} (R : RoundingModel)
+    (dtype : TileDType) {region : RegionName}
+    (offsetFn : α → Nat) (vf : α → TileCarrier dtype) (l : List α) :
+    ∀ s0 : BlockState,
+      (l.foldl (fun acc k =>
+        BlockState.writeMemTypedR R acc dtype region (offsetFn k) (vf k)) s0).pids
+        = s0.pids := by
+  induction l with
+  | nil => intro s0; rfl
+  | cons hd tl ih =>
+      intro s0
+      rw [List.foldl_cons, ih]
+      cases dtype <;> simp [BlockState.writeMemTypedR]
+
+/-- Cell-level frame for step A's exact `z` store: `zReg` offsets not hit by a
+lane of the program window are untouched. -/
+private theorem silu_step_gate_unhit {s' : BlockState} (o : Nat)
+    (ho : ∀ i : Fin blockSize, s.pid * blockSize + i.val ≠ o)
+    (h : exec (siluStepGate xReg gateReg zReg blockSize) s = some s') :
+    s'.mem zReg o = s.mem zReg o := by
+  simp only [BlockState.pid_eq] at ho
+  simp [exec, siluStepGate, stepStmts, stepStmt, Tile.bop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_unhit _ _ _ o
+    (fun k _ => ho k.1) _
+
+/-- Cell-level frame for step B's exact `silu` store. -/
+private theorem silu_step_silu_unhit {s' : BlockState} (o : Nat)
+    (ho : ∀ i : Fin blockSize, s.pid * blockSize + i.val ≠ o)
+    (h : exec (siluStepSilu zReg siluReg blockSize) s = some s') :
+    s'.mem siluReg o = s.mem siluReg o := by
+  simp only [BlockState.pid_eq] at ho
+  simp [exec, siluStepSilu, stepStmts, stepStmt, evalOp, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul] at h
+  subst h
+  exact BlockState.foldl_writeMem_mem_preserve_unhit _ _ _ o
+    (fun k _ => ho k.1) _
+
+/-- Cell-level frame for the fused kernel's bf16-rounded `out` store. -/
+private theorem fusedR_silu_unhit {s' : BlockState} (o : Nat)
+    (ho : ∀ i : Fin blockSize, s.pid * blockSize + i.val ≠ o)
+    (h : execR R (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s = some s') :
+    s'.mem outReg o = s.mem outReg o := by
+  simp only [BlockState.pid_eq] at ho
+  simp [execR, fusedSiLUKernel, stepStmtsR, stepStmtR, evalOpR.eq_def, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul, ComputeExpr.toAlgorithm?] at h
+  subst h
+  exact foldl_writeMemAsR_preserve_unhit R .bf16 _ _ _ o (fun k _ => ho k.1) _
+
+/-- Cell-level frame for step C's bf16-rounded `out` store. -/
+private theorem siluR_step_residual_unhit {s' : BlockState} (o : Nat)
+    (ho : ∀ i : Fin blockSize, s.pid * blockSize + i.val ≠ o)
+    (h : execR R (siluStepResidual siluReg residualReg outReg blockSize) s = some s') :
+    s'.mem outReg o = s.mem outReg o := by
+  simp only [BlockState.pid_eq] at ho
+  simp [execR, siluStepResidual, stepStmtsR, stepStmtR, evalOpR.eq_def, Tile.bop,
+        NumericDType.add, NumericDType.mul, ComputeExpr.toAlgorithm?] at h
+  subst h
+  exact foldl_writeMemAsR_preserve_unhit R .bf16 _ _ _ o (fun k _ => ho k.1) _
+
+/-! ### Termination (unconditional, for the `≡[R]` contract)
+
+`≡[R]`'s region-model obligation starts from **any** state — no loaded inputs
+— so termination cannot come from the realization plumbing (which takes
+`ViewsLoaded`). It holds outright: all four bodies are straight-line statement
+lists whose every step is total, so `execR R` (resp. `exec` for the ℝ scratch
+stages) computes to `some _` by the same computational unfold the frames use. -/
+
+/-- The fused kernel terminates under `execR R` from every state. -/
+private theorem fusedSiLU_execR_isSome :
+    ∃ s', execR R ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize).toAlgKernel) s
+      = some s' := by
+  simp [execR, fusedSiLUKernel, stepStmtsR, stepStmtR, evalOpR.eq_def, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul, ComputeExpr.toAlgorithm?]
+
+/-- Step A terminates under `exec` from every state. -/
+private theorem silu_step_gate_exec_isSome :
+    ∃ s', exec (siluStepGate xReg gateReg zReg blockSize) s = some s' := by
+  simp [exec, siluStepGate, stepStmts, stepStmt, Tile.bop,
+        NumericDType.add, NumericDType.mul]
+
+/-- Step B terminates under `exec` from every state. -/
+private theorem silu_step_silu_exec_isSome :
+    ∃ s', exec (siluStepSilu zReg siluReg blockSize) s = some s' := by
+  simp [exec, siluStepSilu, stepStmts, stepStmt, evalOp, Tile.bop, Tile.uop,
+        NumericDType.add, NumericDType.mul]
+
+/-- Step C terminates under `execR R` from every state. -/
+private theorem siluR_step_residual_execR_isSome :
+    ∃ s', execR R (siluStepResidual siluReg residualReg outReg blockSize) s = some s' := by
+  simp [execR, siluStepResidual, stepStmtsR, stepStmtR, evalOpR.eq_def, Tile.bop,
+        NumericDType.add, NumericDType.mul, ComputeExpr.toAlgorithm?]
+
 end FusedSiLURounded.lemmas
 
-/-! ## The headline theorem -/
+/-! ## The region-level refinement core -/
 section FusedSiLURounded.theorems
 
 set_option maxHeartbeats 1600000 in
@@ -306,8 +459,12 @@ model `R`, from the same initial state the fused kernel and the unfused pipeline
 perform the same writes — the two final memories agree at every cell outside the
 declared scratch regions `zReg`/`siluReg`. Both compute the same per-lane ℝ
 output `residual + silu(x·gate)` and round it at the shared bf16 output store, so
-`R` quantizes equal values equally. -/
-specification silu_kernels_refinement_view
+`R` quantizes equal values equally.
+
+Formerly the file's headline; now the mathematical core the `≡[R]`
+specification's region-model obligation repackages (its `out`-agreement leg is
+exactly this memory agreement read at the output window). -/
+theorem silu_kernels_refinement_view
     (hin : TensorView.ViewsLoaded s
       [TensorView.slot (programTileView s xReg blockSize) xs,
        TensorView.slot (programTileView s gateReg blockSize) gates,
@@ -416,22 +573,284 @@ specification silu_kernels_refinement_view
             silu_step_silu_mem_frame zReg siluReg blockSize s1 h2 hrsilu o,
             silu_step_gate_mem_frame xReg gateReg zReg blockSize s h1 hrz o]
 
+end FusedSiLURounded.theorems
+
+/-! ## Flat-memory bridge side conditions
+
+Both kernels are register-indirect (`offsets := pid * B + tl.arange(B);
+tl.load(xReg + offsets)`), so no ∀-state safety contract covers them; the
+flat-memory bridge (v1.2, `execR` flavor) takes the per-execution
+`Kernel.TraceSafeR` contract instead, plus `FlattenOk` (bridge fragment
+membership). Every access on both sides is **unmasked** over the whole
+per-program window, so the bounds obligations are whole-window: each buffer
+must admit `[pid * B, pid * B + B)`. The fused kernel makes 4 accesses (loads
+`x`/`gate`/`residual`, store `out`); the unfused pipeline — the concatenation
+of the three step bodies — makes 8 (loads `x`/`gate`, store `z`, load `z`,
+store `silu`, loads `silu`/`residual`, store `out`), and its `z`/`silu` bounds
+come from the `≡[R]` scratch-window hypothesis. -/
+section FusedSiLURounded.bridge
+
+/-- The fused kernel sits inside the bridge's covered fragment. -/
+theorem fusedSiLU_flattenOk :
+    ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fusedSiLUKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- The concatenated unfused pipeline sits inside the bridge's covered
+fragment (concatenation adds no new statement forms). -/
+theorem unfusedSiLU_flattenOk :
+    ((unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [unfusedSiLUKernel, siluStepGate, siluStepSilu, siluStepResidual,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk for the fused kernel under `R`: one
+computational unfold walks all the statements, discharging every load-free
+`SafeAtR` and reducing the four unmasked accesses' address obligations to the
+whole-window bounds hypotheses. -/
+theorem fusedSiLU_traceSafeR (bounds : RegionBounds)
+    (hx : s.pid * blockSize + blockSize ≤ bounds xReg)
+    (hg : s.pid * blockSize + blockSize ≤ bounds gateReg)
+    (hres : s.pid * blockSize + blockSize ≤ bounds residualReg)
+    (hout : s.pid * blockSize + blockSize ≤ bounds outReg) :
+    Kernel.TraceSafeR R bounds
+      ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize).toAlgKernel) s := by
+  unfold Kernel.TraceSafeR
+  simp only [BlockState.pid_eq] at hx hg hres hout
+  simp [fusedSiLUKernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+    MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise,
+    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+    MaskOpt.ActiveR, BlockState.setReg,
+    Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul]
+  refine ⟨fun a => ?_, fun a => ?_, fun a => ?_, fun a => ?_⟩ <;>
+    exact Nat.lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) (by assumption)
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk for the concatenated unfused pipeline under
+`R`: same computational unfold over the concatenated statements; the eight
+unmasked accesses all address the shared per-program window, and the `z`/`silu`
+bounds come from the `≡[R]` scratch-window hypothesis. -/
+theorem unfusedSiLU_traceSafeR (bounds : RegionBounds)
+    (hx : s.pid * blockSize + blockSize ≤ bounds xReg)
+    (hg : s.pid * blockSize + blockSize ≤ bounds gateReg)
+    (hres : s.pid * blockSize + blockSize ≤ bounds residualReg)
+    (hout : s.pid * blockSize + blockSize ≤ bounds outReg)
+    (hz : s.pid * blockSize + blockSize ≤ bounds zReg)
+    (hsilu : s.pid * blockSize + blockSize ≤ bounds siluReg) :
+    Kernel.TraceSafeR R bounds
+      ((unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize).toAlgKernel) s := by
+  unfold Kernel.TraceSafeR
+  simp only [BlockState.pid_eq] at hx hg hres hout hz hsilu
+  simp [unfusedSiLUKernel, siluStepGate, siluStepSilu, siluStepResidual,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+    MaskOpt.SafeAtR, MemAccess.SafeAtR, stepStmtR, evalOpR.eq_def,
+    tile_elementwise,
+    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+    MaskOpt.ActiveR, BlockState.setReg,
+    foldl_writeMemTypedR_pids,
+    Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul]
+  -- (six obligations, not eight: `simp` merges the z-store/z-load and
+  -- silu-store/silu-load windows' identical whole-window bounds conjuncts)
+  refine ⟨fun a => ?_, fun a => ?_, fun a => ?_, fun a => ?_,
+    fun a => ?_, fun a => ?_⟩ <;>
+    exact Nat.lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) (by assumption)
+
+end FusedSiLURounded.bridge
+
+/-! ## The spec: `siluFusedIO ≡[R] siluUnfusedIO` -/
+section FusedSiLURounded.spec
+
+/-- The unfused pipeline's **IO signature** — the whole kernel-specific audit
+surface of the headline: interface `x`, `gate`, `residual` → `out`, each
+program owning the window `[pid * B, pid * B + B)`, **plus its two private
+staging buffers `z` and `silu`** (same per-program window), declared as
+`scratch`: the pipeline may write its `z`/`silu` windows, but their post-state
+is no part of the contract — `≡` never compares them. -/
+def siluUnfusedIO (B : Nat) : KernelIO₃ where
+  kernel := unfusedSiLUKernel ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"z"⟩ ⟨"silu"⟩ ⟨"out"⟩ B
+  in1 := ⟨"x"⟩
+  in2 := ⟨"gate"⟩
+  in3 := ⟨"residual"⟩
+  out := ⟨"out"⟩
+  B1 := B
+  B2 := B
+  B3 := B
+  Bout := B
+  read1 := fun pid => pid * B
+  read2 := fun pid => pid * B
+  read3 := fun pid => pid * B
+  write := fun pid => pid * B
+  scratch := [⟨⟨"z"⟩, fun pid => pid * B, B⟩, ⟨⟨"silu"⟩, fun pid => pid * B, B⟩]
+
+/-- The fused kernel's IO signature: the **same interface by construction**
+(structure update of `siluUnfusedIO` — buffers and windows shared verbatim),
+with the fused kernel plugged in and **no scratch** (it stages nothing
+through memory). -/
+def siluFusedIO (B : Nat) : KernelIO₃ :=
+  { siluUnfusedIO B with
+    kernel := fusedSiLUKernel ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B
+    scratch := [] }
+
+/-- Unpack `ComputeRefine.Refines` at one successful execution pair of the
+two projected kernels — the two-kernel sibling of the library's
+`ComputeKernel.ExecCorrectR.out`. -/
+private theorem refines_out {R : RoundingModel} {lhs rhs : ComputeKernel}
+    {s : BlockState} {scratch : List RegionName}
+    (h : ComputeRefine.Refines R lhs rhs s scratch)
+    (hLAlg : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hRAlg : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    {s1 s2 : BlockState}
+    (h1 : execR R lhs.toAlgKernel s = some s1)
+    (h2 : execR R rhs.toAlgKernel s = some s2) :
+    ∀ r, r ∉ scratch → ∀ o, s1.mem r o = s2.mem r o := by
+  have h' := h.2
+  unfold ComputeKernel.ProjectedRefineR at h'
+  rw [hLAlg, hRAlg] at h'
+  exact h' s s1 s2 h1 h2 rfl
+
+/-- **The headline**: fused SiLU is equivalent to the unfused three-step
+pipeline on their shared three-input IO signature, for **every** rounding
+model — see the module docstring for the full contract `≡[R]` unfolds to
+(both kernels terminate from any state, `out` windows agree, each frames
+outside `out` ∪ its own scratch). Proof: `KernelIO₃.Equiv.intro` assembles
+the region-model equivalence — termination is unconditional, the
+`out`-agreement leg is the region-level refinement theorem's memory agreement
+(equal ℝ outputs, rounded identically at the boundary store), the frames are
+the unmasked scatter frame lemmas — with the flat-memory bridge side
+conditions (`FlattenOk` + `TraceSafeR` per kernel). -/
+specification silu_equiv (R : RoundingModel) (B : Nat) :
+    siluFusedIO B ≡[R] siluUnfusedIO B := by
+  refine KernelIO₃.Equiv.intro _ _ ?_ ?_ ?_ ?_ ?_
+  · -- FlattenOk, fused
+    exact fusedSiLU_flattenOk ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B
+  · -- FlattenOk, unfused
+    exact unfusedSiLU_flattenOk ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ ⟨"silu"⟩ ⟨"residual"⟩ ⟨"out"⟩ B
+  · -- TraceSafeR, fused (its accesses need no scratch bounds)
+    intro bounds t h1 h2 h3 h4 _
+    simp only [siluFusedIO, siluUnfusedIO] at h1 h2 h3 h4 ⊢
+    exact fusedSiLU_traceSafeR ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B t R bounds
+      h1 h2 h3 h4
+  · -- TraceSafeR, unfused (z/silu bounds from the scratch-window hypothesis)
+    intro bounds t h1 h2 h3 h4 hsc
+    simp only [siluFusedIO, siluUnfusedIO] at h1 h2 h3 h4 hsc ⊢
+    exact unfusedSiLU_traceSafeR ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ ⟨"silu"⟩ ⟨"residual"⟩
+      ⟨"out"⟩ B t R bounds h1 h2 h3 h4
+      (hsc ⟨⟨"z"⟩, fun pid => pid * B, B⟩ (by simp))
+      (hsc ⟨⟨"silu"⟩, fun pid => pid * B, B⟩ (by simp))
+  · -- the region-model equivalence, from ANY state s₀ (no input hypotheses)
+    intro s₀
+    simp only [siluFusedIO, siluUnfusedIO]
+    -- termination of both sides
+    obtain ⟨s1, hexec1⟩ :=
+      fusedSiLU_execR_isSome ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B s₀ R
+    obtain ⟨sA, hexecA⟩ := silu_step_gate_exec_isSome ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ B s₀
+    obtain ⟨sB, hexecB⟩ := silu_step_silu_exec_isSome ⟨"z"⟩ ⟨"silu"⟩ B sA
+    obtain ⟨s2, hexecC⟩ :=
+      siluR_step_residual_execR_isSome ⟨"silu"⟩ ⟨"residual"⟩ ⟨"out"⟩ B sB R
+    have hexec2 : execR R
+        ((unfusedSiLUKernel ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"z"⟩ ⟨"silu"⟩ ⟨"out"⟩ B).toAlgKernel) s₀
+        = some s2 := by
+      rw [execR_unfusedSiLU_split]
+      simp only [hexecA, hexecB, Option.bind_some]
+      exact hexecC
+    have hpidA : sA.pid = s₀.pid := exec_pid hexecA
+    have hpidB : sB.pid = sA.pid := exec_pid hexecB
+    -- the inputs both kernels actually see: whatever s₀ holds (no hypotheses)
+    have hin : TensorView.ViewsLoaded s₀
+        [TensorView.slot (programTileView s₀ ⟨"x"⟩ B)
+          (fun j => s₀.readMem ⟨"x"⟩ (s₀.pid * B + j.val)),
+         TensorView.slot (programTileView s₀ ⟨"gate"⟩ B)
+          (fun j => s₀.readMem ⟨"gate"⟩ (s₀.pid * B + j.val)),
+         TensorView.slot (programTileView s₀ ⟨"residual"⟩ B)
+          (fun j => s₀.readMem ⟨"residual"⟩ (s₀.pid * B + j.val))] := by
+      refine ⟨?_, ?_, ?_, trivial⟩
+      all_goals
+        rintro ⟨i, -⟩
+        simp [TensorView.offset, programTileView, Offset.strided]
+    -- the region-level refinement: memories agree outside z/silu
+    have hmem12 : ∀ r, r ∉ [(⟨"z"⟩ : RegionName), ⟨"silu"⟩] →
+        ∀ o, s1.mem r o = s2.mem r o :=
+      refines_out
+        (silu_kernels_refinement_view ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ ⟨"silu"⟩
+          ⟨"residual"⟩ ⟨"out"⟩ B s₀ _ _ _ R hin (by decide))
+        rfl rfl hexec1 hexec2
+    refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
+    · -- OUT windows agree (out ∉ [z, silu])
+      intro j
+      have hmem := hmem12 ⟨"out"⟩ (by decide) (s₀.pid * B + j.val)
+      unfold BlockState.readMem
+      rw [hmem]
+    · -- fused frame: writes only the out window (no scratch)
+      intro r o hcond _hscr
+      by_cases hrOUT : r = ⟨"out"⟩
+      · subst hrOUT
+        rcases hcond with hne | hno
+        · exact absurd rfl hne
+        · exact fusedR_silu_unhit ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B s₀ R o
+            (fun i heq => hno i heq.symm) hexec1
+      · exact fusedR_silu_mem_frame ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B s₀ R
+          hexec1 hrOUT o
+    · -- unfused frame: writes only out window ∪ z/silu windows (its scratch)
+      intro r o hcond hscr
+      have hC : s2.mem r o = sB.mem r o := by
+        by_cases hrOUT : r = ⟨"out"⟩
+        · subst hrOUT
+          rcases hcond with hne | hno
+          · exact absurd rfl hne
+          · refine siluR_step_residual_unhit ⟨"silu"⟩ ⟨"residual"⟩ ⟨"out"⟩ B sB
+              R o (fun i => ?_) hexecC
+            rw [hpidB, hpidA]
+            exact fun heq => hno i heq.symm
+        · exact siluR_step_residual_mem_frame ⟨"silu"⟩ ⟨"residual"⟩ ⟨"out"⟩ B
+            sB R hexecC hrOUT o
+      have hB : sB.mem r o = sA.mem r o := by
+        by_cases hrS : r = ⟨"silu"⟩
+        · subst hrS
+          refine silu_step_silu_unhit ⟨"z"⟩ ⟨"silu"⟩ B sA o
+            (fun i => ?_) hexecB
+          rw [hpidA]
+          exact fun heq =>
+            hscr ⟨⟨"silu"⟩, fun pid => pid * B, B⟩ (by simp) rfl i heq.symm
+        · exact silu_step_silu_mem_frame ⟨"z"⟩ ⟨"silu"⟩ B sA hexecB hrS o
+      have hA : sA.mem r o = s₀.mem r o := by
+        by_cases hrZ : r = ⟨"z"⟩
+        · subst hrZ
+          exact silu_step_gate_unhit ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ B s₀ o
+            (fun i heq =>
+              hscr ⟨⟨"z"⟩, fun pid => pid * B, B⟩ (by simp) rfl i heq.symm)
+            hexecA
+        · exact silu_step_gate_mem_frame ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ B s₀ hexecA hrZ o
+      rw [hC, hB, hA]
+
+end FusedSiLURounded.spec
+
 /-! ## Trust audit (compile-time gate)
 
-If either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
-trusted statement) the file stops compiling. See `VeriTile.Meta.StatementAudit`. -/
+These commands re-audit the public result every time the file is elaborated —
+if either gate fails (a smuggled axiom / `sorry`, or a foreign constant in the
+trusted statement) the file stops compiling. See
+`VeriTile.Meta.StatementAudit`. -/
 
--- (1) No `sorry`, no smuggled axiom, in the public theorem's transitive proof.
+-- (1) No `sorry`, no smuggled axiom — in the region-level core's and the
+-- public headline's transitive proofs.
 #axiomsClean silu_kernels_refinement_view
+#axiomsClean silu_equiv
 
--- (2) The headline is a *kernel-vs-kernel* refinement: its statement may mention
--- ONLY the two kernels, the loaded-input contract, the rounding-model surface,
--- and the state/region types — NO spec.
-#stmtSurfaceSubset silu_kernels_refinement_view ⊆
-  [fusedSiLUKernel, unfusedSiLUKernel, TensorView.ViewsLoaded,
-   TensorView.Slot, TensorView.slot, TensorView, programTileView, InputAt,
-   ComputeRefine.Refines, RoundingModel, BlockState, RegionName]
+-- (2) The headline's statement surface is the two IO signatures plus the
+-- audit-once kernel-equivalence combinator — NO spec (there are none), no
+-- other project constant. If a spec-like definition ever creeps into the
+-- statement, this fails.
+#stmtSurfaceSubset silu_equiv ⊆
+  [siluFusedIO, siluUnfusedIO, VeriTile.Triton.KernelIO₃.Equiv,
+   RoundingModel]
 
-end FusedSiLURounded.theorems
+-- (There is no `#specNonCircular` gate: the file defines no specs at all, so a
+-- self-referential spec is impossible by construction.)
 
 end VeriTile.Bench.Examples.FusedSiLURounded

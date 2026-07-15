@@ -733,10 +733,12 @@ specification online_softmax_correctness (B : Nat) (hB : 0 < B) :
         / (onlineSoftmaxL xs B).unbotD 0 := by
   refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact batchSoftmax_flattenOk ⟨"x"⟩ ⟨"y"⟩ B
-  · intro bounds s h1 h2
+  · intro bounds s h1 h2 _
     exact batchSoftmax_traceSafe ⟨"x"⟩ ⟨"y"⟩ B bounds s h1 h2
   · intro s₀ xs hx
-    exact batchSoftmax_region_run B hB s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ := batchSoftmax_region_run B hB s₀ xs hx
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 end OnlineSoftmax.kernelIO
 
