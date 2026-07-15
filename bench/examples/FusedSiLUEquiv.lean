@@ -12,9 +12,9 @@ grind), the region-level refinement core next
 (`silu_kernels_refinement_view`), then the **flat-memory bridge side
 conditions**, the **specification** last (one public headline `silu_equiv` on
 the `≡[R]` surface), and a compile-time **trust audit**. The real sections
-below are `FusedSiLURounded.kernels`, `FusedSiLURounded.lemmas`,
-`FusedSiLURounded.theorems`, `FusedSiLURounded.bridge`,
-`FusedSiLURounded.spec`.
+below are `FusedSiLUEquiv.kernels`, `FusedSiLUEquiv.lemmas`,
+`FusedSiLUEquiv.theorems`, `FusedSiLUEquiv.bridge`,
+`FusedSiLUEquiv.spec`.
 
 The **boundary-rounding** SiLU story (the exact-ℝ template is
 `bench/examples/FusedSiLUReal.lean`), on the `⊨`-grade kernel-equivalence
@@ -70,13 +70,13 @@ register-leakage gap is bridged once in the library
 this file's headline is about the concatenated kernel.
 -/
 
-namespace VeriTile.Bench.Examples.FusedSiLURounded
+namespace VeriTile.Bench.Examples.FusedSiLUEquiv
 
 open VeriTile.Triton VeriTile.Examples
 open scoped VeriTile.Triton.KernelIO₃
 
 /-! ## Kernels -/
-section FusedSiLURounded.kernels
+section FusedSiLUEquiv.kernels
 
 /-- Fused SiLU with a bf16-rounded output store. -/
 def fusedSiLUKernel (xReg gateReg residualReg outReg : RegionName)
@@ -133,7 +133,7 @@ def unfusedSiLUKernel
      siluStepSilu zReg siluReg blockSize,
      siluStepResidual siluReg residualReg outReg blockSize]
 
-end FusedSiLURounded.kernels
+end FusedSiLUEquiv.kernels
 
 /- Shared parameters of every lemma and the headline — the pipeline's regions in
 data-flow order (`keepReg` is the generic frame region), the block size, the
@@ -144,7 +144,7 @@ variable (xs gates residuals : Fin blockSize → ℝ)
 variable (R : RoundingModel)
 
 /-! ## Supporting lemmas (private plumbing) -/
-section FusedSiLURounded.lemmas
+section FusedSiLUEquiv.lemmas
 
 /-- Two `writeMemAsR` scatters over the same offsets agree cell-by-cell when
 their per-lane values agree — the rounding-store analogue of
@@ -430,10 +430,10 @@ private theorem siluR_step_residual_execR_isSome :
   simp [execR, siluStepResidual, stepStmtsR, stepStmtR, evalOpR.eq_def, Tile.bop,
         NumericDType.add, NumericDType.mul, ComputeExpr.toAlgorithm?]
 
-end FusedSiLURounded.lemmas
+end FusedSiLUEquiv.lemmas
 
 /-! ## The region-level refinement core -/
-section FusedSiLURounded.theorems
+section FusedSiLUEquiv.theorems
 
 set_option maxHeartbeats 1600000 in
 /-- **fused refines pipeline** (`ComputeRefine.Refines R`): for the rounding
@@ -555,7 +555,7 @@ theorem silu_kernels_refinement_view
             silu_step_silu_mem_frame zReg siluReg blockSize s1 h2 hrsilu o,
             silu_step_gate_mem_frame xReg gateReg zReg blockSize s h1 hrz o]
 
-end FusedSiLURounded.theorems
+end FusedSiLUEquiv.theorems
 
 /-! ## Flat-memory bridge side conditions
 
@@ -570,7 +570,7 @@ must admit `[pid * B, pid * B + B)`. The fused kernel makes 4 accesses (loads
 of the three step bodies — makes 8 (loads `x`/`gate`, store `z`, load `z`,
 store `silu`, loads `silu`/`residual`, store `out`), and its `z`/`silu` bounds
 come from the `≡[R]` scratch-window hypothesis. -/
-section FusedSiLURounded.bridge
+section FusedSiLUEquiv.bridge
 
 /-- The fused kernel sits inside the bridge's covered fragment. -/
 theorem fusedSiLU_flattenOk :
@@ -648,10 +648,10 @@ theorem unfusedSiLU_traceSafeR (bounds : RegionBounds)
     fun a => ?_, fun a => ?_⟩ <;>
     exact Nat.lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) (by assumption)
 
-end FusedSiLURounded.bridge
+end FusedSiLUEquiv.bridge
 
 /-! ## The spec: `siluFusedIO ≡[R] siluUnfusedIO` -/
-section FusedSiLURounded.spec
+section FusedSiLUEquiv.spec
 
 /-- The unfused pipeline's **IO signature** — the whole kernel-specific audit
 surface of the headline: interface `x`, `gate`, `residual` → `out`, each
@@ -798,7 +798,7 @@ specification silu_equiv (R : RoundingModel) (B : Nat) :
         · exact silu_step_gate_mem_frame ⟨"x"⟩ ⟨"gate"⟩ ⟨"z"⟩ B s₀ hexecA hrZ o
       rw [hC, hB, hA]
 
-end FusedSiLURounded.spec
+end FusedSiLUEquiv.spec
 
 /-! ## Trust audit (compile-time gate)
 
@@ -823,4 +823,4 @@ trusted statement) the file stops compiling. See
 -- (There is no `#specNonCircular` gate: the file defines no specs at all, so a
 -- self-referential spec is impossible by construction.)
 
-end VeriTile.Bench.Examples.FusedSiLURounded
+end VeriTile.Bench.Examples.FusedSiLUEquiv
