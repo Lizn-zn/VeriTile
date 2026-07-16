@@ -1,5 +1,5 @@
 /-
-bench/examples/MemorySafety.lean
+bench/tests/MemorySafety.lean
 
 Representative Layer-1 memory-bounds safety examples.
 -/

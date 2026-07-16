@@ -8,7 +8,8 @@
 # importable:
 #
 #   * bench/tritonbench_g/*/*.lean   (the 151 TritonBench-G ports)
-#   * bench/examples/*.lean          (the relocated examples + SwiGLU pilot)
+#   * bench/examples/*.lean          (the kernel showcases)
+#   * bench/tests/*.lean             (infra smoke tests / regression gates)
 #
 # For each file it emits a TEMP COPY (via bench/audit_trust_prep.py) that adds
 # `import VeriTile.Meta.StatementAudit` and appends `#axiomsClean` on every
@@ -38,12 +39,14 @@ cd "${PROJECT_ROOT}"
 
 PORTS_ROOT="bench/tritonbench_g"
 EXAMPLES_ROOT="bench/examples"
+TESTS_ROOT="bench/tests"
 PREP="bench/audit_trust_prep.py"
 
 select_targets() {
   if [ "$#" -eq 0 ]; then
     find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -type f -name '*.lean' | sort
     find "${EXAMPLES_ROOT}" -maxdepth 1 -type f -name '*.lean' | sort
+    find "${TESTS_ROOT}" -maxdepth 1 -type f -name '*.lean' | sort
   else
     for name in "$@"; do
       local lean
