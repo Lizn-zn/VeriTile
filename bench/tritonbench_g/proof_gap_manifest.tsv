@@ -51,9 +51,9 @@ bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_output_summ
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	chunked_cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
-bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	rms_layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	gemma_rms_layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	rms_layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	gemma_rms_layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	rope_embedding_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fifth_order_sph_harmonics/FifthOrderSphHarmonics.lean	fifth_order_fwd_surface_y00_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -130,7 +130,7 @@ bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_o
 bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
+bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize_kv_group_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rbe_triton_transform/RbeTritonTransform.lean	rbe_triton_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
