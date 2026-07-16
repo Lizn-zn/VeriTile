@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Emit an audited temp copy of a standalone bench Lean file.
 
-Given a path to a bench Lean file (a `bench/tritonbench_g/*/*.lean` port or a
-`bench/examples/*.lean` file), print to stdout a copy that:
+Given a path to a bench Lean file (a `bench/tritonbench_g/*/*.lean` port, a
+`bench/examples/*.lean` showcase, or a `bench/tests/*.lean` smoke), print to
+stdout a copy that:
 
   1. adds `import VeriTile.Meta.StatementAudit` to the import block, and
   2. appends, at end of file, a `#axiomsClean <fully-qualified-thm>` command for

@@ -1,5 +1,5 @@
 /-
-bench/examples/LoopInvariant.lean
+bench/tests/LoopInvariant.lean
 
 Small sanity proofs for the Triton `forLoop_inv` API.
 -/

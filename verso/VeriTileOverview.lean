@@ -774,7 +774,7 @@ Once these are proved, *concurrent ≡ sequential on final memory* follows by re
 ::::
 
 :::cardMuted
-*Worked example.* `bench/examples/GridComposition.lean` exercises the Layer-2b
+*Worked example.* `bench/tests/GridComposition.lean` exercises the Layer-2b
 disjoint merge end to end, on the same `programTileView` API used by
 single-program proofs.
 

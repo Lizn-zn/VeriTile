@@ -1,5 +1,5 @@
 /-
-bench/examples/GridComposition
+bench/tests/GridComposition
 
 Representative whole-grid disjoint-frame composition smoke.
 -/

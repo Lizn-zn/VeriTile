@@ -1,5 +1,5 @@
 /-
-bench/examples/MemoryFrame.lean
+bench/tests/MemoryFrame.lean
 
 Representative Layer-2a write-footprint / frame examples.
 -/
