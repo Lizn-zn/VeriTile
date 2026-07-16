@@ -19,10 +19,16 @@ The per-kernel statement surface is just the `KernelIO₂` value (which buffer
 is which argument, buffer lengths, the per-program window) plus `f` — pure
 mathematics. `Implements` is the audit-once combinator.
 
-The module hosts **two relations** over these IO signatures:
+The module hosts **three relations** over these IO signatures:
 
 * **Correctness** — `io ⊨ f` (`Implements`, exact-ℝ `exec`): the kernel
   computes the mathematical function `f` on its declared windows.
+* **Rounding correctness** — `io ⊨[R] f` (`ImplementsR`, rounding-model
+  `execR R`): the kernel computes `f` exactly and quantizes it once at the
+  declared output dtype (`outDType`) — the boundary-rounding contract. The
+  output windows hold `R.round outDType (f …)` as typed cells. At
+  `R := .triv` every cast is exact, so the exact surface is this relation's
+  degeneration.
 * **Equivalence** — `io₁ ≡[R] io₂` (`Equiv`, rounding-model `execR R`): two
   kernels sharing one IO signature make the same writes — the `⊨`-grade
   form of the refinement surface. No `f` and **no input hypotheses** (equal
@@ -83,6 +89,13 @@ structure KernelIO₂ where
   read2 : Nat → Nat
   /-- Where program `pid` writes its output tile. -/
   write : Nat → Nat
+  /-- The output buffer's floating dtype — the quantization grid of the
+  boundary store, used only by the rounding-correctness relation `⊨[R]`
+  (its postcondition reads the output back as `outDType`-typed cells
+  holding `R.round outDType (f …)`). Declared, not parsed: the headline
+  proves the kernel's actual store cast matches. `.real` (the default)
+  means an unrounded store — the exact relation `⊨` ignores this field. -/
+  outDType : FloatDType := .real
 
 namespace KernelIO₂
 
@@ -161,6 +174,107 @@ theorem Implements.intro (io : KernelIO₂)
     have hlt : io.write s₀.pid + j.val < A.extent io.out := by
       have := j.isLt; omega
     rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_)
+          by_cases hro : r = io.out
+          · subst hro
+            refine Or.inr fun j hoj => ?_
+            rcases hcond with hflat | hnadr
+            · exact hflat rfl
+            · exact hnadr j (by rw [hoeq, hoj])
+          · exact Or.inl hro
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+/-- `io.ImplementsR R f` — the **rounding-correctness** relation `io ⊨[R] f`:
+the kernel of `io` computes the mathematical function `f` exactly and
+quantizes it once at the declared output dtype (`io.outDType`) — the
+boundary-rounding contract. Same full Hoare triple as `Implements` (same
+precondition: ∀ disjoint allocation, ∀ in-bounds pid, ∀ launch state with
+exact-ℝ inputs loaded), but the execution is `execR R` and the output
+window holds **typed cells**: reading lane `j` back as `outDType` yields
+`R.round outDType (f xs ys j)`. Inputs stay exact ℝ — the rounding model
+acts at the kernel's cast/store sites, not at loads. At `R := .triv` the
+store is exact and this degenerates to the exact surface. -/
+def ImplementsR (io : KernelIO₂) (R : RoundingModel)
+    (f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    io.read1 pid + io.B ≤ A.extent io.in1 →
+    io.read2 pid + io.B ≤ A.extent io.in2 →
+    io.write pid + io.B ≤ A.extent io.out →
+  ∀ (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, s₀.readMem io.in1 (io.read1 pid + j.val) = xs j) →
+    (∀ j : Fin io.B, s₀.readMem io.in2 (io.read2 pid + j.val) = ys j) →
+    ∃ s',
+      execR R (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B,
+          s'.readMemAs io.outDType A.flat
+              (A.addr io.out (io.write pid + j.val))
+            = io.outDType.ofReal (R.round io.outDType (f xs ys j)))
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ∀ j : Fin io.B, o' ≠ A.addr io.out (io.write pid + j.val)) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped notation:25 io " ⊨[" R "] " f =>
+  KernelIO₂.ImplementsR io R f
+
+/-- Assembly lemma for `⊨[R]` — the rounding sibling of `Implements.intro`:
+`FlattenOk`, the `TraceSafeR R` safety walk, and the region-model rounded
+Hoare triple `hrun` (termination under `execR R` + typed output readback +
+frame). The flat transport is `execR_flatten` plus the typed readback
+transport `flattenState_readMemAs`. -/
+theorem ImplementsR.intro (io : KernelIO₂) {R : RoundingModel}
+    {f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      io.read1 s.pid + io.B ≤ bounds io.in1 →
+      io.read2 s.pid + io.B ≤ bounds io.in2 →
+      io.write s.pid + io.B ≤ bounds io.out →
+      (io.kernel.toAlgKernel).TraceSafeR R bounds s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
+      (∀ j : Fin io.B, s₀.readMem io.in1 (io.read1 s₀.pid + j.val) = xs j) →
+      (∀ j : Fin io.B, s₀.readMem io.in2 (io.read2 s₀.pid + j.val) = ys j) →
+      ∃ s1, execR R (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B,
+            s1.readMemAs io.outDType io.out (io.write s₀.pid + j.val)
+              = io.outDType.ofReal (R.round io.outDType (f xs ys j)))
+        ∧ (∀ r o,
+            (r ≠ io.out ∨ ∀ j : Fin io.B, o ≠ io.write s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.ImplementsR R f := by
+  intro A hd hregs hcov pid h1 h2 h3 xs ys s₀ hpid hu hx hy
+  subst hpid
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
+  have hts' : (io.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
+    hts A.extent s₀ h1 h2 h3
+  have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write s₀.pid + j.val < A.extent io.out := by
+      have := j.isLt; omega
+    rw [A.flattenState_readMemAs hd s1 hmem hlt io.outDType]
     exact hval j
   · intro r' o' hcond
     by_cases hr : r' = A.flat
