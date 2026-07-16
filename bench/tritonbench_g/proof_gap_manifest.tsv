@@ -125,7 +125,7 @@ bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_kernel_outpu
 bench/tritonbench_g/max_reduction/MaxReduction.lean	max_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/mean_reduction/MeanReduction.lean	mean_dim_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean	mixed_sparse_attention_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean	mul_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean	mul_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
@@ -135,7 +135,7 @@ bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize
 bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rbe_triton_transform/RbeTritonTransform.lean	rbe_triton_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -161,7 +161,7 @@ bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_backward_kerne
 bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/square_matrix/SquareMatrix.lean	square_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -186,5 +186,5 @@ bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_kernel_triton_small_length_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/vector_addition/VectorAddition.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/vector_addition/VectorAddition.lean	add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context

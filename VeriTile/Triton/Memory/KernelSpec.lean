@@ -657,6 +657,151 @@ theorem Equiv.intro (io₁ io₂ : MaskedKernelIO₂) {R : RoundingModel}
 
 end MaskedKernelIO₂
 
+/-- IO signature of a **masked** one-input / one-output kernel — the
+one-input sibling of `MaskedKernelIO₂` (elementwise maps: relu, sin,
+square, …). Each program instance owns a `B`-lane window but only its
+**active** lanes touch memory; inactive lanes carry no obligations on
+either side of the Hoare triple. The read side and the write side may have
+**different** active sets (`mask` vs `writeMask`, e.g. a `pid == 0` store
+gate over an ungated load); for the common symmetric case `writeMask`
+defaults to `mask`. -/
+structure MaskedKernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length: each program instance owns `B`-element windows. -/
+  B : Nat
+  /-- Where program `pid` reads its input tile: active lanes of
+  `[read pid, read pid + B)`. -/
+  read : Nat → Nat
+  /-- Where program `pid` writes its output tile. -/
+  write : Nat → Nat
+  /-- Program `pid`'s **read-active** lanes: the lanes whose input cells the
+  precondition constrains (and whose read addresses must be in bounds). -/
+  mask : Nat → Fin B → Prop
+  /-- Program `pid`'s **write-active** lanes: the lanes the postcondition
+  asserts output values at (and whose write addresses must be in bounds);
+  the frame holds everywhere else. Defaults to `mask` — override only for
+  kernels whose store is gated more tightly than their load. -/
+  writeMask : Nat → Fin B → Prop := mask
+  /-- This kernel's **private working buffers**, each with its per-program
+  window start (lane-masked by `writeMask`, tile length `B`, like the
+  output); see `MaskedKernelIO₂.scratch`. -/
+  scratch : List (RegionName × (Nat → Nat)) := []
+
+namespace MaskedKernelIO₁
+
+/-- `io.Implements f` — one-input sibling of `MaskedKernelIO₂.Implements`.
+Full Hoare triple, restricted to the active lanes: window-in-bounds
+contract, loaded-input precondition, and output-value postcondition all
+**lane-wise at active lanes only**; frame everywhere outside the active
+output and scratch lanes. -/
+def Implements (io : MaskedKernelIO₁)
+    (f : (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] ++ io.scratch.map Prod.fst →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    (∀ j : Fin io.B, io.mask pid j → io.read pid + j.val < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask pid j →
+      io.write pid + j.val < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+      p.2 pid + j.val < A.extent p.1) →
+  ∀ (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid j →
+      s₀.readMem io.inp (io.read pid + j.val) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid j →
+          s'.readMem A.flat (A.addr io.out (io.write pid + j.val))
+            = f xs j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr io.out (io.write pid + j.val)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₁.Implements
+
+/-- Assembly lemma — one-input sibling of `MaskedKernelIO₂.Implements.intro`;
+see there for the reading of the lane-wise obligations. -/
+theorem Implements.intro (io : MaskedKernelIO₁)
+    {f : (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.read s.pid + j.val < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask s.pid j →
+        io.write s.pid + j.val < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask s₀.pid j →
+        s₀.readMem io.inp (io.read s₀.pid + j.val) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask s₀.pid j →
+            s1.readMem io.out (io.write s₀.pid + j.val) = f xs j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ io.write s₀.pid + j.val) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
+  subst hpid
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2 hsc
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write s₀.pid + j.val < A.extent io.out := h2 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end MaskedKernelIO₁
+
 /-- One **private working buffer** of an unmasked kernel: program `pid` may
 stage intermediates in the window `[win pid, win pid + len)` of buffer
 `buf`. Scratch buffers are allocated and writable, but their post-state is
