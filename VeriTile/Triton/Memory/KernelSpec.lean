@@ -841,9 +841,14 @@ namespace Masked2DKernelIO₁
 /-- `io.Implements f` — two-axis, general-window sibling of
 `MaskedKernelIO₁.Implements`. Same lane-wise masked Hoare triple; the
 launch state pins both program-id axes, and every address is the
-signature's per-lane map evaluated at `(pid₀, pid₁, j)`. -/
+signature's per-lane map evaluated at `(pid₀, pid₁, j)`. The spec `f`
+takes both pids: on a tiled axis a per-block reduction's value is
+irreducibly block-dependent (a full block computes a different function
+than the tail block, and an all-masked block stores the finite fallback),
+so a pid-independent spec would be falsifiable. Pid-independent kernels
+simply ignore the two arguments. -/
 def Implements (io : Masked2DKernelIO₁)
-    (f : (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+    (f : Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
   ∀ A : FlatAlloc,
     A.Disjoint →
     A.regions = [io.inp, io.out] ++ io.scratch.map Prod.fst →
@@ -866,7 +871,7 @@ def Implements (io : Masked2DKernelIO₁)
         = some s'
       ∧ (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
           s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ j))
-            = f xs j)
+            = f pid₀ pid₁ xs j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
             ((∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
@@ -880,7 +885,7 @@ def Implements (io : Masked2DKernelIO₁)
 /-- Assembly lemma — two-axis sibling of `MaskedKernelIO₁.Implements.intro`;
 the obligations' lane hypotheses are indexed by `(s.pids 0, s.pids 1)`. -/
 theorem Implements.intro (io : Masked2DKernelIO₁)
-    {f : (Fin io.B → ℝ) → Fin io.B → ℝ}
+    {f : Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState),
       (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
@@ -895,7 +900,8 @@ theorem Implements.intro (io : Masked2DKernelIO₁)
         s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) j) = xs j) →
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
-            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j) = f xs j)
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j)
+              = f (s₀.pids 0) (s₀.pids 1) xs j)
         ∧ (∀ r o,
             (r ≠ io.out ∨
               ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
@@ -982,7 +988,8 @@ namespace Masked2DKernelIO₂
 /-- `io.Implements f` — two-input sibling of
 `Masked2DKernelIO₁.Implements`. -/
 def Implements (io : Masked2DKernelIO₂)
-    (f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+    (f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) :
+    Prop :=
   ∀ A : FlatAlloc,
     A.Disjoint →
     A.regions = [io.in1, io.in2, io.out] ++ io.scratch.map Prod.fst →
@@ -1009,7 +1016,7 @@ def Implements (io : Masked2DKernelIO₂)
         = some s'
       ∧ (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
           s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ j))
-            = f xs ys j)
+            = f pid₀ pid₁ xs ys j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
             ((∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
@@ -1023,7 +1030,7 @@ def Implements (io : Masked2DKernelIO₂)
 /-- Assembly lemma — two-input sibling of
 `Masked2DKernelIO₁.Implements.intro`. -/
 theorem Implements.intro (io : Masked2DKernelIO₂)
-    {f : (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    {f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState),
       (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
@@ -1043,7 +1050,7 @@ theorem Implements.intro (io : Masked2DKernelIO₂)
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
             s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j)
-              = f xs ys j)
+              = f (s₀.pids 0) (s₀.pids 1) xs ys j)
         ∧ (∀ r o,
             (r ≠ io.out ∨
               ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →

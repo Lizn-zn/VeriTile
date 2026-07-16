@@ -19,16 +19,33 @@ memories into one buffer are the *trusted boundary*, not proof obligations here.
 (A whole-grid / launch-composition treatment lives separately as the worked
 example `bench/examples/AdamUpdateGridLaunch.lean`.)
 
+The headline is stated on the masked KernelIO `⊨` surface
+(`MaskedKernelIO₃ₓ₂.Implements`): a full masked Hoare triple over **flat
+pointer memory** — ∀ disjoint base-pointer placements of the three buffers,
+∀ program ids whose active lanes are in bounds, ∀ launch states whose input
+windows are loaded at the active lanes — the translated pointer kernel
+terminates, both active output windows hold the Lion oracles, and every other
+flat cell is untouched.
+
+**The kernel is in-place**: `p_ptr` and `exp_avg_ptr` are inputs *and*
+outputs. `MaskedKernelIO₃ₓ₂` supports this by decoupling the allocation list
+(`bufs`, each buffer exactly once) from the argument roles, so
+`out1 = in1 = p_ptr` and `out2 = in3 = exp_avg_ptr`; the triple reads the
+*old* window contents into `f` and asserts the *new* ones — the standard
+before/after reading of a Hoare triple.
+
 ## Proof architecture
 
 ```
-update_fn_kernel_output_summary                  ← TOP THEOREM (this file)
-  ├─ update_fn_kernel_surface_toAlgorithm_supported   (the surface lowers)
-  └─ update_fn_kernel_all_outputs_compute_correct
-       ├─ update_fn_kernel_p_compute_correct
-       │    └─ update_fn_kernel_p_correct          ← p_ptr store realizes pFullSpec
-       └─ update_fn_kernel_exp_avg_compute_correct
-            └─ update_fn_kernel_exp_avg_correct    ← exp_avg_ptr store realizes expAvgFullSpec
+update_fn_kernel_correctness            ← TOP SPECIFICATION
+  · adamIO ⊨ (lionParam, lionMomentum): the masked in-place Hoare triple
+    (out1 = in1 = p_ptr, out2 = in3 = exp_avg_ptr; MaskedKernelIO₃ₓ₂)
+  ├─ update_fn_kernel_flattenOk         bridge fragment membership
+  ├─ update_fn_kernel_traceSafe         per-execution lane-wise safety walk
+  └─ update_fn_kernel_region_run        region-model masked in-place triple
+       ├─ adam_exec_isSome                                  (termination)
+       ├─ update_fn_kernel_p_correct / _exp_avg_correct     (values)
+       └─ adam_writeWithin (via adamWritesFP_frame_cell)    (frame)
 ```
 
 For an arbitrary program (`s.pid` is universally quantified), each masked store
@@ -45,12 +62,14 @@ once, in `Math.Optimizer`, and never re-derived here.
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
 modeled. Side condition: `p_ptr ≠ exp_avg_ptr` (the two output buffers do not
-alias — no kernel caller relies on aliasing them).
+alias — the second masked store would otherwise clobber the first output; no
+kernel caller relies on aliasing them).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AdamUpdateTriton
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedKernelIO₃ₓ₂
 
 set_option maxHeartbeats 5000000
 
@@ -80,23 +99,13 @@ def update_fn_kernel
   tl.store(offset_exp_avg_ptr, exp_avg, mask=mask)
 }
 
-/-- The full Adam update surface lowers to the algorithm layer, including both
-masked stores to `p_ptr` and `exp_avg_ptr`. -/
-theorem update_fn_kernel_surface_toAlgorithm_supported
-    (p_ptr grad_ptr exp_avg_ptr : RegionName)
-    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
-    ∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg := by
-  simp [update_fn_kernel, ComputeExpr.toAlgorithm?]
+/-! ## Single-program value core
 
-/-! ## Full-kernel output correctness
-
-The Python test runs the full `update_fn_kernel` which writes both `p` and
-`exp_avg`. Per #139's audit, slice proofs are insufficient. This theorem
-characterizes the observable stores for the full kernel under the assumption
-that `p_ptr ≠ exp_avg_ptr` (no kernel callers rely on aliasing those
-buffers). -/
+The two algorithm-layer theorems below execute one program of the full
+`update_fn_kernel` and characterize BOTH observable stores lane by lane —
+active lanes hold the Lion oracles, masked-off lanes are unchanged — under
+the assumption `p_ptr ≠ exp_avg_ptr` (no kernel callers alias those
+buffers). They are the value legs of the headline's region-model triple. -/
 
 /-- Per-lane `exp_avg` output spec: the reusable Lion momentum oracle applied
 to the values this lane loads. The math lives once in `Math.Optimizer`; this
@@ -134,7 +143,7 @@ theorem update_fn_kernel_exp_avg_correct
         else s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
@@ -152,31 +161,6 @@ theorem update_fn_kernel_exp_avg_correct
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the `exp_avg` store of the full
-`update_fn_kernel`. -/
-theorem update_fn_kernel_exp_avg_compute_correct
-    (p_ptr grad_ptr exp_avg_ptr : RegionName)
-    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hRegions : exp_avg_ptr ≠ p_ptr) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i => expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [update_fn_kernel]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := update_fn_kernel_exp_avg_correct p_ptr grad_ptr exp_avg_ptr
-    lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
-  simpa [hActive] using h
-
 /-- Algorithm-layer correctness for the `p` store of the full
 `update_fn_kernel`. -/
 theorem update_fn_kernel_p_correct
@@ -193,7 +177,7 @@ theorem update_fn_kernel_p_correct
         else s.readMem p_ptr (linearOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
@@ -231,116 +215,276 @@ theorem update_fn_kernel_p_correct
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the `p` store of the full
-`update_fn_kernel`. -/
-theorem update_fn_kernel_p_compute_correct
+/-! ## Termination and frame -/
+
+/-- Progress: `update_fn_kernel` always executes to a defined state. -/
+theorem adam_exec_isSome
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) (s : BlockState) :
+    (exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE) s).isSome := by
+  simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, ComparableDType.gt, ComparableDType.ne]
+
+/-- Per-program write footprint: the two masked block stores to `p_ptr` and
+`exp_avg_ptr` at offsets `pid·BLOCK_SIZE + lane`, active when `< n_elements`. -/
+noncomputable def adamWritesFP
+    (p_ptr exp_avg_ptr : RegionName) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState) : WriteFootprint :=
+  WriteFootprint.union
+    (WriteFootprint.activeTileImage p_ptr
+      (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val)
+      (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val < n_elements))
+    (WriteFootprint.activeTileImage exp_avg_ptr
+      (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val)
+      (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val < n_elements))
+
+/-- Frame write-footprint: a single program of `update_fn_kernel` only writes
+the two masked blocks `adamWritesFP` (its `p_ptr` and `exp_avg_ptr` lanes). All
+other memory — other regions, and out-of-block / masked-off cells — is
+untouched. -/
+theorem adam_writeWithin
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) (s : BlockState) :
+    Kernel.ExecWritesWithin
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel s
+      (adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE s) := by
+  intro s' hExec
+  simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
+  subst s'
+  refine BlockState.writeWithin_trans (s₁ := ?mid1) ?hsp ?houter
+  case houter =>
+    refine BlockState.foldl_writeMem_prop_writeWithin (region := exp_avg_ptr)
+      (active := fun i : TileIndex [BLOCK_SIZE] =>
+        s.pids 0 * BLOCK_SIZE + i.1.val < n_elements) _ _ _ _ ?_
+    intro i _ hact
+    exact Or.inr ⟨rfl, i, hact, rfl⟩
+  case hsp =>
+    refine BlockState.writeWithin_trans (s₁ := ?mid2) ?hbase ?hinner
+    case hinner =>
+      refine BlockState.foldl_writeMem_prop_writeWithin (region := p_ptr)
+        (active := fun i : TileIndex [BLOCK_SIZE] =>
+          s.pids 0 * BLOCK_SIZE + i.1.val < n_elements) _ _ _ _ ?_
+      intro i _ hact
+      exact Or.inl ⟨rfl, i, hact, rfl⟩
+    case hbase =>
+      intro r o _
+      simp [BlockState.setReg_mem]
+
+/-- Frame bridging lemma: `adam_writeWithin` pins the execution's write
+footprint to `adamWritesFP` (the two active masked windows), so any cell
+outside **both** active output windows — the exact frame condition shape of
+`MaskedKernelIO₃ₓ₂.Implements.intro`'s `hrun` — is untouched. -/
+theorem adamWritesFP_frame_cell
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hRegions : p_ptr ≠ exp_avg_ptr) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [update_fn_kernel]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := update_fn_kernel_p_correct p_ptr grad_ptr exp_avg_ptr
-    lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
-  simpa [hActive] using h
+    (s s1 : BlockState)
+    (hExec : exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel s = some s1)
+    (r : RegionName) (o : Nat)
+    (h1 : r ≠ p_ptr ∨ ∀ j : Fin BLOCK_SIZE,
+      s.pid * BLOCK_SIZE + j.val < n_elements → o ≠ s.pid * BLOCK_SIZE + j.val)
+    (h2 : r ≠ exp_avg_ptr ∨ ∀ j : Fin BLOCK_SIZE,
+      s.pid * BLOCK_SIZE + j.val < n_elements → o ≠ s.pid * BLOCK_SIZE + j.val) :
+    s1.mem r o = s.mem r o := by
+  have hw := adam_writeWithin p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+    n_elements BLOCK_SIZE s s1 hExec
+  refine (hw r o ?_).symm
+  rintro (⟨rfl, i, hact, ho⟩ | ⟨rfl, i, hact, ho⟩)
+  · rcases h1 with hne | hno
+    · exact hne rfl
+    · exact hno i.1 hact ho.symm
+  · rcases h2 with hne | hno
+    · exact hne rfl
+    · exact hno i.1 hact ho.symm
 
-/-- Full compute-facing output coverage for Python `update_fn`: the parameter
-buffer `p_ptr` and momentum buffer `exp_avg_ptr` stores are both characterized
-for the full `update_fn_kernel`. -/
-theorem update_fn_kernel_all_outputs_compute_correct
+/-! ## Flat-memory bridge side conditions -/
+
+/-- The full Lion-update surface sits inside the flat-memory bridge's
+covered fragment (pointer arithmetic, masked loads/stores, `where`,
+comparisons are all covered). -/
+theorem update_fn_kernel_flattenOk
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
+    ((update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [update_fn_kernel, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+/-- Per-execution safety walk: all three masked loads and both masked
+stores address the same window `pid * BLOCK_SIZE + j`, active only when
+`< n_elements`, so the bounds contract is lane-wise — every *active* lane's
+address is below the region bound of the buffer it touches. -/
+theorem update_fn_kernel_traceSafe
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hRegions : p_ptr ≠ exp_avg_ptr) :
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i)) := by
-  constructor
-  · exact update_fn_kernel_p_compute_correct p_ptr grad_ptr exp_avg_ptr
-      lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
-  · exact update_fn_kernel_exp_avg_compute_correct p_ptr grad_ptr exp_avg_ptr
-      lr wd beta1 beta2 n_elements BLOCK_SIZE s (fun h => hRegions h.symm)
+    (bounds : RegionBounds) (s : BlockState)
+    (hp : ∀ j : Fin BLOCK_SIZE, s.pid * BLOCK_SIZE + j.val < n_elements →
+      s.pid * BLOCK_SIZE + j.val < bounds p_ptr)
+    (hg : ∀ j : Fin BLOCK_SIZE, s.pid * BLOCK_SIZE + j.val < n_elements →
+      s.pid * BLOCK_SIZE + j.val < bounds grad_ptr)
+    (he : ∀ j : Fin BLOCK_SIZE, s.pid * BLOCK_SIZE + j.val < n_elements →
+      s.pid * BLOCK_SIZE + j.val < bounds exp_avg_ptr) :
+    Kernel.TraceSafe bounds
+      ((update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  -- Computational unroll: walks all 19 statements, discharging every
+  -- load-free `SafeAt` and reducing the five memory accesses' lane-wise
+  -- address obligations to the bounds hypotheses below.
+  simp [update_fn_kernel, ComputeKernel.toAlgKernel,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    stepStmt, evalOp.eq_def,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, ComparableDType.gt, ComparableDType.ne,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe, MemAccess.SafeAt,
+    Op.PointerAddressesSafeOn, Op.MemorySafe, MaskOpt.Active,
+    BlockState.setReg]
+  exact ⟨fun a ha => hp a ha, fun a ha => hg a ha, fun a ha => he a ha,
+    fun a ha => hp a ha, fun a ha => he a ha⟩
 
-/-- Single-program output summary for Python `update_fn`.
+/-! ## Region-model triple, IO signature, and headline -/
 
-This is a local, per-`BlockState` correctness statement, not the whole-grid
-launch theorem.  It says three things about executing one Triton program/block:
-
-* the DSL surface for `update_fn_kernel` successfully lowers to the algorithm
-  layer (`toAlgorithm? = Except.ok alg`);
-* for every active lane `i : Fin BLOCK_SIZE`, where
-  `linearOffset s BLOCK_SIZE i < n_elements` is the kernel mask
-  `offsets < n_elements`, the store to
-  `(p_ptr, linearOffset s BLOCK_SIZE i)` realizes `pFullSpec`, i.e. the reusable
-  Lion parameter-update oracle applied to the values loaded by that lane;
-* for the same active lanes, the store to
-  `(exp_avg_ptr, linearOffset s BLOCK_SIZE i)` realizes `expAvgFullSpec`, i.e.
-  the reusable Lion momentum oracle.
-
-The side condition `p_ptr ≠ exp_avg_ptr` rules out aliasing between the two
-output regions, so the second masked store cannot overwrite the first output.
-Grid coverage, `cdiv n_elements BLOCK_SIZE`, and cross-program disjointness are
-separate whole-grid obligations handled by the worked example
-`bench/examples/AdamUpdateGridLaunch.lean`, outside the scope of this per-kernel
-theorem. -/
-specification update_fn_kernel_output_summary
+/-- **The region-model masked Hoare triple** — termination, active-lane
+values of both in-place outputs, and frame off the two active output
+windows, from any launch state whose three input windows are loaded at the
+**active lanes only** (`pid * BLOCK_SIZE + j < n_elements`). This is the
+`hrun` obligation of the `⊨` headline; its three legs are
+`adam_exec_isSome`, `update_fn_kernel_p_correct` / `_exp_avg_correct`, and
+`adamWritesFP_frame_cell`. -/
+theorem update_fn_kernel_region_run
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
-    (s : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr)
+    (s₀ : BlockState) (xs ys zs : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, s₀.pid * BLOCK_SIZE + j.val < n_elements →
+      s₀.readMem p_ptr (s₀.pid * BLOCK_SIZE + j.val) = xs j)
+    (hy : ∀ j : Fin BLOCK_SIZE, s₀.pid * BLOCK_SIZE + j.val < n_elements →
+      s₀.readMem grad_ptr (s₀.pid * BLOCK_SIZE + j.val) = ys j)
+    (hz : ∀ j : Fin BLOCK_SIZE, s₀.pid * BLOCK_SIZE + j.val < n_elements →
+      s₀.readMem exp_avg_ptr (s₀.pid * BLOCK_SIZE + j.val) = zs j) :
+    ∃ s1, exec ((update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, s₀.pid * BLOCK_SIZE + j.val < n_elements →
+          s1.readMem p_ptr (s₀.pid * BLOCK_SIZE + j.val)
+            = TiledOptimizer.lionParam (xs j) (zs j) (ys j) lr wd beta1)
+      ∧ (∀ j : Fin BLOCK_SIZE, s₀.pid * BLOCK_SIZE + j.val < n_elements →
+          s1.readMem exp_avg_ptr (s₀.pid * BLOCK_SIZE + j.val)
+            = TiledOptimizer.lionMomentum (zs j) (ys j) beta2)
+      ∧ (∀ r o,
+          (r ≠ p_ptr ∨ ∀ j : Fin BLOCK_SIZE,
+            s₀.pid * BLOCK_SIZE + j.val < n_elements →
+              o ≠ s₀.pid * BLOCK_SIZE + j.val) →
+          (r ≠ exp_avg_ptr ∨ ∀ j : Fin BLOCK_SIZE,
+            s₀.pid * BLOCK_SIZE + j.val < n_elements →
+              o ≠ s₀.pid * BLOCK_SIZE + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hs1⟩ := Option.isSome_iff_exists.mp
+    (adam_exec_isSome p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+      n_elements BLOCK_SIZE s₀)
+  have hs1' : exec ((update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel) s₀ = some s1 := hs1
+  refine ⟨s1, hs1', ?_, ?_, ?_⟩
+  · -- p window: the in-place parameter update realizes `lionParam`.
+    intro j hj
+    have h := update_fn_kernel_p_correct p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE s₀ s1 hRegions hs1 j
+    rw [show linearOffset s₀ BLOCK_SIZE j = s₀.pid * BLOCK_SIZE + j.val
+        from rfl] at h
+    rw [h, if_pos hj]
+    unfold pFullSpec
+    rw [show linearOffset s₀ BLOCK_SIZE j = s₀.pid * BLOCK_SIZE + j.val
+        from rfl, hx j hj, hy j hj, hz j hj]
+  · -- exp_avg window: the in-place momentum update realizes `lionMomentum`.
+    intro j hj
+    have h := update_fn_kernel_exp_avg_correct p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE s₀ s1
+      (fun hc => hRegions hc.symm) hs1 j
+    rw [show linearOffset s₀ BLOCK_SIZE j = s₀.pid * BLOCK_SIZE + j.val
+        from rfl] at h
+    rw [h, if_pos hj]
+    unfold expAvgFullSpec
+    rw [show linearOffset s₀ BLOCK_SIZE j = s₀.pid * BLOCK_SIZE + j.val
+        from rfl, hy j hj, hz j hj]
+  · -- frame off the two active output windows.
+    intro r o h1 h2
+    exact adamWritesFP_frame_cell p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE s₀ s1 hs1' r o h1 h2
+
+/-- `update_fn_kernel`'s masked in-place **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `bufs` — the allocation list: three buffers, each exactly once;
+* `in1`/`in2`/`in3` — parameters, gradient, momentum (the wiring);
+* `out1 = in1`, `out2 = in3` — the **in-place** roles: the kernel rewrites
+  the parameter and momentum buffers it read;
+* `read1..3`/`write1..2` — every window is the same block
+  `[pid·BLOCK_SIZE, pid·BLOCK_SIZE + BLOCK_SIZE)` (the launch convention
+  `offsets = pid * BLOCK_SIZE + arange`);
+* `mask` — program `pid`'s active lanes, `pid * BLOCK_SIZE + j < n_elements`.
+  Inactive lanes (the overhang of the last partial block) carry no
+  obligations.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer
+sizes are not signature content: the headline quantifies over every
+allocation whose extents cover the active lanes. -/
+def adamIO (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
+    MaskedKernelIO₃ₓ₂ where
+  kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+    lr wd beta1 beta2 n_elements BLOCK_SIZE
+  bufs := [p_ptr, grad_ptr, exp_avg_ptr]  -- p and exp_avg are updated in place
+  in1 := p_ptr
+  in2 := grad_ptr
+  in3 := exp_avg_ptr
+  out1 := p_ptr          -- = in1: in-place parameter update
+  out2 := exp_avg_ptr    -- = in3: in-place momentum update
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * BLOCK_SIZE
+  read2 := fun pid => pid * BLOCK_SIZE
+  read3 := fun pid => pid * BLOCK_SIZE
+  write1 := fun pid => pid * BLOCK_SIZE
+  write2 := fun pid => pid * BLOCK_SIZE
+  mask := fun pid j => pid * BLOCK_SIZE + j.val < n_elements
+
+/-- **The headline**: `update_fn_kernel` implements the Lion step on its
+masked in-place IO signature — for every disjoint flat placement of the
+three buffers, every program id whose active lanes are in bounds, and every
+launch state whose input windows are loaded at the active lanes, the
+translated pointer kernel terminates, every active lane of the parameter
+buffer ends up holding `lionParam` and of the momentum buffer
+`lionMomentum`, applied to the *originally loaded* windows; every other
+flat cell is untouched. The side condition `p_ptr ≠ exp_avg_ptr` rules out
+aliasing between the two output buffers (the second masked store would
+otherwise clobber the first output). Proof:
+`MaskedKernelIO₃ₓ₂.Implements.intro` assembles the region-model triple with
+the flat-memory bridge side conditions. -/
+specification update_fn_kernel_correctness
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
     (hRegions : p_ptr ≠ exp_avg_ptr) :
-    (∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i))) := by
-  constructor
-  · exact update_fn_kernel_surface_toAlgorithm_supported p_ptr grad_ptr
-      exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE
-  · exact update_fn_kernel_all_outputs_compute_correct p_ptr grad_ptr
-      exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
+    adamIO p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE
+      ⊨ fun p grad expAvg =>
+        (fun i => TiledOptimizer.lionParam (p i) (expAvg i) (grad i) lr wd beta1,
+         fun i => TiledOptimizer.lionMomentum (expAvg i) (grad i) beta2) := by
+  refine MaskedKernelIO₃ₓ₂.Implements.intro _
+    (by simp [adamIO]) (by simp [adamIO]) ?_ ?_ ?_
+  · exact update_fn_kernel_flattenOk p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE
+  · intro bounds s h1 h2 h3 _ _
+    exact update_fn_kernel_traceSafe p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE bounds s h1 h2 h3
+  · intro s₀ xs ys zs hx hy hz
+    exact update_fn_kernel_region_run p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE hRegions s₀ xs ys zs hx hy hz
 
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
