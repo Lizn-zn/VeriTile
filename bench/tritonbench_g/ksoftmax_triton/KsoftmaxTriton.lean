@@ -23,20 +23,29 @@ every program of the grid.
 ## Proof architecture
 
 ```
-ksoftmax_forward_plain_output_summary               ← TOP THEOREM
-  ├─ ksoftmax_forward_surface_toAlgorithm_supported  full surface lowers (LOG/mask/causal/fp16/qk)
-  └─ ksoftmax_forward_plain_compute_correct          ← ComputeCorrect over the masked store
-       └─ ksoftmax_forward_plain_correct             ← algorithm-layer readback per lane
-                                                        (LOG=false, no mask, non-causal, no fp16)
+ksoftmax_forward_plain_correctness            ← TOP THEOREM (ksoftmaxIO ⊨ ksoftmaxSpec)
+  ├─ ksoftmax_forward_plain_flattenOk         bridge fragment membership
+  ├─ ksoftmax_forward_plain_traceSafe         per-execution lane-wise safety walk
+  └─ ksoftmax_forward_plain_region_run        region-model masked Hoare triple
+       ├─ ksoftmax_forward_plain_exec_isSome  termination
+       ├─ ksoftmax_forward_plain_correct      ← algorithm-layer readback per lane
+       │    └─ ksoftmaxSpec_congr             only active lanes feed the spec
+       └─ ksoftmax_forward_plain_frame        masked scatter frame
 ```
 
 The full Python surfaces (`ksoftmax_forward_surface`, the `qk`/`bk` mask
 variants, and `ksoftmax_backward_surface`) each have a `*_toAlgorithm_supported`
 lemma showing they lower to the algorithm layer. The arithmetic correctness is
 proved for the plain forward slice `ksoftmax_forward_plain` (the
-non-mask, non-causal, non-fp16, non-log path): `ksoftmaxSpec` is the exact
-stable softmax over the masked row (`reduceMax`, lane-wise `exp`, `reduceSum`,
-quotient). In-bounds lanes hold `ksoftmaxSpec`, out-of-bounds lanes preserved.
+non-mask, non-causal, non-fp16, non-log path) as the masked 2D-grid
+Hoare-triple combinator `ksoftmaxIO … ⊨ ksoftmaxSpec`
+(`Masked2DKernelIO₁.Implements`): for every disjoint flat placement of the two
+buffers, every program `(m, n)` all of whose *active* lanes (`k < K`) are in
+bounds, and every launch state whose active input-row lanes hold `xs`, the
+translated pointer kernel terminates, every active output-row lane holds
+`ksoftmaxSpec K DEPTH xs k`, and every other memory cell is unchanged.
+`ksoftmaxSpec` is the exact stable softmax over the masked row (`reduceMax`,
+lane-wise `exp`, `reduceSum`, quotient).
 
 ## Modeling boundary
 
@@ -45,8 +54,7 @@ is modeled as exact `WithBot.realExp`; `@triton.autotune` / `num_warps` and the
 `IS_FP16` heuristic are not modeled (the fp16 `.to(tl.float32)` cast reduces to
 the identity at the algorithm layer). The reduction runs over the full `DEPTH`
 block, but masked lanes load `⊥` (matching `other=float("-inf")`), so the
-reduction-over-padded-block matches the upstream `-inf` semantics. The
-arithmetic theorem assumes injective output offsets (`hOutInj`); the broader
+reduction-over-padded-block matches the upstream `-inf` semantics. The broader
 mask/causal/log/backward branches are covered only at the lowering
 (`toAlgorithm?`) level, not the arithmetic level.
 -/
@@ -54,6 +62,7 @@ mask/causal/log/backward branches are covered only at the lowering
 namespace VeriTile.Bench.TritonBenchG.KsoftmaxTriton
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked2DKernelIO₁
 
 /-- Lean transcription of `ksoftmax_triton.py`'s `_softmax`.
 
@@ -296,27 +305,18 @@ def ksoftmax_forward_plain
   tl.store(y_ptrs, y, mask=k < $(K))
 }
 
-def xOffset
-    (s : BlockState) (stride_xm stride_xn : Nat) (i : Fin DEPTH) : Nat :=
-  s.pids 0 * stride_xm + s.pids 1 * stride_xn + i.val
+/-- Masked input row tile used by `ksoftmax_forward_plain`: lane `k < K` holds
+`xs k`, masked lanes are `⊥`, matching `other=-inf`. -/
+noncomputable def ksoftmaxInputTile (K DEPTH : Nat)
+    (xs : Fin DEPTH → ℝ) : Tile .real [DEPTH] :=
+  { data := fun idx => if idx.1.val < K then some (xs idx.1) else none }
 
-def yOffset
-    (s : BlockState) (stride_ym stride_yn : Nat) (i : Fin DEPTH) : Nat :=
-  s.pids 0 * stride_ym + s.pids 1 * stride_yn + i.val
-
-noncomputable def ksoftmaxInputTile
-    (s : BlockState) (X : RegionName)
-    (stride_xm stride_xn K DEPTH : Nat) :
-    Tile .real [DEPTH] :=
-  { data := fun idx =>
-      if idx.1.val < K then
-        some (s.readMem X (xOffset s stride_xm stride_xn idx.1))
-      else none }
-
-noncomputable def ksoftmaxSpec
-    (s : BlockState) (X : RegionName)
-    (stride_xm stride_xn K DEPTH : Nat) (idx : Fin DEPTH) : ℝ :=
-  let row := ksoftmaxInputTile s X stride_xm stride_xn K DEPTH
+/-- Exact stable-softmax value computed by the kernel at lane `idx`, as a pure
+function of the active row prefix `xs k`, `k < K` (masked lanes enter the
+reductions as `⊥`, neutral for both `max` and the `exp`-sum). -/
+noncomputable def ksoftmaxSpec (K DEPTH : Nat)
+    (xs : Fin DEPTH → ℝ) (idx : Fin DEPTH) : ℝ :=
+  let row := ksoftmaxInputTile K DEPTH xs
   match Tile.reduceMax (shape := [DEPTH]) ⟨0, by simp⟩ Bool.false row with
   | some rowMax =>
       let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
@@ -327,34 +327,51 @@ noncomputable def ksoftmaxSpec
           (idx, PUnit.unit))
   | none => 0
 
-/-- Algorithm-layer correctness for the plain forward softmax slice. -/
+/-- `ksoftmaxSpec` only reads the active lanes of its input: two rows agreeing
+below `K` yield the same softmax value (masked lanes are `⊥` in the tile
+either way). -/
+theorem ksoftmaxSpec_congr (K DEPTH : Nat) (xs ys : Fin DEPTH → ℝ)
+    (h : ∀ j : Fin DEPTH, j.val < K → xs j = ys j) (i : Fin DEPTH) :
+    ksoftmaxSpec K DEPTH xs i = ksoftmaxSpec K DEPTH ys i := by
+  have htile : ksoftmaxInputTile K DEPTH xs = ksoftmaxInputTile K DEPTH ys := by
+    unfold ksoftmaxInputTile
+    congr 1
+    funext idx
+    by_cases hj : idx.1.val < K
+    · simp only [if_pos hj, h idx.1 hj]
+    · simp only [if_neg hj]
+  unfold ksoftmaxSpec
+  rw [htile]
+
+/-- Algorithm-layer cellwise correctness for the plain forward softmax slice:
+in-bounds lanes hold `ksoftmaxSpec` of the loaded row, out-of-bounds lanes
+are preserved. -/
 theorem ksoftmax_forward_plain_correct
     (Y X : RegionName)
     (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
     (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin DEPTH => yOffset s stride_ym stride_yn i))
     (hExec : exec (ksoftmax_forward_plain Y X
         stride_ym stride_yn stride_xm stride_xn K DEPTH) s = some s') :
     ∀ i : Fin DEPTH,
-      s'.readMem Y (yOffset s stride_ym stride_yn i) =
+      s'.readMem Y (s.pids 0 * stride_ym + s.pids 1 * stride_yn + i.val) =
         if i.val < K then
-          ksoftmaxSpec s X stride_xm stride_xn K DEPTH i
-        else s.readMem Y (yOffset s stride_ym stride_yn i) := by
+          ksoftmaxSpec K DEPTH
+            (fun j => s.readMem X
+              (s.pids 0 * stride_xm + s.pids 1 * stride_xn + j.val)) i
+        else s.readMem Y (s.pids 0 * stride_ym + s.pids 1 * stride_yn + i.val) := by
   intro i
   by_cases hD : 0 < DEPTH
-  · simp [exec, ksoftmax_forward_plain, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+  · simp [exec, ksoftmax_forward_plain, stepStmts, stepStmt, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
           ComparableDType.lt, hD] at hExec
     subst s'
-    simp only [yOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < K
-    · simp [hi, ksoftmaxSpec, ksoftmaxInputTile, xOffset,
+    · simp [hi, ksoftmaxSpec, ksoftmaxInputTile,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,
             Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
             TileShape.insertAxisIndex, hD]
@@ -362,58 +379,207 @@ theorem ksoftmax_forward_plain_correct
     · simp [hi]
   · exact False.elim (hD (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the plain forward softmax slice. -/
-theorem ksoftmax_forward_plain_compute_correct
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for the masked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+set_option maxHeartbeats 1600000 in
+/-- Frame half: every memory cell not actively written by the masked output
+store — every cell of every region other than `Y`, and the *inactive* lanes
+of the output row itself — is preserved by the run. -/
+private theorem ksoftmax_forward_plain_frame
     (Y X : RegionName)
     (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin DEPTH => yOffset s stride_ym stride_yn i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := ksoftmax_forward_plain Y X
-        stride_ym stride_yn stride_xm stride_xn K DEPTH)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin DEPTH => i.val < K)
-        (fun i => (Y, yOffset s stride_ym stride_yn i)))
-      (expected := fun i => ksoftmaxSpec s X stride_xm stride_xn K DEPTH i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [ksoftmax_forward_plain]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := ksoftmax_forward_plain_correct Y X
-    stride_ym stride_yn stride_xm stride_xn K DEPTH s s' hOutInj hExec i
-  simpa [hActive] using h
+    (hD : 0 < DEPTH) (s s1 : BlockState)
+    (hExec : exec ((ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm
+        stride_xn K DEPTH).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ i : Fin DEPTH, i.val < K →
+      ¬(Y = r ∧ s.pids 0 * stride_ym + s.pids 1 * stride_yn + i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, ksoftmax_forward_plain, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        ComparableDType.lt, hD] at hExec
+  subst s1
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+  intro k _ hmk hc
+  exact hmiss k.1 (by simpa using hmk) hc
 
-/-- Public plain-forward summary: the Python surface for
-`LOG=false`, no mask, non-causal, and no fp16 accumulator cast lowers, and the
-corresponding checked proof realizes the softmax computation over the output row
-from `x` to `y`.
--/
-specification ksoftmax_forward_plain_output_summary
-    (Y X M : RegionName)
-    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin DEPTH => yOffset s stride_ym stride_yn i)) :
-    (∃ alg, (ksoftmax_forward_surface Y X M stride_ym stride_yn stride_xm
-      stride_xn stride_m K DEPTH Bool.false Bool.false Bool.false Bool.false
-      Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := ksoftmax_forward_plain Y X
-        stride_ym stride_yn stride_xm stride_xn K DEPTH)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin DEPTH => i.val < K)
-        (fun i => (Y, yOffset s stride_ym stride_yn i)))
-      (expected := fun i => ksoftmaxSpec s X stride_xm stride_xn K DEPTH i)) := by
-  constructor
-  · exact ksoftmax_forward_surface_toAlgorithm_supported Y X M
-      stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH
-      Bool.false Bool.false Bool.false Bool.false Bool.false
-  · exact ksoftmax_forward_plain_compute_correct Y X
-      stride_ym stride_yn stride_xm stride_xn K DEPTH s hOutInj
+set_option maxHeartbeats 1600000 in
+/-- Termination: the kernel executes to completion from any state. `0 < DEPTH`
+is required because the `max` reduce (like `Finset.sup'`) is only defined on
+non-empty axes. -/
+private theorem ksoftmax_forward_plain_exec_isSome
+    (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
+    (hD : 0 < DEPTH) (s : BlockState) :
+    ∃ s1, exec ((ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm
+        stride_xn K DEPTH).toAlgKernel) s = some s1 := by
+  simp [exec, ksoftmax_forward_plain, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        ComparableDType.lt, hD]
+
+/-- **The region-model masked Hoare triple** — termination, active-lane output
+values, and frame off the active output lanes, from any launch state whose
+input row is loaded at the **active lanes only** (`j < K`). This is the
+`hrun` obligation of the `⊨` headline. -/
+theorem ksoftmax_forward_plain_region_run
+    (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
+    (hD : 0 < DEPTH) (s₀ : BlockState) (xs : Fin DEPTH → ℝ)
+    (hx : ∀ j : Fin DEPTH, j.val < K →
+      s₀.readMem X (s₀.pids 0 * stride_xm + s₀.pids 1 * stride_xn + j.val)
+        = xs j) :
+    ∃ s1, exec ((ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm
+          stride_xn K DEPTH).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin DEPTH, j.val < K →
+          s1.readMem Y (s₀.pids 0 * stride_ym + s₀.pids 1 * stride_yn + j.val)
+            = ksoftmaxSpec K DEPTH xs j)
+      ∧ (∀ r o,
+          (r ≠ Y ∨ ∀ j : Fin DEPTH, j.val < K →
+            o ≠ s₀.pids 0 * stride_ym + s₀.pids 1 * stride_yn + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hs1⟩ := ksoftmax_forward_plain_exec_isSome Y X
+    stride_ym stride_yn stride_xm stride_xn K DEPTH hD s₀
+  refine ⟨s1, hs1, fun j hj => ?_, fun r o hcond => ?_⟩
+  · have h := ksoftmax_forward_plain_correct Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH s₀ s1 hs1 j
+    simp only [hj, if_pos] at h
+    rw [h]
+    exact ksoftmaxSpec_congr K DEPTH _ xs (fun k hk => hx k hk) j
+  · refine ksoftmax_forward_plain_frame Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH hD s₀ s1 hs1 r o
+      (fun i hi ⟨hr, ho⟩ => ?_)
+    rcases hcond with hne | hno
+    · exact hne hr.symm
+    · exact hno i hi ho.symm
+
+/-- The kernel sits inside the flat-memory bridge's covered fragment (pointer
+arithmetic, masked load with `other`, reductions, masked store). -/
+theorem ksoftmax_forward_plain_flattenOk
+    (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat) :
+    ((ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm stride_xn
+        K DEPTH).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [ksoftmax_forward_plain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk,
+    Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk: one computational unfold walks all the
+statements — the pointer/index staging, the reductions, and the register
+arithmetic are memory-silent — and reduces the two masked accesses (row load,
+row store) to the **lane-wise** bounds hypotheses: every *active* lane's
+address is below the region bound. -/
+theorem ksoftmax_forward_plain_traceSafe
+    (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
+    (hD : 0 < DEPTH) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ j : Fin DEPTH, j.val < K →
+      s.pids 0 * stride_xm + s.pids 1 * stride_xn + j.val < bounds X)
+    (hout : ∀ j : Fin DEPTH, j.val < K →
+      s.pids 0 * stride_ym + s.pids 1 * stride_yn + j.val < bounds Y) :
+    Kernel.TraceSafe bounds
+      ((ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm stride_xn
+        K DEPTH).toAlgKernel) s := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hD.ne'
+  unfold Kernel.TraceSafe
+  simp [ksoftmax_forward_plain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComparableDType.lt,
+    Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+  exact ⟨fun a ha => hin a ha, fun a ha => hout a ha⟩
+
+/-- `ksoftmax_forward_plain`'s masked **2D IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `inp`/`out` — which buffer is which argument (the wiring);
+* `B = DEPTH` — the last-dimension row window each program owns;
+* `read`/`write` — program `(m, n)` reads lane `k` of its row at
+  `m * stride_xm + n * stride_xn + k` and writes it at
+  `m * stride_ym + n * stride_yn + k` (the host-side one-program-per-`(m, n)`
+  launch convention over the leading two dimensions);
+* `mask` — the active lanes `k < K`, **the same for every program**: the row
+  prefix that actually exists in the tensor. Inactive lanes (the padding of
+  `DEPTH = next_power_of_2(K)`) carry no obligations on either side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+def ksoftmaxIO (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat) :
+    Masked2DKernelIO₁ where
+  kernel := ksoftmax_forward_plain Y X stride_ym stride_yn stride_xm
+    stride_xn K DEPTH
+  inp := X
+  out := Y
+  B := DEPTH
+  read := fun m n j => m * stride_xm + n * stride_xn + j.val
+  write := fun m n j => m * stride_ym + n * stride_yn + j.val
+  mask := fun _ _ j => j.val < K
+
+/-- **The headline**: the plain forward slice of `_softmax` (`LOG=false`, no
+mask, non-causal, no fp16 cast) implements the exact stable softmax over the
+active row prefix on its masked 2D IO signature — for every disjoint flat
+placement of the two buffers, every program `(m, n)` whose active lanes are in
+bounds, and every launch state whose active input-row lanes hold `xs`, the
+translated pointer kernel terminates, every active output-row lane `k` holds
+`ksoftmaxSpec K DEPTH xs k`, and every other memory cell is unchanged.
+`0 < DEPTH` is required: the kernel's `max` reduce (like `Finset.sup'`) is
+only defined on non-empty tiles. Proof: `Implements.intro` assembles the
+region-model masked triple with the bridge side conditions. -/
+specification ksoftmax_forward_plain_correctness
+    (Y X : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn K DEPTH : Nat)
+    (hD : 0 < DEPTH) :
+    ksoftmaxIO Y X stride_ym stride_yn stride_xm stride_xn K DEPTH ⊨
+      fun _ _ xs k => ksoftmaxSpec K DEPTH xs k := by
+  refine Masked2DKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact ksoftmax_forward_plain_flattenOk Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH
+  · intro bounds s h1 h2 _
+    exact ksoftmax_forward_plain_traceSafe Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH hD bounds s h1 h2
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ := ksoftmax_forward_plain_region_run Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH hD s₀ xs hx
+    -- scratch is empty, so its frame side condition is vacuous
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 end VeriTile.Bench.TritonBenchG.KsoftmaxTriton

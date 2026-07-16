@@ -1,5 +1,4 @@
 import VeriTile.Triton
-import VeriTile.Examples.Common
 
 /-!
 # `logsumexp_fwd` — strict per-kernel correctness
@@ -15,31 +14,38 @@ by `scale` (`HAS_SCALE`), computes the numerically-stable
 This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
 body. The host launch (`logsumexp_fwd_kernel[grid](...)`, the grid size
 `(N, cdiv(D, B))`, and how the runtime composes per-program writes into `z`) is
-the *trusted boundary*. The grid-level theorem below is stated in the
-per-program-local `Kernel.ForAllProgramsSome` form (one statement quantified
-over every grid index), not a unified merged-state launch. Because the
-program-id is universally quantified, the per-program statement covers every
-program of the grid. The kernel deliberately stops at the Triton boundary; it
-does **not** model the Python wrapper's later `z.logsumexp(-1)` cross-block
-reduction.
+the *trusted boundary*. Both program-id axes are universally quantified in the
+`⊨` headline, so the per-program statement covers every program of the grid
+(and every out-of-grid program with an in-bounds store cell). The kernel
+deliberately stops at the Triton boundary; it does **not** model the Python
+wrapper's later `z.logsumexp(-1)` cross-block reduction.
 
 ## Proof architecture
 
 ```
-logsumexp_fwd_kernel_output_summary               ← TOP THEOREM
-  ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
-  └─ logsumexp_fwd_kernel_compute_correct         ← ComputeCorrect, single-block row D=B=n+1
-       └─ logsumexp_fwd_kernel_correct            ← full-row LSE readback
-            └─ logsumexp_fwd_kernel_correct_full  ← tail-block masked-lane core
+logsumexp_fwd_kernel_correctness                  ← TOP THEOREM (logsumexpIO ⊨ per-block LSE)
+  ├─ logsumexp_fwd_kernel_flattenOk               bridge fragment membership
+  ├─ logsumexp_fwd_kernel_traceSafe               per-execution lane-wise safety walk
+  └─ logsumexp_fwd_kernel_region_run              region-model masked Hoare triple
+       ├─ logsumexp_fwd_kernel_correct_full       ← in-grid blocks (full + tail)
+       │    └─ partialLSE_full_eq_blockLSE_local  row spec → block-local spec bridge
+       ├─ logsumexp_fwd_kernel_store_zero         ← all-masked blocks store the ⊥-fallback 0
+       └─ logsumexp_fwd_kernel_frame              single-cell store frame
 logsumexp_fwd_kernel_grid_blockLSE_correct        ← whole-grid per-block blockLSE
   └─ logsumexp_fwd_kernel_correct_full            (shared masked-lane core)
 ```
 
-The spec is the standard mathematical `LSE` (from
-`VeriTile.Triton.Math.LogSumExp`) together with the tiled
-`blockLSE` / `partialLSE_full` / `scaledLane_full` / `validLanes` (from
-`VeriTile.Triton.Semantics.TiledIndexing`), under the `TiledLogSumExp`
-oracle — the math is *not* inline-duplicated here.
+The headline is the two-axis masked Hoare-triple combinator
+`logsumexpIO … ⊨ f` (`Masked2DKernelIO₁.Implements`, pid-aware spec): for every
+disjoint flat placement of the two buffers, every program `(i_n, i_d)` whose
+active read lanes and scalar store cell are in bounds, and every launch state
+whose active input lanes hold `xs`, the translated pointer kernel terminates,
+the scalar cell `z[i_n·cdiv(D,B) + i_d]` holds the per-block spec value, and
+every other memory cell is unchanged. The spec is `blockLSE_local`, the exact
+log-sum-exp over the block's *active* lanes — a pure function of the loaded
+block tile; the tiled row-level vocabulary (`validLanes` / `partialLSE_full` /
+`blockLSE`, from `VeriTile.Triton.Semantics.TiledIndexing` under the
+`TiledLogSumExp` oracle) is *not* inline-duplicated here.
 
 ## Modeling boundary
 
@@ -48,14 +54,18 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and t
 plain `Bool` parameter, both branches proved). Out-of-range lanes in the tail
 block are loaded with `other = -float("inf")` (= `⊥ : WithBot ℝ`); the reduction
 is proved to depend only on the valid lanes (`withBot_sup'_partial`,
-`sum_exp_masked_eq`), so padded-block values never contaminate the result. The
-`.to(tl.int64)` casts on the program ids erase to identity at the algorithm
-layer.
+`sum_exp_masked_eq`), so padded-block values never contaminate the result. An
+*all*-masked program (`i_d·B ≥ D`, only reachable outside the real launch grid)
+computes `b_z = ⊥` and its unmasked store writes the IEEE-faithful finite
+fallback `0` (`FloatDType.storeValue ⊥ = 0`); the headline covers this honestly
+via the pid-aware spec's `else 0` branch. The `.to(tl.int64)` casts on the
+program ids erase to identity at the algorithm layer.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.LogsumexpFwd
 
-open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Examples
+open VeriTile.Triton VeriTile.Triton.TiledLogSumExp
+open scoped VeriTile.Triton.Masked2DKernelIO₁
 
 /-- Faithful 1:1 transcription of `logsumexp_fwd.py`'s `logsumexp_fwd_kernel`.
 
@@ -239,80 +249,19 @@ private theorem logsumexp_fwd_kernel_correct_full
     rw [show rm i * scale = xs ⟨s.pids 1 * (n+1) + i.val, hi⟩ * scale from by congr 1; exact h_rm i hi]
     congr 1  -- denominators: proof irrelevance
 
-/-- **Complete row correctness for `logsumexp_fwd_kernel`.**
-
-This is the public correctness theorem for the kernel in the single-block
-configuration `D = B = n + 1` and `pid axis-1 = 0`. Under that launch shape the
-kernel writes the complete row log-sum-exp, not a per-block partial. -/
-theorem logsumexp_fwd_kernel_correct
-    (x z : RegionName)
-    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
-    (s : BlockState)
-    (xs : Fin (n+1) → ℝ)
-    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
-    (h_pid1 : s.pids 1 = 0) :
-    (exec (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale) s).map
-        (·.readMem z (s.pids 0)) =
-      some (LSE xs HAS_SCALE scale) := by
-  have h_tail : s.pids 1 * (n+1) < n+1 := by
-    simp [h_pid1]
-  have hview :=
-    logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale s xs h_x h_tail
-  have h_spec :
-      partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale =
-        LSE xs HAS_SCALE scale := by
-    have h_stable :
-        partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale =
-          stableLSE xs (Nat.succ_pos n) HAS_SCALE scale := by
-      simpa [h_pid1] using partialLSE_full_zero_self_eq_stableLSE xs HAS_SCALE scale
-    exact h_stable.trans (stableLSE_eq_LSE xs (Nat.succ_pos n) HAS_SCALE scale)
-  rw [h_spec] at hview
-  have h_div : (n + 1 + n) / (n + 1) = 1 := by
-    apply Nat.div_eq_of_lt_le
-    · simp
-    · omega
-  simpa [h_pid1, h_div, Nat.mul_one] using hview
-
-/-- **Compute-facing complete correctness for `logsumexp_fwd_kernel`.**
-
-The theorem is intentionally complete-row only: `D = B = n + 1`, so one Triton
-program covers the entire row and writes the standard mathematical `LSE` to
-`z[i_n]`. -/
-theorem logsumexp_fwd_kernel_compute_correct
-    (x z : RegionName)
-    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
-    (s : BlockState)
-    (xs : Fin (n+1) → ℝ)
-    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
-    (h_pid1 : s.pids 1 = 0) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
-      (initialState := s)
-      (write := fun _ : PUnit => some (z, s.pids 0))
-      (expected := fun _ => LSE xs HAS_SCALE scale) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
-  intro s0 s' hExec hs0
-  subst s0
-  have hview :=
-    logsumexp_fwd_kernel_correct x z n HAS_SCALE scale s xs h_x h_pid1
-  rw [hExec] at hview
-  simpa [ComputeCorrect.Realizes_without_Rounding, ComputeKernel.ExecCorrect] using hview
-
 /-- **Whole Triton-grid block-LSE correctness for `logsumexp_fwd_kernel`.**
 
 For launch grid `(N, cdiv(D, B))`, every program instance `(i_n, i_d)` writes
 the correct standard mathematical `blockLSE` for its row/block to
 `z[i_n * cdiv(D, B) + i_d]`. This theorem covers both full blocks and the tail
-block through the masked-lane theorem above. This is the faithful main theorem
-for the Triton kernel itself. It deliberately stops at the Triton kernel
-boundary; it does not model the Python wrapper's later
+block through the masked-lane theorem above. It deliberately stops at the
+Triton kernel boundary; it does not model the Python wrapper's later
 `z.logsumexp(-1)`.
 
 Note: until VeriTile has a whole-grid `launchExec` returning a single merged
 final state, this theorem is stated in the per-program-local form
-`Kernel.ForAllProgramsSome` instead of the unified `ComputeCorrect.Realizes_without_Rounding`
-surface. Single-program kernels in this file already use `Realizes_without_Rounding` /
-`OutputScalar`; once the launcher lands, the grid case will move there too. -/
+`Kernel.ForAllProgramsSome`; the flat-memory per-program headline is the
+`⊨` spec at the end of the file. -/
 theorem logsumexp_fwd_kernel_grid_blockLSE_correct
     (x z : RegionName)
     (N : Nat) {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
@@ -350,25 +299,273 @@ theorem logsumexp_fwd_kernel_grid_blockLSE_correct
         (xs (sIdx.pids 0)) (sIdx.pids 1) h_tail HAS_SCALE scale] at hview
       simpa [sIdx, h_tail] using hview
 
-/-- Per-kernel output summary for `logsumexp_fwd_kernel`: the DSL surface lowers
-to the algorithm layer, and in the single-block configuration `D = B = n + 1`
-(pid axis-1 = 0) the store to `z[i_n]` is compute-correct — it holds the
-standard mathematical row `LSE xs HAS_SCALE scale`. -/
-specification logsumexp_fwd_kernel_output_summary
+/-! ### The `⊨` specification -/
+
+/-- Exact log-sum-exp over the **active lanes** of one `B`-sized block: lane
+`j` of block `i_d` is active when `i_d * B + j < D` (the kernel's load mask).
+This is the pure, block-local form of the tiled `blockLSE`; the bridge below
+proves the two agree on loaded blocks. -/
+noncomputable def blockLSE_local (D B i_d : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (xs : Fin B → ℝ) : ℝ :=
+  Real.log (∑ i ∈ Finset.univ.filter (fun i : Fin B => i_d * B + i.val < D),
+    Real.exp (if HAS_SCALE then xs i * scale else xs i))
+
+/-- Row-level `partialLSE_full` at a row agreeing with the block tile `xs` on
+the block's active lanes equals the block-local `blockLSE_local xs`. -/
+private theorem partialLSE_full_eq_blockLSE_local
+    {D : Nat} (n : Nat) (i_d : Nat) (h_tail : i_d * (n+1) < D)
+    (HAS_SCALE : Bool) (scale : ℝ)
+    (xsRow : Fin D → ℝ) (xs : Fin (n+1) → ℝ)
+    (h : ∀ (j : Fin (n+1)) (hj : i_d * (n+1) + j.val < D),
+      xsRow ⟨i_d * (n+1) + j.val, hj⟩ = xs j) :
+    partialLSE_full xsRow i_d h_tail HAS_SCALE scale
+      = blockLSE_local D (n+1) i_d HAS_SCALE scale xs := by
+  rw [partialLSE_full_eq_blockLSE]
+  unfold TiledLogSumExp.blockLSE blockLSE_local
+  congr 1
+  apply Finset.sum_congr
+  · rfl
+  · intro i hi
+    have hmem : i_d * (n+1) + i.val < D := (Finset.mem_filter.mp hi).2
+    unfold scaledLane_full
+    simp only [dif_pos hmem, h i hmem]
+
+set_option maxHeartbeats 1600000 in
+/-- **All-masked-block behavior for `logsumexp_fwd_kernel`.**
+
+When no lane of the block is in range (`¬ i_d * B < D`, only reachable for
+programs outside the real launch grid), the load yields the all-`⊥` tile,
+`b_m = ⊥`, hence `b_z = log(…) + ⊥ = ⊥`, and the unmasked store writes the
+IEEE-faithful finite fallback `0` (`FloatDType.storeValue ⊥ = 0`). -/
+private theorem logsumexp_fwd_kernel_store_zero
     (x z : RegionName)
-    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
     (s : BlockState)
-    (xs : Fin (n+1) → ℝ)
-    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
-    (h_pid1 : s.pids 1 = 0) :
-    (∃ alg, (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
-      (initialState := s)
-      (write := fun _ : PUnit => some (z, s.pids 0))
-      (expected := fun _ => LSE xs HAS_SCALE scale) := by
-  refine ⟨⟨_, rfl⟩, ?_⟩
-  exact logsumexp_fwd_kernel_compute_correct x z n HAS_SCALE scale s xs h_x h_pid1
+    (h_out : ¬ s.pids 1 * (n + 1) < D) :
+    (exec (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale) s).map
+        (·.readMem z (s.pids 0 * ((D + n) / (n+1)) + s.pids 1)) =
+      some 0 := by
+  have hno : ∀ i : Fin (n+1), ¬ (s.pids 1 * (n+1) + i.val < D) := fun i hlt =>
+    h_out (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hlt)
+  rcases HAS_SCALE with _ | _
+  · -- HAS_SCALE = false
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp.eq_def,
+      Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt, if_true]
+    simp [hno, Finset.sup'_const]
+    exact Or.inr rfl
+  · -- HAS_SCALE = true
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp.eq_def,
+      Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt, if_true]
+    simp [hno, Finset.sup'_const]
+    exact Or.inr rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Frame half: the single-cell scalar store at `z[i_n·cdiv(D,B) + i_d]`
+leaves every other memory cell unchanged. -/
+private theorem logsumexp_fwd_kernel_frame
+    (x z : RegionName)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s s1 : BlockState)
+    (hExec : exec ((logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel) s
+      = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ¬(z = r ∧ s.pids 0 * ((D + n) / (n+1)) + s.pids 1 = o)) :
+    s1.mem r o = s.mem r o := by
+  rcases HAS_SCALE with _ | _
+  · simp [exec, logsumexp_fwd_kernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+      evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] at hExec
+    subst hExec
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast]
+    rw [BlockState.writeMem_mem]
+    exact if_neg fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩
+  · simp [exec, logsumexp_fwd_kernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+      evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] at hExec
+    subst hExec
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast]
+    rw [BlockState.writeMem_mem]
+    exact if_neg fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩
+
+/-- **The region-model masked Hoare triple** — termination, the scalar output
+cell's per-block value (in-grid blocks: the active-lane `blockLSE_local`;
+all-masked blocks: the `⊥`-store fallback `0`), and frame off the store cell,
+from any launch state whose **active** input lanes are loaded. This is the
+`hrun` obligation of the `⊨` headline. -/
+theorem logsumexp_fwd_kernel_region_run
+    (x z : RegionName)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s₀ : BlockState) (xs : Fin (n+1) → ℝ)
+    (hx : ∀ j : Fin (n+1), s₀.pids 1 * (n+1) + j.val < D →
+      s₀.readMem x (s₀.pids 0 * D + (s₀.pids 1 * (n+1) + j.val)) = xs j) :
+    ∃ s1, exec ((logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel) s₀
+        = some s1
+      ∧ s1.readMem z (s₀.pids 0 * ((D + n) / (n+1)) + s₀.pids 1)
+          = (if s₀.pids 1 * (n+1) < D
+             then blockLSE_local D (n+1) (s₀.pids 1) HAS_SCALE scale xs
+             else 0)
+      ∧ (∀ r o, (r ≠ z ∨ o ≠ s₀.pids 0 * ((D + n) / (n+1)) + s₀.pids 1) →
+          s1.mem r o = s₀.mem r o) := by
+  have hview : (exec (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale) s₀).map
+      (·.readMem z (s₀.pids 0 * ((D + n) / (n+1)) + s₀.pids 1))
+      = some (if s₀.pids 1 * (n+1) < D
+              then blockLSE_local D (n+1) (s₀.pids 1) HAS_SCALE scale xs
+              else 0) := by
+    by_cases h_tail : s₀.pids 1 * (n+1) < D
+    · rw [if_pos h_tail]
+      rw [logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale s₀
+        (fun k : Fin D => s₀.readMem x (s₀.pids 0 * D + k.val)) (fun _ => rfl) h_tail]
+      rw [partialLSE_full_eq_blockLSE_local n (s₀.pids 1) h_tail HAS_SCALE scale
+        _ xs (fun j hj => hx j hj)]
+    · rw [if_neg h_tail]
+      exact logsumexp_fwd_kernel_store_zero x z n HAS_SCALE scale s₀ h_tail
+  cases hExec : exec ((logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel) s₀ with
+  | none => rw [hExec] at hview; simp at hview
+  | some s1 =>
+      rw [hExec] at hview
+      refine ⟨s1, rfl, by simpa using hview, fun r o hro => ?_⟩
+      refine logsumexp_fwd_kernel_frame x z n HAS_SCALE scale s₀ s1 hExec r o ?_
+      rintro ⟨hr, ho⟩
+      rcases hro with hne | hno
+      · exact hne hr.symm
+      · exact hno ho.symm
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk: the statements are memory-silent (program ids,
+index staging, the reductions, the register arithmetic) except the masked row
+load and the unmasked scalar store; the walk reduces them to the **lane-wise**
+bounds hypotheses: every *active* load lane's address and the single store
+cell are below the region bounds. -/
+theorem logsumexp_fwd_kernel_traceSafe
+    (x z : RegionName)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < D →
+      s.pids 0 * D + (s.pids 1 * (n+1) + j.val) < bounds x)
+    (hout : s.pids 0 * ((D + n) / (n+1)) + s.pids 1 < bounds z) :
+    Kernel.TraceSafe bounds
+      ((logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  rcases HAS_SCALE with _ | _
+  · simp [logsumexp_fwd_kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmts, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, BlockState.setReg,
+      Tile.bop, Tile.cop, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt,
+      Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt]
+    exact ⟨fun a ha => hin a ha, hout⟩
+  · simp [logsumexp_fwd_kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmts, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, BlockState.setReg,
+      Tile.bop, Tile.cop, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt,
+      Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt]
+    exact ⟨fun a ha => hin a ha, hout⟩
+
+/-- The kernel sits inside the flat-memory bridge's covered fragment (pointer
+arithmetic, casts, masked load with `other`, reductions, gated register
+arithmetic, scalar store). -/
+theorem logsumexp_fwd_kernel_flattenOk
+    (x z : RegionName) (D B : Nat) (HAS_SCALE : Bool) (scale : ℝ) :
+    ((logsumexp_fwd_kernel x z D B HAS_SCALE scale).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [logsumexp_fwd_kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- `logsumexp_fwd_kernel`'s masked two-axis **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `inp`/`out` — which buffer is which argument (the wiring);
+* `B` — the block window each program owns;
+* `read` — program `(i_n, i_d)`'s lane `j` reads `x[i_n·D + i_d·B + j]`
+  (row-major rows of length `D`, `B`-sized blocks along the row);
+* `write` — the **scalar** store cell `z[i_n·cdiv(D,B) + i_d]`, the same for
+  every lane;
+* `mask` — the active read lanes `i_d·B + j < D`: the part of the block that
+  actually lies inside the row;
+* `writeMask` — lane `0` carries the scalar; the other lanes are
+  write-inactive and carry no obligations on either side.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+def logsumexpIO (x z : RegionName) (D B : Nat) (HAS_SCALE : Bool) (scale : ℝ) :
+    Masked2DKernelIO₁ where
+  kernel := logsumexp_fwd_kernel x z D B HAS_SCALE scale
+  inp := x
+  out := z
+  B := B
+  read := fun i_n i_d j => i_n * D + (i_d * B + j.val)
+  write := fun i_n i_d _ => i_n * ((D + B - 1) / B) + i_d
+  mask := fun _ i_d j => i_d * B + j.val < D
+  writeMask := fun _ _ j => j.val = 0
+
+/-- **The headline**: `logsumexp_fwd_kernel` implements the per-block
+log-sum-exp on its masked two-axis IO signature — for every disjoint flat
+placement of the two buffers, every program `(i_n, i_d)` whose active lanes
+and store cell are in bounds, and every launch state whose active input lanes
+hold `xs`, the translated pointer kernel terminates, the scalar cell
+`z[i_n·cdiv(D,B) + i_d]` holds `blockLSE_local D B i_d HAS_SCALE scale xs`
+(the exact LSE over the block's active lanes) when the block meets the row
+(`i_d·B < D`), and the `⊥`-store fallback `0` otherwise (programs outside the
+real launch grid), and every other memory cell is unchanged. `0 < B` is
+required: the kernel's `max` reduce (like `Finset.sup'`) is only defined on
+non-empty tiles. Proof: `Implements.intro` assembles the region-model masked
+triple with the bridge side conditions. -/
+specification logsumexp_fwd_kernel_correctness
+    (x z : RegionName) (D B : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (hB : 0 < B) :
+    logsumexpIO x z D B HAS_SCALE scale ⊨
+      fun _ i_d xs _ =>
+        if i_d * B < D then blockLSE_local D B i_d HAS_SCALE scale xs else 0 := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  refine Masked2DKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact logsumexp_fwd_kernel_flattenOk x z D (n+1) HAS_SCALE scale
+  · intro bounds s h1 h2 _
+    exact logsumexp_fwd_kernel_traceSafe x z n HAS_SCALE scale bounds s
+      (fun j hj => h1 j hj) (h2 ⟨0, Nat.succ_pos n⟩ rfl)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      logsumexp_fwd_kernel_region_run x z n HAS_SCALE scale s₀ xs
+        (fun j hj => hx j hj)
+    -- scratch is empty, so its frame side condition is vacuous
+    refine ⟨s1, hexec, fun j _ => hval, fun r o hout _ => ?_⟩
+    refine hframe r o ?_
+    rcases hout with hne | hno
+    · exact Or.inl hne
+    · exact Or.inr (hno ⟨0, Nat.succ_pos n⟩ rfl)
 
 end VeriTile.Bench.TritonBenchG.LogsumexpFwd

@@ -657,6 +657,453 @@ theorem Equiv.intro (io₁ io₂ : MaskedKernelIO₂) {R : RoundingModel}
 
 end MaskedKernelIO₂
 
+/-- IO signature of a **masked** one-input / one-output kernel — the
+one-input sibling of `MaskedKernelIO₂` (elementwise maps: relu, sin,
+square, …). Each program instance owns a `B`-lane window but only its
+**active** lanes touch memory; inactive lanes carry no obligations on
+either side of the Hoare triple. The read side and the write side may have
+**different** active sets (`mask` vs `writeMask`, e.g. a `pid == 0` store
+gate over an ungated load); for the common symmetric case `writeMask`
+defaults to `mask`. -/
+structure MaskedKernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length: each program instance owns `B`-element windows. -/
+  B : Nat
+  /-- Where program `pid` reads its input tile: active lanes of
+  `[read pid, read pid + B)`. -/
+  read : Nat → Nat
+  /-- Where program `pid` writes its output tile. -/
+  write : Nat → Nat
+  /-- Program `pid`'s **read-active** lanes: the lanes whose input cells the
+  precondition constrains (and whose read addresses must be in bounds). -/
+  mask : Nat → Fin B → Prop
+  /-- Program `pid`'s **write-active** lanes: the lanes the postcondition
+  asserts output values at (and whose write addresses must be in bounds);
+  the frame holds everywhere else. Defaults to `mask` — override only for
+  kernels whose store is gated more tightly than their load. -/
+  writeMask : Nat → Fin B → Prop := mask
+  /-- This kernel's **private working buffers**, each with its per-program
+  window start (lane-masked by `writeMask`, tile length `B`, like the
+  output); see `MaskedKernelIO₂.scratch`. -/
+  scratch : List (RegionName × (Nat → Nat)) := []
+
+namespace MaskedKernelIO₁
+
+/-- `io.Implements f` — one-input sibling of `MaskedKernelIO₂.Implements`.
+Full Hoare triple, restricted to the active lanes: window-in-bounds
+contract, loaded-input precondition, and output-value postcondition all
+**lane-wise at active lanes only**; frame everywhere outside the active
+output and scratch lanes. -/
+def Implements (io : MaskedKernelIO₁)
+    (f : (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] ++ io.scratch.map Prod.fst →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    (∀ j : Fin io.B, io.mask pid j → io.read pid + j.val < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask pid j →
+      io.write pid + j.val < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+      p.2 pid + j.val < A.extent p.1) →
+  ∀ (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid j →
+      s₀.readMem io.inp (io.read pid + j.val) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid j →
+          s'.readMem A.flat (A.addr io.out (io.write pid + j.val))
+            = f xs j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr io.out (io.write pid + j.val)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₁.Implements
+
+/-- Assembly lemma — one-input sibling of `MaskedKernelIO₂.Implements.intro`;
+see there for the reading of the lane-wise obligations. -/
+theorem Implements.intro (io : MaskedKernelIO₁)
+    {f : (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.read s.pid + j.val < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask s.pid j →
+        io.write s.pid + j.val < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask s₀.pid j →
+        s₀.readMem io.inp (io.read s₀.pid + j.val) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask s₀.pid j →
+            s1.readMem io.out (io.write s₀.pid + j.val) = f xs j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ io.write s₀.pid + j.val) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
+  subst hpid
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2 hsc
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write s₀.pid + j.val < A.extent io.out := h2 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end MaskedKernelIO₁
+
+/-- IO signature of a **2D-grid, general-window** masked one-input /
+one-output kernel — the two-axis sibling of `MaskedKernelIO₁` for kernels
+that read `tl.program_id(1)` and/or address their lanes non-contiguously.
+Two generalizations over the 1D family, both forced by real ports:
+
+* **two program-id axes**: every field takes `(pid₀ pid₁ : Nat)`, and
+  `Implements` pins **both** `s₀.pids 0` and `s₀.pids 1` (the 1D family
+  leaves `pids 1` universally free, which falsifies any 2D kernel's ⊨);
+* **per-lane windows**: `read`/`write` give lane `j`'s full address
+  directly (`Nat → Nat → Fin B → Nat`), so strided rows
+  (`base + j * stride_c`), block offsets (`i_d * B + j`), and scalar cells
+  are all expressible — the 1D family's contiguous `base pid + j` is the
+  special case `fun pid₀ _ j => base pid₀ + j.val`. -/
+structure Masked2DKernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length: each program instance owns `B`-lane windows. -/
+  B : Nat
+  /-- Lane `j`'s read address for program `(pid₀, pid₁)`. -/
+  read : Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s write address for program `(pid₀, pid₁)`. -/
+  write : Nat → Nat → Fin B → Nat
+  /-- Program `(pid₀, pid₁)`'s **read-active** lanes. -/
+  mask : Nat → Nat → Fin B → Prop
+  /-- Program `(pid₀, pid₁)`'s **write-active** lanes; defaults to `mask`. -/
+  writeMask : Nat → Nat → Fin B → Prop := mask
+  /-- Private working buffers with per-lane windows (masked by
+  `writeMask`); see `MaskedKernelIO₂.scratch`. -/
+  scratch : List (RegionName × (Nat → Nat → Fin B → Nat)) := []
+
+namespace Masked2DKernelIO₁
+
+/-- `io.Implements f` — two-axis, general-window sibling of
+`MaskedKernelIO₁.Implements`. Same lane-wise masked Hoare triple; the
+launch state pins both program-id axes, and every address is the
+signature's per-lane map evaluated at `(pid₀, pid₁, j)`. The spec `f`
+takes both pids: on a tiled axis a per-block reduction's value is
+irreducibly block-dependent (a full block computes a different function
+than the tail block, and an all-masked block stores the finite fallback),
+so a pid-independent spec would be falsifiable. Pid-independent kernels
+simply ignore the two arguments. -/
+def Implements (io : Masked2DKernelIO₁)
+    (f : Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] ++ io.scratch.map Prod.fst →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      io.read pid₀ pid₁ j < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+      io.write pid₀ pid₁ j < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+      p.2 pid₀ pid₁ j < A.extent p.1) →
+  ∀ (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      s₀.readMem io.inp (io.read pid₀ pid₁ j) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+          s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ j))
+            = f pid₀ pid₁ xs j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+                o' ≠ A.addr io.out (io.write pid₀ pid₁ j)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+                o' ≠ A.addr p.1 (p.2 pid₀ pid₁ j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₁.Implements
+
+/-- Assembly lemma — two-axis sibling of `MaskedKernelIO₁.Implements.intro`;
+the obligations' lane hypotheses are indexed by `(s.pids 0, s.pids 1)`. -/
+theorem Implements.intro (io : Masked2DKernelIO₁)
+    {f : Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
+        io.read (s.pids 0) (s.pids 1) j < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        io.write (s.pids 0) (s.pids 1) j < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        p.2 (s.pids 0) (s.pids 1) j < bounds p.1) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) j) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j)
+              = f (s₀.pids 0) (s₀.pids 1) xs j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) j) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ p.2 (s₀.pids 0) (s₀.pids 1) j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid₀ pid₁ h1 h2 hsc xs s₀ hpid₀ hpid₁ hu hx
+  subst hpid₀
+  subst hpid₁
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2 hsc
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write (s₀.pids 0) (s₀.pids 1) j < A.extent io.out :=
+      h2 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end Masked2DKernelIO₁
+
+/-- IO signature of a **2D-grid, general-window** masked two-input /
+one-output kernel — the two-input sibling of `Masked2DKernelIO₁` (see there
+for the two generalizations over the 1D family). -/
+structure Masked2DKernelIO₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First input buffer. -/
+  in1 : RegionName
+  /-- Second input buffer. -/
+  in2 : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length: each program instance owns `B`-lane windows. -/
+  B : Nat
+  /-- Lane `j`'s `in1` read address for program `(pid₀, pid₁)`. -/
+  read1 : Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s `in2` read address. -/
+  read2 : Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s write address. -/
+  write : Nat → Nat → Fin B → Nat
+  /-- Program `(pid₀, pid₁)`'s **read-active** lanes. -/
+  mask : Nat → Nat → Fin B → Prop
+  /-- Program `(pid₀, pid₁)`'s **write-active** lanes; defaults to `mask`. -/
+  writeMask : Nat → Nat → Fin B → Prop := mask
+  /-- Private working buffers with per-lane windows (masked by
+  `writeMask`). -/
+  scratch : List (RegionName × (Nat → Nat → Fin B → Nat)) := []
+
+namespace Masked2DKernelIO₂
+
+/-- `io.Implements f` — two-input sibling of
+`Masked2DKernelIO₁.Implements`. -/
+def Implements (io : Masked2DKernelIO₂)
+    (f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ) :
+    Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.out] ++ io.scratch.map Prod.fst →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      io.read1 pid₀ pid₁ j < A.extent io.in1) →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      io.read2 pid₀ pid₁ j < A.extent io.in2) →
+    (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+      io.write pid₀ pid₁ j < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+      p.2 pid₀ pid₁ j < A.extent p.1) →
+  ∀ (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      s₀.readMem io.in1 (io.read1 pid₀ pid₁ j) = xs j) →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ j →
+      s₀.readMem io.in2 (io.read2 pid₀ pid₁ j) = ys j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+          s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ j))
+            = f pid₀ pid₁ xs ys j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+                o' ≠ A.addr io.out (io.write pid₀ pid₁ j)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid₀ pid₁ j →
+                o' ≠ A.addr p.1 (p.2 pid₀ pid₁ j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₂.Implements
+
+/-- Assembly lemma — two-input sibling of
+`Masked2DKernelIO₁.Implements.intro`. -/
+theorem Implements.intro (io : Masked2DKernelIO₂)
+    {f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
+        io.read1 (s.pids 0) (s.pids 1) j < bounds io.in1) →
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
+        io.read2 (s.pids 0) (s.pids 1) j < bounds io.in2) →
+      (∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        io.write (s.pids 0) (s.pids 1) j < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        p.2 (s.pids 0) (s.pids 1) j < bounds p.1) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMem io.in1 (io.read1 (s₀.pids 0) (s₀.pids 1) j) = xs j) →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMem io.in2 (io.read2 (s₀.pids 0) (s₀.pids 1) j) = ys j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j)
+              = f (s₀.pids 0) (s₀.pids 1) xs ys j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) j) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ p.2 (s₀.pids 0) (s₀.pids 1) j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 hsc xs ys s₀ hpid₀ hpid₁ hu hx hy
+  subst hpid₀
+  subst hpid₁
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
+  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ h1 h2 h3 hsc
+  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
+    have hlt : io.write (s₀.pids 0) (s₀.pids 1) j < A.extent io.out :=
+      h3 j hj
+    rw [A.flattenState_readMem hd s1 hmem hlt]
+    exact hval j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out
+            · subst hro
+              refine Or.inr fun j hj hoj => ?_
+              rcases hcond with hflat | ⟨hnout, _⟩
+              · exact hflat rfl
+              · exact hnout j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hj hoj
+            rcases hcond with hflat | ⟨_, hnscr⟩
+            · exact hflat rfl
+            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end Masked2DKernelIO₂
+
 /-- One **private working buffer** of an unmasked kernel: program `pid` may
 stage intermediates in the window `[win pid, win pid + len)` of buffer
 `buf`. Scratch buffers are allocated and writable, but their post-state is
