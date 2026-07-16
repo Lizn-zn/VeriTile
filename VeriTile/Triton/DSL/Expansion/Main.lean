@@ -844,6 +844,23 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
     else
       Macro.throwUnsupported
   else
+  match roundCast? stx with
+  | some (e, dt) =>
+      -- `.round_to(tl.floatXX)`: always the FloatDType rounding channel —
+      -- an explicit quantization event (`Op.castFloat src dst`), never the
+      -- bit-accurate compute channel `.to(tl.float32)` routes fp32 to.
+      let e' ← expandExpr env e
+      let dst ← expandDType dt
+      match dst with
+      | .fp32 | .fp16 | .bf16 =>
+          let srcProof ← e'.dtype.floatProof
+          let dstProof ← dst.floatProof
+          pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape,
+            none, none⟩
+      | _ =>
+          Macro.throwError
+            "round_to: only fp32/fp16/bf16 name a rounding grid (use .to(...) for working-precision casts)"
+  | none =>
   match methodCast? stx with
   | some (e, dt) =>
       let dst ← expandDType dt

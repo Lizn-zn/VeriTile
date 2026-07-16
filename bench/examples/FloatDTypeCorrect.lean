@@ -4,28 +4,29 @@ bench/examples/FloatDTypeCorrect
 **Float dtypes at the memory boundary — the float-facing *correctness*
 policy, on the `⊨[R]` surface.** Pilot consumer of `KernelIO₂.ImplementsR`.
 
-One kernel (`floatAddKernel`), two float-annotation fates:
+One kernel (`floatAddKernel`), two float-annotation fates — and three fp32
+spellings, each with its own meaning:
 
-* **Loads, `dtype=tl.float32` — erased.** `tl.float32` lives on VeriTile's
-  bit-accurate compute channel (`ComputeDType.fp32`), and the
+* **Loads, `dtype=tl.float32` — erased.** `tl.float32` load annotations live
+  on VeriTile's bit-accurate compute channel (`ComputeDType.fp32`), and the
   compute→algorithm projection rewrites every fp32 load to the Real channel
   before any semantics sees it (`floatAdd_toAlg`: the projected loads are
-  `Op.load .real`) — inputs are consumed as exact ℝ. This is the erasure
-  policy the file's previous headline was stated on, still documented by the
-  honest region-typing negation below. An fp32 *store* cast would erase the
-  same way (`.to(tl.float32)` projects to an inert `castFloat .real .real`
-  inside a raw Real store): fp32 has **no rounding site** on today's
-  projected surface.
-* **Store, `.to(tl.float16)` — modeled.** The narrow floats (fp16/bf16) live
-  on the `FloatDType` rounding channel, which the projection preserves: the
-  projected store is fp16-typed and its value carries
-  `Op.castFloat .real .fp16` — under `execR R` the value is rounded at the
-  cast (site 1) and quantized again at the typed store (site 2), and
-  `R.round_idem` collapses the pair to one boundary round.
+  `Op.load .real`) — inputs are consumed as exact ℝ. Documented by the
+  honest region-typing negation below. Likewise `.to(tl.float32)` is the
+  **working-precision** cast: it routes to the same compute channel and is
+  inert on the projected ℝ surface (the abstraction models fp32 working
+  precision as ℝ — the ports' proofs rely on it).
+* **Store, `.round_to(tl.float32)` — modeled.** `round_to` is the explicit
+  **quantization-event** spelling: it always emits a `FloatDType`
+  rounding-channel cast, which the projection preserves — the projected
+  store is fp32-typed and its value carries `Op.castFloat .real .fp32`.
+  Under `execR R` the value is rounded at the cast (site 1) and quantized
+  again at the typed store (site 2), and `R.round_idem` collapses the pair
+  to one boundary round.
 
 The headline is the **boundary-rounding contract**: for every rounding model
-`R`, the output window holds the fp16-typed cells
-`R.round .fp16 (xs i + ys i)`. At `R := .triv` the round is the identity and
+`R`, the output window holds the fp32-typed cells
+`R.round .fp32 (xs i + ys i)`. At `R := .triv` the round is the identity and
 the statement is exact — the file's previous erasure headline (`⊨` with
 `(floatAddKernel …).eraseDType` in the IO signature) is retired, and
 `.eraseDType` no longer appears anywhere in the audited statement. The
@@ -35,15 +36,15 @@ refinement counterpart of the erasure policy stays in
 Four parts:
 
 1. **The kernel** — `floatAddKernel`, elementwise add with fp32-annotated
-   loads and an fp16-cast store.
+   loads and an fp32-quantized (`round_to`) store.
 2. **Literal projected body + region-model Hoare triple** —
    `floatAdd_toAlg` pins the kernel's algorithm projection to its literal
    six-statement list (load annotations erased, store cast preserved), then
    the rounded region run `floatAdd_region_runR` (termination under
-   `execR R`, typed fp16 output readback, frame). Also here, the honest
+   `execR R`, typed fp32 output readback, frame). Also here, the honest
    region-typing facts: the all-fp32 typing is a proved **negation** (the
    load annotations die in projection), while the mixed typing — inputs
-   `.real`, output `.fp16` — is the true contract (the store dtype
+   `.real`, output `.fp32` — is the true contract (the store dtype
    survives).
 3. **Flat-memory bridge side conditions** — `Kernel.TraceSafeR` and
    `FlattenOk`, discharged on the literal body.
@@ -54,14 +55,14 @@ Four parts:
    `floatAddIO` is the kernel's **IO signature**: which buffer is which
    argument, where each program reads its input tiles, where it writes its
    output tile, and — new on this surface — the declared output dtype
-   `outDType := .fp16`. `⊨[R]` is the audit-once rounding-correctness
+   `outDType := .fp32`. `⊨[R]` is the audit-once rounding-correctness
    combinator (`KernelIO₂.ImplementsR`, `VeriTile.Triton.Memory.KernelSpec`);
    spelled out, the headline says: for **every** rounding model `R`,
    **every** disjoint placement of the three buffers in flat memory,
    **every** program id whose windows are in bounds, and **every** launch
    state whose input windows hold `xs`/`ys` exactly — the translated pointer
-   kernel terminates under `execR R`, its output window holds the fp16-typed
-   cells `R.round .fp16 (xs i + ys i)`, and every other memory cell is
+   kernel terminates under `execR R`, its output window holds the fp32-typed
+   cells `R.round .fp32 (xs i + ys i)`, and every other memory cell is
    unchanged.
 -/
 
@@ -86,20 +87,20 @@ This discharges them for `simp`. -/
 
 /-! ## Part 1 — the kernel -/
 
-/-- Elementwise add with fp32-annotated input memory and an fp16-cast store:
-the loads carry Triton-like `dtype=tl.float32` information, and the stored
-value crosses an explicit `.to(tl.float16)` cast. The store-side fp16 is
-**modeled** by the headline below (the output cells are fp16-typed and the
-stored value is rounded at the fp16 grid); the load-side fp32 is erased by
-the compute→algorithm projection (inputs are consumed as exact ℝ), as
-documented by the region-typing facts below. -/
+/-- Elementwise add with fp32-annotated input memory and an fp32-quantized
+store: the loads carry Triton-like `dtype=tl.float32` information, and the
+stored value crosses an explicit `.round_to(tl.float32)` quantization cast.
+The store-side fp32 is **modeled** by the headline below (the output cells
+are fp32-typed and the stored value is rounded at the fp32 grid); the
+load-side fp32 is erased by the compute→algorithm projection (inputs are
+consumed as exact ℝ), as documented by the region-typing facts below. -/
 def floatAddKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs, dtype=tl.float32)
   y    := tl.load($(yReg) + offs, dtype=tl.float32)
   out  := x + y
-  tl.store($(outReg) + offs, (out).to(tl.float16))
+  tl.store($(outReg) + offs, (out).round_to(tl.float32))
 }
 
 /-! ## Part 2 — literal projected body, region-model Hoare triple, typing facts -/
@@ -107,8 +108,8 @@ def floatAddKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKe
 /-- The kernel's projected body, pinned to its literal statement list: six
 statements (`pid`, `offs`, the two loads, `out = x + y`, the cast store).
 The projection erases the loads' fp32 annotations to the Real channel but
-**preserves the store cast**: the store is fp16-typed and its value is
-`Op.castFloat .real .fp16 out` — the rounding site the headline models.
+**preserves the store cast**: the store is fp32-typed and its value is
+`Op.castFloat .real .fp32 out` — the rounding site the headline models.
 Every obligation below rewrites the kernel's projection along this equation
 first, then runs the computational walk on the literal body. -/
 private theorem floatAdd_toAlg (xReg yReg outReg : RegionName) (B : Nat) :
@@ -131,9 +132,9 @@ private theorem floatAdd_toAlg (xReg yReg outReg : RegionName) (B : Nat) :
            Stmt.assign TileDType.real [B] "out"
              (Op.add NumericDType.real Broadcast.nil.consSame
                (Op.ref TileDType.real [B] "x") (Op.ref TileDType.real [B] "y")),
-           Stmt.store TileDType.fp16 [B]
+           Stmt.store TileDType.fp32 [B]
              (MemAccess.region (Region.cast outReg) (Op.ref TileDType.nat [B] "offs"))
-             (Op.castFloat FloatDType.real FloatDType.fp16
+             (Op.castFloat FloatDType.real FloatDType.fp32
                (Op.ref TileDType.real [B] "out"))
              MaskOpt.none] := by
   simp [floatAddKernel, ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
@@ -163,13 +164,15 @@ private theorem float_add_not_respects_fp32_regions
 
 /-- The true region-typing contract on today's projected surface: the loads'
 fp32 annotations are erased (the input regions type as `.real`), but the
-store's fp16 dtype **survives** the projection — the output region types as
-`.fp16`. Stated at the headline's concrete buffers so the mixed typing is a
-plain function of the region name. (The old all-`.real` typing fact died
-with the raw store: the output region is now genuinely fp16-typed.) -/
+store's fp32 dtype **survives** the projection (it entered through the
+rounding-channel `round_to`, not the erased compute channel) — the output
+region types as `.fp32`. Stated at the headline's concrete buffers so the
+mixed typing is a plain function of the region name. (The old all-`.real`
+typing fact died with the raw store: the output region is now genuinely
+fp32-typed.) -/
 private theorem float_add_respects_mixed_regions (blockSize : Nat) :
     Kernel.RespectsRegionTyping
-      (fun r => if r = ⟨"out"⟩ then .fp16 else .real)
+      (fun r => if r = ⟨"out"⟩ then .fp32 else .real)
       (floatAddKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ blockSize) := by
   simp [floatAddKernel, ComputeKernel.toAlgKernel,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
@@ -196,12 +199,12 @@ private theorem scatter_writeMemAsR_readback {shape : TileShape}
   simpa using h
 
 /-- **The rounded region-model Hoare triple** — termination under `execR R`,
-typed fp16 output readback, and frame, from any launch state whose input
+typed fp32 output readback, and frame, from any launch state whose input
 windows are loaded (exact ℝ). The stored value is rounded twice — once at
-the `.to(tl.float16)` cast (site 1), once at the fp16-typed store (site 2) —
-and `R.round_idem` collapses the pair to the single boundary round the
-headline states. This is what the `⊨[R]` headline transports to flat
-memory. -/
+the `.round_to(tl.float32)` cast (site 1), once at the fp32-typed store
+(site 2) — and `R.round_idem` collapses the pair to the single boundary
+round the headline states. This is what the `⊨[R]` headline transports to
+flat memory. -/
 private theorem floatAdd_region_runR (R : RoundingModel) (B : Nat)
     (s₀ : BlockState) (xs ys : Fin B → ℝ)
     (hx : ∀ j : Fin B, s₀.readMem ⟨"x"⟩ (s₀.pid * B + j.val) = xs j)
@@ -209,8 +212,8 @@ private theorem floatAdd_region_runR (R : RoundingModel) (B : Nat)
     ∃ s1, execR R ((floatAddKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B).toAlgKernel) s₀
         = some s1
       ∧ (∀ j : Fin B,
-          s1.readMemAs .fp16 ⟨"out"⟩ (s₀.pid * B + j.val)
-            = FloatDType.fp16.ofReal (R.round .fp16 (xs j + ys j)))
+          s1.readMemAs .fp32 ⟨"out"⟩ (s₀.pid * B + j.val)
+            = FloatDType.fp32.ofReal (R.round .fp32 (xs j + ys j)))
       ∧ (∀ r o,
           (r ≠ ⟨"out"⟩ ∨ ∀ j : Fin B, o ≠ s₀.pid * B + j.val) →
           s1.mem r o = s₀.mem r o) := by
@@ -227,12 +230,12 @@ private theorem floatAdd_region_runR (R : RoundingModel) (B : Nat)
   · -- value: single-lane readback of the R-store scatter, then the
     -- cast/store value chain collapses by `round_idem`
     unfold BlockState.readMemAs
-    rw [scatter_writeMemAsR_readback R .fp16 _ _ _ h_inj (j, PUnit.unit)]
+    rw [scatter_writeMemAsR_readback R .fp32 _ _ _ h_inj (j, PUnit.unit)]
     simp [MemCell.readAs_of_same, FloatDType.ofReal, FloatDType.storeValue,
       RoundingModel.storeValue, RoundingModel.cast, hx j, hy j, R.round_idem]
   · -- frame: the scatter misses (r, o), and `setReg` never touches memory
     refine Eq.trans
-      (BlockState.foldl_writeMemAsR_preserve_cell R .fp16 _ _ r o _ ?_ _) rfl
+      (BlockState.foldl_writeMemAsR_preserve_cell R .fp32 _ _ r o _ ?_ _) rfl
     intro k _ hc
     rcases hcond with hne | hno
     · exact hne hc.1.symm
@@ -283,15 +286,15 @@ private theorem floatAdd_traceSafeR (xReg yReg outReg : RegionName) (B : Nat)
 /-- The float add kernel's **IO signature** — the whole kernel-specific
 audit surface of the headline:
 
-* `kernel` — `floatAddKernel` itself: no erasure; the fp16 store is modeled;
+* `kernel` — `floatAddKernel` itself: no erasure; the fp32 store is modeled;
 * `in1`/`in2`/`out` — which buffer is which argument (the wiring);
 * `B` — the tile length;
 * `read1`/`read2` — where program `pid` reads its input tiles (the address
   half of the *pre*condition);
 * `write` — where program `pid` writes its output tile (the address half
-  of the *post*condition: rounded fp16 values land there, frame holds
+  of the *post*condition: rounded fp32 values land there, frame holds
   everywhere else);
-* `outDType := .fp16` — the declared quantization grid of the boundary
+* `outDType := .fp32` — the declared quantization grid of the boundary
   store; the headline **proves** the kernel's actual store cast matches.
 
 The windows are declared, not parsed from the kernel: they formalize the
@@ -308,13 +311,13 @@ def floatAddIO (B : Nat) : KernelIO₂ where
   read1 := fun pid => pid * B
   read2 := fun pid => pid * B
   write := fun pid => pid * B
-  outDType := .fp16
+  outDType := .fp32
 
 /-- **The headline**: the float-annotated add kernel implements pointwise
 addition on its IO signature under the boundary-rounding contract, for
 **every** rounding model — see the module docstring for the full Hoare
-triple `⊨[R]` unfolds to (output window = fp16-typed cells holding
-`R.round .fp16 (xs i + ys i)`; at `R := .triv` this is the exact statement).
+triple `⊨[R]` unfolds to (output window = fp32-typed cells holding
+`R.round .fp32 (xs i + ys i)`; at `R := .triv` this is the exact statement).
 Proof: `ImplementsR.intro` assembles the rounded region-model triple
 (Part 2) with the bridge side conditions (Part 3), each stated on the
 kernel's literal projected body (`floatAdd_toAlg`). -/
@@ -328,8 +331,8 @@ specification float_add_correctness (R : RoundingModel) (B : Nat) :
     show ∃ s1,
       execR R ((floatAddKernel ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B).toAlgKernel) s₀ = some s1
         ∧ (∀ j : Fin B,
-            s1.readMemAs .fp16 ⟨"out"⟩ (s₀.pid * B + j.val)
-              = FloatDType.fp16.ofReal (R.round .fp16 (xs j + ys j)))
+            s1.readMemAs .fp32 ⟨"out"⟩ (s₀.pid * B + j.val)
+              = FloatDType.fp32.ofReal (R.round .fp32 (xs j + ys j)))
         ∧ (∀ r o,
             (r ≠ ⟨"out"⟩ ∨ ∀ j : Fin B, o ≠ s₀.pid * B + j.val) →
             s1.mem r o = s₀.mem r o)
@@ -342,7 +345,7 @@ specification float_add_correctness (R : RoundingModel) (B : Nat) :
 
 /- The headline's statement surface is the IO signature plus the audit-once
 rounding-correctness combinator and the rounding-model interface — no other
-project constant. The output-dtype policy (`outDType := .fp16`) lives inside
+project constant. The output-dtype policy (`outDType := .fp32`) lives inside
 `floatAddIO`'s definition, one definition-click away from the headline. -/
 #stmtSurfaceSubset float_add_correctness ⊆
   [floatAddIO, VeriTile.Triton.KernelIO₂.ImplementsR,

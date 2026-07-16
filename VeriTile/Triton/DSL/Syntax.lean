@@ -82,6 +82,14 @@ syntax (name := tritonIdentMethodCastDTypeIdentSpaced) ident "." "to" "(" ident 
 syntax:max (name := tritonMethodCast) tritonExpr:max noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax:max (name := tritonIdentMethodCast) ident noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax (name := tritonIdentMethodCastSpaced) ident "." "to" "(" tritonDType ")" : tritonExpr
+/- Rounding-channel cast: unlike `.to(tl.float32)` (which enters the
+bit-accurate compute channel and is inert on the projected ℝ surface),
+`.round_to(tl.floatXX)` always emits a `FloatDType` rounding-channel
+`castFloat` — an explicit quantization event, modeled by `execR`'s rounding
+model. Only fp32/fp16/bf16 name a rounding grid. -/
+syntax:max (name := tritonMethodRoundCast) tritonExpr:max noWs "." "round_to" "(" tritonDType ")" : tritonExpr
+syntax:max (name := tritonIdentMethodRoundCast) ident noWs "." "round_to" "(" tritonDType ")" : tritonExpr
+syntax (name := tritonIdentMethodRoundCastSpaced) ident "." "round_to" "(" tritonDType ")" : tritonExpr
 syntax:max (name := tritonDottedIdentMethodCast) ident noWs "(" tritonDType ")" : tritonExpr
 syntax:max (name := tritonMethodCastElementTy) tritonExpr:max noWs "." "to" "(" term ")" : tritonExpr
 syntax:max (name := tritonMethodCastElementTyIdent) tritonExpr:max noWs "." "to" "(" ident "." ident "." ident ")" : tritonExpr

@@ -153,6 +153,23 @@ def methodCast? (stx : TSyntax `tritonExpr) :
   else
     none
 
+/-- Extractor for the `.round_to(tl.floatXX)` rounding-channel cast — the
+`roundCast` sibling of `methodCast?` (same argument layouts). -/
+def roundCast? (stx : TSyntax `tritonExpr) :
+    Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
+  let k := stx.raw.getKind
+  if k == ``tritonMethodRoundCast || k == ``tritonIdentMethodRoundCast ||
+      k == ``tritonIdentMethodRoundCastSpaced then
+    let args := stx.raw.getArgs
+    if h : args.size = 5 then
+      some (⟨args[0]⟩, ⟨args[3]⟩)
+    else if h : args.size = 6 then
+      some (⟨args[0]⟩, ⟨args[4]⟩)
+    else
+      none
+  else
+    none
+
 def isRealDType : DInfo → Bool
   | .real => Bool.true
   | _ => Bool.false
