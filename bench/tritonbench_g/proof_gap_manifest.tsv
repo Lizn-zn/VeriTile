@@ -47,7 +47,7 @@ bench/tritonbench_g/destindex_copy/DestindexCopy.lean	fwd_kernel_destindex_copy_
 bench/tritonbench_g/destindex_copy_kv1/DestindexCopyKv1.lean	fwd_kernel_destindex_copy_kv_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/destindex_copy_kv2/DestindexCopyKv2.lean	fwd_kernel_destindex_copy_kv_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	chunked_cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
@@ -109,7 +109,7 @@ bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attent
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
