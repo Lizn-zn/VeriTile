@@ -15,23 +15,37 @@ This file verifies **the Triton kernels themselves** — the per-program
 `@triton.jit` bodies, for one program (one row). The host launch (grid over rows,
 the host-side `BLOCK_SIZE` choice, scheduling, and how the runtime composes
 per-row writes into the buffers) is the *trusted boundary*, not a proof
-obligation here. Because `row_idx = tl.program_id(0)` is universally quantified
-(via `s.pid`), the per-program statement covers every row of the grid.
+obligation here. Because `row_idx = tl.program_id(0)` is universally quantified,
+the per-program statement covers every row of the grid.
 
 ## Proof architecture
 
 ```
-layernorm_forward_output_summary              ← TOP THEOREM (forward, all outputs)
-  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
-  ├─ layernorm_forward_y_compute_correct       ← masked Y store
-  │    └─ layernorm_forward_y_correct
-  ├─ layernorm_forward_inv_var_compute_correct ← scalar rstd store into r
-  │    └─ layernorm_forward_inv_var_correct
-  └─ layernorm_forward_mean_compute_correct    ← scalar mean store into mu
-       └─ layernorm_forward_mean_correct
+layernorm_forward_correctness                 ← TOP THEOREM (layernormForwardIO ⊨ forward triple)
+  ├─ layernorm_forward_flattenOk              bridge fragment membership
+  ├─ layernorm_forward_traceSafe              per-execution lane-wise safety walk
+  └─ layernorm_forward_region_run             region-model masked Hoare triple
+       ├─ layernorm_forward_exec_isSome       termination
+       ├─ layernorm_forward_y_correct         ← masked Y store per lane
+       ├─ layernorm_forward_inv_var_correct   ← scalar rstd store into r
+       ├─ layernorm_forward_mean_correct      ← scalar mean store into mu
+       ├─ layernormYSpec_congr /
+       │  invVarFullSpec_congr /
+       │  meanFullSpec_congr                  only active lanes feed the specs
+       └─ layernorm_forward_frame             masked-scatter + scalar-store frame
 layernorm_backward_dx_compute_correct         ← backward dX (separate kernel)
   └─ layernorm_backward_dx_correct
 ```
+
+The headline is the two-axis masked Hoare-triple combinator
+`layernormForwardIO … ⊨ f` (`Masked2DKernelIO₃ₓ₃.Implements`, three inputs /
+three outputs): for every disjoint flat placement of the six buffers, every
+program id all of whose active read lanes and write cells are in bounds, and
+every launch state whose active input lanes hold `xs` (the `X` row), `ws` (the
+weights) and `bs` (the bias), the translated pointer kernel terminates, every
+active `Y` lane `j` holds `layernormYSpec n_cols BLOCK_SIZE eps xs ws bs j`,
+the scalar cells `r[pid]` / `mu[pid]` hold `invVarFullSpec` / `meanFullSpec`,
+and every other memory cell is unchanged.
 
 There are additional proof-oriented store-slice theorems
 (`layernorm_forward_inv_var_store_slice_*`, `layernorm_forward_mean_store_slice_*`)
@@ -50,14 +64,19 @@ masked to `0` (load `other=0`), so each sum equals the logical row length
 stores `r` and `mu` are characterized via `WithBot.unbotD 0` wrappers
 (`invVarFullSpec`, `meanFullSpec`). This is a single-block kernel: `BLOCK_SIZE`
 covers the whole row in one pass, with the `col_offsets < n_cols` mask handling
-the padded tail. Output/input region disjointness is assumed where a store
-region must not alias another output (`Y ≠ r`, `Y ≠ mu`, `r ≠ Y`, `r ≠ mu`,
-`mu ≠ Y`).
+the padded tail. The headline takes the three output buffers pairwise distinct
+(`Y ≠ r`, `Y ≠ mu`, `r ≠ mu`; symmetric forms are derived) so each output's
+readback sees through the other stores, and `0 < BLOCK_SIZE`: the two scalar
+stores are **unconditional**, and the `⊨` interface carries their in-bounds and
+frame obligations on the write-active lane `0`, which must exist. The grid is
+1-D; the signature's second program-id axis is unused (windows and masks are
+constant in `pid₁`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FastLayernorm
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked2DKernelIO₃ₓ₃
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -135,63 +154,76 @@ noncomputable def rowElem (s : BlockState) (R : RegionName)
     (row_stride j : Nat) : ℝ :=
   s.readMem R (s.pid * row_stride + j)
 
+/-- Masked input row tile: lane `j < n_cols` holds `xs j`, masked lanes are
+`0`, matching `mask=…, other=0`. Pure in the row values `xs`. -/
 noncomputable def layernormInputTile
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
+    (n_cols BLOCK_SIZE : Nat) (xs : Fin BLOCK_SIZE → ℝ) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
+      if idx.1.val < n_cols then some (xs idx.1)
       else some (0 : ℝ) }
 
+/-- `mean_X = tl.sum(X_row) / n_cols` over the masked row: masked lanes enter
+as `0`, neutral for the sum, so the padded-block sum equals the sum over the
+active prefix. -/
 noncomputable def layernormMeanCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
+    (n_cols BLOCK_SIZE : Nat) (xs : Fin BLOCK_SIZE → ℝ) :
     WithBot ℝ :=
   Option.map (fun a => a / (n_cols : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
-      (layernormInputTile s X X_row_stride n_cols BLOCK_SIZE)).data PUnit.unit)
+      (layernormInputTile n_cols BLOCK_SIZE xs)).data PUnit.unit)
 
+/-- `XX = X_row - mean_X`, lane-wise over the masked row tile. -/
 noncomputable def layernormCenteredTile
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
+    (n_cols BLOCK_SIZE : Nat) (xs : Fin BLOCK_SIZE → ℝ) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
       Option.map₂ (fun x mean => x - mean)
-        ((layernormInputTile s X X_row_stride n_cols BLOCK_SIZE).data idx)
-        (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE) }
+        ((layernormInputTile n_cols BLOCK_SIZE xs).data idx)
+        (layernormMeanCarrier n_cols BLOCK_SIZE xs) }
 
+/-- `row_var = tl.sum(XX * XX) / n_cols`. -/
 noncomputable def layernormVarCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
+    (n_cols BLOCK_SIZE : Nat) (xs : Fin BLOCK_SIZE → ℝ) :
     WithBot ℝ :=
   Option.map (fun a => a / (n_cols : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-        (layernormCenteredTile s X X_row_stride n_cols BLOCK_SIZE)
-        (layernormCenteredTile s X X_row_stride n_cols BLOCK_SIZE))).data PUnit.unit)
+        (layernormCenteredTile n_cols BLOCK_SIZE xs)
+        (layernormCenteredTile n_cols BLOCK_SIZE xs))).data PUnit.unit)
 
+/-- `inv_var = tl.math.rsqrt(row_var + eps)`. -/
 noncomputable def layernormInvVarCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) : WithBot ℝ :=
+    (n_cols BLOCK_SIZE : Nat) (eps : ℝ) (xs : Fin BLOCK_SIZE → ℝ) :
+    WithBot ℝ :=
   WithBot.realRsqrt
     (Option.map (fun a => a + eps)
-      (layernormVarCarrier s X X_row_stride n_cols BLOCK_SIZE))
+      (layernormVarCarrier n_cols BLOCK_SIZE xs))
 
+/-- Exact affine LayerNorm value computed by the kernel at lane `idx`, as a
+pure function of the row `xs`, weights `ws` and bias `bs`:
+`((x - mean) * inv_var) * w + b` with the row statistics threaded through
+`layernormMeanCarrier` / `layernormInvVarCarrier`. -/
 noncomputable def layernormYSpec
-    (s : BlockState) (X W bias : RegionName)
-    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
-    (idx : Fin BLOCK_SIZE) : ℝ :=
+    (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws bs : Fin BLOCK_SIZE → ℝ) (idx : Fin BLOCK_SIZE) : ℝ :=
   WithBot.unbotD 0
     (Option.map₂ (fun affine bias => affine + bias)
       (Option.map₂ (fun scaled w => scaled * w)
         (Option.map₂ (fun centered inv => centered * inv)
           (Option.map₂ (fun x mean => x - mean)
-            (some (rowElem s X X_row_stride idx.val))
-            (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))
-          (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
-        (some (s.readMem W idx.val)))
-      (some (s.readMem bias idx.val)))
+            (some (xs idx))
+            (layernormMeanCarrier n_cols BLOCK_SIZE xs))
+          (layernormInvVarCarrier n_cols BLOCK_SIZE eps xs))
+        (some (ws idx)))
+      (some (bs idx)))
 
 def yOutOffset (s : BlockState) (Y_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * Y_row_stride + i.val
 
-/-- Executed-state correctness for the `Y` output of `layernorm_forward`. -/
+/-- Executed-state correctness for the `Y` output of `layernorm_forward`:
+active lanes hold `layernormYSpec` of the loaded row/weights/bias, inactive
+lanes are preserved. -/
 theorem layernorm_forward_y_correct
     (Y X W bias r mu : RegionName)
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
@@ -204,7 +236,10 @@ theorem layernorm_forward_y_correct
     ∀ i : Fin BLOCK_SIZE,
       s'.readMem Y (yOutOffset s Y_row_stride i) =
         if i.val < n_cols then
-          layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i
+          layernormYSpec n_cols BLOCK_SIZE eps
+            (fun j => rowElem s X X_row_stride j.val)
+            (fun j => s.readMem W j.val)
+            (fun j => s.readMem bias j.val) i
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
@@ -407,43 +442,15 @@ theorem layernorm_backward_dx_compute_correct
     X_row_stride n_cols BLOCK_SIZE eps s s' hOutInj hExec i
   simpa [hActive] using h
 
-/-- Compute-facing correctness for the `Y` output of `layernorm_forward`. -/
-theorem layernorm_forward_y_compute_correct
-    (Y X W bias r mu : RegionName)
-    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hYmu : Y ≠ mu)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := layernorm_forward_y_correct Y X W bias r mu Y_row_stride X_row_stride
-    n_cols BLOCK_SIZE eps s s' hYr hYmu hOutInj hExec i
-  simpa [hActive] using h
-
 /-- Full-kernel spec for the `inv_var` (rstd) store of `layernorm_forward`.
 
 Wraps `layernormInvVarCarrier` with `WithBot.unbotD 0` so that the readback
 of the kernel's scalar write into `r` matches the carrier's value as a
 plain `ℝ`. -/
 noncomputable def invVarFullSpec
-    (s : BlockState) (X : RegionName)
-    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) : ℝ :=
+    (n_cols BLOCK_SIZE : Nat) (eps : ℝ) (xs : Fin BLOCK_SIZE → ℝ) : ℝ :=
   WithBot.unbotD 0
-    (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
+    (layernormInvVarCarrier n_cols BLOCK_SIZE eps xs)
 
 /-- Full-kernel spec for the `mean` (mu) store of `layernorm_forward`.
 
@@ -451,10 +458,9 @@ Wraps `layernormMeanCarrier` with `WithBot.unbotD 0` so that the readback
 of the kernel's scalar write into `mu` matches the carrier's value as a
 plain `ℝ`. -/
 noncomputable def meanFullSpec
-    (s : BlockState) (X : RegionName)
-    (X_row_stride n_cols BLOCK_SIZE : Nat) : ℝ :=
+    (n_cols BLOCK_SIZE : Nat) (xs : Fin BLOCK_SIZE → ℝ) : ℝ :=
   WithBot.unbotD 0
-    (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE)
+    (layernormMeanCarrier n_cols BLOCK_SIZE xs)
 
 /-- Executed-state correctness for the `inv_var` (rstd) scalar store of
 `layernorm_forward`. The kernel writes a single element at offset `s.pid`
@@ -468,7 +474,8 @@ theorem layernorm_forward_inv_var_correct
     (hExec : exec (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
           n_cols eps BLOCK_SIZE) s = some s') :
     s'.readMem r s.pid =
-      invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
+      invVarFullSpec n_cols BLOCK_SIZE eps
+        (fun j => rowElem s X X_row_stride j.val) := by
   simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
@@ -489,29 +496,6 @@ theorem layernorm_forward_inv_var_correct
         WithBot.realRsqrt]
   rfl
 
-/-- Compute-facing correctness for the `inv_var` (rstd) scalar store of
-`layernorm_forward`. -/
-theorem layernorm_forward_inv_var_compute_correct
-    (Y X W bias r mu : RegionName)
-    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hRY : r ≠ Y) (hRmu : r ≠ mu) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, s.pid))
-      (expected := fun _ =>
-        invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
-  unfold ComputeCorrect.Realizes_without_Rounding
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact layernorm_forward_inv_var_correct Y X W bias r mu Y_row_stride
-    X_row_stride n_cols BLOCK_SIZE eps s s' hRY hRmu hExec
-
 /-- Executed-state correctness for the `mean` (mu) scalar store of
 `layernorm_forward`. The kernel writes a single element at offset `s.pid`
 into `mu`; this theorem strips the trailing `Y` foldl to expose that store.
@@ -525,7 +509,8 @@ theorem layernorm_forward_mean_correct
     (hExec : exec (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
           n_cols eps BLOCK_SIZE) s = some s') :
     s'.readMem mu s.pid =
-      meanFullSpec s X X_row_stride n_cols BLOCK_SIZE := by
+      meanFullSpec n_cols BLOCK_SIZE
+        (fun j => rowElem s X X_row_stride j.val) := by
   simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
@@ -542,29 +527,6 @@ theorem layernorm_forward_mean_correct
         Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex]
   rfl
-
-/-- Compute-facing correctness for the `mean` (mu) scalar store of
-`layernorm_forward`. -/
-theorem layernorm_forward_mean_compute_correct
-    (Y X W bias r mu : RegionName)
-    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hMuY : mu ≠ Y) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (mu, s.pid))
-      (expected := fun _ =>
-        meanFullSpec s X X_row_stride n_cols BLOCK_SIZE) := by
-  unfold ComputeCorrect.Realizes_without_Rounding
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact layernorm_forward_mean_correct Y X W bias r mu Y_row_stride
-    X_row_stride n_cols BLOCK_SIZE eps s s' hMuY hExec
 
 /-- Proof-oriented inv_var (rstd) store slice of `fast_layernorm.py`'s
 `layernorm_forward`. Takes a precomputed `InvVarPre` scalar (per row) and
@@ -643,53 +605,337 @@ theorem layernorm_forward_mean_store_slice_compute_correct
   intro _
   exact layernorm_forward_mean_store_slice_correct MeanPre mu s s' hExec
 
-/-- Per-kernel output summary for `layernorm_forward`: the DSL surface lowers to
-the algorithm layer, and the kernel is compute-correct on all three
-Python-observable outputs — the masked `Y` store (every active lane holds the
-affine LayerNorm spec `layernormYSpec`), the scalar reciprocal-std store into `r`
-(`invVarFullSpec`), and the scalar mean store into `mu` (`meanFullSpec`). -/
-specification layernorm_forward_output_summary
+/-! ### The `⊨` specification (forward) -/
+
+/-- The masked input tile only reads the active lanes: rows agreeing below
+`n_cols` yield the same tile (masked lanes are `0` either way). -/
+theorem layernormInputTile_congr (n_cols BLOCK_SIZE : Nat)
+    (xs xs' : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → xs j = xs' j) :
+    layernormInputTile n_cols BLOCK_SIZE xs
+      = layernormInputTile n_cols BLOCK_SIZE xs' := by
+  unfold layernormInputTile
+  congr 1
+  funext idx
+  by_cases hj : idx.1.val < n_cols
+  · simp only [if_pos hj, hx idx.1 hj]
+  · simp only [if_neg hj]
+
+/-- `layernormYSpec` at an **active** lane only reads the active lanes of its
+inputs: rows/weights/biases agreeing below `n_cols` yield the same value. -/
+theorem layernormYSpec_congr (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs xs' ws ws' bs bs' : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → xs j = xs' j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → ws j = ws' j)
+    (hb : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → bs j = bs' j)
+    (i : Fin BLOCK_SIZE) (hi : i.val < n_cols) :
+    layernormYSpec n_cols BLOCK_SIZE eps xs ws bs i
+      = layernormYSpec n_cols BLOCK_SIZE eps xs' ws' bs' i := by
+  unfold layernormYSpec layernormInvVarCarrier layernormVarCarrier
+    layernormCenteredTile layernormMeanCarrier
+  rw [layernormInputTile_congr n_cols BLOCK_SIZE xs xs' hx,
+      hx i hi, hw i hi, hb i hi]
+
+/-- `invVarFullSpec` only reads the active lanes of the row. -/
+theorem invVarFullSpec_congr (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs xs' : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → xs j = xs' j) :
+    invVarFullSpec n_cols BLOCK_SIZE eps xs
+      = invVarFullSpec n_cols BLOCK_SIZE eps xs' := by
+  unfold invVarFullSpec layernormInvVarCarrier layernormVarCarrier
+    layernormCenteredTile layernormMeanCarrier
+  rw [layernormInputTile_congr n_cols BLOCK_SIZE xs xs' hx]
+
+/-- `meanFullSpec` only reads the active lanes of the row. -/
+theorem meanFullSpec_congr (n_cols BLOCK_SIZE : Nat)
+    (xs xs' : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → xs j = xs' j) :
+    meanFullSpec n_cols BLOCK_SIZE xs = meanFullSpec n_cols BLOCK_SIZE xs' := by
+  unfold meanFullSpec layernormMeanCarrier
+  rw [layernormInputTile_congr n_cols BLOCK_SIZE xs xs' hx]
+
+/-- The kernel sits inside the flat-memory bridge's covered fragment (pointer
+arithmetic, masked loads with `other`, dtype casts, sum reductions, `rsqrt`,
+scalar stores, masked store). -/
+theorem layernorm_forward_flattenOk
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols : Nat) (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ((layernorm_forward Y X W bias r mu Y_row_stride X_row_stride n_cols eps
+        BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Termination: the kernel executes to completion from any state — including
+`BLOCK_SIZE = 0`, since the only reductions are `sum`s (total on empty axes). -/
+private theorem layernorm_forward_exec_isSome
     (Y X W bias r mu : RegionName)
     (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hYmu : Y ≠ mu)
-    (hRY : r ≠ Y) (hRmu : r ≠ mu)
-    (hMuY : mu ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (∃ alg, (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, s.pid))
-      (expected := fun _ =>
-        invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
-        n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (mu, s.pid))
-      (expected := fun _ =>
-        meanFullSpec s X X_row_stride n_cols BLOCK_SIZE))) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · simp only [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    exact ⟨_, rfl⟩
-  · exact layernorm_forward_y_compute_correct Y X W bias r mu Y_row_stride
-      X_row_stride n_cols BLOCK_SIZE eps s hYr hYmu hOutInj
-  · exact layernorm_forward_inv_var_compute_correct Y X W bias r mu Y_row_stride
-      X_row_stride n_cols BLOCK_SIZE eps s hRY hRmu
-  · exact layernorm_forward_mean_compute_correct Y X W bias r mu Y_row_stride
-      X_row_stride n_cols BLOCK_SIZE eps s hMuY
+    (eps : ℝ) (s : BlockState) :
+    ∃ s1, exec ((layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE).toAlgKernel) s = some s1 := by
+  simp [exec, layernorm_forward, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot]
+
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for the masked `Y` store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- Frame half: every memory cell not actively written by the three stores —
+the masked `Y` row scatter and the two scalar cells `r[pid]` / `mu[pid]` — is
+preserved by the run. -/
+private theorem layernorm_forward_frame
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s1 : BlockState)
+    (hExec : exec ((layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE).toAlgKernel) s = some s1)
+    (r' : RegionName) (o' : Nat)
+    (hmissY : ∀ i : Fin BLOCK_SIZE, i.val < n_cols →
+      ¬(Y = r' ∧ s.pids 0 * Y_row_stride + i.val = o'))
+    (hmissR : ¬(r = r' ∧ s.pids 0 = o'))
+    (hmissMu : ¬(mu = r' ∧ s.pids 0 = o')) :
+    s1.mem r' o' = s.mem r' o' := by
+  simp [exec, layernorm_forward, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r' o' _ _ ?_) ?_
+  · intro k _ hmk hc
+    exact hmissY k.1 (by simpa using hmk) hc
+  · show (BlockState.writeMem _ mu _ _).mem r' o' = s.mem r' o'
+    rw [BlockState.writeMem_mem,
+        if_neg (fun hc => hmissMu ⟨hc.1.symm, hc.2.symm⟩)]
+    show (BlockState.writeMem _ r _ _).mem r' o' = s.mem r' o'
+    rw [BlockState.writeMem_mem,
+        if_neg (fun hc => hmissR ⟨hc.1.symm, hc.2.symm⟩)]
+    rfl
+
+/-- Per-execution safety walk: one computational unfold walks all the
+statements — the pointer/mask/index staging, the reductions and register
+arithmetic are memory-silent — and reduces the six memory accesses (masked
+row load of `X`, masked loads of `W` and `b`, unconditional scalar stores to
+`r` and `mu`, masked row store to `Y`) to the **lane-wise** bounds
+hypotheses. -/
+theorem layernorm_forward_traceSafe
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (bounds : RegionBounds) (s : BlockState)
+    (hin1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pids 0 * X_row_stride + j.val < bounds X)
+    (hin2 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → j.val < bounds W)
+    (hin3 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → j.val < bounds bias)
+    (hout1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pids 0 * Y_row_stride + j.val < bounds Y)
+    (hout2 : s.pids 0 < bounds r)
+    (hout3 : s.pids 0 < bounds mu) :
+    Kernel.TraceSafe bounds
+      ((layernorm_forward Y X W bias r mu Y_row_stride X_row_stride n_cols eps
+        BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+    FloatDType.toWithBot,
+    Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+  exact ⟨fun a ha => hin1 a ha, fun a ha => hin2 a ha, fun a ha => hin3 a ha,
+    hout2, hout3, fun a ha => hout1 a ha⟩
+
+/-- **The region-model masked Hoare triple** — termination, active-lane `Y`
+values, the two scalar output cells, and frame off the written cells, from any
+launch state whose active input lanes hold `xs` (the `X` row), `ws` (the
+weights) and `bs` (the bias). This is the `hrun` obligation of the `⊨`
+headline. The output-distinctness hypotheses let each output's readback see
+through the other stores. -/
+theorem layernorm_forward_region_run
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (hYr : Y ≠ r) (hYmu : Y ≠ mu) (hRmu : r ≠ mu)
+    (s₀ : BlockState) (xs ws bs : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem X (s₀.pids 0 * X_row_stride + j.val) = xs j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → s₀.readMem W j.val = ws j)
+    (hb : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → s₀.readMem bias j.val = bs j) :
+    ∃ s1, exec ((layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+          n_cols eps BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem Y (s₀.pids 0 * Y_row_stride + j.val)
+            = layernormYSpec n_cols BLOCK_SIZE eps xs ws bs j)
+      ∧ s1.readMem r (s₀.pids 0) = invVarFullSpec n_cols BLOCK_SIZE eps xs
+      ∧ s1.readMem mu (s₀.pids 0) = meanFullSpec n_cols BLOCK_SIZE xs
+      ∧ (∀ r' o',
+          (r' ≠ Y ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o' ≠ s₀.pids 0 * Y_row_stride + j.val) →
+          (r' ≠ r ∨ o' ≠ s₀.pids 0) →
+          (r' ≠ mu ∨ o' ≠ s₀.pids 0) →
+          s1.mem r' o' = s₀.mem r' o') := by
+  have hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s₀ Y_row_stride i) := by
+    intro a b h
+    simp only [yOutOffset] at h
+    exact Fin.ext (Nat.add_left_cancel h)
+  obtain ⟨s1, hs1⟩ := layernorm_forward_exec_isSome Y X W bias r mu
+    Y_row_stride X_row_stride n_cols BLOCK_SIZE eps s₀
+  refine ⟨s1, hs1, fun j hj => ?_, ?_, ?_, fun r' o' hY hR hMu => ?_⟩
+  · have h := layernorm_forward_y_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s₀ s1 hYr hYmu hOutInj hs1 j
+    rw [if_pos hj] at h
+    exact h.trans (layernormYSpec_congr n_cols BLOCK_SIZE eps _ xs _ ws _ bs
+      (fun k hk => hx k hk) (fun k hk => hw k hk) (fun k hk => hb k hk) j hj)
+  · exact (layernorm_forward_inv_var_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s₀ s1 (Ne.symm hYr) hRmu hs1).trans
+      (invVarFullSpec_congr n_cols BLOCK_SIZE eps _ xs (fun k hk => hx k hk))
+  · exact (layernorm_forward_mean_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s₀ s1 (Ne.symm hYmu) hs1).trans
+      (meanFullSpec_congr n_cols BLOCK_SIZE _ xs (fun k hk => hx k hk))
+  · refine layernorm_forward_frame Y X W bias r mu Y_row_stride X_row_stride
+      n_cols BLOCK_SIZE eps s₀ s1 hs1 r' o' ?_ ?_ ?_
+    · rintro i hi ⟨hr, ho⟩
+      rcases hY with hne | hno
+      · exact hne hr.symm
+      · exact hno i hi ho.symm
+    · rintro ⟨hr, ho⟩
+      rcases hR with hne | hno
+      · exact hne hr.symm
+      · exact hno ho.symm
+    · rintro ⟨hr, ho⟩
+      rcases hMu with hne | hno
+      · exact hne hr.symm
+      · exact hno ho.symm
+
+/-- `layernorm_forward`'s masked three-input / three-output **IO signature** —
+the whole kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`in3` — the input matrix `X`, the per-column weights `W`, the
+  per-column bias `b`;
+* `out1`/`out2`/`out3` — the output matrix `Y`, the per-row reciprocal-std
+  vector `r`, the per-row mean vector `mu`;
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read1`/`write1` — **per-lane row windows**: program `pid` reads its `X` row
+  at `pid * X_row_stride + j` and writes its `Y` row at
+  `pid * Y_row_stride + j` (the host-side one-program-per-row launch
+  convention);
+* `read2`/`read3` — the weight and bias windows are **absolute and
+  pid-independent**: every program reads `W[j]` / `b[j]`;
+* `write2`/`write3` — the **scalar** store cells `r[pid]` / `mu[pid]`, the
+  same for every lane;
+* `mask` — the active lanes `j < n_cols`, the same for every program: the row
+  prefix that actually exists in the matrix. All three loads and the `Y` store
+  share it (`read2Mask`/`read3Mask`/`writeMask1` keep their defaults);
+* `writeMask2`/`writeMask3` — lane `0` carries each scalar; the other lanes
+  are write-inactive and carry no obligations on either side.
+
+The grid is 1-D, so the second program-id axis is an unused parameter: windows
+and masks are constant in `pid₁` (the headline's `∀ pid₁` quantification is
+vacuous but honest). The windows and masks are declared, not parsed from the
+kernel; the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the active lanes. -/
+def layernormForwardIO (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₃ₓ₃ where
+  kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+    n_cols eps BLOCK_SIZE
+  in1 := X
+  in2 := W
+  in3 := bias
+  out1 := Y
+  out2 := r
+  out3 := mu
+  B := BLOCK_SIZE
+  read1 := fun pid _ j => pid * X_row_stride + j.val
+  read2 := fun _ _ j => j.val
+  read3 := fun _ _ j => j.val
+  write1 := fun pid _ j => pid * Y_row_stride + j.val
+  write2 := fun pid _ _ => pid
+  write3 := fun pid _ _ => pid
+  mask := fun _ _ j => j.val < n_cols
+  writeMask2 := fun _ _ j => j.val = 0
+  writeMask3 := fun _ _ j => j.val = 0
+
+/-- **The headline**: `layernorm_forward` implements the exact affine LayerNorm
+triple over the active row prefix on its masked three-input / three-output IO
+signature — for every disjoint flat placement of the six buffers, every
+program id whose active lanes and scalar store cells are in bounds, and every
+launch state whose active input lanes hold `xs` (the `X` row), `ws` (the
+weights) and `bs` (the bias), the translated pointer kernel terminates, every
+active `Y` lane `j` holds
+`layernormYSpec n_cols BLOCK_SIZE eps xs ws bs j = ((x - mean)·inv_var)·w + b`,
+the scalar cells `r[pid]` / `mu[pid]` hold
+`invVarFullSpec n_cols BLOCK_SIZE eps xs = rsqrt(var + eps)` and
+`meanFullSpec n_cols BLOCK_SIZE xs = sum(x)/n_cols`, and every other memory
+cell is unchanged. `0 < BLOCK_SIZE` is required: the two scalar stores are
+unconditional, and the interface carries their in-bounds/frame obligations on
+the write-active lane `0`, which must exist. The output buffers must be
+pairwise distinct (`Y ≠ r`, `Y ≠ mu`, `r ≠ mu`) so each readback sees through
+the other stores. Proof: `Masked2DKernelIO₃ₓ₃.Implements.intro` assembles the
+region-model masked triple with the flat-memory bridge side conditions. -/
+specification layernorm_forward_correctness
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (hB : 0 < BLOCK_SIZE)
+    (hYr : Y ≠ r) (hYmu : Y ≠ mu) (hRmu : r ≠ mu) :
+    layernormForwardIO Y X W bias r mu Y_row_stride X_row_stride n_cols eps
+        BLOCK_SIZE ⊨
+      fun _ _ xs ws bs =>
+        (fun i => layernormYSpec n_cols BLOCK_SIZE eps xs ws bs i,
+         fun _ => invVarFullSpec n_cols BLOCK_SIZE eps xs,
+         fun _ => meanFullSpec n_cols BLOCK_SIZE xs) := by
+  refine Masked2DKernelIO₃ₓ₃.Implements.intro _ ?_ ?_ ?_
+  · exact layernorm_forward_flattenOk Y X W bias r mu Y_row_stride
+      X_row_stride n_cols eps BLOCK_SIZE
+  · intro bounds s h1 h2 h3 h4 h5 h6
+    exact layernorm_forward_traceSafe Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps bounds s h1 h2 h3 h4
+      (h5 ⟨0, hB⟩ rfl) (h6 ⟨0, hB⟩ rfl)
+  · intro s₀ xs ws bs hx hw hb
+    obtain ⟨s1, hexec, hvalY, hvalR, hvalMu, hframe⟩ :=
+      layernorm_forward_region_run Y X W bias r mu Y_row_stride X_row_stride
+        n_cols BLOCK_SIZE eps hYr hYmu hRmu s₀ xs ws bs hx hw hb
+    refine ⟨s1, hexec, hvalY, fun j _ => hvalR, fun j _ => hvalMu,
+      fun r' o' h1 h2 h3 => ?_⟩
+    refine hframe r' o' h1 ?_ ?_
+    · rcases h2 with hne | hno
+      · exact Or.inl hne
+      · exact Or.inr (hno ⟨0, hB⟩ rfl)
+    · rcases h3 with hne | hno
+      · exact Or.inl hne
+      · exact Or.inr (hno ⟨0, hB⟩ rfl)
 
 end VeriTile.Bench.TritonBenchG.FastLayernorm

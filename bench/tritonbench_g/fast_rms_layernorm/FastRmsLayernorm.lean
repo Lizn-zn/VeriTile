@@ -17,28 +17,37 @@ This file verifies **the Triton kernels themselves** — the per-program
 `(n_rows,)`, the host-side `BLOCK_SIZE` choice via `calculate_settings`, the
 `GEMMA` heuristic dispatch, scheduling, and how the runtime composes per-row
 writes into the buffers) is the *trusted boundary*, not a proof obligation here.
-Because `row_idx = tl.program_id(0)` is universally quantified (via `s.pid`), the
-per-program statement covers every row of the grid.
+Because `row_idx = tl.program_id(0)` is universally quantified, the per-program
+statement covers every row of the grid.
 
 ## Proof architecture
 
 ```
-rms_layernorm_forward_output_summary          ← TOP THEOREM (plain forward)
-  ├─ rms_layernorm_forward_surface_toAlgorithm_supported   surface lowers
-  └─ rms_layernorm_forward_all_outputs_compute_correct
-       ├─ rms_layernorm_forward_y_compute_correct   ← masked Y store
-       │    └─ rms_layernorm_forward_y_correct
-       └─ rms_layernorm_forward_inv_var_compute_correct  ← scalar rstd store into r
-            └─ rms_layernorm_forward_inv_var_correct
-gemma_rms_layernorm_forward_output_summary    ← TOP THEOREM (Gemma forward)
-  └─ gemma_rms_layernorm_forward_all_outputs_compute_correct  (analogous)
+rms_layernorm_forward_correctness             ← TOP THEOREM (rmsLayernormFwdIO ⊨ (Y-spec, rstd-spec))
+  ├─ rms_layernorm_forward_flattenOk          bridge fragment membership
+  ├─ rms_layernorm_forward_traceSafe          per-execution lane-wise safety walk
+  └─ rms_layernorm_forward_region_run         region-model masked Hoare triple
+       ├─ rms_layernorm_forward_exec_isSome   termination
+       ├─ rms_layernorm_forward_y_correct     ← masked Y store readback
+       ├─ rms_layernorm_forward_inv_var_correct  ← scalar rstd store into r
+       ├─ rmsLayernormYSpec_eq_of_loaded / rmsInvVarSpec_eq_of_loaded  pure-spec bridges
+       └─ rms_layernorm_forward_frame         masked-scatter + scalar-store frame
+gemma_rms_layernorm_forward_correctness       ← TOP THEOREM (Gemma forward, analogous)
 rms_layernorm_backward_dy_compute_correct     ← backward dY (plain)
 gemma_rms_layernorm_backward_dy_compute_correct  ← backward dY (Gemma)
 ```
 
-The two forward summaries are the public top theorems. The RMS row math
-(`rmsInputTile`, `rmsSumCarrier`, `rmsInvVarCarrier`, `rmsLayernormYSpec`,
-`gemmaRmsLayernormYSpec`) is defined inline in this file rather than reusing
+The two forward headlines are the masked two-output Hoare-triple combinator
+`rmsLayernormFwdIO … ⊨ f` / `gemmaRmsLayernormFwdIO … ⊨ f`
+(`Masked2DKernelIO₂ₓ₂.Implements`): for every disjoint flat placement of the
+four buffers (`X`, `W`, `Y`, `r`), every program id whose active lanes and
+scalar rstd cell are in bounds, and every launch state whose active input lanes
+hold `xs` (the `X` row) and `ws` (the weights), the translated pointer kernel
+terminates, every active `Y` lane holds the pure spec `rmsFwdYSpec` /
+`gemmaRmsFwdYSpec`, the scalar cell `r[row_idx·r_row_stride]` holds
+`rmsFwdInvVarSpec`, and every other memory cell is unchanged. The RMS row math
+(`rmsInputTile`, `rmsSumCarrier`, `rmsInvVarCarrier`, and their pure `rmsFwd*`
+reparametrizations) is defined inline in this file rather than reusing
 `VeriTile.Triton.Math.RMSNorm`.
 
 ## Modeling boundary
@@ -54,7 +63,12 @@ the affine step is `(X * inv_var) * W` (plain) or `(X * inv_var) * (W + 1)`
 (Gemma). The scalar `r` store is characterized via `rmsInvVarSpec`
 (`WithBot.unbotD 0` of the carrier). This is a single-block kernel: `BLOCK_SIZE`
 covers the whole row in one pass, with the `col_offsets < n_cols` mask handling
-the padded tail. Output/input disjointness (`Y ≠ r`, `r ≠ Y`) is assumed. The
+the padded tail. Output/output disjointness (`Y ≠ r`) is assumed: the scalar
+rstd store must not alias the row store. `0 < BLOCK_SIZE` is genuinely forced:
+the `r` store is **unmasked** in the kernel, so its safety bound and single-cell
+frame exclusion are carried by the lane-0 write gate (`writeMask2`), which needs
+at least one lane. The grid is 1-D; the headline signature's second program-id
+axis is unused (windows and masks are constant in `pid₁`). The
 `@triton.heuristics` GEMMA dispatch is modeled by the two separate forward
 kernels rather than a runtime branch. `@triton.autotune` is not modeled.
 -/
@@ -62,6 +76,9 @@ kernels rather than a runtime branch. `@triton.autotune` is not modeled.
 namespace VeriTile.Bench.TritonBenchG.FastRmsLayernorm
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked2DKernelIO₂ₓ₂
+
+set_option linter.unusedSimpArgs false
 
 set_option maxHeartbeats 5000000
 
@@ -95,17 +112,6 @@ def rms_layernorm_forward
   tl.store(Y + col_offsets, output, mask=mask)
 }
 
-/-- The regular RMS layernorm forward surface lowers to the algorithm layer,
-including the row inverse-variance store and masked `Y` writeback. -/
-theorem rms_layernorm_forward_surface_toAlgorithm_supported
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
-    (eps : ℝ) (BLOCK_SIZE : Nat) :
-    ∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-      W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg := by
-  simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
 `_gemma_rms_layernorm_forward`.
 
@@ -135,18 +141,6 @@ def gemma_rms_layernorm_forward
 
   tl.store(Y + col_offsets, output, mask=mask)
 }
-
-/-- The Gemma RMS layernorm forward surface lowers to the algorithm layer,
-including the row inverse-variance store and masked `Y` writeback. -/
-theorem gemma_rms_layernorm_forward_surface_toAlgorithm_supported
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride r_row_stride n_cols : Nat)
-    (eps : ℝ) (BLOCK_SIZE : Nat) :
-    ∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
-      X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg := by
-  simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?,
-    ComputeOp.toAlgorithm?]
 
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
 `_rms_layernorm_backward` for `GEMMA = false`.
@@ -370,7 +364,7 @@ theorem rms_layernorm_forward_y_correct
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s s' : BlockState)
     (hRegions : Y ≠ r)
-    (hOutInj : Function.Injective
+    (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i))
     (hExec : exec (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
           W_row_stride r_row_stride n_cols eps BLOCK_SIZE) s = some s') :
@@ -401,33 +395,6 @@ theorem rms_layernorm_forward_y_correct
     · simp [hi, BlockState.writeMem_readMem, hRegions]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the `Y` output of `_rms_layernorm_forward`. -/
-theorem rms_layernorm_forward_y_compute_correct
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hRegions : Y ≠ r)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols BLOCK_SIZE eps i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := rms_layernorm_forward_y_correct Y X W r Y_row_stride X_row_stride
-    W_row_stride r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hOutInj hExec i
-  simpa [hActive] using h
-
 /-- Executed-state correctness for the `Y` output of
 `_gemma_rms_layernorm_forward`. -/
 theorem gemma_rms_layernorm_forward_y_correct
@@ -435,7 +402,7 @@ theorem gemma_rms_layernorm_forward_y_correct
     (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) (s s' : BlockState)
     (hRegions : Y ≠ r)
-    (hOutInj : Function.Injective
+    (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i))
     (hExec : exec (gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
           r_row_stride n_cols eps BLOCK_SIZE) s = some s') :
@@ -466,34 +433,6 @@ theorem gemma_rms_layernorm_forward_y_correct
     · simp [hi, BlockState.writeMem_readMem, hRegions]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the `Y` output of
-`_gemma_rms_layernorm_forward`. -/
-theorem gemma_rms_layernorm_forward_y_compute_correct
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hRegions : Y ≠ r)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := gemma_rms_layernorm_forward_y_correct Y X W r Y_row_stride X_row_stride
-    r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hOutInj hExec i
-  simpa [hActive] using h
-
 /-- Executed-state correctness for the in-place `dY` output of
 `_rms_layernorm_backward` with `GEMMA = false`. -/
 theorem rms_layernorm_backward_dy_correct
@@ -501,7 +440,7 @@ theorem rms_layernorm_backward_dy_correct
     (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
       n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s s' : BlockState)
-    (hOutInj : Function.Injective
+    (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i))
     (hExec : exec (rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
           _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
@@ -570,7 +509,7 @@ theorem gemma_rms_layernorm_backward_dy_correct
     (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
       n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s s' : BlockState)
-    (hOutInj : Function.Injective
+    (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i))
     (hExec : exec (gemma_rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
           _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
@@ -729,29 +668,6 @@ theorem rms_layernorm_forward_inv_var_correct
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
 
-/-- Compute-facing correctness for the `r` (rstd / inv_var) output of
-`_rms_layernorm_forward`. -/
-theorem rms_layernorm_forward_inv_var_compute_correct
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hRegions : r ≠ Y) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
-  unfold ComputeCorrect.Realizes_without_Rounding
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride X_row_stride
-    W_row_stride r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hExec
-
 /-- Executed-state correctness for the `r` (rstd / inv_var) output of
 `_gemma_rms_layernorm_forward`. -/
 theorem gemma_rms_layernorm_forward_inv_var_correct
@@ -795,164 +711,581 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
 
-/-- Compute-facing correctness for the `r` (rstd / inv_var) output of
-`_gemma_rms_layernorm_forward`. -/
-theorem gemma_rms_layernorm_forward_inv_var_compute_correct
-    (Y X W r : RegionName)
-    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hRegions : r ≠ Y) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
-  unfold ComputeCorrect.Realizes_without_Rounding
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact gemma_rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride X_row_stride
-    r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hExec
+/-! ### The `⊨` specifications
 
-/-- Full forward output coverage for `_rms_layernorm_forward`: vector `Y` and
-row rstd/inv-var `r` are both characterized against the Python formula. -/
-theorem rms_layernorm_forward_all_outputs_compute_correct
+The headlines below restate the two forward kernels' correctness on the
+flat-memory `Masked2DKernelIO₂ₓ₂` surface. The specs are **pure** functions of
+the loaded row `xs` and weights `ws` (`rmsFwd*` below); the bridges
+`rms*Spec_eq_of_loaded` connect them to the `BlockState`-reading carriers the
+readback lemmas above are stated with. -/
+
+/-- Pure masked input row tile: lane `j < n_cols` holds `xs j`, masked lanes
+are `0` (matching `mask=…, other=0`). The `xs`-reparametrized form of
+`rmsInputTile`. -/
+noncomputable def rmsFwdInputTile (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      if idx.1.val < n_cols then some (xs idx.1) else some (0 : ℝ) }
+
+/-- Pure `sum(X_row * X_row)` over the masked row (masked lanes enter as `0`,
+neutral for the sum). -/
+noncomputable def rmsFwdSumCarrier (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
+  (Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+    (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs)
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs))).data PUnit.unit
+
+/-- Pure `inv_var = rsqrt(sum(x*x)/n_cols + eps)` carrier. -/
+noncomputable def rmsFwdInvVarCarrier (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
+  WithBot.realRsqrt
+    (Option.map ((fun a => a + eps) ∘ fun a => a / (n_cols : ℝ))
+      (rmsFwdSumCarrier n_cols BLOCK_SIZE xs))
+
+/-- Pure per-row rstd value stored to `r`: `WithBot.unbotD 0` of the
+`rsqrt` carrier. -/
+noncomputable def rmsFwdInvVarSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : ℝ :=
+  WithBot.unbotD 0 (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs)
+
+/-- Pure per-lane `Y` value of the plain forward: `(x · inv_var) · w`. -/
+noncomputable def rmsFwdYSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun x w => x * w)
+      (Option.map₂ (fun x inv => x * inv)
+        (some (xs i))
+        (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs))
+      (some (ws i)))
+
+/-- Pure per-lane `Y` value of the Gemma forward: `(x · inv_var) · (w + 1)`. -/
+noncomputable def gemmaRmsFwdYSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun scaled w => scaled * (w + 1.0))
+      (Option.map₂ (fun x inv => x * inv)
+        (some (xs i))
+        (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs))
+      (some (ws i)))
+
+/-- The masked input tile only reads the **active** lanes of the `X` row: if
+those lanes hold `xs`, the `BlockState` tile is the pure tile of `xs` (masked
+lanes are `0` on both sides). -/
+theorem rmsInputTile_eq_of_loaded
+    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem X (s.pid * X_row_stride + j.val) = xs j) :
+    rmsInputTile s X X_row_stride n_cols BLOCK_SIZE
+      = rmsFwdInputTile n_cols BLOCK_SIZE xs := by
+  unfold rmsInputTile rmsFwdInputTile rowElem
+  congr 1
+  funext idx
+  by_cases hj : idx.1.val < n_cols
+  · simp only [if_pos hj, hx idx.1 hj]
+  · simp only [if_neg hj]
+
+/-- Pure-spec bridge for the rstd store: a launch state whose active `X` lanes
+hold `xs` computes the pure `rmsFwdInvVarSpec xs`. -/
+theorem rmsInvVarSpec_eq_of_loaded
+    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (xs : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem X (s.pid * X_row_stride + j.val) = xs j) :
+    rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps
+      = rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs := by
+  unfold rmsInvVarSpec rmsFwdInvVarSpec rmsInvVarCarrier rmsFwdInvVarCarrier
+    rmsSumCarrier rmsFwdSumCarrier
+  rw [rmsInputTile_eq_of_loaded s X X_row_stride n_cols BLOCK_SIZE xs hx]
+
+/-- Pure-spec bridge for the plain `Y` store at an **active** lane. -/
+theorem rmsLayernormYSpec_eq_of_loaded
+    (s : BlockState) (X W : RegionName)
+    (X_row_stride W_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem X (s.pid * X_row_stride + j.val) = xs j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem W (j.val * W_row_stride) = ws j)
+    (i : Fin BLOCK_SIZE) (hi : i.val < n_cols) :
+    rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols BLOCK_SIZE eps i
+      = rmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i := by
+  unfold rmsLayernormYSpec rmsFwdYSpec rowElem rmsInvVarCarrier
+    rmsFwdInvVarCarrier rmsSumCarrier rmsFwdSumCarrier
+  rw [rmsInputTile_eq_of_loaded s X X_row_stride n_cols BLOCK_SIZE xs hx,
+      hx i hi, hw i hi]
+
+/-- Pure-spec bridge for the Gemma `Y` store at an **active** lane. -/
+theorem gemmaRmsLayernormYSpec_eq_of_loaded
+    (s : BlockState) (X W : RegionName)
+    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem X (s.pid * X_row_stride + j.val) = xs j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.readMem W j.val = ws j)
+    (i : Fin BLOCK_SIZE) (hi : i.val < n_cols) :
+    gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i
+      = gemmaRmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i := by
+  unfold gemmaRmsLayernormYSpec gemmaRmsFwdYSpec rowElem rmsInvVarCarrier
+    rmsFwdInvVarCarrier rmsSumCarrier rmsFwdSumCarrier
+  rw [rmsInputTile_eq_of_loaded s X X_row_stride n_cols BLOCK_SIZE xs hx,
+      hx i hi, hw i hi]
+
+/-- Termination: the plain forward executes to completion from any state —
+including `BLOCK_SIZE = 0`, since its reductions (`sum`, `rsqrt`) are total, so
+no `0 < BLOCK_SIZE` side condition is needed here. -/
+private theorem rms_layernorm_forward_exec_isSome
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
-          BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)) := by
-  constructor
-  · exact rms_layernorm_forward_y_compute_correct Y X W r Y_row_stride
-      X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr
-      hOutInj
-  · exact rms_layernorm_forward_inv_var_compute_correct Y X W r Y_row_stride
-      X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s hrY
+    (eps : ℝ) (s : BlockState) :
+    ∃ s1, exec ((rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s
+      = some s1 := by
+  simp [exec, rms_layernorm_forward, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-/-- Full forward output coverage for `_gemma_rms_layernorm_forward`: vector `Y`
-and row rstd/inv-var `r` are both characterized against the Python formula. -/
-theorem gemma_rms_layernorm_forward_all_outputs_compute_correct
+/-- Termination for the Gemma forward (same shape as the plain one). -/
+private theorem gemma_rms_layernorm_forward_exec_isSome
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)) := by
-  constructor
-  · exact gemma_rms_layernorm_forward_y_compute_correct Y X W r Y_row_stride
-      X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr hOutInj
-  · exact gemma_rms_layernorm_forward_inv_var_compute_correct Y X W r
-      Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hrY
+    (eps : ℝ) (s : BlockState) :
+    ∃ s1, exec ((gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s = some s1 := by
+  simp [exec, gemma_rms_layernorm_forward, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-/-- Public forward summary for regular RMS layernorm: the full Python forward
-surface lowers, and the checked forward kernel characterizes both
-Python-observable outputs `Y` and `r`. -/
-specification rms_layernorm_forward_output_summary
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for the masked `Y` store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (ρ : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = ρ ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem ρ o = s.mem ρ o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- Frame half for the plain forward: every memory cell not actively written —
+every cell outside the active `Y` lanes and off the scalar `r` store cell — is
+preserved by the run. -/
+private theorem rms_layernorm_forward_frame
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-      W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
-          BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps))) := by
-  constructor
-  · exact rms_layernorm_forward_surface_toAlgorithm_supported Y X W r
-      Y_row_stride X_row_stride W_row_stride r_row_stride n_cols eps BLOCK_SIZE
-  · exact rms_layernorm_forward_all_outputs_compute_correct Y X W r
-      Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE
-      eps s hYr hrY hOutInj
+    (eps : ℝ) (s s1 : BlockState)
+    (hExec : exec ((rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s
+      = some s1)
+    (ρ : RegionName) (o : Nat)
+    (hmissY : ∀ i : Fin BLOCK_SIZE, i.val < n_cols →
+      ¬(Y = ρ ∧ s.pid * Y_row_stride + i.val = o))
+    (hmissR : ¬(r = ρ ∧ s.pid * r_row_stride = o)) :
+    s1.mem ρ o = s.mem ρ o := by
+  simp [exec, rms_layernorm_forward, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ ρ o _ _ ?_) ?_
+  · intro k _ hmk hc
+    exact hmissY k.1 (by simpa using hmk) hc
+  · simp only [BlockState.setReg_mem, BlockState.writeMem_mem]
+    exact if_neg fun hc => hmissR ⟨hc.1.symm, hc.2.symm⟩
 
-/-- Public forward summary for Gemma RMS layernorm: the full Python forward
-surface lowers, and the checked forward kernel characterizes both
-Python-observable outputs `Y` and `r`. -/
-specification gemma_rms_layernorm_forward_output_summary
+/-- Frame half for the Gemma forward (same footprint as the plain one). -/
+private theorem gemma_rms_layernorm_forward_frame
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
-      X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps))) := by
-  constructor
-  · exact gemma_rms_layernorm_forward_surface_toAlgorithm_supported Y X W r
-      Y_row_stride X_row_stride r_row_stride n_cols eps BLOCK_SIZE
-  · exact gemma_rms_layernorm_forward_all_outputs_compute_correct Y X W r
-      Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr hrY
-      hOutInj
+    (eps : ℝ) (s s1 : BlockState)
+    (hExec : exec ((gemma_rms_layernorm_forward Y X W r Y_row_stride
+        X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s
+      = some s1)
+    (ρ : RegionName) (o : Nat)
+    (hmissY : ∀ i : Fin BLOCK_SIZE, i.val < n_cols →
+      ¬(Y = ρ ∧ s.pid * Y_row_stride + i.val = o))
+    (hmissR : ¬(r = ρ ∧ s.pid * r_row_stride = o)) :
+    s1.mem ρ o = s.mem ρ o := by
+  simp [exec, gemma_rms_layernorm_forward, ComputeKernel.toAlgKernel, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ ρ o _ _ ?_) ?_
+  · intro k _ hmk hc
+    exact hmissY k.1 (by simpa using hmk) hc
+  · simp only [BlockState.setReg_mem, BlockState.writeMem_mem]
+    exact if_neg fun hc => hmissR ⟨hc.1.symm, hc.2.symm⟩
+
+/-- The plain forward sits inside the flat-memory bridge's covered fragment
+(pointer arithmetic, masked loads with `other`, dtype casts, sum reduction,
+`rsqrt`, scalar store, masked store). -/
+theorem rms_layernorm_forward_flattenOk
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) :
+    ((rms_layernorm_forward Y X W r Y_row_stride X_row_stride W_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rms_layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- The Gemma forward sits inside the flat-memory bridge's covered fragment. -/
+theorem gemma_rms_layernorm_forward_flattenOk
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) :
+    ((gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [gemma_rms_layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk for the plain forward: the masked `X`/`W` loads
+and the masked `Y` store reduce to **lane-wise** bounds at the active lanes;
+the **unmasked** scalar `r` store reduces to the single-cell bound
+`row_idx · r_row_stride < bounds r`. -/
+theorem rms_layernorm_forward_traceSafe
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (bounds : RegionBounds) (s : BlockState)
+    (hin1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * X_row_stride + j.val < bounds X)
+    (hin2 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      j.val * W_row_stride < bounds W)
+    (hout1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * Y_row_stride + j.val < bounds Y)
+    (hout2 : s.pid * r_row_stride < bounds r) :
+    Kernel.TraceSafe bounds
+      ((rms_layernorm_forward Y X W r Y_row_stride X_row_stride W_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [rms_layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+    FloatDType.toWithBot,
+    Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+  exact ⟨fun a ha => hin1 a ha, fun a ha => hin2 a ha, hout2,
+    fun a ha => hout1 a ha⟩
+
+/-- Per-execution safety walk for the Gemma forward (contiguous `W` window). -/
+theorem gemma_rms_layernorm_forward_traceSafe
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (bounds : RegionBounds) (s : BlockState)
+    (hin1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * X_row_stride + j.val < bounds X)
+    (hin2 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols → j.val < bounds W)
+    (hout1 : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * Y_row_stride + j.val < bounds Y)
+    (hout2 : s.pid * r_row_stride < bounds r) :
+    Kernel.TraceSafe bounds
+      ((gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [gemma_rms_layernorm_forward, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+    FloatDType.toWithBot,
+    Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+  exact ⟨fun a ha => hin1 a ha, fun a ha => hin2 a ha, hout2,
+    fun a ha => hout1 a ha⟩
+
+/-- **The region-model masked Hoare triple** for the plain forward —
+termination, active-lane `Y` values, the scalar `r` (rstd) value, and frame off
+the active `Y` lanes and the `r` cell, from any launch state whose active input
+lanes hold `xs` (the `X` row) and `ws` (the weights). This is the `hrun`
+obligation of the `⊨` headline. `Y ≠ r` is required: the unconditional scalar
+rstd store must not alias the masked row store. -/
+theorem rms_layernorm_forward_region_run
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (hYr : Y ≠ r)
+    (s₀ : BlockState) (xs ws : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem X (s₀.pid * X_row_stride + j.val) = xs j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem W (j.val * W_row_stride) = ws j) :
+    ∃ s1, exec ((rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+          W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s₀
+        = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem Y (s₀.pid * Y_row_stride + j.val)
+            = rmsFwdYSpec n_cols BLOCK_SIZE eps xs ws j)
+      ∧ s1.readMem r (s₀.pid * r_row_stride)
+          = rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs
+      ∧ (∀ ρ o,
+          (ρ ≠ Y ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o ≠ s₀.pid * Y_row_stride + j.val) →
+          (ρ ≠ r ∨ o ≠ s₀.pid * r_row_stride) →
+          s1.mem ρ o = s₀.mem ρ o) := by
+  have hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s₀ Y_row_stride i) := by
+    intro a b h
+    simp only [yOutOffset] at h
+    exact Fin.ext (Nat.add_left_cancel h)
+  obtain ⟨s1, hs1⟩ := rms_layernorm_forward_exec_isSome Y X W r Y_row_stride
+    X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀
+  refine ⟨s1, hs1, fun j hj => ?_, ?_, fun ρ o h1 h2 => ?_⟩
+  · have h := rms_layernorm_forward_y_correct Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀ s1 hYr hOutInj hs1 j
+    simp only [yOutOffset] at h
+    rw [h, if_pos hj]
+    exact rmsLayernormYSpec_eq_of_loaded s₀ X W X_row_stride W_row_stride
+      n_cols BLOCK_SIZE eps xs ws hx hw j hj
+  · have h := rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride
+      X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀ s1
+      (Ne.symm hYr) hs1
+    simp only [rOutOffset] at h
+    rw [h]
+    exact rmsInvVarSpec_eq_of_loaded s₀ X X_row_stride n_cols BLOCK_SIZE eps
+      xs hx
+  · refine rms_layernorm_forward_frame Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀ s1 hs1 ρ o
+      (fun i hi hc => ?_) (fun hc => ?_)
+    · rcases h1 with hne | hno
+      · exact hne hc.1.symm
+      · exact hno i hi hc.2.symm
+    · rcases h2 with hne | hno
+      · exact hne hc.1.symm
+      · exact hno hc.2.symm
+
+/-- **The region-model masked Hoare triple** for the Gemma forward (contiguous
+`W` window, `(w + 1)` scaling; otherwise as the plain one). -/
+theorem gemma_rms_layernorm_forward_region_run
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (hYr : Y ≠ r)
+    (s₀ : BlockState) (xs ws : Fin BLOCK_SIZE → ℝ)
+    (hx : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem X (s₀.pid * X_row_stride + j.val) = xs j)
+    (hw : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem W j.val = ws j) :
+    ∃ s1, exec ((gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+          r_row_stride n_cols eps BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem Y (s₀.pid * Y_row_stride + j.val)
+            = gemmaRmsFwdYSpec n_cols BLOCK_SIZE eps xs ws j)
+      ∧ s1.readMem r (s₀.pid * r_row_stride)
+          = rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs
+      ∧ (∀ ρ o,
+          (ρ ≠ Y ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o ≠ s₀.pid * Y_row_stride + j.val) →
+          (ρ ≠ r ∨ o ≠ s₀.pid * r_row_stride) →
+          s1.mem ρ o = s₀.mem ρ o) := by
+  have hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s₀ Y_row_stride i) := by
+    intro a b h
+    simp only [yOutOffset] at h
+    exact Fin.ext (Nat.add_left_cancel h)
+  obtain ⟨s1, hs1⟩ := gemma_rms_layernorm_forward_exec_isSome Y X W r
+    Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀
+  refine ⟨s1, hs1, fun j hj => ?_, ?_, fun ρ o h1 h2 => ?_⟩
+  · have h := gemma_rms_layernorm_forward_y_correct Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀ s1 hYr hOutInj hs1 j
+    simp only [yOutOffset] at h
+    rw [h, if_pos hj]
+    exact gemmaRmsLayernormYSpec_eq_of_loaded s₀ X W X_row_stride
+      n_cols BLOCK_SIZE eps xs ws hx hw j hj
+  · have h := gemma_rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols BLOCK_SIZE eps s₀ s1 (Ne.symm hYr) hs1
+    simp only [rOutOffset] at h
+    rw [h]
+    exact rmsInvVarSpec_eq_of_loaded s₀ X X_row_stride n_cols BLOCK_SIZE eps
+      xs hx
+  · refine gemma_rms_layernorm_forward_frame Y X W r Y_row_stride X_row_stride
+      r_row_stride n_cols BLOCK_SIZE eps s₀ s1 hs1 ρ o
+      (fun i hi hc => ?_) (fun hc => ?_)
+    · rcases h1 with hne | hno
+      · exact hne hc.1.symm
+      · exact hno i hi hc.2.symm
+    · rcases h2 with hne | hno
+      · exact hne hc.1.symm
+      · exact hno hc.2.symm
+
+/-- `_rms_layernorm_forward`'s masked two-output **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`out1`/`out2` — which buffer is which argument (the wiring): the
+  input matrix `X`, the per-column weights `W`, the output matrix `Y`, the
+  per-row rstd vector `r`;
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read1`/`write1` — **strided row windows**: program `row_idx` reads its `X`
+  row at `row_idx · X_row_stride + j` and writes its `Y` row at
+  `row_idx · Y_row_stride + j` (the host-side one-program-per-row launch);
+* `read2` — the weight window is **pid-independent and column-strided**: every
+  program reads `W[j · W_row_stride]` (the Python kernel scales the offsets by
+  `W_row_stride`);
+* `write2` — the **scalar** rstd cell `r[row_idx · r_row_stride]`, the same
+  for every lane;
+* `mask` — the active lanes `j < n_cols`, the same for every program; the
+  load masks and the `Y` store mask coincide, so `read2Mask`/`writeMask1` keep
+  their `mask` default;
+* `writeMask2` — lane `0` carries the scalar rstd; the other lanes are
+  write-inactive and carry no obligations on either side.
+
+The grid is 1-D, so the second program-id axis is an unused parameter: windows
+and masks are constant in `pid₁` (the headline's `∀ pid₁` quantification is
+vacuous but honest). The windows and masks are declared, not parsed from the
+kernel; the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the active lanes. -/
+def rmsLayernormFwdIO (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₂ₓ₂ where
+  kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+    W_row_stride r_row_stride n_cols eps BLOCK_SIZE
+  in1 := X
+  in2 := W
+  out1 := Y
+  out2 := r
+  B := BLOCK_SIZE
+  read1 := fun row_idx _ j => row_idx * X_row_stride + j.val
+  read2 := fun _ _ j => j.val * W_row_stride
+  write1 := fun row_idx _ j => row_idx * Y_row_stride + j.val
+  write2 := fun row_idx _ _ => row_idx * r_row_stride
+  mask := fun _ _ j => j.val < n_cols
+  writeMask2 := fun _ _ j => j.val = 0
+
+/-- `_gemma_rms_layernorm_forward`'s masked two-output **IO signature** — as
+`rmsLayernormFwdIO`, except the weight window is **contiguous**: the Python
+kernel accepts `W_row_stride` but loads `W + col_offsets`, and this signature
+preserves that stride-free weight access (`read2 = j`). -/
+def gemmaRmsLayernormFwdIO (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₂ₓ₂ where
+  kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+    r_row_stride n_cols eps BLOCK_SIZE
+  in1 := X
+  in2 := W
+  out1 := Y
+  out2 := r
+  B := BLOCK_SIZE
+  read1 := fun row_idx _ j => row_idx * X_row_stride + j.val
+  read2 := fun _ _ j => j.val
+  write1 := fun row_idx _ j => row_idx * Y_row_stride + j.val
+  write2 := fun row_idx _ _ => row_idx * r_row_stride
+  mask := fun _ _ j => j.val < n_cols
+  writeMask2 := fun _ _ j => j.val = 0
+
+/-- **The headline (plain forward)**: `_rms_layernorm_forward` implements the
+exact RMS normalization pair on its masked two-output IO signature — for every
+disjoint flat placement of the four buffers, every program id whose active
+lanes and scalar rstd cell are in bounds, and every launch state whose active
+input lanes hold `xs` (the `X` row) and `ws` (the weights), the translated
+pointer kernel terminates, every active `Y` lane `j` holds
+`rmsFwdYSpec … = (xs j · inv_var) · ws j`, the rstd cell holds
+`rmsFwdInvVarSpec … = rsqrt(sum(x²)/n_cols + eps)`, and every other memory cell
+is unchanged. Side conditions, both genuinely forced: `Y ≠ r` (the
+unconditional scalar rstd store must not alias the masked row store) and
+`0 < BLOCK_SIZE` (the `r` store is unmasked in the kernel, so its safety bound
+and frame exclusion are carried by the lane-0 gate `writeMask2`, which needs a
+lane). Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions. -/
+specification rms_layernorm_forward_correctness
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (hYr : Y ≠ r) (hB : 0 < BLOCK_SIZE) :
+    rmsLayernormFwdIO Y X W r Y_row_stride X_row_stride W_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE ⊨
+      fun _ _ xs ws =>
+        (fun i => rmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i,
+         fun _ => rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs) := by
+  refine Masked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact rms_layernorm_forward_flattenOk Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols BLOCK_SIZE eps
+  · intro bounds s h1 h2 h3 h4
+    exact rms_layernorm_forward_traceSafe Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols BLOCK_SIZE eps bounds s h1 h2
+      h3 (h4 ⟨0, hB⟩ rfl)
+  · intro s₀ xs ws hx hw
+    obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+      rms_layernorm_forward_region_run Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols BLOCK_SIZE eps hYr s₀ xs ws hx hw
+    refine ⟨s1, hexec, hval1, fun j _ => hval2, fun ρ o h1 h2 => ?_⟩
+    refine hframe ρ o h1 ?_
+    rcases h2 with hne | hno
+    · exact Or.inl hne
+    · exact Or.inr (hno ⟨0, hB⟩ rfl)
+
+/-- **The headline (Gemma forward)**: `_gemma_rms_layernorm_forward` implements
+the Gemma-scaled RMS normalization pair on its masked two-output IO signature —
+as the plain headline, with every active `Y` lane `j` holding
+`gemmaRmsFwdYSpec … = (xs j · inv_var) · (ws j + 1)` over the contiguous weight
+window. Same genuinely-forced side conditions (`Y ≠ r`, `0 < BLOCK_SIZE`). -/
+specification gemma_rms_layernorm_forward_correctness
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (hYr : Y ≠ r) (hB : 0 < BLOCK_SIZE) :
+    gemmaRmsLayernormFwdIO Y X W r Y_row_stride X_row_stride r_row_stride
+        n_cols eps BLOCK_SIZE ⊨
+      fun _ _ xs ws =>
+        (fun i => gemmaRmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i,
+         fun _ => rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs) := by
+  refine Masked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact gemma_rms_layernorm_forward_flattenOk Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols BLOCK_SIZE eps
+  · intro bounds s h1 h2 h3 h4
+    exact gemma_rms_layernorm_forward_traceSafe Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols BLOCK_SIZE eps bounds s h1 h2
+      h3 (h4 ⟨0, hB⟩ rfl)
+  · intro s₀ xs ws hx hw
+    obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+      gemma_rms_layernorm_forward_region_run Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols BLOCK_SIZE eps hYr s₀ xs ws hx hw
+    refine ⟨s1, hexec, hval1, fun j _ => hval2, fun ρ o h1 h2 => ?_⟩
+    refine hframe ρ o h1 ?_
+    rcases h2 with hne | hno
+    · exact Or.inl hne
+    · exact Or.inr (hno ⟨0, hB⟩ rfl)
 
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm
