@@ -4086,4 +4086,226 @@ theorem Equiv.intro (io₁ io₂ : KernelIO₁ₓ₂) {R : RoundingModel}
 
 end KernelIO₁ₓ₂
 
+/-! ### The metadata genre: `Meta*` skins
+
+Windows that read memory. A `Meta*` struct declares scalar **slots** —
+per-program single cells on the `.nat`/`.int` channel — whose loaded values
+enter the data windows, the masks, and the spec `f` as honest named
+binders, pinned to the slot cells by `readMemValue` preconditions (the
+ghost-variable discipline). The prefix marks the capability; subscripts
+stay pure input×output arity. First shape: the LightLLM
+`B_Start_Loc`/`B_Seqlen` pattern (token_softmax family). -/
+
+/-- IO signature of a **metadata-driven** 2D masked one-input / one-output
+kernel: two per-program `nat` scalar slots (`mbuf₁`/`mbuf₂`) whose loaded
+values (`m₁`/`m₂`) parametrize the data window, the masks, and the spec. -/
+structure MetaMasked2DKernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First scalar slot's buffer (one `.nat` cell per program). -/
+  mbuf₁ : RegionName
+  /-- Second scalar slot's buffer. -/
+  mbuf₂ : RegionName
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Tile length of the data channels. -/
+  B : Nat
+  /-- First slot's cell address for program `(pid₀, pid₁)`. -/
+  mwin₁ : Nat → Nat → Nat
+  /-- Second slot's cell address. -/
+  mwin₂ : Nat → Nat → Nat
+  /-- Data read window at `(pid₀, pid₁, m₁, m₂, j)` — the loaded scalars
+  are ordinary named arguments. -/
+  read : Nat → Nat → Nat → Nat → Fin B → Nat
+  /-- Write window. -/
+  write : Nat → Nat → Nat → Nat → Fin B → Nat
+  /-- Read-active lanes, given the loaded scalars. -/
+  mask : Nat → Nat → Nat → Nat → Fin B → Prop
+  /-- Write-active lanes; defaults to `mask`. -/
+  writeMask : Nat → Nat → Nat → Nat → Fin B → Prop := mask
+
+namespace MetaMasked2DKernelIO₁
+
+/-- `io.Implements f` — the metadata-genre masked Hoare triple. The slot
+values `m₁`/`m₂` are universally quantified and pinned to the slot cells
+inside the memory precondition, so the window/mask/value contracts all
+speak about the *loaded* scalars. -/
+def Implements (io : MetaMasked2DKernelIO₁)
+    (f : Nat → Nat → Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.mbuf₁, io.mbuf₂, io.inp, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+  ∀ (m₁ m₂ : Nat) (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    io.mwin₁ pid₀ pid₁ < A.extent io.mbuf₁ →
+    io.mwin₂ pid₀ pid₁ < A.extent io.mbuf₂ →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ m₁ m₂ j →
+      io.read pid₀ pid₁ m₁ m₂ j < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask pid₀ pid₁ m₁ m₂ j →
+      io.write pid₀ pid₁ m₁ m₂ j < A.extent io.out) →
+    s₀.readMemValue .nat io.mbuf₁ (io.mwin₁ pid₀ pid₁) = m₁ →
+    s₀.readMemValue .nat io.mbuf₂ (io.mwin₂ pid₀ pid₁) = m₂ →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ m₁ m₂ j →
+      s₀.readMem io.inp (io.read pid₀ pid₁ m₁ m₂ j) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid₀ pid₁ m₁ m₂ j →
+          s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ m₁ m₂ j))
+            = f pid₀ pid₁ m₁ m₂ xs j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            (∀ j : Fin io.B, io.writeMask pid₀ pid₁ m₁ m₂ j →
+              o' ≠ A.addr io.out (io.write pid₀ pid₁ m₁ m₂ j))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MetaMasked2DKernelIO₁.Implements
+
+/-- Embed into the unified core: channels 0/1 are the 1-lane `.nat` slots
+(always read), channel 2 the float data tile whose window/mask read the
+slots' pinned values. -/
+private def toU (io : MetaMasked2DKernelIO₁) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 1
+  nScr := 0
+  bufs := [io.mbuf₁, io.mbuf₂, io.inp, io.out]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .nat
+    | ⟨1, _⟩ => .nat
+    | ⟨2, _⟩ => .float
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => 1
+    | ⟨1, _⟩ => 1
+    | ⟨2, _⟩ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.mbuf₁
+    | ⟨1, _⟩ => io.mbuf₂
+    | ⟨2, _⟩ => io.inp
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => io.mwin₁ p₀ p₁
+    | ⟨1, _⟩ => fun _ => io.mwin₂ p₀ p₁
+    | ⟨2, _⟩ => fun j => io.read p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+  imask := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => True
+    | ⟨2, _⟩ => fun j => io.mask p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+  owin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+    (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+    (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+  omask := fun _ vals p₀ p₁ j => io.writeMask p₀ p₁
+    (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+    (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
+/-- Assembly lemma: obligations in the skin's named vocabulary — the slots
+enter `hts`/`hrun` as pinned named scalars, no lane-constancy plumbing
+(slots are 1-lane channels). -/
+theorem Implements.intro (io : MetaMasked2DKernelIO₁)
+    {f : Nat → Nat → Nat → Nat → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (m₁ m₂ : Nat),
+      s.readMemValue .nat io.mbuf₁ (io.mwin₁ (s.pids 0) (s.pids 1)) = m₁ →
+      s.readMemValue .nat io.mbuf₂ (io.mwin₂ (s.pids 0) (s.pids 1)) = m₂ →
+      io.mwin₁ (s.pids 0) (s.pids 1) < bounds io.mbuf₁ →
+      io.mwin₂ (s.pids 0) (s.pids 1) < bounds io.mbuf₂ →
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) m₁ m₂ j →
+        io.read (s.pids 0) (s.pids 1) m₁ m₂ j < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) m₁ m₂ j →
+        io.write (s.pids 0) (s.pids 1) m₁ m₂ j < bounds io.out) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (m₁ m₂ : Nat) (xs : Fin io.B → ℝ),
+      s₀.readMemValue .nat io.mbuf₁ (io.mwin₁ (s₀.pids 0) (s₀.pids 1)) = m₁ →
+      s₀.readMemValue .nat io.mbuf₂ (io.mwin₂ (s₀.pids 0) (s₀.pids 1)) = m₂ →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) m₁ m₂ j →
+        s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) m₁ m₂ j) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) m₁ m₂ j →
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) m₁ m₂ j)
+              = f (s₀.pids 0) (s₀.pids 1) m₁ m₂ xs j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨ ∀ j : Fin io.B,
+              io.writeMask (s₀.pids 0) (s₀.pids 1) m₁ m₂ j →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) m₁ m₂ j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j => f p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (fun j' => vals (⟨2, by decide⟩ : Fin 3) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals hpins hib hob _hsb
+      exact hts bounds s
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (hpins (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hpins (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (fun j => vals (⟨2, by decide⟩ : Fin 3) j)
+        (hpins (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hpins (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun j hj => hpins (⟨2, by decide⟩ : Fin 3) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun j hj => ?_
+        rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ m₁ m₂ xs s₀ hpid₀ hpid₁ hu hb1 hb2 hbr
+    hbw hm1 hm2 hx
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ => m₁
+        | ⟨1, _⟩ => fun _ => m₂
+        | ⟨2, _⟩ => xs)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hb1
+        | ⟨1, _⟩ => fun _ _ => hb2
+        | ⟨2, _⟩ => fun j hj => hbr j hj)
+      (fun _o j hj => hbw j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hm1
+        | ⟨1, _⟩ => fun _ _ => hm2
+        | ⟨2, _⟩ => fun j hj => hx j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | hout
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj, fun t => t.elim0⟩
+
+end MetaMasked2DKernelIO₁
+
+
 end VeriTile.Triton
