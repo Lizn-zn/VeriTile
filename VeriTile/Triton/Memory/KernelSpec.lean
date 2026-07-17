@@ -138,6 +138,52 @@ def Implements (io : KernelIO₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(two float tile channels plus three 1-lane bound-witness channels — the
+block bounds `w + B ≤ extent` carried as the masked per-lane bounds
+`w + B - 1 < extent` gated on `0 < w + B` — one output, no scratch). -/
+private def toU (io : KernelIO₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 5
+  nOut := 1
+  nScr := 0
+  bufs := [io.in1, io.in2, io.out]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | ⟨1, _⟩ => .float
+    | _ => .nat
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => io.B
+    | ⟨1, _⟩ => io.B
+    | _ => 1
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | ⟨2, _⟩ => io.in1
+    | ⟨3, _⟩ => io.in2
+    | _ => io.out
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
+    | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
+    | ⟨2, _⟩ => fun _ => io.read1 p₀ + io.B - 1
+    | ⟨3, _⟩ => fun _ => io.read2 p₀ + io.B - 1
+    | _ => fun _ => io.write p₀ + io.B - 1
+  imask := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => True
+    | ⟨2, _⟩ => fun _ => 0 < io.read1 p₀ + io.B
+    | ⟨3, _⟩ => fun _ => 0 < io.read2 p₀ + io.B
+    | _ => fun _ => 0 < io.write p₀ + io.B
+  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ => True
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma: `io ⊨ f` from three per-kernel obligations —
 `FlattenOk` (bridge fragment membership), `TraceSafe` (the per-execution
 safety walk, taking the window-in-bounds contract), and the region-model
@@ -162,42 +208,98 @@ theorem Implements.intro (io : KernelIO₂)
             (r ≠ io.out ∨ ∀ j : Fin io.B, o ≠ io.write s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by decide⟩ : Fin 5) j')
+          (fun j' => vals (⟨1, by decide⟩ : Fin 5) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      have hb1 : io.read1 (s.pids 0) + io.B ≤ bounds io.in1 := by
+        by_cases hpos : 0 < io.read1 (s.pids 0) + io.B
+        · have h : io.read1 (s.pids 0) + io.B - 1 < bounds io.in1 :=
+            hib (⟨2, by decide⟩ : Fin 5) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb2 : io.read2 (s.pids 0) + io.B ≤ bounds io.in2 := by
+        by_cases hpos : 0 < io.read2 (s.pids 0) + io.B
+        · have h : io.read2 (s.pids 0) + io.B - 1 < bounds io.in2 :=
+            hib (⟨3, by decide⟩ : Fin 5) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb3 : io.write (s.pids 0) + io.B ≤ bounds io.out := by
+        by_cases hpos : 0 < io.write (s.pids 0) + io.B
+        · have h : io.write (s.pids 0) + io.B - 1 < bounds io.out :=
+            hib (⟨4, by decide⟩ : Fin 5) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      exact hts bounds s hb1 hb2 hb3
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 5) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 5) j)
+          (fun j => hpins (⟨0, by decide⟩ : Fin 5) j True.intro)
+          (fun j => hpins (⟨1, by decide⟩ : Fin 5) j True.intro)
+      refine ⟨s1, hexec, fun _o j _ => hval j, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun j => ?_
+        rcases hoc (⟨0, by decide⟩ : Fin 1) j True.intro with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 xs ys s₀ hpid hu hx hy
-  subst hpid
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write s₀.pid + j.val < A.extent io.out := by
-      have := j.isLt; omega
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_)
-          by_cases hro : r = io.out
-          · subst hro
-            refine Or.inr fun j hoj => ?_
-            rcases hcond with hflat | hnadr
-            · exact hflat rfl
-            · exact hnadr j (by rw [hoeq, hoj])
-          · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | ⟨2, _⟩ => fun _ => ChanTy.read .nat s₀ io.in1 (io.read1 pid + io.B - 1)
+        | ⟨3, _⟩ => fun _ => ChanTy.read .nat s₀ io.in2 (io.read2 pid + io.B - 1)
+        | ⟨_+4, _⟩ => fun _ => ChanTy.read .nat s₀ io.out (io.write pid + io.B - 1))
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => by
+            have hj : j.val < io.B := j.isLt
+            have h : io.read1 pid + j.val < A.extent io.in1 := by omega
+            exact h
+        | ⟨1, _⟩ => fun j _ => by
+            have hj : j.val < io.B := j.isLt
+            have h : io.read2 pid + j.val < A.extent io.in2 := by omega
+            exact h
+        | ⟨2, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read1 pid + io.B := hm
+            have h : io.read1 pid + io.B - 1 < A.extent io.in1 := by omega
+            exact h
+        | ⟨3, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read2 pid + io.B := hm
+            have h : io.read2 pid + io.B - 1 < A.extent io.in2 := by omega
+            exact h
+        | ⟨_+4, _⟩ => fun _ hm => by
+            have hm' : 0 < io.write pid + io.B := hm
+            have h : io.write pid + io.B - 1 < A.extent io.out := by omega
+            exact h)
+      (fun _o j _ => by
+        have hj : j.val < io.B := j.isLt
+        have h : io.write pid + j.val < A.extent io.out := by omega
+        exact h)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => hx j
+        | ⟨1, _⟩ => fun j _ => hy j
+        | ⟨2, _⟩ => fun _ _ => rfl
+        | ⟨3, _⟩ => fun _ _ => rfl
+        | ⟨_+4, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j => hval (⟨0, by decide⟩ : Fin 1) j True.intro, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | hout
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j _ => hout j, fun t => t.elim0⟩
 
 /-- `io.ImplementsR R f` — the **rounding-correctness** relation `io ⊨[R] f`:
 the kernel of `io` computes the mathematical function `f` exactly and
@@ -392,6 +494,34 @@ def Implements (io : MaskedKernelIO₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(two float channels, one output, scratch as contract-free channels; every
+window is lane-masked by `mask`, so no bound-witness channels are needed). -/
+private def toU (io : MaskedKernelIO₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 2
+  nOut := 1
+  nScr := io.scratch.length
+  bufs := [io.in1, io.in2, io.out] ++ io.scratch.map Prod.fst
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | _ => io.in2
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun _ => io.B
+  sbuf := fun t => (io.scratch.get t).1
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
+    | _ => fun j => io.read2 p₀ + j.val
+  imask := fun _ _ p₀ _ j => io.mask p₀ j
+  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
+  omask := fun _ _ p₀ _ j => io.mask p₀ j
+  swin := fun t _ p₀ _ j => (io.scratch.get t).2 p₀ + j.val
+  smask := fun _ _ p₀ _ j => io.mask p₀ j
+
 /-- Assembly lemma — masked sibling of `KernelIO₂.Implements.intro`. The
 three per-kernel obligations take the **lane-wise** contracts: `hts` gets the
 active-lane bounds, `hrun` proves the region-model masked Hoare triple from
@@ -428,45 +558,71 @@ theorem Implements.intro (io : MaskedKernelIO₂)
                 o ≠ p.2 s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+          (fun j' => vals (⟨1, by decide⟩ : Fin 2) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob hsb
+      refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
+      intro q hq j hj
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      have h : (io.scratch.get u).2 (s.pids 0) + j.val
+          < bounds (io.scratch.get u).1 := hsb u j hj
+      rw [hu] at h
+      exact h
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 2) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq j hj
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        have h : r ≠ (io.scratch.get u).1 ∨
+            o' ≠ (io.scratch.get u).2 (s₀.pids 0) + j.val :=
+          hsc' u j hj
+        rw [hu] at h
+        rcases h with hne | hno
+        · exact absurd hrq hne
+        · exact hno
   intro A hd hregs hcov pid h1 h2 h3 hsc xs ys s₀ hpid hu hx hy
-  subst hpid
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 hsc
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write s₀.pid + j.val < A.extent io.out := h3 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hnout, _⟩
-              · exact hflat rfl
-              · exact hnout j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · intro p hp hrp j hj hoj
-            rcases hcond with hflat | ⟨_, hnscr⟩
-            · exact hflat rfl
-            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | _ => ys)
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨_+1, _⟩ => fun j hj => h2 j hj)
+      (fun _o j hj => h3 j hj)
+      (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨_+1, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj,
+      fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
 
 /-- `io₁ ≡[R] io₂` — **kernel equivalence on a shared IO signature**, the
 `⊨`-grade form of the refinement surface. The interface (buffers, windows,
@@ -733,6 +889,30 @@ def Implements (io : MaskedKernelIO₁)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₁.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(one float channel, one output, scratch as contract-free channels; the
+windows are lane-masked, reads by `mask` and writes by `writeMask`). -/
+private def toU (io : MaskedKernelIO₁) : UKernelIO where
+  kernel := io.kernel
+  nIn := 1
+  nOut := 1
+  nScr := io.scratch.length
+  bufs := [io.inp, io.out] ++ io.scratch.map Prod.fst
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun _ => io.inp
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun _ => io.B
+  sbuf := fun t => (io.scratch.get t).1
+  iwin := fun _ _ p₀ _ j => io.read p₀ + j.val
+  imask := fun _ _ p₀ _ j => io.mask p₀ j
+  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
+  omask := fun _ _ p₀ _ j => io.writeMask p₀ j
+  swin := fun t _ p₀ _ j => (io.scratch.get t).2 p₀ + j.val
+  smask := fun _ _ p₀ _ j => io.writeMask p₀ j
+
 /-- Assembly lemma — one-input sibling of `MaskedKernelIO₂.Implements.intro`;
 see there for the reading of the lane-wise obligations. -/
 theorem Implements.intro (io : MaskedKernelIO₁)
@@ -761,45 +941,58 @@ theorem Implements.intro (io : MaskedKernelIO₁)
                 o ≠ p.2 s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by decide⟩ : Fin 1) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob hsb
+      refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 1) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
+      intro q hq j hj
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      have h : (io.scratch.get u).2 (s.pids 0) + j.val
+          < bounds (io.scratch.get u).1 := hsb u j hj
+      rw [hu] at h
+      exact h
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 1) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 1) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq j hj
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        have h : r ≠ (io.scratch.get u).1 ∨
+            o' ≠ (io.scratch.get u).2 (s₀.pids 0) + j.val :=
+          hsc' u j hj
+        rw [hu] at h
+        rcases h with hne | hno
+        · exact absurd hrq hne
+        · exact hno
   intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
-  subst hpid
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 hsc
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write s₀.pid + j.val < A.extent io.out := h2 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hnout, _⟩
-              · exact hflat rfl
-              · exact hnout j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · intro p hp hrp j hj hoj
-            rcases hcond with hflat | ⟨_, hnscr⟩
-            · exact hflat rfl
-            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1) (fun _ => xs) s₀ hpid rfl hu
+      (fun _i j hj => h1 j hj) (fun _o j hj => h2 j hj)
+      (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
+      (fun _i j hj => hx j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj,
+      fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
 
 end MaskedKernelIO₁
 
@@ -1065,6 +1258,36 @@ def Implements (io : Masked2DKernelIO₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(two float channels with per-channel read gates, one output, scratch as
+contract-free channels). -/
+private def toU (io : Masked2DKernelIO₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 2
+  nOut := 1
+  nScr := io.scratch.length
+  bufs := [io.in1, io.in2, io.out] ++ io.scratch.map Prod.fst
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | _ => io.in2
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun _ => io.B
+  sbuf := fun t => (io.scratch.get t).1
+  iwin := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
+    | _ => fun j => io.read2 p₀ p₁ j
+  imask := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
+    | _ => fun j => io.read2Mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
+  omask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
+  swin := fun t _ p₀ p₁ j => (io.scratch.get t).2 p₀ p₁ j
+  smask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
+
 /-- Assembly lemma — two-input sibling of
 `Masked2DKernelIO₁.Implements.intro`. -/
 theorem Implements.intro (io : Masked2DKernelIO₂)
@@ -1098,48 +1321,71 @@ theorem Implements.intro (io : Masked2DKernelIO₂)
                 o ≠ p.2 (s₀.pids 0) (s₀.pids 1) j) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j =>
+        f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+          (fun j' => vals (⟨1, by decide⟩ : Fin 2) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob hsb
+      refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
+      intro q hq j hj
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      have h : (io.scratch.get u).2 (s.pids 0) (s.pids 1) j
+          < bounds (io.scratch.get u).1 := hsb u j hj
+      rw [hu] at h
+      exact h
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 2) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq j hj
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        have h : r ≠ (io.scratch.get u).1 ∨
+            o' ≠ (io.scratch.get u).2 (s₀.pids 0) (s₀.pids 1) j :=
+          hsc' u j hj
+        rw [hu] at h
+        rcases h with hne | hno
+        · exact absurd hrq hne
+        · exact hno
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 hsc xs ys s₀ hpid₀ hpid₁ hu hx hy
-  subst hpid₀
-  subst hpid₁
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys hx hy
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 hsc
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write (s₀.pids 0) (s₀.pids 1) j < A.extent io.out :=
-      h3 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hnout, _⟩
-              · exact hflat rfl
-              · exact hnout j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · intro p hp hrp j hj hoj
-            rcases hcond with hflat | ⟨_, hnscr⟩
-            · exact hflat rfl
-            · exact hnscr p hp j hj (by rw [hoeq, hrp, hoj])
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | _ => ys)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨_+1, _⟩ => fun j hj => h2 j hj)
+      (fun _o j hj => h3 j hj)
+      (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨_+1, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj,
+      fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
 end Masked2DKernelIO₂
 
 /-- IO signature of a **2D-grid, general-window** masked two-input /
@@ -1231,6 +1477,42 @@ def Implements (io : Masked2DKernelIO₂ₓ₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₂ₓ₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(two float channels with per-channel read gates, two outputs with
+per-output write gates, no scratch). -/
+private def toU (io : Masked2DKernelIO₂ₓ₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 2
+  nOut := 2
+  nScr := 0
+  bufs := [io.in1, io.in2, io.out1, io.out2]
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | _ => io.in2
+  oarity := fun _ => io.B
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | _ => io.out2
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
+    | _ => fun j => io.read2 p₀ p₁ j
+  imask := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
+    | _ => fun j => io.read2Mask p₀ p₁ j
+  owin := fun o _ p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ p₁ j
+    | _ => fun j => io.write2 p₀ p₁ j
+  omask := fun o _ p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁ j
+    | _ => fun j => io.writeMask2 p₀ p₁ j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — two-output sibling of
 `Masked2DKernelIO₂.Implements.intro`; `hrun`'s frame takes one exclusion
 condition per output region. -/
@@ -1269,57 +1551,75 @@ theorem Implements.intro (io : Masked2DKernelIO₂ₓ₂)
                 o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) j) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 2) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hval2 j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 xs ys s₀ hpid₀ hpid₁ hu hx hy
-  subst hpid₀
-  subst hpid₁
-  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ xs ys hx hy
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out1 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write1 (s₀.pids 0) (s₀.pids 1) j < A.extent io.out1 :=
-      h3 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval1 j hj
-  · intro j hj
-    have hmem : io.out2 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write2 (s₀.pids 0) (s₀.pids 1) j < A.extent io.out2 :=
-      h4 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval2 j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out1
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hn1, _⟩
-              · exact hflat rfl
-              · exact hn1 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · by_cases hro : r = io.out2
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨_, hn2⟩
-              · exact hflat rfl
-              · exact hn2 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | _ => ys)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨_+1, _⟩ => fun j hj => h2 j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => h3 j hj
+        | ⟨_+1, _⟩ => fun j hj => h4 j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨_+1, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 2) j hj,
+    fun j hj => hval (⟨1, by decide⟩ : Fin 2) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj,
+      fun t => t.elim0⟩
 end Masked2DKernelIO₂ₓ₂
 
 /-- IO signature of a **2D-grid, general-window** masked three-input /
@@ -1437,6 +1737,48 @@ def Implements (io : Masked2DKernelIO₃ₓ₃)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₃ₓ₃.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(three float channels with per-channel read gates, three outputs with
+per-output write gates, no scratch). -/
+private def toU (io : Masked2DKernelIO₃ₓ₃) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 3
+  nScr := 0
+  bufs := [io.in1, io.in2, io.in3, io.out1, io.out2, io.out3]
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | _ => io.in3
+  oarity := fun _ => io.B
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | ⟨1, _⟩ => io.out2
+    | _ => io.out3
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.read2 p₀ p₁ j
+    | _ => fun j => io.read3 p₀ p₁ j
+  imask := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.read2Mask p₀ p₁ j
+    | _ => fun j => io.read3Mask p₀ p₁ j
+  owin := fun o _ p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.write2 p₀ p₁ j
+    | _ => fun j => io.write3 p₀ p₁ j
+  omask := fun o _ p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.writeMask2 p₀ p₁ j
+    | _ => fun j => io.writeMask3 p₀ p₁ j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — three-input / three-output sibling of
 `Masked2DKernelIO₂ₓ₂.Implements.intro`; `hrun`'s frame takes one exclusion
 condition per output region. -/
@@ -1487,71 +1829,100 @@ theorem Implements.intro (io : Masked2DKernelIO₃ₓ₃)
                 o ≠ io.write3 (s₀.pids 0) (s₀.pids 1) j) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).1 j
+        | ⟨1, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).2.1 j
+        | ⟨_+2, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).2.2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hob (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hob (⟨2, by decide⟩ : Fin 3) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨2, by decide⟩ : Fin 3) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨2, by decide⟩ : Fin 3) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 j hj
+        | ⟨1, _⟩ => fun j hj => hval2 j hj
+        | ⟨_+2, _⟩ => fun j hj => hval3 j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 3) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 3) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out3
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨2, by decide⟩ : Fin 3) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 h5 h6 xs ys zs s₀ hpid₀ hpid₁
     hu hx hy hz
-  subst hpid₀
-  subst hpid₁
-  obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ := hrun s₀ xs ys zs hx hy hz
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4 h5 h6
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out1 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write1 (s₀.pids 0) (s₀.pids 1) j < A.extent io.out1 :=
-      h4 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval1 j hj
-  · intro j hj
-    have hmem : io.out2 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write2 (s₀.pids 0) (s₀.pids 1) j < A.extent io.out2 :=
-      h5 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval2 j hj
-  · intro j hj
-    have hmem : io.out3 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write3 (s₀.pids 0) (s₀.pids 1) j < A.extent io.out3 :=
-      h6 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval3 j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_ ?_)
-          · by_cases hro : r = io.out1
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hn1, _, _⟩
-              · exact hflat rfl
-              · exact hn1 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · by_cases hro : r = io.out2
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨_, hn2, _⟩
-              · exact hflat rfl
-              · exact hn2 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · by_cases hro : r = io.out3
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨_, _, hn3⟩
-              · exact hflat rfl
-              · exact hn3 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | _ => zs)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨1, _⟩ => fun j hj => h2 j hj
+        | ⟨_+2, _⟩ => fun j hj => h3 j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => h4 j hj
+        | ⟨1, _⟩ => fun j hj => h5 j hj
+        | ⟨_+2, _⟩ => fun j hj => h6 j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨1, _⟩ => fun j hj => hy j hj
+        | ⟨_+2, _⟩ => fun j hj => hz j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 3) j hj,
+    fun j hj => hval (⟨1, by decide⟩ : Fin 3) j hj,
+    fun j hj => hval (⟨2, by decide⟩ : Fin 3) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2, hn3⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨1, _⟩ => fun j hj => hn2 j hj
+      | ⟨_+2, _⟩ => fun j hj => hn3 j hj,
+      fun t => t.elim0⟩
 end Masked2DKernelIO₃ₓ₃
 
 /-- IO signature of a **2D-grid, general-window** masked kernel with one ℝ
@@ -1636,6 +2007,44 @@ def Implements (io : Masked2DKernelIO₁ᵦ)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₁ᵦ.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`.
+Channel 0 is the float tile, channel 1 the `.bool` tile (it enters both
+the lifted spec and the data-dependent `omask`), and channel 2 is a
+contract-free bound witness on the output window: the core states output
+bounds only at `omask` (= data-gated) lanes, while the family's
+trace-safety obligation needs them at the static `mask` — the witness
+channel's `imask := mask` carries that wider bound through. -/
+private def toU (io : Masked2DKernelIO₁ᵦ) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 1
+  nScr := 0
+  bufs := [io.inp, io.mbuf, io.out]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | ⟨1, _⟩ => .bool
+    | _ => .nat
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.inp
+    | ⟨1, _⟩ => io.mbuf
+    | _ => io.out
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.read p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.readm p₀ p₁ j
+    | _ => fun j => io.write p₀ p₁ j
+  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
+  omask := fun _ vals p₀ p₁ j =>
+    io.writeMask p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j') j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — bool-input sibling of
 `Masked2DKernelIO₁.Implements.intro`. `hsub` says the data gate only
 narrows the static mask (`fun _ _ _ _ h => h` for the default `writeMask`);
@@ -1671,44 +2080,59 @@ theorem Implements.intro (io : Masked2DKernelIO₁ᵦ)
                 o ≠ io.write (s₀.pids 0) (s₀.pids 1) j) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j =>
+        f p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+          (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 3) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun j hj => ?_
+        rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 bs xs s₀ hpid₀ hpid₁ hu hx hb
-  subst hpid₀
-  subst hpid₁
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ bs xs hx hb
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write (s₀.pids 0) (s₀.pids 1) j < A.extent io.out :=
-      h3 j (hsub _ _ bs j hj)
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_)
-          by_cases hro : r = io.out
-          · subst hro
-            refine Or.inr fun j hj hoj => ?_
-            rcases hcond with hflat | hn
-            · exact hflat rfl
-            · exact hn j hj (by rw [hoeq, hoj])
-          · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => bs
+        | ⟨_+2, _⟩ => fun j =>
+            ChanTy.read .nat s₀ io.out (io.write pid₀ pid₁ j))
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨1, _⟩ => fun j hj => h2 j hj
+        | ⟨_+2, _⟩ => fun j hj => h3 j hj)
+      (fun _o j hj => h3 j (hsub _ _ _ j hj))
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨1, _⟩ => fun j hj => hb j hj
+        | ⟨_+2, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | hn
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hn j hj, fun t => t.elim0⟩
 end Masked2DKernelIO₁ᵦ
 
 /-- IO signature of a **2D-grid, general-window** masked kernel with two ℝ
@@ -1791,6 +2215,45 @@ def Implements (io : Masked2DKernelIO₂ᵦ)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₂ᵦ.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`.
+Channels 0/1 are the float tiles, channel 2 the `.bool` tile, and channel 3
+a contract-free bound witness on the output window (see
+`Masked2DKernelIO₁ᵦ.toU` for why the witness carries the static-`mask`
+write bound). -/
+private def toU (io : Masked2DKernelIO₂ᵦ) : UKernelIO where
+  kernel := io.kernel
+  nIn := 4
+  nOut := 1
+  nScr := 0
+  bufs := [io.in1, io.in2, io.mbuf, io.out]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | ⟨1, _⟩ => .float
+    | ⟨2, _⟩ => .bool
+    | _ => .nat
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | ⟨2, _⟩ => io.mbuf
+    | _ => io.out
+  oarity := fun _ => io.B
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.read2 p₀ p₁ j
+    | ⟨2, _⟩ => fun j => io.readm p₀ p₁ j
+    | _ => fun j => io.write p₀ p₁ j
+  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
+  omask := fun _ vals p₀ p₁ j =>
+    io.writeMask p₀ p₁ (fun j' => vals (⟨2, by decide⟩ : Fin 4) j') j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — two-input sibling of
 `Masked2DKernelIO₁ᵦ.Implements.intro` (see there for `hsub`). -/
 theorem Implements.intro (io : Masked2DKernelIO₂ᵦ)
@@ -1828,45 +2291,67 @@ theorem Implements.intro (io : Masked2DKernelIO₂ᵦ)
                 o ≠ io.write (s₀.pids 0) (s₀.pids 1) j) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j =>
+        f p₀ p₁ (fun j' => vals (⟨2, by decide⟩ : Fin 4) j')
+          (fun j' => vals (⟨0, by decide⟩ : Fin 4) j')
+          (fun j' => vals (⟨1, by decide⟩ : Fin 4) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 4) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 4) j hj)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 4) j hj)
+        (fun j hj => hib (⟨3, by decide⟩ : Fin 4) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨2, by decide⟩ : Fin 4) j)
+          (fun j => vals (⟨0, by decide⟩ : Fin 4) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 4) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 4) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 4) j hj)
+          (fun j hj => hpins (⟨2, by decide⟩ : Fin 4) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun j hj => ?_
+        rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 bs xs ys s₀ hpid₀ hpid₁ hu
     hx hy hb
-  subst hpid₀
-  subst hpid₁
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ bs xs ys hx hy hb
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write (s₀.pids 0) (s₀.pids 1) j < A.extent io.out :=
-      h4 j (hsub _ _ bs j hj)
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_)
-          by_cases hro : r = io.out
-          · subst hro
-            refine Or.inr fun j hj hoj => ?_
-            rcases hcond with hflat | hn
-            · exact hflat rfl
-            · exact hn j hj (by rw [hoeq, hoj])
-          · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | ⟨2, _⟩ => bs
+        | ⟨_+3, _⟩ => fun j =>
+            ChanTy.read .nat s₀ io.out (io.write pid₀ pid₁ j))
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨1, _⟩ => fun j hj => h2 j hj
+        | ⟨2, _⟩ => fun j hj => h3 j hj
+        | ⟨_+3, _⟩ => fun j hj => h4 j hj)
+      (fun _o j hj => h4 j (hsub _ _ _ j hj))
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨1, _⟩ => fun j hj => hy j hj
+        | ⟨2, _⟩ => fun j hj => hb j hj
+        | ⟨_+3, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | hn
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hn j hj, fun t => t.elim0⟩
 end Masked2DKernelIO₂ᵦ
 
 /-- One **private working buffer** of an unmasked kernel: program `pid` may
@@ -1944,6 +2429,52 @@ def Implements (io : KernelIO₁)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₁.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(one float tile channel plus 1-lane bound-witness channels for the input,
+output, and every scratch buffer — the block bounds `w + L ≤ extent`
+carried as the masked per-lane bounds `w + L - 1 < extent` gated on
+`0 < w + L` — one output, scratch as contract-free channels). -/
+private def toU (io : KernelIO₁) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3 + io.scratch.length
+  nOut := 1
+  nScr := io.scratch.length
+  bufs := [io.inp, io.out] ++ io.scratch.map (·.buf)
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | _ => .nat
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => io.Bin
+    | _ => 1
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.inp
+    | ⟨1, _⟩ => io.inp
+    | ⟨2, _⟩ => io.out
+    | ⟨k+3, h⟩ => (io.scratch.get ⟨k, by omega⟩).buf
+  oarity := fun _ => io.Bout
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => (io.scratch.get t).len
+  sbuf := fun t => (io.scratch.get t).buf
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read p₀ + j.val
+    | ⟨1, _⟩ => fun _ => io.read p₀ + io.Bin - 1
+    | ⟨2, _⟩ => fun _ => io.write p₀ + io.Bout - 1
+    | ⟨k+3, h⟩ => fun _ =>
+        (io.scratch.get ⟨k, by omega⟩).win p₀
+          + (io.scratch.get ⟨k, by omega⟩).len - 1
+  imask := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => 0 < io.read p₀ + io.Bin
+    | ⟨2, _⟩ => fun _ => 0 < io.write p₀ + io.Bout
+    | ⟨k+3, h⟩ => fun _ =>
+        0 < (io.scratch.get ⟨k, by omega⟩).win p₀
+          + (io.scratch.get ⟨k, by omega⟩).len
+  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ => True
+  swin := fun t _ p₀ _ k => (io.scratch.get t).win p₀ + k.val
+  smask := fun _ _ _ _ _ => True
+
 /-- Assembly lemma — one-input sibling of `KernelIO₂.Implements.intro`. -/
 theorem Implements.intro (io : KernelIO₁)
     {f : (Fin io.Bin → ℝ) → Fin io.Bout → ℝ}
@@ -1964,46 +2495,130 @@ theorem Implements.intro (io : KernelIO₁)
               ∀ k : Fin p.len, o ≠ p.win s₀.pid + k.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by omega⟩ : Fin (3 + io.scratch.length)) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      have hb1 : io.read (s.pids 0) + io.Bin ≤ bounds io.inp := by
+        by_cases hpos : 0 < io.read (s.pids 0) + io.Bin
+        · have h : io.read (s.pids 0) + io.Bin - 1 < bounds io.inp :=
+            hib (⟨1, by omega⟩ : Fin (3 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb2 : io.write (s.pids 0) + io.Bout ≤ bounds io.out := by
+        by_cases hpos : 0 < io.write (s.pids 0) + io.Bout
+        · have h : io.write (s.pids 0) + io.Bout - 1 < bounds io.out :=
+            hib (⟨2, by omega⟩ : Fin (3 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      refine hts bounds s hb1 hb2 ?_
+      intro q hq
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      subst hu
+      show (io.scratch.get u).win (s.pids 0) + (io.scratch.get u).len
+          ≤ bounds (io.scratch.get u).buf
+      by_cases hpos : 0 < (io.scratch.get u).win (s.pids 0)
+          + (io.scratch.get u).len
+      · have h : (io.scratch.get u).win (s.pids 0)
+            + (io.scratch.get u).len - 1 < bounds (io.scratch.get u).buf :=
+          hib (⟨u.val + 3, by have := u.isLt; omega⟩ :
+              Fin (3 + io.scratch.length))
+            (⟨0, by decide⟩ : Fin 1) hpos
+        omega
+      · omega
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by omega⟩ : Fin (3 + io.scratch.length)) j)
+          (fun j => hpins (⟨0, by omega⟩ : Fin (3 + io.scratch.length)) j
+            True.intro)
+      refine ⟨s1, hexec, fun _o j _ => hval j, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j True.intro with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq k
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        subst hu
+        rcases hsc' u k True.intro with hne | hno
+        · exact absurd hrq hne
+        · exact hno
   intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
-  subst hpid
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs hx
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 hsc
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write s₀.pid + j.val < A.extent io.out := by
-      have := j.isLt; omega
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out
-            · subst hro
-              refine Or.inr fun j hoj => ?_
-              rcases hcond with hflat | ⟨hnout, _⟩
-              · exact hflat rfl
-              · exact hnout j (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · intro p hp hrp k hok'
-            rcases hcond with hflat | ⟨_, hnscr⟩
-            · exact hflat rfl
-            · exact hnscr p hp k (by rw [hoeq, hrp, hok'])
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => fun _ => ChanTy.read .nat s₀ io.inp (io.read pid + io.Bin - 1)
+        | ⟨2, _⟩ => fun _ => ChanTy.read .nat s₀ io.out (io.write pid + io.Bout - 1)
+        | ⟨k+3, h⟩ => fun _ =>
+            have hk : k < io.scratch.length := by
+              have h' : k + 3 < 3 + io.scratch.length := h
+              omega
+            ChanTy.read .nat s₀ (io.scratch.get ⟨k, hk⟩).buf
+              ((io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len - 1))
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => by
+            have hj : j.val < io.Bin := j.isLt
+            have h : io.read pid + j.val < A.extent io.inp := by omega
+            exact h
+        | ⟨1, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read pid + io.Bin := hm
+            have h : io.read pid + io.Bin - 1 < A.extent io.inp := by omega
+            exact h
+        | ⟨2, _⟩ => fun _ hm => by
+            have hm' : 0 < io.write pid + io.Bout := hm
+            have h : io.write pid + io.Bout - 1 < A.extent io.out := by omega
+            exact h
+        | ⟨k+3, hk3⟩ => fun _ hm => by
+            have hk : k < io.scratch.length := by
+              have h' : k + 3 < 3 + io.scratch.length := hk3
+              omega
+            have hm' : 0 < (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len := hm
+            have hb : (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len
+                ≤ A.extent (io.scratch.get ⟨k, hk⟩).buf :=
+              hsc (io.scratch.get ⟨k, hk⟩) (io.scratch.get_mem ⟨k, hk⟩)
+            have h : (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len - 1
+                < A.extent (io.scratch.get ⟨k, hk⟩).buf := by omega
+            exact h)
+      (fun _o j _ => by
+        have hj : j.val < io.Bout := j.isLt
+        have h : io.write pid + j.val < A.extent io.out := by omega
+        exact h)
+      (fun t k _ => by
+        have hb : (io.scratch.get t).win pid + (io.scratch.get t).len
+            ≤ A.extent (io.scratch.get t).buf :=
+          hsc (io.scratch.get t) (io.scratch.get_mem t)
+        have hk : k.val < (io.scratch.get t).len := k.isLt
+        have h : (io.scratch.get t).win pid + k.val
+            < A.extent (io.scratch.get t).buf := by omega
+        exact h)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => hx j
+        | ⟨1, _⟩ => fun _ _ => rfl
+        | ⟨2, _⟩ => fun _ _ => rfl
+        | ⟨_+3, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j => hval (⟨0, by decide⟩ : Fin 1) j True.intro, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j _ => hout j,
+      fun t k _ => hscr (io.scratch.get t) (io.scratch.get_mem t) k⟩
 
 /-- `io₁ ≡[R] io₂` — kernel equivalence on a shared one-input IO signature;
 the one-input sibling of `MaskedKernelIO₂.Equiv`. The interface is read
@@ -2242,6 +2857,67 @@ def Implements (io : KernelIO₃)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₃.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(three float tile channels plus 1-lane bound-witness channels for every
+input, the output, and every scratch buffer — see `KernelIO₁.toU` — one
+output, scratch as contract-free channels). -/
+private def toU (io : KernelIO₃) : UKernelIO where
+  kernel := io.kernel
+  nIn := 7 + io.scratch.length
+  nOut := 1
+  nScr := io.scratch.length
+  bufs := [io.in1, io.in2, io.in3, io.out] ++ io.scratch.map (·.buf)
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | ⟨1, _⟩ => .float
+    | ⟨2, _⟩ => .float
+    | _ => .nat
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => io.B1
+    | ⟨1, _⟩ => io.B2
+    | ⟨2, _⟩ => io.B3
+    | _ => 1
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | ⟨2, _⟩ => io.in3
+    | ⟨3, _⟩ => io.in1
+    | ⟨4, _⟩ => io.in2
+    | ⟨5, _⟩ => io.in3
+    | ⟨6, _⟩ => io.out
+    | ⟨k+7, h⟩ => (io.scratch.get ⟨k, by omega⟩).buf
+  oarity := fun _ => io.Bout
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => (io.scratch.get t).len
+  sbuf := fun t => (io.scratch.get t).buf
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
+    | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
+    | ⟨2, _⟩ => fun j => io.read3 p₀ + j.val
+    | ⟨3, _⟩ => fun _ => io.read1 p₀ + io.B1 - 1
+    | ⟨4, _⟩ => fun _ => io.read2 p₀ + io.B2 - 1
+    | ⟨5, _⟩ => fun _ => io.read3 p₀ + io.B3 - 1
+    | ⟨6, _⟩ => fun _ => io.write p₀ + io.Bout - 1
+    | ⟨k+7, h⟩ => fun _ =>
+        (io.scratch.get ⟨k, by omega⟩).win p₀
+          + (io.scratch.get ⟨k, by omega⟩).len - 1
+  imask := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => True
+    | ⟨2, _⟩ => fun _ => True
+    | ⟨3, _⟩ => fun _ => 0 < io.read1 p₀ + io.B1
+    | ⟨4, _⟩ => fun _ => 0 < io.read2 p₀ + io.B2
+    | ⟨5, _⟩ => fun _ => 0 < io.read3 p₀ + io.B3
+    | ⟨6, _⟩ => fun _ => 0 < io.write p₀ + io.Bout
+    | ⟨k+7, h⟩ => fun _ =>
+        0 < (io.scratch.get ⟨k, by omega⟩).win p₀
+          + (io.scratch.get ⟨k, by omega⟩).len
+  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ => True
+  swin := fun t _ p₀ _ k => (io.scratch.get t).win p₀ + k.val
+  smask := fun _ _ _ _ _ => True
+
 /-- Assembly lemma — three-input sibling of `KernelIO₂.Implements.intro`. -/
 theorem Implements.intro (io : KernelIO₃)
     {f : (Fin io.B1 → ℝ) → (Fin io.B2 → ℝ) → (Fin io.B3 → ℝ) →
@@ -2268,46 +2944,178 @@ theorem Implements.intro (io : KernelIO₃)
               ∀ k : Fin p.len, o ≠ p.win s₀.pid + k.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by omega⟩ : Fin (7 + io.scratch.length)) j')
+          (fun j' => vals (⟨1, by omega⟩ : Fin (7 + io.scratch.length)) j')
+          (fun j' => vals (⟨2, by omega⟩ : Fin (7 + io.scratch.length)) j')
+          j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      have hb1 : io.read1 (s.pids 0) + io.B1 ≤ bounds io.in1 := by
+        by_cases hpos : 0 < io.read1 (s.pids 0) + io.B1
+        · have h : io.read1 (s.pids 0) + io.B1 - 1 < bounds io.in1 :=
+            hib (⟨3, by omega⟩ : Fin (7 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb2 : io.read2 (s.pids 0) + io.B2 ≤ bounds io.in2 := by
+        by_cases hpos : 0 < io.read2 (s.pids 0) + io.B2
+        · have h : io.read2 (s.pids 0) + io.B2 - 1 < bounds io.in2 :=
+            hib (⟨4, by omega⟩ : Fin (7 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb3 : io.read3 (s.pids 0) + io.B3 ≤ bounds io.in3 := by
+        by_cases hpos : 0 < io.read3 (s.pids 0) + io.B3
+        · have h : io.read3 (s.pids 0) + io.B3 - 1 < bounds io.in3 :=
+            hib (⟨5, by omega⟩ : Fin (7 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb4 : io.write (s.pids 0) + io.Bout ≤ bounds io.out := by
+        by_cases hpos : 0 < io.write (s.pids 0) + io.Bout
+        · have h : io.write (s.pids 0) + io.Bout - 1 < bounds io.out :=
+            hib (⟨6, by omega⟩ : Fin (7 + io.scratch.length))
+              (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      refine hts bounds s hb1 hb2 hb3 hb4 ?_
+      intro q hq
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      subst hu
+      show (io.scratch.get u).win (s.pids 0) + (io.scratch.get u).len
+          ≤ bounds (io.scratch.get u).buf
+      by_cases hpos : 0 < (io.scratch.get u).win (s.pids 0)
+          + (io.scratch.get u).len
+      · have h : (io.scratch.get u).win (s.pids 0)
+            + (io.scratch.get u).len - 1 < bounds (io.scratch.get u).buf :=
+          hib (⟨u.val + 7, by have := u.isLt; omega⟩ :
+              Fin (7 + io.scratch.length))
+            (⟨0, by decide⟩ : Fin 1) hpos
+        omega
+      · omega
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀
+          (fun j => vals (⟨0, by omega⟩ : Fin (7 + io.scratch.length)) j)
+          (fun j => vals (⟨1, by omega⟩ : Fin (7 + io.scratch.length)) j)
+          (fun j => vals (⟨2, by omega⟩ : Fin (7 + io.scratch.length)) j)
+          (fun j => hpins (⟨0, by omega⟩ : Fin (7 + io.scratch.length)) j
+            True.intro)
+          (fun j => hpins (⟨1, by omega⟩ : Fin (7 + io.scratch.length)) j
+            True.intro)
+          (fun j => hpins (⟨2, by omega⟩ : Fin (7 + io.scratch.length)) j
+            True.intro)
+      refine ⟨s1, hexec, fun _o j _ => hval j, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j True.intro with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq k
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        subst hu
+        rcases hsc' u k True.intro with hne | hno
+        · exact absurd hrq hne
+        · exact hno
   intro A hd hregs hcov pid h1 h2 h3 h4 hsc xs ys zs s₀ hpid hu hx hy hz
-  subst hpid
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys zs hx hy hz
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4 hsc
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j
-    have hmem : io.out ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write s₀.pid + j.val < A.extent io.out := by
-      have := j.isLt; omega
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval j
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out
-            · subst hro
-              refine Or.inr fun j hoj => ?_
-              rcases hcond with hflat | ⟨hnout, _⟩
-              · exact hflat rfl
-              · exact hnout j (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · intro p hp hrp k hok'
-            rcases hcond with hflat | ⟨_, hnscr⟩
-            · exact hflat rfl
-            · exact hnscr p hp k (by rw [hoeq, hrp, hok'])
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | ⟨2, _⟩ => zs
+        | ⟨3, _⟩ => fun _ => ChanTy.read .nat s₀ io.in1 (io.read1 pid + io.B1 - 1)
+        | ⟨4, _⟩ => fun _ => ChanTy.read .nat s₀ io.in2 (io.read2 pid + io.B2 - 1)
+        | ⟨5, _⟩ => fun _ => ChanTy.read .nat s₀ io.in3 (io.read3 pid + io.B3 - 1)
+        | ⟨6, _⟩ => fun _ => ChanTy.read .nat s₀ io.out (io.write pid + io.Bout - 1)
+        | ⟨k+7, h⟩ => fun _ =>
+            have hk : k < io.scratch.length := by
+              have h' : k + 7 < 7 + io.scratch.length := h
+              omega
+            ChanTy.read .nat s₀ (io.scratch.get ⟨k, hk⟩).buf
+              ((io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len - 1))
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => by
+            have hj : j.val < io.B1 := j.isLt
+            have h : io.read1 pid + j.val < A.extent io.in1 := by omega
+            exact h
+        | ⟨1, _⟩ => fun j _ => by
+            have hj : j.val < io.B2 := j.isLt
+            have h : io.read2 pid + j.val < A.extent io.in2 := by omega
+            exact h
+        | ⟨2, _⟩ => fun j _ => by
+            have hj : j.val < io.B3 := j.isLt
+            have h : io.read3 pid + j.val < A.extent io.in3 := by omega
+            exact h
+        | ⟨3, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read1 pid + io.B1 := hm
+            have h : io.read1 pid + io.B1 - 1 < A.extent io.in1 := by omega
+            exact h
+        | ⟨4, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read2 pid + io.B2 := hm
+            have h : io.read2 pid + io.B2 - 1 < A.extent io.in2 := by omega
+            exact h
+        | ⟨5, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read3 pid + io.B3 := hm
+            have h : io.read3 pid + io.B3 - 1 < A.extent io.in3 := by omega
+            exact h
+        | ⟨6, _⟩ => fun _ hm => by
+            have hm' : 0 < io.write pid + io.Bout := hm
+            have h : io.write pid + io.Bout - 1 < A.extent io.out := by omega
+            exact h
+        | ⟨k+7, hk7⟩ => fun _ hm => by
+            have hk : k < io.scratch.length := by
+              have h' : k + 7 < 7 + io.scratch.length := hk7
+              omega
+            have hm' : 0 < (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len := hm
+            have hb : (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len
+                ≤ A.extent (io.scratch.get ⟨k, hk⟩).buf :=
+              hsc (io.scratch.get ⟨k, hk⟩) (io.scratch.get_mem ⟨k, hk⟩)
+            have h : (io.scratch.get ⟨k, hk⟩).win pid
+                + (io.scratch.get ⟨k, hk⟩).len - 1
+                < A.extent (io.scratch.get ⟨k, hk⟩).buf := by omega
+            exact h)
+      (fun _o j _ => by
+        have hj : j.val < io.Bout := j.isLt
+        have h : io.write pid + j.val < A.extent io.out := by omega
+        exact h)
+      (fun t k _ => by
+        have hb : (io.scratch.get t).win pid + (io.scratch.get t).len
+            ≤ A.extent (io.scratch.get t).buf :=
+          hsc (io.scratch.get t) (io.scratch.get_mem t)
+        have hk : k.val < (io.scratch.get t).len := k.isLt
+        have h : (io.scratch.get t).win pid + k.val
+            < A.extent (io.scratch.get t).buf := by omega
+        exact h)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => hx j
+        | ⟨1, _⟩ => fun j _ => hy j
+        | ⟨2, _⟩ => fun j _ => hz j
+        | ⟨3, _⟩ => fun _ _ => rfl
+        | ⟨4, _⟩ => fun _ _ => rfl
+        | ⟨5, _⟩ => fun _ _ => rfl
+        | ⟨6, _⟩ => fun _ _ => rfl
+        | ⟨_+7, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j => hval (⟨0, by decide⟩ : Fin 1) j True.intro, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j _ => hout j,
+      fun t k _ => hscr (io.scratch.get t) (io.scratch.get_mem t) k⟩
 
 /-- `io₁ ≡[R] io₂` — kernel equivalence on a shared three-input IO
 signature; the three-input sibling of `MaskedKernelIO₂.Equiv`. The interface
@@ -2554,6 +3362,68 @@ def Implements (io : KernelIO₃ₓ₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₃ₓ₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(three float tile channels plus 1-lane bound-witness channels for every
+input and output buffer — see `KernelIO₁.toU` — two outputs, no scratch). -/
+private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 8
+  nOut := 2
+  nScr := 0
+  bufs := [io.in1, io.in2, io.in3, io.out1, io.out2]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .float
+    | ⟨1, _⟩ => .float
+    | ⟨2, _⟩ => .float
+    | _ => .nat
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => io.B1
+    | ⟨1, _⟩ => io.B2
+    | ⟨2, _⟩ => io.B3
+    | _ => 1
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | ⟨2, _⟩ => io.in3
+    | ⟨3, _⟩ => io.in1
+    | ⟨4, _⟩ => io.in2
+    | ⟨5, _⟩ => io.in3
+    | ⟨6, _⟩ => io.out1
+    | _ => io.out2
+  oarity := fun o => match o with
+    | ⟨0, _⟩ => io.Bout1
+    | _ => io.Bout2
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | _ => io.out2
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
+    | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
+    | ⟨2, _⟩ => fun j => io.read3 p₀ + j.val
+    | ⟨3, _⟩ => fun _ => io.read1 p₀ + io.B1 - 1
+    | ⟨4, _⟩ => fun _ => io.read2 p₀ + io.B2 - 1
+    | ⟨5, _⟩ => fun _ => io.read3 p₀ + io.B3 - 1
+    | ⟨6, _⟩ => fun _ => io.write1 p₀ + io.Bout1 - 1
+    | _ => fun _ => io.write2 p₀ + io.Bout2 - 1
+  imask := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => True
+    | ⟨2, _⟩ => fun _ => True
+    | ⟨3, _⟩ => fun _ => 0 < io.read1 p₀ + io.B1
+    | ⟨4, _⟩ => fun _ => 0 < io.read2 p₀ + io.B2
+    | ⟨5, _⟩ => fun _ => 0 < io.read3 p₀ + io.B3
+    | ⟨6, _⟩ => fun _ => 0 < io.write1 p₀ + io.Bout1
+    | _ => fun _ => 0 < io.write2 p₀ + io.Bout2
+  owin := fun o _ p₀ _ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ + j.val
+    | _ => fun j => io.write2 p₀ + j.val
+  omask := fun _ _ _ _ _ => True
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — three-input / two-output sibling of
 `KernelIO₂.Implements.intro`. The region-model triple `hrun` takes the frame
 as two window conditions (one per output); a cell is untouched when it avoids
@@ -2586,55 +3456,156 @@ theorem Implements.intro (io : KernelIO₃ₓ₂)
               ∀ j : Fin io.Bout2, o ≠ io.write2 s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f (fun j' => vals (⟨0, by decide⟩ : Fin 8) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 8) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 8) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f (fun j' => vals (⟨0, by decide⟩ : Fin 8) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 8) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 8) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib _hob _hsb
+      have hb1 : io.read1 (s.pids 0) + io.B1 ≤ bounds io.in1 := by
+        by_cases hpos : 0 < io.read1 (s.pids 0) + io.B1
+        · have h : io.read1 (s.pids 0) + io.B1 - 1 < bounds io.in1 :=
+            hib (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb2 : io.read2 (s.pids 0) + io.B2 ≤ bounds io.in2 := by
+        by_cases hpos : 0 < io.read2 (s.pids 0) + io.B2
+        · have h : io.read2 (s.pids 0) + io.B2 - 1 < bounds io.in2 :=
+            hib (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb3 : io.read3 (s.pids 0) + io.B3 ≤ bounds io.in3 := by
+        by_cases hpos : 0 < io.read3 (s.pids 0) + io.B3
+        · have h : io.read3 (s.pids 0) + io.B3 - 1 < bounds io.in3 :=
+            hib (⟨5, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb4 : io.write1 (s.pids 0) + io.Bout1 ≤ bounds io.out1 := by
+        by_cases hpos : 0 < io.write1 (s.pids 0) + io.Bout1
+        · have h : io.write1 (s.pids 0) + io.Bout1 - 1 < bounds io.out1 :=
+            hib (⟨6, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      have hb5 : io.write2 (s.pids 0) + io.Bout2 ≤ bounds io.out2 := by
+        by_cases hpos : 0 < io.write2 (s.pids 0) + io.Bout2
+        · have h : io.write2 (s.pids 0) + io.Bout2 - 1 < bounds io.out2 :=
+            hib (⟨7, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1) hpos
+          omega
+        · omega
+      exact hts bounds s hb1 hb2 hb3 hb4 hb5
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 8) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 8) j)
+          (fun j => vals (⟨2, by decide⟩ : Fin 8) j)
+          (fun j => hpins (⟨0, by decide⟩ : Fin 8) j True.intro)
+          (fun j => hpins (⟨1, by decide⟩ : Fin 8) j True.intro)
+          (fun j => hpins (⟨2, by decide⟩ : Fin 8) j True.intro)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j _ => hval1 j
+        | ⟨_+1, _⟩ => fun j _ => hval2 j, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) j True.intro with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) j True.intro with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 h4 h5 xs ys zs s₀ hpid hu hx hy hz
-  subst hpid
-  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ xs ys zs hx hy hz
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4 h5
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j
-    have hmem : io.out1 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write1 s₀.pid + j.val < A.extent io.out1 := by
-      have := j.isLt; omega
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval1 j
-  · intro j
-    have hmem : io.out2 ∈ A.regions := by rw [hregs]; simp
-    have hlt : io.write2 s₀.pid + j.val < A.extent io.out2 := by
-      have := j.isLt; omega
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval2 j
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out1
-            · subst hro
-              refine Or.inr fun j hoj => ?_
-              rcases hcond with hflat | ⟨hn1, _⟩
-              · exact hflat rfl
-              · exact hn1 j (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · by_cases hro : r = io.out2
-            · subst hro
-              refine Or.inr fun j hoj => ?_
-              rcases hcond with hflat | ⟨_, hn2⟩
-              · exact hflat rfl
-              · exact hn2 j (by rw [hoeq, hoj])
-            · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | ⟨2, _⟩ => zs
+        | ⟨3, _⟩ => fun _ => ChanTy.read .nat s₀ io.in1 (io.read1 pid + io.B1 - 1)
+        | ⟨4, _⟩ => fun _ => ChanTy.read .nat s₀ io.in2 (io.read2 pid + io.B2 - 1)
+        | ⟨5, _⟩ => fun _ => ChanTy.read .nat s₀ io.in3 (io.read3 pid + io.B3 - 1)
+        | ⟨6, _⟩ => fun _ =>
+            ChanTy.read .nat s₀ io.out1 (io.write1 pid + io.Bout1 - 1)
+        | ⟨_+7, _⟩ => fun _ =>
+            ChanTy.read .nat s₀ io.out2 (io.write2 pid + io.Bout2 - 1))
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => by
+            have hj : j.val < io.B1 := j.isLt
+            have h : io.read1 pid + j.val < A.extent io.in1 := by omega
+            exact h
+        | ⟨1, _⟩ => fun j _ => by
+            have hj : j.val < io.B2 := j.isLt
+            have h : io.read2 pid + j.val < A.extent io.in2 := by omega
+            exact h
+        | ⟨2, _⟩ => fun j _ => by
+            have hj : j.val < io.B3 := j.isLt
+            have h : io.read3 pid + j.val < A.extent io.in3 := by omega
+            exact h
+        | ⟨3, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read1 pid + io.B1 := hm
+            have h : io.read1 pid + io.B1 - 1 < A.extent io.in1 := by omega
+            exact h
+        | ⟨4, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read2 pid + io.B2 := hm
+            have h : io.read2 pid + io.B2 - 1 < A.extent io.in2 := by omega
+            exact h
+        | ⟨5, _⟩ => fun _ hm => by
+            have hm' : 0 < io.read3 pid + io.B3 := hm
+            have h : io.read3 pid + io.B3 - 1 < A.extent io.in3 := by omega
+            exact h
+        | ⟨6, _⟩ => fun _ hm => by
+            have hm' : 0 < io.write1 pid + io.Bout1 := hm
+            have h : io.write1 pid + io.Bout1 - 1 < A.extent io.out1 := by omega
+            exact h
+        | ⟨_+7, _⟩ => fun _ hm => by
+            have hm' : 0 < io.write2 pid + io.Bout2 := hm
+            have h : io.write2 pid + io.Bout2 - 1 < A.extent io.out2 := by omega
+            exact h)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j _ => by
+            have hj : j.val < io.Bout1 := j.isLt
+            have h : io.write1 pid + j.val < A.extent io.out1 := by omega
+            exact h
+        | ⟨_+1, _⟩ => fun j _ => by
+            have hj : j.val < io.Bout2 := j.isLt
+            have h : io.write2 pid + j.val < A.extent io.out2 := by omega
+            exact h)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j _ => hx j
+        | ⟨1, _⟩ => fun j _ => hy j
+        | ⟨2, _⟩ => fun j _ => hz j
+        | ⟨3, _⟩ => fun _ _ => rfl
+        | ⟨4, _⟩ => fun _ _ => rfl
+        | ⟨5, _⟩ => fun _ _ => rfl
+        | ⟨6, _⟩ => fun _ _ => rfl
+        | ⟨_+7, _⟩ => fun _ _ => rfl)
+  refine ⟨s', hexec, fun j => hval (⟨0, by decide⟩ : Fin 2) j True.intro,
+    fun j => hval (⟨1, by decide⟩ : Fin 2) j True.intro, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j _ => hn1 j
+      | ⟨_+1, _⟩ => fun j _ => hn2 j,
+      fun t => t.elim0⟩
 
 end KernelIO₃ₓ₂
 
@@ -2729,6 +3700,45 @@ def Implements (io : MaskedKernelIO₃ₓ₂)
 
 @[inherit_doc] scoped infix:25 " ⊨ " => MaskedKernelIO₃ₓ₂.Implements
 
+/-- Embed into the unified core — proof plumbing for `Implements.intro`.
+The allocation list is the struct's own `bufs` (decoupled from the channel
+roles, so in-place duplicate-region wiring survives); the core's `obuf_mem`
+field is exactly the intro's two membership side conditions, so they are
+threaded through as arguments. -/
+private def toU (io : MaskedKernelIO₃ₓ₂)
+    (hout1 : io.out1 ∈ io.bufs) (hout2 : io.out2 ∈ io.bufs) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 2
+  nScr := 0
+  bufs := io.bufs
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | ⟨1, _⟩ => io.in2
+    | _ => io.in3
+  oarity := fun _ => io.B
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | _ => io.out2
+  obuf_mem := fun o => match o with
+    | ⟨0, _⟩ => hout1
+    | ⟨_+1, _⟩ => hout2
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
+    | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
+    | _ => fun j => io.read3 p₀ + j.val
+  imask := fun _ _ p₀ _ j => io.mask p₀ j
+  owin := fun o _ p₀ _ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ + j.val
+    | _ => fun j => io.write2 p₀ + j.val
+  omask := fun _ _ p₀ _ j => io.mask p₀ j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
 /-- Assembly lemma — masked three-input / two-output sibling of
 `MaskedKernelIO₂.Implements.intro`, plus the two membership side conditions
 tying the output roles into the declared allocation list. -/
@@ -2770,54 +3780,83 @@ theorem Implements.intro (io : MaskedKernelIO₃ₓ₂)
                 o ≠ io.write2 s₀.pid + j.val) →
             s1.mem r o = s₀.mem r o)) :
     io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : (io.toU hout1 hout2).Implements
+      (fun _p₀ _p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨2, by decide⟩ : Fin 3) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨2, by decide⟩ : Fin 3) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hval2 j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 h4 h5 xs ys zs s₀ hpid hu hx hy hz
-  subst hpid
-  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ xs ys zs hx hy hz
-  have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ h1 h2 h3 h4 h5
-  have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
-  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_⟩
-  · rw [hbridge, hexec, Option.map_some]
-  · intro j hj
-    have hmem : io.out1 ∈ A.regions := by rw [hregs]; exact hout1
-    have hlt : io.write1 s₀.pid + j.val < A.extent io.out1 := h4 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval1 j hj
-  · intro j hj
-    have hmem : io.out2 ∈ A.regions := by rw [hregs]; exact hout2
-    have hlt : io.write2 s₀.pid + j.val < A.extent io.out2 := h5 j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
-    exact hval2 j hj
-  · intro r' o' hcond
-    by_cases hr : r' = A.flat
-    · subst hr
-      show (A.flattenState s1).mem A.flat o'
-          = (A.flattenState s₀).mem A.flat o'
-      simp only [FlatAlloc.flattenState]
-      unfold FlatAlloc.readFlat
-      cases hdec : A.decode o' with
-      | none => rfl
-      | some p =>
-          obtain ⟨r, o⟩ := p
-          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
-          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
-          refine congrArg A.trCell (hframe r o ?_ ?_)
-          · by_cases hro : r = io.out1
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨hn1, _⟩
-              · exact hflat rfl
-              · exact hn1 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-          · by_cases hro : r = io.out2
-            · subst hro
-              refine Or.inr fun j hj hoj => ?_
-              rcases hcond with hflat | ⟨_, hn2⟩
-              · exact hflat rfl
-              · exact hn2 j hj (by rw [hoeq, hoj])
-            · exact Or.inl hro
-    · simp only [FlatAlloc.flattenState, if_neg hr]
-
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1)
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | ⟨1, _⟩ => ys
+        | _ => zs)
+      s₀ hpid rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨1, _⟩ => fun j hj => h2 j hj
+        | ⟨_+2, _⟩ => fun j hj => h3 j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => h4 j hj
+        | ⟨_+1, _⟩ => fun j hj => h5 j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨1, _⟩ => fun j hj => hy j hj
+        | ⟨_+2, _⟩ => fun j hj => hz j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 2) j hj,
+    fun j hj => hval (⟨1, by decide⟩ : Fin 2) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj,
+      fun t => t.elim0⟩
 end MaskedKernelIO₃ₓ₂
 
 /-- IO signature of a **one-input / two-output** kernel (`₁ₓ₂` = "1 × 2") —
