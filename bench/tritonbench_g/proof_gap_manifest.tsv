@@ -37,7 +37,7 @@ bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_
 bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cosine_compute/CosineCompute.lean	cos_func_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cross_entropy1/CrossEntropy1.lean	cross_entropy_fwd_output_summary	full_value_candidate	none		end-to-end
+bench/tritonbench_g/cross_entropy1/CrossEntropy1.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean	cross_entropy_fwd_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cross_entropy_ops/CrossEntropyOps.lean	cross_entropy_fwd_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	decay_cumsum_backward_closed_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -173,8 +173,8 @@ bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_backward_kernel_corre
 bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_softmax_bloom/TokenSoftmaxBloom.lean	token_softmax_bloom_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_llama_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/token_softmax_bloom/TokenSoftmaxBloom.lean	token_softmax_bloom_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_llama_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_value_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_index_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_2_compute_correct	full_value_candidate	none		no proof-gap marker in summary context

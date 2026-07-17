@@ -4307,5 +4307,283 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁)
 
 end MetaMasked2DKernelIO₁
 
+/-- IO signature of the **cross-entropy metadata shape**: one per-program
+`.int` scalar slot (the label, `mbufL`, loaded at the pid-affine cell
+`mwinL`), one masked float data row (`inp`, `B` lanes), one label-dependent
+single-cell **gather** read (also from `inp`; window `gwin` and read gate
+`gmask` both eat the loaded label), and two per-program single-cell float
+outputs (`out1`/`out2`, each with its own cell address and write gate).
+The subscript is pure data-input × output arity (row + gather cell ↦ two
+scalar cells); the slot is capability (`Meta`), not arity. Intended
+consumers: the TritonBench-G cross-entropy forward family
+(`cross_entropy1` / `cross_entropy2` / `cross_entropy_ops` — per-
+`(row_idx, col_block_idx)` loss/LSE cells with the guarded
+`logits[label]` gather). Following the family precedent there is no
+`scratch` field until a consumer needs one. -/
+structure MetaMasked2DKernelIO₂ₓ₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Label slot's buffer (one `.int` cell per program). -/
+  mbufL : RegionName
+  /-- Data input buffer — both the masked row and the gather cell read it. -/
+  inp : RegionName
+  /-- First output buffer. -/
+  out1 : RegionName
+  /-- Second output buffer. -/
+  out2 : RegionName
+  /-- Tile length of the masked data row. -/
+  B : Nat
+  /-- Label slot's cell address for program `(pid₀, pid₁)`. -/
+  mwinL : Nat → Nat → Nat
+  /-- Data-row read window at `(pid₀, pid₁, lab, j)` — the loaded label is
+  an ordinary named argument. -/
+  read : Nat → Nat → Int → Fin B → Nat
+  /-- Data-row read-active lanes, given the loaded label. -/
+  mask : Nat → Nat → Int → Fin B → Prop
+  /-- Gather cell's read address (label-dependent). -/
+  gwin : Nat → Nat → Int → Nat
+  /-- Gather read gate: the label-dependent condition under which the
+  kernel actually loads the gather cell. -/
+  gmask : Nat → Nat → Int → Prop
+  /-- `out1`'s cell address for program `(pid₀, pid₁)`. -/
+  write1 : Nat → Nat → Int → Nat
+  /-- `out2`'s cell address. -/
+  write2 : Nat → Nat → Int → Nat
+  /-- `out1`'s write gate; defaults to always-on (the genre's loss/LSE
+  stores are unconditional). -/
+  writeMask1 : Nat → Nat → Int → Prop := fun _ _ _ => True
+  /-- `out2`'s write gate; defaults to always-on. -/
+  writeMask2 : Nat → Nat → Int → Prop := fun _ _ _ => True
+
+namespace MetaMasked2DKernelIO₂ₓ₂
+
+/-- `io.Implements f` — the cross-entropy-genre masked Hoare triple. The
+label `lab` is universally quantified and pinned to the slot cell inside
+the memory precondition; the data row `xs` is pinned on the read-active
+lanes and the gather cell `g` under its gate, so window/mask/value
+contracts all speak about the *loaded* label. The spec `f` returns the
+pair of the two output cells' values (`.1` for `out1`, `.2` for `out2`).
+Frame: every cell outside the two gated output cells is untouched. -/
+def Implements (io : MetaMasked2DKernelIO₂ₓ₂)
+    (f : Nat → Nat → Int → (Fin io.B → ℝ) → ℝ → ℝ × ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.mbufL, io.inp, io.out1, io.out2] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+  ∀ (lab : Int) (xs : Fin io.B → ℝ) (g : ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    io.mwinL pid₀ pid₁ < A.extent io.mbufL →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ lab j →
+      io.read pid₀ pid₁ lab j < A.extent io.inp) →
+    (io.gmask pid₀ pid₁ lab → io.gwin pid₀ pid₁ lab < A.extent io.inp) →
+    (io.writeMask1 pid₀ pid₁ lab →
+      io.write1 pid₀ pid₁ lab < A.extent io.out1) →
+    (io.writeMask2 pid₀ pid₁ lab →
+      io.write2 pid₀ pid₁ lab < A.extent io.out2) →
+    s₀.readMemValue .int io.mbufL (io.mwinL pid₀ pid₁) = lab →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ lab j →
+      s₀.readMem io.inp (io.read pid₀ pid₁ lab j) = xs j) →
+    (io.gmask pid₀ pid₁ lab →
+      s₀.readMem io.inp (io.gwin pid₀ pid₁ lab) = g) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (io.writeMask1 pid₀ pid₁ lab →
+          s'.readMem A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ lab))
+            = (f pid₀ pid₁ lab xs g).1)
+      ∧ (io.writeMask2 pid₀ pid₁ lab →
+          s'.readMem A.flat (A.addr io.out2 (io.write2 pid₀ pid₁ lab))
+            = (f pid₀ pid₁ lab xs g).2)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((io.writeMask1 pid₀ pid₁ lab →
+                o' ≠ A.addr io.out1 (io.write1 pid₀ pid₁ lab)) ∧
+             (io.writeMask2 pid₀ pid₁ lab →
+                o' ≠ A.addr io.out2 (io.write2 pid₀ pid₁ lab)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MetaMasked2DKernelIO₂ₓ₂.Implements
+
+/-- Embed into the unified core: channel 0 is the 1-lane `.int` label slot
+(always read), channel 1 the `B`-lane float data row and channel 2 the
+1-lane float gather cell, both with windows/masks reading the slot's
+pinned value; the two outputs are 1-lane gated cells. -/
+private def toU (io : MetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 2
+  nScr := 0
+  bufs := [io.mbufL, io.inp, io.out1, io.out2]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .int
+    | ⟨1, _⟩ => .float
+    | ⟨2, _⟩ => .float
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => 1
+    | ⟨1, _⟩ => io.B
+    | ⟨2, _⟩ => 1
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.mbufL
+    | ⟨1, _⟩ => io.inp
+    | ⟨2, _⟩ => io.inp
+  oarity := fun _ => 1
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | _ => io.out2
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => io.mwinL p₀ p₁
+    | ⟨1, _⟩ => fun j => io.read p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+    | ⟨2, _⟩ => fun _ => io.gwin p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+  imask := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun j => io.mask p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
+    | ⟨2, _⟩ => fun _ => io.gmask p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+  owin := fun o vals p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun _ => io.write1 p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+    | _ => fun _ => io.write2 p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+  omask := fun o vals p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun _ => io.writeMask1 p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+    | _ => fun _ => io.writeMask2 p₀ p₁
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
+/-- Assembly lemma: obligations in the skin's named vocabulary — the label
+enters `hts`/`hrun` as one pinned named `Int` scalar (no lane-constancy
+plumbing: the slot and the gather cell are 1-lane channels), the gather
+pin and bound are gated by `gmask`, and `hrun`'s frame takes one exclusion
+condition per output cell. -/
+theorem Implements.intro (io : MetaMasked2DKernelIO₂ₓ₂)
+    {f : Nat → Nat → Int → (Fin io.B → ℝ) → ℝ → ℝ × ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (lab : Int),
+      s.readMemValue .int io.mbufL (io.mwinL (s.pids 0) (s.pids 1)) = lab →
+      io.mwinL (s.pids 0) (s.pids 1) < bounds io.mbufL →
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) lab j →
+        io.read (s.pids 0) (s.pids 1) lab j < bounds io.inp) →
+      (io.gmask (s.pids 0) (s.pids 1) lab →
+        io.gwin (s.pids 0) (s.pids 1) lab < bounds io.inp) →
+      (io.writeMask1 (s.pids 0) (s.pids 1) lab →
+        io.write1 (s.pids 0) (s.pids 1) lab < bounds io.out1) →
+      (io.writeMask2 (s.pids 0) (s.pids 1) lab →
+        io.write2 (s.pids 0) (s.pids 1) lab < bounds io.out2) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (lab : Int) (xs : Fin io.B → ℝ) (g : ℝ),
+      s₀.readMemValue .int io.mbufL (io.mwinL (s₀.pids 0) (s₀.pids 1)) = lab →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) lab j →
+        s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) lab j) = xs j) →
+      (io.gmask (s₀.pids 0) (s₀.pids 1) lab →
+        s₀.readMem io.inp (io.gwin (s₀.pids 0) (s₀.pids 1) lab) = g) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (io.writeMask1 (s₀.pids 0) (s₀.pids 1) lab →
+            s1.readMem io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) lab)
+              = (f (s₀.pids 0) (s₀.pids 1) lab xs g).1)
+        ∧ (io.writeMask2 (s₀.pids 0) (s₀.pids 1) lab →
+            s1.readMem io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) lab)
+              = (f (s₀.pids 0) (s₀.pids 1) lab xs g).2)
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨ (io.writeMask1 (s₀.pids 0) (s₀.pids 1) lab →
+              o ≠ io.write1 (s₀.pids 0) (s₀.pids 1) lab)) →
+            (r ≠ io.out2 ∨ (io.writeMask2 (s₀.pids 0) (s₀.pids 1) lab →
+              o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) lab)) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun _ =>
+            (f p₀ p₁ (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (vals (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))).1
+        | ⟨_+1, _⟩ => fun _ =>
+            (f p₀ p₁ (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (vals (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))).2) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals hpins hib hob _hsb
+      exact hts bounds s
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (hpins (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun hgm => hib (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) hgm)
+        (fun h1 => hob (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h1)
+        (fun h2 => hob (⟨1, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h2)
+    · intro s₀ vals hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀
+        (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
+        (vals (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
+        (hpins (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun j hj => hpins (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun hgm => hpins (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) hgm)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun _ h1 => hval1 h1
+        | ⟨_+1, _⟩ => fun _ h2 => hval2 h2, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun h1 => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h1
+            with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun h2 => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h2
+            with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ lab xs g s₀ hpid₀ hpid₁ hu hbL hbr hbg
+    hbw1 hbw2 hmL hx hg
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ => lab
+        | ⟨1, _⟩ => xs
+        | ⟨2, _⟩ => fun _ => g)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hbL
+        | ⟨1, _⟩ => fun j hj => hbr j hj
+        | ⟨2, _⟩ => fun _ hgm => hbg hgm)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun _ h1 => hbw1 h1
+        | ⟨_+1, _⟩ => fun _ h2 => hbw2 h2)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hmL
+        | ⟨1, _⟩ => fun j hj => hx j hj
+        | ⟨2, _⟩ => fun _ hgm => hg hgm)
+  refine ⟨s', hexec,
+    fun h1 => hval (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h1,
+    fun h2 => hval (⟨1, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h2, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun o => match o with
+      | ⟨0, _⟩ => fun _ hj => hn1 hj
+      | ⟨_+1, _⟩ => fun _ hj => hn2 hj,
+      fun t => t.elim0⟩
+
+end MetaMasked2DKernelIO₂ₓ₂
+
 
 end VeriTile.Triton
