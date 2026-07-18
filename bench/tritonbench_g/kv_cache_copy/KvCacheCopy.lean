@@ -24,30 +24,39 @@ covers every program of the grid.
 ## Proof architecture
 
 ```
-kv_cache_copy_seqlen1_output_summary_general           ← TOP THEOREM (old layout, dimension-general)
-kv_cache_copy_split_x_output_summary_general           ← TOP THEOREM (split-x layout, dimension-general)
-  ├─ copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported   surface lowers
-  ├─ K-cache scatter ComputeCorrect
-  │    ├─ copy_to_kcache_seqlen1_old_layout_block_compute_correct   (old layout)
-  │    │    └─ copy_to_kcache_seqlen1_xblock_compute_correct → _xblock_correct
-  │    └─ copy_to_kcache_seqlen1_new_layout_xblock_compute_correct  (split-x, ∀ split_x)
-  ├─ V-cache scatter ComputeCorrect
-  │    └─ copy_to_vcache_seqlen1_dblock_compute_correct → _dblock_correct
-  └─ offset-injectivity (K-cache old/new layout, V-cache) taken as hypotheses
+kv_cache_copy_correctness                       ← TOP SPECIFICATION
+  · kvCacheCopyIO ⊨ (xs, ys): the chained-metadata masked copy triple
+    (ChainMetaMasked2DKernelIO₂ₓ₂ — slot 1 = context_lengths[pid₀], slot 2 =
+     the block-table cell whose ADDRESS eats slot 1's loaded value)
+  ├─ copy_to_kvcache_seqlen1_xblock_flattenOk    bridge fragment membership
+  ├─ copy_to_kvcache_seqlen1_xblock_traceSafe    per-execution safety walk
+  └─ copy_to_kvcache_seqlen1_xblock_region_run   region-model chained triple
+copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported  faithful full-loop kernel lowers
+copy_to_kcache_seqlen1_xblock_correct /               per-channel audit slices
+copy_to_vcache_seqlen1_dblock_correct                 (single-store exec value lemmas)
 ```
-Single-x-block lemmas `copy_to_kcache_one_xblock_*` /
-`copy_to_vcache_one_dblock_*` underlie the seqlen1 versions.
+
+The headline kernel `copy_to_kvcache_seqlen1_xblock` is the decode prologue
+plus ONE `split_x` iteration of the Python static loop, with BOTH stores (K
+and V) in a single program. Instantiating `SPLIT_X` at every
+`split_x < HEAD_DIM / KCACHE_X` covers the whole loop; the legacy layout is
+the instance `SPLIT_X = 0`, `KCACHE_X = HEAD_DIM`, `stride_kcsplit_x = 0`.
+The single-store slices are kept as independently audited per-channel value
+lemmas.
 
 ## Modeling boundary
 
 Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
 erased (post-erasure all dtypes unify to `ℝ`). The destination block id and
 in-block slot are data-dependent: `block_id` is gathered from `BLOCK_TABLES`
-and `offsets_in_last_block` from `context_lengths[cur_seq_idx] - 1`. The
-top theorems are stated at the **Python test shapes** (`HEAD_DIM = 64`,
-`KCACHE_X ∈ {64, 8}`, block_size 16, etc.), with explicit offset-injectivity
-lemmas (no two cells of one program alias) proved by `omega` for those shapes.
-The split-x case quantifies over every `split_x : Fin (HEAD_DIM // KCACHE_X)`.
+at an address computed from `context_lengths[cur_seq_idx] - 1` (Nat-truncated
+subtraction, exactly as the DSL executes it) — the `⊨` headline pins the two
+**raw** loaded scalars as named binders `m₁` (context length) and `m₂` (block
+id); the `- 1` / `/ block_size` / `% block_size` arithmetic lives in the
+declared windows. Everything is dimension-general; no-aliasing of the
+block-id-dependent cache windows enters through the skin's per-pinned-context
+`WriteInj` readback gates (not as `∀`-quantified hypotheses), plus the
+`KCache ≠ VCache` side condition (the V store must not clobber the K output).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.KvCacheCopy
@@ -119,44 +128,10 @@ theorem copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported
   simp [copy_to_kvcache_seqlen1_kernel, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
-/-- Surface transcription of the K-cache store in `kv_cache_copy.py`'s
-`_copy_to_kvcache_seqlen1_kernel` for one `split_x` partition.
-
-The Python kernel iterates `split_x in tl.static_range(HEAD_DIM // KCACHE_X)`.
-This surface fixes that partition as `SPLIT_X`, loads the corresponding K
-dimension block, and stores it into either the old layout (`SPLIT_X=0`,
-`KCACHE_X=HEAD_DIM`) or the new split layout. -/
-def copy_to_kcache_one_xblock
-    (K KCache : RegionName) (BLOCK_TABLES : Region .nat)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-      stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb HEAD_DIM KCACHE_X : Nat) :
-    ComputeKernel := triton {
-  cur_seq_idx = tl.program_id(0)
-  cur_kv_head_idx = tl.program_id(1)
-  range_x = tl.arange(0, $(KCACHE_X))
-  offsets_dmodel_x_partition = $(SPLIT_X) * $(KCACHE_X) + range_x
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    $(LAST_BLOCK_IDX) * $(stride_btb))
-  k = tl.load(K + cur_seq_idx * $(stride_kt) +
-      cur_kv_head_idx * $(stride_kh) +
-      offsets_dmodel_x_partition * $(stride_kd),
-    mask=offsets_dmodel_x_partition < $(HEAD_DIM), other=0.0)
-  tl.store(KCache + block_id * $(stride_kcb) +
-      cur_kv_head_idx * $(stride_kch) +
-      $(SPLIT_X) * $(stride_kcsplit_x) +
-      $(OFFSET_LAST_BLOCK) * $(stride_kcs) + range_x,
-    k, mask=offsets_dmodel_x_partition < $(HEAD_DIM))
-}
-
-/-- Surface transcription of the K-cache store in `kv_cache_copy.py`'s
-`_copy_to_kvcache_seqlen1_kernel`.
-
-Unlike `copy_to_kcache_one_xblock`, this keeps the decode-path arithmetic from
-the Python kernel: `context_lengths[cur_seq_idx] - 1`, block-table lookup,
-last-block offset, one K load, and the K-cache store for one `split_x`
-partition. -/
+/-- Per-channel audit slice: the K-cache store of `kv_cache_copy.py`'s
+`_copy_to_kvcache_seqlen1_kernel`, keeping the decode-path arithmetic
+(`context_lengths[cur_seq_idx] - 1`, block-table lookup, last-block offset),
+one K load, and the K-cache store for one `split_x` partition. -/
 def copy_to_kcache_seqlen1_xblock
     (K KCache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
     (SPLIT_X stride_kt stride_kh stride_kd
@@ -181,32 +156,6 @@ def copy_to_kcache_seqlen1_xblock
       $(SPLIT_X) * $(stride_kcsplit_x) +
       offsets_in_last_block * $(stride_kcs) + range_x,
     k, mask=offsets_dmodel_x_partition < $(HEAD_DIM))
-}
-
-/-- Proof-oriented V-cache one-dimension-block slice of `kv_cache_copy.py`'s
-`_copy_to_kvcache_seqlen1_kernel`.
-
-This captures the V side after sequence/block arithmetic has selected the cache
-slot: load the block id from `BLOCK_TABLES`, load a V head block, and store it
-into `VCache`. -/
-def copy_to_vcache_one_dblock
-    (V VCache : RegionName) (BLOCK_TABLES : Region .nat)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-      stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb HEAD_DIM BLOCK_D : Nat) :
-    ComputeKernel := triton {
-  cur_seq_idx = tl.program_id(0)
-  cur_kv_head_idx = tl.program_id(1)
-  d = tl.arange(0, $(BLOCK_D))
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    $(LAST_BLOCK_IDX) * $(stride_btb))
-  v = tl.load(V + cur_seq_idx * $(stride_vt) +
-      cur_kv_head_idx * $(stride_vh) + d * $(stride_vd),
-    mask=d < $(HEAD_DIM), other=0.0)
-  tl.store(VCache + block_id * $(stride_vcb) +
-      cur_kv_head_idx * $(stride_vch) + $(OFFSET_LAST_BLOCK) * $(stride_vcs) +
-      d * $(stride_vcd),
-    v, mask=d < $(HEAD_DIM))
 }
 
 /-- Surface transcription of the V-cache store in `kv_cache_copy.py`'s
@@ -240,11 +189,6 @@ def copy_to_vcache_seqlen1_dblock
 def dimIndex (i : Fin BLOCK_D) : Nat :=
   i.val
 
-def blockId (s : BlockState) (BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX stride_bts stride_btb : Nat) : Nat :=
-  s.readMemValue .nat BLOCK_TABLES
-    (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb)
-
 def active (HEAD_DIM : Nat) (i : Fin BLOCK_D) : Prop :=
   dimIndex i < HEAD_DIM
 
@@ -269,15 +213,6 @@ def kSourceOffset
     (i : Fin KCACHE_X) : Nat :=
   s.pids 0 * stride_kt + s.pids 1 * stride_kh +
     kDimIndex SPLIT_X KCACHE_X i * stride_kd
-
-def kCacheOffset
-    (s : BlockState) (BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kcb stride_kch
-      stride_kcsplit_x stride_kcs stride_bts stride_btb KCACHE_X : Nat)
-    (i : Fin KCACHE_X) : Nat :=
-  blockId s BLOCK_TABLES LAST_BLOCK_IDX stride_bts stride_btb * stride_kcb +
-    s.pids 1 * stride_kch + SPLIT_X * stride_kcsplit_x +
-    OFFSET_LAST_BLOCK * stride_kcs + i.val
 
 def seqlen1PastKvSeqLen (s : BlockState) (context_lengths : RegionName) : Nat :=
   s.readMemValue .nat context_lengths (s.pids 0) - 1
@@ -305,139 +240,6 @@ def seqlen1KCacheOffset
       stride_kcb +
     s.pids 1 * stride_kch + SPLIT_X * stride_kcsplit_x +
     seqlen1OffsetLastBlock s context_lengths block_size * stride_kcs + i.val
-
-/-- Algorithm-layer correctness for the K-cache split-x copy slice. -/
-theorem copy_to_kcache_one_xblock_correct
-    (K KCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-      stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb HEAD_DIM KCACHE_X : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin KCACHE_X =>
-        kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-          stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-          stride_btb KCACHE_X i))
-    (hExec : exec (copy_to_kcache_one_xblock K KCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
-        stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-        HEAD_DIM KCACHE_X) s = some s') :
-    ∀ i : Fin KCACHE_X,
-      s'.readMem KCache
-          (kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-            stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-            stride_btb KCACHE_X i) =
-        if kActive SPLIT_X HEAD_DIM KCACHE_X i then
-          s.readMem K (kSourceOffset s SPLIT_X stride_kt stride_kh stride_kd
-            KCACHE_X i)
-        else
-          s.readMem KCache
-            (kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-              stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-              stride_btb KCACHE_X i) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [KCACHE_X] =>
-        s.readMemValue .nat BLOCK_TABLES
-            (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb) * stride_kcb +
-          s.pids 1 * stride_kch + SPLIT_X * stride_kcsplit_x +
-          OFFSET_LAST_BLOCK * stride_kcs + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [kCacheOffset, blockId, BlockState.readMemValue] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
-  by_cases hBX : 0 < KCACHE_X
-  · simp [exec, copy_to_kcache_one_xblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-          NumericDType.add, NumericDType.mul, ComparableDType.lt,
-          BlockState.readMemValue, hBX] at hExec
-    rw [← hExec]
-    have hScatter :=
-      (BlockState.scatter_readback_prop_masked_nd
-        (region := KCache)
-        (shape := [KCACHE_X])
-        (s := (s.setReg "cur_seq_idx" TileDType.nat [] (Tile.scalar (s.pids 0))
-          |>.setReg "cur_kv_head_idx" TileDType.nat [] (Tile.scalar (s.pids 1))
-          |>.setReg "range_x" TileDType.nat [KCACHE_X] (Tile.vec fun i => i.val)
-          |>.setReg "offsets_dmodel_x_partition" TileDType.nat [KCACHE_X]
-            { data := fun i => SPLIT_X * KCACHE_X + i.1.val }
-          |>.setReg "block_id" TileDType.nat []
-            (Tile.scalar (s.readMemValue .nat BLOCK_TABLES
-              (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb)))
-          |>.setReg "k" TileDType.real [KCACHE_X]
-            { data := fun i =>
-              if SPLIT_X * KCACHE_X + i.1.val < HEAD_DIM then
-                some (s.readMem K
-                  (s.pids 0 * stride_kt + s.pids 1 * stride_kh +
-                    (SPLIT_X * KCACHE_X + i.1.val) * stride_kd))
-              else some (0.0 : ℝ) }))
-        (offsetFn := fun idx : TileIndex [KCACHE_X] =>
-          s.readMemValue .nat BLOCK_TABLES
-              (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb) * stride_kcb +
-            s.pids 1 * stride_kch + SPLIT_X * stride_kcsplit_x +
-            OFFSET_LAST_BLOCK * stride_kcs + idx.1.val)
-        (valueFn := fun idx : TileIndex [KCACHE_X] =>
-          WithBot.unbotD 0
-            (if SPLIT_X * KCACHE_X + idx.1.val < HEAD_DIM then
-              some (s.readMem K
-                (s.pids 0 * stride_kt + s.pids 1 * stride_kh +
-                  (SPLIT_X * KCACHE_X + idx.1.val) * stride_kd))
-            else some (0.0 : ℝ)))
-        (P := fun idx : TileIndex [KCACHE_X] =>
-          SPLIT_X * KCACHE_X + idx.1.val < HEAD_DIM)
-        hRawInj (i, PUnit.unit))
-    simp [BlockState.readMemValue] at hScatter
-    simp only [kActive, kSourceOffset, kCacheOffset, kDimIndex, blockId,
-      BlockState.readMemValue]
-    rw [hScatter]
-    split <;> simp_all
-  · exact False.elim (hBX (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
-/-- Compute-facing correctness for the K-cache split-x copy slice. -/
-theorem copy_to_kcache_one_xblock_compute_correct
-    (K KCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-      stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb HEAD_DIM KCACHE_X : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin KCACHE_X =>
-        kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-          stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-          stride_btb KCACHE_X i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
-        stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-        HEAD_DIM KCACHE_X)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin KCACHE_X => kActive SPLIT_X HEAD_DIM KCACHE_X i)
-        (fun i => (KCache,
-          kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-            stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-            stride_btb KCACHE_X i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s SPLIT_X stride_kt stride_kh stride_kd
-          KCACHE_X i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [copy_to_kcache_one_xblock]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := copy_to_kcache_one_xblock_correct K KCache BLOCK_TABLES
-    LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
-    stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-    HEAD_DIM KCACHE_X s s' hOutInj hExec i
-  simpa [hActive] using h
 
 /-- Algorithm-layer correctness for the K-cache seqlen=1 copy surface. -/
 theorem copy_to_kcache_seqlen1_xblock_correct
@@ -556,197 +358,10 @@ theorem copy_to_kcache_seqlen1_xblock_correct
     · simpa [hi] using hScatter'
   · exact False.elim (hBX (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the K-cache seqlen=1 copy surface. -/
-theorem copy_to_kcache_seqlen1_xblock_compute_correct
-    (K KCache BLOCK_TABLES context_lengths : RegionName)
-    (SPLIT_X stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin KCACHE_X =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X stride_kcb
-          stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-          block_size KCACHE_X i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb
-        stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
-        HEAD_DIM KCACHE_X)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin KCACHE_X => kActive SPLIT_X HEAD_DIM KCACHE_X i)
-        (fun i => (KCache,
-          seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X
-            stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-            stride_btb block_size KCACHE_X i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s SPLIT_X stride_kt stride_kh stride_kd
-          KCACHE_X i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [copy_to_kcache_seqlen1_xblock]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := copy_to_kcache_seqlen1_xblock_correct K KCache BLOCK_TABLES
-    context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb stride_kch
-    stride_kcsplit_x stride_kcs stride_bts stride_btb block_size HEAD_DIM
-    KCACHE_X s s' hOutInj hExec i
-  simpa [hActive] using h
-
-/-- Named K-cache seqlen=1 writeback for the legacy Python layout
-`[num_blocks, num_kv_heads, block_size, head_dim]`.
-
-In this branch Python sets `KCACHE_X = HEAD_DIM` and `stride_kcsplit_x = 0`,
-so one x-block covers the complete K head for the selected sequence/head. -/
-theorem copy_to_kcache_seqlen1_old_layout_block_compute_correct
-    (K KCache BLOCK_TABLES context_lengths : RegionName)
-    (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcs
-      stride_bts stride_btb block_size HEAD_DIM : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0 stride_kcb
-          stride_kch 0 stride_kcs stride_bts stride_btb block_size HEAD_DIM i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch
-        0 stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin HEAD_DIM => kActive 0 HEAD_DIM HEAD_DIM i)
-        (fun i => (KCache,
-          seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0 stride_kcb
-            stride_kch 0 stride_kcs stride_bts stride_btb block_size
-            HEAD_DIM i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s 0 stride_kt stride_kh stride_kd
-          HEAD_DIM i)) := by
-  exact copy_to_kcache_seqlen1_xblock_compute_correct K KCache BLOCK_TABLES
-    context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch 0
-    stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM s hOutInj
-
-/-- Named K-cache seqlen=1 writeback for the new split-x Python layout
-`[num_blocks, num_kv_heads, head_dim // x, block_size, x]`. -/
-theorem copy_to_kcache_seqlen1_new_layout_xblock_compute_correct
-    (K KCache BLOCK_TABLES context_lengths : RegionName)
-    (SPLIT_X stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin KCACHE_X =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X stride_kcb
-          stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-          block_size KCACHE_X i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb
-        stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
-        HEAD_DIM KCACHE_X)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin KCACHE_X => kActive SPLIT_X HEAD_DIM KCACHE_X i)
-        (fun i => (KCache,
-          seqlen1KCacheOffset s BLOCK_TABLES context_lengths SPLIT_X
-            stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-            stride_btb block_size KCACHE_X i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s SPLIT_X stride_kt stride_kh stride_kd
-          KCACHE_X i)) := by
-  exact copy_to_kcache_seqlen1_xblock_compute_correct K KCache BLOCK_TABLES
-    context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_kcb stride_kch
-    stride_kcsplit_x stride_kcs stride_bts stride_btb block_size HEAD_DIM
-    KCACHE_X s hOutInj
-
-/-- Named K-cache writeback for the legacy Python layout
-`[num_blocks, num_kv_heads, block_size, head_dim]`.
-
-In this mode Python sets `KCACHE_X = HEAD_DIM`, `SPLIT_X = 0`, and
-`stride_kcsplit_x = 0`, so a single x-block covers the whole head dimension. -/
-theorem copy_to_kcache_old_layout_block_compute_correct
-    (K KCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-      stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcs
-      stride_bts stride_btb HEAD_DIM : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0
-          stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb HEAD_DIM i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0 stride_kt stride_kh stride_kd
-        stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb
-        HEAD_DIM HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin HEAD_DIM => kActive 0 HEAD_DIM HEAD_DIM i)
-        (fun i => (KCache,
-          kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0
-            stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb
-            HEAD_DIM i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s 0 stride_kt stride_kh stride_kd
-          HEAD_DIM i)) := by
-  exact copy_to_kcache_one_xblock_compute_correct K KCache BLOCK_TABLES
-    LAST_BLOCK_IDX OFFSET_LAST_BLOCK 0 stride_kt stride_kh stride_kd
-    stride_kcb stride_kch 0 stride_kcs stride_bts stride_btb HEAD_DIM HEAD_DIM
-    s hOutInj
-
-/-- Named K-cache writeback for the new split-x Python layout
-`[num_blocks, num_kv_heads, head_dim // x, block_size, x]`.
-
-This exposes one `split_x` iteration of the Python static loop. Covering the
-whole new-layout K-cache path instantiates this theorem for every
-`split_x < HEAD_DIM / KCACHE_X`. -/
-theorem copy_to_kcache_new_layout_xblock_compute_correct
-    (K KCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-      stride_kt stride_kh stride_kd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      stride_bts stride_btb HEAD_DIM KCACHE_X : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin KCACHE_X =>
-        kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-          stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-          stride_btb KCACHE_X i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_one_xblock K KCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
-        stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-        HEAD_DIM KCACHE_X)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin KCACHE_X => kActive SPLIT_X HEAD_DIM KCACHE_X i)
-        (fun i => (KCache,
-          kCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
-            stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-            stride_btb KCACHE_X i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s SPLIT_X stride_kt stride_kh stride_kd
-          KCACHE_X i)) := by
-  exact copy_to_kcache_one_xblock_compute_correct K KCache BLOCK_TABLES
-    LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X stride_kt stride_kh stride_kd
-    stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-    HEAD_DIM KCACHE_X s hOutInj
-
 def vSourceOffset
     (s : BlockState) (stride_vt stride_vh stride_vd : Nat)
     (i : Fin BLOCK_D) : Nat :=
   s.pids 0 * stride_vt + s.pids 1 * stride_vh + dimIndex i * stride_vd
-
-def vCacheOffset
-    (s : BlockState) (BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_vcb stride_vch stride_vcs
-      stride_vcd stride_bts stride_btb : Nat)
-    (i : Fin BLOCK_D) : Nat :=
-  blockId s BLOCK_TABLES LAST_BLOCK_IDX stride_bts stride_btb * stride_vcb +
-    s.pids 1 * stride_vch + OFFSET_LAST_BLOCK * stride_vcs +
-    dimIndex i * stride_vcd
 
 def seqlen1VCacheOffset
     (s : BlockState) (BLOCK_TABLES context_lengths : RegionName)
@@ -868,308 +483,416 @@ theorem copy_to_vcache_seqlen1_dblock_correct
     · simpa [hi] using hScatter'
   · exact False.elim (hBD (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the V-cache seqlen=1 copy surface. -/
-theorem copy_to_vcache_seqlen1_dblock_compute_correct
-    (V VCache BLOCK_TABLES context_lengths : RegionName)
-    (stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb block_size HEAD_DIM BLOCK_D : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_D =>
-        seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
-          stride_vcs stride_vcd stride_bts stride_btb block_size i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-        stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_D => active HEAD_DIM i)
-        (fun i => (VCache,
-          seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
-            stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [copy_to_vcache_seqlen1_dblock]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := copy_to_vcache_seqlen1_dblock_correct V VCache BLOCK_TABLES
-    context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-    stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D
-    s s' hOutInj hExec i
-  simpa [hActive] using h
+/-! ## The combined per-split surface, chained-metadata triple, and headline -/
 
-/-- Algorithm-layer correctness for the V-cache copy slice. -/
-theorem copy_to_vcache_one_dblock_correct
-    (V VCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-      stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb HEAD_DIM BLOCK_D : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_D =>
-        vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-          stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i))
-    (hExec : exec (copy_to_vcache_one_dblock V VCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_vt stride_vh stride_vd
-        stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
-        HEAD_DIM BLOCK_D) s = some s') :
-    ∀ i : Fin BLOCK_D,
-      s'.readMem VCache
-          (vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-            stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i) =
-        if active HEAD_DIM i then
-          s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i)
-        else
-          s.readMem VCache
-            (vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-              stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_D] =>
-        s.readMemValue .nat BLOCK_TABLES
-            (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb) * stride_vcb +
-          s.pids 1 * stride_vch + OFFSET_LAST_BLOCK * stride_vcs +
-          idx.1.val * stride_vcd) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [vCacheOffset, blockId, dimIndex, BlockState.readMemValue] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
-  by_cases hBD : 0 < BLOCK_D
-  · simp [exec, copy_to_vcache_one_dblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-          NumericDType.add, NumericDType.mul, ComparableDType.lt,
-          BlockState.readMemValue, hBD] at hExec
-    rw [← hExec]
-    have hScatter :=
-      (BlockState.scatter_readback_prop_masked_nd
-        (region := VCache)
-        (shape := [BLOCK_D])
-        (s := (s.setReg "cur_seq_idx" TileDType.nat [] (Tile.scalar (s.pids 0))
-          |>.setReg "cur_kv_head_idx" TileDType.nat [] (Tile.scalar (s.pids 1))
-          |>.setReg "d" TileDType.nat [BLOCK_D] (Tile.vec fun i => i.val)
-          |>.setReg "block_id" TileDType.nat []
-            (Tile.scalar (s.readMemValue .nat BLOCK_TABLES
-              (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb)))
-          |>.setReg "v" TileDType.real [BLOCK_D]
-            { data := fun i =>
-              if i.1.val < HEAD_DIM then
-                some (s.readMem V
-                  (s.pids 0 * stride_vt + s.pids 1 * stride_vh +
-                    i.1.val * stride_vd))
-              else some (0.0 : ℝ) }))
-        (offsetFn := fun idx : TileIndex [BLOCK_D] =>
-          s.readMemValue .nat BLOCK_TABLES
-              (s.pids 0 * stride_bts + LAST_BLOCK_IDX * stride_btb) * stride_vcb +
-            s.pids 1 * stride_vch + OFFSET_LAST_BLOCK * stride_vcs +
-            idx.1.val * stride_vcd)
-        (valueFn := fun idx : TileIndex [BLOCK_D] =>
-          WithBot.unbotD 0
-            (if idx.1.val < HEAD_DIM then
-              some (s.readMem V
-                (s.pids 0 * stride_vt + s.pids 1 * stride_vh +
-                  idx.1.val * stride_vd))
-            else some (0.0 : ℝ)))
-        (P := fun idx : TileIndex [BLOCK_D] => idx.1.val < HEAD_DIM)
-        hRawInj (i, PUnit.unit))
-    simp [BlockState.readMemValue] at hScatter
-    simp only [active, vSourceOffset, vCacheOffset, blockId, dimIndex,
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for one masked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- **The headline surface**: the decode prologue plus ONE `split_x` iteration
+of `_copy_to_kvcache_seqlen1_kernel`'s static loop, with BOTH cache stores in
+a single program — `context_lengths[cur_seq_idx] - 1`, block division/modulo,
+the chained block-table lookup, the masked K load / K-cache store and the
+masked V load / V-cache store for the `SPLIT_X` x-partition. Instantiating
+`SPLIT_X` at every `split_x < HEAD_DIM / KCACHE_X` covers the whole loop; the
+legacy cache layout is the instance `SPLIT_X = 0`, `KCACHE_X = HEAD_DIM`,
+`stride_kcsplit_x = 0`. -/
+def copy_to_kvcache_seqlen1_xblock
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (SPLIT_X stride_kt stride_kh stride_kd
+      stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat) :
+    ComputeKernel := triton {
+  cur_seq_idx = tl.program_id(0)
+  cur_kv_head_idx = tl.program_id(1)
+  past_kv_seq_len = tl.load(context_lengths + cur_seq_idx) - $(1)
+  last_bt_block_idx = past_kv_seq_len // $(block_size)
+  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
+    last_bt_block_idx * $(stride_btb))
+  offsets_in_last_block = past_kv_seq_len % $(block_size)
+  range_x = tl.arange(0, $(KCACHE_X))
+  offsets_dmodel_x_partition = $(SPLIT_X) * $(KCACHE_X) + range_x
+  k = tl.load(K + cur_seq_idx * $(stride_kt) +
+      cur_kv_head_idx * $(stride_kh) +
+      offsets_dmodel_x_partition * $(stride_kd),
+    mask=offsets_dmodel_x_partition < $(HEAD_DIM), other=0.0)
+  v = tl.load(V + cur_seq_idx * $(stride_vt) +
+      cur_kv_head_idx * $(stride_vh) +
+      offsets_dmodel_x_partition * $(stride_vd),
+    mask=offsets_dmodel_x_partition < $(HEAD_DIM), other=0.0)
+  tl.store(KCache + block_id * $(stride_kcb) +
+      cur_kv_head_idx * $(stride_kch) +
+      $(SPLIT_X) * $(stride_kcsplit_x) +
+      offsets_in_last_block * $(stride_kcs) + range_x,
+    k, mask=offsets_dmodel_x_partition < $(HEAD_DIM))
+  tl.store(VCache + block_id * $(stride_vcb) +
+      cur_kv_head_idx * $(stride_vch) +
+      offsets_in_last_block * $(stride_vcs) +
+      offsets_dmodel_x_partition * $(stride_vcd),
+    v, mask=offsets_dmodel_x_partition < $(HEAD_DIM))
+}
+
+/-- The combined per-split surface sits inside the flat-memory bridge's
+covered fragment (scalar `.nat` slot loads, Nat sub/div/mod register
+arithmetic, pointer arithmetic, masked loads with `other`, masked stores). -/
+theorem copy_to_kvcache_seqlen1_xblock_flattenOk
+    (K V KCache VCache BLOCK_TABLES context_lengths : RegionName)
+    (SPLIT_X stride_kt stride_kh stride_kd
+      stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat) :
+    ((copy_to_kvcache_seqlen1_xblock K V KCache VCache BLOCK_TABLES
+      context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [copy_to_kvcache_seqlen1_xblock, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk: one computational unfold walks all eleven
+statements — the register arithmetic is memory-silent — and reduces the six
+memory accesses to the skin-shaped hypotheses: the two **unmasked scalar-slot
+loads** need their cells in bounds (`context_lengths[pid₀]`, then the
+**chained** block-table cell whose address eats the first loaded value), and
+the masked K/V loads and K/V-cache stores need their windows in bounds at the
+active lanes `SPLIT_X·KCACHE_X + j < HEAD_DIM` (kernel-level spelling:
+`s.readMemValue .nat …` for the loaded scalars). -/
+theorem copy_to_kvcache_seqlen1_xblock_traceSafe
+    (K V KCache VCache BLOCK_TABLES context_lengths : RegionName)
+    (SPLIT_X stride_kt stride_kh stride_kd
+      stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hb₁ : s.pids 0 < bounds context_lengths)
+    (hb₂ : s.pids 0 * stride_bts +
+      ((s.readMemValue .nat context_lengths (s.pids 0) - 1) / block_size) *
+        stride_btb < bounds BLOCK_TABLES)
+    (hrk : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s.pids 0 * stride_kt + s.pids 1 * stride_kh +
+        (SPLIT_X * KCACHE_X + j.val) * stride_kd < bounds K)
+    (hrv : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s.pids 0 * stride_vt + s.pids 1 * stride_vh +
+        (SPLIT_X * KCACHE_X + j.val) * stride_vd < bounds V)
+    (hwk : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s.readMemValue .nat BLOCK_TABLES
+          (s.pids 0 * stride_bts +
+            ((s.readMemValue .nat context_lengths (s.pids 0) - 1) / block_size) *
+              stride_btb) * stride_kcb +
+        s.pids 1 * stride_kch + SPLIT_X * stride_kcsplit_x +
+        ((s.readMemValue .nat context_lengths (s.pids 0) - 1) % block_size) *
+          stride_kcs + j.val < bounds KCache)
+    (hwv : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s.readMemValue .nat BLOCK_TABLES
+          (s.pids 0 * stride_bts +
+            ((s.readMemValue .nat context_lengths (s.pids 0) - 1) / block_size) *
+              stride_btb) * stride_vcb +
+        s.pids 1 * stride_vch +
+        ((s.readMemValue .nat context_lengths (s.pids 0) - 1) % block_size) *
+          stride_vcs + (SPLIT_X * KCACHE_X + j.val) * stride_vcd
+          < bounds VCache) :
+    Kernel.TraceSafe bounds
+      ((copy_to_kvcache_seqlen1_xblock K V KCache VCache BLOCK_TABLES
+        context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [copy_to_kvcache_seqlen1_xblock, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+    BlockState.readMemValue, hb₁, hb₂]
+  exact ⟨hb₂, fun a ha => hrk a ha, fun a ha => hrv a ha,
+    fun a ha => hwk a ha, fun a ha => hwv a ha⟩
+
+/-- **The region-model chained-metadata masked triple** — termination, the
+`WriteInj`-gated active-lane values of both cache stores, and frame off the
+two active store windows, from any launch state whose slot cells hold the
+pinned raw scalars `m₁` (the context length) / `m₂` (the block id, sitting at
+the `m₁`-dependent block-table cell) and whose active K/V windows hold
+`xs`/`ys`. This is the `hrun` obligation of the `⊨` headline. `KCache ≠
+VCache` lets the K readback see through the later V store. -/
+theorem copy_to_kvcache_seqlen1_xblock_region_run
+    (K V KCache VCache BLOCK_TABLES context_lengths : RegionName)
+    (SPLIT_X stride_kt stride_kh stride_kd
+      stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat)
+    (hKV : KCache ≠ VCache)
+    (s₀ : BlockState) (m₁ m₂ : Nat) (xs ys : Fin KCACHE_X → ℝ)
+    (hm₁ : s₀.readMemValue .nat context_lengths (s₀.pids 0) = m₁)
+    (hm₂ : s₀.readMemValue .nat BLOCK_TABLES
+      (s₀.pids 0 * stride_bts + ((m₁ - 1) / block_size) * stride_btb) = m₂)
+    (hx : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s₀.readMem K (s₀.pids 0 * stride_kt + s₀.pids 1 * stride_kh +
+        (SPLIT_X * KCACHE_X + j.val) * stride_kd) = xs j)
+    (hy : ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+      s₀.readMem V (s₀.pids 0 * stride_vt + s₀.pids 1 * stride_vh +
+        (SPLIT_X * KCACHE_X + j.val) * stride_vd) = ys j) :
+    ∃ s1, exec ((copy_to_kvcache_seqlen1_xblock K V KCache VCache BLOCK_TABLES
+        context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X).toAlgKernel) s₀ = some s1
+      ∧ ((∀ j k : Fin KCACHE_X,
+            SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+            SPLIT_X * KCACHE_X + k.val < HEAD_DIM →
+            m₂ * stride_kcb + s₀.pids 1 * stride_kch +
+                SPLIT_X * stride_kcsplit_x +
+                ((m₁ - 1) % block_size) * stride_kcs + j.val
+              = m₂ * stride_kcb + s₀.pids 1 * stride_kch +
+                SPLIT_X * stride_kcsplit_x +
+                ((m₁ - 1) % block_size) * stride_kcs + k.val → j = k) →
+          ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+            s1.readMem KCache
+              (m₂ * stride_kcb + s₀.pids 1 * stride_kch +
+                SPLIT_X * stride_kcsplit_x +
+                ((m₁ - 1) % block_size) * stride_kcs + j.val) = xs j)
+      ∧ ((∀ j k : Fin KCACHE_X,
+            SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+            SPLIT_X * KCACHE_X + k.val < HEAD_DIM →
+            m₂ * stride_vcb + s₀.pids 1 * stride_vch +
+                ((m₁ - 1) % block_size) * stride_vcs +
+                (SPLIT_X * KCACHE_X + j.val) * stride_vcd
+              = m₂ * stride_vcb + s₀.pids 1 * stride_vch +
+                ((m₁ - 1) % block_size) * stride_vcs +
+                (SPLIT_X * KCACHE_X + k.val) * stride_vcd → j = k) →
+          ∀ j : Fin KCACHE_X, SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+            s1.readMem VCache
+              (m₂ * stride_vcb + s₀.pids 1 * stride_vch +
+                ((m₁ - 1) % block_size) * stride_vcs +
+                (SPLIT_X * KCACHE_X + j.val) * stride_vcd) = ys j)
+      ∧ (∀ r o,
+          (r ≠ KCache ∨ ∀ j : Fin KCACHE_X,
+            SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+              o ≠ m₂ * stride_kcb + s₀.pids 1 * stride_kch +
+                SPLIT_X * stride_kcsplit_x +
+                ((m₁ - 1) % block_size) * stride_kcs + j.val) →
+          (r ≠ VCache ∨ ∀ j : Fin KCACHE_X,
+            SPLIT_X * KCACHE_X + j.val < HEAD_DIM →
+              o ≠ m₂ * stride_vcb + s₀.pids 1 * stride_vch +
+                ((m₁ - 1) % block_size) * stride_vcs +
+                (SPLIT_X * KCACHE_X + j.val) * stride_vcd) →
+          s1.mem r o = s₀.mem r o) := by
+  subst hm₂
+  subst hm₁
+  obtain ⟨s1, hs1⟩ : ∃ s1,
+      exec ((copy_to_kvcache_seqlen1_xblock K V KCache VCache BLOCK_TABLES
+        context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X).toAlgKernel) s₀ = some s1 := by
+    simp [exec, copy_to_kvcache_seqlen1_xblock, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
       BlockState.readMemValue]
-    rw [hScatter]
-    split <;> simp_all
-  · exact False.elim (hBD (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+  have hs1' := hs1
+  simp [exec, copy_to_kvcache_seqlen1_xblock, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+    BlockState.readMemValue] at hs1'
+  refine ⟨s1, hs1, ?_, ?_, ?_⟩
+  · -- K-cache value leg (`WriteInj₁`-gated readback).
+    intro hKInj j hj
+    rw [← hs1']
+    simp only [BlockState.readMemValue]
+    refine ((BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      VCache _ _ _ _ _ _ _ hKV).trans ?_)
+    refine ((BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := KCache) (shape := [KCACHE_X]) _ _ _ _
+      (j, PUnit.unit) ?_ ?_).trans ?_)
+    · simpa using hj
+    · rintro ⟨a, u⟩ ha heq
+      cases u
+      have hval : a = j := hKInj a j (by simpa using ha) hj (by simpa using heq)
+      subst hval
+      rfl
+    · simpa [hj] using hx j hj
+  · -- V-cache value leg (`WriteInj₂`-gated readback).
+    intro hVInj j hj
+    rw [← hs1']
+    simp only [BlockState.readMemValue]
+    refine ((BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := VCache) (shape := [KCACHE_X]) _ _ _ _
+      (j, PUnit.unit) ?_ ?_).trans ?_)
+    · simpa using hj
+    · rintro ⟨a, u⟩ ha heq
+      cases u
+      have hval : a = j := hVInj a j (by simpa using ha) hj (by simpa using heq)
+      subst hval
+      rfl
+    · simpa [hj] using hy j hj
+  · -- frame off the two active store windows.
+    intro r o hc1 hc2
+    rw [← hs1']
+    refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_)
+      (Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl)
+    · -- the outer (V-cache) store misses `(r, o)`
+      rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc2 with hne | hno
+      · exact hne hreg.symm
+      · exact hno k.1 (by simpa using hPk)
+          (by simp only [BlockState.readMemValue]; exact hoff.symm)
+    · -- the inner (K-cache) store misses `(r, o)`
+      rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc1 with hne | hno
+      · exact hne hreg.symm
+      · exact hno k.1 (by simpa using hPk)
+          (by simp only [BlockState.readMemValue]; exact hoff.symm)
 
-/-- Compute-facing correctness for the V-cache copy slice. -/
-theorem copy_to_vcache_one_dblock_compute_correct
-    (V VCache BLOCK_TABLES : RegionName)
-    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-      stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb HEAD_DIM BLOCK_D : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_D =>
-        vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-          stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_vcache_one_dblock V VCache BLOCK_TABLES
-        LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_vt stride_vh stride_vd
-        stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
-        HEAD_DIM BLOCK_D)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_D => active HEAD_DIM i)
-        (fun i => (VCache,
-          vCacheOffset s BLOCK_TABLES LAST_BLOCK_IDX OFFSET_LAST_BLOCK
-            stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [copy_to_vcache_one_dblock]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := copy_to_vcache_one_dblock_correct V VCache BLOCK_TABLES
-    LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_vt stride_vh stride_vd stride_vcb
-    stride_vch stride_vcs stride_vcd stride_bts stride_btb HEAD_DIM BLOCK_D
-    s s' hOutInj hExec i
-  simpa [hActive] using h
+/-- `copy_to_kvcache_seqlen1_xblock`'s chained-metadata **IO signature** — the
+whole kernel-specific audit surface of the `⊨` headline
+(`ChainMetaMasked2DKernelIO₂ₓ₂`, the chained-metadata genre this kernel was
+designed from):
 
-/-! ## Dimension-general public summaries
+* `mbuf₁ = context_lengths` — slot 1: program `(cur_seq_idx, cur_kv_head_idx)
+  = (pid₀, pid₁)` reads cell `pid₀` (`mwin₁`), yielding the **raw** context
+  length `m₁`;
+* `mbuf₂ = BLOCK_TABLES` — slot 2, **chained**: its cell
+  `pid₀·stride_bts + ((m₁ − 1) / block_size)·stride_btb` (`mwin₂`) eats
+  slot 1's loaded value (`- 1` is the DSL's Nat-truncated subtraction),
+  yielding the raw block id `m₂ = block_id`;
+* `inp₁ = K → out₁ = KCache`, `inp₂ = V → out₂ = VCache` — the two data
+  channels, `B = KCACHE_X` lanes at x-partition `SPLIT_X`;
+* `read₁`/`read₂` — lane `j` reads
+  `pid₀·stride_*t + pid₁·stride_*h + (SPLIT_X·KCACHE_X + j)·stride_*d`;
+* `write₁` — the K-cache cell `m₂·stride_kcb + pid₁·stride_kch +
+  SPLIT_X·stride_kcsplit_x + ((m₁ − 1) % block_size)·stride_kcs + j`;
+* `write₂` — the V-cache cell `m₂·stride_vcb + pid₁·stride_vch +
+  ((m₁ − 1) % block_size)·stride_vcs + (SPLIT_X·KCACHE_X + j)·stride_vcd`;
+* `mask₁ = mask₂` — the active lanes `SPLIT_X·KCACHE_X + j < HEAD_DIM`
+  (`writeMask`s default to the masks).
 
-The two `*_output_summary_general` theorems below are the symbolic-dimension
-versions of the pinned Python case1/case2 summaries: every shape / stride is a
-universally quantified `Nat`, and the per-program offset-injectivity facts are
-taken as hypotheses. The two cases are genuinely different K-cache addressing
-paths — the legacy `seqlen1` layout uses one x-block covering the whole head
-(`SPLIT_X = 0`, `KCACHE_X = HEAD_DIM`, `stride_kcsplit_x = 0`), while the
-split-x layout quantifies over every `split_x` partition — so each gets its own
-general theorem. Both share the general V-cache writeback. -/
-
-/-- **Dimension-general** old-layout (`seqlen1`, single x-block) summary.
-
-Over arbitrary (symbolic) dimensions:
-the surface lowers, the legacy K-cache writeback covers the whole head in one
-x-block, and the V-cache writeback realizes its strides. Offset-injectivity for
-the K and V cache stores is supplied as hypotheses. -/
-specification kv_cache_copy_seqlen1_output_summary_general
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat)
-    (stride_kt stride_kh stride_kd
+The slot cells, windows, and masks are declared, not parsed from the kernel;
+the headline **proves** the kernel's actual chained slot loads, addressing,
+and masking match them. Buffer sizes are not signature content: the headline
+quantifies over every allocation whose extents cover the declared cells. -/
+def kvCacheCopyIO
+    (K V KCache VCache BLOCK_TABLES context_lengths : RegionName)
+    (SPLIT_X stride_kt stride_kh stride_kd
       stride_vt stride_vh stride_vd
-      stride_kcb stride_kch stride_kcs _stride_kcd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
       stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb block_size HEAD_DIM : Nat)
-    (s : BlockState)
-    (hKInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0 stride_kcb
-          stride_kch 0 stride_kcs stride_bts stride_btb block_size HEAD_DIM i))
-    (hVInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
-          stride_vcs stride_vcd stride_bts stride_btb block_size i)) :
-    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
-      stride_kcb stride_kch 0 stride_kcs _stride_kcd stride_vcb stride_vch
-      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
-      HEAD_DIM).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-        context_lengths 0 stride_kt stride_kh stride_kd stride_kcb stride_kch
-        0 stride_kcs stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin HEAD_DIM => kActive 0 HEAD_DIM HEAD_DIM i)
-        (fun i => (KCache,
-          seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0 stride_kcb
-            stride_kch 0 stride_kcs stride_bts stride_btb block_size HEAD_DIM i)))
-      (expected := fun i =>
-        s.readMem K (kSourceOffset s 0 stride_kt stride_kh stride_kd
-          HEAD_DIM i))) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-        stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin HEAD_DIM => active HEAD_DIM i)
-        (fun i => (VCache,
-          seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
-            stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i))) := by
-  refine ⟨copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache VCache
-      BLOCK_TABLES context_lengths stride_kt stride_kh stride_kd stride_vt
-      stride_vh stride_vd stride_kcb stride_kch 0 stride_kcs _stride_kcd
-      stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
-      block_size HEAD_DIM HEAD_DIM,
-    copy_to_kcache_seqlen1_old_layout_block_compute_correct K KCache BLOCK_TABLES
-      context_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
-      stride_kcs stride_bts stride_btb block_size HEAD_DIM s hKInj,
-    copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
-      context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM s
-      hVInj⟩
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat) : ChainMetaMasked2DKernelIO₂ₓ₂ where
+  kernel := copy_to_kvcache_seqlen1_xblock K V KCache VCache BLOCK_TABLES
+    context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X
+  mbuf₁ := context_lengths
+  mbuf₂ := BLOCK_TABLES
+  inp₁ := K
+  inp₂ := V
+  out₁ := KCache
+  out₂ := VCache
+  B := KCACHE_X
+  mwin₁ := fun pid₀ _ => pid₀
+  mwin₂ := fun pid₀ _ m₁ =>
+    pid₀ * stride_bts + ((m₁ - 1) / block_size) * stride_btb
+  read₁ := fun pid₀ pid₁ _ _ j =>
+    pid₀ * stride_kt + pid₁ * stride_kh +
+      (SPLIT_X * KCACHE_X + j.val) * stride_kd
+  read₂ := fun pid₀ pid₁ _ _ j =>
+    pid₀ * stride_vt + pid₁ * stride_vh +
+      (SPLIT_X * KCACHE_X + j.val) * stride_vd
+  mask₁ := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
+  mask₂ := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
+  write₁ := fun _ pid₁ m₁ m₂ j =>
+    m₂ * stride_kcb + pid₁ * stride_kch + SPLIT_X * stride_kcsplit_x +
+      ((m₁ - 1) % block_size) * stride_kcs + j.val
+  write₂ := fun _ pid₁ m₁ m₂ j =>
+    m₂ * stride_vcb + pid₁ * stride_vch +
+      ((m₁ - 1) % block_size) * stride_vcs +
+      (SPLIT_X * KCACHE_X + j.val) * stride_vcd
 
-/-- **Dimension-general** split-x (new layout) summary.
-
-Over arbitrary (symbolic) dimensions:
-the surface lowers, every `split_x` partition's K-cache writeback realizes its
-x-block, and the V-cache writeback realizes its strides. Per-`split_x`
-K-cache offset-injectivity and the V-cache offset-injectivity are hypotheses. -/
-specification kv_cache_copy_split_x_output_summary_general
-    (K V KCache VCache : RegionName)
-    (BLOCK_TABLES context_lengths : Region .nat)
-    (stride_kt stride_kh stride_kd
+open scoped VeriTile.Triton.ChainMetaMasked2DKernelIO₂ₓ₂ in
+/-- **The headline**: the per-split KV-cache copy surface implements the pure
+masked copy `(xs, ys)` on its chained-metadata IO signature — for every
+disjoint flat placement of the six buffers, every program
+`(cur_seq_idx, cur_kv_head_idx)` whose declared cells/lanes are in bounds,
+and every launch state pinning the **raw** loaded scalars — `m₁` at the
+`context_lengths` slot cell and `m₂` at the **`m₁`-dependent** block-table
+cell (the chain) — and the active K/V windows to `xs`/`ys`, the translated
+pointer kernel terminates, every active (`SPLIT_X·KCACHE_X + j < HEAD_DIM`)
+K-cache window lane holds `xs j` and V-cache window lane `ys j` — each
+readback gated by its per-pinned-context `WriteInj` no-aliasing side
+condition on the block-id-dependent cache window — and every other memory
+cell is unchanged. All `- 1` / `/` / `%` decode arithmetic is Nat-truncated,
+exactly as the DSL executes it, and lives in the declared windows, not in the
+pins. Side condition: `KCache ≠ VCache` (the V store must not clobber the K
+output). Instantiating
+`SPLIT_X` at every `split_x < HEAD_DIM / KCACHE_X` covers the full static
+loop; the legacy cache layout is `SPLIT_X = 0`, `KCACHE_X = HEAD_DIM`,
+`stride_kcsplit_x = 0`. Proof:
+`ChainMetaMasked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+chained triple with the flat-memory bridge side conditions. -/
+specification kv_cache_copy_correctness
+    (K V KCache VCache BLOCK_TABLES context_lengths : RegionName)
+    (SPLIT_X stride_kt stride_kh stride_kd
       stride_vt stride_vh stride_vd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs _stride_kcd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
       stride_vcb stride_vch stride_vcs stride_vcd
-      stride_bts stride_btb block_size HEAD_DIM KCACHE_X NUM_SPLITS : Nat)
-    (s : BlockState)
-    (hKInj : ∀ split_x : Fin NUM_SPLITS, Function.Injective
-      (fun i : Fin KCACHE_X =>
-        seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x.val stride_kcb
-          stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
-          KCACHE_X i))
-    (hVInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
-          stride_vcs stride_vcd stride_bts stride_btb block_size i)) :
-    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
-      context_lengths stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
-      stride_kcb stride_kch stride_kcsplit_x stride_kcs _stride_kcd stride_vcb
-      stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM
-      KCACHE_X).toAlgorithm? = Except.ok alg) ∧
-    (∀ split_x : Fin NUM_SPLITS,
-      ComputeCorrect.Realizes_without_Rounding
-        (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
-          context_lengths split_x.val stride_kt stride_kh stride_kd stride_kcb
-          stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb block_size
-          HEAD_DIM KCACHE_X)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin KCACHE_X => kActive split_x.val HEAD_DIM KCACHE_X i)
-          (fun i => (KCache,
-            seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x.val
-              stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts
-              stride_btb block_size KCACHE_X i)))
-        (expected := fun i =>
-          s.readMem K (kSourceOffset s split_x.val stride_kt stride_kh stride_kd
-            KCACHE_X i))) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
-        context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-        stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin HEAD_DIM => active HEAD_DIM i)
-        (fun i => (VCache,
-          seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
-            stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i)))
-      (expected := fun i =>
-        s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i))) := by
-  refine ⟨copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache VCache
-      BLOCK_TABLES context_lengths stride_kt stride_kh stride_kd stride_vt
-      stride_vh stride_vd stride_kcb stride_kch stride_kcsplit_x stride_kcs
-      _stride_kcd stride_vcb stride_vch stride_vcs stride_vcd stride_bts
-      stride_btb block_size HEAD_DIM KCACHE_X,
-    fun split_x =>
-      copy_to_kcache_seqlen1_new_layout_xblock_compute_correct K KCache
-        BLOCK_TABLES context_lengths split_x.val stride_kt stride_kh stride_kd
-        stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb
-        block_size HEAD_DIM KCACHE_X s (hKInj split_x),
-    copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
-      context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
-      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM HEAD_DIM s
-      hVInj⟩
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat)
+    (hKV : KCache ≠ VCache) :
+    kvCacheCopyIO K V KCache VCache BLOCK_TABLES context_lengths
+        SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X
+      ⊨ fun _ _ _ _ xs ys => (xs, ys) := by
+  refine ChainMetaMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact copy_to_kvcache_seqlen1_xblock_flattenOk K V KCache VCache
+      BLOCK_TABLES context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X
+  · intro bounds s m₁ m₂ hm₁ hm₂ hb₁ hb₂ hbr₁ hbr₂ hbw₁ hbw₂
+    subst hm₂
+    subst hm₁
+    exact copy_to_kvcache_seqlen1_xblock_traceSafe K V KCache VCache
+      BLOCK_TABLES context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X bounds s hb₁ hb₂
+      (fun j hj => hbr₁ j hj) (fun j hj => hbr₂ j hj)
+      (fun j hj => hbw₁ j hj) (fun j hj => hbw₂ j hj)
+  · intro s₀ m₁ m₂ xs ys hm₁ hm₂ hx hy
+    exact copy_to_kvcache_seqlen1_xblock_region_run K V KCache VCache
+      BLOCK_TABLES context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
+      stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X hKV s₀ m₁ m₂ xs ys hm₁ hm₂
+      (fun j hj => hx j hj) (fun j hj => hy j hj)
+
 
 end VeriTile.Bench.TritonBenchG.KvCacheCopy
