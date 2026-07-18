@@ -18,18 +18,40 @@ the runtime composes per-program cache writes) is the *trusted boundary*.
 Because the program ids are universally quantified, the per-program statement
 covers every program. Both the old and new cache layouts are covered.
 
+The headline is stated on the grouped vector-channel IO skin
+(`GroupedMasked2DKernelIO.Implements`, notation `⊨`): a full Hoare triple over
+**flat pointer memory** for the unconditional Q rotary face that every program
+instance performs — ∀ disjoint base-pointer placements of `q`/`cos`/`sin`, ∀
+program ids whose windows are in bounds, ∀ launch states whose four input
+windows hold `q0`/`q1`/`cos`/`sin`, the translated pointer kernel terminates,
+both Q half-windows hold their rotary closed forms, and every other flat cell
+is untouched. The `handle_kv`-guarded K rotary and paged K/V cache faces stay
+on the `Realizes` surface (see the second ★ theorem): their addressing is
+driven by *chained* `context_lengths`/`BLOCK_TABLES` nat loads, which the plain
+grouped skin does not carry — a combined grouped-plus-chained-metadata skin is
+a known follow-up.
+
 ## Proof architecture
 
 ```
-decoding_fused_rotary_embedding_output_summary_general  ← TOP (dimension-general)
-  ├─ decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
-  │      surface lowers to the algorithm layer
-  └─ decoding_fused_rotary_embedding_all_outputs_compute_correct_general
-       ├─ q_{first,second}_half_compute_correct ⊳ q_{first,second}_half_correct
-       ├─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
-       ├─ context_k_cache_{first,second}_half_guarded_store_slice_compute_correct
-       │      ⊳ *_store_slice_correct
-       └─ context_v_cache_guarded_store_slice_compute_correct ⊳ v_cache_guarded_store_slice_correct
+decoding_fused_rotary_embedding_q_correctness    ← TOP SPECIFICATION
+                                                   (decodingRotaryQIO ⊨ rotary)
+  ├─ decoding_fused_rotary_embedding_q_surface_flattenOk
+  │      bridge fragment membership
+  ├─ decoding_fused_rotary_embedding_q_surface_traceSafe
+  │      per-execution lane-wise safety walk
+  └─ decoding_fused_rotary_embedding_q_surface_region_run
+         region-model Hoare triple (both in-place Q stores + frame)
+
+decoding_fused_rotary_embedding_all_outputs_compute_correct_general  ← ★ (K/V faces)
+  ├─ q_{first,second}_half_compute_correct ⊳ q_{first,second}_half_correct
+  ├─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
+  ├─ context_k_cache_{first,second}_half_guarded_store_slice_compute_correct
+  │      ⊳ *_store_slice_correct
+  └─ context_v_cache_guarded_store_slice_compute_correct ⊳ v_cache_guarded_store_slice_correct
+
+decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
+       the full Python-shaped surface lowers to the algorithm layer
 ```
 
 ## Modeling boundary
@@ -41,16 +63,20 @@ for both Q and K. The `cur_head_idx % KV_GROUP_NUM == 0` guard on the K-rotary a
 K/V cache-fill path is modeled (the guard predicate `handleKv` gates the
 writeback). The paged-cache offsets read `BLOCK_TABLES` and `context_lengths`
 as natural-number index regions. Side
-conditions: store-offset injectivity and cache-region distinctness hypotheses.
+conditions: `0 < head_dim_stride` for the `⊨` headline (it is what makes the
+two in-place Q half-windows disjoint and each of them injective), and
+store-offset injectivity hypotheses for the `Realizes` K/V faces.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.GroupedMasked2DKernelIO
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `decoding_fused_rotary_embedding_all_outputs_compute_correct_general`, `decoding_fused_rotary_embedding_output_summary_general` -/
+/-! **★ Main theorems:** `decoding_fused_rotary_embedding_q_correctness` (top
+`⊨` specification), `decoding_fused_rotary_embedding_all_outputs_compute_correct_general` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -1911,165 +1937,344 @@ theorem decoding_fused_rotary_embedding_all_outputs_compute_correct_general
         HEAD_DIM s hVCInj
 
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **General top theorem (genuine closed form).** Dimension-general all-outputs
-summary built on `decoding_fused_rotary_embedding_all_outputs_compute_correct_general`.
-Over symbolic strides/dims (`x`, all Q/K/cos/sin/cache strides, the rotary half
-width `HALF_DIM`, the V head dim `HEAD_DIM`, `block_size`, `KV_GROUP_NUM`): the
-faithful full kernel surface lowers to the algorithm layer, AND every output —
-Q/K rotary writebacks plus the `handle_kv`-guarded paged K/V cache stores driven
-by `context_lengths`/`BLOCK_TABLES` — realizes its genuine rotary closed form
-reading input memory. No hardcoded test-shape literals; the only side conditions
-are the per-region store-offset injectivity hypotheses. -/
-specification decoding_fused_rotary_embedding_output_summary_general
-    (q k v cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
-      context_lengths : RegionName)
-    (BLOCK_TABLES_nat context_lengths_nat : Region .nat)
-    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride x kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM : Nat)
-    (s : BlockState)
-    (hQ1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qFirstOffset s q_token_stride q_head_stride head_dim_stride i))
-    (hQ2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i))
-    (hK1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-    (hK2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-    (hKC1Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size i))
-    (hKC2Inj : Function.Injective
-      (fun i : Fin HALF_DIM =>
-        decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride bts_stride btb_stride block_size HALF_DIM i))
-    (hVCInj : Function.Injective
-      (fun i : Fin HEAD_DIM =>
-        decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths KV_GROUP_NUM
-          vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
-          block_size i)) :
-    (∃ alg, (decoding_fused_rotary_embedding_kernel_surface q k v cos sin
-      k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
-      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
-      ).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
+/-! ## ════════ The `⊨` specification (unconditional Q rotary) ════════
+
+The headline below is stated on the grouped vector-channel IO skin
+`GroupedMasked2DKernelIO`: a full Hoare triple over **flat pointer memory**
+for `decoding_fused_rotary_embedding_q_surface`, the unconditional Q rotary
+face that *every* program instance performs. Four input channels
+(`q` first half, `q` second half, `cos`, `sin`) and two output channels
+(both the *same* `q` buffer — the rotation is in place, which is why the
+allocation list `bufs` is decoupled from the channel tables). -/
+
+/-- Program `(pid₀, pid₁)`'s Q first-half lane address — the pid-level twin of
+`qFirstOffset` (which reads the ids out of a `BlockState`). -/
+def qFirstAddr
+    (pid₀ pid₁ q_token_stride q_head_stride head_dim_stride HALF_DIM : Nat)
+    (j : Fin HALF_DIM) : Nat :=
+  pid₁ * q_token_stride + pid₀ * q_head_stride + j.val * head_dim_stride
+
+/-- Program `(pid₀, pid₁)`'s Q second-half lane address — the pid-level twin of
+`qSecondOffset`. -/
+def qSecondAddr
+    (pid₀ pid₁ q_token_stride q_head_stride head_dim_stride HALF_DIM : Nat)
+    (j : Fin HALF_DIM) : Nat :=
+  pid₁ * q_token_stride + pid₀ * q_head_stride +
+    (j.val + HALF_DIM) * head_dim_stride
+
+/-- Program `pid₁`'s rotary-factor lane address — the pid-level twin of
+`cosOffset` / `sinOffset` (`cos` and `sin` share one addressing scheme). -/
+def cosSinAddr (pid₁ cos_token_stride cos_stride HALF_DIM : Nat)
+    (j : Fin HALF_DIM) : Nat :=
+  pid₁ * cos_token_stride + j.val * cos_stride
+
+/-- An unmasked scatter-store `foldl` leaves every address it does not hit
+unchanged (value-level frame; used to push the second-half store past the
+first-half readback, since both stores target the same `q` buffer). -/
+private theorem foldl_store_preserve_readMem {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α)
+    (s : BlockState) (hnot : ∀ k ∈ l, offsetFn k ≠ o) :
+    (l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+        s).readMem region o = s.readMem region o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons,
+        ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_readMem]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd
+        else s.readMem region o) = s.readMem region o
+      exact if_neg (fun hc => hnot hd List.mem_cons_self hc.2.symm)
+
+/-- Cell-level frame for an unmasked scatter-store `foldl`: every memory cell
+it does not hit is preserved. -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+        s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons,
+        ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_mem]
+      exact if_neg (fun hc =>
+        hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
+
+/-- **The region-model Hoare triple** for the unconditional Q rotary surface —
+termination, the values of both output windows, and the frame off them, from
+any launch state whose four input windows hold `q0s`/`q1s`/`cs`/`sns`.
+
+This is the `hrun` obligation of the `⊨` headline. The two stores hit the
+*same* `q` buffer, so the first-half readback has to survive the second-half
+scatter: that is exactly what `0 < head_dim_stride` buys (lane `j`'s first-half
+address `j · hds` is below every second-half address `(k + HALF_DIM) · hds`),
+and the same hypothesis gives both scatters their injectivity. -/
+theorem decoding_fused_rotary_embedding_q_surface_region_run
+    (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (hstride : 0 < head_dim_stride)
+    (s₀ : BlockState) (q0s q1s cs sns : Fin HALF_DIM → ℝ)
+    (hq0 : ∀ j : Fin HALF_DIM, s₀.readMem q (qFirstAddr (s₀.pids 0) (s₀.pids 1)
+      q_token_stride q_head_stride head_dim_stride HALF_DIM j) = q0s j)
+    (hq1 : ∀ j : Fin HALF_DIM, s₀.readMem q (qSecondAddr (s₀.pids 0) (s₀.pids 1)
+      q_token_stride q_head_stride head_dim_stride HALF_DIM j) = q1s j)
+    (hc : ∀ j : Fin HALF_DIM, s₀.readMem cos
+      (cosSinAddr (s₀.pids 1) cos_token_stride cos_stride HALF_DIM j) = cs j)
+    (hs : ∀ j : Fin HALF_DIM, s₀.readMem sin
+      (cosSinAddr (s₀.pids 1) cos_token_stride cos_stride HALF_DIM j) = sns j) :
+    ∃ s1, exec ((decoding_fused_rotary_embedding_q_surface q cos sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q, qFirstOffset s q_token_stride q_head_stride head_dim_stride i)))
-      (expected := fun i =>
-        qFirstSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
+        (HALF_DIM * 2) HALF_DIM).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin HALF_DIM, s1.readMem q (qFirstAddr (s₀.pids 0) (s₀.pids 1)
+            q_token_stride q_head_stride head_dim_stride HALF_DIM j)
+          = q0s j * cs j - q1s j * sns j)
+      ∧ (∀ j : Fin HALF_DIM, s1.readMem q (qSecondAddr (s₀.pids 0) (s₀.pids 1)
+            q_token_stride q_head_stride head_dim_stride HALF_DIM j)
+          = q0s j * sns j + q1s j * cs j)
+      ∧ (∀ r o,
+          (r ≠ q ∨ ∀ j : Fin HALF_DIM, o ≠ qFirstAddr (s₀.pids 0) (s₀.pids 1)
+            q_token_stride q_head_stride head_dim_stride HALF_DIM j) →
+          (r ≠ q ∨ ∀ j : Fin HALF_DIM, o ≠ qSecondAddr (s₀.pids 0) (s₀.pids 1)
+            q_token_stride q_head_stride head_dim_stride HALF_DIM j) →
+          s1.mem r o = s₀.mem r o) := by
+  have hexec : ∃ s1, exec ((decoding_fused_rotary_embedding_q_surface q cos sin
+      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      (HALF_DIM * 2) HALF_DIM).toAlgKernel) s₀ = some s1 := by
+    simp [exec, decoding_fused_rotary_embedding_q_surface,
+      ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+      evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  obtain ⟨s1, hs1⟩ := hexec
+  have hs1' := hs1
+  simp [exec, decoding_fused_rotary_embedding_q_surface,
+    ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hs1'
+  subst hs1'
+  simp only [qFirstAddr, qSecondAddr, cosSinAddr] at hq0 hq1 hc hs ⊢
+  have hInj1 : Function.Injective (fun idx : TileIndex [HALF_DIM] =>
+      s₀.pids 1 * q_token_stride + s₀.pids 0 * q_head_stride +
+        idx.1.val * head_dim_stride) := by
+    intro a b h
+    dsimp only at h
+    have h1 : a.1 = b.1 :=
+      Fin.ext (Nat.eq_of_mul_eq_mul_right hstride (Nat.add_left_cancel h))
+    exact Prod.ext h1 (Subsingleton.elim _ _)
+  have hInj2 : Function.Injective (fun idx : TileIndex [HALF_DIM] =>
+      s₀.pids 1 * q_token_stride + s₀.pids 0 * q_head_stride +
+        (idx.1.val + HALF_DIM) * head_dim_stride) := by
+    intro a b h
+    dsimp only at h
+    have h1 : a.1 = b.1 :=
+      Fin.ext (by
+        have := Nat.eq_of_mul_eq_mul_right hstride (Nat.add_left_cancel h)
+        omega)
+    exact Prod.ext h1 (Subsingleton.elim _ _)
+  refine ⟨_, hs1, ?_, ?_, ?_⟩
+  · -- first-half channel: read past the second-half scatter, then read back
+    intro j
+    have hmiss : ∀ k : TileIndex [HALF_DIM],
+        k ∈ TileShape.allIndices [HALF_DIM] →
+        s₀.pids 1 * q_token_stride + s₀.pids 0 * q_head_stride +
+            (k.1.val + HALF_DIM) * head_dim_stride
+          ≠ s₀.pids 1 * q_token_stride + s₀.pids 0 * q_head_stride +
+            j.val * head_dim_stride := by
+      intro k _ hcon
+      have h2 := Nat.add_left_cancel hcon
+      have h3 : j.val * head_dim_stride
+          < (k.1.val + HALF_DIM) * head_dim_stride :=
+        Nat.mul_lt_mul_of_pos_right (by have := j.isLt; omega) hstride
+      omega
+    rw [foldl_store_preserve_readMem _ _ _ _ _ hmiss,
+      BlockState.scatter_readback_nd _ _ _ hInj1 (j, PUnit.unit)]
+    rw [hq0 j, hc j, hq1 j, hs j]
+  · -- second-half channel: the outermost scatter reads back directly
+    intro j
+    rw [BlockState.scatter_readback_nd _ _ _ hInj2 (j, PUnit.unit)]
+    rw [hq0 j, hs j, hq1 j, hc j]
+  · -- frame: neither scatter touches a cell outside its own window
+    intro r o h1 h2
+    refine Eq.trans (foldl_store_preserve_cell _ _ r o _ _ ?_)
+      (Eq.trans (foldl_store_preserve_cell _ _ r o _ _ ?_) rfl)
+    · rintro k _ ⟨hqr, ho⟩
+      rcases h2 with hne | hno
+      · exact hne hqr.symm
+      · exact hno k.1 ho.symm
+    · rintro k _ ⟨hqr, ho⟩
+      rcases h1 with hne | hno
+      · exact hne hqr.symm
+      · exact hno k.1 ho.symm
+
+/-- The Q rotary surface sits inside the flat-memory bridge's covered fragment
+(pointer arithmetic, unmasked loads/stores, elementwise multiply/add/sub). -/
+theorem decoding_fused_rotary_embedding_q_surface_flattenOk
+    (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat) :
+    ((decoding_fused_rotary_embedding_q_surface q cos sin q_token_stride
+      q_head_stride head_dim_stride cos_token_stride cos_stride (HALF_DIM * 2)
+      HALF_DIM).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [decoding_fused_rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk: the surface's four loads and two stores address
+the two Q half-windows and the shared `cos`/`sin` window, all unmasked, so the
+bounds contract is lane-wise over *every* lane of each window. -/
+theorem decoding_fused_rotary_embedding_q_surface_traceSafe
+    (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (h0 : ∀ j : Fin HALF_DIM, qFirstAddr (s.pids 0) (s.pids 1) q_token_stride
+      q_head_stride head_dim_stride HALF_DIM j < bounds q)
+    (h1 : ∀ j : Fin HALF_DIM, qSecondAddr (s.pids 0) (s.pids 1) q_token_stride
+      q_head_stride head_dim_stride HALF_DIM j < bounds q)
+    (h2 : ∀ j : Fin HALF_DIM, cosSinAddr (s.pids 1) cos_token_stride cos_stride
+      HALF_DIM j < bounds cos)
+    (h3 : ∀ j : Fin HALF_DIM, cosSinAddr (s.pids 1) cos_token_stride cos_stride
+      HALF_DIM j < bounds sin) :
+    Kernel.TraceSafe bounds ((decoding_fused_rotary_embedding_q_surface q cos
+      sin q_token_stride q_head_stride head_dim_stride cos_token_stride
+      cos_stride (HALF_DIM * 2) HALF_DIM).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp only [qFirstAddr, qSecondAddr, cosSinAddr] at h0 h1 h2 h3
+  simp [decoding_fused_rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+    stepStmt, stepStmts, evalOp.eq_def,
+    Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe, MemAccess.SafeAt,
+    MaskOpt.Active, BlockState.setReg, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+  exact ⟨h0, h1, h2, h3, h0, h1⟩
+
+/-- The Q rotary surface's **IO signature** — the whole kernel-specific audit
+surface of the `⊨` headline: which buffer is which channel, where program
+`(pid₀, pid₁)` reads and writes, and the (here total) activity predicates.
+
+Four input channels — `0` the Q first half, `1` the Q second half, `2` `cos`,
+`3` `sin` — and two output channels, `0` the Q first half and `1` the Q second
+half. Both output channels name the **same** `q` buffer as input channels `0`
+and `1`: the rotation is in place, which is why `bufs` (the allocation list,
+`[q, cos, sin]`) is decoupled from the channel tables. Every lane is active:
+the Python kernel carries no mask on this face. -/
+def decodingRotaryQIO (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat) : GroupedMasked2DKernelIO where
+  kernel := decoding_fused_rotary_embedding_q_surface q cos sin q_token_stride
+    q_head_stride head_dim_stride cos_token_stride cos_stride (HALF_DIM * 2)
+    HALF_DIM
+  nIn := 4
+  nOut := 2
+  bufs := [q, cos, sin]
+  inp := fun
+    | ⟨0, _⟩ => q
+    | ⟨1, _⟩ => q
+    | ⟨2, _⟩ => cos
+    | ⟨_ + 3, _⟩ => sin
+  out := fun
+    | ⟨0, _⟩ => q
+    | ⟨_ + 1, _⟩ => q
+  B := HALF_DIM
+  read := fun
+    | ⟨0, _⟩ => fun p₀ p₁ j =>
+        qFirstAddr p₀ p₁ q_token_stride q_head_stride head_dim_stride HALF_DIM j
+    | ⟨1, _⟩ => fun p₀ p₁ j =>
+        qSecondAddr p₀ p₁ q_token_stride q_head_stride head_dim_stride HALF_DIM j
+    | ⟨2, _⟩ => fun _p₀ p₁ j =>
+        cosSinAddr p₁ cos_token_stride cos_stride HALF_DIM j
+    | ⟨_ + 3, _⟩ => fun _p₀ p₁ j =>
+        cosSinAddr p₁ cos_token_stride cos_stride HALF_DIM j
+  readMask := fun _ _ _ _ => True
+  write := fun
+    | ⟨0, _⟩ => fun p₀ p₁ j =>
+        qFirstAddr p₀ p₁ q_token_stride q_head_stride head_dim_stride HALF_DIM j
+    | ⟨_ + 1, _⟩ => fun p₀ p₁ j =>
+        qSecondAddr p₀ p₁ q_token_stride q_head_stride head_dim_stride HALF_DIM j
+  writeMask := fun _ _ _ _ => True
+
+/-! ### ════════ ★ TOP SPECIFICATION ★ ════════ -/
+/-- **`decodingRotaryQIO ⊨ rotary`** — the unconditional Q rotary face of
+`decoding_fused_rotary_embedding_kernel` as one Hoare triple over flat pointer
+memory: for every disjoint base-pointer placement of `q`/`cos`/`sin`, every
+program `(pid₀, pid₁)` whose windows are in bounds, and every launch state
+whose four input windows hold `q0`, `q1`, `cos`, `sin`, the translated pointer
+kernel terminates, the Q first half ends up holding `q0 · cos - q1 · sin`, the
+Q second half `q0 · sin + q1 · cos`, and every flat cell outside the two Q
+half-windows is untouched.
+
+Dimension-general: the rotary half width `HALF_DIM` and all four strides are
+free `Nat` parameters. The single side condition `0 < head_dim_stride` is what
+makes the two in-place half-windows disjoint (and each of them injective) —
+without it the two stores would alias and no closed form could hold. -/
+specification decoding_fused_rotary_embedding_q_correctness
+    (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (hstride : 0 < head_dim_stride) :
+    decodingRotaryQIO q cos sin q_token_stride q_head_stride head_dim_stride
+        cos_token_stride cos_stride HALF_DIM ⊨
+      fun _pid₀ _pid₁ xs o j =>
+        let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+        let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+        let c := xs (⟨2, by decide⟩ : Fin 4) j
+        let sn := xs (⟨3, by decide⟩ : Fin 4) j
+        match o with
+        | ⟨0, _⟩ => q0 * c - q1 * sn
+        | ⟨_ + 1, _⟩ => q0 * sn + q1 * c := by
+  refine GroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · -- both output channels live in the declared allocation list
+    intro o
+    fin_cases o <;> simp [decodingRotaryQIO]
+  · exact decoding_fused_rotary_embedding_q_surface_flattenOk q cos sin
+      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM
+  · intro bounds s hin _hout
+    exact decoding_fused_rotary_embedding_q_surface_traceSafe q cos sin
+      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM bounds s
+      (fun j => hin (⟨0, by decide⟩ : Fin 4) j trivial)
+      (fun j => hin (⟨1, by decide⟩ : Fin 4) j trivial)
+      (fun j => hin (⟨2, by decide⟩ : Fin 4) j trivial)
+      (fun j => hin (⟨3, by decide⟩ : Fin 4) j trivial)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hv0, hv1, hframe⟩ :=
+      decoding_fused_rotary_embedding_q_surface_region_run q cos sin
         q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _i : Fin HALF_DIM => True)
-        (fun i => (q,
-          qSecondOffset s q_token_stride q_head_stride head_dim_stride HALF_DIM i)))
-      (expected := fun i =>
-        qSecondSpec s q cos sin q_token_stride q_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kFirstOffset s k_token_stride k_head_stride head_dim_stride i))
-      (expected := fun i =>
-        kFirstSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        HALF_DIM)
-      (initialState := s)
-      (write := fun i : Fin HALF_DIM => some (k,
-        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
-      (expected := fun i =>
-        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
-          cos_token_stride cos_stride HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
-          OutK0Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size i)))
-      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel :=
-        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
-          OutK1Pre k_cache
-          (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-            block_size)
-          (decodingOffsetsInLastBlock s context_lengths block_size)
-          KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-          kcd_stride HALF_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HALF_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (k_cache,
-          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM x kcb_stride kch_stride kcsplit_x_stride kcs_stride
-            kcd_stride bts_stride btb_stride block_size HALF_DIM i)))
-      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre HALF_DIM i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
-        LoadedV v_cache
-        (decodingBlockId s BLOCK_TABLES context_lengths bts_stride btb_stride
-          block_size)
-        (decodingOffsetsInLastBlock s context_lengths block_size)
-        KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride HEAD_DIM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun _ : Fin HEAD_DIM => handleKv s KV_GROUP_NUM)
-        (fun i => (v_cache,
-          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
-            KV_GROUP_NUM vcb_stride vch_stride vcs_stride vcd_stride bts_stride
-            btb_stride block_size i)))
-      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
-  refine ⟨?_, ?_⟩
-  · exact decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
-      q k v cos sin k_cache v_cache BLOCK_TABLES_nat context_lengths_nat
-      x q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
-      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
-      kcs_stride kcd_stride vcb_stride vch_stride vcs_stride vcd_stride
-      bts_stride btb_stride block_size KV_GROUP_NUM (HALF_DIM * 2)
-  · exact decoding_fused_rotary_embedding_all_outputs_compute_correct_general
-      q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
-      context_lengths q_token_stride q_head_stride k_token_stride k_head_stride
-      head_dim_stride cos_token_stride cos_stride x kcb_stride kch_stride
-      kcsplit_x_stride kcs_stride kcd_stride vcb_stride vch_stride vcs_stride
-      vcd_stride bts_stride btb_stride block_size KV_GROUP_NUM HALF_DIM HEAD_DIM
-      s hQ1Inj hQ2Inj hK1Inj hK2Inj hKC1Inj hKC2Inj hVCInj
+        HALF_DIM hstride s₀
+        (xs (⟨0, by decide⟩ : Fin 4)) (xs (⟨1, by decide⟩ : Fin 4))
+        (xs (⟨2, by decide⟩ : Fin 4)) (xs (⟨3, by decide⟩ : Fin 4))
+        (fun j => hx (⟨0, by decide⟩ : Fin 4) j trivial)
+        (fun j => hx (⟨1, by decide⟩ : Fin 4) j trivial)
+        (fun j => hx (⟨2, by decide⟩ : Fin 4) j trivial)
+        (fun j => hx (⟨3, by decide⟩ : Fin 4) j trivial)
+    refine ⟨s1, hexec, ?_, ?_⟩
+    · rintro ⟨o, ho⟩ j _
+      match o, ho with
+      | 0, _ => exact hv0 j
+      | _ + 1, _ => exact hv1 j
+    · intro r o' hcond
+      refine hframe r o' ?_ ?_
+      · by_cases hr : r = q
+        · refine Or.inr (fun j => ?_)
+          rcases hcond (⟨0, by decide⟩ : Fin 2) j trivial with h | h
+          · exact absurd hr h
+          · exact h
+        · exact Or.inl hr
+      · by_cases hr : r = q
+        · refine Or.inr (fun j => ?_)
+          rcases hcond (⟨1, by decide⟩ : Fin 2) j trivial with h | h
+          · exact absurd hr h
+          · exact h
+        · exact Or.inl hr
+
 
 end Correct_without_Rounding
 

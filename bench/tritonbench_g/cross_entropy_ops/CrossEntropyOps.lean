@@ -23,21 +23,48 @@ quantified, the per-program statements cover every program of the grid.
 ## Proof architecture
 
 ```
-cross_entropy_fwd_output_summary                       ← TOP THEOREM (fwd, genuine end-to-end)
-  ├─ (toAlgorithm? = Except.ok _)                      full fwd surface lowers
-  ├─ cross_entropy_fwd_lse_correct                     ← genuine masked-lane scaled LSE store
-  │    ├─ ceFwd_body_split                             body = LSE prefix ++ loss/zloss tail
-  │    ├─ storeFree_stepStmt_mem / _stepStmts_mem      loss/zloss tail preserves lse_ptr
-  │    └─ ceFwdLsePrefix_correct                       prefix writes scaled partialLSE_full
-  ├─ cross_entropy_fwd_loss_correct                    ← genuine branchy loss store
-  │    ├─ ceFwdLsePrefix_regs                          mid-state register values
-  │    ├─ ceFwdLsePrefix_mem_of_ne                     prefix store frames logits_ptr
-  │    └─ crossEntropyLossSpec                         five-way closed form (input memory)
-  └─ cross_entropy_fwd_z_loss_correct                  ← genuine z-loss store (¬SPLIT)
-       └─ zLossSpec                                    lse_square_scale·lse² closed form
+cross_entropy_fwd_correctness                          ← TOP THEOREM (fwd, ⊨ headline)
+  ├─ crossEntropyFwdIO                                 MetaMasked2DKernelIO₂ₓ₃ signature
+  │                                                    (label slot + gather + 3 gated cells)
+  ├─ cross_entropy_fwd_flattenOk                       flat-memory bridge coverage
+  ├─ cross_entropy_fwd_traceSafe                       per-execution safety walk
+  │    ├─ ceFwdLsePrefix_traceSafe                     prefix walk (label slot, masked row, LSE store)
+  │    └─ ceFwdLossTail_traceSafe                      branchy walk (gated gather load,
+  │                                                    loss store, ¬SPLIT z-loss store)
+  └─ cross_entropy_fwd_region_run                      region-model masked Hoare triple (hrun)
+       ├─ ceFwdLsePrefix_isSome / _run_facts / _run_fallback
+       ├─ ceFwdLossTail_run / _run_fallback
+       ├─ cross_entropy_fwd_lse_correct                ← genuine masked-lane scaled LSE store
+       │    ├─ ceFwd_body_split                        body = LSE prefix ++ loss/zloss tail
+       │    ├─ storeFree_stepStmt_mem / _stepStmts_mem loss/zloss tail preserves lse_ptr
+       │    └─ ceFwdLsePrefix_correct                  prefix writes scaled partialLSE_full
+       ├─ cross_entropy_fwd_loss_correct               ← genuine branchy loss store
+       │    ├─ ceFwdLsePrefix_regs                     mid-state register values
+       │    ├─ ceFwdLsePrefix_mem_of_ne                prefix store frames logits_ptr
+       │    └─ crossEntropyLossSpec                    five-way closed form (input memory)
+       └─ cross_entropy_fwd_z_loss_correct             ← genuine z-loss store (¬SPLIT)
+            └─ zLossSpec                               lse_square_scale·lse² closed form
 cross_entropy_bwd_store_slice_compute_correct          ← masked (dloss·scale)·probs
   └─ cross_entropy_bwd_store_slice_correct
 ```
+
+The forward headline is the `⊨` triple on the metadata-genre skin
+`MetaMasked2DKernelIO₂ₓ₃`: the `.int` label slot (`labels_ptr[row]`), the masked
+logits row and the label-gated single-cell gather are the inputs; the loss, LSE
+and z-loss cells are the three 1-lane outputs, the z-loss one carrying the
+constexpr `SPLIT = false` gate in `writeMask3`. The per-cell values are the pure
+`ceLossLocal` / `ceBlockLSE` / `ceZLossLocal` of the pinned inputs (with
+`logit_scale` applied inside), and the memory-reading `crossEntropyLossSpec` /
+`partialLSE_full` / `zLossSpec` lemmas below are the reused exec-value legs.
+
+**Label-channel faithfulness.** The label is loaded from a *static* `.int`
+region root (`tl.load(labels_ptr + row_idx)` transcribes to
+`MemAccess.region labels_ptr …` at `TileDType.int`), so it carries a genuine
+`Int` — the `label_idx == ignored_index` (`-100`) branch and the
+`label_idx -= class_start_idx` shift are live, signed, and provable, and the
+`⊨` headline quantifies the label as an `Int` ghost binder pinned to that cell.
+No `.nat` erasure through a dynamic pointer register anywhere on the forward
+surface.
 
 The forward kernel is now **genuinely value-correct end-to-end** (all three side
 outputs, all branches):
@@ -1516,99 +1543,1194 @@ theorem crossEntropyLossSpec_eq_crossEntropyLossSmoothed
 
 
 
-/-- **Per-kernel forward output summary for `cross_entropy_fwd_surface`
-(genuine, end-to-end).**
+/-! ## The `⊨` specification (forward)
 
-Stated as a conjunction of `ComputeCorrect.Realizes_without_Rounding` claims (with the side
-outputs and the logits buffer pairwise-distinct as needed, and at least one valid
-lane), bundling:
-1. **genuine LSE side output**: `lse_ptr[col_block·n_rows + row]` holds exactly the
-   masked-lane stable log-sum-exp `partialLSE_full` of the INPUT block logits,
-   *scaled by `logit_scale`*;
-2. **genuine loss output**: `loss_ptr[col_block·n_rows + row]` holds exactly the
-   faithful five-way cross-entropy `crossEntropyLossSpec`, every logit sub-term
-   scaled by `logit_scale` and read from INPUT memory;
-3. **genuine z-loss output (¬SPLIT)**: when `SPLIT = false`,
-   `z_loss_ptr[col_block·n_rows + row]` holds exactly `zLossSpec`
-   (`lse_square_scale·lse²`, or `0` when the label is ignored).
+The headline states the forward kernel on the metadata-genre IO skin
+`MetaMasked2DKernelIO₂ₓ₃`: the loaded label is a named ghost binder pinned to
+the `labels_ptr` slot cell, the masked logits row and the label-gated gather
+cell are the two data inputs, and the loss / LSE / z-loss cells are the three
+1-lane outputs — the z-loss one gated by the constexpr `¬SPLIT`. The
+machinery below supplies the three intro obligations: the prefix/tail
+termination + cell-frame walks (`_isSome`/`_run_facts`/`_run`), the ⊥-path
+fallback (programs past the row end store `0` to all three cells), and the
+per-execution safety walks. -/
 
-Each `ComputeCorrect.Realizes_without_Rounding` internalizes the execution (`exec ... = some s'`)
-and the lowering to the algorithm layer. All value specs read INPUT memory, never
-`exec(...).readMem`, so this summary is non-self-referential. The
-region-distinctness hypotheses are the only framing side-conditions. -/
-specification cross_entropy_fwd_output_summary
+/-- Pure block log-sum-exp over the active lanes (`pid₁·B + i < n_cols`) of a
+`B`-lane block of `logit_scale`-scaled logits: the plain (shift-free) form
+`log (∑ exp (xᵢ·scale))`; the stable kernel form `partialLSE_full` collapses
+to it via `partialLSE_full_eq_blockLSE`. -/
+noncomputable def ceBlockLSE (n_cols B pid₁ : Nat) (logit_scale : ℝ)
+    (xs : Fin B → ℝ) : ℝ :=
+  Real.log (∑ i ∈ Finset.univ.filter (fun i : Fin B => pid₁ * B + i.val < n_cols),
+    Real.exp (xs i * logit_scale))
+
+/-- Pure masked block sum: the kernel's
+`sum_logits = tl.sum(tl.where(col_offsets < n_cols, logits, 0.0))` over the
+pinned (scaled) block values. -/
+noncomputable def ceBlockSum (n_cols B pid₁ : Nat) (logit_scale : ℝ)
+    (xs : Fin B → ℝ) : ℝ :=
+  ∑ i : Fin B, if pid₁ * B + i.val < n_cols then xs i * logit_scale else 0
+
+/-- The kernel's five-way loss, as a pure function of the pinned inputs: the
+loaded label `lab`, the raw block values `xs`, and the raw gather cell `g`
+(the label logit, meaningful exactly on the in-block branch that reads it);
+every logit sub-term is scaled by `logit_scale`. Mirrors
+`crossEntropyLossSpec` with every memory read replaced by its pinned value. -/
+noncomputable def ceLossLocal (n_cols total_classes B : Nat)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index class_start_idx : Int)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (pid₁ : Nat) (lab : Int) (xs : Fin B → ℝ) (g : ℝ) : ℝ :=
+  if lab = ignored_index then 0 else
+    let lblShift : Int := lab - class_start_idx
+    let lse : ℝ := ceBlockLSE n_cols B pid₁ logit_scale xs
+    let lseTerm : ℝ := if SPLIT then 0 else lse
+    let sq : ℝ := if SPLIT then 0 else lse_square_scale * lse * lse
+    let core : ℝ :=
+      if (lblShift ≥ (pid₁ * B : Nat)) ∧
+         (lblShift < (min n_cols ((pid₁ + 1) * B) : Nat)) then
+        if HAS_SMOOTHING then
+          lseTerm - smoothing * ceBlockSum n_cols B pid₁ logit_scale xs / total_classes
+            - (1 - smoothing) * (g * logit_scale)
+        else
+          lseTerm - g * logit_scale
+      else
+        if HAS_SMOOTHING then
+          smoothing * (lseTerm - ceBlockSum n_cols B pid₁ logit_scale xs / total_classes)
+        else 0
+    core + sq
+
+/-- The kernel's z-loss cell (written only under `¬SPLIT`), as a pure function
+of the pinned inputs: `lse_square_scale·lse²`, or `0` for an ignored label. -/
+noncomputable def ceZLossLocal (n_cols B : Nat) (logit_scale lse_square_scale : ℝ)
+    (ignored_index : Int) (pid₁ : Nat) (lab : Int) (xs : Fin B → ℝ) : ℝ :=
+  if lab = ignored_index then 0 else
+    lse_square_scale * ceBlockLSE n_cols B pid₁ logit_scale xs
+      * ceBlockLSE n_cols B pid₁ logit_scale xs
+
+/-- The stable kernel-form scaled block LSE equals the pure `ceBlockLSE` of any
+tile `xs` agreeing with the row on the active lanes. -/
+private theorem partialLSE_full_eq_ceBlockLSE
+    {n_cols : Nat} (n pid₁ : Nat) (h_tail : pid₁ * (n+1) < n_cols)
+    (logit_scale : ℝ)
+    (xsRow : Fin n_cols → ℝ) (xs : Fin (n+1) → ℝ)
+    (h : ∀ (j : Fin (n+1)) (hj : pid₁ * (n+1) + j.val < n_cols),
+      xsRow ⟨pid₁ * (n+1) + j.val, hj⟩ = xs j) :
+    partialLSE_full xsRow pid₁ h_tail Bool.true logit_scale
+      = ceBlockLSE n_cols (n+1) pid₁ logit_scale xs := by
+  rw [partialLSE_full_eq_blockLSE]
+  unfold TiledLogSumExp.blockLSE ceBlockLSE
+  congr 1
+  apply Finset.sum_congr
+  · rfl
+  · intro i hi
+    have hmem : pid₁ * (n+1) + i.val < n_cols := (Finset.mem_filter.mp hi).2
+    unfold scaledLane_full
+    simp only [dif_pos hmem, h i hmem, if_true]
+
+/-- The kernel's masked scaled block sum equals the pure `ceBlockSum` of the
+pinned block values. -/
+private theorem blockSumLogits_eq_ceBlockSum
+    (s : BlockState) (logits_ptr : RegionName)
+    (logits_row_stride n_cols n : Nat) (logit_scale : ℝ) (xs : Fin (n+1) → ℝ)
+    (hx : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < n_cols →
+      s.readMem logits_ptr
+        (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + j.val)) = xs j) :
+    blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale
+      = ceBlockSum n_cols (n+1) (s.pids 1) logit_scale xs := by
+  unfold blockSumLogits ceBlockSum
+  apply Finset.sum_congr rfl
+  intro i _
+  by_cases hi : s.pids 1 * (n+1) + i.val < n_cols
+  · rw [dif_pos hi, if_pos hi]
+    exact congrArg (· * logit_scale) (hx i hi)
+  · rw [dif_neg hi, if_neg hi]
+
+/-- The kernel's memory-reading five-way loss equals the pure `ceLossLocal`
+of the pinned label, block values, and gather cell. -/
+private theorem crossEntropyLossSpec_eq_ceLossLocal
+    (s : BlockState) (logits_ptr : RegionName)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index class_start_idx : Int)
+    (total_classes n_cols logits_row_stride n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (lab : Int) (xs : Fin (n+1) → ℝ) (g : ℝ)
+    (hx : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < n_cols →
+      s.readMem logits_ptr
+        (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + j.val)) = xs j)
+    (hg : (lab ≠ ignored_index ∧
+        lab - class_start_idx ≥ (↑(s.pids 1 * (n+1)) : Int) ∧
+        lab - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n+1))) : Int)) →
+      s.readMem logits_ptr
+        (s.pids 0 * logits_row_stride + (lab - class_start_idx).toNat) = g) :
+    crossEntropyLossSpec s logits_ptr lab smoothing logit_scale lse_square_scale
+        ignored_index total_classes class_start_idx n_cols logits_row_stride n
+        HAS_SMOOTHING SPLIT
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale)
+      = ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+          lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+          (s.pids 1) lab xs g := by
+  have hlse := partialLSE_full_eq_ceBlockLSE n (s.pids 1) h_tail logit_scale
+    (rowLogits s logits_ptr logits_row_stride n_cols) xs (fun j hj => hx j hj)
+  have hsum := blockSumLogits_eq_ceBlockSum s logits_ptr logits_row_stride
+    n_cols n logit_scale xs hx
+  simp only [crossEntropyLossSpec, ceLossLocal]
+  by_cases hIgn : lab = ignored_index
+  · rw [if_pos hIgn, if_pos hIgn]
+  · rw [if_neg hIgn, if_neg hIgn]
+    by_cases hInb : (lab - class_start_idx ≥ (↑(s.pids 1 * (n+1)) : Int)) ∧
+        (lab - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n+1))) : Int))
+    · have hgv : labelLogit s logits_ptr logits_row_stride (lab - class_start_idx)
+          logit_scale = g * logit_scale := by
+        unfold labelLogit
+        exact congrArg (· * logit_scale) (hg ⟨hIgn, hInb.1, hInb.2⟩)
+      rw [if_pos hInb, if_pos hInb, hlse, hsum, hgv]
+    · rw [if_neg hInb, if_neg hInb, hlse, hsum]
+
+/-- The kernel's memory-reading z-loss equals the pure `ceZLossLocal`. -/
+private theorem zLossSpec_eq_ceZLossLocal
+    (s : BlockState) (logits_ptr : RegionName)
+    (logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (n_cols logits_row_stride n : Nat)
+    (h_tail : s.pids 1 * (n+1) < n_cols)
+    (lab : Int) (xs : Fin (n+1) → ℝ)
+    (hx : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < n_cols →
+      s.readMem logits_ptr
+        (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + j.val)) = xs j) :
+    zLossSpec lab lse_square_scale ignored_index
+        (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
+          (s.pids 1) h_tail Bool.true logit_scale)
+      = ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+          (s.pids 1) lab xs := by
+  have hlse := partialLSE_full_eq_ceBlockLSE n (s.pids 1) h_tail logit_scale
+    (rowLogits s logits_ptr logits_row_stride n_cols) xs (fun j hj => hx j hj)
+  unfold zLossSpec ceZLossLocal
+  by_cases hIgn : lab = ignored_index
+  · rw [if_pos hIgn, if_pos hIgn]
+  · rw [if_neg hIgn, if_neg hIgn, hlse]
+
+/-- `TraceSafeList` splits over `++`: prove the front safe, then the back safe
+in whatever state the front's execution actually reaches. -/
+private theorem traceSafeList_append {bounds : RegionBounds}
+    {l1 l2 : List Stmt} {s : BlockState}
+    (h1 : Stmt.TraceSafeList bounds l1 s)
+    (h2 : ∀ s', stepStmts l1 s = some s' → Stmt.TraceSafeList bounds l2 s') :
+    Stmt.TraceSafeList bounds (l1 ++ l2) s := by
+  induction l1 generalizing s with
+  | nil => exact h2 s (by simp [stepStmts])
+  | cons st rest ih =>
+      rw [List.cons_append, Stmt.TraceSafeList]
+      rw [Stmt.TraceSafeList] at h1
+      refine ⟨h1.1, ?_⟩
+      cases h : stepStmt st s with
+      | none => trivial
+      | some s1 =>
+          have h1' := h1.2
+          simp only [h] at h1'
+          refine ih h1' (fun s'' hs'' => h2 s'' ?_)
+          simp only [stepStmts, h]
+          exact hs''
+
+set_option maxHeartbeats 1600000 in
+/-- Termination of the LSE prefix, from any launch state (no valid-lane
+hypothesis: the reductions and the masked load are total). -/
+private theorem ceFwdLsePrefix_isSome
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ) (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool) (s : BlockState) :
+    ∃ smid, stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING) s = some smid := by
+  unfold ceFwdLsePrefix
+  cases HAS_SMOOTHING <;>
+  · simp [stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] <;>
+    exact ⟨_, rfl⟩
+
+set_option maxHeartbeats 1600000 in
+/-- Post-prefix facts, from any launch state: the registers the loss tail
+reads (with the `lse`/`sum_logits` carriers existential — the concrete values
+belong to `ceFwdLsePrefix_regs` / the `⊥`-path lemma below), and the
+cell-level memory frame off the single LSE store cell. -/
+private theorem ceFwdLsePrefix_run_facts
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ) (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool) (s smid : BlockState)
+    (hpre : stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING) s = some smid) :
+    smid.regs TileDType.nat [] "row_idx" = some (Tile.scalar (s.pids 0)) ∧
+    smid.regs TileDType.nat [] "col_block_idx" = some (Tile.scalar (s.pids 1)) ∧
+    smid.regs TileDType.ptr [] "logits_ptr" =
+      some (Tile.scalar ((Region.cast logits_ptr : RegionName),
+        s.pids 0 * logits_row_stride)) ∧
+    smid.regs TileDType.int [] "label_idx" =
+      some (Tile.scalar (labelValue s labels_ptr)) ∧
+    (∃ lseC : WithBot ℝ,
+      smid.regs TileDType.real [] "lse" = some (Tile.scalar lseC)) ∧
+    (HAS_SMOOTHING = Bool.true → ∃ sumC : WithBot ℝ,
+      smid.regs TileDType.real [] "sum_logits" = some (Tile.scalar sumC)) ∧
+    (∀ r o, ¬(lse_ptr = r ∧ lseOutOffset s n_rows = o) →
+      smid.mem r o = s.mem r o) := by
+  revert hpre
+  unfold ceFwdLsePrefix
+  cases HAS_SMOOTHING <;>
+  · intro hpre
+    simp [stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] at hpre
+    subst hpre
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [BlockState.writeMem_regs]; rfl
+    · rw [BlockState.writeMem_regs]; rfl
+    · rw [BlockState.writeMem_regs]
+      refine Eq.trans rfl ?_; congr 1
+      ext j; simp [Tile.ptrAdd, Region.cast]
+    · rw [BlockState.writeMem_regs]; rfl
+    · exact ⟨_, by rw [BlockState.writeMem_regs]; rfl⟩
+    · first
+      | (intro hh; exact absurd hh (by decide))
+      | (intro _; exact ⟨_, by rw [BlockState.writeMem_regs]; rfl⟩)
+    · intro r o hmiss
+      simp only [lseOutOffset] at hmiss
+      rw [BlockState.writeMem_mem,
+        if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+      simp
+
+set_option maxHeartbeats 1600000 in
+/-- **⊥-path prefix facts.** For a program whose block lies entirely past the
+row end (no valid lane), the loaded tile is all-`⊥`, so the `lse` register
+carrier is `⊥`, the (smoothing) `sum_logits` carrier is `0`, and the unmasked
+LSE store writes the IEEE-faithful finite fallback `0`. -/
+private theorem ceFwdLsePrefix_run_fallback
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ) (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool) (s smid : BlockState)
+    (h_out : ¬ s.pids 1 * (n+1) < n_cols)
+    (hpre : stepStmts (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING) s = some smid) :
+    smid.regs TileDType.real [] "lse" = some (Tile.scalar (none : WithBot ℝ)) ∧
+    (HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits"
+        = some (Tile.scalar (some (0:ℝ) : WithBot ℝ))) ∧
+    smid.readMem lse_ptr (lseOutOffset s n_rows) = 0 := by
+  have hno : ∀ i : Fin (n+1), ¬ (s.pids 1 * (n+1) + i.val < n_cols) := fun i hlt =>
+    h_out (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hlt)
+  let rm : Fin (n+1) → ℝ := fun i =>
+    s.readMem logits_ptr (s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + i.val))
+  have h_rm : ∀ (i : Fin (n+1)) (hi : s.pids 1 * (n+1) + i.val < n_cols),
+      rm i = rowLogits s logits_ptr logits_row_stride n_cols
+        ⟨s.pids 1 * (n+1) + i.val, hi⟩ := fun _ _ => rfl
+  have hbs : blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale = 0 := by
+    unfold blockSumLogits
+    apply Finset.sum_eq_zero
+    intro i _
+    rw [dif_neg (hno i)]
+  have h_sum_carrier :
+      (∑ x : Fin (n+1),
+        ((if s.pids 1 * (n+1) + x.val < n_cols then
+          Option.map (fun a : ℝ => a * logit_scale)
+            (if s.pids 1 * (n+1) + x.val < n_cols then some (rm x) else none)
+        else some (0.0 : ℝ)) : WithBot ℝ))
+      = some (blockSumLogits s logits_ptr logits_row_stride n_cols n logit_scale) := by
+    unfold blockSumLogits
+    rw [show (some (∑ i : Fin (n+1), if h : s.pids 1 * (n+1) + i.val < n_cols then
+          rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+          else 0) : WithBot ℝ)
+        = ((∑ i : Fin (n+1), if h : s.pids 1 * (n+1) + i.val < n_cols then
+          rowLogits s logits_ptr logits_row_stride n_cols ⟨s.pids 1 * (n+1) + i.val, h⟩ * logit_scale
+          else 0 : ℝ) : WithBot ℝ) from rfl, WithBot.coe_sum]
+    apply Finset.sum_congr rfl
+    intro i _
+    by_cases hi : s.pids 1 * (n+1) + i.val < n_cols
+    · simp only [hi, if_true, dif_pos hi, Option.map_some]; rw [h_rm i hi]; rfl
+    · simp only [hi, if_false, dif_neg hi]; congr 1; norm_num
+  revert hpre
+  unfold ceFwdLsePrefix
+  cases HAS_SMOOTHING <;>
+  · intro hpre
+    simp [stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt] at hpre
+    subst hpre
+    refine ⟨?_, ?_, ?_⟩
+    · rw [BlockState.writeMem_regs]
+      refine Eq.trans rfl ?_; congr 2
+      simp [hno, Finset.sup'_const, WithBot.realLog, WithBot.realExp,
+        Option.map₂, Real.log_zero] <;>
+      rfl
+    · first
+      | (intro hh; exact absurd hh (by decide))
+      | (intro _
+         rw [BlockState.writeMem_regs]
+         refine Eq.trans rfl ?_
+         exact congrArg (some ∘ Tile.scalar)
+           (h_sum_carrier.trans (by rw [hbs])))
+    · simp only [lseOutOffset, BlockState.writeMem_readMem, and_self, if_pos]
+      simp [hno, Finset.sup'_const, WithBot.realLog, WithBot.realExp,
+        Option.map₂, Real.log_zero] <;>
+      first
+        | exact Or.inr rfl
+        | rfl
+
+set_option maxHeartbeats 3200000 in
+/-- Termination + cell frame of the loss/z-loss tail, from any post-prefix
+state whose relevant registers are pinned (the `lse`/`sum_logits` carriers are
+arbitrary: the tail is register arithmetic plus the loss store and the
+`¬SPLIT`-gated z-loss store). -/
+private theorem ceFwdLossTail_run
+    (loss_ptr z_loss_ptr logits_ptr : RegionName)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index class_start_idx : Int)
+    (total_classes n_cols n_rows n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (smid : BlockState) (r₀ c₀ poff : Nat) (lv : Int)
+    (lseC sumC : WithBot ℝ)
+    (hrow : smid.regs TileDType.nat [] "row_idx" = some (Tile.scalar r₀))
+    (hcol : smid.regs TileDType.nat [] "col_block_idx" = some (Tile.scalar c₀))
+    (hlp : smid.regs TileDType.ptr [] "logits_ptr" =
+      some (Tile.scalar ((Region.cast logits_ptr : RegionName), poff)))
+    (hlbl : smid.regs TileDType.int [] "label_idx" = some (Tile.scalar lv))
+    (hlse : smid.regs TileDType.real [] "lse" = some (Tile.scalar lseC))
+    (hsum : HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits" = some (Tile.scalar sumC)) :
+    ∃ s2, stepStmts (ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows n HAS_SMOOTHING SPLIT) smid = some s2
+      ∧ (∀ r o, ¬(loss_ptr = r ∧ c₀ * n_rows + r₀ = o) →
+          (SPLIT = Bool.false → ¬(z_loss_ptr = r ∧ c₀ * n_rows + r₀ = o)) →
+          s2.mem r o = smid.mem r o) := by
+  have hmin : (if decide (n_cols < (c₀ + 1) * (n + 1)) = «true» then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    by_cases hb : n_cols < (c₀ + 1) * (n + 1)
+    · simp only [hb, decide_true, if_true]; omega
+    · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+  have hmin' : (if n_cols < (c₀ + 1) * (n + 1) then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    split <;> omega
+  cases hstep : stepStmts (ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing
+      logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows n HAS_SMOOTHING SPLIT) smid with
+  | none =>
+      exfalso
+      by_cases hHS : HAS_SMOOTHING = «true» <;>
+        by_cases hSP : SPLIT = «true» <;>
+        by_cases hIgn : lv = ignored_index <;>
+        by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+          lv - class_start_idx < (n_cols : Int) ∧
+          lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+      first
+        | (have hsum' := hsum hHS
+           simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+             hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+             Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+             NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+             ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+             TileShape.allIndices] at hstep)
+        | simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+            hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+            Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+            NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+            ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+            TileShape.allIndices] at hstep
+  | some s2 =>
+      refine ⟨s2, rfl, ?_⟩
+      intro r o hmiss hmissZ
+      by_cases hHS : HAS_SMOOTHING = «true» <;>
+        by_cases hSP : SPLIT = «true» <;>
+        by_cases hIgn : lv = ignored_index <;>
+        by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+          lv - class_start_idx < (n_cols : Int) ∧
+          lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+      first
+        | (have hsum' := hsum hHS
+           simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+             hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+             Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+             NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+             ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+             TileShape.allIndices] at hstep
+           subst hstep
+           first
+             | (rw [BlockState.writeMem_mem,
+                  if_neg (fun hc => hmissZ (by simpa using hSP) ⟨hc.1.symm, hc.2.symm⟩),
+                  BlockState.writeMem_mem,
+                  if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                simp)
+             | (rw [BlockState.writeMem_mem,
+                  if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                simp))
+        | (simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+            hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+            Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+            NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+            ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+            TileShape.allIndices] at hstep
+           subst hstep
+           first
+             | (rw [BlockState.writeMem_mem,
+                  if_neg (fun hc => hmissZ (by simpa using hSP) ⟨hc.1.symm, hc.2.symm⟩),
+                  BlockState.writeMem_mem,
+                  if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                simp)
+             | (rw [BlockState.writeMem_mem,
+                  if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                simp))
+
+set_option maxHeartbeats 3200000 in
+/-- **⊥-path tail.** With the `lse` carrier `⊥`, the `sum_logits` carrier `0`,
+and the label not in the (empty) block window, every branch's `loss`/`z_loss`
+carrier is `⊥` or `0`, so the unmasked stores write `0`. Termination + the
+stored `0`s + cell frame. -/
+private theorem ceFwdLossTail_run_fallback
+    (loss_ptr z_loss_ptr logits_ptr : RegionName)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index class_start_idx : Int)
+    (total_classes n_cols n_rows n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (hLZ : loss_ptr ≠ z_loss_ptr)
+    (smid : BlockState) (r₀ c₀ poff : Nat) (lv : Int)
+    (hrow : smid.regs TileDType.nat [] "row_idx" = some (Tile.scalar r₀))
+    (hcol : smid.regs TileDType.nat [] "col_block_idx" = some (Tile.scalar c₀))
+    (hlp : smid.regs TileDType.ptr [] "logits_ptr" =
+      some (Tile.scalar ((Region.cast logits_ptr : RegionName), poff)))
+    (hlbl : smid.regs TileDType.int [] "label_idx" = some (Tile.scalar lv))
+    (hlse : smid.regs TileDType.real [] "lse" = some (Tile.scalar (none : WithBot ℝ)))
+    (hsum : HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits"
+        = some (Tile.scalar (some (0:ℝ) : WithBot ℝ)))
+    (hnb : ¬((↑(c₀ * (n + 1)) : Int) ≤ lv - class_start_idx ∧
+      lv - class_start_idx < (↑(min n_cols ((c₀ + 1) * (n + 1))) : Int))) :
+    ∃ s2, stepStmts (ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows n HAS_SMOOTHING SPLIT) smid = some s2
+      ∧ s2.readMem loss_ptr (c₀ * n_rows + r₀) = 0
+      ∧ (SPLIT = Bool.false → s2.readMem z_loss_ptr (c₀ * n_rows + r₀) = 0)
+      ∧ (∀ r o, ¬(loss_ptr = r ∧ c₀ * n_rows + r₀ = o) →
+          (SPLIT = Bool.false → ¬(z_loss_ptr = r ∧ c₀ * n_rows + r₀ = o)) →
+          s2.mem r o = smid.mem r o) := by
+  have hmin : (if decide (n_cols < (c₀ + 1) * (n + 1)) = «true» then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    by_cases hb : n_cols < (c₀ + 1) * (n + 1)
+    · simp only [hb, decide_true, if_true]; omega
+    · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+  have hmin' : (if n_cols < (c₀ + 1) * (n + 1) then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    split <;> omega
+  cases hstep : stepStmts (ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing
+      logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows n HAS_SMOOTHING SPLIT) smid with
+  | none =>
+      exfalso
+      by_cases hHS : HAS_SMOOTHING = «true» <;>
+        by_cases hSP : SPLIT = «true» <;>
+        by_cases hIgn : lv = ignored_index <;>
+        by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+          lv - class_start_idx < (n_cols : Int) ∧
+          lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+      first
+        | exact (hnb ⟨by push_cast; omega, by push_cast; omega⟩).elim
+        | (have hsum' := hsum hHS
+           simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+             hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+             Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+             NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+             ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+             TileShape.allIndices] at hstep)
+        | simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+            hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+            Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+            NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+            ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+            TileShape.allIndices] at hstep
+  | some s2 =>
+      refine ⟨s2, rfl, ?_, ?_, ?_⟩
+      · by_cases hHS : HAS_SMOOTHING = «true» <;>
+          by_cases hSP : SPLIT = «true» <;>
+          by_cases hIgn : lv = ignored_index <;>
+          by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+            lv - class_start_idx < (n_cols : Int) ∧
+            lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+        first
+          | exact (hnb ⟨by push_cast; omega, by push_cast; omega⟩).elim
+          | (have hsum' := hsum hHS
+             simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+               hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+               Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+               NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+               ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+               TileShape.allIndices] at hstep
+             subst hstep
+             simp [BlockState.writeMem_readMem, BlockState.writeMem_readMem_of_ne_region,
+               hLZ, Ne.symm hLZ, Option.map₂, WithBot.unbotD, WithBot.recBotCoe]
+             try norm_num)
+          | (simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+              hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+              Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+              NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+              ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+              TileShape.allIndices] at hstep
+             subst hstep
+             simp [BlockState.writeMem_readMem, BlockState.writeMem_readMem_of_ne_region,
+               hLZ, Ne.symm hLZ, Option.map₂, WithBot.unbotD, WithBot.recBotCoe]
+             try norm_num)
+      · intro hSPf
+        by_cases hHS : HAS_SMOOTHING = «true» <;>
+          by_cases hIgn : lv = ignored_index <;>
+          by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+            lv - class_start_idx < (n_cols : Int) ∧
+            lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+        first
+          | exact (hnb ⟨by push_cast; omega, by push_cast; omega⟩).elim
+          | (have hsum' := hsum hHS
+             simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+               hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSPf, hIgn, hAB,
+               Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+               NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+               ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+               TileShape.allIndices] at hstep
+             subst hstep
+             simp [BlockState.writeMem_readMem, Option.map₂, WithBot.unbotD,
+               WithBot.recBotCoe]
+             try norm_num)
+          | (simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+              hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSPf, hIgn, hAB,
+              Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+              NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+              ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+              TileShape.allIndices] at hstep
+             subst hstep
+             simp [BlockState.writeMem_readMem, Option.map₂, WithBot.unbotD,
+               WithBot.recBotCoe]
+             try norm_num)
+      · intro r o hmiss hmissZ
+        by_cases hHS : HAS_SMOOTHING = «true» <;>
+          by_cases hSP : SPLIT = «true» <;>
+          by_cases hIgn : lv = ignored_index <;>
+          by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+            lv - class_start_idx < (n_cols : Int) ∧
+            lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+        first
+          | exact (hnb ⟨by push_cast; omega, by push_cast; omega⟩).elim
+          | (have hsum' := hsum hHS
+             simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+               hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+               Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+               NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+               ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+               TileShape.allIndices] at hstep
+             subst hstep
+             first
+               | (rw [BlockState.writeMem_mem,
+                    if_neg (fun hc => hmissZ (by simpa using hSP) ⟨hc.1.symm, hc.2.symm⟩),
+                    BlockState.writeMem_mem,
+                    if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                  simp)
+               | (rw [BlockState.writeMem_mem,
+                    if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                  simp))
+          | (simp [ceFwdLossTail, stepStmts, stepStmt, evalOp.eq_def,
+              hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+              Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+              NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+              ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+              TileShape.allIndices] at hstep
+             subst hstep
+             first
+               | (rw [BlockState.writeMem_mem,
+                    if_neg (fun hc => hmissZ (by simpa using hSP) ⟨hc.1.symm, hc.2.symm⟩),
+                    BlockState.writeMem_mem,
+                    if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                  simp)
+               | (rw [BlockState.writeMem_mem,
+                    if_neg (fun hc => hmiss ⟨hc.1.symm, hc.2.symm⟩)]
+                  simp))
+
+set_option maxHeartbeats 3200000 in
+/-- Safety walk over the LSE prefix: the label-slot cell, the active lanes of
+the masked row load, and the unmasked LSE store cell must be in bounds. -/
+private theorem ceFwdLsePrefix_traceSafe
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale : ℝ) (total_classes : Nat)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING : Bool)
+    (bounds : RegionBounds) (s : BlockState)
+    (hbL : s.pids 0 < bounds (Region.cast labels_ptr))
+    (hbr : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < n_cols →
+      s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + j.val)
+        < bounds logits_ptr)
+    (hbw2 : s.pids 1 * n_rows + s.pids 0 < bounds lse_ptr) :
+    Stmt.TraceSafeList bounds
+      (ceFwdLsePrefix loss_ptr lse_ptr logits_ptr labels_ptr smoothing logit_scale
+        total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING) s := by
+  unfold ceFwdLsePrefix
+  cases HAS_SMOOTHING <;>
+  · simp (maxSteps := 16000000) [Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      BlockState.setReg,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt,
+      Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      hbL, hbw2] <;>
+    first
+      | exact fun a ha => hbr a ha
+      | exact ⟨fun a ha => hbr a ha, fun a ha => hbr a ha⟩
+      | (refine ⟨fun a ha => hbr a ha, ?_⟩; trivial)
+
+set_option maxHeartbeats 3200000 in
+/-- Safety walk over the loss/z-loss tail: only the gated gather load (active
+exactly on the in-block branch, whose condition is the gate), the unmasked
+loss store, and the `¬SPLIT`-gated z-loss store touch memory. -/
+private theorem ceFwdLossTail_traceSafe
+    (loss_ptr z_loss_ptr logits_ptr : RegionName)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index class_start_idx : Int)
+    (total_classes n_cols n_rows n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (bounds : RegionBounds) (smid : BlockState) (r₀ c₀ poff : Nat) (lv : Int)
+    (lseC sumC : WithBot ℝ)
+    (hrow : smid.regs TileDType.nat [] "row_idx" = some (Tile.scalar r₀))
+    (hcol : smid.regs TileDType.nat [] "col_block_idx" = some (Tile.scalar c₀))
+    (hlp : smid.regs TileDType.ptr [] "logits_ptr" =
+      some (Tile.scalar ((Region.cast logits_ptr : RegionName), poff)))
+    (hlbl : smid.regs TileDType.int [] "label_idx" = some (Tile.scalar lv))
+    (hlse : smid.regs TileDType.real [] "lse" = some (Tile.scalar lseC))
+    (hsum : HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits" = some (Tile.scalar sumC))
+    (hbg : lv ≠ ignored_index →
+      (↑(c₀ * (n + 1)) : Int) ≤ lv - class_start_idx →
+      lv - class_start_idx < (↑(min n_cols ((c₀ + 1) * (n + 1))) : Int) →
+      poff + (lv - class_start_idx).toNat < bounds logits_ptr)
+    (hbw1 : c₀ * n_rows + r₀ < bounds loss_ptr)
+    (hbw3 : SPLIT = Bool.false → c₀ * n_rows + r₀ < bounds z_loss_ptr) :
+    Stmt.TraceSafeList bounds
+      (ceFwdLossTail loss_ptr z_loss_ptr logits_ptr smoothing logit_scale
+        lse_square_scale ignored_index total_classes class_start_idx n_cols
+        n_rows n HAS_SMOOTHING SPLIT) smid := by
+  have hmin : (if decide (n_cols < (c₀ + 1) * (n + 1)) = «true» then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    by_cases hb : n_cols < (c₀ + 1) * (n + 1)
+    · simp only [hb, decide_true, if_true]; omega
+    · simp only [hb, decide_false, Bool.false_eq_true, if_false]; omega
+  have hmin' : (if n_cols < (c₀ + 1) * (n + 1) then n_cols
+      else (c₀ + 1) * (n + 1)) = min n_cols ((c₀ + 1) * (n + 1)) := by
+    split <;> omega
+  by_cases hHS : HAS_SMOOTHING = «true» <;>
+    by_cases hSP : SPLIT = «true» <;>
+    by_cases hIgn : lv = ignored_index <;>
+    by_cases hAB : ((c₀ : Int) * ((n : Int) + 1) ≤ lv - class_start_idx ∧
+      lv - class_start_idx < (n_cols : Int) ∧
+      lv - class_start_idx < ((c₀ : Int) + 1) * ((n : Int) + 1)) <;>
+  first
+    | (have hsum' := hsum hHS
+       have hbg' := hbg hIgn (by push_cast; omega) (by push_cast; omega)
+       have hbz : c₀ * n_rows + r₀ < bounds z_loss_ptr :=
+         hbw3 (by simpa using hSP)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbg', hbw1, hbz,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hsum' := hsum hHS
+       have hbg' := hbg hIgn (by push_cast; omega) (by push_cast; omega)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbg', hbw1,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hsum' := hsum hHS
+       have hbz : c₀ * n_rows + r₀ < bounds z_loss_ptr :=
+         hbw3 (by simpa using hSP)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbw1, hbz,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hsum' := hsum hHS
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hsum', hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbw1,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hbg' := hbg hIgn (by push_cast; omega) (by push_cast; omega)
+       have hbz : c₀ * n_rows + r₀ < bounds z_loss_ptr :=
+         hbw3 (by simpa using hSP)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbg', hbw1, hbz,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hbg' := hbg hIgn (by push_cast; omega) (by push_cast; omega)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB,
+         hbg', hbw1,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | (have hbz : c₀ * n_rows + r₀ < bounds z_loss_ptr :=
+         hbw3 (by simpa using hSP)
+       simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+         MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+         MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+         MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+         hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB, hbw1, hbz,
+         Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+         ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+         TileShape.allIndices])
+    | simp (maxSteps := 8000000) [ceFwdLossTail, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+        MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, stepStmts, evalOp.eq_def,
+        MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+        MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+        hrow, hcol, hlp, hlbl, hlse, hmin, hmin', hHS, hSP, hIgn, hAB, hbw1,
+        Tile.bop, Tile.cop, Tile.uop, Tile.select, Tile.ptrAdd, Tile.scalar, -Tile.scalar_eta,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        ComparableDType.eq, ComparableDType.ge, ComparableDType.lt,
+        TileShape.allIndices]
+
+/-- The forward kernel sits inside the flat-memory bridge's covered fragment. -/
+theorem cross_entropy_fwd_flattenOk
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) :
+    ((cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes
+      class_start_idx n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING
+      SPLIT).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [cross_entropy_fwd_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Full-kernel per-execution safety walk, split as prefix ++ tail. The
+hypotheses are exactly the `⊨` skin's bounds obligations: the label slot
+cell, the active row lanes, the label-gated gather cell, and the three
+output cells (the z-loss one gated by `¬SPLIT`). -/
+theorem cross_entropy_fwd_traceSafe
     (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
     (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
     (total_classes : Nat) (class_start_idx : Int)
     (n_cols n_rows logits_row_stride : Nat) (n : Nat)
     (HAS_SMOOTHING SPLIT : Bool)
-    (s : BlockState)
-    (h_tail : s.pids 1 * (n+1) < n_cols)
-    (hne : lse_ptr ≠ loss_ptr)
-    (hneZ : lse_ptr ≠ z_loss_ptr)
-    (hLL : lse_ptr ≠ logits_ptr)
-    (hLZ : loss_ptr ≠ z_loss_ptr) :
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-        smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
-      (initialState := s)
-      (write := fun _ : PUnit => some (lse_ptr, lseOutOffset s n_rows))
-      (expected := fun _ =>
-        partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-          (s.pids 1) h_tail Bool.true logit_scale)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-        smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-        n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
-      (initialState := s)
-      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
-      (expected := fun _ =>
-        crossEntropyLossSpec s logits_ptr (labelValue s labels_ptr) smoothing logit_scale
-          lse_square_scale ignored_index total_classes class_start_idx n_cols
-          logits_row_stride n HAS_SMOOTHING SPLIT
-          (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-            (s.pids 1) h_tail Bool.true logit_scale))) ∧
-    (SPLIT = Bool.false →
-      ComputeCorrect.Realizes_without_Rounding
-        (kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-          smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-          n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT)
-        (initialState := s)
-        (write := fun _ : PUnit => some (z_loss_ptr, lseOutOffset s n_rows))
-        (expected := fun _ =>
-          zLossSpec (labelValue s labels_ptr) lse_square_scale ignored_index
-            (partialLSE_full (n := n) (rowLogits s logits_ptr logits_row_stride n_cols)
-              (s.pids 1) h_tail Bool.true logit_scale))) := by
-  refine ⟨?_, ?_, ?_⟩
-  · unfold ComputeCorrect.Realizes_without_Rounding
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [cross_entropy_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro _
-    exact cross_entropy_fwd_lse_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-      n_cols n_rows logits_row_stride n HAS_SMOOTHING SPLIT s s' h_tail hne hneZ hExec
-  · unfold ComputeCorrect.Realizes_without_Rounding
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [cross_entropy_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro _
-    exact cross_entropy_fwd_loss_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-      n_cols n_rows logits_row_stride n HAS_SMOOTHING SPLIT s s' h_tail hLL hLZ hExec
-  · intro hSP
-    subst hSP
-    unfold ComputeCorrect.Realizes_without_Rounding
-    apply ComputeKernel.computeCorrect_of_toAlgKernel
-    · simp [cross_entropy_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-    intro s0 s' hExec hs0
-    subst s0
-    intro _
-    exact cross_entropy_fwd_z_loss_correct loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
-      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
-      n_cols n_rows logits_row_stride n HAS_SMOOTHING s s' h_tail hExec
+    (bounds : RegionBounds) (s : BlockState) (lab : Int)
+    (hlab : s.readMemValue .int (Region.cast labels_ptr) (s.pids 0) = lab)
+    (hbL : s.pids 0 < bounds (Region.cast labels_ptr))
+    (hbr : ∀ j : Fin (n+1), s.pids 1 * (n+1) + j.val < n_cols →
+      s.pids 0 * logits_row_stride + (s.pids 1 * (n+1) + j.val)
+        < bounds logits_ptr)
+    (hbg : lab ≠ ignored_index →
+      (↑(s.pids 1 * (n+1)) : Int) ≤ lab - class_start_idx →
+      lab - class_start_idx < (↑(min n_cols ((s.pids 1 + 1) * (n+1))) : Int) →
+      s.pids 0 * logits_row_stride + (lab - class_start_idx).toNat
+        < bounds logits_ptr)
+    (hbw1 : s.pids 1 * n_rows + s.pids 0 < bounds loss_ptr)
+    (hbw2 : s.pids 1 * n_rows + s.pids 0 < bounds lse_ptr)
+    (hbw3 : SPLIT = Bool.false →
+      s.pids 1 * n_rows + s.pids 0 < bounds z_loss_ptr) :
+    Kernel.TraceSafe bounds
+      ((cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+        smoothing logit_scale lse_square_scale ignored_index total_classes
+        class_start_idx n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING
+        SPLIT).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  rw [ceFwd_body_split]
+  refine traceSafeList_append ?_ ?_
+  · exact ceFwdLsePrefix_traceSafe loss_ptr lse_ptr logits_ptr labels_ptr
+      smoothing logit_scale total_classes n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING bounds s hbL hbr hbw2
+  · intro s' hs'
+    obtain ⟨smid, hpre⟩ := ceFwdLsePrefix_isSome loss_ptr lse_ptr logits_ptr
+      labels_ptr smoothing logit_scale total_classes n_cols n_rows
+      logits_row_stride n HAS_SMOOTHING s
+    obtain ⟨hrow, hcol, hlp, hlbl, ⟨lseC, hlse⟩, hsumEx, _⟩ :=
+      ceFwdLsePrefix_run_facts loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+        logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING
+        s smid hpre
+    obtain rfl : smid = s' := by rw [hpre] at hs'; exact Option.some.inj hs'
+    have hlv : labelValue s labels_ptr = lab := hlab
+    rw [hlv] at hlbl
+    obtain ⟨sumC, hsum⟩ : ∃ sumC : WithBot ℝ, (HAS_SMOOTHING = Bool.true →
+        smid.regs TileDType.real [] "sum_logits" = some (Tile.scalar sumC)) := by
+      cases hHS : HAS_SMOOTHING
+      · exact ⟨0, fun h => absurd h (by decide)⟩
+      · obtain ⟨c, hc⟩ := hsumEx hHS
+        exact ⟨c, fun _ => hc⟩
+    exact ceFwdLossTail_traceSafe loss_ptr z_loss_ptr logits_ptr smoothing
+      logit_scale lse_square_scale ignored_index class_start_idx total_classes
+      n_cols n_rows n HAS_SMOOTHING SPLIT bounds smid (s.pids 0) (s.pids 1)
+      (s.pids 0 * logits_row_stride) lab lseC sumC hrow hcol hlp hlbl hlse hsum
+      (fun h1 h2 h3 => hbg h1 h2 h3) hbw1 hbw3
+
+/-- **The region-model masked Hoare triple** — termination, all three output
+cells' values (in-grid programs: the pure `ceLossLocal`/`ceBlockLSE`/
+`ceZLossLocal` of the pinned inputs; past-the-row programs: the `⊥`-path
+fallback `0`), and the cell frame off the written cells. This is the `hrun`
+obligation of the `⊨` headline; the in-grid values reuse
+`cross_entropy_fwd_loss_correct` / `_lse_correct` / `_z_loss_correct` on the
+assembled execution. -/
+theorem cross_entropy_fwd_region_run
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride : Nat) (n : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (hne : lse_ptr ≠ loss_ptr) (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hLL : lse_ptr ≠ logits_ptr) (hLZ : loss_ptr ≠ z_loss_ptr)
+    (s₀ : BlockState) (lab : Int) (xs : Fin (n+1) → ℝ) (g : ℝ)
+    (hlab : s₀.readMemValue .int (Region.cast labels_ptr) (s₀.pids 0) = lab)
+    (hx : ∀ j : Fin (n+1), s₀.pids 1 * (n+1) + j.val < n_cols →
+      s₀.readMem logits_ptr
+        (s₀.pids 0 * logits_row_stride + (s₀.pids 1 * (n+1) + j.val)) = xs j)
+    (hg : (lab ≠ ignored_index ∧
+        lab - class_start_idx ≥ (↑(s₀.pids 1 * (n+1)) : Int) ∧
+        lab - class_start_idx < (↑(min n_cols ((s₀.pids 1 + 1) * (n+1))) : Int)) →
+      s₀.readMem logits_ptr
+        (s₀.pids 0 * logits_row_stride + (lab - class_start_idx).toNat) = g) :
+    ∃ s1, exec ((cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr
+        labels_ptr smoothing logit_scale lse_square_scale ignored_index
+        total_classes class_start_idx n_cols n_rows logits_row_stride (n+1)
+        HAS_SMOOTHING SPLIT).toAlgKernel) s₀ = some s1
+      ∧ s1.readMem loss_ptr (lseOutOffset s₀ n_rows)
+          = (if s₀.pids 1 * (n+1) < n_cols then
+              ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+                lse_square_scale ignored_index class_start_idx HAS_SMOOTHING
+                SPLIT (s₀.pids 1) lab xs g
+            else 0)
+      ∧ s1.readMem lse_ptr (lseOutOffset s₀ n_rows)
+          = (if s₀.pids 1 * (n+1) < n_cols then
+              ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs
+            else 0)
+      ∧ (SPLIT = Bool.false →
+          s1.readMem z_loss_ptr (lseOutOffset s₀ n_rows)
+            = (if s₀.pids 1 * (n+1) < n_cols then
+                ceZLossLocal n_cols (n+1) logit_scale lse_square_scale
+                  ignored_index (s₀.pids 1) lab xs
+              else 0))
+      ∧ (∀ r o, ¬(loss_ptr = r ∧ lseOutOffset s₀ n_rows = o) →
+          ¬(lse_ptr = r ∧ lseOutOffset s₀ n_rows = o) →
+          (SPLIT = Bool.false → ¬(z_loss_ptr = r ∧ lseOutOffset s₀ n_rows = o)) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨smid, hpre⟩ := ceFwdLsePrefix_isSome loss_ptr lse_ptr logits_ptr
+    labels_ptr smoothing logit_scale total_classes n_cols n_rows
+    logits_row_stride n HAS_SMOOTHING s₀
+  obtain ⟨hrow, hcol, hlp, hlbl, ⟨lseC, hlse⟩, hsumEx, hpframe⟩ :=
+    ceFwdLsePrefix_run_facts loss_ptr lse_ptr logits_ptr labels_ptr smoothing
+      logit_scale total_classes n_cols n_rows logits_row_stride n HAS_SMOOTHING
+      s₀ smid hpre
+  have hlv : labelValue s₀ labels_ptr = lab := hlab
+  rw [hlv] at hlbl
+  obtain ⟨sumC, hsum⟩ : ∃ sumC : WithBot ℝ, (HAS_SMOOTHING = Bool.true →
+      smid.regs TileDType.real [] "sum_logits" = some (Tile.scalar sumC)) := by
+    cases hHS : HAS_SMOOTHING
+    · exact ⟨0, fun h => absurd h (by decide)⟩
+    · obtain ⟨c, hc⟩ := hsumEx hHS
+      exact ⟨c, fun _ => hc⟩
+  by_cases h_tail : s₀.pids 1 * (n+1) < n_cols
+  · -- in-grid program: genuine values via the existing exec value lemmas
+    obtain ⟨s1, htail, htframe⟩ := ceFwdLossTail_run loss_ptr z_loss_ptr
+      logits_ptr smoothing logit_scale lse_square_scale ignored_index
+      class_start_idx total_classes n_cols n_rows n HAS_SMOOTHING SPLIT smid
+      (s₀.pids 0) (s₀.pids 1) (s₀.pids 0 * logits_row_stride) lab lseC sumC
+      hrow hcol hlp hlbl hlse hsum
+    have hExec : exec ((cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr
+        logits_ptr labels_ptr smoothing logit_scale lse_square_scale
+        ignored_index total_classes class_start_idx n_cols n_rows
+        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgKernel) s₀ = some s1 := by
+      rw [exec, ceFwd_body_split, stepStmts.append_some_iff]
+      exact ⟨smid, hpre, htail⟩
+    have hloss := cross_entropy_fwd_loss_correct loss_ptr lse_ptr z_loss_ptr
+      logits_ptr labels_ptr smoothing logit_scale lse_square_scale ignored_index
+      total_classes class_start_idx n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING SPLIT s₀ s1 h_tail hLL hLZ hExec
+    have hlse2 := cross_entropy_fwd_lse_correct loss_ptr lse_ptr z_loss_ptr
+      logits_ptr labels_ptr smoothing logit_scale lse_square_scale ignored_index
+      total_classes class_start_idx n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING SPLIT s₀ s1 h_tail hne hneZ hExec
+    refine ⟨s1, hExec, ?_, ?_, ?_, ?_⟩
+    · rw [if_pos h_tail, hloss, hlv]
+      exact crossEntropyLossSpec_eq_ceLossLocal s₀ logits_ptr smoothing
+        logit_scale lse_square_scale ignored_index class_start_idx total_classes
+        n_cols logits_row_stride n HAS_SMOOTHING SPLIT h_tail lab xs g hx hg
+    · rw [if_pos h_tail, hlse2]
+      exact partialLSE_full_eq_ceBlockLSE n (s₀.pids 1) h_tail logit_scale
+        (rowLogits s₀ logits_ptr logits_row_stride n_cols) xs
+        (fun j hj => hx j hj)
+    · intro hSPf
+      subst hSPf
+      have hz := cross_entropy_fwd_z_loss_correct loss_ptr lse_ptr z_loss_ptr
+        logits_ptr labels_ptr smoothing logit_scale lse_square_scale
+        ignored_index total_classes class_start_idx n_cols n_rows
+        logits_row_stride n HAS_SMOOTHING s₀ s1 h_tail hExec
+      rw [if_pos h_tail, hz, hlv]
+      exact zLossSpec_eq_ceZLossLocal s₀ logits_ptr logit_scale lse_square_scale
+        ignored_index n_cols logits_row_stride n h_tail lab xs hx
+    · intro r o hm1 hm2 hm3
+      have h1 : s1.mem r o = smid.mem r o := by
+        refine htframe r o (fun hc => hm1 ?_) (fun hSPf hc => hm3 hSPf ?_)
+        · exact ⟨hc.1, by simpa [lseOutOffset] using hc.2⟩
+        · exact ⟨hc.1, by simpa [lseOutOffset] using hc.2⟩
+      rw [h1]
+      exact hpframe r o hm2
+  · -- past-the-row program: the ⊥-path fallback
+    obtain ⟨hlseBot, hsum0, hcell0⟩ := ceFwdLsePrefix_run_fallback loss_ptr
+      lse_ptr logits_ptr labels_ptr smoothing logit_scale total_classes n_cols
+      n_rows logits_row_stride n HAS_SMOOTHING s₀ smid h_tail hpre
+    have hnb : ¬((↑(s₀.pids 1 * (n + 1)) : Int) ≤ lab - class_start_idx ∧
+        lab - class_start_idx <
+          (↑(min n_cols ((s₀.pids 1 + 1) * (n + 1))) : Int)) := by
+      rintro ⟨h1, h2⟩
+      have hcols : n_cols ≤ s₀.pids 1 * (n+1) := Nat.le_of_not_lt h_tail
+      have hminle : min n_cols ((s₀.pids 1 + 1) * (n+1)) ≤ n_cols :=
+        Nat.min_le_left _ _
+      omega
+    obtain ⟨s1, htail, hloss0, hz0, htframe⟩ := ceFwdLossTail_run_fallback
+      loss_ptr z_loss_ptr logits_ptr smoothing logit_scale lse_square_scale
+      ignored_index class_start_idx total_classes n_cols n_rows n HAS_SMOOTHING
+      SPLIT hLZ smid (s₀.pids 0) (s₀.pids 1) (s₀.pids 0 * logits_row_stride) lab
+      hrow hcol hlp hlbl hlseBot hsum0 hnb
+    have hExec : exec ((cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr
+        logits_ptr labels_ptr smoothing logit_scale lse_square_scale
+        ignored_index total_classes class_start_idx n_cols n_rows
+        logits_row_stride (n+1) HAS_SMOOTHING SPLIT).toAlgKernel) s₀ = some s1 := by
+      rw [exec, ceFwd_body_split, stepStmts.append_some_iff]
+      exact ⟨smid, hpre, htail⟩
+    refine ⟨s1, hExec, ?_, ?_, ?_, ?_⟩
+    · rw [if_neg h_tail]
+      simpa [lseOutOffset] using hloss0
+    · rw [if_neg h_tail]
+      have hstep : s1.readMem lse_ptr (lseOutOffset s₀ n_rows)
+          = smid.readMem lse_ptr (lseOutOffset s₀ n_rows) := by
+        unfold BlockState.readMem
+        rw [htframe lse_ptr (lseOutOffset s₀ n_rows)
+          (fun hc => hne hc.1.symm) (fun _ hc => hneZ hc.1.symm)]
+      rw [hstep]
+      exact hcell0
+    · intro hSPf
+      rw [if_neg h_tail]
+      simpa [lseOutOffset] using hz0 hSPf
+    · intro r o hm1 hm2 hm3
+      have h1 : s1.mem r o = smid.mem r o := by
+        refine htframe r o (fun hc => hm1 ?_) (fun hSPf hc => hm3 hSPf ?_)
+        · exact ⟨hc.1, by simpa [lseOutOffset] using hc.2⟩
+        · exact ⟨hc.1, by simpa [lseOutOffset] using hc.2⟩
+      rw [h1]
+      exact hpframe r o hm2
+
+/-- `cross_entropy_fwd_surface`'s metadata-genre **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `mbufL` — the `.int` label slot: program `(row, col_block)` loads
+  `labels_ptr[row]` (`mwinL`);
+* `inp` — the logits matrix, read twice: the masked row block
+  (`read`/`mask`: lane `j` at `row·stride + col_block·B + j`, active while
+  `col_block·B + j < n_cols`) and the label-gated single-cell gather
+  (`gwin`/`gmask`: cell `row·stride + (lab − class_start_idx)`, read exactly
+  when the label is live and its shifted position falls in this block);
+* `out1`/`out2`/`out3` — the loss, LSE and z-loss cells, all at
+  `col_block·n_rows + row` (the host's `(n_splits, n_rows)` layout); the loss
+  and LSE stores are unconditional (`writeMask1`/`writeMask2` defaults), the
+  z-loss store carries the constexpr gate `SPLIT = false` in `writeMask3`.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing, gating, and masking match them. -/
+def crossEntropyFwdIO
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) : MetaMasked2DKernelIO₂ₓ₃ where
+  kernel := cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr
+    labels_ptr smoothing logit_scale lse_square_scale ignored_index total_classes
+    class_start_idx n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT
+  mbufL := Region.cast labels_ptr
+  inp := logits_ptr
+  out1 := loss_ptr
+  out2 := lse_ptr
+  out3 := z_loss_ptr
+  B := BLOCK_SIZE
+  mwinL := fun pid₀ _ => pid₀
+  read := fun pid₀ pid₁ _ j =>
+    pid₀ * logits_row_stride + (pid₁ * BLOCK_SIZE + j.val)
+  mask := fun _ pid₁ _ j => pid₁ * BLOCK_SIZE + j.val < n_cols
+  gwin := fun pid₀ _ lab =>
+    pid₀ * logits_row_stride + (lab - class_start_idx).toNat
+  gmask := fun _ pid₁ lab =>
+    lab ≠ ignored_index ∧
+    lab - class_start_idx ≥ (↑(pid₁ * BLOCK_SIZE) : Int) ∧
+    lab - class_start_idx < (↑(min n_cols ((pid₁ + 1) * BLOCK_SIZE)) : Int)
+  write1 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  write2 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  write3 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  writeMask3 := fun _ _ _ => SPLIT = Bool.false
+
+open scoped VeriTile.Triton.MetaMasked2DKernelIO₂ₓ₃ in
+/-- **The headline**: `cross_entropy_fwd_kernel` implements the pure
+per-program cross-entropy triple on its metadata-genre IO signature — for
+every disjoint flat placement of the five buffers, every program
+`(row, col_block)` whose declared cells/lanes are in bounds, and every launch
+state pinning the label `lab` at the slot cell, the raw block logits `xs` on
+the active lanes, and the raw gather cell `g` under its gate, the translated
+pointer kernel terminates and writes
+
+* `loss_ptr[col_block·n_rows + row] = ceLossLocal … lab xs g` — the faithful
+  five-way loss (ignored label / label-in-block / `HAS_SMOOTHING` / `SPLIT` /
+  `lse²` term) over the pinned inputs, every logit sub-term scaled by
+  `logit_scale`,
+* `lse_ptr[col_block·n_rows + row] = ceBlockLSE … xs` — the log-sum-exp of
+  the scaled active block lanes, and
+* `z_loss_ptr[col_block·n_rows + row] = ceZLossLocal … lab xs` —
+  `lse_square_scale·lse²` (`0` for an ignored label) — **only under the
+  constexpr gate `SPLIT = false`**, which is exactly the skin's `writeMask3`;
+  under `SPLIT = true` the kernel never touches that cell and the frame leg
+  says so,
+
+for in-grid programs (`col_block·B < n_cols`); programs whose block lies past
+the row end write the IEEE-faithful `⊥`-path fallback `0` to every gated
+cell. Every other memory cell is unchanged. `0 < BLOCK_SIZE` is required (the
+`max` reduce needs a lane); the output buffers must be pairwise distinct
+where a readback has to see through another store (`lse_ptr ≠ loss_ptr`,
+`lse_ptr ≠ z_loss_ptr`, `loss_ptr ≠ z_loss_ptr`), and `lse_ptr ≠ logits_ptr`
+so the LSE store does not clobber the gather cell it reads.
+Proof: `MetaMasked2DKernelIO₂ₓ₃.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions. -/
+specification cross_entropy_fwd_correctness
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (hB : 0 < BLOCK_SIZE)
+    (hne : lse_ptr ≠ loss_ptr) (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hLL : lse_ptr ≠ logits_ptr) (hLZ : loss_ptr ≠ z_loss_ptr) :
+    crossEntropyFwdIO loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT ⊨
+      fun _ pid₁ lab xs g =>
+        if pid₁ * BLOCK_SIZE < n_cols then
+          (ceLossLocal n_cols total_classes BLOCK_SIZE smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             pid₁ lab xs g,
+           ceBlockLSE n_cols BLOCK_SIZE pid₁ logit_scale xs,
+           ceZLossLocal n_cols BLOCK_SIZE logit_scale lse_square_scale
+             ignored_index pid₁ lab xs)
+        else (0, 0, 0) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  refine MetaMasked2DKernelIO₂ₓ₃.Implements.intro _ ?_ ?_ ?_
+  · exact cross_entropy_fwd_flattenOk loss_ptr lse_ptr z_loss_ptr logits_ptr
+      labels_ptr smoothing logit_scale lse_square_scale ignored_index
+      total_classes class_start_idx n_cols n_rows logits_row_stride (n+1)
+      HAS_SMOOTHING SPLIT
+  · intro bounds s lab hlab hbL hbr hbg hbw1 hbw2 hbw3
+    exact cross_entropy_fwd_traceSafe loss_ptr lse_ptr z_loss_ptr logits_ptr
+      labels_ptr smoothing logit_scale lse_square_scale ignored_index
+      total_classes class_start_idx n_cols n_rows logits_row_stride n
+      HAS_SMOOTHING SPLIT bounds s lab hlab hbL (fun j hj => hbr j hj)
+      (fun h1 h2 h3 => hbg ⟨h1, h2, h3⟩) (hbw1 trivial) (hbw2 trivial)
+      (fun hSPf => hbw3 hSPf)
+  · intro s₀ lab xs g hlab hx hg
+    obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ := cross_entropy_fwd_region_run
+      loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing logit_scale
+      lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
+      logits_row_stride n HAS_SMOOTHING SPLIT hne hneZ hLL hLZ s₀ lab xs g hlab
+      (fun j hj => hx j hj) (fun hgm => hg hgm)
+    refine ⟨s1, hexec, fun _ => ?_, fun _ => ?_, fun hSPf => ?_,
+      fun r o h1 h2 h3 => ?_⟩
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).1 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+              lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+              (s₀.pids 1) lab xs g
+          else 0) from by split <;> rfl]
+      exact hval1
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).2.1 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs
+          else 0) from by split <;> rfl]
+      exact hval2
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).2.2 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+              (s₀.pids 1) lab xs
+          else 0) from by split <;> rfl]
+      exact hval3 hSPf
+    · refine hframe r o ?_ ?_ ?_
+      · rcases h1 with hner | hno
+        · exact fun hc => hner hc.1.symm
+        · exact fun hc => hno trivial hc.2.symm
+      · rcases h2 with hner | hno
+        · exact fun hc => hner hc.1.symm
+        · exact fun hc => hno trivial hc.2.symm
+      · rcases h3 with hner | hno
+        · exact fun _ hc => hner hc.1.symm
+        · exact fun hSPf hc => hno hSPf hc.2.symm
 
 end VeriTile.Bench.TritonBenchG.CrossEntropyOps
