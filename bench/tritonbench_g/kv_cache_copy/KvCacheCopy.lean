@@ -780,22 +780,22 @@ whole kernel-specific audit surface of the `⊨` headline
 (`ChainMetaMasked2DKernelIO₂ₓ₂`, the chained-metadata genre this kernel was
 designed from):
 
-* `mbuf₁ = context_lengths` — slot 1: program `(cur_seq_idx, cur_kv_head_idx)
-  = (pid₀, pid₁)` reads cell `pid₀` (`mwin₁`), yielding the **raw** context
+* `mbuf1 = context_lengths` — slot 1: program `(cur_seq_idx, cur_kv_head_idx)
+  = (pid₀, pid₁)` reads cell `pid₀` (`mwin1`), yielding the **raw** context
   length `m₁`;
-* `mbuf₂ = BLOCK_TABLES` — slot 2, **chained**: its cell
-  `pid₀·stride_bts + ((m₁ − 1) / block_size)·stride_btb` (`mwin₂`) eats
+* `mbuf2 = BLOCK_TABLES` — slot 2, **chained**: its cell
+  `pid₀·stride_bts + ((m₁ − 1) / block_size)·stride_btb` (`mwin2`) eats
   slot 1's loaded value (`- 1` is the DSL's Nat-truncated subtraction),
   yielding the raw block id `m₂ = block_id`;
-* `inp₁ = K → out₁ = KCache`, `inp₂ = V → out₂ = VCache` — the two data
+* `in1 = K → out1 = KCache`, `in2 = V → out2 = VCache` — the two data
   channels, `B = KCACHE_X` lanes at x-partition `SPLIT_X`;
-* `read₁`/`read₂` — lane `j` reads
+* `read1`/`read2` — lane `j` reads
   `pid₀·stride_*t + pid₁·stride_*h + (SPLIT_X·KCACHE_X + j)·stride_*d`;
-* `write₁` — the K-cache cell `m₂·stride_kcb + pid₁·stride_kch +
+* `write1` — the K-cache cell `m₂·stride_kcb + pid₁·stride_kch +
   SPLIT_X·stride_kcsplit_x + ((m₁ − 1) % block_size)·stride_kcs + j`;
-* `write₂` — the V-cache cell `m₂·stride_vcb + pid₁·stride_vch +
+* `write2` — the V-cache cell `m₂·stride_vcb + pid₁·stride_vch +
   ((m₁ − 1) % block_size)·stride_vcs + (SPLIT_X·KCACHE_X + j)·stride_vcd`;
-* `mask₁ = mask₂` — the active lanes `SPLIT_X·KCACHE_X + j < HEAD_DIM`
+* `mask1 = mask2` — the active lanes `SPLIT_X·KCACHE_X + j < HEAD_DIM`
   (`writeMask`s default to the masks).
 
 The slot cells, windows, and masks are declared, not parsed from the kernel;
@@ -813,28 +813,28 @@ def kvCacheCopyIO
     context_lengths SPLIT_X stride_kt stride_kh stride_kd stride_vt stride_vh stride_vd
       stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_vcb stride_vch
       stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM KCACHE_X
-  mbuf₁ := context_lengths
-  mbuf₂ := BLOCK_TABLES
-  inp₁ := K
-  inp₂ := V
-  out₁ := KCache
-  out₂ := VCache
+  mbuf1 := context_lengths
+  mbuf2 := BLOCK_TABLES
+  in1 := K
+  in2 := V
+  out1 := KCache
+  out2 := VCache
   B := KCACHE_X
-  mwin₁ := fun pid₀ _ => pid₀
-  mwin₂ := fun pid₀ _ m₁ =>
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ m₁ =>
     pid₀ * stride_bts + ((m₁ - 1) / block_size) * stride_btb
-  read₁ := fun pid₀ pid₁ _ _ j =>
+  read1 := fun pid₀ pid₁ _ _ j =>
     pid₀ * stride_kt + pid₁ * stride_kh +
       (SPLIT_X * KCACHE_X + j.val) * stride_kd
-  read₂ := fun pid₀ pid₁ _ _ j =>
+  read2 := fun pid₀ pid₁ _ _ j =>
     pid₀ * stride_vt + pid₁ * stride_vh +
       (SPLIT_X * KCACHE_X + j.val) * stride_vd
-  mask₁ := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
-  mask₂ := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
-  write₁ := fun _ pid₁ m₁ m₂ j =>
+  mask1 := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
+  mask2 := fun _ _ _ _ j => SPLIT_X * KCACHE_X + j.val < HEAD_DIM
+  write1 := fun _ pid₁ m₁ m₂ j =>
     m₂ * stride_kcb + pid₁ * stride_kch + SPLIT_X * stride_kcsplit_x +
       ((m₁ - 1) % block_size) * stride_kcs + j.val
-  write₂ := fun _ pid₁ m₁ m₂ j =>
+  write2 := fun _ pid₁ m₁ m₂ j =>
     m₂ * stride_vcb + pid₁ * stride_vch +
       ((m₁ - 1) % block_size) * stride_vcs +
       (SPLIT_X * KCACHE_X + j.val) * stride_vcd

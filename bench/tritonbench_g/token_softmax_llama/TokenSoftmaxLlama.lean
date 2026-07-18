@@ -40,8 +40,8 @@ token_softmax_llama_correctness                ← TOP SPECIFICATION (tokenSoftm
 
 The headline is stated on the kernel's **metadata-driven IO signature**
 `tokenSoftmaxLlamaIO` (`MetaMasked2DKernelIO₁`, the metadata-genre skin): the
-two per-program scalars live in the `.nat` slots `mbuf₁ = B_Start_Loc` /
-`mbuf₂ = B_Seqlen` at cell `cur_batch = pid₀`, and the loaded values `m₁`
+two per-program scalars live in the `.nat` slots `mbuf1 = B_Start_Loc` /
+`mbuf2 = B_Seqlen` at cell `cur_batch = pid₀`, and the loaded values `m₁`
 (start index) / `m₂` (sequence length) enter the read window
 `pid₁ * stride_logic_h + (m₁ + j) * stride_logic_bs`, the write window
 `pid₁ * stride_prob_h + (m₁ + j) * stride_prob_bs`, the mask `j < m₂`, and
@@ -650,8 +650,8 @@ theorem token_softmax_surface_region_run
 /-- `_fwd_kernel_token_softmax`'s metadata-driven **IO signature** — the whole
 kernel-specific audit surface of the `⊨` headline:
 
-* `mbuf₁ = B_Start_Loc` / `mbuf₂ = B_Seqlen` — the two per-program `.nat`
-  scalar slots, both at cell `cur_batch = pid₀` (`mwin₁ = mwin₂ = pid₀`);
+* `mbuf1 = B_Start_Loc` / `mbuf2 = B_Seqlen` — the two per-program `.nat`
+  scalar slots, both at cell `cur_batch = pid₀` (`mwin1 = mwin2 = pid₀`);
 * `inp = Logics` / `out = Prob_Out` — which buffer is which argument;
 * `B = BLOCK_SIZE` — the row window each program owns;
 * `read`/`write` — lane `j` of program `(pid₀, pid₁)` reads
@@ -673,13 +673,13 @@ def tokenSoftmaxLlamaIO
     MetaMasked2DKernelIO₁ where
   kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
     stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE
-  mbuf₁ := B_Start_Loc
-  mbuf₂ := B_Seqlen
+  mbuf1 := B_Start_Loc
+  mbuf2 := B_Seqlen
   inp := Logics
   out := Prob_Out
   B := BLOCK_SIZE
-  mwin₁ := fun pid₀ _ => pid₀
-  mwin₂ := fun pid₀ _ => pid₀
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀
   read := fun _ pid₁ m₁ _ j =>
     pid₁ * stride_logic_h + (m₁ + j.val) * stride_logic_bs
   write := fun _ pid₁ m₁ _ j =>

@@ -45,8 +45,8 @@ sequence length `m₁ = seq_lengths[pid₀]`, slot 2 pins the block id
 **`m₁`-dependent** cell (the chain), and the single K tile is copied to the
 `m₂`-selected cache window. The kernel is K-only (1 in ↦ 1 out), so the
 family's second data channel is instantiated *off* by duplicate-region
-wiring: `inp₂ := inp₁ = K`, `out₂ := out₁ = KCache` with
-`mask₂`/`writeMask₂ := False` (sound — `FlatAlloc.Disjoint` only constrains
+wiring: `in2 := in1 = K`, `out2 := out1 = KCache` with
+`mask2`/`writeMask2 := False` (sound — `FlatAlloc.Disjoint` only constrains
 *distinct* listed regions, and the `False` gates make channel 2's legs
 vacuous).
 
@@ -865,22 +865,22 @@ theorem copy_to_kcache_seqlen_n1_surface_region_run
 /-- `copy_to_kcache_seqlen_n1_surface`'s chained-metadata **IO signature** —
 the whole kernel-specific audit surface of the `⊨` headline:
 
-* `mbuf₁` — the `seq_lengths` slot: program `(cur_token_idx, cur_kv_head_idx)`
-  loads the **raw** sequence length `m₁ = seq_lengths[pid₀]` (`mwin₁`; the
+* `mbuf1` — the `seq_lengths` slot: program `(cur_token_idx, cur_kv_head_idx)`
+  loads the **raw** sequence length `m₁ = seq_lengths[pid₀]` (`mwin1`; the
   decode path's `− 1` lives in the windows, Nat-truncated exactly as in the
   kernel);
-* `mbuf₂` — the `BLOCK_TABLES` slot, **chained**: its cell
-  `pid₀·bts + ((m₁−1)/block_size)·btb` (`mwin₂`) eats the first slot's loaded
+* `mbuf2` — the `BLOCK_TABLES` slot, **chained**: its cell
+  `pid₀·bts + ((m₁−1)/block_size)·btb` (`mwin2`) eats the first slot's loaded
   value, pinning the raw block id `m₂`;
-* `inp₁ → out₁` — the K tile at
-  `pid₀·kt + pid₁·kh + (SPLIT_X·KCACHE_X + j)·kd` (`read₁`), copied to the
+* `in1 → out1` — the K tile at
+  `pid₀·kt + pid₁·kh + (SPLIT_X·KCACHE_X + j)·kd` (`read1`), copied to the
   `m₂`-selected cache window
   `m₂·kcb + pid₁·kch + SPLIT_X·kcsplit_x + ((m₁−1)%block_size)·kcs + j`
-  (`write₁`), both unmasked (`mask₁`/`writeMask₁ := True` — the kernel's load
+  (`write1`), both unmasked (`mask1`/`writeMask1 := True` — the kernel's load
   and store carry no mask);
-* `inp₂ → out₂` — the family's second data channel, instantiated **off** for
-  this K-only sibling: duplicate-region wiring `inp₂ := K`, `out₂ := KCache`
-  with `mask₂`/`writeMask₂ := False`, so its legs are vacuous.
+* `in2 → out2` — the family's second data channel, instantiated **off** for
+  this K-only sibling: duplicate-region wiring `in2 := K`, `out2 := KCache`
+  with `mask2`/`writeMask2 := False`, so its legs are vacuous.
 
 The windows and masks are declared, not parsed from the kernel; the headline
 **proves** the kernel's actual addressing and chaining match them. -/
@@ -891,32 +891,32 @@ def kcacheCopyN1IO (K KCache BLOCK_TABLES seq_lengths : RegionName)
   kernel := copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES seq_lengths
     SPLIT_X stride_kt stride_kh stride_kd stride_kcb stride_kch
     stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0 KCACHE_X
-  mbuf₁ := seq_lengths
-  mbuf₂ := BLOCK_TABLES
-  inp₁ := K
-  inp₂ := K
-  out₁ := KCache
-  out₂ := KCache
+  mbuf1 := seq_lengths
+  mbuf2 := BLOCK_TABLES
+  in1 := K
+  in2 := K
+  out1 := KCache
+  out2 := KCache
   B := KCACHE_X
-  mwin₁ := fun pid₀ _ => pid₀
-  mwin₂ := fun pid₀ _ m₁ =>
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ m₁ =>
     pid₀ * stride_bts + ((m₁ - 1) / block_size) * stride_btb
-  read₁ := fun pid₀ pid₁ _ _ j =>
+  read1 := fun pid₀ pid₁ _ _ j =>
     pid₀ * stride_kt + pid₁ * stride_kh +
       (SPLIT_X * KCACHE_X + j.val) * stride_kd
-  read₂ := fun pid₀ pid₁ _ _ j =>
+  read2 := fun pid₀ pid₁ _ _ j =>
     pid₀ * stride_kt + pid₁ * stride_kh +
       (SPLIT_X * KCACHE_X + j.val) * stride_kd
-  mask₁ := fun _ _ _ _ _ => True
-  mask₂ := fun _ _ _ _ _ => False
-  write₁ := fun _ pid₁ m₁ m₂ j =>
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => False
+  write1 := fun _ pid₁ m₁ m₂ j =>
     m₂ * stride_kcb + pid₁ * stride_kch + SPLIT_X * stride_kcsplit_x +
       ((m₁ - 1) % block_size) * stride_kcs + j.val
-  write₂ := fun _ pid₁ m₁ m₂ j =>
+  write2 := fun _ pid₁ m₁ m₂ j =>
     m₂ * stride_kcb + pid₁ * stride_kch + SPLIT_X * stride_kcsplit_x +
       ((m₁ - 1) % block_size) * stride_kcs + j.val
-  writeMask₁ := fun _ _ _ _ _ => True
-  writeMask₂ := fun _ _ _ _ _ => False
+  writeMask1 := fun _ _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ _ => False
 
 /-- **The headline**: the `n_tokens = 1` decode path of
 `_copy_to_kcache_seqlen_n_kernel` implements the pure paged-cache copy on its

@@ -40,7 +40,7 @@ The headline is stated on the kernel's **metadata-driven IO signature**
 `tokenSoftmaxIO` (`MetaMasked2DKernelIO₁`, the metadata genre: windows and
 masks that *read memory*). The two per-program `.nat` scalar slots
 `B_Start_Loc[pid₀]` / `B_Seqlen[pid₀]` are declared as slot cells
-(`mwin₁ = mwin₂ = pid₀`), and their loaded values enter the headline as
+(`mwin1 = mwin2 = pid₀`), and their loaded values enter the headline as
 honest named binders: `m₁` (the batch's start index) parametrizes the
 `Logics`/`Prob_Out` data windows `pid₁ * stride_*_h + (m₁ + j) * stride_*_bs`,
 and `m₂` (the batch's sequence length) both the active-lane mask `j < m₂` and
@@ -665,9 +665,9 @@ kernel-specific audit surface of the `⊨` headline (`MetaMasked2DKernelIO₁`,
 the metadata genre: the data windows and the mask read two per-program `.nat`
 scalar slots):
 
-* `mbuf₁ = B_Start_Loc`, `mbuf₂ = B_Seqlen` — the scalar slots; program
+* `mbuf1 = B_Start_Loc`, `mbuf2 = B_Seqlen` — the scalar slots; program
   `(cur_batch, cur_head) = (pid₀, pid₁)` reads both at cell `pid₀`
-  (`mwin₁ = mwin₂ = pid₀`), yielding the named scalars
+  (`mwin1 = mwin2 = pid₀`), yielding the named scalars
   `m₁ = cur_batch_in_all_start_index` and `m₂ = cur_batch_seq_len`;
 * `inp = Logics`, `out = Prob_Out` — the data channels, `B = BLOCK_SIZE`;
 * `read`/`write` — lane `j` at
@@ -687,13 +687,13 @@ def tokenSoftmaxIO (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
       BLOCK_SIZE : Nat) : MetaMasked2DKernelIO₁ where
   kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
     stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE
-  mbuf₁ := B_Start_Loc
-  mbuf₂ := B_Seqlen
+  mbuf1 := B_Start_Loc
+  mbuf2 := B_Seqlen
   inp := Logics
   out := Prob_Out
   B := BLOCK_SIZE
-  mwin₁ := fun pid₀ _ => pid₀
-  mwin₂ := fun pid₀ _ => pid₀
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀
   read := fun _ pid₁ m₁ _ j =>
     pid₁ * stride_logic_h + (m₁ + j.val) * stride_logic_bs
   write := fun _ pid₁ m₁ _ j =>

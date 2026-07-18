@@ -746,12 +746,12 @@ kernel-specific audit surface of the `⊨` headline
 (`MetaScatterMasked2DKernelIO₁`, the metadata genre's `Meta` slots +
 `Scatter` writes skin):
 
-* `fbuf₁`/`fbuf₂`/`fbuf₃` — the three per-batch float penalty slots
+* `fbuf1`/`fbuf2`/`fbuf3` — the three per-batch float penalty slots
   (`presence_penalty`/`freqency_penalty`/`repetition_penalty`), all read at
-  cell `pid₀` (`fwin₁ = fwin₂ = fwin₃ = pid₀`), yielding the named scalars
+  cell `pid₀` (`fwin1 = fwin2 = fwin3 = pid₀`), yielding the named scalars
   `g₁ = cur_presence`, `g₂ = cur_freqency`, `g₃ = cur_repetition`;
 * `mbuf = p_cumsum_seq_len` — the `.nat` metadata buffer carrying both
-  cumsum slots: `mwin₁ = pid₀` and `mwin₂ = pid₀ + 1`, yielding
+  cumsum slots: `mwin1 = pid₀` and `mwin2 = pid₀ + 1`, yielding
   `m₁ = cur_batch_start_index` and `m₂ = cur_batch_end_index`;
 * `idbuf = p_token_ids`, `cntbuf = p_token_counts` — the `.nat` tiles, lane
   `j` at the batch-window cell `m₁ + j` (`readi = readc`), yielding the
@@ -778,20 +778,20 @@ def applyPenaltyIO
   kernel := apply_penalty Logits presence_penalty freqency_penalty
     repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
     stride_logit_b stride_logit_s BLOCK_P
-  fbuf₁ := presence_penalty
-  fbuf₂ := freqency_penalty
-  fbuf₃ := repetition_penalty
+  fbuf1 := presence_penalty
+  fbuf2 := freqency_penalty
+  fbuf3 := repetition_penalty
   mbuf := p_cumsum_seq_len
   idbuf := p_token_ids
   cntbuf := p_token_counts
   inp := Logits
   out := Logits
   B := BLOCK_P
-  fwin₁ := fun pid₀ _ => pid₀
-  fwin₂ := fun pid₀ _ => pid₀
-  fwin₃ := fun pid₀ _ => pid₀
-  mwin₁ := fun pid₀ _ => pid₀
-  mwin₂ := fun pid₀ _ => pid₀ + 1
+  fwin1 := fun pid₀ _ => pid₀
+  fwin2 := fun pid₀ _ => pid₀
+  fwin3 := fun pid₀ _ => pid₀
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀ + 1
   readi := fun _ _ m₁ _ j => m₁ + j.val
   readc := fun _ _ m₁ _ j => m₁ + j.val
   read := fun pid₀ _ _ _ ids j => pid₀ * stride_logit_b + ids j
