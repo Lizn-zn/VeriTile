@@ -18,7 +18,7 @@ proof obligation here. Because `pid` is universally quantified, the per-program
 statement covers every program of the grid.
 
 The headline is stated on the kernel's compaction-scatter IO signature
-`maskedSelectIO` (`ScatterMasked2DKernelIO₁ᵦ`, the scatter genre's bool-gated
+`maskedSelectIO` (`BoolScatterMasked2DKernelIO₁`, the scatter genre's bool-gated
 skin): which buffer is which argument — data `inp_ptr` (`inp`), select gate
 `select_mask_ptr` (`mbuf`, `.bool` channel), prefix-sum `prefix_sum_ptr`
 (`idxbuf`, `.nat` index channel), and the scatter target `out_ptr` (`out`) —
@@ -27,7 +27,7 @@ the shared read window `pid₀ * BLOCK_SIZE + j`, the **static** bounds mask
 `writeMask` `offset < n_elements ∧ bs j = Bool.true` (the kernel's
 `select_mask and mask` store gate), and the data-dependent scatter destination
 `write … ids j = ids j − 1` (the loaded `prefix_sum` value minus one). `⊨`
-(`ScatterMasked2DKernelIO₁ᵦ.Implements`) is the audit-once scatter Hoare-triple
+(`BoolScatterMasked2DKernelIO₁.Implements`) is the audit-once scatter Hoare-triple
 combinator: for **every** disjoint flat placement of the four buffers, **every**
 program id whose static-mask lanes are in bounds, and **every** launch state
 whose windows hold `xs`/`bs`/`ids` at the static-mask lanes, the translated
@@ -68,7 +68,7 @@ so they hold with or without injectivity.
 namespace VeriTile.Bench.TritonBenchG.MaskedSelect
 
 open VeriTile.Triton
-open scoped VeriTile.Triton.ScatterMasked2DKernelIO₁ᵦ
+open scoped VeriTile.Triton.BoolScatterMasked2DKernelIO₁
 
 /-- Faithful transcription of `masked_select.py`'s `masked_select_kernel`.
 
@@ -322,7 +322,7 @@ private theorem masked_select_kernel_exec_isSome
 scatter values under the per-context no-collision antecedent, and frame off the
 raw scatter cells, from any launch state whose windows hold `xs`/`bs`/`ids` at
 the static bounds mask. This is the `hrun` obligation of
-`ScatterMasked2DKernelIO₁ᵦ.Implements.intro`; the value half reuses
+`BoolScatterMasked2DKernelIO₁.Implements.intro`; the value half reuses
 `masked_select_kernel_correct_of_exec` (whose state-coupled store offset
 collapses to `ids j − 1` under the index-tile pin). -/
 theorem masked_select_kernel_region_run
@@ -459,7 +459,7 @@ match them. Buffer sizes are not signature content: the headline quantifies
 over every allocation whose extents cover the static-mask lanes and the
 write-active scatter cells. -/
 def maskedSelectIO (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
-    (n_elements BLOCK_SIZE : Nat) : ScatterMasked2DKernelIO₁ᵦ where
+    (n_elements BLOCK_SIZE : Nat) : BoolScatterMasked2DKernelIO₁ where
   kernel := masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
     n_elements BLOCK_SIZE
   inp := inp_ptr
@@ -489,14 +489,14 @@ lanes where it is actually true of a genuine prefix sum), every write-active
 lane `j` (in-bounds and `bs j = Bool.true`, the kernel's `select_mask and mask`)
 put `xs j` at its compacted slot `ids j − 1` of `out_ptr`; and every memory
 cell off the raw scatter cells is unchanged — unconditionally. Proof:
-`ScatterMasked2DKernelIO₁ᵦ.Implements.intro` assembles the region-model
+`BoolScatterMasked2DKernelIO₁.Implements.intro` assembles the region-model
 scatter triple with the flat-memory bridge side conditions. -/
 specification masked_select_kernel_correctness
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) :
     maskedSelectIO inp_ptr select_mask_ptr prefix_sum_ptr out_ptr n_elements
       BLOCK_SIZE ⊨ fun _ _ _ _ xs j => xs j := by
-  refine ScatterMasked2DKernelIO₁ᵦ.Implements.intro _ ?_ ?_ ?_
+  refine BoolScatterMasked2DKernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact masked_select_kernel_flattenOk inp_ptr select_mask_ptr prefix_sum_ptr
       out_ptr n_elements BLOCK_SIZE
   · intro bounds s bs ids hbsPin hidsPin hbr hbm hbx hbw

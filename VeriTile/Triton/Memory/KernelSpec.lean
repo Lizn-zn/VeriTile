@@ -1935,7 +1935,7 @@ takes the loaded bool tile — write-active lanes may depend on the data
 (`tl.store(…, mask=keep)`) — while `mask` stays the **static** read-active
 superset that bounds/trace-safety are stated against. No `scratch` field
 yet: it will be added when a consumer appears. -/
-structure Masked2DKernelIO₁ᵦ where
+structure BoolMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
   /-- Input buffer (ℝ channel). -/
@@ -1962,7 +1962,7 @@ structure Masked2DKernelIO₁ᵦ where
   writeMask : Nat → Nat → (Fin B → Bool) → Fin B → Prop :=
     fun p₀ p₁ _ j => mask p₀ p₁ j
 
-namespace Masked2DKernelIO₁ᵦ
+namespace BoolMasked2DKernelIO₁
 
 /-- `io.Implements f` — bool-input sibling of
 `Masked2DKernelIO₁.Implements`. The bool tile `bs` is quantified alongside
@@ -1971,7 +1971,7 @@ the data tile: the launch state holds `bs` on the `.bool` channel of
 address bounds are stated at the **static** `mask` (the superset
 trace-safety needs); the data gate `writeMask … bs` only narrows which
 output lanes carry the value contract and the frame exclusion. -/
-def Implements (io : Masked2DKernelIO₁ᵦ)
+def Implements (io : BoolMasked2DKernelIO₁)
     (f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → ℝ) → Fin io.B → ℝ) :
     Prop :=
   ∀ A : FlatAlloc,
@@ -2005,7 +2005,7 @@ def Implements (io : Masked2DKernelIO₁ᵦ)
               o' ≠ A.addr io.out (io.write pid₀ pid₁ j))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
-@[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₁ᵦ.Implements
+@[inherit_doc] scoped infix:25 " ⊨ " => BoolMasked2DKernelIO₁.Implements
 
 /-- Embed into the unified core — proof plumbing for `Implements.intro`.
 Channel 0 is the float tile, channel 1 the `.bool` tile (it enters both
@@ -2014,7 +2014,7 @@ contract-free bound witness on the output window: the core states output
 bounds only at `omask` (= data-gated) lanes, while the family's
 trace-safety obligation needs them at the static `mask` — the witness
 channel's `imask := mask` carries that wider bound through. -/
-private def toU (io : Masked2DKernelIO₁ᵦ) : UKernelIO where
+private def toU (io : BoolMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
   nIn := 3
   nOut := 1
@@ -2051,7 +2051,7 @@ narrows the static mask (`fun _ _ _ _ h => h` for the default `writeMask`);
 it discharges the write-address bound at data-gated lanes from the
 static-mask bound. The bool-tile input hypothesis lives on the region-model
 state on both sides of the bridge, so no typed-read transport is needed. -/
-theorem Implements.intro (io : Masked2DKernelIO₁ᵦ)
+theorem Implements.intro (io : BoolMasked2DKernelIO₁)
     {f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → ℝ) → Fin io.B → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hsub : ∀ p₀ p₁ (bs : Fin io.B → Bool) (j : Fin io.B),
@@ -2133,16 +2133,16 @@ theorem Implements.intro (io : Masked2DKernelIO₁ᵦ)
   rcases hcond with hflat | hn
   · exact Or.inl hflat
   · exact Or.inr ⟨fun _o j hj => hn j hj, fun t => t.elim0⟩
-end Masked2DKernelIO₁ᵦ
+end BoolMasked2DKernelIO₁
 
 /-- IO signature of a **2D-grid, general-window** masked kernel with two ℝ
 inputs, one **`Bool` input**, and one output — the two-input sibling of
-`Masked2DKernelIO₁ᵦ` (see there for the bool-channel reading, and
+`BoolMasked2DKernelIO₁` (see there for the bool-channel reading, and
 `Masked2DKernelIO₁` for the two generalizations over the 1D family). This
 is the masked-add shape; in-place updates (`out = in2`) are expressible by
 the duplicate-region precedent of `MaskedKernelIO₃ₓ₂`. No `scratch` field
 yet: it will be added when a consumer appears. -/
-structure Masked2DKernelIO₂ᵦ where
+structure BoolMasked2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
   /-- First input buffer (ℝ channel). -/
@@ -2167,15 +2167,15 @@ structure Masked2DKernelIO₂ᵦ where
   bounds/trace-safety superset. -/
   mask : Nat → Nat → Fin B → Prop
   /-- Program `(pid₀, pid₁)`'s **write-active** lanes given the loaded bool
-  tile; defaults to the static `mask` (see `Masked2DKernelIO₁ᵦ.writeMask`). -/
+  tile; defaults to the static `mask` (see `BoolMasked2DKernelIO₁.writeMask`). -/
   writeMask : Nat → Nat → (Fin B → Bool) → Fin B → Prop :=
     fun p₀ p₁ _ j => mask p₀ p₁ j
 
-namespace Masked2DKernelIO₂ᵦ
+namespace BoolMasked2DKernelIO₂
 
 /-- `io.Implements f` — two-input sibling of
-`Masked2DKernelIO₁ᵦ.Implements`. -/
-def Implements (io : Masked2DKernelIO₂ᵦ)
+`BoolMasked2DKernelIO₁.Implements`. -/
+def Implements (io : BoolMasked2DKernelIO₂)
     (f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
       Fin io.B → ℝ) : Prop :=
   ∀ A : FlatAlloc,
@@ -2213,14 +2213,14 @@ def Implements (io : Masked2DKernelIO₂ᵦ)
               o' ≠ A.addr io.out (io.write pid₀ pid₁ j))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
-@[inherit_doc] scoped infix:25 " ⊨ " => Masked2DKernelIO₂ᵦ.Implements
+@[inherit_doc] scoped infix:25 " ⊨ " => BoolMasked2DKernelIO₂.Implements
 
 /-- Embed into the unified core — proof plumbing for `Implements.intro`.
 Channels 0/1 are the float tiles, channel 2 the `.bool` tile, and channel 3
 a contract-free bound witness on the output window (see
-`Masked2DKernelIO₁ᵦ.toU` for why the witness carries the static-`mask`
+`BoolMasked2DKernelIO₁.toU` for why the witness carries the static-`mask`
 write bound). -/
-private def toU (io : Masked2DKernelIO₂ᵦ) : UKernelIO where
+private def toU (io : BoolMasked2DKernelIO₂) : UKernelIO where
   kernel := io.kernel
   nIn := 4
   nOut := 1
@@ -2255,8 +2255,8 @@ private def toU (io : Masked2DKernelIO₂ᵦ) : UKernelIO where
   smask := fun t => t.elim0
 
 /-- Assembly lemma — two-input sibling of
-`Masked2DKernelIO₁ᵦ.Implements.intro` (see there for `hsub`). -/
-theorem Implements.intro (io : Masked2DKernelIO₂ᵦ)
+`BoolMasked2DKernelIO₁.Implements.intro` (see there for `hsub`). -/
+theorem Implements.intro (io : BoolMasked2DKernelIO₂)
     {f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
       Fin io.B → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
@@ -2352,7 +2352,7 @@ theorem Implements.intro (io : Masked2DKernelIO₂ᵦ)
   rcases hcond with hflat | hn
   · exact Or.inl hflat
   · exact Or.inr ⟨fun _o j hj => hn j hj, fun t => t.elim0⟩
-end Masked2DKernelIO₂ᵦ
+end BoolMasked2DKernelIO₂
 
 /-- One **private working buffer** of an unmasked kernel: program `pid` may
 stage intermediates in the window `[win pid, win pid + len)` of buffer
@@ -4620,7 +4620,7 @@ host-side no-duplicate-destination guarantee (the consumers' `hOutInj` /
 own value leg and threads to its scatter-readback lemma. The frame and
 the trace-safety write bound are stated at the *ungated* `writeMask`
 lanes, so they hold with or without injectivity. -/
-structure ScatterMasked2DKernelIO₁ᵦ where
+structure BoolScatterMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
   /-- Input buffer (ℝ channel). -/
@@ -4650,13 +4650,13 @@ structure ScatterMasked2DKernelIO₁ᵦ where
   writeMask : Nat → Nat → (Fin B → Bool) → (Fin B → Nat) → Fin B → Prop :=
     fun p₀ p₁ _ _ j => mask p₀ p₁ j
 
-namespace ScatterMasked2DKernelIO₁ᵦ
+namespace BoolScatterMasked2DKernelIO₁
 
 /-- No two write-active lanes share a scatter destination — the
 per-pinned-context injectivity that scatter readback needs. For
 `masked_select` this is the host prefix-sum's no-duplicate-destination
 guarantee. -/
-def WriteInj (io : ScatterMasked2DKernelIO₁ᵦ) (p₀ p₁ : Nat)
+def WriteInj (io : BoolScatterMasked2DKernelIO₁) (p₀ p₁ : Nat)
     (bs : Fin io.B → Bool) (ids : Fin io.B → Nat) : Prop :=
   ∀ j k : Fin io.B, io.writeMask p₀ p₁ bs ids j →
     io.writeMask p₀ p₁ bs ids k →
@@ -4667,7 +4667,7 @@ bool tile `bs` and the index tile `ids` are quantified alongside the data
 tile and pinned on the read-active lanes; the write addresses eat the
 *loaded* `ids`. The readback leg is guarded by `WriteInj` (see the
 struct docstring); the frame excludes the raw (ungated) scatter cells. -/
-def Implements (io : ScatterMasked2DKernelIO₁ᵦ)
+def Implements (io : BoolScatterMasked2DKernelIO₁)
     (f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → Nat) →
       (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
   ∀ A : FlatAlloc,
@@ -4707,7 +4707,7 @@ def Implements (io : ScatterMasked2DKernelIO₁ᵦ)
               o' ≠ A.addr io.out (io.write pid₀ pid₁ ids j))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
-@[inherit_doc] scoped infix:25 " ⊨ " => ScatterMasked2DKernelIO₁ᵦ.Implements
+@[inherit_doc] scoped infix:25 " ⊨ " => BoolScatterMasked2DKernelIO₁.Implements
 
 /-- Embed into the unified core: channel 0 is the float data tile,
 channel 1 the `.bool` select tile, channel 2 the `.nat` index tile.
@@ -4715,7 +4715,7 @@ The single output's window eats the index channel's pinned values and
 its mask is the write gate **conjoined with `WriteInj`**; a scratch
 channel shadows the same cells with the *ungated* write gate, carrying
 the unconditional frame exclusion and write bound. -/
-private def toU (io : ScatterMasked2DKernelIO₁ᵦ) : UKernelIO where
+private def toU (io : BoolScatterMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
   nIn := 3
   nOut := 1
@@ -4758,7 +4758,7 @@ bool/index tiles enter `hts`/`hrun` as pinned tiles, and `hrun`'s value
 leg receives the per-context `WriteInj` antecedent (the consumer threads
 its `hOutInj`/`hUniq` side condition there); `hrun`'s frame and the
 write bound are at the ungated `writeMask` lanes. -/
-theorem Implements.intro (io : ScatterMasked2DKernelIO₁ᵦ)
+theorem Implements.intro (io : BoolScatterMasked2DKernelIO₁)
     {f : Nat → Nat → (Fin io.B → Bool) → (Fin io.B → Nat) →
       (Fin io.B → ℝ) → Fin io.B → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
@@ -4864,7 +4864,7 @@ theorem Implements.intro (io : ScatterMasked2DKernelIO₁ᵦ)
   · exact Or.inl hflat
   · exact Or.inr ⟨fun _o j hj => hn j hj.1, fun _t j hj => hn j hj⟩
 
-end ScatterMasked2DKernelIO₁ᵦ
+end BoolScatterMasked2DKernelIO₁
 
 /-- IO signature of the **penalty gather–scatter shape** (`Meta` slots +
 `Scatter` writes): three per-program float scalar slots (`fbuf₁`–`fbuf₃`,
@@ -4882,7 +4882,7 @@ the TritonBench-G LightLLM penalty kernel `apply_penalty`
 (per-`cur_batch` presence/frequency/repetition penalties applied in place
 to `Logits` at the gathered token positions).
 
-**Injectivity design.** Same as `ScatterMasked2DKernelIO₁ᵦ`: the
+**Injectivity design.** Same as `BoolScatterMasked2DKernelIO₁`: the
 readback leg of `Implements` is guarded by the per-pinned-context
 `WriteInj pid₀ pid₁ m₁ m₂ ids` antecedent (the consumer's `hUniq`
 distinct-active-token-ids side condition) rather than by an
