@@ -73,6 +73,20 @@ def read : (t : ChanTy) → BlockState → RegionName → Nat → t.carrier
   | .nat   => fun s r a => s.readMemValue .nat r a
   | .int   => fun s r a => s.readMemValue .int r a
 
+/-- Channel reads commute with the flattening at in-bounds addresses, on
+every channel type. This is the read-back step of the bridge, generalized
+from the float-only `flattenState_readMem` to the whole `ChanTy` family; it
+is what lets an *output* channel be typed. -/
+theorem read_flattenState (t : ChanTy) (A : FlatAlloc) (hd : A.Disjoint)
+    (s : BlockState) {r : RegionName} (hr : r ∈ A.regions) {o : Nat}
+    (ho : o < A.extent r) :
+    t.read (A.flattenState s) A.flat (A.addr r o) = t.read s r o := by
+  cases t with
+  | float => exact A.flattenState_readMem hd s hr ho
+  | bool => exact A.flattenState_readMemValue hd s hr ho .bool ⟨by decide, by decide⟩
+  | nat => exact A.flattenState_readMemValue hd s hr ho .nat ⟨by decide, by decide⟩
+  | int => exact A.flattenState_readMemValue hd s hr ho .int ⟨by decide, by decide⟩
+
 end ChanTy
 
 /-! ## The core signature -/
@@ -101,6 +115,12 @@ structure UKernelIO where
   iarity : Fin nIn → Nat
   /-- Each input channel's buffer. -/
   ibuf : Fin nIn → RegionName
+  /-- Each output channel's element type. Symmetric to `ity`: the
+  postcondition reads output channel `o` back through `(oty o).read`, so a
+  kernel whose store is `.to(tl.int8)`-style typed can state a *true* value
+  contract. `.float` reads are definitionally `readMem`, so every skin that
+  sets `oty := fun _ => .float` keeps its `Implements` statement unchanged. -/
+  oty : Fin nOut → ChanTy
   /-- Each output channel's lane count. -/
   oarity : Fin nOut → Nat
   /-- Each output channel's buffer. -/
@@ -144,7 +164,8 @@ at the `vals`-dependent windows), the translated kernel terminates, every
 write-active lane of every output channel holds `f … vals o j`, and every
 flat cell outside the declared output/scratch windows is unchanged. -/
 def Implements (io : UKernelIO)
-    (f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → ℝ) :
+    (f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+      (io.oty o).carrier) :
     Prop :=
   ∀ A : FlatAlloc,
     A.Disjoint →
@@ -168,7 +189,8 @@ def Implements (io : UKernelIO)
         = some s'
       ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
           io.omask o vals pid₀ pid₁ j →
-          s'.readMem A.flat (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ j))
+          (io.oty o).read s' A.flat
+              (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ j))
             = f pid₀ pid₁ vals o j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
@@ -185,9 +207,18 @@ def Implements (io : UKernelIO)
 /-- Assembly lemma — **the** flattening-bridge proof of the whole family.
 The obligations are the family's usual three, with the channel-typed pin
 hypothesis threaded through both `hts` and `hrun` (value-dependent windows
-need the pinned values to state their bounds). -/
+need the pinned values to state their bounds).
+
+`hrun` additionally receives the **`undef` pin** `s₀.undef = fun _ _ => 0`
+that `Implements` hypothesises. Without it, a kernel whose masked loads lack
+an `other=` default reads `s₀.undef` at masked-off lanes; if the kernel then
+reduces across the tile, the value stored at an *active* lane depends on
+`undef` at *inactive* lanes and no `⊨`-shaped contract is provable. Since
+this is a hypothesis the consumer *discharges*, handing it over strictly
+weakens the obligation — skins that do not need it simply ignore the binder. -/
 theorem Implements.intro (io : UKernelIO)
-    {f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → ℝ}
+    {f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+      (io.oty o).carrier}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
@@ -205,6 +236,7 @@ theorem Implements.intro (io : UKernelIO)
         io.swin t vals (s.pids 0) (s.pids 1) j < bounds (io.sbuf t)) →
       Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
     (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
+      s₀.undef = (fun _ _ => 0) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
         io.imask i vals (s₀.pids 0) (s₀.pids 1) j →
         (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) j)
@@ -212,7 +244,8 @@ theorem Implements.intro (io : UKernelIO)
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
             io.omask o vals (s₀.pids 0) (s₀.pids 1) j →
-            s1.readMem (io.obuf o) (io.owin o vals (s₀.pids 0) (s₀.pids 1) j)
+            (io.oty o).read s1 (io.obuf o)
+                (io.owin o vals (s₀.pids 0) (s₀.pids 1) j)
               = f (s₀.pids 0) (s₀.pids 1) vals o j)
         ∧ (∀ r o',
             (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
@@ -226,7 +259,7 @@ theorem Implements.intro (io : UKernelIO)
   intro A hd hregs hcov pid₀ pid₁ vals s₀ hpid₀ hpid₁ hu hib hob hsb hpins
   subst hpid₀
   subst hpid₁
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ vals hpins
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ vals hu hpins
   have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
     hts A.extent s₀ vals hpins hib hob hsb
   have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
@@ -237,7 +270,7 @@ theorem Implements.intro (io : UKernelIO)
       rw [hregs]; exact io.obuf_mem o
     have hlt : io.owin o vals (s₀.pids 0) (s₀.pids 1) j
         < A.extent (io.obuf o) := hob o j hj
-    rw [A.flattenState_readMem hd s1 hmem hlt]
+    rw [(io.oty o).read_flattenState A hd s1 hmem hlt]
     exact hval o j hj
   · intro r' o' hcond
     by_cases hr : r' = A.flat

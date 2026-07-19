@@ -162,6 +162,7 @@ private def toU (io : KernelIO₂) : UKernelIO where
     | ⟨2, _⟩ => io.in1
     | ⟨3, _⟩ => io.in2
     | _ => io.out
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -236,7 +237,7 @@ theorem Implements.intro (io : KernelIO₂)
           omega
         · omega
       exact hts bounds s hb1 hb2 hb3
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 5) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 5) j)
@@ -508,6 +509,7 @@ private def toU (io : MaskedKernelIO₂) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.in1
     | _ => io.in2
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -576,7 +578,7 @@ theorem Implements.intro (io : MaskedKernelIO₂)
           < bounds (io.scratch.get u).1 := hsb u j hj
       rw [hu] at h
       exact h
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
@@ -901,6 +903,7 @@ private def toU (io : MaskedKernelIO₁) : UKernelIO where
   ity := fun _ => .float
   iarity := fun _ => io.B
   ibuf := fun _ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -957,7 +960,7 @@ theorem Implements.intro (io : MaskedKernelIO₁)
           < bounds (io.scratch.get u).1 := hsb u j hj
       rw [hu] at h
       exact h
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 1) j)
           (fun j hj => hpins (⟨0, by decide⟩ : Fin 1) j hj)
@@ -1087,6 +1090,7 @@ private def toU (io : Masked2DKernelIO₁) : UKernelIO where
   ity := fun _ => .float
   iarity := fun _ => io.B
   ibuf := fun _ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -1143,7 +1147,7 @@ theorem Implements.intro (io : Masked2DKernelIO₁)
           < bounds (io.scratch.get u).1 := hsb u j hj
       rw [hu] at h
       exact h
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 1) j)
           (fun j hj => hpins (⟨0, by decide⟩ : Fin 1) j hj)
@@ -1272,6 +1276,7 @@ private def toU (io : Masked2DKernelIO₂) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.in1
     | _ => io.in2
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -1339,7 +1344,7 @@ theorem Implements.intro (io : Masked2DKernelIO₂)
           < bounds (io.scratch.get u).1 := hsb u j hj
       rw [hu] at h
       exact h
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
@@ -1491,6 +1496,7 @@ private def toU (io : Masked2DKernelIO₂ₓ₂) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.in1
     | _ => io.in2
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -1568,7 +1574,7 @@ theorem Implements.intro (io : Masked2DKernelIO₂ₓ₂)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
         (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
@@ -1752,6 +1758,7 @@ private def toU (io : Masked2DKernelIO₃ₓ₃) : UKernelIO where
     | ⟨0, _⟩ => io.in1
     | ⟨1, _⟩ => io.in2
     | _ => io.in3
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -1854,7 +1861,7 @@ theorem Implements.intro (io : Masked2DKernelIO₃ₓ₃)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 3) j hj)
         (fun j hj => hob (⟨1, by decide⟩ : Fin 3) j hj)
         (fun j hj => hob (⟨2, by decide⟩ : Fin 3) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
@@ -2029,6 +2036,7 @@ private def toU (io : BoolMasked2DKernelIO₁) : UKernelIO where
     | ⟨0, _⟩ => io.inp
     | ⟨1, _⟩ => io.mbuf
     | _ => io.out
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -2092,7 +2100,7 @@ theorem Implements.intro (io : BoolMasked2DKernelIO₁)
       exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 3) j hj)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
         (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
           (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
@@ -2237,6 +2245,7 @@ private def toU (io : BoolMasked2DKernelIO₂) : UKernelIO where
     | ⟨1, _⟩ => io.in2
     | ⟨2, _⟩ => io.mbuf
     | _ => io.out
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -2305,7 +2314,7 @@ theorem Implements.intro (io : BoolMasked2DKernelIO₂)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 4) j hj)
         (fun j hj => hib (⟨2, by decide⟩ : Fin 4) j hj)
         (fun j hj => hib (⟨3, by decide⟩ : Fin 4) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨2, by decide⟩ : Fin 4) j)
           (fun j => vals (⟨0, by decide⟩ : Fin 4) j)
@@ -2451,6 +2460,7 @@ private def toU (io : KernelIO₁) : UKernelIO where
     | ⟨1, _⟩ => io.inp
     | ⟨2, _⟩ => io.out
     | ⟨k+3, h⟩ => (io.scratch.get ⟨k, by omega⟩).buf
+  oty := fun _ => .float
   oarity := fun _ => io.Bout
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -2532,7 +2542,7 @@ theorem Implements.intro (io : KernelIO₁)
             (⟨0, by decide⟩ : Fin 1) hpos
         omega
       · omega
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by omega⟩ : Fin (3 + io.scratch.length)) j)
           (fun j => hpins (⟨0, by omega⟩ : Fin (3 + io.scratch.length)) j
@@ -2886,6 +2896,7 @@ private def toU (io : KernelIO₃) : UKernelIO where
     | ⟨5, _⟩ => io.in3
     | ⟨6, _⟩ => io.out
     | ⟨k+7, h⟩ => (io.scratch.get ⟨k, by omega⟩).buf
+  oty := fun _ => .float
   oarity := fun _ => io.Bout
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -2998,7 +3009,7 @@ theorem Implements.intro (io : KernelIO₃)
             (⟨0, by decide⟩ : Fin 1) hpos
         omega
       · omega
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀
           (fun j => vals (⟨0, by omega⟩ : Fin (7 + io.scratch.length)) j)
@@ -3390,6 +3401,7 @@ private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
     | ⟨5, _⟩ => io.in3
     | ⟨6, _⟩ => io.out1
     | _ => io.out2
+  oty := fun _ => .float
   oarity := fun o => match o with
     | ⟨0, _⟩ => io.Bout1
     | _ => io.Bout2
@@ -3502,7 +3514,7 @@ theorem Implements.intro (io : KernelIO₃ₓ₂)
           omega
         · omega
       exact hts bounds s hb1 hb2 hb3 hb4 hb5
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 8) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 8) j)
@@ -3718,6 +3730,7 @@ private def toU (io : MaskedKernelIO₃ₓ₂)
     | ⟨0, _⟩ => io.in1
     | ⟨1, _⟩ => io.in2
     | _ => io.in3
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -3800,7 +3813,7 @@ theorem Implements.intro (io : MaskedKernelIO₃ₓ₂)
         (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
         (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 3) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
@@ -4188,6 +4201,7 @@ private def toU (io : MetaMasked2DKernelIO₁) : UKernelIO where
     | ⟨0, _⟩ => io.mbuf1
     | ⟨1, _⟩ => io.mbuf2
     | ⟨2, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -4261,7 +4275,7 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁)
         (hib (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) trivial)
         (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
@@ -4429,6 +4443,7 @@ private def toU (io : MetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
     | ⟨0, _⟩ => io.mbufL
     | ⟨1, _⟩ => io.inp
     | ⟨2, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => 1
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -4521,7 +4536,7 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₂ₓ₂)
         (fun hgm => hib (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) hgm)
         (fun h1 => hob (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h1)
         (fun h2 => hob (⟨1, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) h2)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
         (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
@@ -4730,6 +4745,7 @@ private def toU (io : BoolScatterMasked2DKernelIO₁) : UKernelIO where
     | ⟨0, _⟩ => io.inp
     | ⟨1, _⟩ => io.mbuf
     | ⟨2, _⟩ => io.idxbuf
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -4819,7 +4835,7 @@ theorem Implements.intro (io : BoolScatterMasked2DKernelIO₁)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
         (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
         (fun j hj => hsb (⟨0, by decide⟩ : Fin 1) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
           (fun j => vals (⟨2, by decide⟩ : Fin 3) j)
@@ -5053,6 +5069,7 @@ private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
     | ⟨5, _⟩ => io.idbuf
     | ⟨6, _⟩ => io.cntbuf
     | ⟨7, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -5205,7 +5222,7 @@ theorem Implements.intro (io : MetaScatterMasked2DKernelIO₁)
         (fun j hj => hib (⟨6, by decide⟩ : Fin 8) j hj)
         (fun j hj => hib (⟨7, by decide⟩ : Fin 8) j hj)
         (fun j hj => hsb (⟨0, by decide⟩ : Fin 1) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀
         (vals (⟨0, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
@@ -5458,6 +5475,7 @@ private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
     | ⟨1, _⟩ => io.mbuf2
     | ⟨2, _⟩ => io.in1
     | ⟨3, _⟩ => io.in2
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -5607,7 +5625,7 @@ theorem Implements.intro (io : ChainMetaMasked2DKernelIO₂ₓ₂)
         (fun j hj => hib (⟨3, by decide⟩ : Fin 4) j hj)
         (fun j hj => hsb (⟨0, by decide⟩ : Fin 2) j hj)
         (fun j hj => hsb (⟨1, by decide⟩ : Fin 2) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
@@ -5824,6 +5842,7 @@ private def toU (io : MetaMasked2DKernelIO₂ₓ₃) : UKernelIO where
     | ⟨0, _⟩ => io.mbufL
     | ⟨1, _⟩ => io.inp
     | ⟨2, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => 1
   obuf := fun o => match o with
     | ⟨0, _⟩ => io.out1
@@ -5933,7 +5952,7 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₂ₓ₃)
         (fun h1 => hob (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) h1)
         (fun h2 => hob (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) h2)
         (fun h3 => hob (⟨2, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1) h3)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ := hrun s₀
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
         (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
@@ -6132,6 +6151,7 @@ private def toU (io : GroupedMasked2DKernelIO)
   ity := fun _ => .float
   iarity := fun _ => io.B
   ibuf := io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := io.out
   obuf_mem := hout
@@ -6189,7 +6209,7 @@ theorem Implements.intro (io : GroupedMasked2DKernelIO)
     · intro bounds s vals _hpins hib hob _hsb
       exact hts bounds s (fun i j hj => hib i j hj)
         (fun o j hj => hob o j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun i j => vals i j) (fun i j hj => hpins i j hj)
       refine ⟨s1, hexec, fun o j hj => hval o j hj, ?_⟩
@@ -6329,6 +6349,7 @@ private def toU (io : MetaMasked2DKernelIO₁ₓ₂) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.mbuf1
     | ⟨_+1, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun o => match o with
     | ⟨0, _⟩ => io.B
     | ⟨_+1, _⟩ => io.C
@@ -6417,7 +6438,7 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁ₓ₂)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
         (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
         hrun s₀ (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
@@ -6615,6 +6636,7 @@ private def toU (io : GatherMasked2DKernelIO₁) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.idxbuf
     | ⟨_+1, _⟩ => io.inp
+  oty := fun _ => .float
   oarity := fun _ => io.B
   obuf := fun _ => io.out
   obuf_mem := fun _ => by simp
@@ -6691,7 +6713,7 @@ theorem Implements.intro (io : GatherMasked2DKernelIO₁)
         (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
         (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
         (fun j hj => hsb (⟨0, by decide⟩ : Fin 1) j hj)
-    · intro s₀ vals hpins
+    · intro s₀ vals _hundef hpins
       obtain ⟨s1, hexec, hval, hframe⟩ :=
         hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
