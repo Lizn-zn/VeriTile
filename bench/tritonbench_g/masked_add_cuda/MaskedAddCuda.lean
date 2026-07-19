@@ -31,7 +31,7 @@ masked_add_kernel_correctness            ← TOP SPECIFICATION (maskedAddIO ⊨ 
 ```
 
 The headline is stated on the kernel's masked **IO signature** `maskedAddIO`
-(`Masked2DKernelIO₂ᵦ`, the bool-input family: this kernel loads the boolean
+(`BoolMasked2DKernelIO₂`, the bool-input family: this kernel loads the boolean
 tile `p_mask` via `.to(tl.int1)` and uses it to narrow its own active set).
 The signature declares which buffer is which argument — data `p` (`in1`),
 running buffer `grad` (`in2`), boolean mask `p_mask` (`mbuf`), and the
@@ -43,7 +43,7 @@ running buffer `grad` (`in2`), boolean mask `p_mask` (`mbuf`), and the
 `mask = mask & ~p_mask`. The kernel is a 1-D launch, so the second program id
 of the 2-D family is simply ignored by every field.
 
-`⊨` (`Masked2DKernelIO₂ᵦ.Implements`) is the audit-once masked Hoare-triple
+`⊨` (`BoolMasked2DKernelIO₂.Implements`) is the audit-once masked Hoare-triple
 combinator: for **every** disjoint flat placement of the buffers, **every**
 program id whose static-mask lanes are in bounds, and **every** launch state
 whose windows hold `xs`/`ys`/`bs` at the static-mask lanes, the translated
@@ -68,7 +68,7 @@ never mentions.
 namespace VeriTile.Bench.TritonBenchG.MaskedAddCuda
 
 open VeriTile.Triton
-open scoped VeriTile.Triton.Masked2DKernelIO₂ᵦ
+open scoped VeriTile.Triton.BoolMasked2DKernelIO₂
 
 /-- Faithful transcription of `masked_add_cuda.py`'s `masked_add_kernel`.
 
@@ -331,7 +331,7 @@ match them. Buffer sizes are not signature content: the headline quantifies
 over every allocation whose extents cover the static-mask lanes. -/
 def maskedAddIO (grad_ptr p_ptr p_mask_ptr : RegionName)
     (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat) :
-    Masked2DKernelIO₂ᵦ where
+    BoolMasked2DKernelIO₂ where
   kernel := masked_add_kernel grad_ptr p_ptr p_mask_ptr n_elements alpha
     BLOCK_SIZE
   in1 := p_ptr
@@ -356,7 +356,7 @@ write-active lane `j` (in-bounds and `bs j = false`, the kernel's
 `mask & ~p_mask`) of the *same* buffer `grad_ptr` ends up holding
 `ys j + xs j * alpha` (the fused update of the originally-loaded window), and
 every other memory cell — including the in-bounds lanes vetoed by `p_mask` —
-is unchanged. Proof: `Masked2DKernelIO₂ᵦ.Implements.intro` assembles the
+is unchanged. Proof: `BoolMasked2DKernelIO₂.Implements.intro` assembles the
 region-model masked in-place triple with the flat-memory bridge side
 conditions. -/
 specification masked_add_kernel_correctness
@@ -364,7 +364,7 @@ specification masked_add_kernel_correctness
     (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat) :
     maskedAddIO grad_ptr p_ptr p_mask_ptr n_elements alpha BLOCK_SIZE
       ⊨ fun _ _ _ xs ys j => ys j + xs j * alpha := by
-  refine Masked2DKernelIO₂ᵦ.Implements.intro _ ?_ ?_ ?_ ?_
+  refine BoolMasked2DKernelIO₂.Implements.intro _ ?_ ?_ ?_ ?_
   · exact masked_add_kernel_flattenOk grad_ptr p_ptr p_mask_ptr n_elements
       alpha BLOCK_SIZE
   · exact fun _ _ _ j h => h.1

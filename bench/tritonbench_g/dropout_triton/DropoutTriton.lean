@@ -18,11 +18,11 @@ into one buffer) is the *trusted boundary*, not a proof obligation here. Because
 of the grid.
 
 The headline is stated on the kernel's masked bool-input IO signature
-`dropoutIO` (`Masked2DKernelIO₁ᵦ`): which buffer is which argument, where
+`dropoutIO` (`BoolMasked2DKernelIO₁`): which buffer is which argument, where
 program `pid` reads its ℝ tile / its `Bool` keep tile / writes its output
 tile, and the active-lane predicate `pid * BLOCK_SIZE + j < n_elements`. `⊨`
 is the audit-once masked Hoare-triple combinator
-(`Masked2DKernelIO₁ᵦ.Implements`): for **every** disjoint placement of the
+(`BoolMasked2DKernelIO₁.Implements`): for **every** disjoint placement of the
 three buffers in flat memory, **every** program id all of whose *active*
 lanes are in bounds, and **every** launch state whose input windows hold the
 data tile `xs` (ℝ channel) and the keep tile `bs` (`.bool` channel) at the
@@ -64,7 +64,7 @@ even if `output_ptr` aliases `x_ptr` or `x_keep_ptr`.
 namespace VeriTile.Bench.TritonBenchG.DropoutTriton
 
 open VeriTile.Triton
-open scoped VeriTile.Triton.Masked2DKernelIO₁ᵦ
+open scoped VeriTile.Triton.BoolMasked2DKernelIO₁
 
 /-- Faithful transcription of `dropout_triton.py`'s `_dropout`.
 
@@ -184,7 +184,7 @@ private theorem dropout_kernel_frame
 values, and frame off the active output lanes, from any launch state whose
 input windows hold the data tile `xs` (ℝ channel) and the keep tile `bs`
 (`.bool` channel) at the **active lanes only**. This is the `hrun` obligation
-of `Masked2DKernelIO₁ᵦ.Implements.intro`; the value half reuses
+of `BoolMasked2DKernelIO₁.Implements.intro`; the value half reuses
 `dropout_kernel_correct` (whose state-coupled `dropoutSpec` collapses to the
 pure keep-gated scale under the two input hypotheses). -/
 theorem dropout_kernel_region_run
@@ -286,7 +286,7 @@ headline **proves** the kernel's actual addressing and masking match them.
 Buffer sizes are not signature content: the headline quantifies over every
 allocation whose extents cover the active lanes. -/
 def dropoutIO (x_ptr x_keep_ptr output_ptr : RegionName)
-    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₁ᵦ where
+    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) : BoolMasked2DKernelIO₁ where
   kernel := dropout_kernel x_ptr x_keep_ptr output_ptr n_elements p BLOCK_SIZE
   inp := x_ptr
   mbuf := x_keep_ptr
@@ -304,7 +304,7 @@ bounds, and every launch state whose input windows hold the data tile `xs`
 and the keep tile `bs` at the active lanes, the translated pointer kernel
 terminates, every active output lane holds `if bs i then xs i / (1 - p)
 else 0`, and every other memory cell is unchanged. Proof:
-`Masked2DKernelIO₁ᵦ.Implements.intro` assembles the region-model masked
+`BoolMasked2DKernelIO₁.Implements.intro` assembles the region-model masked
 triple with the flat-memory bridge side conditions; the store is gated by the
 static mask, so `hsub` is the identity. -/
 specification dropout_kernel_correctness
@@ -312,7 +312,7 @@ specification dropout_kernel_correctness
     (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) :
     dropoutIO x_ptr x_keep_ptr output_ptr n_elements p BLOCK_SIZE ⊨
       fun _ _ bs xs i => if bs i then xs i / (1 - p) else 0 := by
-  refine Masked2DKernelIO₁ᵦ.Implements.intro _ ?_ (fun _ _ _ _ h => h) ?_ ?_
+  refine BoolMasked2DKernelIO₁.Implements.intro _ ?_ (fun _ _ _ _ h => h) ?_ ?_
   · exact dropout_kernel_flattenOk x_ptr x_keep_ptr output_ptr n_elements p
       BLOCK_SIZE
   · intro bounds s h1 h2 h3
