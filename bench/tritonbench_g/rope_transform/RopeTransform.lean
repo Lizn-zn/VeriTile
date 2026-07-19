@@ -50,6 +50,18 @@ combined-row track (rotary-style 2D slice):
 rope_kernel_o0o1_row_all_outputs_compute_correct
   ├─ rope_kernel_o0o1_row_o0_compute_correct → rope_kernel_o0o1_row_o0_correct
   └─ rope_kernel_o0o1_row_o1_compute_correct → rope_kernel_o0o1_row_o1_correct
+
+`⊨` track (`GroupedMasked2DKernelIO`, the grouped vector-channel skin — channel
+counts are `nIn`/`nOut` fields and channels are `Fin n`-indexed), one masked
+Hoare triple over FLAT pointer memory per per-head store:
+rope_transform_{q0,q1,k0,k1}_head_implements   (last four headline conjuncts)
+  ├─ ropeHeadIO             the declared IO signature (4 read / 1 write channel)
+  ├─ *_head_flattenOk       the slice is inside the flat-memory bridge
+  ├─ *_head_traceSafe       per-execution bounds walk
+  └─ *_head_region_run      termination + values + frame, over the region model
+       ├─ *_head_exec_isSome
+       ├─ *_head_correct    (the value half, reused from the track above)
+       └─ *_head_frame      (foldl_store_preserve_cell)
 ```
 
 Offset disjointness within a half pair is discharged inline (by `omega`) in the
@@ -75,6 +87,7 @@ namespace VeriTile.Bench.TritonBenchG.RopeTransform
 
 open VeriTile.Triton
 open VeriTile.Examples.AttentionForwardClosedForm
+open scoped VeriTile.Triton.GroupedMasked2DKernelIO
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -2088,6 +2101,536 @@ theorem rope_kernel_o0o1_row_all_outputs_compute_correct
 
 
 
+/-! ## The `⊨` specification surface (`GroupedMasked2DKernelIO`)
+
+The per-head forward slices above are single-store kernels over the region
+model; each of them is packaged below as a grouped masked Hoare triple
+(`GroupedMasked2DKernelIO.Implements`, notation `⊨`) over **flat** pointer
+memory. The four read channels are the kernel's four `tl.load`s (the Q/K first
+half, the Q/K second half, `cos`, `sin`) and the single output channel points
+back at the data buffer — the RoPE update is in place, so the triple reads the
+*old* window contents into `xs` and asserts the *new* ones. -/
+
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for the masked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- The shared **IO signature** of one in-place per-head RoPE store — the whole
+kernel-specific audit surface of the four `⊨` headlines below.
+
+* `bufs = [Buf, COS, SIN]`; the single output channel points **back at**
+  `Buf` (`out 0 = Buf`), the in-place rotary update.
+* `nIn = 4`, `nOut = 1`, `B = BLOCK_HALF`.
+* read channel `0` — `Buf` at the first-half address
+  `pid₀·row_stride + HEAD_IDX·hd + j`;
+  read channel `1` — `Buf` at the second-half address `… + HEAD_HALF`;
+  read channels `2`/`3` — `COS`/`SIN` at `COS_ROW_IDX·cos_row_stride + j`
+  resp. `COS_ROW_IDX·sin_row_stride + j`.
+* `readMask` — `HEAD_IDX < n_h ∧ j < HEAD_HALF` on the two data channels
+  (the kernel's `mask=(HEAD_IDX < n_qh) and (dim < HEAD_HALF)`) and
+  `j < HEAD_HALF` on `COS`/`SIN` (the kernel's `mask=dim < HEAD_HALF`).
+* `write` — `writeShift` is `0` for the first-half store and `HEAD_HALF`
+  for the second-half one; `writeMask` is the store's own
+  `(HEAD_IDX < n_h) and (dim < HEAD_HALF)`.
+
+The windows and masks are *declared*, not parsed from the kernel; the headlines
+**prove** the kernel's actual addressing and masking match them. -/
+def ropeHeadIO (kernel : ComputeKernel) (Buf COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX row_stride cos_row_stride sin_row_stride hd n_h
+      HEAD_HALF BLOCK_HALF writeShift : Nat) : GroupedMasked2DKernelIO where
+  kernel := kernel
+  nIn := 4
+  nOut := 1
+  bufs := [Buf, COS, SIN]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => Buf
+    | ⟨1, _⟩ => Buf
+    | ⟨2, _⟩ => COS
+    | ⟨_ + 3, _⟩ => SIN
+  out := fun _ => Buf
+  B := BLOCK_HALF
+  read := fun i pid₀ _pid₁ j => match i with
+    | ⟨0, _⟩ => pid₀ * row_stride + HEAD_IDX * hd + j.val
+    | ⟨1, _⟩ => pid₀ * row_stride + HEAD_IDX * hd + j.val + HEAD_HALF
+    | ⟨2, _⟩ => COS_ROW_IDX * cos_row_stride + j.val
+    | ⟨_ + 3, _⟩ => COS_ROW_IDX * sin_row_stride + j.val
+  readMask := fun i _pid₀ _pid₁ j => match i with
+    | ⟨0, _⟩ => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+    | ⟨1, _⟩ => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+    | ⟨2, _⟩ => j.val < HEAD_HALF
+    | ⟨_ + 3, _⟩ => j.val < HEAD_HALF
+  write := fun _ pid₀ _pid₁ j =>
+    pid₀ * row_stride + HEAD_IDX * hd + j.val + writeShift
+  writeMask := fun _ _pid₀ _pid₁ j => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+
+/-! ### `rope_transform_q0_head` -/
+
+/-- Termination: the per-head first-half slice executes to completion from any
+state. -/
+private theorem rope_transform_q0_head_exec_isSome
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) (s : BlockState) :
+    ∃ s1, exec ((rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s = some s1 := by
+  simp [exec, rope_transform_q0_head, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt]
+
+/-- Frame half: every memory cell the per-head first-half masked in-place store
+does not actively hit is preserved by the run. -/
+private theorem rope_transform_q0_head_frame
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) (s s1 : BlockState)
+    (hExec : exec ((rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      ¬(Q = r ∧ s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, rope_transform_q0_head, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+  intro k _ hmk hc
+  exact hmiss k.1 hmk.1 hmk.2 hc
+
+/-- The per-head first-half slice sits inside the flat-memory bridge's covered
+fragment (pointer arithmetic, four masked loads, one masked in-place store). -/
+private theorem rope_transform_q0_head_flattenOk
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) :
+    ((rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rope_transform_q0_head, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk for the per-head first-half slice: the four
+masked loads and the masked store reduce to the lane-wise bounds hypotheses. -/
+private theorem rope_transform_q0_head_traceSafe
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (h1 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val < bounds Q)
+    (h2 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF < bounds Q)
+    (h3 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      COS_ROW_IDX * cos_row_stride + j.val < bounds COS)
+    (h4 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      COS_ROW_IDX * sin_row_stride + j.val < bounds SIN) :
+    Kernel.TraceSafe bounds
+      ((rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [rope_transform_q0_head, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+  exact ⟨fun a hs hh => h1 a hs hh, fun a hs hh => h2 a hs hh,
+    fun a hs => h3 a hs, fun a hs => h4 a hs, fun a hs hh => h1 a hs hh⟩
+
+/-- **The region-model masked in-place Hoare triple** for the per-head
+first-half slice — termination, write-active-lane output values, and frame off
+the write-active output lanes, from any launch state whose four read windows
+hold `xs`. This is the `hrun` obligation of the `⊨` headline; the value half
+reuses `rope_transform_q0_head_correct` (the kernel reads both halves before
+the in-place store, so the before/after reading is sound). -/
+private theorem rope_transform_q0_head_region_run
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (s₀ : BlockState) (xs : Fin 4 → Fin BLOCK_HALF → ℝ)
+    (hx0 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s₀.readMem Q (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val)
+        = xs (⟨0, by decide⟩ : Fin 4) j)
+    (hx1 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s₀.readMem Q (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF)
+        = xs (⟨1, by decide⟩ : Fin 4) j)
+    (hx2 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      s₀.readMem COS (COS_ROW_IDX * cos_row_stride + j.val)
+        = xs (⟨2, by decide⟩ : Fin 4) j)
+    (hx3 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      s₀.readMem SIN (COS_ROW_IDX * sin_row_stride + j.val)
+        = xs (⟨3, by decide⟩ : Fin 4) j) :
+    ∃ s1, exec ((rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+          q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+          BLOCK_HALF).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+          s1.readMem Q (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val)
+            = xs (⟨0, by decide⟩ : Fin 4) j * xs (⟨2, by decide⟩ : Fin 4) j -
+              xs (⟨1, by decide⟩ : Fin 4) j * xs (⟨3, by decide⟩ : Fin 4) j)
+      ∧ (∀ r o',
+          (∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+            r ≠ Q ∨ o' ≠ s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val) →
+          s1.mem r o' = s₀.mem r o') := by
+  obtain ⟨s1, hs1⟩ := rope_transform_q0_head_exec_isSome Q COS SIN HEAD_IDX
+    COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+    BLOCK_HALF s₀
+  have hinj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        qOffset s₀ HEAD_IDX q_row_stride hd (dimIndex i)) := by
+    intro a b hab
+    simp only [qOffset, rowIndex, dimIndex] at hab
+    exact Fin.ext (Nat.add_left_cancel hab)
+  refine ⟨s1, hs1, fun j hhead hdim => ?_, fun r o' hc => ?_⟩
+  · have h := rope_transform_q0_head_correct Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      s₀ s1 hinj hs1 j
+    have hact : active HEAD_IDX n_qh HEAD_HALF j := ⟨hhead, hdim⟩
+    rw [if_pos hact] at h
+    have hoff : qOffset s₀ HEAD_IDX q_row_stride hd (dimIndex j)
+        = s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val := rfl
+    rw [hoff] at h
+    rw [h]
+    simp only [ropeQ0Spec, qOffset, cosOffset, sinOffset, rowIndex, dimIndex]
+    rw [show s₀.pids 0 * q_row_stride + HEAD_IDX * hd + (j.val + HEAD_HALF)
+          = s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF from
+        (Nat.add_assoc _ _ _).symm]
+    rw [hx0 j hhead hdim, hx1 j hhead hdim, hx2 j hdim, hx3 j hdim]
+  · exact rope_transform_q0_head_frame Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      s₀ s1 hs1 r o'
+      (fun j hhead hdim hcc =>
+        (hc j hhead hdim).elim (fun h => h hcc.1.symm) (fun h => h hcc.2.symm))
+
+/-- The per-head first-half store's IO signature (`writeShift = 0`). -/
+def ropeQ0HeadIO (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeHeadIO (rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+      cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF)
+    Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+    n_qh HEAD_HALF BLOCK_HALF 0
+
+/-- **`ropeQ0HeadIO ⊨ q0·cos − q1·sin`** — the per-head forward first-half
+RoPE store as one masked Hoare triple over flat pointer memory. -/
+theorem rope_transform_q0_head_implements
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) :
+    ropeQ0HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride
+        sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q0 * c - q1 * sn := by
+  refine GroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · intro o
+    simp [ropeQ0HeadIO, ropeHeadIO]
+  · exact rope_transform_q0_head_flattenOk Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+  · intro bounds s hib hob
+    exact rope_transform_q0_head_traceSafe Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      bounds s
+      (fun j hh hd' => hib (⟨0, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+      (fun j hh hd' => hib (⟨1, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+      (fun j hd' => hib (⟨2, by decide⟩ : Fin 4) j hd')
+      (fun j hd' => hib (⟨3, by decide⟩ : Fin 4) j hd')
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hfr⟩ :=
+      rope_transform_q0_head_region_run Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+        s₀ xs
+        (fun j hh hd' => hx (⟨0, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+        (fun j hh hd' => hx (⟨1, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+        (fun j hd' => hx (⟨2, by decide⟩ : Fin 4) j hd')
+        (fun j hd' => hx (⟨3, by decide⟩ : Fin 4) j hd')
+    exact ⟨s1, hexec, fun _ j hj => hval j hj.1 hj.2,
+      fun r o' hcond => hfr r o'
+        (fun j hh hd' => hcond (⟨0, by decide⟩ : Fin 1) j ⟨hh, hd'⟩)⟩
+
+/-! ### `rope_transform_q1_head` -/
+
+/-- Termination: the per-head second-half slice executes to completion from any
+state. -/
+private theorem rope_transform_q1_head_exec_isSome
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) (s : BlockState) :
+    ∃ s1, exec ((rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s = some s1 := by
+  simp [exec, rope_transform_q1_head, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt]
+
+/-- Frame half: every memory cell the per-head second-half masked in-place store
+does not actively hit is preserved by the run. -/
+private theorem rope_transform_q1_head_frame
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) (s s1 : BlockState)
+    (hExec : exec ((rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      ¬(Q = r ∧ s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, rope_transform_q1_head, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+  intro k _ hmk hc
+  exact hmiss k.1 hmk.1 hmk.2 hc
+
+/-- The per-head second-half slice sits inside the flat-memory bridge's covered
+fragment. -/
+private theorem rope_transform_q1_head_flattenOk
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) :
+    ((rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rope_transform_q1_head, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk for the per-head second-half slice. -/
+private theorem rope_transform_q1_head_traceSafe
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (h1 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val < bounds Q)
+    (h2 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF < bounds Q)
+    (h3 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      COS_ROW_IDX * cos_row_stride + j.val < bounds COS)
+    (h4 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      COS_ROW_IDX * sin_row_stride + j.val < bounds SIN) :
+    Kernel.TraceSafe bounds
+      ((rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [rope_transform_q1_head, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+  exact ⟨fun a hs hh => h1 a hs hh, fun a hs hh => h2 a hs hh,
+    fun a hs => h3 a hs, fun a hs => h4 a hs, fun a hs hh => h2 a hs hh⟩
+
+/-- **The region-model masked in-place Hoare triple** for the per-head
+second-half slice. -/
+private theorem rope_transform_q1_head_region_run
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (s₀ : BlockState) (xs : Fin 4 → Fin BLOCK_HALF → ℝ)
+    (hx0 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s₀.readMem Q (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val)
+        = xs (⟨0, by decide⟩ : Fin 4) j)
+    (hx1 : ∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+      s₀.readMem Q (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF)
+        = xs (⟨1, by decide⟩ : Fin 4) j)
+    (hx2 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      s₀.readMem COS (COS_ROW_IDX * cos_row_stride + j.val)
+        = xs (⟨2, by decide⟩ : Fin 4) j)
+    (hx3 : ∀ j : Fin BLOCK_HALF, j.val < HEAD_HALF →
+      s₀.readMem SIN (COS_ROW_IDX * sin_row_stride + j.val)
+        = xs (⟨3, by decide⟩ : Fin 4) j) :
+    ∃ s1, exec ((rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+          q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+          BLOCK_HALF).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+          s1.readMem Q
+              (s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF)
+            = xs (⟨1, by decide⟩ : Fin 4) j * xs (⟨2, by decide⟩ : Fin 4) j +
+              xs (⟨0, by decide⟩ : Fin 4) j * xs (⟨3, by decide⟩ : Fin 4) j)
+      ∧ (∀ r o',
+          (∀ j : Fin BLOCK_HALF, HEAD_IDX < n_qh → j.val < HEAD_HALF →
+            r ≠ Q ∨
+              o' ≠ s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF) →
+          s1.mem r o' = s₀.mem r o') := by
+  obtain ⟨s1, hs1⟩ := rope_transform_q1_head_exec_isSome Q COS SIN HEAD_IDX
+    COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+    BLOCK_HALF s₀
+  have hinj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        q1WriteOffset s₀ HEAD_IDX q_row_stride hd HEAD_HALF i) := by
+    intro a b hab
+    simp only [q1WriteOffset, dimIndex] at hab
+    exact Fin.ext (Nat.add_left_cancel (Nat.add_right_cancel hab))
+  refine ⟨s1, hs1, fun j hhead hdim => ?_, fun r o' hc => ?_⟩
+  · have h := rope_transform_q1_head_correct Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      s₀ s1 hinj hs1 j
+    have hact : active HEAD_IDX n_qh HEAD_HALF j := ⟨hhead, hdim⟩
+    rw [if_pos hact] at h
+    have hoff : q1WriteOffset s₀ HEAD_IDX q_row_stride hd HEAD_HALF j
+        = s₀.pids 0 * q_row_stride + HEAD_IDX * hd + j.val + HEAD_HALF := rfl
+    rw [hoff] at h
+    rw [h]
+    simp only [ropeQ1Spec, q1WriteOffset, qOffset, cosOffset, sinOffset,
+      rowIndex, dimIndex]
+    rw [hx0 j hhead hdim, hx1 j hhead hdim, hx2 j hdim, hx3 j hdim]
+  · exact rope_transform_q1_head_frame Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      s₀ s1 hs1 r o'
+      (fun j hhead hdim hcc =>
+        (hc j hhead hdim).elim (fun h => h hcc.1.symm) (fun h => h hcc.2.symm))
+
+/-- The per-head second-half store's IO signature (`writeShift = HEAD_HALF`). -/
+def ropeQ1HeadIO (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeHeadIO (rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+      cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF)
+    Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+    n_qh HEAD_HALF BLOCK_HALF HEAD_HALF
+
+/-- **`ropeQ1HeadIO ⊨ q1·cos + q0·sin`** — the per-head forward second-half
+RoPE store as one masked Hoare triple over flat pointer memory. -/
+theorem rope_transform_q1_head_implements
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) :
+    ropeQ1HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride
+        sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q1 * c + q0 * sn := by
+  refine GroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · intro o
+    simp [ropeQ1HeadIO, ropeHeadIO]
+  · exact rope_transform_q1_head_flattenOk Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+  · intro bounds s hib hob
+    exact rope_transform_q1_head_traceSafe Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      bounds s
+      (fun j hh hd' => hib (⟨0, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+      (fun j hh hd' => hib (⟨1, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+      (fun j hd' => hib (⟨2, by decide⟩ : Fin 4) j hd')
+      (fun j hd' => hib (⟨3, by decide⟩ : Fin 4) j hd')
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hfr⟩ :=
+      rope_transform_q1_head_region_run Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+        s₀ xs
+        (fun j hh hd' => hx (⟨0, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+        (fun j hh hd' => hx (⟨1, by decide⟩ : Fin 4) j ⟨hh, hd'⟩)
+        (fun j hd' => hx (⟨2, by decide⟩ : Fin 4) j hd')
+        (fun j hd' => hx (⟨3, by decide⟩ : Fin 4) j hd')
+    exact ⟨s1, hexec, fun _ j hj => hval j hj.1 hj.2,
+      fun r o' hcond => hfr r o'
+        (fun j hh hd' => hcond (⟨0, by decide⟩ : Fin 1) j ⟨hh, hd'⟩)⟩
+
+/-! ### K-side `⊨` coverage
+
+`rope_transform_k0_head` / `rope_transform_k1_head` are the `abbrev` aliases of
+the Q slices at the K region and `n_kh` head bound, so the K-side IO signatures
+and headlines are the Q ones instantiated there. The named wrappers below make
+the K-side citable. -/
+
+/-- K-side first-half store's IO signature. -/
+abbrev ropeK0HeadIO (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeQ0HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+    sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
+/-- K-side second-half store's IO signature. -/
+abbrev ropeK1HeadIO (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeQ1HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+    sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
+/-- **`ropeK0HeadIO ⊨ k0·cos − k1·sin`**. -/
+theorem rope_transform_k0_head_implements
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) :
+    ropeK0HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+        sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k0 * c - k1 * sn :=
+  rope_transform_q0_head_implements K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+    cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
+/-- **`ropeK1HeadIO ⊨ k1·cos + k0·sin`**. -/
+theorem rope_transform_k1_head_implements
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) :
+    ropeK1HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+        sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k1 * c + k0 * sn :=
+  rope_transform_q1_head_implements K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+    cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
 /-- **Dimension-general public Python forward summary for `rope_transform.py`.**
 For arbitrary symbolic
 row strides, sequence length, head counts, head dim, and `next_power_of_2`
@@ -2100,11 +2643,23 @@ active-lane predicate, so a masked `WriteMap.writeIf` records exactly the cells
 the kernel writes). `Realizes_without_Rounding` internalizes the `exec`/projection quantification,
 so the `s'`/`hExec` binders drop out of the headline. The general building-block
 lemmas (`rope_transform_q0/q1/k0/k1_forward_correct`) supply each per-lane store
-value once the surface is lowered and executed. -/
+value once the surface is lowered and executed.
+
+The final four conjuncts add the **`⊨` (`GroupedMasked2DKernelIO.Implements`)**
+face of the same four stores: each per-head slice, as one masked Hoare triple
+over **flat** pointer memory — termination, the in-place rotary value on every
+write-active lane computed from the *old* window contents, and a frame asserting
+every cell outside the write window is untouched. The four read channels are the
+kernel's four `tl.load`s and the single output channel points back at the data
+buffer. `HEAD_IDX`, `COS_ROW_IDX`, `HEAD_HALF` and `BLOCK_HALF` are free `Nat`
+parameters, so the `⊨` face is dimension-general too; it needs no extra
+hypotheses (the write windows `j ↦ … + j (+ HEAD_HALF)` are injective in the
+lane index outright). -/
 specification rope_transform_output_summary_general
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (HEAD_IDX COS_ROW_IDX HEAD_HALF BLOCK_HALF : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
@@ -2157,8 +2712,48 @@ specification rope_transform_output_summary_general
           kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)))
       (expected := fun idx =>
         ropeForwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
-          s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
+          s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)) ∧
+    (ropeQ0HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride
+        sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q0 * c - q1 * sn) ∧
+    (ropeQ1HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride
+        sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q1 * c + q0 * sn) ∧
+    (ropeK0HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+        sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k0 * c - k1 * sn) ∧
+    (ropeK1HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+        sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k1 * c + k0 * sn) := by
+  refine ⟨?_, ?_, ?_, ?_,
+    rope_transform_q0_head_implements Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF,
+    rope_transform_q1_head_implements Q COS SIN HEAD_IDX COS_ROW_IDX
+      q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF,
+    rope_transform_k0_head_implements K COS SIN HEAD_IDX COS_ROW_IDX
+      k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF,
+    rope_transform_k1_head_implements K COS SIN HEAD_IDX COS_ROW_IDX
+      k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF⟩
   · rw [ComputeCorrect.realizes_writeIf_iff]
     apply ComputeKernel.computeCorrect_of_toAlgKernel
     · simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
