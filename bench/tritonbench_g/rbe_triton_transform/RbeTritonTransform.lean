@@ -571,65 +571,8 @@ theorem rbe_imag_compute_correct
 imaginary part at `x_ptrs + 1`) and writes two interleaved channels (`out_ptrs`
 and `out_ptrs + 1`), so its IO signature is `nIn = 2`, `nOut = 2`. The grouped
 skin indexes lanes by a flat `Fin B`, while the kernel's tile is the 2D
-`[BLOCK_SIZE_M, BLOCK_SIZE_K / 2]`; `rbeLane` is the row-major decode of one
-flat lane into that tile index, and `rbeLaneInv` its inverse. -/
-
-/-- Row-major decode of a flat lane into the kernel's 2D tile index. -/
-def rbeLane (BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
-    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) :
-    TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2] :=
-  have hH : 0 < BLOCK_SIZE_K / 2 := by
-    rcases Nat.eq_zero_or_pos (BLOCK_SIZE_K / 2) with h | h
-    · exact absurd j.isLt (by simp [h])
-    · exact h
-  (⟨j.val / (BLOCK_SIZE_K / 2), Nat.div_lt_of_lt_mul
-      (Nat.lt_of_lt_of_le j.isLt (Nat.le_of_eq (Nat.mul_comm _ _)))⟩,
-   ⟨j.val % (BLOCK_SIZE_K / 2), Nat.mod_lt _ hH⟩,
-   PUnit.unit)
-
-/-- Row-major encode of a 2D tile index into a flat lane. -/
-def rbeLaneInv (BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) :
-    Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2)) :=
-  ⟨idx.2.1.val + idx.1.val * (BLOCK_SIZE_K / 2), by
-    calc idx.2.1.val + idx.1.val * (BLOCK_SIZE_K / 2)
-        < (BLOCK_SIZE_K / 2) + idx.1.val * (BLOCK_SIZE_K / 2) :=
-          Nat.add_lt_add_right idx.2.1.isLt _
-      _ = (idx.1.val + 1) * (BLOCK_SIZE_K / 2) := by ring
-      _ ≤ BLOCK_SIZE_M * (BLOCK_SIZE_K / 2) :=
-          Nat.mul_le_mul_right _ idx.1.isLt⟩
-
-@[simp] theorem rbeLane_rbeLaneInv (BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) :
-    rbeLane BLOCK_SIZE_M BLOCK_SIZE_K
-        (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx) = idx := by
-  have hH : 0 < BLOCK_SIZE_K / 2 := Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt
-  obtain ⟨r, c, u⟩ := idx
-  refine Prod.ext ?_ (Prod.ext ?_ rfl)
-  · refine Fin.ext ?_
-    show (c.val + r.val * (BLOCK_SIZE_K / 2)) / (BLOCK_SIZE_K / 2) = r.val
-    rw [Nat.add_mul_div_right _ _ hH, Nat.div_eq_of_lt c.isLt, Nat.zero_add]
-  · refine Fin.ext ?_
-    show (c.val + r.val * (BLOCK_SIZE_K / 2)) % (BLOCK_SIZE_K / 2) = c.val
-    rw [Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt c.isLt]
-
-theorem rbeLane_injective (BLOCK_SIZE_M BLOCK_SIZE_K : Nat) :
-    Function.Injective (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K) := by
-  intro a b hab
-  have hH : 0 < BLOCK_SIZE_K / 2 := by
-    rcases Nat.eq_zero_or_pos (BLOCK_SIZE_K / 2) with h | h
-    · exact absurd a.isLt (by simp [h])
-    · exact h
-  have hd : a.val / (BLOCK_SIZE_K / 2) = b.val / (BLOCK_SIZE_K / 2) :=
-    congrArg (fun t => (Prod.fst t).val) hab
-  have hm : a.val % (BLOCK_SIZE_K / 2) = b.val % (BLOCK_SIZE_K / 2) :=
-    congrArg (fun t => (Prod.fst (Prod.snd t)).val) hab
-  refine Fin.ext ?_
-  calc a.val = (BLOCK_SIZE_K / 2) * (a.val / (BLOCK_SIZE_K / 2))
-                + a.val % (BLOCK_SIZE_K / 2) := (Nat.div_add_mod _ _).symm
-    _ = (BLOCK_SIZE_K / 2) * (b.val / (BLOCK_SIZE_K / 2))
-          + b.val % (BLOCK_SIZE_K / 2) := by rw [hd, hm]
-    _ = b.val := Nat.div_add_mod _ _
+`[BLOCK_SIZE_M, BLOCK_SIZE_K / 2]`; `Lane2D.decode` is the row-major decode of one
+flat lane into that tile index, and `Lane2D.encode` its inverse. -/
 
 /-- Termination: the full rbe surface executes to completion from any state. -/
 private theorem rbe_triton_surface_exec_isSome
@@ -799,13 +742,13 @@ the decoded lane; the `*_eq` lemmas below record that they agree by `rfl`. -/
 def rbeRowP (pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
     (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
   pid₁ / kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_M +
-    (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).1.val
+    (Lane2D.decode j).1.val
 
 /-- Global (even) column `offs_n[j]` covered by flat lane `j`. -/
 def rbeColP (pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
     (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
   pid₁ % kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_K +
-    (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).2.1.val * 2
+    (Lane2D.decode j).2.1.val * 2
 
 /-- Input address of the real part read by flat lane `j`. -/
 def rbeXAddrP (pid₀ pid₁ K stride_x_batch stride_x_m stride_x_n
@@ -827,7 +770,7 @@ def rbeOutAddrP (pid₀ pid₁ K stride_out_batch stride_out_m stride_out_n
 noncomputable def rbeFreqP (pid₁ K start_token_position DIM
     BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
     (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : ℝ :=
-  (((rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).1.val +
+  (((Lane2D.decode j).1.val +
       (start_token_position + pid₁ / kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_M)
         : ℕ) : ℝ) /
     Real.rpow THETA
@@ -840,7 +783,7 @@ theorem rbeXAddrP_eq (s : BlockState)
     rbeXAddrP (s.pids 0) (s.pids 1) K stride_x_batch stride_x_m stride_x_n
         BLOCK_SIZE_M BLOCK_SIZE_K j
       = xOff s K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M BLOCK_SIZE_K
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := rfl
+          (Lane2D.decode j) := rfl
 
 theorem rbeOutAddrP_eq (s : BlockState)
     (K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
@@ -849,19 +792,19 @@ theorem rbeOutAddrP_eq (s : BlockState)
     rbeOutAddrP (s.pids 0) (s.pids 1) K stride_out_batch stride_out_m
         stride_out_n BLOCK_SIZE_M BLOCK_SIZE_K j
       = outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
-          BLOCK_SIZE_K (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := rfl
+          BLOCK_SIZE_K (Lane2D.decode j) := rfl
 
 theorem rbeRowP_eq (s : BlockState) (K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
     (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) :
     rbeRowP (s.pids 1) K BLOCK_SIZE_M BLOCK_SIZE_K j
       = rowIdx s K BLOCK_SIZE_M BLOCK_SIZE_K
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).1 := rfl
+          (Lane2D.decode j).1 := rfl
 
 theorem rbeColP_eq (s : BlockState) (K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
     (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) :
     rbeColP (s.pids 1) K BLOCK_SIZE_M BLOCK_SIZE_K j
       = colIdx s K BLOCK_SIZE_K
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).2.1 := rfl
+          (Lane2D.decode j).2.1 := rfl
 
 theorem rbeFreqP_eq (s : BlockState)
     (K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
@@ -869,14 +812,14 @@ theorem rbeFreqP_eq (s : BlockState)
     rbeFreqP (s.pids 1) K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K
         THETA j
       = freqSpec s K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K THETA
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := rfl
+          (Lane2D.decode j) := rfl
 
 /-- The **IO signature** of `rbe_triton` — the whole kernel-specific audit
 surface of the `⊨` headline.
 
 * `bufs = [x_ptr, out_ptr]`, `nIn = 2`, `nOut = 2`,
   `B = BLOCK_SIZE_M · (BLOCK_SIZE_K / 2)` (the kernel's 2D tile flattened
-  row-major by `rbeLane`).
+  row-major by `Lane2D.decode`).
 * read channel `0` — `x_ptr` at the even address `x_ptrs`, gated by
   `x_real_mask` (`offs_m < M ∧ offs_n < K`);
   read channel `1` — `x_ptr` at the interleaved odd address `x_ptrs + 1`,
@@ -991,30 +934,30 @@ theorem rbe_triton_surface_implements
     · intro idx hact
       simp only [activeReal] at hact
       have h := hib (⟨0, by decide⟩ : Fin 2)
-        (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-        (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+        (Lane2D.encode idx)
+        (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, Lane2D.decode_encode] at h
       exact h
     · intro idx hact
       simp only [activeImag] at hact
       have h := hib (⟨1, by decide⟩ : Fin 2)
-        (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-        (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+        (Lane2D.encode idx)
+        (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, Lane2D.decode_encode] at h
       exact h
     · intro idx hact
       simp only [activeReal] at hact
       have h := hob (⟨0, by decide⟩ : Fin 2)
-        (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-        (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+        (Lane2D.encode idx)
+        (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, Lane2D.decode_encode] at h
       exact h
     · intro idx hact
       simp only [activeImag] at hact
       have h := hob (⟨1, by decide⟩ : Fin 2)
-        (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-        (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+        (Lane2D.encode idx)
+        (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+      simp only [rbeXAddrP_eq, rbeOutAddrP_eq, Lane2D.decode_encode] at h
       exact h
   · intro s₀ xs hx
     simp only [rbeTritonIO] at hx
@@ -1025,16 +968,16 @@ theorem rbe_triton_surface_implements
     -- exec lemmas use (a definitional re-typing, not a rewrite)
     have hxr : ∀ j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2)),
         activeReal s₀ M K BLOCK_SIZE_M BLOCK_SIZE_K
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) →
+          (Lane2D.decode j) →
         s₀.readMem x_ptr (xOff s₀ K stride_x_batch stride_x_m stride_x_n
-            BLOCK_SIZE_M BLOCK_SIZE_K (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j))
+            BLOCK_SIZE_M BLOCK_SIZE_K (Lane2D.decode j))
           = xs (⟨0, by decide⟩ : Fin 2) j :=
       fun j hj => hx (⟨0, by decide⟩ : Fin 2) j hj
     have hxi : ∀ j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2)),
         activeImag s₀ M K BLOCK_SIZE_M BLOCK_SIZE_K
-          (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) →
+          (Lane2D.decode j) →
         s₀.readMem x_ptr (xOff s₀ K stride_x_batch stride_x_m stride_x_n
-            BLOCK_SIZE_M BLOCK_SIZE_K (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) + 1)
+            BLOCK_SIZE_M BLOCK_SIZE_K (Lane2D.decode j) + 1)
           = xs (⟨1, by decide⟩ : Fin 2) j :=
       fun j hj => hx (⟨1, by decide⟩ : Fin 2) j hj
     refine ⟨s1, hs1, ?_, ?_⟩
@@ -1042,55 +985,55 @@ theorem rbe_triton_surface_implements
       match o, ho with
       | 0, _ =>
           have hact : activeReal s₀ M K BLOCK_SIZE_M BLOCK_SIZE_K
-            (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := hj
+            (Lane2D.decode j) := hj
           have h := rbe_exec_real x_ptr out_ptr M K stride_x_batch stride_x_m
             stride_x_n stride_out_batch stride_out_m stride_out_n
             start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K s₀ s1
-            (hOutInj s₀) (hRI s₀) hs1 (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)
+            (hOutInj s₀) (hRI s₀) hs1 (Lane2D.decode j)
           rw [if_pos hact] at h
           have hres : s1.readMem out_ptr
                 (outOff s₀ K stride_out_batch stride_out_m stride_out_n
                   BLOCK_SIZE_M BLOCK_SIZE_K
-                  (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j))
+                  (Lane2D.decode j))
               = xs (⟨0, by decide⟩ : Fin 2) j *
                   Real.cos (freqSpec s₀ K start_token_position DIM BLOCK_SIZE_M
-                    BLOCK_SIZE_K THETA (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)) -
+                    BLOCK_SIZE_K THETA (Lane2D.decode j)) -
                 (if 1 + colIdx s₀ K BLOCK_SIZE_K
-                    (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).2.1 < K then
+                    (Lane2D.decode j).2.1 < K then
                   xs (⟨1, by decide⟩ : Fin 2) j else 0) *
                   Real.sin (freqSpec s₀ K start_token_position DIM BLOCK_SIZE_M
-                    BLOCK_SIZE_K THETA (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)) := by
+                    BLOCK_SIZE_K THETA (Lane2D.decode j)) := by
             rw [h]
             simp only [rbeOutRealSpec]
             rw [hxr j hact]
             by_cases himag : 1 + colIdx s₀ K BLOCK_SIZE_K
-                (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j).2.1 < K
+                (Lane2D.decode j).2.1 < K
             · rw [if_pos himag, if_pos himag, hxi j ⟨hact.1, himag⟩]
             · rw [if_neg himag, if_neg himag]
           exact hres
       | _ + 1, _ =>
           have hact : activeImag s₀ M K BLOCK_SIZE_M BLOCK_SIZE_K
-            (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := hj
+            (Lane2D.decode j) := hj
           have h := rbe_exec_imag x_ptr out_ptr M K stride_x_batch stride_x_m
             stride_x_n stride_out_batch stride_out_m stride_out_n
             start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K s₀ s1
-            (hOutInj s₀) (hRI s₀) hs1 (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)
+            (hOutInj s₀) (hRI s₀) hs1 (Lane2D.decode j)
           rw [if_pos hact] at h
           have hact' : activeReal s₀ M K BLOCK_SIZE_M BLOCK_SIZE_K
-              (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) := by
+              (Lane2D.decode j) := by
             refine ⟨hact.1, ?_⟩
             have := hact.2
             omega
           have hres : s1.readMem out_ptr
                 (outOff s₀ K stride_out_batch stride_out_m stride_out_n
                   BLOCK_SIZE_M BLOCK_SIZE_K
-                  (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j) + 1)
+                  (Lane2D.decode j) + 1)
               = xs (⟨0, by decide⟩ : Fin 2) j *
                   Real.sin (freqSpec s₀ K start_token_position DIM BLOCK_SIZE_M
-                    BLOCK_SIZE_K THETA (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)) +
+                    BLOCK_SIZE_K THETA (Lane2D.decode j)) +
                 xs (⟨1, by decide⟩ : Fin 2) j *
                   Real.cos (freqSpec s₀ K start_token_position DIM BLOCK_SIZE_M
-                    BLOCK_SIZE_K THETA (rbeLane BLOCK_SIZE_M BLOCK_SIZE_K j)) := by
+                    BLOCK_SIZE_K THETA (Lane2D.decode j)) := by
             rw [h]
             simp only [rbeOutImagSpec]
             rw [hxr j hact', hxi j hact]
@@ -1104,16 +1047,16 @@ theorem rbe_triton_surface_implements
       · intro idx hact hc
         simp only [activeReal] at hact
         have h := hcond (⟨0, by decide⟩ : Fin 2)
-          (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-          (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-        simp only [rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+          (Lane2D.encode idx)
+          (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+        simp only [rbeOutAddrP_eq, Lane2D.decode_encode] at h
         exact h.elim (fun hne => hne hc.1.symm) (fun hne => hne hc.2.symm)
       · intro idx hact hc
         simp only [activeImag] at hact
         have h := hcond (⟨1, by decide⟩ : Fin 2)
-          (rbeLaneInv BLOCK_SIZE_M BLOCK_SIZE_K idx)
-          (by simp only [rbeRowP_eq, rbeColP_eq, rbeLane_rbeLaneInv]; exact hact)
-        simp only [rbeOutAddrP_eq, rbeLane_rbeLaneInv] at h
+          (Lane2D.encode idx)
+          (by simp only [rbeRowP_eq, rbeColP_eq, Lane2D.decode_encode]; exact hact)
+        simp only [rbeOutAddrP_eq, Lane2D.decode_encode] at h
         exact h.elim (fun hne => hne hc.1.symm) (fun hne => hne hc.2.symm)
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
@@ -1141,7 +1084,7 @@ The final conjunct adds the **`⊨` (`GroupedMasked2DKernelIO.Implements`)** fac
 of the same two stores: the whole kernel as one grouped masked Hoare triple over
 **flat** pointer memory (`nIn = 2` interleaved read channels `x_ptrs` /
 `x_ptrs + 1`, `nOut = 2` interleaved write channels `out_ptrs` / `out_ptrs + 1`,
-`B = BLOCK_SIZE_M · (BLOCK_SIZE_K / 2)` lanes decoded row-major by `rbeLane`) —
+`B = BLOCK_SIZE_M · (BLOCK_SIZE_K / 2)` lanes decoded row-major by `Lane2D.decode`) —
 termination, both stored values on their mask-active lanes, and a frame
 asserting every cell outside the two output windows is untouched.
 
