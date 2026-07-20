@@ -1391,6 +1391,114 @@ theorem Implements.intro (io : Masked2DKernelIO₂)
   · exact Or.inl hflat
   · exact Or.inr ⟨fun _o j hj => hout j hj,
       fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
+
+/-- Assembly lemma — **`undef`-pinned sibling** of `Implements.intro`. Proves
+the identical `io.Implements f` conclusion, but its `hrun` obligation
+additionally receives the pin `s₀.undef = (fun _ _ => 0)`. Kernels whose
+masked loads lack an `other=` default read `s₀.undef` at masked-off lanes; if
+the body then reduces across the tile (`tl.sum`, `tl.max`), the value stored
+at an *active* lane depends on `undef` at *inactive* lanes, and no
+`⊨`-shaped per-lane function of the loaded tiles exists that the plain
+`intro` (whose `hrun` is quantified over *every* launch state) could be
+handed. This sibling threads the `Implements`-hypothesised pin through, so
+such a kernel can discharge `hrun` with its masked-off lanes fixed to `0`.
+Intended consumer: `log_softmax`'s backward kernel. -/
+theorem Implements.intro_undef (io : Masked2DKernelIO₂)
+    {f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) j →
+        io.read1 (s.pids 0) (s.pids 1) j < bounds io.in1) →
+      (∀ j : Fin io.B, io.read2Mask (s.pids 0) (s.pids 1) j →
+        io.read2 (s.pids 0) (s.pids 1) j < bounds io.in2) →
+      (∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        io.write (s.pids 0) (s.pids 1) j < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask (s.pids 0) (s.pids 1) j →
+        p.2 (s.pids 0) (s.pids 1) j < bounds p.1) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
+      s₀.undef = (fun _ _ => 0) →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMem io.in1 (io.read1 (s₀.pids 0) (s₀.pids 1) j) = xs j) →
+      (∀ j : Fin io.B, io.read2Mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMem io.in2 (io.read2 (s₀.pids 0) (s₀.pids 1) j) = ys j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) j)
+              = f (s₀.pids 0) (s₀.pids 1) xs ys j)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) j) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask (s₀.pids 0) (s₀.pids 1) j →
+                o ≠ p.2 (s₀.pids 0) (s₀.pids 1) j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  -- identical to `Implements.intro`, but the core's `undef` binder is
+  -- threaded into `hrun` instead of discarded.
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j =>
+        f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+          (fun j' => vals (⟨1, by decide⟩ : Fin 2) j') j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob hsb
+      refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
+      intro q hq j hj
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      have h : (io.scratch.get u).2 (s.pids 0) (s.pids 1) j
+          < bounds (io.scratch.get u).1 := hsb u j hj
+      rw [hu] at h
+      exact h
+    · intro s₀ vals hundef hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j) hundef
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 2) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq j hj
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        have h : r ≠ (io.scratch.get u).1 ∨
+            o' ≠ (io.scratch.get u).2 (s₀.pids 0) (s₀.pids 1) j :=
+          hsc' u j hj
+        rw [hu] at h
+        rcases h with hne | hno
+        · exact absurd hrq hne
+        · exact hno
+  intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 hsc xs ys s₀ hpid₀ hpid₁ hu hx hy
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | _ => ys)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨_+1, _⟩ => fun j hj => h2 j hj)
+      (fun _o j hj => h3 j hj)
+      (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨_+1, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj,
+      fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
 end Masked2DKernelIO₂
 
 /-- IO signature of a **2D-grid, general-window** masked two-input /
@@ -6234,19 +6342,35 @@ end GroupedMasked2DKernelIO
 /-- IO signature of the **quantized destination-index copy shape**: one
 per-program `.nat` scalar slot (the destination row index, `mbuf1`, loaded
 at the pid-affine cell `mwin1`), one masked float data tile (`inp`, `B`
-lanes), and **two float outputs of different tile lengths** — the
-transformed tile `out1` (`B` lanes, the data tile's shape) and the per-row
-statistic column `out2` (`C` lanes, one cell per row of that tile). The
-subscript is pure data-input × output arity (one tile ↦ two tiles); the
-slot is capability (`Meta`), not arity, and the two lengths are ordinary
-fields, never part of a name — the core's per-output `oarity` is already
-per-output, so differing `B`/`C` needs a skin, not a new core. Intended
-consumers: the TritonBench-G LightLLM destination-index quantized KV
-copies (`quantize_copy_kv`, `quantize_kv_copy`, `quantize_kv_transform` —
-`dest_index = tl.load(Dest_loc + cur_index)`, then the `int8` tile and its
-`max |x| / 127` scale column, both addressed off the *loaded* index).
-Following the family precedent there is no `scratch` field until a
-consumer needs one. -/
+lanes), and **two output channels of different tile lengths and independent
+element types** — the transformed tile `out1` (`B` lanes, the data tile's
+shape) and the per-row statistic column `out2` (`C` lanes, one cell per row
+of that tile). The subscript is pure data-input × output arity (one tile ↦
+two tiles); the slot is capability (`Meta`), not arity, and neither the two
+lengths (`B`/`C`) nor the two output element types (`oty1`/`oty2`) are part
+of a name — they are ordinary fields, so a `.to(tl.int8)`-typed tile beside
+a `.float` scale column is *one* skin, not a dtype-suffixed family. The
+outputs default to `.float` (`oty1 = oty2 = .float`, the ℝ `readMem`
+readback), recovering the plain two-float shape for free; a consumer that
+needs a typed output sets the field. Intended consumers: the TritonBench-G
+LightLLM destination-index quantized KV copies (`quantize_kv_copy`,
+`quantize_kv_transform` — `dest_index = tl.load(Dest_loc + cur_index)`, then
+the `.to(tl.int8)` tile via `oty1 := .int` and its `max |x| / 127` scale
+column, whose `.to(Out_scale.dtype.element_ty)` cast lowers to the ℝ
+identity so `oty2 := .float`; `quantize_copy_kv`'s `.int` tile fits `oty1`
+too, but its scale store is `.to(tl.float16)` — reduced-precision *float*,
+i.e. the `FloatDType`/rounding axis, not a `ChanTy` — so that kernel's scale
+conjunct is not typeable here, see the honest note below). Following the
+family precedent there is no `scratch` field until a consumer needs one.
+
+**Output typing vs. the rounding axis.** `oty1`/`oty2` range over `ChanTy`
+(float / bool / nat / int) — the *value* readback view. A store whose
+value is genuinely at reduced float precision (`.to(tl.float16)`) reads back
+through `readMemValue .fp16` at a `TileCarrier .fp16`, which is **not** a
+`ChanTy` carrier; that is the `ImplementsR`/`outDType : FloatDType` rounding
+axis and cannot be expressed by `oty` alone. This skin therefore types the
+`.int` quantized tile and any `.float`/`.nat`/`.bool`/`.int` scale column,
+but not an fp16 scale column. -/
 structure MetaMasked2DKernelIO₁ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
@@ -6262,6 +6386,14 @@ structure MetaMasked2DKernelIO₁ₓ₂ where
   B : Nat
   /-- Tile length of `out2` (the shorter, per-row column). -/
   C : Nat
+  /-- `out1`'s channel element type. Defaults to `.float` (the ℝ `readMem`
+  readback); set `oty1 := .int` for a `.to(tl.int8)`-typed quantized tile,
+  whose value contract reads back through `readMemValue .int`. -/
+  oty1 : ChanTy := .float
+  /-- `out2`'s channel element type. Defaults to `.float`; the scale column
+  of the `element_ty`-cast quantizers stays here (that cast is the ℝ
+  identity). -/
+  oty2 : ChanTy := .float
   /-- Slot's cell address for program `(pid₀, pid₁)`. -/
   mwin1 : Nat → Nat → Nat
   /-- Data read window at `(pid₀, pid₁, m1, j)` — the loaded scalar is an
@@ -6287,11 +6419,13 @@ namespace MetaMasked2DKernelIO₁ₓ₂
 quantified and pinned to the slot cell inside the memory precondition, so
 the windows, the masks and the spec all speak about the *loaded* scalar.
 The spec `f` returns the pair of the two outputs' value functions (`.1`
-for the `B`-lane `out1`, `.2` for the `C`-lane `out2`). Frame: every cell
+for the `B`-lane `out1` at `oty1.carrier`, `.2` for the `C`-lane `out2` at
+`oty2.carrier`); each output reads back through its channel's `read` view
+(definitionally `readMem` when the type is `.float`). Frame: every cell
 outside the union of the two write-active output windows is untouched. -/
 def Implements (io : MetaMasked2DKernelIO₁ₓ₂)
     (f : Nat → Nat → Nat → (Fin io.B → ℝ) →
-      (Fin io.B → ℝ) × (Fin io.C → ℝ)) : Prop :=
+      (Fin io.B → io.oty1.carrier) × (Fin io.C → io.oty2.carrier)) : Prop :=
   ∀ A : FlatAlloc,
     A.Disjoint →
     A.regions = [io.mbuf1, io.inp, io.out1, io.out2] →
@@ -6315,10 +6449,10 @@ def Implements (io : MetaMasked2DKernelIO₁ₓ₂)
       exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
         = some s'
       ∧ (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ m1 j →
-          s'.readMem A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ m1 j))
+          io.oty1.read s' A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ m1 j))
             = (f pid₀ pid₁ m1 xs).1 j)
       ∧ (∀ j : Fin io.C, io.writeMask2 pid₀ pid₁ m1 j →
-          s'.readMem A.flat (A.addr io.out2 (io.write2 pid₀ pid₁ m1 j))
+          io.oty2.read s' A.flat (A.addr io.out2 (io.write2 pid₀ pid₁ m1 j))
             = (f pid₀ pid₁ m1 xs).2 j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
@@ -6349,7 +6483,9 @@ private def toU (io : MetaMasked2DKernelIO₁ₓ₂) : UKernelIO where
   ibuf := fun i => match i with
     | ⟨0, _⟩ => io.mbuf1
     | ⟨_+1, _⟩ => io.inp
-  oty := fun _ => .float
+  oty := fun o => match o with
+    | ⟨0, _⟩ => io.oty1
+    | ⟨_+1, _⟩ => io.oty2
   oarity := fun o => match o with
     | ⟨0, _⟩ => io.B
     | ⟨_+1, _⟩ => io.C
@@ -6386,7 +6522,7 @@ slots are 1-lane channels), and `hrun`'s frame takes one exclusion
 condition per output region. -/
 theorem Implements.intro (io : MetaMasked2DKernelIO₁ₓ₂)
     {f : Nat → Nat → Nat → (Fin io.B → ℝ) →
-      (Fin io.B → ℝ) × (Fin io.C → ℝ)}
+      (Fin io.B → io.oty1.carrier) × (Fin io.C → io.oty2.carrier)}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState) (m1 : Nat),
       s.readMemValue .nat io.mbuf1 (io.mwin1 (s.pids 0) (s.pids 1)) = m1 →
@@ -6404,10 +6540,10 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁ₓ₂)
         s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) m1 j) = xs j) →
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) m1 j →
-            s1.readMem io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) m1 j)
+            io.oty1.read s1 io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) m1 j)
               = (f (s₀.pids 0) (s₀.pids 1) m1 xs).1 j)
         ∧ (∀ j : Fin io.C, io.writeMask2 (s₀.pids 0) (s₀.pids 1) m1 j →
-            s1.readMem io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) m1 j)
+            io.oty2.read s1 io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) m1 j)
               = (f (s₀.pids 0) (s₀.pids 1) m1 xs).2 j)
         ∧ (∀ r o,
             (r ≠ io.out1 ∨
@@ -6442,6 +6578,120 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁ₓ₂)
       obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
         hrun s₀ (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
           (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
+          (hpins (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) trivial)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hval2 j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ m1 xs s₀ hpid₀ hpid₁ hu hb1 hbr hbw1 hbw2
+    hm1 hx
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ => m1
+        | ⟨_+1, _⟩ => xs)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hb1
+        | ⟨_+1, _⟩ => fun j hj => hbr j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hbw1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hbw2 j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hm1
+        | ⟨_+1, _⟩ => fun j hj => hx j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 2) j hj,
+    fun j hj => hval (⟨1, by decide⟩ : Fin 2) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj,
+      fun t => t.elim0⟩
+
+/-- Assembly lemma — **`undef`-pinned sibling** of `Implements.intro`. Same
+`io.Implements f` conclusion, but `hrun` additionally receives the pin
+`s₀.undef = (fun _ _ => 0)`. A quantization tail-block kernel whose masked
+data load lacks an `other=` default and then reduces across the tile (the
+`tl.max(abs_data, axis=1)` scale) reads `s₀.undef` at masked-off lanes; this
+sibling threads the pin so those lanes are fixed to `0` inside `hrun`. -/
+theorem Implements.intro_undef (io : MetaMasked2DKernelIO₁ₓ₂)
+    {f : Nat → Nat → Nat → (Fin io.B → ℝ) →
+      (Fin io.B → io.oty1.carrier) × (Fin io.C → io.oty2.carrier)}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (m1 : Nat),
+      s.readMemValue .nat io.mbuf1 (io.mwin1 (s.pids 0) (s.pids 1)) = m1 →
+      io.mwin1 (s.pids 0) (s.pids 1) < bounds io.mbuf1 →
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) m1 j →
+        io.read (s.pids 0) (s.pids 1) m1 j < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask1 (s.pids 0) (s.pids 1) m1 j →
+        io.write1 (s.pids 0) (s.pids 1) m1 j < bounds io.out1) →
+      (∀ j : Fin io.C, io.writeMask2 (s.pids 0) (s.pids 1) m1 j →
+        io.write2 (s.pids 0) (s.pids 1) m1 j < bounds io.out2) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (m1 : Nat) (xs : Fin io.B → ℝ),
+      s₀.undef = (fun _ _ => 0) →
+      s₀.readMemValue .nat io.mbuf1 (io.mwin1 (s₀.pids 0) (s₀.pids 1)) = m1 →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) m1 j →
+        s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) m1 j) = xs j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) m1 j →
+            io.oty1.read s1 io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) m1 j)
+              = (f (s₀.pids 0) (s₀.pids 1) m1 xs).1 j)
+        ∧ (∀ j : Fin io.C, io.writeMask2 (s₀.pids 0) (s₀.pids 1) m1 j →
+            io.oty2.read s1 io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) m1 j)
+              = (f (s₀.pids 0) (s₀.pids 1) m1 xs).2 j)
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨
+              ∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) m1 j →
+                o ≠ io.write1 (s₀.pids 0) (s₀.pids 1) m1 j) →
+            (r ≠ io.out2 ∨
+              ∀ j : Fin io.C, io.writeMask2 (s₀.pids 0) (s₀.pids 1) m1 j →
+                o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) m1 j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  -- identical to `Implements.intro`, but the core's `undef` binder is
+  -- threaded into `hrun` instead of discarded.
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f p₀ p₁ (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f p₀ p₁ (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals hpins hib hob _hsb
+      exact hts bounds s
+        (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
+        (hpins (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
+    · intro s₀ vals hundef hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1))
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j) hundef
           (hpins (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1) trivial)
           (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
       refine ⟨s1, hexec, fun o => match o with
