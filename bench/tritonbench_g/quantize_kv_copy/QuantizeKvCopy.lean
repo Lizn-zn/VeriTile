@@ -875,4 +875,468 @@ specification destindex_copy_quantize_kv_group_output_summary_general
     rw [hExec] at h
     simpa using Option.some.inj h
 
+/-! ## The `⊨` (KernelIO) surface
+
+Re-packages the full faithful grouped surface on the typed two-output metadata
+combinator `MetaMasked2DKernelIO₁ₓ₂ ⊨ (value, scale)`: the `.int` quantized
+tile via `oty1 := .int` and the real per-group `max |·| / 127` scale column via
+`oty2 := .float` (the `.to(Out_scale.dtype.element_ty)` cast is the ℝ identity).
+Both spec halves are over the loaded tile `xs`. Masked `K` load carries
+`other=0.0`, so plain `Implements.intro` (no `intro_undef`). -/
+
+namespace VeriTile.Bench.TritonBenchG.QuantizeKvCopy
+
+open scoped VeriTile.Triton.MetaMasked2DKernelIO₁ₓ₂
+
+/-- `.int` typed masked-foldl preserves the register file (so the trailing
+scale store's reg reads reduce past the value store). -/
+@[simp] theorem foldl_writeMemTyped_int_prop_masked_regs {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → Int)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (dtype' : TileDType) (shape : TileShape) (name : RegName) :
+    ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s).regs
+        dtype' shape name)
+      = s.regs dtype' shape name := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hP : P hd
+      · simp [hP]
+      · simp [hP]
+
+/-- `.int` masked-store `foldl` cell frame. -/
+private theorem foldl_writeMemTyped_int_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → Int) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP, ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))]
+        show (if r = region ∧ o = offsetFn hd then _ else s.mem r o) = s.mem r o
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- A masked real `writeMem` store `foldl` cell frame. -/
+private theorem foldl_writeMem_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP, ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-! ### Pure `xs`-view specs (lane `j` ↦ group `j / BLOCK_GROUP_DIM`, dim
+`j % BLOCK_GROUP_DIM`). -/
+
+/-- The masked source lane over the loaded tile. -/
+noncomputable def srcXs (BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size : Nat)
+    (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (g : Fin BLOCK_GROUP_NUM) (d : Fin BLOCK_GROUP_DIM) : WithBot ℝ :=
+  if g.val < group_size then some (xs (Lane2D.encode (g, d, PUnit.unit)))
+  else some (0.0 : ℝ)
+
+/-- Per-group scale value over `xs`. -/
+noncomputable def scaleValXs (BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size : Nat)
+    (hD : 0 < BLOCK_GROUP_DIM) (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (g : Fin BLOCK_GROUP_NUM) : WithBot ℝ :=
+  Option.map (· / 127.0)
+    ((Finset.univ.sup'
+        (⟨⟨0, hD⟩, Finset.mem_univ _⟩ :
+          (Finset.univ : Finset (Fin BLOCK_GROUP_DIM)).Nonempty)
+        (fun d : Fin BLOCK_GROUP_DIM =>
+          if srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs g d < (some 0 : WithBot ℝ) then
+            NumericDType.real.sub (some 0)
+              (srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs g d)
+          else srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs g d) :
+      WithBot ℝ))
+
+/-- The `.int` value at lane `j` over `xs`. -/
+noncomputable def valueXs (BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size : Nat)
+    (hD : 0 < BLOCK_GROUP_DIM) (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (j : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM)) : Int :=
+  WithBot.realToInt8
+    (FloatDType.real.cast FloatDType.real
+      (Option.map₂ (fun x1 x2 => x1 / x2)
+        (srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs
+          (Lane2D.decode j).1 (Lane2D.decode j).2.1)
+        (scaleValXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs (Lane2D.decode j).1)))
+
+/-- The real scale cell at group `g` over `xs`. -/
+noncomputable def scaleCellXs (BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size : Nat)
+    (hD : 0 < BLOCK_GROUP_DIM) (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (g : Fin BLOCK_GROUP_NUM) : ℝ :=
+  WithBot.unbotD 0 (scaleValXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs g)
+
+/-- The grouped surface's typed two-output metadata **IO signature**. -/
+def quantizeKvCopyIO
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
+    MetaMasked2DKernelIO₁ₓ₂ where
+  kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+    stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+    stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+  mbuf1 := DestLoc
+  inp := K
+  out1 := Out
+  out2 := OutScale
+  B := BLOCK_GROUP_NUM * BLOCK_GROUP_DIM
+  C := BLOCK_GROUP_NUM
+  oty1 := .int
+  oty2 := .float
+  mwin1 := fun pid₀ _ => pid₀
+  read := fun pid₀ pid₁ _ j =>
+    pid₀ * stride_k_bs + pid₁ * stride_k_h +
+      (j.val / BLOCK_GROUP_DIM) * stride_k_g + (j.val % BLOCK_GROUP_DIM)
+  write1 := fun _ pid₁ m1 j =>
+    m1 * stride_o_bs + pid₁ * stride_o_h +
+      (j.val / BLOCK_GROUP_DIM) * stride_o_g + (j.val % BLOCK_GROUP_DIM)
+  write2 := fun _ pid₁ m1 i => m1 * stride_os_bs + pid₁ * stride_os_h + i.val
+  mask := fun _ _ _ j => j.val / BLOCK_GROUP_DIM < group_size
+  writeMask2 := fun _ _ _ i => i.val < group_size
+
+/-- Under `hx`, the per-group scale value matches its `xs`-view. -/
+private theorem scaleValXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_GROUP_DIM)
+    (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM),
+      j.val / BLOCK_GROUP_DIM < group_size →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + s₀.pids 1 * stride_k_h +
+        (j.val / BLOCK_GROUP_DIM) * stride_k_g + (j.val % BLOCK_GROUP_DIM)) = xs j)
+    (g : Fin BLOCK_GROUP_NUM) :
+    quantizeKvCopyGroupScaleValue s₀ K stride_k_bs stride_k_h stride_k_g
+        group_size BLOCK_GROUP_DIM hD g.val
+      = scaleValXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs g := by
+  have hsrc : ∀ d : Fin BLOCK_GROUP_DIM,
+      maskedSrc s₀ K stride_k_bs stride_k_h stride_k_g group_size g.val d.val
+        = srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs g d := by
+    intro d
+    unfold maskedSrc srcXs
+    by_cases hact : g.val < group_size
+    · rw [if_pos hact, if_pos hact]
+      have hj := hx (Lane2D.encode (g, d, PUnit.unit))
+        (by rw [Lane2D.encode_div]; exact hact)
+      rw [Lane2D.encode_div, Lane2D.encode_mod] at hj
+      rw [hj]
+    · rw [if_neg hact, if_neg hact]
+  unfold quantizeKvCopyGroupScaleValue scaleValXs
+  simp only [hsrc]
+
+/-- Under `hx`, the `.int` value at active lane `j` matches its `xs`-view. -/
+private theorem valueXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_GROUP_DIM)
+    (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM),
+      j.val / BLOCK_GROUP_DIM < group_size →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + s₀.pids 1 * stride_k_h +
+        (j.val / BLOCK_GROUP_DIM) * stride_k_g + (j.val % BLOCK_GROUP_DIM)) = xs j)
+    (j : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM)) :
+    quantizeKvCopyGroupSurfaceIntValue s₀ K stride_k_bs stride_k_h stride_k_g
+        group_size BLOCK_GROUP_DIM hD (Lane2D.decode j)
+      = valueXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs j := by
+  unfold quantizeKvCopyGroupSurfaceIntValue valueXs
+  rw [scaleValXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g
+    group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s₀ hD xs hx (Lane2D.decode j).1]
+  have hsrc :
+      maskedSrc s₀ K stride_k_bs stride_k_h stride_k_g group_size
+          (Lane2D.decode j).1.val (Lane2D.decode j).2.1.val
+        = srcXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size xs
+            (Lane2D.decode j).1 (Lane2D.decode j).2.1 := by
+    unfold maskedSrc srcXs
+    by_cases hact : (Lane2D.decode j).1.val < group_size
+    · rw [if_pos hact, if_pos hact]
+      have hkey : Lane2D.encode
+          (((Lane2D.decode j).1, (Lane2D.decode j).2.1, PUnit.unit)
+            : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM]) = j := by
+        have h : (((Lane2D.decode j).1, (Lane2D.decode j).2.1, PUnit.unit)
+            : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM]) = Lane2D.decode j := rfl
+        rw [h, Lane2D.encode_decode]
+      simp only [Lane2D.decode_row, Lane2D.decode_col]
+      rw [hkey]
+      have hj := hx j (by rw [Lane2D.decode_row] at hact; exact hact)
+      rw [hj]
+    · rw [if_neg hact, if_neg hact]
+  rw [hsrc]
+
+/-- Under `hx`, the scale cell at group `g` matches its `xs`-view. -/
+private theorem scaleCellXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_GROUP_DIM)
+    (xs : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_GROUP_NUM * BLOCK_GROUP_DIM),
+      j.val / BLOCK_GROUP_DIM < group_size →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + s₀.pids 1 * stride_k_h +
+        (j.val / BLOCK_GROUP_DIM) * stride_k_g + (j.val % BLOCK_GROUP_DIM)) = xs j)
+    (g : Fin BLOCK_GROUP_NUM) :
+    quantizeKvCopyGroupScaleCell s₀ K stride_k_bs stride_k_h stride_k_g
+        group_size BLOCK_GROUP_DIM hD g.val
+      = scaleCellXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs g := by
+  unfold quantizeKvCopyGroupScaleCell scaleCellXs
+  rw [scaleValXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g
+    group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s₀ hD xs hx g]
+
+/-- Termination. -/
+private theorem quantize_kv_copy_exec_isSome
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) (hD : 0 < BLOCK_GROUP_DIM)
+    (s : BlockState) :
+    ∃ s1, exec ((destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM).toAlgKernel) s = some s1 := by
+  simp [exec, destindex_copy_quantize_kv_group_real_surface,
+        ComputeKernel.toAlgKernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop, Tile.expandDim,
+        Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, dif_pos hD]
+
+/-- Flat-bridge membership. -/
+theorem quantize_kv_copy_flattenOk
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
+    ((destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [destindex_copy_quantize_kv_group_real_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Safety walk. -/
+theorem quantize_kv_copy_traceSafe
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) (hD : 0 < BLOCK_GROUP_DIM)
+    (bounds : RegionBounds) (s : BlockState)
+    (hd : s.pids 0 < bounds DestLoc)
+    (hk : ∀ idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM], idx.1.val < group_size →
+      s.pids 0 * stride_k_bs + s.pids 1 * stride_k_h +
+        idx.1.val * stride_k_g + idx.2.1.val < bounds K)
+    (ho : ∀ idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM], idx.1.val < group_size →
+      s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs + s.pids 1 * stride_o_h +
+        idx.1.val * stride_o_g + idx.2.1.val < bounds Out)
+    (hos : ∀ i : Fin BLOCK_GROUP_NUM, i.val < group_size →
+      s.readMemValue .nat DestLoc (s.pids 0) * stride_os_bs + s.pids 1 * stride_os_h +
+        i.val < bounds OutScale) :
+    Kernel.TraceSafe bounds
+      ((destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [destindex_copy_quantize_kv_group_real_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    Op.PointerAddressesSafeOn, Op.MemorySafe,
+    MaskOpt.Active, BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.expandDim, Tile.remap, Tile.reduceMax,
+    Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex,
+    Option.bind, Option.map, TileShape.insertAxis, TileShape.dropInsertedIndex,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+    dif_pos hD]
+  refine ⟨hd, fun a a_1 h1 => hk (a, a_1, PUnit.unit) h1,
+    fun a a_1 h1 => ho (a, a_1, PUnit.unit) h1, fun a h1 => hos a h1⟩
+
+/-- Frame. -/
+private theorem quantize_kv_copy_frame
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) (hD : 0 < BLOCK_GROUP_DIM)
+    (s s1 : BlockState)
+    (hExec : exec ((destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmissVal : ∀ idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM], idx.1.val < group_size →
+      ¬(Out = r ∧ s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs +
+          s.pids 1 * stride_o_h + idx.1.val * stride_o_g + idx.2.1.val = o))
+    (hmissScale : ∀ i : Fin BLOCK_GROUP_NUM, i.val < group_size →
+      ¬(OutScale = r ∧ s.readMemValue .nat DestLoc (s.pids 0) * stride_os_bs +
+          s.pids 1 * stride_os_h + i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, destindex_copy_quantize_kv_group_real_surface,
+        ComputeKernel.toAlgKernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop, Tile.expandDim,
+        Tile.ptrAdd, Tile.remap, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?, dif_pos hD] at hExec
+  subst hExec
+  refine Eq.trans (foldl_writeMem_preserve_cell _ _ _ r o _ _ ?_) ?_
+  · intro k _ hP hc
+    exact hmissScale k.1 (by simpa using hP) hc
+  · refine Eq.trans (foldl_writeMemTyped_int_preserve_cell _ _ _ r o _ _ ?_) rfl
+    intro k _ hP hc
+    exact hmissVal k hP hc
+
+/-- **The `⊨` headline (typed two-output metadata surface).** The full faithful
+grouped `quantize_kv_copy` surface implements, on its `MetaMasked2DKernelIO₁ₓ₂`
+signature, the pair `(int8 quantized tile, real max|·|/127 per-group scale
+column)` over the loaded tile `xs` and the loaded dest-index slot `m1`.
+
+Honest side conditions: `hD : 0 < BLOCK_GROUP_DIM` (nonempty reduce axis, also
+forces termination), `hOut : Out ≠ OutScale` (no aliasing), and the value-tile
+destination-offset injectivity `hValInj` (a colliding masked scatter is
+last-writer-wins). No scale-column injectivity hypothesis is needed: the scale
+address is `… + offs_g` (unit stride), so `Fin.val` injectivity alone gives the
+per-group no-collision. The masked `K` load carries `other=0.0`, so plain
+`Implements.intro` (no `intro_undef`). -/
+specification quantize_kv_copy_io_correctness
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (hD : 0 < BLOCK_GROUP_DIM) (hOut : Out ≠ OutScale)
+    (hValInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] =>
+        idx.1.val * stride_o_g + idx.2.1.val)) :
+    quantizeKvCopyIO K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+      ⊨ fun _ _ _ xs =>
+          (fun j => valueXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs j,
+           fun i => scaleCellXs BLOCK_GROUP_NUM BLOCK_GROUP_DIM group_size hD xs i) := by
+  refine MetaMasked2DKernelIO₁ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact quantize_kv_copy_flattenOk K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+      stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+  · -- safety
+    intro bounds s m1 hm1 hb1 hbr hbw1 hbw2
+    simp only [quantizeKvCopyIO] at hm1 hb1 hbr hbw1 hbw2
+    refine quantize_kv_copy_traceSafe K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+      stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+      hD bounds s hb1 (fun idx h1 => ?_) (fun idx h1 => ?_) (fun i h1 => ?_)
+    · simpa using hbr (Lane2D.encode idx) (by simpa using h1)
+    · rw [hm1]
+      simpa using hbw1 (Lane2D.encode idx) (by simpa using h1)
+    · rw [hm1]
+      simpa using hbw2 i (by simpa using h1)
+  · -- run
+    intro s₀ m1 xs hm1 hx
+    simp only [quantizeKvCopyIO] at hm1 hx ⊢
+    have hOutInj : Function.Injective
+        (fun idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] =>
+          outOffset s₀ DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx) := by
+      intro a b hab
+      apply hValInj
+      simp only [outOffset, destIndex, groupIndex, dimIndex] at hab
+      refine Nat.add_left_cancel
+        (n := s₀.readMemValue .nat DestLoc (s₀.pids 0) * stride_o_bs +
+          s₀.pids 1 * stride_o_h) ?_
+      rw [← Nat.add_assoc, ← Nat.add_assoc]
+      exact hab
+    have hScInj : Function.Injective
+        (fun i : Fin BLOCK_GROUP_NUM =>
+          scaleOutOffset s₀ DestLoc stride_os_bs stride_os_h i) := by
+      intro a b hab
+      simp only [scaleOutOffset, destIndex] at hab
+      exact Fin.ext (Nat.add_left_cancel hab)
+    obtain ⟨s1, hs1⟩ := quantize_kv_copy_exec_isSome K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+      stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM hD s₀
+    refine ⟨s1, hs1, ?_, ?_, ?_⟩
+    · -- value output
+      intro j hmask
+      have hv := destindex_copy_quantize_kv_group_real_surface_value_output_compute_correct
+        K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+        stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM s₀ hD hOut hOutInj (Lane2D.decode j)
+      have haddr : outOffset s₀ DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d (Lane2D.decode j)
+          = m1 * stride_o_bs + s₀.pids 1 * stride_o_h +
+            (j.val / BLOCK_GROUP_DIM) * stride_o_g + (j.val % BLOCK_GROUP_DIM) := by
+        simp only [outOffset, destIndex, groupIndex, dimIndex, Lane2D.decode_row,
+          Lane2D.decode_col, hm1]
+      have hact : active s₀ group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM (Lane2D.decode j) := by
+        simp only [active, groupIndex, Lane2D.decode_row]; exact hmask
+      rw [hs1, haddr] at hv
+      simp only [if_pos hact] at hv
+      have hkey : s1.readMemValue .int Out (m1 * stride_o_bs + s₀.pids 1 * stride_o_h +
+          (j.val / BLOCK_GROUP_DIM) * stride_o_g + (j.val % BLOCK_GROUP_DIM))
+        = quantizeKvCopyGroupSurfaceIntValue s₀ K stride_k_bs stride_k_h stride_k_g
+            group_size BLOCK_GROUP_DIM hD (Lane2D.decode j) := Option.some.inj hv
+      show s1.readMemValue .int Out (m1 * stride_o_bs + s₀.pids 1 * stride_o_h +
+        (j.val / BLOCK_GROUP_DIM) * stride_o_g + (j.val % BLOCK_GROUP_DIM)) = _
+      rw [hkey,
+        valueXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g
+          group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s₀ hD xs hx j]
+    · -- scale output
+      intro i hmask
+      have hv := destindex_copy_quantize_kv_group_real_surface_scale_output_compute_correct
+        K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+        stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM
+        BLOCK_GROUP_DIM s₀ hD (fun h => hOut h.symm) hScInj i
+      have haddr : scaleOutOffset s₀ DestLoc stride_os_bs stride_os_h i
+          = m1 * stride_os_bs + s₀.pids 1 * stride_os_h + i.val := by
+        simp only [scaleOutOffset, destIndex, hm1]
+      have hact : scaleActive group_size BLOCK_GROUP_NUM i := hmask
+      rw [hs1, haddr] at hv
+      simp only [if_pos hact] at hv
+      have hkey : s1.readMem OutScale (m1 * stride_os_bs + s₀.pids 1 * stride_os_h + i.val)
+        = quantizeKvCopyGroupScaleCell s₀ K stride_k_bs stride_k_h stride_k_g
+            group_size BLOCK_GROUP_DIM hD i.val := Option.some.inj hv
+      show s1.readMem OutScale (m1 * stride_os_bs + s₀.pids 1 * stride_os_h + i.val) = _
+      rw [hkey,
+        scaleCellXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g
+          group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM s₀ hD xs hx i]
+    · -- frame
+      intro r o hc1 hc2
+      refine quantize_kv_copy_frame K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h stride_o_g
+        stride_o_d stride_os_bs stride_os_h stride_os_g group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+        hD s₀ s1 hs1 r o (fun idx h1 ⟨hr, ho⟩ => ?_) (fun i h1 ⟨hr, ho⟩ => ?_)
+      · rcases hc1 with hne | hno
+        · exact hne hr.symm
+        · refine hno (Lane2D.encode idx) (by simpa using h1) ?_
+          simp only [Lane2D.encode_div, Lane2D.encode_mod]
+          rw [← ho]
+          simp only [destIndex, hm1]
+      · rcases hc2 with hne | hno
+        · exact hne hr.symm
+        · refine hno i h1 ?_
+          rw [← ho]
+          simp only [destIndex, hm1]
+
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy
