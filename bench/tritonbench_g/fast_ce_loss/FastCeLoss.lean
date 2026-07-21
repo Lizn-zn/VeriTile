@@ -25,7 +25,7 @@ per-program statements cover every program of the grid.
 
 ```
 cross_entropy_forward_correctness                           ← TOP (fwd, ⊨ headline)
-  ├─ fastCeForwardIO                                        MetaMasked2DKernelIO₂ₓ₂ signature (.int label slot + gather)
+  ├─ fastCeForwardIO                                        MetaGatherMasked2DKernelIO₂ₓ₂ signature (.int label slot + gather)
   ├─ cross_entropy_forward_flattenOk                        flat-memory bridge coverage
   ├─ cross_entropy_forward_traceSafe                        per-execution safety walk
   └─ cross_entropy_forward_region_run                       termination + both cell values + frame
@@ -42,7 +42,7 @@ cross_entropy_backward_store_slice_compute_correct          ← masked dloss·y 
 ```
 
 The forward kernel's headline is a metadata-genre **`⊨` masked Hoare triple**
-(`MetaMasked2DKernelIO₂ₓ₂`) under `DO_SOFTCAPPING = false`: the loaded label
+(`MetaGatherMasked2DKernelIO₂ₓ₂`) under `DO_SOFTCAPPING = false`: the loaded label
 is a named `Int` ghost binder pinned to the `.int` slot cell, and every
 program writes to `logsumexp_ptr[row]` the pure `fceLseLocal` of the pinned
 transformed row values (transform = optional `LOGIT_SCALE * ·`) and to
@@ -325,7 +325,7 @@ theorem fceLse_withBot_scale
 /-! ## The `⊨` specification (forward)
 
 The forward headline states `_cross_entropy_forward` on the metadata-genre IO
-skin `MetaMasked2DKernelIO₂ₓ₂`: the loaded label is a named `Int` ghost binder
+skin `MetaGatherMasked2DKernelIO₂ₓ₂`: the loaded label is a named `Int` ghost binder
 pinned to the `labels_ptr` slot cell on the `.int` channel, the masked logits
 row and the sentinel-gated label gather cell are the two data inputs, and the
 per-row `logsumexp`/`loss` cells are the two 1-lane outputs. The pure specs
@@ -749,7 +749,7 @@ theorem cross_entropy_forward_traceSafe
 
 /-- `cross_entropy_forward_surface`'s metadata-genre **IO signature** — the
 whole kernel-specific audit surface of the `⊨` headline
-(`MetaMasked2DKernelIO₂ₓ₂`, the cross-entropy metadata shape):
+(`MetaGatherMasked2DKernelIO₂ₓ₂`, the cross-entropy metadata shape):
 
 * `mbufL` — the `.int` label slot: program `row_idx = pid₀` loads
   `labels_ptr[pid₀]` (`mwinL`), yielding the named `Int` scalar `lab`;
@@ -768,7 +768,7 @@ def fastCeForwardIO
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ) (DO_LOGIT_SCALING : Bool) :
-    MetaMasked2DKernelIO₂ₓ₂ where
+    MetaGatherMasked2DKernelIO₂ₓ₂ where
   kernel := cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
     labels_ptr VOCAB_SIZE logits_row_stride BLOCK_SIZE SOFTCAP LOGIT_SCALE
     Bool.false DO_LOGIT_SCALING
@@ -785,7 +785,7 @@ def fastCeForwardIO
   write1 := fun pid₀ _ _ => pid₀
   write2 := fun pid₀ _ _ => pid₀
 
-open scoped VeriTile.Triton.MetaMasked2DKernelIO₂ₓ₂ in
+open scoped VeriTile.Triton.MetaGatherMasked2DKernelIO₂ₓ₂ in
 /-- **The headline**: `_cross_entropy_forward` implements the pure per-row
 cross-entropy pair on its metadata-genre IO signature — for every disjoint
 flat placement of the four buffers, every program `row_idx = pid₀` whose
@@ -806,7 +806,7 @@ takes the `loss = 0` path. `0 < VOCAB_SIZE` (at least one valid lane) and
 output-distinctness side condition (matching the old summary's `hne`).
 `DO_SOFTCAPPING = false` is pinned (softcap breaks `⊥`-propagation on masked
 lanes; see `fastCeTransform`); `DO_LOGIT_SCALING` parametrizes the spec.
-Proof: `MetaMasked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+Proof: `MetaGatherMasked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
 masked triple with the flat-memory bridge side conditions. -/
 specification cross_entropy_forward_correctness
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
@@ -821,7 +821,7 @@ specification cross_entropy_forward_correctness
          fceLossLocal VOCAB_SIZE BLOCK_SIZE LOGIT_SCALE DO_LOGIT_SCALING
            lab xs g) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
-  refine MetaMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  refine MetaGatherMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
   · exact cross_entropy_forward_flattenOk logits_ptr loss_ptr logsumexp_ptr
       labels_ptr VOCAB_SIZE logits_row_stride (n+1) SOFTCAP LOGIT_SCALE
       Bool.false DO_LOGIT_SCALING

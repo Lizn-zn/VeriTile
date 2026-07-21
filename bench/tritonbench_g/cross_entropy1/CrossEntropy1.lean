@@ -23,7 +23,7 @@ per-program statements cover every program of the grid.
 
 ```
 cross_entropy_fwd_correctness                          ← TOP THEOREM (fwd, ⊨ headline)
-  ├─ crossEntropyFwdIO                                 MetaMasked2DKernelIO₂ₓ₂ signature (label slot + gather)
+  ├─ crossEntropyFwdIO                                 MetaGatherMasked2DKernelIO₂ₓ₂ signature (label slot + gather)
   ├─ cross_entropy_fwd_flattenOk                       flat-memory bridge coverage
   ├─ cross_entropy_fwd_traceSafe                       per-execution safety walk
   │    ├─ ceFwdLsePrefix_traceSafe                     prefix walk (label slot, masked row, LSE store)
@@ -1320,7 +1320,7 @@ theorem crossEntropyLossSpec_eq_crossEntropyLossSmoothed
 /-! ## The `⊨` specification (forward)
 
 The headline states the forward kernel on the metadata-genre IO skin
-`MetaMasked2DKernelIO₂ₓ₂`: the loaded label is a named ghost binder pinned to
+`MetaGatherMasked2DKernelIO₂ₓ₂`: the loaded label is a named ghost binder pinned to
 the `labels_ptr` slot cell, the masked logits row and the label-gated gather
 cell are the two data inputs, and the loss/LSE cells are the two 1-lane
 outputs. The machinery below supplies the three intro obligations: the
@@ -2183,7 +2183,7 @@ def crossEntropyFwdIO
     (smoothing lse_square_scale : ℝ) (ignored_index : Int)
     (total_classes : Nat) (class_start_idx : Int)
     (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
-    (HAS_SMOOTHING SPLIT : Bool) : MetaMasked2DKernelIO₂ₓ₂ where
+    (HAS_SMOOTHING SPLIT : Bool) : MetaGatherMasked2DKernelIO₂ₓ₂ where
   kernel := cross_entropy_fwd_surface loss_ptr lse_ptr logits_ptr labels_ptr
     smoothing lse_square_scale ignored_index total_classes class_start_idx
     n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT
@@ -2205,7 +2205,7 @@ def crossEntropyFwdIO
   write1 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
   write2 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
 
-open scoped VeriTile.Triton.MetaMasked2DKernelIO₂ₓ₂ in
+open scoped VeriTile.Triton.MetaGatherMasked2DKernelIO₂ₓ₂ in
 /-- **The headline**: `cross_entropy_fwd_kernel` implements the pure
 per-program cross-entropy pair on its metadata-genre IO signature — for
 every disjoint flat placement of the four buffers, every program
@@ -2226,7 +2226,7 @@ Every other memory cell is unchanged. `0 < BLOCK_SIZE` is required (the `max`
 reduce needs a lane); the two output buffers must differ (`lse_ptr ≠
 loss_ptr`) so each readback sees through the other store, and `lse_ptr ≠
 logits_ptr` so the LSE store does not clobber the gather cell it reads.
-Proof: `MetaMasked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+Proof: `MetaGatherMasked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
 masked triple with the flat-memory bridge side conditions. -/
 specification cross_entropy_fwd_correctness
     (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
@@ -2247,7 +2247,7 @@ specification cross_entropy_fwd_correctness
            ceBlockLSE n_cols BLOCK_SIZE pid₁ xs)
         else (0, 0) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
-  refine MetaMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  refine MetaGatherMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
   · exact cross_entropy_fwd_flattenOk loss_ptr lse_ptr logits_ptr labels_ptr
       smoothing lse_square_scale ignored_index total_classes class_start_idx
       n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT
