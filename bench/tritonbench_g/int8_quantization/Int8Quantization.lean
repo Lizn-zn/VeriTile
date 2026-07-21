@@ -67,13 +67,15 @@ row mask, and proves the two writebacks: the quantized value
 is the honest, unclosed blocker; that it *lowers* is recorded by
 `per_block_int8_scale_compute_store_slice_toAlgorithm_supported`.
 
-`0 < BLK` and `0 < C` are genuinely forced: the `Scale` store is **unmasked**
-in the kernel, so its safety bound and single-cell frame exclusion are carried
-by the lane-`0` write gate (`writeMask2`), which needs at least one lane; and
-`0 < C` is what makes the row-major lane decomposition
-`j ↦ (j / C, j % C)` a bijection onto the `[BLK, C]` tile. `XInt8 ≠ Scale` is
-required because the unmasked scalar store must not alias the masked block
-store. `@triton.autotune` is not present in this benchmark.
+`0 < BLK * C` is genuinely forced: the `Scale` store is **unmasked** in the
+kernel, so its safety bound and single-cell frame exclusion are carried by the
+lane-`0` write gate (`writeMask2`), which needs at least one lane. No separate
+`0 < C` is threaded: the `Lane2D` bridge derives it from the lane
+(`Fin (BLK * C)` is empty when `C = 0`), so the row-major decomposition
+`j ↦ (j / C, j % C)` is a bijection onto the `[BLK, C]` tile without a
+positivity hypothesis. `XInt8 ≠ Scale` is required because the unmasked scalar
+store must not alias the masked block store. `@triton.autotune` is not present
+in this benchmark.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.Int8Quantization
@@ -213,37 +215,9 @@ def per_block_int8_store_slice
 /-! ### Row-major lane decomposition
 
 The `⊨` skin indexes a program's window by a flat lane `j : Fin (BLK * C)`; the
-kernel's tile is `[BLK, C]`. Row-major decomposition `j ↦ (j / C, j % C)` is
-the bijection between them (`0 < C`). -/
-
-/-- The tile index `(i, k)` of a `[BLK, C]` block, as a flat row-major lane. -/
-def idxLane (BLK C : Nat) (idx : TileIndex [BLK, C]) : Fin (BLK * C) :=
-  ⟨idx.1.val * C + idx.2.1.val, by
-    have h1 : idx.1.val * C + idx.2.1.val < idx.1.val * C + C :=
-      Nat.add_lt_add_left idx.2.1.isLt _
-    have h2 : idx.1.val * C + C ≤ BLK * C := by
-      have : idx.1.val + 1 ≤ BLK := idx.1.isLt
-      calc idx.1.val * C + C = (idx.1.val + 1) * C := by ring
-        _ ≤ BLK * C := Nat.mul_le_mul_right C this
-    exact Nat.lt_of_lt_of_le h1 h2⟩
-
-/-- The row coordinate of the lane of a tile index is that index's row. -/
-theorem idxLane_row (BLK C : Nat) (hC : 0 < C) (idx : TileIndex [BLK, C]) :
-    (idxLane BLK C idx).val / C = idx.1.val := by
-  simp only [idxLane]
-  rw [Nat.mul_comm, Nat.mul_add_div hC, Nat.div_eq_of_lt idx.2.1.isLt,
-    Nat.add_zero]
-
-/-- The row-major block offset of lane `j` is the flat offset `base + j`. -/
-theorem laneIdx_offset (BLK C : Nat) (a : Nat) (j : Fin (BLK * C)) :
-    (a + j.val / C) * C + j.val % C = a * C + j.val := by
-  rw [Nat.add_mul, Nat.add_assoc, Nat.mul_comm (j.val / C) C, Nat.div_add_mod]
-
-/-- The tile index `(i, k)`'s block offset is the flat offset of its lane. -/
-theorem idxLane_offset (BLK C : Nat) (a : Nat) (idx : TileIndex [BLK, C]) :
-    (a + idx.1.val) * C + idx.2.1.val = a * C + (idxLane BLK C idx).val := by
-  simp only [idxLane]
-  rw [Nat.add_mul, Nat.add_assoc]
+kernel's tile is `[BLK, C]`. The shared `Lane2D` bridge is the row-major
+bijection `j ↦ (j / C, j % C)` between them; `Fin (BLK * C)` is empty unless
+`0 < C`, so no positivity side-condition is threaded. -/
 
 /-! ### The pure block specs -/
 
@@ -274,7 +248,7 @@ private theorem per_block_int8_exec_isSome
 lane the quantized value, elsewhere the old contents. -/
 theorem per_block_int8_value_correct
     (X ScalePre XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) (hC : 0 < C)
+    (L C BLK scale_stride : Nat) (preScale : ℝ)
     (hRegions : XInt8 ≠ Scale) (s s1 : BlockState)
     (hExec : exec ((per_block_int8_store_slice X ScalePre XInt8 Scale L C BLK
       scale_stride preScale).toAlgKernel) s = some s1) :
@@ -302,7 +276,7 @@ theorem per_block_int8_value_correct
     exact hab
   have haddr : s.pids 1 * L * C + s.pids 0 * BLK * C + j.val
       = s.pids 1 * L * C + (s.pids 0 * BLK + j.val / C) * C + j.val % C := by
-    have h := laneIdx_offset BLK C (s.pids 0 * BLK) j
+    have h := Lane2D.rowBase_addr_decode (s.pids 0 * BLK) j
     simp only [Nat.add_assoc]
     rw [h]
   rw [haddr]
@@ -316,7 +290,7 @@ theorem per_block_int8_value_correct
   simp [hRegions]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj
     ((⟨j.val / C, Nat.div_lt_of_lt_mul (by simpa [Nat.mul_comm] using j.isLt)⟩,
-      ⟨j.val % C, Nat.mod_lt _ hC⟩, PUnit.unit) : TileIndex [BLK, C])]
+      ⟨j.val % C, Nat.mod_lt _ (Lane2D.pos_of_lane j)⟩, PUnit.unit) : TileIndex [BLK, C])]
   by_cases hrow : s.pids 0 * BLK + j.val / C < L
   · simp [hrow]
   · simp [hrow]
@@ -403,7 +377,7 @@ reduce to **lane-wise** bounds at the active lanes; the two **unmasked** scalar
 accesses (`ScalePre` load, `Scale` store) reduce to single-cell bounds. -/
 theorem per_block_int8_traceSafe
     (X ScalePre XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) (hC : 0 < C)
+    (L C BLK scale_stride : Nat) (preScale : ℝ)
     (bounds : RegionBounds) (s : BlockState)
     (hin : ∀ j : Fin (BLK * C), s.pids 0 * BLK + j.val / C < L →
       s.pids 1 * L * C + s.pids 0 * BLK * C + j.val < bounds X)
@@ -416,9 +390,9 @@ theorem per_block_int8_traceSafe
         preScale).toAlgKernel) s := by
   have hlane : ∀ (idx : TileIndex [BLK, C]),
       s.pids 1 * L * C + (s.pids 0 * BLK + idx.1.val) * C + idx.2.1.val
-        = s.pids 1 * L * C + s.pids 0 * BLK * C + (idxLane BLK C idx).val := by
+        = s.pids 1 * L * C + s.pids 0 * BLK * C + (Lane2D.encode idx).val := by
     intro idx
-    have h := idxLane_offset BLK C (s.pids 0 * BLK) idx
+    have h := Lane2D.rowBase_addr_encode (s.pids 0 * BLK) idx
     simp only [Nat.add_assoc]
     rw [h]
   have hin' : ∀ idx : TileIndex [BLK, C], s.pids 0 * BLK + idx.1.val < L →
@@ -426,13 +400,13 @@ theorem per_block_int8_traceSafe
         < bounds X := by
     intro idx hidx
     rw [hlane idx]
-    exact hin (idxLane BLK C idx) (by rw [idxLane_row BLK C hC idx]; exact hidx)
+    exact hin (Lane2D.encode idx) (by rw [Lane2D.encode_div idx]; exact hidx)
   have hout' : ∀ idx : TileIndex [BLK, C], s.pids 0 * BLK + idx.1.val < L →
       s.pids 1 * L * C + (s.pids 0 * BLK + idx.1.val) * C + idx.2.1.val
         < bounds XInt8 := by
     intro idx hidx
     rw [hlane idx]
-    exact hout (idxLane BLK C idx) (by rw [idxLane_row BLK C hC idx]; exact hidx)
+    exact hout (Lane2D.encode idx) (by rw [Lane2D.encode_div idx]; exact hidx)
   unfold Kernel.TraceSafe
   simp [per_block_int8_store_slice, ComputeKernel.toAlgKernel,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
@@ -453,7 +427,7 @@ launch state whose active `X` lanes hold `xs` and whose `ScalePre` cell holds
 `ys`. This is the `hrun` obligation of the `⊨` headline. -/
 theorem per_block_int8_region_run
     (X ScalePre XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) (hC : 0 < C)
+    (L C BLK scale_stride : Nat) (preScale : ℝ)
     (hRegions : XInt8 ≠ Scale) (s₀ : BlockState)
     (xs ys : Fin (BLK * C) → ℝ)
     (hx : ∀ j : Fin (BLK * C), s₀.pids 0 * BLK + j.val / C < L →
@@ -476,7 +450,7 @@ theorem per_block_int8_region_run
     scale_stride preScale s₀
   refine ⟨s1, hs1, fun j hj => ?_, fun j => ?_, fun ρ o h1 h2 => ?_⟩
   · have h := per_block_int8_value_correct X ScalePre XInt8 Scale L C BLK
-      scale_stride preScale hC hRegions s₀ s1 hs1 j
+      scale_stride preScale hRegions s₀ s1 hs1 j
     rw [h, if_pos hj, hx j hj, hy j]
     rfl
   · rw [per_block_int8_scale_correct X ScalePre XInt8 Scale L C BLK
@@ -486,10 +460,10 @@ theorem per_block_int8_region_run
       preScale s₀ s1 hs1 ρ o (fun idx hidx hc => ?_) (fun hc => ?_)
     · rcases h1 with hne | hno
       · exact hne hc.1.symm
-      · refine hno (idxLane BLK C idx)
-          (by rw [idxLane_row BLK C hC idx]; exact hidx) ?_
+      · refine hno (Lane2D.encode idx)
+          (by rw [Lane2D.encode_div idx]; exact hidx) ?_
         rw [← hc.2]
-        have h := idxLane_offset BLK C (s₀.pids 0 * BLK) idx
+        have h := Lane2D.rowBase_addr_encode (s₀.pids 0 * BLK) idx
         simp only [Nat.add_assoc]
         rw [h]
     · rcases h2 with hne | hno
@@ -548,19 +522,20 @@ other memory cell is unchanged.
 `preScale = C**-0.5 · 1.44269504` is `q_kernel_per_block_int8` and
 `preScale = 1` is `k_kernel_per_block_int8`.
 
-Side conditions, all genuinely forced: `0 < C` (the row-major lane
-decomposition `j ↦ (j / C, j % C)` must be a bijection onto the `[BLK, C]`
-tile), `0 < BLK * C` (the `Scale` store is unmasked in the kernel, so its
-safety bound and single-cell frame exclusion are carried by the lane-`0` gate
-`writeMask2`, which needs a lane) and `XInt8 ≠ Scale` (that unmasked scalar
-store must not alias the masked block store). The per-block scale is an
+Side conditions, all genuinely forced: `0 < BLK * C` (the `Scale` store is
+unmasked in the kernel, so its safety bound and single-cell frame exclusion are
+carried by the lane-`0` gate `writeMask2`, which needs a lane) and
+`XInt8 ≠ Scale` (that unmasked scalar store must not alias the masked block
+store). No separate `0 < C` is needed: the `Lane2D` row-major bijection
+`j ↦ (j / C, j % C)` gets its positivity from the lane itself. The per-block
+scale is an
 **input**, not a computed value — see the module docstring: the Python
 reduction reads uninitialized memory at a partial tail block, so it has no pure
 spec. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
 masked triple with the flat-memory bridge side conditions. -/
 specification per_block_int8_correctness
     (X ScalePre XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) (hC : 0 < C)
+    (L C BLK scale_stride : Nat) (preScale : ℝ)
     (hB : 0 < BLK * C) (hRegions : XInt8 ≠ Scale) :
     perBlockInt8IO X ScalePre XInt8 Scale L C BLK scale_stride preScale ⊨
       fun _ _ xs ys =>
@@ -570,11 +545,11 @@ specification per_block_int8_correctness
       preScale
   · intro bounds s h1 h2 h3 h4
     exact per_block_int8_traceSafe X ScalePre XInt8 Scale L C BLK scale_stride
-      preScale hC bounds s h1 (h2 ⟨0, hB⟩ trivial) h3 (h4 ⟨0, hB⟩ rfl)
+      preScale bounds s h1 (h2 ⟨0, hB⟩ trivial) h3 (h4 ⟨0, hB⟩ rfl)
   · intro s₀ xs ys hx hy
     obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
       per_block_int8_region_run X ScalePre XInt8 Scale L C BLK scale_stride
-        preScale hC hRegions s₀ xs ys hx (fun j => hy j trivial)
+        preScale hRegions s₀ xs ys hx (fun j => hy j trivial)
     refine ⟨s1, hexec, hval1, fun j _ => hval2 j, fun ρ o hc1 hc2 => ?_⟩
     refine hframe ρ o hc1 ?_
     rcases hc2 with hne | hno

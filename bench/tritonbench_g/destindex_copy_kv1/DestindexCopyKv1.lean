@@ -242,44 +242,8 @@ theorem fwd_kernel_destindex_copy_kv_correct_of_exec
 
 The `⊨` family's data channels are flat `Fin B` lanes; this kernel's tile is
 genuinely two-dimensional, so lane `j` is identified with tile cell
-`(j / BLOCK_DMODEL, j % BLOCK_DMODEL)` (row-major). `laneOf` is the inverse. -/
-
-/-- Tile cell of lane `j` — row-major decode of the flat lane index. -/
-def laneIndex (BLOCK_HEAD BLOCK_DMODEL : Nat)
-    (j : Fin (BLOCK_HEAD * BLOCK_DMODEL)) : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] :=
-  have hD : 0 < BLOCK_DMODEL :=
-    Nat.pos_of_ne_zero fun h => absurd j.isLt (by simp [h])
-  (⟨j.val / BLOCK_DMODEL,
-      Nat.div_lt_of_lt_mul (by simp only [Nat.mul_comm BLOCK_DMODEL BLOCK_HEAD]; exact j.isLt)⟩,
-    ⟨j.val % BLOCK_DMODEL, Nat.mod_lt _ hD⟩, PUnit.unit)
-
-/-- Flat lane index of a tile cell — row-major encode, inverse to
-`laneIndex`. -/
-def laneOf (BLOCK_HEAD BLOCK_DMODEL : Nat)
-    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) :
-    Fin (BLOCK_HEAD * BLOCK_DMODEL) :=
-  ⟨idx.1.val * BLOCK_DMODEL + idx.2.1.val, by
-    have h1 : idx.1.val + 1 ≤ BLOCK_HEAD := idx.1.isLt
-    have h2 : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-    calc idx.1.val * BLOCK_DMODEL + idx.2.1.val
-        < idx.1.val * BLOCK_DMODEL + BLOCK_DMODEL := Nat.add_lt_add_left h2 _
-      _ = (idx.1.val + 1) * BLOCK_DMODEL := by ring
-      _ ≤ BLOCK_HEAD * BLOCK_DMODEL := Nat.mul_le_mul_right BLOCK_DMODEL h1⟩
-
-@[simp] theorem laneOf_div (BLOCK_HEAD BLOCK_DMODEL : Nat)
-    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) :
-    (laneOf BLOCK_HEAD BLOCK_DMODEL idx).val / BLOCK_DMODEL = idx.1.val := by
-  show (idx.1.val * BLOCK_DMODEL + idx.2.1.val) / BLOCK_DMODEL = idx.1.val
-  have h2 : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  have hD : 0 < BLOCK_DMODEL := Nat.lt_of_le_of_lt (Nat.zero_le _) h2
-  rw [Nat.mul_comm, Nat.mul_add_div hD, Nat.div_eq_of_lt h2, Nat.add_zero]
-
-@[simp] theorem laneOf_mod (BLOCK_HEAD BLOCK_DMODEL : Nat)
-    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) :
-    (laneOf BLOCK_HEAD BLOCK_DMODEL idx).val % BLOCK_DMODEL = idx.2.1.val := by
-  show (idx.1.val * BLOCK_DMODEL + idx.2.1.val) % BLOCK_DMODEL = idx.2.1.val
-  have h2 : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-  rw [Nat.mul_comm, Nat.mul_add_mod, Nat.mod_eq_of_lt h2]
+`(j / BLOCK_DMODEL, j % BLOCK_DMODEL)` (row-major) via the shared `Lane2D`
+bridge (`Lane2D.decode`, with `Lane2D.encode` the inverse). -/
 
 /-- A masked scatter-store `foldl` leaves every memory cell it does not
 actively hit unchanged (cell-level frame for the masked store). -/
@@ -405,10 +369,11 @@ theorem fwd_kernel_destindex_copy_kv_region_run
   · have h := fwd_kernel_destindex_copy_kv_correct_of_exec K Dest_loc Out
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀ hOutInj s1 hs1'
-      (laneIndex BLOCK_HEAD BLOCK_DMODEL j)
-    have hact : active head_num head_dim (laneIndex BLOCK_HEAD BLOCK_DMODEL j) := hj
+      (Lane2D.decode j)
+    have hact : active head_num head_dim (Lane2D.decode j) := hj
     rw [if_pos hact] at h
-    simp only [outAddr, sourceAddr, headIndex, dimIndex, laneIndex, hbase, hpid] at h ⊢
+    simp only [outAddr, sourceAddr, headIndex, dimIndex, Lane2D.decode_row,
+      Lane2D.decode_col, hbase, hpid] at h ⊢
     rw [h, hx j hj]
   · refine fwd_kernel_destindex_copy_kv_frame K Dest_loc Out
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
@@ -416,9 +381,9 @@ theorem fwd_kernel_destindex_copy_kv_region_run
       (fun idx h1 h2 ⟨hr, ho⟩ => ?_)
     rcases hcond with hne | hno
     · exact hne hr.symm
-    · refine hno (laneOf BLOCK_HEAD BLOCK_DMODEL idx) ?_ ?_
+    · refine hno (Lane2D.encode idx) ?_ ?_
       · simpa using ⟨h1, h2⟩
-      · simp only [laneOf_div, laneOf_mod]
+      · simp only [Lane2D.encode_div, Lane2D.encode_mod]
         rw [← ho, hm]
 
 /-- Per-execution safety walk: one computational unfold walks the whole body —
@@ -560,9 +525,9 @@ specification fwd_kernel_destindex_copy_kv_correctness
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD bounds s hb1
       (fun idx h1 h2 => ?_) (fun idx h1 h2 => ?_)
-    · simpa using hbr (laneOf BLOCK_HEAD BLOCK_DMODEL idx) (by simpa using ⟨h1, h2⟩)
+    · simpa using hbr (Lane2D.encode idx) (by simpa using ⟨h1, h2⟩)
     · rw [hm₁]
-      simpa using hbw (laneOf BLOCK_HEAD BLOCK_DMODEL idx) (by simpa using ⟨h1, h2⟩)
+      simpa using hbw (Lane2D.encode idx) (by simpa using ⟨h1, h2⟩)
   · intro s₀ m₁ _m₂ xs hm₁ _hm₂ hx
     exact fwd_kernel_destindex_copy_kv_region_run K Dest_loc Out
       stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d

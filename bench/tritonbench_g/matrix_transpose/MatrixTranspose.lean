@@ -87,40 +87,6 @@ def kernel
   tl.store(out_ptr, tl.trans(matrix))
 }
 
-/-! ### Row-major flattening of a 2-D tile into `⊨` lanes -/
-
-/-- Lane `j` of the row-major flattening of an `R × C` tile. -/
-def laneIdx (R C : Nat) (j : Fin (R * C)) : TileIndex [R, C] :=
-  (⟨j.val / C, Nat.div_lt_of_lt_mul (Nat.lt_of_lt_of_le j.isLt (Nat.le_of_eq (Nat.mul_comm R C)))⟩,
-   ⟨j.val % C, Nat.mod_lt _ (Nat.pos_of_ne_zero (by
-      rintro rfl
-      exact absurd j.isLt (by simp)))⟩,
-   PUnit.unit)
-
-/-- The lane of a logical `R × C` tile index — inverse of `laneIdx`. -/
-def laneOf (R C : Nat) (idx : TileIndex [R, C]) : Fin (R * C) :=
-  ⟨idx.1.val * C + idx.2.1.val, by
-    have h1 : idx.1.val + 1 ≤ R := idx.1.isLt
-    have h2 : idx.1.val * C + idx.2.1.val < idx.1.val * C + C :=
-      Nat.add_lt_add_left idx.2.1.isLt _
-    refine Nat.lt_of_lt_of_le h2 ?_
-    rw [← Nat.succ_mul]
-    exact Nat.mul_le_mul_right C h1⟩
-
-@[simp] theorem laneIdx_laneOf (R C : Nat) (idx : TileIndex [R, C]) :
-    laneIdx R C (laneOf R C idx) = idx := by
-  obtain ⟨a, b, u⟩ := idx
-  have hC : 0 < C := Nat.lt_of_le_of_lt (Nat.zero_le _) b.isLt
-  have hdiv : (a.val * C + b.val) / C = a.val := by
-    rw [Nat.mul_comm, Nat.mul_add_div hC, Nat.div_eq_of_lt b.isLt, Nat.add_zero]
-  have hmod : (a.val * C + b.val) % C = b.val := by
-    rw [Nat.mul_comm, Nat.mul_add_mod, Nat.mod_eq_of_lt b.isLt]
-  simp only [laneIdx, laneOf, hdiv, hmod]
-
-theorem laneOf_injective (R C : Nat) :
-    Function.Injective (laneOf R C) :=
-  Function.LeftInverse.injective (laneIdx_laneOf R C)
-
 /-- Source address read by `kernel` at a logical output tile index. -/
 def matrixAddr (matrix_stridex matrix_stridey : Nat)
     (idx : TileIndex [D_HEAD, SIZE_M]) : Nat :=
@@ -240,10 +206,10 @@ theorem kernel_traceSafe
       SIZE_M D_HEAD : Nat)
     (bounds : RegionBounds) (s : BlockState)
     (h1 : ∀ j : Fin (D_HEAD * SIZE_M),
-      matrixAddr matrix_stridex matrix_stridey (laneIdx D_HEAD SIZE_M j)
+      matrixAddr matrix_stridex matrix_stridey (Lane2D.decode j)
         < bounds M)
     (h2 : ∀ j : Fin (D_HEAD * SIZE_M),
-      outAddr out_stridex out_stridey (laneIdx D_HEAD SIZE_M j)
+      outAddr out_stridex out_stridey (Lane2D.decode j)
         < bounds Out) :
     Kernel.TraceSafe bounds
       ((kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
@@ -251,12 +217,12 @@ theorem kernel_traceSafe
   have h1' : ∀ (a : Fin SIZE_M) (b : Fin D_HEAD),
       a.val * matrix_stridex + b.val * matrix_stridey < bounds M := by
     intro a b
-    have := h1 (laneOf D_HEAD SIZE_M (b, a, PUnit.unit))
+    have := h1 (Lane2D.encode (b, a, PUnit.unit))
     simpa [matrixAddr] using this
   have h2' : ∀ (a : Fin D_HEAD) (b : Fin SIZE_M),
       a.val * out_stridex + b.val * out_stridey < bounds Out := by
     intro a b
-    have := h2 (laneOf D_HEAD SIZE_M (a, b, PUnit.unit))
+    have := h2 (Lane2D.encode (a, b, PUnit.unit))
     simpa [outAddr] using this
   unfold Kernel.TraceSafe
   simp [kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
@@ -282,15 +248,15 @@ theorem kernel_region_run
       (fun idx : TileIndex [D_HEAD, SIZE_M] => outAddr out_stridex out_stridey idx))
     (hx : ∀ j : Fin (D_HEAD * SIZE_M),
       s₀.readMem M (matrixAddr matrix_stridex matrix_stridey
-        (laneIdx D_HEAD SIZE_M j)) = xs j) :
+        (Lane2D.decode j)) = xs j) :
     ∃ s1, exec ((kernel M Out matrix_stridex matrix_stridey out_stridex
         out_stridey SIZE_M D_HEAD).toAlgKernel) s₀ = some s1
       ∧ (∀ j : Fin (D_HEAD * SIZE_M),
           s1.readMem Out (outAddr out_stridex out_stridey
-            (laneIdx D_HEAD SIZE_M j)) = xs j)
+            (Lane2D.decode j)) = xs j)
       ∧ (∀ r o,
           (r ≠ Out ∨ ∀ j : Fin (D_HEAD * SIZE_M),
-            o ≠ outAddr out_stridex out_stridey (laneIdx D_HEAD SIZE_M j)) →
+            o ≠ outAddr out_stridex out_stridey (Lane2D.decode j)) →
           s1.mem r o = s₀.mem r o) := by
   obtain ⟨s1, hs1⟩ := kernel_exec_isSome M Out matrix_stridex matrix_stridey
     out_stridex out_stridey SIZE_M D_HEAD s₀
@@ -298,13 +264,13 @@ theorem kernel_region_run
       out_stridey SIZE_M D_HEAD) s₀ = some s1 := hs1
   refine ⟨s1, hs1, fun j => ?_, fun r o hcond => ?_⟩
   · have h := kernel_correct M Out matrix_stridex matrix_stridey out_stridex
-      out_stridey SIZE_M D_HEAD s₀ hOutInj s1 hs1' (laneIdx D_HEAD SIZE_M j)
+      out_stridey SIZE_M D_HEAD s₀ hOutInj s1 hs1' (Lane2D.decode j)
     rw [h, hx j]
   · refine kernel_frame M Out matrix_stridex matrix_stridey out_stridex
       out_stridey SIZE_M D_HEAD s₀ s1 hs1 r o (fun idx ⟨hr, ho⟩ => ?_)
     rcases hcond with hne | hno
     · exact hne hr.symm
-    · exact hno (laneOf D_HEAD SIZE_M idx) (by rw [laneIdx_laneOf]; exact ho.symm)
+    · exact hno (Lane2D.encode idx) (by rw [Lane2D.decode_encode]; exact ho.symm)
 
 /-- `kernel`'s **IO signature** — the whole kernel-specific audit surface of
 the `⊨` headline:
@@ -329,9 +295,9 @@ def transposeIO (M Out : RegionName)
   out := Out
   B := D_HEAD * SIZE_M
   read := fun _ _ j =>
-    matrixAddr matrix_stridex matrix_stridey (laneIdx D_HEAD SIZE_M j)
+    matrixAddr matrix_stridex matrix_stridey (Lane2D.decode j)
   write := fun _ _ j =>
-    outAddr out_stridex out_stridey (laneIdx D_HEAD SIZE_M j)
+    outAddr out_stridex out_stridey (Lane2D.decode j)
   mask := fun _ _ _ => True
 
 /-- **The headline**: `kernel` implements the matrix transpose on its IO

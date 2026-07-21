@@ -105,6 +105,7 @@ bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_residual
 bench/tritonbench_g/layer_norm_welfold/LayerNormWelfold.lean	layer_norm_welfold_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_backward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -131,7 +132,9 @@ bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_gl
 bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize_kv_group_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	quantize_kv_copy_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	quantize_kv_transform_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rbe_triton_transform/RbeTritonTransform.lean	rbe_triton_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context

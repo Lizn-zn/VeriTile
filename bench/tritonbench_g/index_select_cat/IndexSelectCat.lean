@@ -35,7 +35,7 @@ holds `xs j`, and every cell off the write window is unchanged.
 
 The skin's lane space is one-dimensional, so the kernel's `[BI, BC]` store tile
 is carried as the flattened lane space `Fin (BI * BC)` — lane `j` is tile cell
-`(j / BC, j % BC)` (`laneIdx`, with `idxLane` the inverse). This is a
+`(j / BC, j % BC)` (`Lane2D.decode`, with `Lane2D.encode` the inverse). This is a
 bijection, so nothing is lost: every tile cell is some lane.
 
 ## Proof architecture
@@ -101,44 +101,7 @@ def index_select_cat_fwd_kernel
 /-! ### Flattened lane space
 
 The skin's lane space is `Fin B`; the kernel's store tile is `[BI, BC]`. Lane
-`j` is tile cell `(j / BC, j % BC)`, and `idxLane` is the inverse. -/
-
-/-- Tile cell of lane `j` of the flattened `[BI, BC]` lane space. -/
-def laneIdx {BI BC : Nat} (j : Fin (BI * BC)) : TileIndex [BI, BC] :=
-  (⟨j.val / BC, Nat.div_lt_of_lt_mul
-      (Nat.lt_of_lt_of_le j.isLt (Nat.le_of_eq (Nat.mul_comm BI BC)))⟩,
-    ⟨j.val % BC, Nat.mod_lt _ (by
-      rcases Nat.eq_zero_or_pos BC with h | h
-      · exact absurd j.isLt (by simp [h])
-      · exact h)⟩,
-    PUnit.unit)
-
-/-- Lane of tile cell `k` — the inverse of `laneIdx`. -/
-def idxLane {BI BC : Nat} (k : TileIndex [BI, BC]) : Fin (BI * BC) :=
-  ⟨k.1.val * BC + k.2.1.val, by
-    have h1 : k.1.val * BC + k.2.1.val < (k.1.val + 1) * BC := by
-      have := k.2.1.isLt
-      rw [Nat.succ_mul]
-      omega
-    exact Nat.lt_of_lt_of_le h1 (Nat.mul_le_mul_right BC k.1.isLt)⟩
-
-theorem idxLane_div {BI BC : Nat} (k : TileIndex [BI, BC]) :
-    (idxLane k).val / BC = k.1.val := by
-  have hBC : 0 < BC := Nat.lt_of_le_of_lt (Nat.zero_le _) k.2.1.isLt
-  show (k.1.val * BC + k.2.1.val) / BC = k.1.val
-  rw [Nat.add_comm, Nat.add_mul_div_right _ _ hBC, Nat.div_eq_of_lt k.2.1.isLt,
-    Nat.zero_add]
-
-theorem idxLane_mod {BI BC : Nat} (k : TileIndex [BI, BC]) :
-    (idxLane k).val % BC = k.2.1.val := by
-  show (k.1.val * BC + k.2.1.val) % BC = k.2.1.val
-  rw [Nat.add_comm, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt k.2.1.isLt]
-
-theorem laneIdx_idxLane {BI BC : Nat} (k : TileIndex [BI, BC]) :
-    laneIdx (idxLane k) = k := by
-  refine Prod.ext (Fin.ext ?_) (Prod.ext (Fin.ext ?_) rfl)
-  · exact idxLane_div k
-  · exact idxLane_mod k
+`j` is tile cell `(j / BC, j % BC)`, and `Lane2D.encode` is the inverse. -/
 
 /-! ### Kernel-coupled addressing vocabulary -/
 
@@ -442,41 +405,41 @@ theorem index_select_cat_fwd_kernel_region_run
   -- the lane view of a tile cell is `active`-faithful in both directions
   have hlaneAct : ∀ k : TileIndex [BI, BC],
       active s₀ num_indices num_cols BI BC k →
-      (s₀.pids 0 * BI + (idxLane k).val / BC < num_indices ∧
-        s₀.pids 1 * BC + (idxLane k).val % BC < num_cols) := by
+      (s₀.pids 0 * BI + (Lane2D.encode k).val / BC < num_indices ∧
+        s₀.pids 1 * BC + (Lane2D.encode k).val % BC < num_cols) := by
     intro k hk
-    rw [idxLane_div, idxLane_mod]
+    rw [Lane2D.encode_div, Lane2D.encode_mod]
     exact hk
   have hlaneAddr : ∀ k : TileIndex [BI, BC],
-      (s₀.pids 0 * BI + (idxLane k).val / BC) * stride0 +
-          (s₀.pids 1 * BC + (idxLane k).val % BC) * stride1
+      (s₀.pids 0 * BI + (Lane2D.encode k).val / BC) * stride0 +
+          (s₀.pids 1 * BC + (Lane2D.encode k).val % BC) * stride1
         = outputAddr s₀ stride0 stride1 BI BC k := by
     intro k
-    rw [idxLane_div, idxLane_mod]
+    rw [Lane2D.encode_div, Lane2D.encode_mod]
     rfl
   refine ⟨s1, hs1, fun hinj j hj => ?_, fun r o hcond => ?_⟩
-  · have hActive : active s₀ num_indices num_cols BI BC (laneIdx j) := hj
+  · have hActive : active s₀ num_indices num_cols BI BC (Lane2D.decode j) := hj
     have hNoCol : ∀ k : TileIndex [BI, BC],
         active s₀ num_indices num_cols BI BC k →
         outputAddr s₀ stride0 stride1 BI BC k
-          = outputAddr s₀ stride0 stride1 BI BC (laneIdx j) →
-        k = laneIdx j := by
+          = outputAddr s₀ stride0 stride1 BI BC (Lane2D.decode j) →
+        k = Lane2D.decode j := by
       intro k hk heq
-      have hjk : idxLane k = j := by
-        refine hinj (idxLane k) j (hlaneAct k hk) hj ?_
+      have hjk : Lane2D.encode k = j := by
+        refine hinj (Lane2D.encode k) j (hlaneAct k hk) hj ?_
         rw [hlaneAddr k, heq]
         rfl
-      rw [← laneIdx_idxLane k, hjk]
+      rw [← Lane2D.decode_encode k, hjk]
     have h := index_select_cat_fwd_kernel_correct_of_exec output_ptr source_ptr
-      index_ptr num_indices num_cols stride0 stride1 BI BC s₀ (laneIdx j)
+      index_ptr num_indices num_cols stride0 stride1 BI BC s₀ (Lane2D.decode j)
       hActive hNoCol s1 hs1
-    have hsrc : sourceAddr s₀ index_ptr.cast stride0 stride1 BI BC (laneIdx j)
+    have hsrc : sourceAddr s₀ index_ptr.cast stride0 stride1 BI BC (Lane2D.decode j)
         = ids j * stride0 + (s₀.pids 1 * BC + j.val % BC) * stride1 := by
       show s₀.readMemValue .nat index_ptr.cast (s₀.pids 0 * BI + j.val / BC) * stride0 +
           (s₀.pids 1 * BC + j.val % BC) * stride1
         = ids j * stride0 + (s₀.pids 1 * BC + j.val % BC) * stride1
       rw [hi j hj.1]
-    have hout : outputAddr s₀ stride0 stride1 BI BC (laneIdx j)
+    have hout : outputAddr s₀ stride0 stride1 BI BC (Lane2D.decode j)
         = (s₀.pids 0 * BI + j.val / BC) * stride0 +
           (s₀.pids 1 * BC + j.val % BC) * stride1 := rfl
     rw [← hout, h, hsrc]
@@ -486,7 +449,7 @@ theorem index_select_cat_fwd_kernel_region_run
     intro k hk hc
     rcases hcond with hne | hno
     · exact hne hc.1.symm
-    · exact hno (idxLane k) (hlaneAct k hk)
+    · exact hno (Lane2D.encode k) (hlaneAct k hk)
         (hc.2.symm.trans (hlaneAddr k).symm)
 
 /-- `index_select_cat_fwd_kernel`'s gather **IO signature** — the whole
@@ -576,29 +539,29 @@ specification index_select_cat_fwd_kernel_correctness
     simp only [indexSelectCatIO] at hidsPin hbx hbr hbw ⊢
     -- the lane of tile cell `(i, c)` — well-formed exactly because `BC > 0`
     have hlane : ∀ (i : Fin BLOCK_SIZE_INDEX) (c : Fin BLOCK_SIZE_COL),
-        ((idxLane ((i, c, PUnit.unit) :
+        ((Lane2D.encode ((i, c, PUnit.unit) :
             TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])).val
               / BLOCK_SIZE_COL = i.val ∧
-          (idxLane ((i, c, PUnit.unit) :
+          (Lane2D.encode ((i, c, PUnit.unit) :
             TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])).val
               % BLOCK_SIZE_COL = c.val) :=
-      fun i c => ⟨idxLane_div _, idxLane_mod _⟩
+      fun i c => ⟨Lane2D.encode_div _, Lane2D.encode_mod _⟩
     refine index_select_cat_fwd_kernel_traceSafe output_ptr source_ptr index_ptr
       num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL
       bounds s ?_ ?_ ?_
     · intro i hi
       have hc : Fin BLOCK_SIZE_COL := ⟨0, hBC⟩
       obtain ⟨hd, hm⟩ := hlane i hc
-      have h := hbx (idxLane ((i, hc, PUnit.unit) :
+      have h := hbx (Lane2D.encode ((i, hc, PUnit.unit) :
         TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])) (by rw [hd]; exact hi)
       rw [hd] at h
       exact h
     · intro i c hi hcol
       obtain ⟨hd, hm⟩ := hlane i c
-      have h := hbr (idxLane ((i, c, PUnit.unit) :
+      have h := hbr (Lane2D.encode ((i, c, PUnit.unit) :
         TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])) (by rw [hd, hm]; exact ⟨hi, hcol⟩)
       rw [hm] at h
-      have hpin := hidsPin (idxLane ((i, c, PUnit.unit) :
+      have hpin := hidsPin (Lane2D.encode ((i, c, PUnit.unit) :
         TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])) (by rw [hd]; exact hi)
       rw [hd] at hpin
       show s.readMemValue TileDType.nat index_ptr
@@ -608,7 +571,7 @@ specification index_select_cat_fwd_kernel_correctness
       exact h
     · intro i c hi hcol
       obtain ⟨hd, hm⟩ := hlane i c
-      have h := hbw (idxLane ((i, c, PUnit.unit) :
+      have h := hbw (Lane2D.encode ((i, c, PUnit.unit) :
         TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL])) (by rw [hd, hm]; exact ⟨hi, hcol⟩)
       rw [hd, hm] at h
       exact h

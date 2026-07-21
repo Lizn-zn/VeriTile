@@ -589,4 +589,481 @@ specification destindex_copy_quantize_kv_transform_output_summary_general
     rw [hExec] at h
     simpa using Option.some.inj h
 
+/-! ## The `⊨` (KernelIO) surface
+
+The two `..._compute_correct` engine lemmas above prove the two stored outputs'
+readbacks in the raw exec form. This section re-packages the **full faithful
+surface** on the typed two-output metadata combinator
+`MetaMasked2DKernelIO₁ₓ₂ ⊨ (value, scale)`: the `.int` quantized tile via
+`oty1 := .int` (read back through `readMemValue .int`) and the real
+`max |·| / 127` scale column via `oty2 := .float` (the
+`.to(Out_scale.dtype.element_ty)` cast is the ℝ identity, so `readMem` is the
+faithful readback). Both spec halves are expressed over the **loaded** tile
+`xs` (the `⊨` combinator's input view), so the headline is not
+self-referential. The masked `K` load carries `other=0.0`, so masked-off lanes
+default to `0` and the reduce-max is a genuine function of the loaded inputs —
+plain `Implements.intro` suffices (no `intro_undef`). -/
+
+namespace VeriTile.Bench.TritonBenchG.QuantizeKvTransform
+
+open scoped VeriTile.Triton.MetaMasked2DKernelIO₁ₓ₂
+
+/-- `.int` masked-store `foldl` cell frame: a masked `writeMemTyped .int` fold
+leaves every cell it does not actively hit unchanged. -/
+private theorem foldl_writeMemTyped_int_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → Int) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP, ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))]
+        show (if r = region ∧ o = offsetFn hd then _ else s.mem r o) = s.mem r o
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- A masked real `writeMem` store `foldl` cell frame. -/
+private theorem foldl_writeMem_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP, ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-! ### Pure `xs`-view specs
+
+The two output halves as functions of the **loaded** tile `xs : Fin (BLOCK_HEAD *
+BLOCK_DMODEL) → ℝ` (lane `j` is tile cell `(j / BLOCK_DMODEL, j % BLOCK_DMODEL)`
+via the shared `Lane2D` bridge). Masked-off lanes take the `other=0.0` default. -/
+
+/-- The masked source lane over the loaded tile. -/
+noncomputable def srcXs (BLOCK_HEAD BLOCK_DMODEL head_num head_dim : Nat)
+    (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (h : Fin BLOCK_HEAD) (d : Fin BLOCK_DMODEL) : WithBot ℝ :=
+  if h.val < head_num ∧ d.val < head_dim then
+    some (xs (Lane2D.encode (h, d, PUnit.unit)))
+  else some (0.0 : ℝ)
+
+/-- Per-head scale value over `xs` (`max |·| / 127`), matching
+`quantizeKvTransformScaleValue` with `maskedSrc` replaced by `srcXs`. -/
+noncomputable def scaleValXs (BLOCK_HEAD BLOCK_DMODEL head_num head_dim : Nat)
+    (hD : 0 < BLOCK_DMODEL) (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (h : Fin BLOCK_HEAD) : WithBot ℝ :=
+  Option.map (· / 127.0)
+    ((Finset.univ.sup'
+        (⟨⟨0, hD⟩, Finset.mem_univ _⟩ : (Finset.univ : Finset (Fin BLOCK_DMODEL)).Nonempty)
+        (fun d : Fin BLOCK_DMODEL =>
+          if srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs h d < (some 0 : WithBot ℝ) then
+            NumericDType.real.sub (some 0)
+              (srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs h d)
+          else srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs h d) :
+      WithBot ℝ))
+
+/-- The `.int` value at lane `j` over `xs`. -/
+noncomputable def valueXs (BLOCK_HEAD BLOCK_DMODEL head_num head_dim : Nat)
+    (hD : 0 < BLOCK_DMODEL) (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (j : Fin (BLOCK_HEAD * BLOCK_DMODEL)) : Int :=
+  WithBot.realToInt8
+    (FloatDType.real.cast FloatDType.real
+      (Option.map₂ (fun x1 x2 => x1 / x2)
+        (srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs
+          (Lane2D.decode j).1 (Lane2D.decode j).2.1)
+        (scaleValXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs (Lane2D.decode j).1)))
+
+/-- The real scale cell at head `h` over `xs`. -/
+noncomputable def scaleCellXs (BLOCK_HEAD BLOCK_DMODEL head_num head_dim : Nat)
+    (hD : 0 < BLOCK_DMODEL) (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (h : Fin BLOCK_HEAD) : ℝ :=
+  WithBot.unbotD 0 (scaleValXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs h)
+
+/-! ### The metadata IO signature -/
+
+/-- The full quantize-KV-transform surface's typed two-output metadata **IO
+signature**: the `.nat` dest-index slot `DestLoc[pid₀]`, the masked `K` data
+tile, the `.int` quantized tile `out1 = Out` (`oty1 := .int`), and the real
+scale column `out2 = OutScale` (`oty2 := .float`). Lane `j` of the data/`out1`
+tile is `(j / BLOCK_DMODEL, j % BLOCK_DMODEL)`; `out2` has one column per head. -/
+def quantizeKvTransformIO
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) :
+    MetaMasked2DKernelIO₁ₓ₂ where
+  kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+    stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+    stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+  mbuf1 := DestLoc
+  inp := K
+  out1 := Out
+  out2 := OutScale
+  B := BLOCK_HEAD * BLOCK_DMODEL
+  C := BLOCK_HEAD
+  oty1 := .int
+  oty2 := .float
+  mwin1 := fun pid₀ _ => pid₀
+  read := fun pid₀ _ _ j =>
+    pid₀ * stride_k_bs + (j.val / BLOCK_DMODEL) * stride_k_h +
+      stride_k_d * (j.val % BLOCK_DMODEL)
+  write1 := fun _ _ m1 j =>
+    m1 * stride_o_bs + stride_o_h * (j.val / BLOCK_DMODEL) +
+      stride_o_d * (j.val % BLOCK_DMODEL)
+  write2 := fun _ _ m1 i => m1 * stride_os_bs + stride_os_h * i.val
+  mask := fun _ _ _ j =>
+    j.val / BLOCK_DMODEL < head_num ∧ j.val % BLOCK_DMODEL < head_dim
+  writeMask2 := fun _ _ _ i => i.val < head_num
+
+/-! ### Bridging the `maskedSrc`-view specs to the `xs`-view specs -/
+
+/-- Under the loaded-tile pin `hx`, the per-head scale value matches its
+`xs`-view. -/
+private theorem scaleValXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_DMODEL)
+    (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_HEAD * BLOCK_DMODEL),
+      (j.val / BLOCK_DMODEL < head_num ∧ j.val % BLOCK_DMODEL < head_dim) →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + (j.val / BLOCK_DMODEL) * stride_k_h +
+        stride_k_d * (j.val % BLOCK_DMODEL)) = xs j)
+    (h : Fin BLOCK_HEAD) :
+    quantizeKvTransformScaleValue s₀ K stride_k_bs stride_k_h stride_k_d
+        head_num head_dim BLOCK_DMODEL hD h.val
+      = scaleValXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs h := by
+  have hsrc : ∀ d : Fin BLOCK_DMODEL,
+      maskedSrc s₀ K stride_k_bs stride_k_h stride_k_d head_num head_dim h.val d.val
+        = srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs h d := by
+    intro d
+    unfold maskedSrc srcXs
+    by_cases hact : h.val < head_num ∧ d.val < head_dim
+    · rw [if_pos hact, if_pos hact]
+      have hj := hx (Lane2D.encode (h, d, PUnit.unit))
+        (by rw [Lane2D.encode_div, Lane2D.encode_mod]; exact hact)
+      rw [Lane2D.encode_div, Lane2D.encode_mod] at hj
+      rw [hj]
+    · rw [if_neg hact, if_neg hact]
+  unfold quantizeKvTransformScaleValue scaleValXs
+  simp only [hsrc]
+
+/-- Under `hx`, the `.int` value at active lane `j` matches its `xs`-view. -/
+private theorem valueXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_DMODEL)
+    (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_HEAD * BLOCK_DMODEL),
+      (j.val / BLOCK_DMODEL < head_num ∧ j.val % BLOCK_DMODEL < head_dim) →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + (j.val / BLOCK_DMODEL) * stride_k_h +
+        stride_k_d * (j.val % BLOCK_DMODEL)) = xs j)
+    (j : Fin (BLOCK_HEAD * BLOCK_DMODEL)) :
+    quantizeKvTransformSurfaceIntValue s₀ K stride_k_bs stride_k_h stride_k_d
+        head_num head_dim BLOCK_DMODEL hD (Lane2D.decode j)
+      = valueXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs j := by
+  unfold quantizeKvTransformSurfaceIntValue valueXs
+  rw [scaleValXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d
+    head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀ hD xs hx (Lane2D.decode j).1]
+  have hsrc :
+      maskedSrc s₀ K stride_k_bs stride_k_h stride_k_d head_num head_dim
+          (Lane2D.decode j).1.val (Lane2D.decode j).2.1.val
+        = srcXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim xs
+            (Lane2D.decode j).1 (Lane2D.decode j).2.1 := by
+    unfold maskedSrc srcXs
+    by_cases hact : (Lane2D.decode j).1.val < head_num ∧ (Lane2D.decode j).2.1.val < head_dim
+    · rw [if_pos hact, if_pos hact]
+      have hkey : Lane2D.encode
+          (((Lane2D.decode j).1, (Lane2D.decode j).2.1, PUnit.unit)
+            : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) = j := by
+        have h : (((Lane2D.decode j).1, (Lane2D.decode j).2.1, PUnit.unit)
+            : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) = Lane2D.decode j := rfl
+        rw [h, Lane2D.encode_decode]
+      simp only [Lane2D.decode_row, Lane2D.decode_col]
+      rw [hkey]
+      have hj := hx j (by
+        rw [Lane2D.decode_row, Lane2D.decode_col] at hact; exact hact)
+      rw [hj]
+    · rw [if_neg hact, if_neg hact]
+  rw [hsrc]
+
+/-! ### Termination, flat-bridge membership, safety, frame -/
+
+/-- Termination: the surface executes to completion from any state. -/
+private theorem quantize_kv_transform_exec_isSome
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) (hD : 0 < BLOCK_DMODEL)
+    (s : BlockState) :
+    ∃ s1, exec ((destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+        BLOCK_HEAD).toAlgKernel) s = some s1 := by
+  simp [exec, destindex_copy_quantize_kv_transform_real_surface,
+        ComputeKernel.toAlgKernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop, Tile.expandDim,
+        Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, dif_pos hD]
+
+/-- The surface sits inside the flat-memory bridge's covered fragment. -/
+theorem quantize_kv_transform_flattenOk
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) :
+    ((destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+        BLOCK_HEAD).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [destindex_copy_quantize_kv_transform_real_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk: the scalar `.nat` `DestLoc` load, the masked `K`
+load, and the two masked stores reduce to the cell/lane-wise bounds. -/
+theorem quantize_kv_transform_traceSafe
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) (hD : 0 < BLOCK_DMODEL)
+    (bounds : RegionBounds) (s : BlockState)
+    (hd : s.pids 0 < bounds DestLoc)
+    (hk : ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      idx.1.val < head_num → idx.2.1.val < head_dim →
+      s.pids 0 * stride_k_bs + idx.1.val * stride_k_h + stride_k_d * idx.2.1.val
+        < bounds K)
+    (ho : ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      idx.1.val < head_num → idx.2.1.val < head_dim →
+      s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs +
+        stride_o_h * idx.1.val + stride_o_d * idx.2.1.val < bounds Out)
+    (hos : ∀ i : Fin BLOCK_HEAD, i.val < head_num →
+      s.readMemValue .nat DestLoc (s.pids 0) * stride_os_bs + stride_os_h * i.val
+        < bounds OutScale) :
+    Kernel.TraceSafe bounds
+      ((destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+        BLOCK_HEAD).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [destindex_copy_quantize_kv_transform_real_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    Op.PointerAddressesSafeOn, Op.MemorySafe,
+    MaskOpt.Active, BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.expandDim, Tile.remap, Tile.reduceMax,
+    Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex,
+    Option.bind, Option.map, TileShape.insertAxis, TileShape.dropInsertedIndex,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+    dif_pos hD]
+  refine ⟨hd, fun a a_1 h1 h2 => hk (a, a_1, PUnit.unit) h1 h2,
+    fun a a_1 h1 h2 => ho (a, a_1, PUnit.unit) h1 h2, fun a h1 => hos a h1⟩
+
+/-- Frame: every cell off both written windows (the active `Out` value cells and
+the active `OutScale` scale cells) is preserved. -/
+private theorem quantize_kv_transform_frame
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) (hD : 0 < BLOCK_DMODEL)
+    (s s1 : BlockState)
+    (hExec : exec ((destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+        BLOCK_HEAD).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmissVal : ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
+      idx.1.val < head_num → idx.2.1.val < head_dim →
+      ¬(Out = r ∧ s.readMemValue .nat DestLoc (s.pids 0) * stride_o_bs +
+          stride_o_h * idx.1.val + stride_o_d * idx.2.1.val = o))
+    (hmissScale : ∀ i : Fin BLOCK_HEAD, i.val < head_num →
+      ¬(OutScale = r ∧ s.readMemValue .nat DestLoc (s.pids 0) * stride_os_bs +
+          stride_os_h * i.val = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, destindex_copy_quantize_kv_transform_real_surface,
+        ComputeKernel.toAlgKernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop, Tile.expandDim,
+        Tile.ptrAdd, Tile.remap, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?, dif_pos hD] at hExec
+  subst hExec
+  refine Eq.trans (foldl_writeMem_preserve_cell _ _ _ r o _ _ ?_) ?_
+  · intro k _ hP hc
+    exact hmissScale k.1 hP hc
+  · refine Eq.trans (foldl_writeMemTyped_int_preserve_cell _ _ _ r o _ _ ?_) rfl
+    intro k _ hP hc
+    exact hmissVal k hP.1 hP.2 hc
+
+/-- Under `hx`, the scale cell at head `i` matches its `xs`-view. -/
+private theorem scaleCellXs_eq
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s₀ : BlockState) (hD : 0 < BLOCK_DMODEL)
+    (xs : Fin (BLOCK_HEAD * BLOCK_DMODEL) → ℝ)
+    (hx : ∀ j : Fin (BLOCK_HEAD * BLOCK_DMODEL),
+      (j.val / BLOCK_DMODEL < head_num ∧ j.val % BLOCK_DMODEL < head_dim) →
+      s₀.readMem K (s₀.pids 0 * stride_k_bs + (j.val / BLOCK_DMODEL) * stride_k_h +
+        stride_k_d * (j.val % BLOCK_DMODEL)) = xs j)
+    (i : Fin BLOCK_HEAD) :
+    quantizeKvTransformScaleCell s₀ K stride_k_bs stride_k_h stride_k_d
+        head_num head_dim BLOCK_DMODEL hD i.val
+      = scaleCellXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs i := by
+  unfold quantizeKvTransformScaleCell scaleCellXs
+  rw [scaleValXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d
+    head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀ hD xs hx i]
+
+/-- **The `⊨` headline (typed two-output metadata surface).** The full faithful
+`quantize_kv_transform` surface implements, on its `MetaMasked2DKernelIO₁ₓ₂`
+signature, the pair `(int8 quantized tile, real max|·|/127 scale column)` over
+the loaded tile `xs` and the loaded dest-index slot `m1`.
+
+Honest side conditions, each required for truth: `hD : 0 < BLOCK_DMODEL` (the
+`tl.max(·, axis=1)` reduce axis must be nonempty — this is also what makes the
+kernel terminate), `hOut : Out ≠ OutScale` (the two stores must not alias), and
+the value-tile / scale-column destination-offset injectivity `hValInj` /
+`hScaleInj` (a masked scatter with colliding lanes is last-writer-wins, so the
+per-lane readbacks are false without them; both are `Dest_loc`-independent since
+the loaded row only shifts every address by a constant). The masked `K` load
+carries `other=0.0`, so masked-off lanes default to `0` and the scale is a
+genuine function of the loaded inputs — plain `Implements.intro` (no
+`intro_undef`). -/
+specification quantize_kv_transform_io_correctness
+    (K : RegionName) (DestLoc : RegionName) (Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (hD : 0 < BLOCK_DMODEL) (hOut : Out ≠ OutScale)
+    (hValInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+        stride_o_h * idx.1.val + stride_o_d * idx.2.1.val))
+    (hScaleInj : Function.Injective
+      (fun i : Fin BLOCK_HEAD => stride_os_h * i.val)) :
+    quantizeKvTransformIO K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+      ⊨ fun _ _ _ xs =>
+          (fun j => valueXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs j,
+           fun i => scaleCellXs BLOCK_HEAD BLOCK_DMODEL head_num head_dim hD xs i) := by
+  refine MetaMasked2DKernelIO₁ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact quantize_kv_transform_flattenOk K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+  · -- safety
+    intro bounds s m1 hm1 hb1 hbr hbw1 hbw2
+    simp only [quantizeKvTransformIO] at hm1 hb1 hbr hbw1 hbw2
+    refine quantize_kv_transform_traceSafe K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+      hD bounds s hb1 (fun idx h1 h2 => ?_) (fun idx h1 h2 => ?_) (fun i h1 => ?_)
+    · simpa using hbr (Lane2D.encode idx) (by simpa using ⟨h1, h2⟩)
+    · rw [hm1]
+      simpa using hbw1 (Lane2D.encode idx) (by simpa using ⟨h1, h2⟩)
+    · rw [hm1]
+      simpa using hbw2 i (by simpa using h1)
+  · -- run
+    intro s₀ m1 xs hm1 hx
+    simp only [quantizeKvTransformIO] at hm1 hx ⊢
+    have hOutInj : Function.Injective
+        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+          outOffset s₀ DestLoc stride_o_bs stride_o_h stride_o_d idx) := by
+      intro a b hab
+      apply hValInj
+      simp only [outOffset, headIndex, dimIndex] at hab
+      rw [Nat.add_assoc, Nat.add_assoc] at hab
+      exact Nat.add_left_cancel hab
+    have hScInj : Function.Injective
+        (fun i : Fin BLOCK_HEAD => scaleOutOffset s₀ DestLoc stride_os_bs stride_os_h i) := by
+      intro a b hab
+      apply hScaleInj
+      simp only [scaleOutOffset] at hab
+      exact Nat.add_left_cancel hab
+    obtain ⟨s1, hs1⟩ := quantize_kv_transform_exec_isSome K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD hD s₀
+    refine ⟨s1, hs1, ?_, ?_, ?_⟩
+    · -- value output
+      intro j hmask
+      have hv := destindex_copy_quantize_kv_transform_real_surface_value_output_compute_correct
+        K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀
+        hD hOut hOutInj (Lane2D.decode j)
+      have haddr : outOffset s₀ DestLoc stride_o_bs stride_o_h stride_o_d (Lane2D.decode j)
+          = m1 * stride_o_bs + stride_o_h * (j.val / BLOCK_DMODEL) +
+            stride_o_d * (j.val % BLOCK_DMODEL) := by
+        simp only [outOffset, destIndex, headIndex, dimIndex, Lane2D.decode_row,
+          Lane2D.decode_col, hm1]
+      have hact : active s₀ head_num head_dim BLOCK_HEAD BLOCK_DMODEL (Lane2D.decode j) := by
+        simp only [active, headIndex, dimIndex, Lane2D.decode_row, Lane2D.decode_col]
+        exact hmask
+      rw [hs1, haddr] at hv
+      simp only [if_pos hact] at hv
+      have hkey : s1.readMemValue .int Out (m1 * stride_o_bs +
+          stride_o_h * (j.val / BLOCK_DMODEL) + stride_o_d * (j.val % BLOCK_DMODEL))
+        = quantizeKvTransformSurfaceIntValue s₀ K stride_k_bs stride_k_h stride_k_d
+            head_num head_dim BLOCK_DMODEL hD (Lane2D.decode j) := Option.some.inj hv
+      show s1.readMemValue .int Out (m1 * stride_o_bs +
+        stride_o_h * (j.val / BLOCK_DMODEL) + stride_o_d * (j.val % BLOCK_DMODEL)) = _
+      rw [hkey,
+        valueXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d
+          head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀ hD xs hx j]
+    · -- scale output
+      intro i hmask
+      have hv := destindex_copy_quantize_kv_transform_real_surface_scale_output_compute_correct
+        K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀
+        hD (fun h => hOut h.symm) hScInj i
+      have haddr : scaleOutOffset s₀ DestLoc stride_os_bs stride_os_h i
+          = m1 * stride_os_bs + stride_os_h * i.val := by
+        simp only [scaleOutOffset, destIndex, hm1]
+      have hact : scaleActive head_num BLOCK_HEAD i := hmask
+      rw [hs1, haddr] at hv
+      simp only [if_pos hact] at hv
+      have hkey : s1.readMem OutScale (m1 * stride_os_bs + stride_os_h * i.val)
+        = quantizeKvTransformScaleCell s₀ K stride_k_bs stride_k_h stride_k_d
+            head_num head_dim BLOCK_DMODEL hD i.val := Option.some.inj hv
+      show s1.readMem OutScale (m1 * stride_os_bs + stride_os_h * i.val) = _
+      rw [hkey,
+        scaleCellXs_eq K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d
+          head_num head_dim BLOCK_DMODEL BLOCK_HEAD s₀ hD xs hx i]
+    · -- frame
+      intro r o hc1 hc2
+      refine quantize_kv_transform_frame K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+        hD s₀ s1 hs1 r o (fun idx h1 h2 ⟨hr, ho⟩ => ?_) (fun i h1 ⟨hr, ho⟩ => ?_)
+      · rcases hc1 with hne | hno
+        · exact hne hr.symm
+        · refine hno (Lane2D.encode idx) (by simpa using ⟨h1, h2⟩) ?_
+          simp only [Lane2D.encode_div, Lane2D.encode_mod]
+          rw [← ho]
+          simp only [destIndex, hm1]
+      · rcases hc2 with hne | hno
+        · exact hne hr.symm
+        · refine hno i h1 ?_
+          rw [← ho]
+          simp only [destIndex, hm1]
+
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform

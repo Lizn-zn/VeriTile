@@ -61,6 +61,39 @@ the quotient's `(src / scale).to(tl.int8)` annotations) lowers through algorithm
 erasure, where those casts are the **identity over `ℝ`**. The bit-accurate effect
 of the fp16 scale rounding and the int8 saturating cast is **not** numerically
 modeled. `@triton.autotune` is not present here.
+
+## The `⊨` (KernelIO) surface — scope, and why the fp16 scale stays here
+
+The two LightLLM siblings `quantize_kv_copy` and `quantize_kv_transform` migrate
+onto the typed two-output metadata combinator
+`MetaMasked2DKernelIO₁ₓ₂ ⊨ (int8 tile, real scale)`. This kernel's int8 value
+tile IS equally expressible there (`oty1 := .int`, read back through
+`readMemValue .int`) — but its **scale store is `.to(tl.float16)`**, and that
+lands on the `FloatDType` / **rounding** axis, *not* the `ChanTy` axis
+(`float | bool | nat | int`) that `oty2` ranges over: a reduced-precision float
+cell reads back through `readMemValue .fp16` at a `TileCarrier .fp16`, which is
+not a `ChanTy` carrier. So `oty2` cannot type it.
+
+The `₁ₓ₂` skin is *inherently two-output* and its frame asserts that every cell
+outside the two declared output windows is untouched. This kernel genuinely
+performs **two** stores — the int8 tile to `Out` and the fp16 scale to
+`OutScale` (a real `writeMemTyped .fp16`, which does mutate `s.mem`). To satisfy
+the frame, `OutScale`'s cells must lie inside an output window, i.e. `out2` must
+be `OutScale`; but then the `out2` *value* conjunct is forced, and with
+`oty2 := .float` its readback (`readMem` on an fp16-typed cell) is the constant
+`0` (dtype mismatch), never the scale — stating that as the scale slot would be
+a **faked** float scale, and stating `0` would be a **degenerate/weakened**
+output. Neither is acceptable, and emptying `out2` (`writeMask2 := ⊥` or
+`C := 0`) instead makes the frame *false*, since the real fp16 store to
+`OutScale` is then uncovered.
+
+The honest resolution (per `MAIN_THEOREM_CONVENTIONS.md` §6 and the
+"blocked-beats-weakened" rule): the `⊨` migration is **deferred pending an
+`ImplementsR`-style multi-output surface** that carries an fp16 output on the
+rounding axis. Until then the genuine content stands exactly as verified above —
+the int8 value tile as `ComputeCorrect.Realizes_without_Rounding` and the fp16
+scale as raw exec-readback — inside `destindex_copy_quantize_kv_output_summary_general`.
+Nothing here is faked and nothing is deleted.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.QuantizeCopyKv
