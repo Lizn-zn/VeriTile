@@ -113,6 +113,7 @@ bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summar
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f32_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context

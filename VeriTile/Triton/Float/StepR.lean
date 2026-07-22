@@ -353,6 +353,27 @@ theorem stepForLoopAuxR_castFree (R : RoundingModel) (body : List Stmt)
   termination_by start n _ => n - start
   decreasing_by omega
 
+/-- `forRange` auxiliary cast-free degeneration: the `forRange` mirror of
+`stepForLoopAuxR_castFree`. If the body steps identically under
+`stepStmtsR R` and `stepStmts`, the whole strided fold does too. -/
+theorem stepForRangeAuxR_castFree (R : RoundingModel) (body : List Stmt)
+    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
+    ∀ (cur stop step : Nat) (s : BlockState),
+      stepForRangeAuxR R idx cur stop step body s = stepForRangeAux idx cur stop step body s
+  | cur, stop, step, s => by
+      rw [stepForRangeAuxR, stepForRangeAux]
+      simp only [hbody (s.setReg idx .nat [] (Tile.scalar cur))]
+      split
+      · rfl
+      · split
+        · cases stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) with
+          | none => rfl
+          | some s' =>
+              exact stepForRangeAuxR_castFree R body hbody idx (cur + step) stop step s'
+        · rfl
+  termination_by cur stop _ _ => stop - cur
+  decreasing_by omega
+
 /-! ## R-scatter readback (#447 Phase C)
 
 The `writeMemAsR` mirror of the fp16 `MemCell` scatter-readback family in
