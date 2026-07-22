@@ -41,6 +41,18 @@ theorem gemmSum_blockSucc (a b : Nat → ℝ) (BLOCK_K c : Nat) :
   congr 1
   rw [Finset.sum_range (fun e => a (c * BLOCK_K + e) * b (c * BLOCK_K + e))]
 
+/-- **Streaming block decomposition** of the accumulator: over a contraction
+length `T * B` (`T` loop steps of `B` keys each), `gemmSum` is the double sum
+of per-step `B`-key dots at the row-major key `t * B + e`. This is
+`StreamLane.sum_range_mul` instantiated at `gemmSum` — the interchange shape
+the streaming (wave-5 S1) matmul consumers fold against. -/
+theorem gemmSum_blocks (a b : Nat → ℝ) (T B : Nat) :
+    gemmSum a b (T * B)
+      = ∑ t : Fin T, ∑ e : Fin B,
+          a (t.val * B + e.val) * b (t.val * B + e.val) := by
+  unfold gemmSum
+  exact StreamLane.sum_range_mul T B (fun k => a k * b k)
+
 /-- **`tl.dot` output-cell evaluation.** Given readbacks `fx`/`fy` for row `i` of
 `x` and column `j` of `y`, the `(i,j)` cell of `Tile.dot x y` is `Σ_e fx e · fy e`.
 Shared by every matmul kernel's per-iteration dot recipe. -/

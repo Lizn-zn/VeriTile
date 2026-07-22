@@ -1399,6 +1399,37 @@ theorem Stmt.TraceSafeListR.nil_intro {R : RoundingModel}
   rw [Stmt.TraceSafeListR]
   trivial
 
+/-- **Invariant principle for `forRangeTraceSafeR`.** To discharge trace
+safety of a whole strided loop, supply an invariant `P` (indexed by the loop
+counter) such that every in-range iteration started from a `P`-state (with
+the counter register set) has a trace-safe body, steps successfully, and
+re-establishes `P` at the advanced counter. Consumers (e.g. the streaming
+matmul family) pin the loop-carried pointer registers' in-bounds addresses
+with `P` and prove the per-iteration obligation once. The `step = 0` and
+`stop ≤ cur` cases are vacuously safe, so no positivity hypothesis on `step`
+is needed. -/
+theorem Stmt.forRangeTraceSafeR_inv (R : RoundingModel) (bounds : RegionBounds)
+    (idx : RegName) (stop step : Nat) (body : List Stmt)
+    (P : Nat → BlockState → Prop)
+    (hstep : ∀ c s, c < stop → P c s →
+      Stmt.TraceSafeListR R bounds body (s.setReg idx .nat [] (Tile.scalar c)) ∧
+      ∃ s', stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar c)) = some s' ∧
+        P (c + step) s') :
+    ∀ cur s, P cur s → Stmt.forRangeTraceSafeR R bounds idx cur stop step body s
+  | cur, s, hP => by
+      rw [Stmt.forRangeTraceSafeR]
+      split
+      · trivial
+      · split
+        · obtain ⟨hsafe, s', hrun, hP'⟩ := hstep cur s ‹cur < stop› hP
+          refine ⟨hsafe, ?_⟩
+          rw [hrun]
+          exact Stmt.forRangeTraceSafeR_inv R bounds idx stop step body P hstep
+            (cur + step) s' hP'
+        · trivial
+  termination_by cur _ _ => stop - cur
+  decreasing_by omega
+
 /-- Kernel-level per-execution safety. -/
 def Kernel.TraceSafeR (R : RoundingModel) (bounds : RegionBounds) (k : Kernel)
     (s : BlockState) : Prop :=
