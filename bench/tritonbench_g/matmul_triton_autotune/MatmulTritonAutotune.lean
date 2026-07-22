@@ -29,6 +29,11 @@ matmul_autotune_closed_form_correct               ← TOP THEOREM (ComputeCorrec
        ├─ matmul_step         (one K-block: masked dot advances the partial sum)
        ├─ matmul_postLoop     (activation tail + fp16 cast + masked store = closed form)
        └─ forRange_inv        (loop-invariant principle, drives the K-loop)
+
+matmul_autotune_io_correctness                    ← STREAMING `⊨[R]` HEADLINE (StreamMasked2DKernelIO₂)
+  ├─ matmul_autotune_flattenOk / matmul_autotune_traceSafeR    (flat bridge + looping safety walk)
+  └─ preLoop + matmul_step (reused verbatim; prologue/loop/activation are cast-free)
+       └─ matmul_autotune_postLoopR   (R store tail: R.cast + masked writeMemAsR, one boundary round)
 ```
 
 ## Modeling boundary
@@ -1190,5 +1195,1099 @@ specification matmul_autotune_closed_form_correct
   rw [hExec2] at hmain
   rw [if_pos hActive] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
+
+/-! ## The `⊨[R]` streaming headline (wave-5 S1 fold genre)
+
+Everything below is purely additive; the exact surface above is untouched.
+Structure of the `execR R` story: the kernel's only two rounding events live
+in `matmulStoreTail` — the `tl.cast(accumulator, tl.float16)` (`evalOpR`
+site 1) and the `.fp16`-typed masked `tl.store` (`writeMemAsR` site 2). The
+prologue, the whole K-loop (masked loads with `other=0.0` carry no
+`castFloat`), and the `leaky_relu` activation tail are cast-free, so under
+`execR R` they collapse verbatim onto the exact stepper and the proven
+`preLoop` / `matmul_step` / `forRange_inv` / `matmulActStmt_eval` stack above
+is reused unchanged; only the 6-statement store tail is re-proved on the `R`
+side (`matmul_autotune_postLoopR`). `round_idem` (via
+`RoundingModel.storeValue_cast`) collapses the tail's double round into the
+single boundary `R.round .fp16` the skin's readback contract states. The
+constexpr `ACTIVATION` gate stays the `Bool` parameter throughout: the io,
+the safety walk, and the headline all quantify over it, and the spec routes
+it through the named `act` brancher (both branches genuine). -/
+
+open scoped VeriTile.Triton.StreamMasked2DKernelIO₂
+
+/-! ### Body decomposition names and cast-free collapses -/
+
+/-- The 15-statement prologue (statements 0–14) as an explicit list: the 9
+L2-grouping schedule scalars, the three index vectors
+`offs_am`/`offs_bn`/`offs_k`, the two pointer seeds, and the zero
+accumulator. -/
+private def matmulAutotunePrologue (A B : RegionName)
+    (M N BM BN BK GM sam sak sbk sbn : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid" (Op.programId 0),
+    Stmt.assign .nat [] "num_pid_m"
+      (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1))
+        (Op.constNat BM)),
+    Stmt.assign .nat [] "num_pid_n"
+      (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1))
+        (Op.constNat BN)),
+    Stmt.assign .nat [] "num_pid_in_group"
+      (Op.mul .nat Broadcast.nil (Op.constNat GM) (Op.ref .nat [] "num_pid_n")),
+    Stmt.assign .nat [] "group_id"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group")),
+    Stmt.assign .nat [] "first_pid_m"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id") (Op.constNat GM)),
+    Stmt.assign .nat [] "group_size_m"
+      ((Op.lt ComparableDType.nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+          (Op.constNat GM)).where
+        (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+        (Op.constNat GM)),
+    Stmt.assign .nat [] "pid_m"
+      (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+        (Op.mod .nat Broadcast.nil
+          (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+          (Op.ref .nat [] "group_size_m"))),
+    Stmt.assign .nat [] "pid_n"
+      (Op.floorDiv .nat Broadcast.nil
+        (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+        (Op.ref .nat [] "group_size_m")),
+    Stmt.assign .nat [BM] "offs_am"
+      (Op.mod .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM))
+          (Op.arange BM))
+        (Op.constNat M)),
+    Stmt.assign .nat [BN] "offs_bn"
+      (Op.mod .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN))
+          (Op.arange BN))
+        (Op.constNat N)),
+    Stmt.assign .nat [BK] "offs_k" (Op.arange BK),
+    Stmt.assign .ptr [BM, BK] "a_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase A)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat sam))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat sak)))),
+    Stmt.assign .ptr [BK, BN] "b_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase B)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat sbk))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_bn")) (Op.constNat sbn)))),
+    Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ]
+
+private theorem matmul_autotune_take15_eq (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool) :
+    ((matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+        numKBlocks ACTIVATION).toAlgKernel.body.take 15)
+      = matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn := rfl
+
+/-- `matmul_body_split` with the prologue named. By `rfl`. -/
+private theorem matmul_autotune_body_split' (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool) :
+    (matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+        numKBlocks ACTIVATION).toAlgKernel.body
+      = matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn
+        ++ (Stmt.forRange "kk" 0 numKBlocks 1 (matmulLoopBody K BM BN BK sak sbk)
+            :: matmulActStmt BM BN ACTIVATION
+            :: matmulStoreTail C M N scm scn BM BN) := rfl
+
+set_option maxHeartbeats 1000000 in
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem matmulAutotunePrologue_castFree (R : RoundingModel) (A B : RegionName)
+    (M N BM BN BK GM sam sak sbk sbn : Nat) (t : BlockState) :
+    stepStmtsR R (matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn) t
+      = stepStmts (matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn) t := by
+  simp only [matmulAutotunePrologue, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- The K-loop body is cast-free: the masked loads' `mask=`/`other=` operands
+are nat comparisons and a real constant (no `castFloat`), the fused
+`tl.dot`+add and the pointer advances are exact ops, and the body has no
+store — so it steps identically under `stepStmtsR R` and the exact invariant
+stack transports to `execR`. -/
+private theorem matmulAutotuneBody_castFree (R : RoundingModel)
+    (K BM BN BK sak sbk : Nat) (t : BlockState) :
+    stepStmtsR R (matmulLoopBody K BM BN BK sak sbk) t
+      = stepStmts (matmulLoopBody K BM BN BK sak sbk) t := by
+  simp only [matmulLoopBody, aMaskOp, bMaskOp, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- The activation tail is cast-free (`tl.where`/`>=`/`*` over `.real`; the
+`ACTIVATION` gate is a `constBool`): it steps identically under `stepStmtR R`
+for **both** values of the gate, so the exact `matmulActStmt_eval` above is
+also its `execR` story. -/
+private theorem matmulActStmt_castFree (R : RoundingModel) (BM BN : Nat)
+    (ACTIVATION : Bool) (t : BlockState) :
+    stepStmtR R (matmulActStmt BM BN ACTIVATION) t
+      = stepStmt (matmulActStmt BM BN ACTIVATION) t := by
+  simp only [matmulActStmt, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-! ### Cast-free op collapses and the two rounding-event sites -/
+
+/-- The `offs_c*` index-vector op is cast-free. -/
+private theorem evalR_offsc (R : RoundingModel) (Mv BMc : Nat) (pidReg : RegName)
+    (s : BlockState) :
+    evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] pidReg) (Op.constNat BMc))
+        (Op.arange Mv)) s
+      = evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] pidReg) (Op.constNat BMc))
+        (Op.arange Mv)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- `offs_cm` / `offs_cn` eval under `R` (via the cast-free collapse). -/
+private theorem offscm_evalR (R : RoundingModel) (s : BlockState) (Mv BMc : Nat)
+    (pm : Nat) (pidReg : RegName)
+    (hpm : s.regs .nat [] pidReg = some (Tile.scalar pm)) :
+    evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] pidReg) (Op.constNat BMc))
+        (Op.arange Mv)) s
+      = some (Tile.vec (fun i : Fin Mv => pm * BMc + i.val)) := by
+  rw [evalR_offsc]
+  exact offscm_eval s Mv BMc pm pidReg hpm
+
+/-- The `c_ptrs` pointer op (general `stride_cm`/`stride_cn`) is cast-free. -/
+private theorem evalR_cptrsAT (R : RoundingModel) (Creg : RegionName)
+    (BMv BNv scm scn : Nat) (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Creg)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat scm) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BMv] "offs_cm")))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat scn) (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BNv] "offs_cn"))))) s
+      = evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Creg)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat scm) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BMv] "offs_cm")))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat scn) (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BNv] "offs_cn"))))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `c_mask` boolean op is cast-free. -/
+private theorem evalR_cmaskAT (R : RoundingModel) (Mv Nv BMv BNv : Nat) (s : BlockState) :
+    evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BMv] "offs_cm")) (Op.constNat Mv))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BNv] "offs_cn")) (Op.constNat Nv))) s
+      = evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BMv] "offs_cm")) (Op.constNat Mv))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BNv] "offs_cn")) (Op.constNat Nv))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- `c = tl.cast(accumulator, tl.float16)` eval under `R`: rounding-event
+site 1, `R.cast` applied lane-wise to the accumulator tile. Proven by direct
+`eq_def` unfolding (a `rw` through `evalOpR_castFloat` trips over the
+`FloatDType.real.toTileDType` vs `TileDType.real` spelling). -/
+private theorem castAcc_evalR (R : RoundingModel) (Mv Nv : Nat) (s : BlockState)
+    (zT : Tile .real [Mv, Nv]) (hz : s.regs .real [Mv, Nv] "accumulator" = some zT) :
+    evalOpR R (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [Mv, Nv] "accumulator")) s
+      = some ⟨fun idx => RoundingModel.cast R FloatDType.real FloatDType.fp16 (zT.data idx)⟩ := by
+  have hz' : s.regs FloatDType.real.toTileDType [Mv, Nv] "accumulator" = some zT := hz
+  simp only [evalOpR.eq_def, hz']
+  rfl
+
+/-! ### The tail under `execR R` -/
+
+set_option maxHeartbeats 4000000 in
+/-- **R-postLoop**: from the exact invariant at `numKBlocks` blocks, the
+`execR R` activation tail + store tail terminates and writes, at every
+**active** output lane, the cell `fp16(R.round .fp16 (matmulSpec …))` — the
+ideal activated GEMM value rounded **once** at the fp16 grid (`R.cast` site +
+`R.storeValue` site collapsed by `round_idem`); inactive lanes' cells and
+every cell not hit by an active lane are untouched (the masked-store frame). -/
+private theorem matmul_autotune_postLoopR (R : RoundingModel) (A B C : RegionName)
+    (s0 : BlockState)
+    (M N BM BN GM sam sak sbk sbn scm scn BLOCK_K numKBlocks : Nat) (ACTIVATION : Bool)
+    (hInj : Function.Injective (cOffset s0 M N BM BN GM scm scn))
+    (st : BlockState)
+    (hinv : matmulInvariant A B s0 M N BM BN GM sam sak sbk sbn BLOCK_K numKBlocks numKBlocks st) :
+    ∃ sfin, stepStmtsR R
+        (matmulActStmt BM BN ACTIVATION :: matmulStoreTail C M N scm scn BM BN) st
+        = some sfin
+      ∧ (∀ idx : TileIndex [BM, BN],
+          sfin.mem C (cOffset s0 M N BM BN GM scm scn idx)
+            = if active s0 M N BM BN GM idx then
+                MemCell.of FloatDType.fp16.toTileDType
+                  (FloatDType.fp16.ofReal
+                    (R.round .fp16
+                      (matmulSpec s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K numKBlocks ACTIVATION idx.1 idx.2.1)))
+              else st.mem C (cOffset s0 M N BM BN GM scm scn idx))
+      ∧ (∀ r o, (r ≠ C ∨ ∀ idx : TileIndex [BM, BN],
+            active s0 M N BM BN GM idx → o ≠ cOffset s0 M N BM BN GM scm scn idx) →
+          sfin.mem r o = st.mem r o) := by
+  simp only [matmulInvariant] at hinv
+  obtain ⟨hpids, hcle, hpm, hpn, hz, hm, hn, hk, hap, hbp, hundef, hmem⟩ := hinv
+  -- run the activation tail (cast-free) via the exact evaluator
+  obtain ⟨sa, hsa, hsa_acc, hsa_other, hsa_mem, hsa_pids, hsa_undef⟩ :=
+    matmulActStmt_eval st BM BN ACTIVATION
+      (fun idx => accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 numKBlocks)
+      hz
+  rw [stepStmtsR_cons_some ((matmulActStmt_castFree R BM BN ACTIVATION st).trans hsa)]
+  -- registers preserved by the activation tail
+  have hpm' : sa.regs .nat [] "pid_m" = some (Tile.scalar (pidM (s0.pids 0) M N BM BN GM)) := by
+    rw [hsa_other "pid_m" (by decide)]; exact hpm
+  have hpn' : sa.regs .nat [] "pid_n" = some (Tile.scalar (pidN (s0.pids 0) M N BM BN GM)) := by
+    rw [hsa_other "pid_n" (by decide)]; exact hpn
+  -- the activated accumulator tile and its R-cast
+  set zT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      some (act ACTIVATION (accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 numKBlocks))⟩
+      with hzT
+  set cT : Tile .fp16 [BM, BN] :=
+    ⟨fun idx => RoundingModel.cast R FloatDType.real FloatDType.fp16 (zT.data idx)⟩ with hcT
+  set cpT : Tile .ptr [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => (C.cast, cOffset s0 M N BM BN GM scm scn idx)⟩ with hcpT
+  set cmaskT : Tile .bool [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      (decide (rowGlobal s0 M N BM BN GM idx.1 < M) && decide (colGlobal s0 M N BM BN GM idx.2.1 < N))⟩
+      with hcmaskT
+  unfold matmulStoreTail
+  -- c = cast(accumulator, fp16): rounding-event site 1 (`R.cast`)
+  erw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (show evalOpR R (Op.castFloat FloatDType.real FloatDType.fp16
+              (Op.ref .real [BM, BN] "accumulator")) sa = some cT
+          from castAcc_evalR R BM BN sa zT hsa_acc))]
+  -- offs_cm / offs_cn (cast-free)
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (offscm_evalR R _ BM BM (pidM (s0.pids 0) M N BM BN GM) "pid_m" (by simp [hpm'])))]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (offscm_evalR R _ BN BN (pidN (s0.pids 0) M N BM BN GM) "pid_n" (by simp [hpn'])))]
+  -- c_ptrs (cast-free)
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (show evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase C)
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.mul .nat Broadcast.scalarL (Op.constNat scm) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
+              (Op.mul .nat Broadcast.scalarL (Op.constNat scn) (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))))) _
+          = some cpT from by
+          rw [evalR_cptrsAT,
+            cptrs_eval _ C BM BN scm scn (fun i => rowGlobal s0 M N BM BN GM i) (fun j => colGlobal s0 M N BM BN GM j)
+              (by simp [rowGlobal]) (by simp [colGlobal])]
+          rfl))]
+  -- c_mask (cast-free)
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (show evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")) (Op.constNat M))
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn")) (Op.constNat N))) _
+          = some cmaskT from by
+          rw [evalR_cmaskAT,
+            cmask_eval _ M N BM BN (fun i => rowGlobal s0 M N BM BN GM i) (fun j => colGlobal s0 M N BM BN GM j)
+              (by simp [rowGlobal]) (by simp [colGlobal])]))]
+  -- abstract the post-assign state
+  generalize hst4 : (((((sa.setReg "c" FloatDType.fp16.toTileDType [BM, BN] cT).setReg "offs_cm" .nat [BM]
+        (Tile.vec fun i : Fin BM => pidM (s0.pids 0) M N BM BN GM * BM + i.val)).setReg "offs_cn" .nat [BN]
+        (Tile.vec fun j : Fin BN => pidN (s0.pids 0) M N BM BN GM * BN + j.val)).setReg "c_ptrs" .ptr [BM, BN] cpT).setReg
+        "c_mask" .bool [BM, BN] cmaskT) = st4
+  have hc4 : st4.regs .fp16 [BM, BN] "c" = some cT := by rw [← hst4]; simp
+  have hcp4 : st4.regs .ptr [BM, BN] "c_ptrs" = some cpT := by rw [← hst4]; simp
+  have hcm4 : st4.regs .bool [BM, BN] "c_mask" = some cmaskT := by rw [← hst4]; simp
+  have hmem4 : st4.mem = st.mem := by
+    rw [← hst4]; funext region offset; simp only [BlockState.setReg_mem]; rw [hsa_mem]
+  -- the masked fp16 store: rounding-event site 2 (`writeMemAsR`)
+  have hstore : stepStmtR R (Stmt.store .fp16 [BM, BN] (.ptr (Op.ref .ptr [BM, BN] "c_ptrs"))
+        (Op.ref .fp16 [BM, BN] "c") (.mask (Op.ref .bool [BM, BN] "c_mask"))) st4
+      = some ((TileShape.allIndices [BM, BN]).foldl
+          (fun acc i =>
+            if cmaskT.data i then
+              acc.writeMemAsR R .fp16 C (cOffset s0 M N BM BN GM scm scn i) (cT.data i)
+            else acc) st4) := by
+    simp only [stepStmtR]
+    rw [show evalOpR R (Op.ref .fp16 [BM, BN] "c") st4 = some cT from by rw [evalOpR_ref, hc4]]
+    rw [show evalOpR R (Op.ref .bool [BM, BN] "c_mask") st4 = some cmaskT from by rw [evalOpR_ref, hcm4]]
+    rw [show evalOpR R (Op.ref .ptr [BM, BN] "c_ptrs") st4 = some cpT from by rw [evalOpR_ref, hcp4]]
+    simp only [bind, Option.map_some, Option.bind_some]
+    refine congrArg some (List.foldl_ext _ _ _ (fun acc i _ => ?_))
+    by_cases hmask : cmaskT.data i
+    · simp only [hmask, if_true, hcpT, Region.cast_id, BlockState.writeMemTypedR_fp16]
+    · simp only [hmask, Bool.false_eq_true, if_false]
+  rw [stepStmtsR_cons_some hstore, stepStmtsR_nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx
+    rw [BlockState.scatter_memcell_R_prop_masked_nd R .fp16 (region := C) st4
+          (cOffset s0 M N BM BN GM scm scn) (fun i => cT.data i)
+          (fun i => cmaskT.data i = Bool.true) hInj idx]
+    by_cases hact : active s0 M N BM BN GM idx
+    · have hmasktrue : cmaskT.data idx = Bool.true := by
+        simp only [hcmaskT]
+        obtain ⟨hr, hcc⟩ := hact
+        simp [hr, hcc]
+      rw [if_pos hmasktrue, if_pos hact]
+      have hdata : cT.data idx = RoundingModel.cast R FloatDType.real FloatDType.fp16
+          (some (act ACTIVATION (accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 numKBlocks))) := rfl
+      rw [hdata, RoundingModel.storeValue_cast]
+      have hspec : matmulSpec s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K numKBlocks ACTIVATION idx.1 idx.2.1
+          = act ACTIVATION (accPartial s0 A B M N BM BN GM sam sak sbk sbn BLOCK_K idx.1 idx.2.1 numKBlocks) := by
+        unfold matmulSpec accPartial
+        rw [Nat.mul_comm]
+      rw [hspec]
+    · have hmaskfalse : ¬ (cmaskT.data idx = Bool.true) := by
+        simp only [hcmaskT, Bool.and_eq_true, decide_eq_true_eq, not_and]
+        intro hr hcc
+        exact hact ⟨hr, hcc⟩
+      rw [if_neg hmaskfalse, if_neg hact, hmem4]
+  · intro r o hcond
+    by_cases hr : r = C
+    · subst hr
+      have hno : ∀ idx : TileIndex [BM, BN],
+          active s0 M N BM BN GM idx → o ≠ cOffset s0 M N BM BN GM scm scn idx := by
+        rcases hcond with h | h
+        · exact absurd rfl h
+        · exact h
+      rw [BlockState.foldl_writeMemAsR_preserve_masked_prop R .fp16
+            (cOffset s0 M N BM BN GM scm scn) (fun i => cT.data i)
+            (fun i => cmaskT.data i = Bool.true) o (TileShape.allIndices [BM, BN])
+            (fun k _ hk => by
+              have hkact : active s0 M N BM BN GM k := by
+                simp only [hcmaskT, Bool.and_eq_true, decide_eq_true_eq] at hk
+                exact ⟨hk.1, hk.2⟩
+              exact fun heq => hno k hkact heq.symm) st4, hmem4]
+    · rw [BlockState.foldl_writeMemAsR_preserve_other_region R .fp16
+            (cOffset s0 M N BM BN GM scm scn) (fun i => cT.data i)
+            (fun i => cmaskT.data i = Bool.true) r hr o (TileShape.allIndices [BM, BN]) st4,
+          hmem4]
+
+/-! ### Safety-walk invariant (weak shape half of `matmulInvariant`) -/
+
+/-- Safety-walk loop invariant: the *shape* half of `matmulInvariant`
+(`pid_m`/`pid_n` seeded from the L2 schedule, *some* accumulator tile,
+`offs_k`, and the exact `a_ptrs`/`b_ptrs` address shapes) with no
+`undef`/`mem`/value pins. Needed because the `⊨[R]` skin's `hts` obligation
+quantifies over arbitrary launch states, so the safety walk cannot assume
+the clean-`undef` precondition that `preLoop`'s full invariant needs.
+`offs_k` is carried because the loop body's **masked** loads must evaluate
+their `offs_k`-based masks to step at all. -/
+private def matmulAutotuneSafeInv (A B : RegionName) (s0 : BlockState)
+    (M N BM BN GM sam sak sbk sbn BK T : Nat) (c : Nat) (s : BlockState) : Prop :=
+  c ≤ T ∧
+  (s.regs .nat [] "pid_m" = some (Tile.scalar (pidM (s0.pids 0) M N BM BN GM))) ∧
+  (s.regs .nat [] "pid_n" = some (Tile.scalar (pidN (s0.pids 0) M N BM BN GM))) ∧
+  (∃ zT : Tile .real [BM, BN], s.regs .real [BM, BN] "accumulator" = some zT) ∧
+  (s.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val))) ∧
+  (s.regs .ptr [BM, BK] "a_ptrs" = some ⟨fun idx : TileIndex [BM, BK] =>
+      (A.cast, rowIndex s0 M N BM BN GM idx.1 * sam + idx.2.1.val * sak + c * BK * sak)⟩) ∧
+  (s.regs .ptr [BK, BN] "b_ptrs" = some ⟨fun idx : TileIndex [BK, BN] =>
+      (B.cast, idx.1.val * sbk + colIndex s0 M N BM BN GM idx.2.1 * sbn + c * BK * sbk)⟩)
+
+set_option maxHeartbeats 1000000 in
+/-- Weak `preLoop`: from an **arbitrary** state the prologue steps to a state
+satisfying `matmulAutotuneSafeInv … 0` (no clean-`undef` hypothesis; the
+value half of `preLoop` is dropped). -/
+private theorem matmul_autotune_preLoopW (A B : RegionName) (s : BlockState)
+    (M N BM BN BK GM sam sak sbk sbn T : Nat) :
+    ∃ s', stepStmts (matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn) s = some s'
+      ∧ matmulAutotuneSafeInv A B s M N BM BN GM sam sak sbk sbn BK T 0 s' := by
+  obtain ⟨s12, h12, hpids, hpm, hpn, hm, hn, hk, huf, hmem⟩ := preLoop_scalars s M N BM BN BK GM
+  rw [show matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn
+      = [ Stmt.assign .nat [] "pid" (Op.programId 0),
+          Stmt.assign .nat [] "num_pid_m"
+            (Op.div .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1))
+              (Op.constNat BM)),
+          Stmt.assign .nat [] "num_pid_n"
+            (Op.div .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1))
+              (Op.constNat BN)),
+          Stmt.assign .nat [] "num_pid_in_group"
+            (Op.mul .nat Broadcast.nil (Op.constNat GM) (Op.ref .nat [] "num_pid_n")),
+          Stmt.assign .nat [] "group_id"
+            (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group")),
+          Stmt.assign .nat [] "first_pid_m"
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id") (Op.constNat GM)),
+          Stmt.assign .nat [] "group_size_m"
+            ((Op.lt ComparableDType.nat Broadcast.nil
+                (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+                (Op.constNat GM)).where
+              (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+              (Op.constNat GM)),
+          Stmt.assign .nat [] "pid_m"
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+              (Op.mod .nat Broadcast.nil
+                (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+                (Op.ref .nat [] "group_size_m"))),
+          Stmt.assign .nat [] "pid_n"
+            (Op.floorDiv .nat Broadcast.nil
+              (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+              (Op.ref .nat [] "group_size_m")),
+          Stmt.assign .nat [BM] "offs_am"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM))
+                (Op.arange BM))
+              (Op.constNat M)),
+          Stmt.assign .nat [BN] "offs_bn"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN))
+                (Op.arange BN))
+              (Op.constNat N)),
+          Stmt.assign .nat [BK] "offs_k" (Op.arange BK) ]
+        ++ [ Stmt.assign .ptr [BM, BK] "a_ptrs"
+              (Op.ptrAdd Broadcast.scalarL (Op.ptrBase A)
+                (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                  (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat sam))
+                  (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat sak)))),
+            Stmt.assign .ptr [BK, BN] "b_ptrs"
+              (Op.ptrAdd Broadcast.scalarL (Op.ptrBase B)
+                (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                  (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat sbk))
+                  (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_bn")) (Op.constNat sbn)))),
+            Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ] from rfl,
+    stepStmts.append_some h12,
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (aptrs_eval s12 A BM BK sam sak (fun i => rowIndex s M N BM BN GM i) (by simpa using hm) (by simpa using hk))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (bptrs_eval _ B BK BN sbk sbn (fun j => colIndex s M N BM BN GM j) (by simp [hk]) (by simp [hn]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some (acc_init_eval _ BM BN)),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨Nat.zero_le T, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [hpm]
+  · simp [hpn]
+  · refine ⟨⟨fun _ => some (0 : ℝ)⟩, ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+      String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · simp [hk]
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+
+set_option maxHeartbeats 2000000 in
+/-- Weak step lemma: one body iteration from `matmulAutotuneSafeInv c` steps
+successfully (exact stepper; the body is cast-free, and at exact-multiple
+`K` the load masks evaluate all-true) and re-establishes the invariant at
+`c + 1` — the shape half of `matmul_step`, valid from arbitrary launch
+states. -/
+private theorem matmul_autotune_stepW (A B : RegionName) (s0 : BlockState)
+    (M N BM BN GM sam sak sbk sbn BK T K : Nat) (hK : K = BK * T)
+    (c : Nat) (s : BlockState) (hclt : c < T)
+    (hinv : matmulAutotuneSafeInv A B s0 M N BM BN GM sam sak sbk sbn BK T c s) :
+    ∃ s', stepStmts (matmulLoopBody K BM BN BK sak sbk)
+        (s.setReg "kk" .nat [] (Tile.scalar c)) = some s'
+      ∧ matmulAutotuneSafeInv A B s0 M N BM BN GM sam sak sbk sbn BK T (c + 1) s' := by
+  obtain ⟨hcle, hpm, hpn, ⟨zT, hz⟩, hk, hap, hbp⟩ := hinv
+  set apT : Tile .ptr [BM, BK] :=
+    ⟨fun idx : TileIndex [BM, BK] =>
+      (A.cast, rowIndex s0 M N BM BN GM idx.1 * sam + idx.2.1.val * sak + c * BK * sak)⟩ with hapT
+  set bpT : Tile .ptr [BK, BN] :=
+    ⟨fun idx : TileIndex [BK, BN] =>
+      (B.cast, idx.1.val * sbk + colIndex s0 M N BM BN GM idx.2.1 * sbn + c * BK * sbk)⟩ with hbpT
+  set sk := s.setReg "kk" .nat [] (Tile.scalar c) with hsk
+  have hapk : sk.regs .ptr [BM, BK] "a_ptrs" = some apT := by simp [hsk, hap, hapT]
+  have hbpk : sk.regs .ptr [BK, BN] "b_ptrs" = some bpT := by simp [hsk, hbp, hbpT]
+  have hzk : sk.regs .real [BM, BN] "accumulator" = some zT := by simp [hsk, hz]
+  have hkk : sk.regs .nat [] "kk" = some (Tile.scalar c) := by simp [hsk]
+  have hkofk : sk.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val)) := by
+    simp [hsk, hk]
+  set asub : Tile .real [BM, BK] :=
+    ⟨fun idx => some (sk.readMem (apT.data idx).1 (apT.data idx).2)⟩ with hasub
+  set bsub : Tile .real [BK, BN] :=
+    ⟨fun idx => some (sk.readMem (bpT.data idx).1 (bpT.data idx).2)⟩ with hbsub
+  unfold matmulLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_a_eval sk K BM BK T c apT hK hclt hapk hkofk hkk))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_b_eval _ K BK BN T c bpT hK hclt
+          (by simp [hbpk]) (by simp [hkofk]) (by simp [hkk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (accdot_op_eval BM BK BN _ zT asub bsub
+          (by simp [hzk, hasub, hbsub, BlockState.setReg_readMem])
+          (by simp [hasub, BlockState.setReg_readMem])
+          (by simp [hbsub, BlockState.setReg_readMem])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aptr_adv_eval _ BM BK BK sak apT (by simp [hapk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (bptr_adv_eval _ BK BN BK sbk bpT (by simp [hbpk])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by omega, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [hsk, hpm]
+  · simp [hsk, hpn]
+  · refine ⟨Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.dot [] asub bsub) zT, ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+      String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · simp [hsk, hk]
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hapT, NumericDType.add]
+    ring
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hbpT, NumericDType.add]
+    ring
+
+/-! ### Activation-tail safety helpers -/
+
+/-- The activation tail is trace-safe at **every** state and **both** gate
+values: the `constBool` condition and the single register-only `where`
+assign touch no memory. -/
+private theorem matmulActStmt_safeR (R : RoundingModel) (bounds : RegionBounds)
+    (BM BN : Nat) (ACTIVATION : Bool) (s : BlockState) :
+    Stmt.TraceSafeR R bounds (matmulActStmt BM BN ACTIVATION) s := by
+  unfold matmulActStmt
+  simp only [Stmt.TraceSafeR]
+  refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+  split
+  · split
+    · exact Stmt.TraceSafeListR.of_forall _ _ (fun st hst s' => by
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+        subst hst
+        simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    · trivial
+  · trivial
+
+/-- Weak activation-tail step (both gate values, arbitrary accumulator
+tile): the `stepStmtR R` step succeeds, non-`accumulator` registers pass
+through, and *some* accumulator tile survives — the successor pins the tail
+safety walk needs. -/
+private theorem matmulActStmt_stepW (R : RoundingModel) (BM BN : Nat) (ACTIVATION : Bool)
+    (st : BlockState) (zT : Tile .real [BM, BN])
+    (hz : st.regs .real [BM, BN] "accumulator" = some zT) :
+    ∃ st', stepStmtR R (matmulActStmt BM BN ACTIVATION) st = some st'
+      ∧ (∀ {dt : TileDType} {sh : TileShape} (nm : RegName), nm ≠ "accumulator" →
+          st'.regs dt sh nm = st.regs dt sh nm)
+      ∧ ∃ zT' : Tile .real [BM, BN], st'.regs .real [BM, BN] "accumulator" = some zT' := by
+  rw [matmulActStmt_castFree R BM BN ACTIVATION st]
+  unfold matmulActStmt
+  rcases ACTIVATION with _ | _
+  · refine ⟨st, ?_, fun nm _ => rfl, ⟨zT, hz⟩⟩
+    show stepStmt (Stmt.ifThen (Op.constBool Bool.false) _) st = some st
+    simp only [stepStmt, evalOp_constBool]
+    rfl
+  · have heval : ∃ vT : Tile .real [BM, BN], evalOp (Op.where
+        (Op.ge ComparableDType.real Broadcast.scalarR (Op.ref .real [BM, BN] "accumulator") (Op.const 0))
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.mul .real Broadcast.scalarL (Op.const (1e-2 : ℝ)) (Op.ref .real [BM, BN] "accumulator"))) st
+        = some vT := by
+      rw [evalOp_where, evalOp_ge, evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, hz, Option.bind_eq_bind, Option.bind_some]
+      exact ⟨_, rfl⟩
+    obtain ⟨vT, hv⟩ := heval
+    refine ⟨st.setReg "accumulator" .real [BM, BN] vT, ?_, ?_, ⟨vT, by simp⟩⟩
+    · show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) st
+          = some (st.setReg "accumulator" .real [BM, BN] vT)
+      simp only [stepStmt, evalOp_constBool, Option.bind_eq_bind, Option.bind_some,
+        Tile.scalar_data, if_true, stepStmts, hv]
+    · intro dt sh nm hnm
+      simp [BlockState.setReg_ne_name, hnm]
+
+set_option maxHeartbeats 1000000 in
+/-- Per-iteration `TraceSafeListR` for the K-loop body: the two **masked**
+loads' addresses are the invariant's pointer shapes, in bounds at *every*
+lane by the all-lane bound groups (active lanes are a subset, so the masks
+never need evaluating for safety); the `mask=`/`other=` operands are
+register-only ops; the three remaining assigns are unconditionally safe. -/
+private theorem matmul_autotune_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (A B : RegionName) (s0 : BlockState)
+    (M N BM BN GM sam sak sbk sbn BK T K : Nat) (c : Nat) (hc : c < T)
+    (sk : BlockState)
+    (hap : sk.regs .ptr [BM, BK] "a_ptrs" = some ⟨fun idx : TileIndex [BM, BK] =>
+        (A.cast, rowIndex s0 M N BM BN GM idx.1 * sam + idx.2.1.val * sak + c * BK * sak)⟩)
+    (hbp : sk.regs .ptr [BK, BN] "b_ptrs" = some ⟨fun idx : TileIndex [BK, BN] =>
+        (B.cast, idx.1.val * sbk + colIndex s0 M N BM BN GM idx.2.1 * sbn + c * BK * sbk)⟩)
+    (hbA : ∀ (t : Fin T) (j : Fin (BM * BK)),
+      ((pidM (s0.pids 0) M N BM BN GM * BM + j.val / BK) % M) * sam
+        + (t.val * BK + j.val % BK) * sak < bounds A)
+    (hbB : ∀ (t : Fin T) (j : Fin (BK * BN)),
+      (t.val * BK + j.val / BN) * sbk
+        + ((pidN (s0.pids 0) M N BM BN GM * BN + j.val % BN) % N) * sbn < bounds B) :
+    Stmt.TraceSafeListR R bounds (matmulLoopBody K BM BN BK sak sbk) sk := by
+  unfold matmulLoopBody
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · -- load a (masked)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, aMaskOp, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, by simp, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref, hap] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    show rowIndex s0 M N BM BN GM i.1 * sam + i.2.1.val * sak + c * BK * sak
+        < bounds (Region.cast A)
+    have h' := hbA ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+    rw [Lane2D.encode_div, Lane2D.encode_mod] at h'
+    simp only [Region.cast_id]
+    calc rowIndex s0 M N BM BN GM i.1 * sam + i.2.1.val * sak + c * BK * sak
+        = ((pidM (s0.pids 0) M N BM BN GM * BM + i.1.val) % M) * sam
+            + (c * BK + i.2.1.val) * sak := by
+          unfold rowIndex rowGlobal; ring
+      _ < bounds A := h'
+  · intro s1 h1
+    obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- load b (masked)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, bMaskOp, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, by simp, ?_⟩
+      intro ptrs hptrs i _
+      rw [evalOpR_ref] at hptrs
+      rw [show (sk.setReg "a" .real [BM, BK] v1).regs .ptr [BK, BN] "b_ptrs"
+          = some (⟨fun idx : TileIndex [BK, BN] =>
+            (B.cast, idx.1.val * sbk + colIndex s0 M N BM BN GM idx.2.1 * sbn + c * BK * sbk)⟩ :
+              Tile .ptr [BK, BN]) from by simp [hbp]] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      show i.1.val * sbk + colIndex s0 M N BM BN GM i.2.1 * sbn + c * BK * sbk
+          < bounds (Region.cast B)
+      have h' := hbB ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+      rw [Lane2D.encode_div, Lane2D.encode_mod] at h'
+      simp only [Region.cast_id]
+      calc i.1.val * sbk + colIndex s0 M N BM BN GM i.2.1 * sbn + c * BK * sbk
+          = (c * BK + i.1.val) * sbk
+              + ((pidN (s0.pids 0) M N BM BN GM * BN + i.2.1.val) % N) * sbn := by
+            unfold colIndex colGlobal; ring
+        _ < bounds B := h'
+    · intro s2 h2
+      obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro stx hstx s'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hstx
+      rcases hstx with rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+
+set_option maxHeartbeats 1000000 in
+/-- `TraceSafeListR` for the store tail: the five assigns are register-only
+(the cast is not a memory event) and the single **masked** `.fp16` store's
+active lanes are exactly the `(row<M)&(col<N)` window, so their addresses
+are the skin's `writeMask`-gated `write` bounds. -/
+private theorem matmul_autotune_tailSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (C : RegionName) (s0 : BlockState) (M N scm scn BM BN GM : Nat) (st : BlockState)
+    (hpm : st.regs .nat [] "pid_m" = some (Tile.scalar (pidM (s0.pids 0) M N BM BN GM)))
+    (hpn : st.regs .nat [] "pid_n" = some (Tile.scalar (pidN (s0.pids 0) M N BM BN GM)))
+    (hzE : ∃ zT : Tile .real [BM, BN], st.regs .real [BM, BN] "accumulator" = some zT)
+    (hbC : ∀ j : Fin (BM * BN),
+      (pidM (s0.pids 0) M N BM BN GM * BM + j.val / BN < M ∧
+        pidN (s0.pids 0) M N BM BN GM * BN + j.val % BN < N) →
+      scm * (pidM (s0.pids 0) M N BM BN GM * BM + j.val / BN)
+        + scn * (pidN (s0.pids 0) M N BM BN GM * BN + j.val % BN) < bounds C) :
+    Stmt.TraceSafeListR R bounds (matmulStoreTail C M N scm scn BM BN) st := by
+  obtain ⟨zT, hz⟩ := hzE
+  unfold matmulStoreTail
+  -- 1. c = cast(accumulator, fp16)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s1 h1
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- 2. offs_cm
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s2 h2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+  rw [offscm_evalR R _ BM BM (pidM (s0.pids 0) M N BM BN GM) "pid_m" (by simp [hpm])] at hv2
+  obtain rfl := Option.some.inj hv2
+  -- 3. offs_cn
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s3 h3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv h3
+  rw [offscm_evalR R _ BN BN (pidN (s0.pids 0) M N BM BN GM) "pid_n" (by simp [hpn])] at hv3
+  obtain rfl := Option.some.inj hv3
+  -- 4. c_ptrs
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s4 h4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv h4
+  rw [evalR_cptrsAT,
+    cptrs_eval _ C BM BN scm scn
+      (fun i => pidM (s0.pids 0) M N BM BN GM * BM + i.val)
+      (fun j => pidN (s0.pids 0) M N BM BN GM * BN + j.val) (by simp) (by simp)] at hv4
+  obtain rfl := Option.some.inj hv4
+  -- 5. c_mask
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s5 h5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmtR_assign_inv h5
+  rw [evalR_cmaskAT,
+    cmask_eval _ M N BM BN
+      (fun i => pidM (s0.pids 0) M N BM BN GM * BM + i.val)
+      (fun j => pidN (s0.pids 0) M N BM BN GM * BN + j.val) (by simp) (by simp)] at hv5
+  obtain rfl := Option.some.inj hv5
+  -- 6. the masked store
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s' _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR.eq_def,
+    MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, trivial, ?_⟩
+  intro ptrs hptrs i hactive
+  rw [evalOpR_ref] at hptrs
+  simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+    not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  obtain ⟨masks, hmasks, hmi⟩ := hactive
+  rw [evalOpR_ref] at hmasks
+  simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+    not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff] at hmasks
+  obtain rfl := Option.some.inj hmasks
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hmi
+  show scm * (pidM (s0.pids 0) M N BM BN GM * BM + i.1.val)
+      + scn * (pidN (s0.pids 0) M N BM BN GM * BN + i.2.1.val) < bounds (Region.cast C)
+  have h' := hbC (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+    (by rw [Lane2D.encode_div, Lane2D.encode_mod]; exact hmi)
+  rw [Lane2D.encode_div, Lane2D.encode_mod] at h'
+  simpa only [Region.cast_id] using h'
+
+set_option maxHeartbeats 1000000 in
+/-- **The `TraceSafeR` walk for the whole kernel**, driven by
+`Stmt.forRangeTraceSafeR_inv` over the weak `matmulAutotuneSafeInv`. The
+three bound groups are the skin's `read1`/`read2` windows (widened to all
+lanes via `hK`, since the load masks are all-true at exact-multiple `K`) and
+the `writeMask`-gated `write` window. -/
+private theorem matmul_autotune_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool)
+    (hK : K = BK * numKBlocks) (s : BlockState)
+    (hbA : ∀ (t : Fin numKBlocks) (j : Fin (BM * BK)),
+      ((pidM (s.pids 0) M N BM BN GM * BM + j.val / BK) % M) * sam
+        + (t.val * BK + j.val % BK) * sak < bounds A)
+    (hbB : ∀ (t : Fin numKBlocks) (j : Fin (BK * BN)),
+      (t.val * BK + j.val / BN) * sbk
+        + ((pidN (s.pids 0) M N BM BN GM * BN + j.val % BN) % N) * sbn < bounds B)
+    (hbC : ∀ j : Fin (BM * BN),
+      (pidM (s.pids 0) M N BM BN GM * BM + j.val / BN < M ∧
+        pidN (s.pids 0) M N BM BN GM * BN + j.val % BN < N) →
+      scm * (pidM (s.pids 0) M N BM BN GM * BM + j.val / BN)
+        + scn * (pidN (s.pids 0) M N BM BN GM * BN + j.val % BN) < bounds C) :
+    ((matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+        numKBlocks ACTIVATION).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [matmul_autotune_body_split' A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+    numKBlocks ACTIVATION]
+  have hstep : ∀ c s', c < numKBlocks →
+      matmulAutotuneSafeInv A B s M N BM BN GM sam sak sbk sbn BK numKBlocks c s' →
+      Stmt.TraceSafeListR R bounds (matmulLoopBody K BM BN BK sak sbk)
+        (s'.setReg "kk" .nat [] (Tile.scalar c)) ∧
+      ∃ s'', stepStmtsR R (matmulLoopBody K BM BN BK sak sbk)
+          (s'.setReg "kk" .nat [] (Tile.scalar c)) = some s'' ∧
+        matmulAutotuneSafeInv A B s M N BM BN GM sam sak sbk sbn BK numKBlocks (c + 1) s'' := by
+    intro c s' hcx hP
+    obtain ⟨hcle, hpm, hpn, hzE, hkx, hapx, hbpx⟩ := hP
+    refine ⟨matmul_autotune_bodySafeR R bounds A B s M N BM BN GM sam sak sbk sbn BK
+        numKBlocks K c hcx _ (by simp [hapx]) (by simp [hbpx]) hbA hbB, ?_⟩
+    obtain ⟨s'', hs'', hP''⟩ := matmul_autotune_stepW A B s M N BM BN GM sam sak sbk sbn BK
+      numKBlocks K hK c s' hcx ⟨hcle, hpm, hpn, hzE, hkx, hapx, hbpx⟩
+    exact ⟨s'', by rw [matmulAutotuneBody_castFree]; exact hs'', hP''⟩
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst s'
+    simp only [matmulAutotunePrologue, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    obtain ⟨s1x, hpre, hP0⟩ :=
+      matmul_autotune_preLoopW A B s M N BM BN BK GM sam sak sbk sbn numKBlocks
+    rw [matmulAutotunePrologue_castFree R A B M N BM BN BK GM sam sak sbk sbn s, hpre] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- the K-loop is trace-safe (invariant principle over the weak invariant)
+      simp only [Stmt.TraceSafeR]
+      exact Stmt.forRangeTraceSafeR_inv R bounds "kk" numKBlocks 1
+        (matmulLoopBody K BM BN BK sak sbk)
+        (matmulAutotuneSafeInv A B s M N BM BN GM sam sak sbk sbn BK numKBlocks)
+        hstep 0 s1x hP0
+    · intro s2 hs2
+      obtain ⟨final, sLoop, hLoopStmt, hfinal, hPL⟩ :=
+        forRange_inv (idx := "kk") (start := 0) (stop := numKBlocks) (step := 1)
+          (body := matmulLoopBody K BM BN BK sak sbk)
+          (by omega) hP0
+          (fun c st hlt hinv => matmul_autotune_stepW A B s M N BM BN GM sam sak sbk sbn BK
+            numKBlocks K hK c st hlt hinv)
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _ (matmulAutotuneBody_castFree R K BM BN BK sak sbk) "kk",
+        ← stepForRangeAux.forRange_unfold, hLoopStmt] at hs2
+      obtain rfl := Option.some.inj hs2
+      obtain ⟨-, hpmL, hpnL, hzL, -, -, -⟩ := hPL
+      refine Stmt.TraceSafeListR.cons_intro
+        (matmulActStmt_safeR R bounds BM BN ACTIVATION sLoop) ?_
+      intro s3 hs3
+      obtain ⟨zTL, hzTL⟩ := hzL
+      obtain ⟨s3', hstep3, hother3, hz3⟩ := matmulActStmt_stepW R BM BN ACTIVATION sLoop zTL hzTL
+      rw [hstep3] at hs3
+      obtain rfl := Option.some.inj hs3
+      exact matmul_autotune_tailSafeR R bounds C s M N scm scn BM BN GM s3'
+        (by rw [hother3 "pid_m" (by decide)]; exact hpmL)
+        (by rw [hother3 "pid_n" (by decide)]; exact hpnL)
+        hz3 hbC
+
+/-- The full autotuned surface (masked loads, `if` activation tail, masked
+store) sits inside the flat-memory bridge's covered fragment (`FlattenOk`). -/
+theorem matmul_autotune_flattenOk (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool) :
+    ((matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+        numKBlocks ACTIVATION).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [matmul_autotune_body_split' A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+    numKBlocks ACTIVATION]
+  simp [matmulAutotunePrologue, matmulLoopBody, matmulActStmt, matmulStoreTail,
+    aMaskOp, bMaskOp, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### IO signature, lane bridges, spec bridge -/
+
+/-- The `A`-stream lane feeding output lane `l` at inner key `e`: the row of
+`l` (row-major over the `[BM, BN]` output tile) paired with `e` over the
+`[BM, BLOCK_K]` per-step `A`-tile, both via the shared `Lane2D` bridge. -/
+def aLane (BM BN BK : Nat) (l : Fin (BM * BN)) (e : Fin BK) : Fin (BM * BK) :=
+  Lane2D.encode ((Lane2D.decode l).1, e, PUnit.unit)
+
+/-- The `B`-stream lane feeding output lane `l` at inner key `e`: `e` paired
+with the column of `l` over the `[BLOCK_K, BN]` per-step `B`-tile. -/
+def bLane (BM BN BK : Nat) (l : Fin (BM * BN)) (e : Fin BK) : Fin (BK * BN) :=
+  Lane2D.encode (e, (Lane2D.decode l).2.1, PUnit.unit)
+
+/-- Under `K = BK · numKBlocks`, every in-tile inner key is inside the
+kernel's `offs_k < K - kk·BK` load window: `t·BK + e < K` for `e < BK`. -/
+private theorem stream_mask_lt (K BK numKBlocks : Nat) (hK : K = BK * numKBlocks)
+    (t : Fin numKBlocks) {e : Nat} (he : e < BK) : t.val * BK + e < K := by
+  have h1 : (t.val + 1) * BK ≤ numKBlocks * BK :=
+    Nat.mul_le_mul_right BK (Nat.succ_le_of_lt t.isLt)
+  have h2 : t.val * BK + e < (t.val + 1) * BK := by
+    rw [Nat.succ_mul]; omega
+  calc t.val * BK + e < (t.val + 1) * BK := h2
+    _ ≤ numKBlocks * BK := h1
+    _ = BK * numKBlocks := Nat.mul_comm _ _
+    _ = K := hK.symm
+
+/-- **Streaming IO signature** of `matmul_triton_autotune` on the two-stream
+fold skin (S1: fold + terminal store). Step `t` of the K-loop reads the
+`[BM, BLOCK_K]` `A`-tile and the `[BLOCK_K, BN]` `B`-tile; after the loop
+one `[BM, BN]` output tile is stored at the **fp16** grid
+(`outDType := .fp16` — the kernel's `.to(tl.float16)` + fp16 store). The
+kernel schedules on a **single** linear `pid` (`program_id(0)`; the skin's
+`pid₁` slot is unused), so every window derives `(pid_m, pid_n)` through the
+transcribed L2-grouping arithmetic `pidM`/`pidN`:
+
+* `read1` lane `l = (i, e)` (row-major over `[BM, BLOCK_K]`), step `t`:
+  `((pid_m·BM + i) % M)·sam + (t·BK + e)·sak` — the invariant's `a_ptrs`
+  cell after `t` advances.
+* `read2` lane `l = (e, j)` (row-major over `[BLOCK_K, BN]`), step `t`:
+  `(t·BK + e)·sbk + ((pid_n·BN + j) % N)·sbn` — the `b_ptrs` cell.
+* `write` lane `l = (i, j)`: `scm·(pid_m·BM + i) + scn·(pid_n·BN + j)` — the
+  kernel's un-wrapped `c_ptrs` (= `cOffset` in pid form).
+* `mask1`/`mask2` transcribe the loads' `offs_k < K - kk·BK` windows in the
+  per-lane spelling `t·BK + e < K`; `writeMask` transcribes the store's
+  `(row<M) & (col<N)` boundary mask verbatim.
+
+The constexpr `ACTIVATION` gate is the `Bool` parameter, kept symbolic. -/
+def matmulAutotuneIO (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool) :
+    StreamMasked2DKernelIO₂ where
+  kernel := matmul_autotune_surface A B C M N K sam sak sbk sbn scm scn BM BN BK GM
+    numKBlocks ACTIVATION
+  inp1 := A
+  inp2 := B
+  out := C
+  T := numKBlocks
+  B1 := BM * BK
+  B2 := BK * BN
+  C := BM * BN
+  outDType := .fp16
+  read1 := fun p₀ _ t l =>
+    ((pidM p₀ M N BM BN GM * BM + l.val / BK) % M) * sam + (t.val * BK + l.val % BK) * sak
+  read2 := fun p₀ _ t l =>
+    (t.val * BK + l.val / BN) * sbk + ((pidN p₀ M N BM BN GM * BN + l.val % BN) % N) * sbn
+  write := fun p₀ _ l =>
+    scm * (pidM p₀ M N BM BN GM * BM + l.val / BN) + scn * (pidN p₀ M N BM BN GM * BN + l.val % BN)
+  mask1 := fun _ _ t l => t.val * BK + l.val % BK < K
+  mask2 := fun _ _ t l => t.val * BK + l.val / BN < K
+  writeMask := fun p₀ _ l =>
+    pidM p₀ M N BM BN GM * BM + l.val / BN < M ∧ pidN p₀ M N BM BN GM * BN + l.val % BN < N
+
+/-- Under the two stream pins, `matmulSpec` at the decoded output lane **is**
+`act ACTIVATION` of the skin-level double fold `∑ t, ∑ e, xs · ys`
+(`gemmSum_blocks` + address-identity of the windows with the invariant's
+pointer shapes; the pins' `mask1`/`mask2` guards are discharged by
+`stream_mask_lt` from `hK`). -/
+private theorem matmulSpec_eq_streamSum (A B : RegionName) (s₀ : BlockState)
+    (M N BM BN GM sam sak sbk sbn BK numKBlocks K : Nat) (ACTIVATION : Bool)
+    (hK : K = BK * numKBlocks)
+    (xs : Fin numKBlocks → Fin (BM * BK) → ℝ) (ys : Fin numKBlocks → Fin (BK * BN) → ℝ)
+    (hx : ∀ (t : Fin numKBlocks) (j : Fin (BM * BK)), t.val * BK + j.val % BK < K →
+      s₀.readMem A (((pidM (s₀.pids 0) M N BM BN GM * BM + j.val / BK) % M) * sam
+          + (t.val * BK + j.val % BK) * sak)
+        = xs t j)
+    (hy : ∀ (t : Fin numKBlocks) (j : Fin (BK * BN)), t.val * BK + j.val / BN < K →
+      s₀.readMem B ((t.val * BK + j.val / BN) * sbk
+          + ((pidN (s₀.pids 0) M N BM BN GM * BN + j.val % BN) % N) * sbn)
+        = ys t j)
+    (l : Fin (BM * BN)) :
+    matmulSpec s₀ A B M N BM BN GM sam sak sbk sbn BK numKBlocks ACTIVATION
+        (Lane2D.decode l).1 (Lane2D.decode l).2.1
+      = act ACTIVATION (∑ t : Fin numKBlocks, ∑ e : Fin BK,
+          xs t (aLane BM BN BK l e) * ys t (bLane BM BN BK l e)) := by
+  unfold matmulSpec
+  refine congrArg (act ACTIVATION) ?_
+  rw [Nat.mul_comm BK numKBlocks, gemmSum_blocks]
+  refine Finset.sum_congr rfl fun t _ => Finset.sum_congr rfl fun e _ => ?_
+  have hxa : aElem s₀ A M N BM BN GM sam sak (Lane2D.decode l).1 (t.val * BK + e.val)
+      = xs t (aLane BM BN BK l e) := by
+    rw [← hx t (aLane BM BN BK l e)
+        (by simpa [aLane, Lane2D.encode_mod] using stream_mask_lt K BK numKBlocks hK t e.isLt)]
+    simp only [aLane, Lane2D.encode_div, Lane2D.encode_mod]
+    rfl
+  have hyb : bElem s₀ B M N BM BN GM sbk sbn (Lane2D.decode l).2.1 (t.val * BK + e.val)
+      = ys t (bLane BM BN BK l e) := by
+    rw [← hy t (bLane BM BN BK l e)
+        (by simpa [bLane, Lane2D.encode_div] using stream_mask_lt K BK numKBlocks hK t e.isLt)]
+    simp only [bLane, Lane2D.encode_div, Lane2D.encode_mod]
+    rfl
+  rw [hxa, hyb]
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 4000000 in
+/-- **The `⊨[R]` streaming headline (wave-5 S1 fold genre).** For every
+rounding model `R` and **both** values of the constexpr `ACTIVATION` gate,
+the faithful `matmul_triton_autotune` surface implements, on its
+`StreamMasked2DKernelIO₂` signature, the **ideal ℝ activated GEMM fold**
+over the streamed tiles: output lane `l = (i, j)` holds
+`act ACTIVATION (∑ t, ∑ e, A-tile[t](i,e) · B-tile[t](e,j))` — the spec `f`
+is exact real arithmetic with the leaky-ReLU branch expressed through the
+named `act` brancher (identity when the gate is off), and the single
+boundary quantization is carried by the skin's readback contract
+(`readMemAs .fp16` holds `fp16.ofReal (R.round .fp16 (f …))`), where the
+kernel's two rounding events (the `.to(tl.float16)` cast and the fp16-typed
+masked store) collapse to one `R.round .fp16` by the defining `round_idem`.
+
+Layer map: the prologue, the whole K-loop (masked loads, `other=0.0`), and
+the activation tail are cast-free, so under `execR R` they collapse verbatim
+onto the exact stepper and the proven `preLoop` / `matmul_step` /
+`forRange_inv` / `matmulActStmt_eval` stack above is reused unchanged; only
+the 6-statement store tail is re-proved on the `R` side
+(`matmul_autotune_postLoopR`).
+
+Every hypothesis is truth-forced:
+
+* `hK : K = BK · numKBlocks` — the exact-multiple contraction presentation
+  shared with the exact surface: it makes the trip count
+  `cdiv(K, BLOCK_K) = numKBlocks` exact and the per-step
+  `offs_k < K - kk·BK` load masks all-true, which is what lets the streamed
+  pins cover every lane the `tl.dot` consumes (at non-multiple `K` the spec
+  sum would over-count the tail block and the statement would be false).
+* `hcn : scn = 1` and `hBN : BN ≤ scm` — output-offset injectivity
+  (`rowMajor2D_inj`): the column stride is the unit stride and the
+  column-block width fits the row stride, so distinct output lanes hit
+  distinct addresses; with colliding lanes the per-lane readback would be
+  last-writer-wins and the statement false. Both hold for every valid
+  row-major tiling.
+
+Relation to the exact surface: the exact headline
+`matmul_autotune_closed_form_correct` (`Realizes_without_Rounding`) above is
+retained unchanged; this `⊨[R]` face strictly generalizes its content — at
+`R := .triv` the readback contract degenerates to the exact fp16-cast cell
+of the same activated GEMM value. Both faces are kept per the
+rounding-as-default doctrine. -/
+specification matmul_autotune_io_correctness (R : RoundingModel)
+    (A B C : RegionName)
+    (M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks : Nat) (ACTIVATION : Bool)
+    (hK : K = BK * numKBlocks) (hcn : scn = 1) (hBN : BN ≤ scm) :
+    matmulAutotuneIO A B C M N K sam sak sbk sbn scm scn BM BN BK GM numKBlocks ACTIVATION
+      ⊨[R] fun _ _ xs ys l =>
+        act ACTIVATION (∑ t : Fin numKBlocks, ∑ e : Fin BK,
+          xs t (aLane BM BN BK l e) * ys t (bLane BM BN BK l e)) := by
+  subst hcn
+  refine StreamMasked2DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact matmul_autotune_flattenOk A B C M N K sam sak sbk sbn scm 1 BM BN BK GM
+      numKBlocks ACTIVATION
+  · -- safety walk
+    intro bounds s xs ys _hx _hy hbr1 hbr2 hbw
+    simp only [matmulAutotuneIO] at hbr1 hbr2 hbw ⊢
+    refine matmul_autotune_traceSafeR R bounds A B C M N K sam sak sbk sbn scm 1 BM BN BK GM
+      numKBlocks ACTIVATION hK s ?_ ?_ ?_
+    · intro t j
+      have hBK : 0 < BK := by
+        rcases Nat.eq_zero_or_pos BK with h | h
+        · exact absurd j.pos (by simp [h])
+        · exact h
+      exact hbr1 t j (stream_mask_lt K BK numKBlocks hK t (Nat.mod_lt _ hBK))
+    · intro t j
+      have hdiv : j.val / BN < BK :=
+        Nat.div_lt_of_lt_mul (lt_of_lt_of_eq j.isLt (Nat.mul_comm BK BN))
+      exact hbr2 t j (stream_mask_lt K BK numKBlocks hK t hdiv)
+    · intro j hj
+      exact hbw j hj
+  · -- the rounded Hoare triple
+    intro s₀ xs ys hundef hx hy
+    simp only [matmulAutotuneIO] at hx hy ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hundef]
+    have hInj : Function.Injective (cOffset s₀ M N BM BN GM scm 1) := by
+      have heq : cOffset s₀ M N BM BN GM scm 1
+          = fun idx : TileIndex [BM, BN] =>
+              (scm * (pidM (s₀.pids 0) M N BM BN GM * BM) + pidN (s₀.pids 0) M N BM BN GM * BN)
+                + idx.1.val * scm + idx.2.1.val := by
+        funext idx; simp only [cOffset, rowGlobal, colGlobal]; ring
+      rw [heq]; exact rowMajor2D_inj _ scm hBN
+    -- exact preLoop + K-loop (cast-free, so they are the `execR` run too)
+    obtain ⟨s1, hpre, hP0⟩ := preLoop A B C s₀ M N BM BN BK sam sak sbk sbn scm 1 GM
+      numKBlocks K ACTIVATION hundef'
+    obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+      forRange_inv (idx := "kk") (start := 0) (stop := numKBlocks) (step := 1)
+        (by omega) hP0
+        (fun c stx hlt hinv => by
+          simpa using matmul_step A B s₀ M N BM BN GM sam sak sbk sbn BK numKBlocks K hK
+            c stx hlt hinv)
+    have hfinalEq : final = numKBlocks := by
+      have hle : final ≤ numKBlocks := by
+        simp only [matmulInvariant] at hPLoop
+        exact hPLoop.2.1
+      exact le_antisymm hle hfinal
+    rw [hfinalEq] at hPLoop
+    have hmem0 : sLoop.mem = s₀.mem := by
+      have h := hPLoop
+      simp only [matmulInvariant] at h
+      exact h.2.2.2.2.2.2.2.2.2.2.2
+    -- R-side activation + store tail
+    obtain ⟨sfin, hTailR, hval, hframe⟩ :=
+      matmul_autotune_postLoopR R A B C s₀ M N BM BN GM sam sak sbk sbn scm 1 BK
+        numKBlocks ACTIVATION hInj sLoop hPLoop
+    have hLoopR : stepStmtR R (Stmt.forRange "kk" 0 numKBlocks 1
+          (matmulLoopBody K BM BN BK sak sbk)) s1
+        = some sLoop := by
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _ (matmulAutotuneBody_castFree R K BM BN BK sak sbk) "kk",
+        ← stepForRangeAux.forRange_unfold]
+      exact hLoopStmt
+    have hpre' : stepStmts (matmulAutotunePrologue A B M N BM BN BK GM sam sak sbk sbn) s₀
+        = some s1 := by
+      rw [← matmul_autotune_take15_eq A B C M N K sam sak sbk sbn scm 1 BM BN BK GM
+        numKBlocks ACTIVATION]
+      exact hpre
+    refine ⟨sfin, ?_, ?_, ?_⟩
+    · show execR R (matmul_autotune_surface A B C M N K sam sak sbk sbn scm 1 BM BN BK GM
+          numKBlocks ACTIVATION).toAlgKernel s₀ = some sfin
+      unfold execR
+      rw [matmul_autotune_body_split' A B C M N K sam sak sbk sbn scm 1 BM BN BK GM
+          numKBlocks ACTIVATION,
+        stepStmtsR_append,
+        matmulAutotunePrologue_castFree R A B M N BM BN BK GM sam sak sbk sbn s₀, hpre',
+        Option.bind_some, stepStmtsR_cons_some hLoopR]
+      exact hTailR
+    · intro l hj
+      have hact : active s₀ M N BM BN GM (Lane2D.decode l) := hj
+      have hcell := hval (Lane2D.decode l)
+      rw [if_pos hact] at hcell
+      have haddr : scm * (pidM (s₀.pids 0) M N BM BN GM * BM + l.val / BN)
+            + 1 * (pidN (s₀.pids 0) M N BM BN GM * BN + l.val % BN)
+          = cOffset s₀ M N BM BN GM scm 1 (Lane2D.decode l) := rfl
+      rw [haddr, BlockState.readMemAs_fp16_of_cell hcell,
+        matmulSpec_eq_streamSum A B s₀ M N BM BN GM sam sak sbk sbn BK numKBlocks K
+          ACTIVATION hK xs ys hx hy l]
+    · intro r o hcond
+      have hcond' : r ≠ C ∨ ∀ idx : TileIndex [BM, BN],
+          active s₀ M N BM BN GM idx → o ≠ cOffset s₀ M N BM BN GM scm 1 idx := by
+        rcases hcond with hne | hno
+        · exact Or.inl hne
+        · refine Or.inr fun idx hidx => ?_
+          have h := hno (Lane2D.encode idx)
+            (by
+              rw [Lane2D.encode_div, Lane2D.encode_mod]
+              exact hidx)
+          rw [Lane2D.encode_div, Lane2D.encode_mod] at h
+          exact h
+      rw [hframe r o hcond', hmem0]
 
 end VeriTile.Bench.TritonBenchG.MatmulTritonAutotune

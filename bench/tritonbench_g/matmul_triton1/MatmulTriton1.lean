@@ -671,4 +671,734 @@ specification matmul_triton1_closed_form_correct
   rw [hExec2] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_real] using hmain
 
+/-! ## The `⊨[R]` streaming headline (wave-5 S1 fold genre)
+
+Everything below is purely additive; the exact surface above is untouched.
+Structure of the `execR R` story: this kernel has **zero rounding events** —
+the loads and the K-loop arithmetic are all at `.real`, and the terminal
+store is an unmasked `.real` store, which `stepStmtR` delegates to the exact
+`writeMemTyped` (a `.real` write is not a quantization). The prologue and
+the whole K-loop are therefore cast-free and collapse verbatim onto the
+exact stepper (`stepForRangeAuxR_castFree`), reusing the proven
+`preLoop` / `matmul_step` / `forRange_inv` invariant stack unchanged; only
+the single store statement is re-proved on the `R` side
+(`matmul_postLoopR`), where the `.real` write coincides with the
+`writeMemAsR R .real` rounded write because `R.storeValue .real` **is** the
+exact store demotion (`RoundingModel.storeValue_real`). The skin's readback
+contract then carries `R.round .real`, which is the identity by the model's
+defining `round_real` — the `⊨[R]` face at the `.real` grid is the exact
+streaming contract, stated once for every `R`. -/
+
+open scoped VeriTile.Triton.StreamMasked2DKernelIO₂
+
+/-! ### Body decomposition names and cast-free collapses -/
+
+/-- The 11-statement prologue (statements 0–10) as an explicit list. -/
+private def matmulPrologue (X Y Z : RegionName)
+    (NS M BLOCK_K N numKBlocks : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid" (Op.programId 0),
+    Stmt.assign .nat [] "num_n_blocks"
+      (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.constNat NS) (Op.constNat N)) (Op.constNat 1)) (Op.constNat N)),
+    Stmt.assign .nat [] "m_block" (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_n_blocks")),
+    Stmt.assign .nat [] "n_block" (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_n_blocks")),
+    Stmt.assign .nat [M] "m_offsets"
+      (Op.add .nat Broadcast.scalarR (Op.arange M)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "m_block") (Op.constNat M))),
+    Stmt.assign .nat [N] "n_offsets"
+      (Op.add .nat Broadcast.scalarR (Op.arange N)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "n_block") (Op.constNat N))),
+    Stmt.assign .nat [BLOCK_K] "k_offsets" (Op.arange BLOCK_K),
+    Stmt.assign .ptr [M, BLOCK_K] "x_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase X)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "m_offsets")) (Op.constNat (BLOCK_K * numKBlocks)))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "k_offsets")))),
+    Stmt.assign .ptr [BLOCK_K, N] "y_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Y)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_K] "k_offsets")) (Op.constNat NS))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [N] "n_offsets")))),
+    Stmt.assign .ptr [M, N] "z_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Z)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "m_offsets")) (Op.constNat NS))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [N] "n_offsets")))),
+    Stmt.assign .real [M, N] "z" (Op.full [M, N] (Op.const 0)) ]
+
+private theorem matmul_take11_eq (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat) :
+    (matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N).toAlgKernel.body.take 11
+      = matmulPrologue X Y Z NS M BLOCK_K N numKBlocks := rfl
+
+/-- `matmul_body_split` with the prologue named. By `rfl`. -/
+private theorem matmul_body_split' (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat) :
+    (matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N).toAlgKernel.body
+      = matmulPrologue X Y Z NS M BLOCK_K N numKBlocks
+        ++ (Stmt.forRange "kk" 0 (BLOCK_K * numKBlocks) BLOCK_K
+              (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+            :: matmulStoreStmt M N :: []) := rfl
+
+set_option maxHeartbeats 2000000 in
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem matmulPrologue_castFree (R : RoundingModel) (X Y Z : RegionName)
+    (NS M BLOCK_K N numKBlocks : Nat) (t : BlockState) :
+    stepStmtsR R (matmulPrologue X Y Z NS M BLOCK_K N numKBlocks) t
+      = stepStmts (matmulPrologue X Y Z NS M BLOCK_K N numKBlocks) t := by
+  simp only [matmulPrologue, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- The K-loop body is cast-free (loads at `.real`, `tl.dot`+add, nat pointer
+advances — no `castFloat`, no narrow-float store): it steps identically under
+`stepStmtsR R`, so the exact invariant stack transports to `execR`. -/
+private theorem matmulBody_castFree (R : RoundingModel) (M K N KS NS BK : Nat)
+    (t : BlockState) :
+    stepStmtsR R (matmulLoopBody M K N KS NS BK) t
+      = stepStmts (matmulLoopBody M K N KS NS BK) t := by
+  simp only [matmulLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-! ### The tail under `execR R` -/
+
+/-- A `.real`-typed rounded write **is** the `writeMemAsR R .real` write:
+`writeMemTypedR` delegates `.real` to the exact `writeMemTyped`, whose stored
+cell is definitionally `MemCell.of .real (real.ofReal (real.storeValue v))`,
+and `RoundingModel.storeValue_real` says `R.storeValue .real` is exactly that
+demotion. Lets the `.real` terminal store reuse the `writeMemAsR` scatter
+readback/frame lemma family. -/
+private theorem writeMemTypedR_real_eq (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.real) :
+    s.writeMemTypedR R .real region offset v
+      = s.writeMemAsR R .real region offset v := by
+  show s.writeMemTyped .real region offset v = _
+  simp only [BlockState.writeMemTyped, BlockState.writeMemAs, BlockState.writeMemAsR,
+    RoundingModel.storeValue_real]
+
+/-- Tag-exact readback of a stored `.real` cell through `readMemAs .real`
+(the `.real` sibling of `BlockState.readMemAs_fp16_of_cell`): the
+`storeValue ∘ ofReal` round trip is the identity on a defined real. -/
+private theorem readMemAs_real_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.real.toTileDType (FloatDType.real.ofReal x)) :
+    s.readMemAs .real region offset = FloatDType.real.ofReal x := by
+  simp [BlockState.readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+set_option maxHeartbeats 2000000 in
+/-- **R-postLoop**: from the exact invariant at `numKBlocks` blocks, the
+`execR R` terminal store terminates and writes, at every output lane, the
+exact-ℝ cell `MemCell.of .real (some (matmulSpec …))` — the `.real` store has
+no rounding event (`R.storeValue .real` is the exact demotion) — with a
+per-cell frame outside the output window. -/
+private theorem matmul_postLoopR (R : RoundingModel) (X Y Z : RegionName) (s0 : BlockState)
+    (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
+    (hInj : Function.Injective (zOffset s0 NS N M))
+    (st : BlockState)
+    (hinv : matmulInvariant X Y Z s0 (BLOCK_K * numKBlocks) NS N M N BLOCK_K numKBlocks
+        (BLOCK_K * numKBlocks) st) :
+    ∃ sfin, stepStmtsR R (matmulStoreStmt M N :: []) st = some sfin
+      ∧ (∀ idx : TileIndex [M, N],
+          sfin.mem Z (zOffset s0 NS N M idx)
+            = MemCell.of FloatDType.real.toTileDType
+                (FloatDType.real.ofReal
+                  (matmulSpec s0 X Y (BLOCK_K * numKBlocks) NS N M N BLOCK_K numKBlocks
+                    idx.1 idx.2.1)))
+      ∧ (∀ r o, (r ≠ Z ∨ ∀ idx : TileIndex [M, N], o ≠ zOffset s0 NS N M idx) →
+          sfin.mem r o = st.mem r o) := by
+  have hc : (BLOCK_K * numKBlocks) / BLOCK_K = numKBlocks := by
+    rw [Nat.mul_comm, Nat.mul_div_cancel _ hBK]
+  simp only [matmulInvariant, hc] at hinv
+  obtain ⟨hpids, hi, hcle, hz, hm, hn, hk, hzp, hxp, hyp, hundef, hmem⟩ := hinv
+  set KS := BLOCK_K * numKBlocks with hKS
+  set zT : Tile .real [M, N] :=
+    ⟨fun idx : TileIndex [M, N] => some (accPartial s0 X Y KS NS N M N BLOCK_K idx.1 idx.2.1 numKBlocks)⟩ with hzT
+  set zpT : Tile .ptr [M, N] :=
+    ⟨fun idx : TileIndex [M, N] => (Z.cast, rowIndex s0 NS N M idx.1 * NS + colIndex s0 NS N N idx.2.1)⟩ with hzpT
+  -- the unmasked `.real` store: no rounding event, `writeMemAsR R .real` form
+  have hstore : stepStmtR R (matmulStoreStmt M N) st
+      = some ((TileShape.allIndices [M, N]).foldl
+          (fun acc i =>
+            acc.writeMemAsR R .real Z (zOffset s0 NS N M i) (zT.data i)) st) := by
+    simp only [matmulStoreStmt, stepStmtR]
+    rw [show evalOpR R (Op.ref .real [M, N] "z") st = some zT from by rw [evalOpR_ref, hz]]
+    rw [show evalOpR R (Op.ref .ptr [M, N] "z_ptrs") st = some zpT from by rw [evalOpR_ref, hzp]]
+    simp only [bind, Option.bind_some]
+    refine congrArg some (List.foldl_ext _ _ st (fun acc i _ => ?_))
+    simp only [if_true, zpT, hzpT, zOffset, Region.cast_id, writeMemTypedR_real_eq]
+  rw [stepStmtsR_cons_some hstore, stepStmtsR_nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx
+    rw [BlockState.scatter_memcell_R_nd R .real st (zOffset s0 NS N M)
+        (fun i => zT.data i) hInj idx]
+    simp only [hzT, RoundingModel.storeValue_real, FloatDType.real_storeValue,
+      WithBot.unbotD_some, matmulSpec, accPartial, Nat.mul_comm numKBlocks BLOCK_K]
+  · intro r o hcond
+    have hnot : ∀ k ∈ TileShape.allIndices [M, N], ¬(Z = r ∧ zOffset s0 NS N M k = o) := by
+      intro k _ hk
+      obtain ⟨hZr, hko⟩ := hk
+      rcases hcond with hne | hall
+      · exact hne hZr.symm
+      · exact hall k hko.symm
+    rw [BlockState.foldl_writeMemAsR_preserve_cell R .real (zOffset s0 NS N M)
+        (fun i => zT.data i) r o (TileShape.allIndices [M, N]) hnot st]
+
+/-! ### Safety-walk invariant (weak shape half of `matmulInvariant`) -/
+
+/-- Safety-walk loop invariant: the *shape* half of `matmulInvariant`
+(counter `i = c · BLOCK_K`; *some* accumulator tile, and the exact `z_ptrs` /
+`x_ptrs` / `y_ptrs` address shapes) with no `undef` / `mem` / value pins.
+Needed because the `⊨[R]` skin's `hts` obligation quantifies over arbitrary
+launch states, so the safety walk cannot assume the clean-`undef`
+precondition that `preLoop`'s full invariant needs. -/
+private def matmulSafeInv (X Y Z : RegionName) (s0 : BlockState)
+    (KS NS M N BLOCK_K T : Nat) (i : Nat) (s : BlockState) : Prop :=
+  let c := i / BLOCK_K
+  i = c * BLOCK_K ∧ c ≤ T ∧
+  (∃ zT : Tile .real [M, N], s.regs .real [M, N] "z" = some zT) ∧
+  (s.regs .ptr [M, N] "z_ptrs" = some ⟨fun idx : TileIndex [M, N] =>
+      (Z.cast, rowIndex s0 NS N M idx.1 * NS + colIndex s0 NS N N idx.2.1)⟩) ∧
+  (s.regs .ptr [M, BLOCK_K] "x_ptrs" = some ⟨fun idx : TileIndex [M, BLOCK_K] =>
+      (X.cast, rowIndex s0 NS N M idx.1 * KS + idx.2.1.val + c * BLOCK_K)⟩) ∧
+  (s.regs .ptr [BLOCK_K, N] "y_ptrs" = some ⟨fun idx : TileIndex [BLOCK_K, N] =>
+      (Y.cast, idx.1.val * NS + colIndex s0 NS N N idx.2.1 + c * BLOCK_K * NS)⟩)
+
+set_option maxHeartbeats 1000000 in
+/-- Weak `preLoop`: from an **arbitrary** state the prologue steps to a state
+satisfying `matmulSafeInv … 0` (no clean-`undef` hypothesis; the value half of
+`preLoop` is dropped). -/
+private theorem preLoopW (X Y Z : RegionName) (s : BlockState)
+    (NS M BLOCK_K N numKBlocks : Nat) :
+    ∃ s', stepStmts (matmulPrologue X Y Z NS M BLOCK_K N numKBlocks) s = some s'
+      ∧ matmulSafeInv X Y Z s (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks 0 s' := by
+  obtain ⟨s7, h7, hpids, hm, hn, hk, huf, hmem⟩ :=
+    preLoop_scalars s (BLOCK_K * numKBlocks) NS M BLOCK_K N N
+  rw [show matmulPrologue X Y Z NS M BLOCK_K N numKBlocks
+      = [ Stmt.assign .nat [] "pid" (Op.programId 0),
+          Stmt.assign .nat [] "num_n_blocks"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat NS) (Op.constNat N)) (Op.constNat 1)) (Op.constNat N)),
+          Stmt.assign .nat [] "m_block" (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_n_blocks")),
+          Stmt.assign .nat [] "n_block" (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_n_blocks")),
+          Stmt.assign .nat [M] "m_offsets"
+            (Op.add .nat Broadcast.scalarR (Op.arange M)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "m_block") (Op.constNat M))),
+          Stmt.assign .nat [N] "n_offsets"
+            (Op.add .nat Broadcast.scalarR (Op.arange N)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "n_block") (Op.constNat N))),
+          Stmt.assign .nat [BLOCK_K] "k_offsets" (Op.arange BLOCK_K) ]
+      ++ [ Stmt.assign .ptr [M, BLOCK_K] "x_ptrs"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase X)
+              (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "m_offsets")) (Op.constNat (BLOCK_K * numKBlocks)))
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "k_offsets")))),
+          Stmt.assign .ptr [BLOCK_K, N] "y_ptrs"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Y)
+              (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_K] "k_offsets")) (Op.constNat NS))
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [N] "n_offsets")))),
+          Stmt.assign .ptr [M, N] "z_ptrs"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Z)
+              (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "m_offsets")) (Op.constNat NS))
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [N] "n_offsets")))),
+          Stmt.assign .real [M, N] "z" (Op.full [M, N] (Op.const 0)) ] from rfl,
+    stepStmts.append_some h7,
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (xptrs_eval s7 X M BLOCK_K (BLOCK_K * numKBlocks) (fun i => rowIndex s NS N M i) (by simpa using hm) (by simpa using hk))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (yptrs_eval _ Y BLOCK_K N NS (fun j => colIndex s NS N N j) (by simp [hk]) (by simp [hn]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (zptrs_eval _ Z M N NS (fun i => rowIndex s NS N M i) (fun j => colIndex s NS N N j) (by simp [hm]) (by simp [hn]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some (z_init_eval _ M N)),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp, by simp, ?_, ?_, ?_, ?_⟩
+  · -- some accumulator tile
+    refine ⟨⟨fun _ => some (0 : ℝ)⟩, ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+      String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · -- z_ptrs
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · -- x_ptrs (c = 0)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+  · -- y_ptrs (c = 0)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+
+set_option maxHeartbeats 2000000 in
+/-- Weak step lemma: one body iteration from `matmulSafeInv i` steps
+successfully (exact stepper; the body is cast-free) and re-establishes
+`matmulSafeInv (i + BLOCK_K)` — the shape half of `matmul_step`, valid from
+arbitrary launch states. -/
+private theorem matmul_stepW (X Y Z : RegionName) (s0 : BlockState)
+    (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
+    (i : Nat) (s : BlockState) (hilt : i < BLOCK_K * numKBlocks)
+    (hinv : matmulSafeInv X Y Z s0 (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks i s) :
+    ∃ s', stepStmts (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+        (s.setReg "kk" .nat [] (Tile.scalar i)) = some s'
+      ∧ matmulSafeInv X Y Z s0 (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks (i + BLOCK_K) s' := by
+  set KS := BLOCK_K * numKBlocks with hKS
+  have hc : i / BLOCK_K < numKBlocks := (Nat.div_lt_iff_lt_mul hBK).mpr (by rw [Nat.mul_comm]; exact hilt)
+  have hc1 : (i + BLOCK_K) / BLOCK_K = i / BLOCK_K + 1 := Nat.add_div_right i hBK
+  simp only [matmulSafeInv] at hinv
+  obtain ⟨hi, hcle, ⟨zT, hz⟩, hzp, hxp, hyp⟩ := hinv
+  set c := i / BLOCK_K with hcdef
+  set xpT : Tile .ptr [M, BLOCK_K] :=
+    ⟨fun idx : TileIndex [M, BLOCK_K] => (X.cast, rowIndex s0 NS N M idx.1 * KS + idx.2.1.val + c * BLOCK_K)⟩ with hxpT
+  set ypT : Tile .ptr [BLOCK_K, N] :=
+    ⟨fun idx : TileIndex [BLOCK_K, N] => (Y.cast, idx.1.val * NS + colIndex s0 NS N N idx.2.1 + c * BLOCK_K * NS)⟩ with hypT
+  set sk := s.setReg "kk" .nat [] (Tile.scalar i) with hsk
+  have hxpk : sk.regs .ptr [M, BLOCK_K] "x_ptrs" = some xpT := by simp [hsk, hxp, hxpT]
+  have hypk : sk.regs .ptr [BLOCK_K, N] "y_ptrs" = some ypT := by simp [hsk, hyp, hypT]
+  have hzk : sk.regs .real [M, N] "z" = some zT := by simp [hsk, hz]
+  set xsub : Tile .real [M, BLOCK_K] :=
+    ⟨fun idx => some (sk.readMem (xpT.data idx).1 (xpT.data idx).2)⟩ with hxsub
+  set ysub : Tile .real [BLOCK_K, N] :=
+    ⟨fun idx => some (sk.readMem (ypT.data idx).1 (ypT.data idx).2)⟩ with hysub
+  unfold matmulLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_none_real (Op.ref .ptr [M, BLOCK_K] "x_ptrs") _ xpT (by rw [evalOp_ref]; simp [hxpk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_none_real (Op.ref .ptr [BLOCK_K, N] "y_ptrs") _ ypT (by rw [evalOp_ref]; simp [hypk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (zdot_op_eval M BLOCK_K N _ zT xsub ysub
+          (by simp [hzk, hxsub, hysub, BlockState.setReg_readMem])
+          (by simp [hxsub, BlockState.setReg_readMem])
+          (by simp [hysub, BlockState.setReg_readMem])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (xptr_adv_eval _ M BLOCK_K BLOCK_K xpT (by simp [hxpk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (yptr_adv_eval _ BLOCK_K N BLOCK_K NS ypT (by simp [hypk])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  simp only [matmulSafeInv, hc1]
+  refine ⟨by rw [hi]; ring, by omega, ?_, ?_, ?_, ?_⟩
+  · -- some accumulator tile
+    refine ⟨Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      zT (Tile.dot [] xsub ysub), ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+      String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · -- z_ptrs unchanged
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    simp [hsk, hzp]
+  · -- x_ptrs advanced
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hxpT, NumericDType.add]
+    ring
+  · -- y_ptrs advanced
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hypT, NumericDType.add]
+    ring
+
+set_option maxHeartbeats 1000000 in
+/-- Per-iteration `TraceSafeListR` for the K-loop body: the two unmasked
+loads' addresses are the invariant's pointer shapes, in bounds by the skin's
+`read1`/`read2` windows (instantiated at block `c`); the three register-only
+assigns are unconditionally safe. -/
+private theorem matmul_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (X Y : RegionName) (s0 : BlockState) (NS M BLOCK_K N numKBlocks : Nat)
+    (c : Nat) (hc : c < numKBlocks) (sk : BlockState)
+    (hxp : sk.regs .ptr [M, BLOCK_K] "x_ptrs" = some ⟨fun idx : TileIndex [M, BLOCK_K] =>
+        (X.cast, rowIndex s0 NS N M idx.1 * (BLOCK_K * numKBlocks) + idx.2.1.val + c * BLOCK_K)⟩)
+    (hyp : sk.regs .ptr [BLOCK_K, N] "y_ptrs" = some ⟨fun idx : TileIndex [BLOCK_K, N] =>
+        (Y.cast, idx.1.val * NS + colIndex s0 NS N N idx.2.1 + c * BLOCK_K * NS)⟩)
+    (hbX : ∀ (t : Fin numKBlocks) (j : Fin (M * BLOCK_K)),
+      (s0.pids 0 / numNBlocks NS N * M + j.val / BLOCK_K) * (BLOCK_K * numKBlocks)
+        + (t.val * BLOCK_K + j.val % BLOCK_K) < bounds X)
+    (hbY : ∀ (t : Fin numKBlocks) (j : Fin (BLOCK_K * N)),
+      (t.val * BLOCK_K + j.val / N) * NS
+        + (s0.pids 0 % numNBlocks NS N * N + j.val % N) < bounds Y) :
+    Stmt.TraceSafeListR R bounds
+      (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K) sk := by
+  unfold matmulLoopBody
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · -- load x_sub
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref, hxp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    show rowIndex s0 NS N M i.1 * (BLOCK_K * numKBlocks) + i.2.1.val + c * BLOCK_K
+        < bounds (Region.cast X)
+    have h' : (s0.pids 0 / numNBlocks NS N * M + i.1.val) * (BLOCK_K * numKBlocks)
+        + (c * BLOCK_K + i.2.1.val) < bounds X := by
+      simpa using hbX ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+    simp only [Region.cast_id]
+    calc rowIndex s0 NS N M i.1 * (BLOCK_K * numKBlocks) + i.2.1.val + c * BLOCK_K
+        = (s0.pids 0 / numNBlocks NS N * M + i.1.val) * (BLOCK_K * numKBlocks)
+            + (c * BLOCK_K + i.2.1.val) := by
+          unfold rowIndex; ring
+      _ < bounds X := h'
+  · intro s1 h1
+    obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- load y_sub
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+        memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs i _
+      rw [evalOpR_ref] at hptrs
+      rw [show (sk.setReg "x_sub" .real [M, BLOCK_K] v1).regs .ptr [BLOCK_K, N] "y_ptrs"
+          = some (⟨fun idx : TileIndex [BLOCK_K, N] =>
+            (Y.cast, idx.1.val * NS + colIndex s0 NS N N idx.2.1 + c * BLOCK_K * NS)⟩ :
+              Tile .ptr [BLOCK_K, N]) from by simp [hyp]] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      show i.1.val * NS + colIndex s0 NS N N i.2.1 + c * BLOCK_K * NS < bounds (Region.cast Y)
+      have h' : (c * BLOCK_K + i.1.val) * NS
+          + (s0.pids 0 % numNBlocks NS N * N + i.2.1.val) < bounds Y := by
+        simpa using hbY ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+      simp only [Region.cast_id]
+      calc i.1.val * NS + colIndex s0 NS N N i.2.1 + c * BLOCK_K * NS
+          = (c * BLOCK_K + i.1.val) * NS + (s0.pids 0 % numNBlocks NS N * N + i.2.1.val) := by
+            unfold colIndex; ring
+        _ < bounds Y := h'
+    · intro s2 h2
+      obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst s'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+
+set_option maxHeartbeats 1000000 in
+/-- `TraceSafeListR` for the terminal store: the single unmasked `.real`
+store's addresses are the invariant's `z_ptrs` shape — the skin's `write`
+window. -/
+private theorem matmul_tailSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Z : RegionName) (s0 : BlockState) (NS M N : Nat) (st : BlockState)
+    (hzp : st.regs .ptr [M, N] "z_ptrs" = some ⟨fun idx : TileIndex [M, N] =>
+        (Z.cast, rowIndex s0 NS N M idx.1 * NS + colIndex s0 NS N N idx.2.1)⟩)
+    (hbZ : ∀ j : Fin (M * N),
+      (s0.pids 0 / numNBlocks NS N * M + j.val / N) * NS
+        + (s0.pids 0 % numNBlocks NS N * N + j.val % N) < bounds Z) :
+    Stmt.TraceSafeListR R bounds (matmulStoreStmt M N :: []) st := by
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s' _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [matmulStoreStmt, Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR,
+    Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, trivial, ?_⟩
+  intro ptrs hptrs i _
+  rw [evalOpR_ref, hzp] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  show rowIndex s0 NS N M i.1 * NS + colIndex s0 NS N N i.2.1 < bounds (Region.cast Z)
+  have h' := hbZ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+  rw [Lane2D.encode_div, Lane2D.encode_mod] at h'
+  simp only [Region.cast_id]
+  calc rowIndex s0 NS N M i.1 * NS + colIndex s0 NS N N i.2.1
+      = (s0.pids 0 / numNBlocks NS N * M + i.1.val) * NS
+          + (s0.pids 0 % numNBlocks NS N * N + i.2.1.val) := by
+        unfold rowIndex colIndex; ring
+    _ < bounds Z := h'
+
+set_option maxHeartbeats 1000000 in
+/-- **The `TraceSafeR` walk for the whole kernel** — driven by
+`Stmt.forRangeTraceSafeR_inv` over the weak `matmulSafeInv`, with the
+counter advancing by the loop's stride `BLOCK_K` (not 1). The three bound
+groups are the skin's `read1`/`read2`/`write` windows. `hBK` is needed to
+convert the raw counter `i < BLOCK_K · numKBlocks` into the block index
+`i / BLOCK_K < numKBlocks` the per-step windows are phrased over. -/
+private theorem matmul_triton1_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat) (hBK : 0 < BLOCK_K)
+    (s : BlockState)
+    (hbX : ∀ (t : Fin numKBlocks) (j : Fin (M * BLOCK_K)),
+      (s.pids 0 / numNBlocks NS N * M + j.val / BLOCK_K) * (BLOCK_K * numKBlocks)
+        + (t.val * BLOCK_K + j.val % BLOCK_K) < bounds X)
+    (hbY : ∀ (t : Fin numKBlocks) (j : Fin (BLOCK_K * N)),
+      (t.val * BLOCK_K + j.val / N) * NS
+        + (s.pids 0 % numNBlocks NS N * N + j.val % N) < bounds Y)
+    (hbZ : ∀ j : Fin (M * N),
+      (s.pids 0 / numNBlocks NS N * M + j.val / N) * NS
+        + (s.pids 0 % numNBlocks NS N * N + j.val % N) < bounds Z) :
+    ((matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N).toAlgKernel).TraceSafeR
+      R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [matmul_body_split' X Y Z NS M BLOCK_K N numKBlocks]
+  have hstep : ∀ i s', i < BLOCK_K * numKBlocks →
+      matmulSafeInv X Y Z s (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks i s' →
+      Stmt.TraceSafeListR R bounds (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+        (s'.setReg "kk" .nat [] (Tile.scalar i)) ∧
+      ∃ s'', stepStmtsR R (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+          (s'.setReg "kk" .nat [] (Tile.scalar i)) = some s'' ∧
+        matmulSafeInv X Y Z s (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks (i + BLOCK_K) s'' := by
+    intro i s' hi hP
+    have hPd := hP
+    simp only [matmulSafeInv] at hPd
+    obtain ⟨hieq, hcle, hzE, hzp, hxp, hyp⟩ := hPd
+    have hcT : i / BLOCK_K < numKBlocks :=
+      (Nat.div_lt_iff_lt_mul hBK).mpr (by rw [Nat.mul_comm]; exact hi)
+    refine ⟨matmul_bodySafeR R bounds X Y s NS M BLOCK_K N numKBlocks (i / BLOCK_K) hcT _
+        (by simp [hxp]) (by simp [hyp]) hbX hbY, ?_⟩
+    obtain ⟨s'', hs'', hP''⟩ :=
+      matmul_stepW X Y Z s NS M BLOCK_K N numKBlocks hBK i s' hi hP
+    exact ⟨s'', by rw [matmulBody_castFree]; exact hs'', hP''⟩
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst s'
+    simp only [matmulPrologue, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    obtain ⟨s1x, hpre, hP0⟩ := preLoopW X Y Z s NS M BLOCK_K N numKBlocks
+    rw [matmulPrologue_castFree R X Y Z NS M BLOCK_K N numKBlocks s, hpre] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- the K-loop is trace-safe (invariant principle over the weak invariant)
+      simp only [Stmt.TraceSafeR]
+      exact Stmt.forRangeTraceSafeR_inv R bounds "kk" (BLOCK_K * numKBlocks) BLOCK_K
+        (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+        (matmulSafeInv X Y Z s (BLOCK_K * numKBlocks) NS M N BLOCK_K numKBlocks)
+        hstep 0 s1x hP0
+    · intro s2 hs2
+      obtain ⟨final, sLoop, hLoopStmt, hfinal, hPL⟩ :=
+        forRange_inv (idx := "kk") (start := 0) (stop := BLOCK_K * numKBlocks) (step := BLOCK_K)
+          (body := matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)
+          (by omega) hP0
+          (fun i st hlt hinv => matmul_stepW X Y Z s NS M BLOCK_K N numKBlocks hBK i st hlt hinv)
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _ (matmulBody_castFree R M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K) "kk",
+        ← stepForRangeAux.forRange_unfold, hLoopStmt] at hs2
+      obtain rfl := Option.some.inj hs2
+      simp only [matmulSafeInv] at hPL
+      obtain ⟨-, -, -, hzpL, -, -⟩ := hPL
+      exact matmul_tailSafeR R bounds Z s NS M N sLoop hzpL hbZ
+
+/-- The full matmul surface sits inside the flat-memory bridge's covered
+fragment (`FlattenOk`; the `forRange` clause recurses into the cast-free
+body). -/
+theorem matmul_triton1_flattenOk (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat) :
+    ((matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [matmul_body_split' X Y Z NS M BLOCK_K N numKBlocks]
+  simp [matmulPrologue, matmulLoopBody, matmulStoreStmt, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### IO signature, lane bridges, spec bridge -/
+
+/-- The `X`-stream lane feeding output lane `l` at inner key `e`: the row of
+`l` (row-major over the `[M, N]` output tile) paired with `e` over the
+`[M, BLOCK_K]` per-step `X`-tile, both via the shared `Lane2D` bridge. -/
+def aLane (M N BK : Nat) (l : Fin (M * N)) (e : Fin BK) : Fin (M * BK) :=
+  Lane2D.encode ((Lane2D.decode l).1, e, PUnit.unit)
+
+/-- The `Y`-stream lane feeding output lane `l` at inner key `e`: `e` paired
+with the column of `l` over the `[BLOCK_K, N]` per-step `Y`-tile. -/
+def bLane (M N BK : Nat) (l : Fin (M * N)) (e : Fin BK) : Fin (BK * N) :=
+  Lane2D.encode (e, (Lane2D.decode l).2.1, PUnit.unit)
+
+/-- **Streaming IO signature** of `matmul_triton1` on the two-stream fold
+skin (S1: fold + terminal store). Step `c` of the K-loop reads the
+`[M, BLOCK_K]` `X`-tile and the `[BLOCK_K, N]` `Y`-tile; after the loop one
+`[M, N]` output tile is stored at the **`.real`** grid (`outDType` default —
+the kernel's store is untyped `tl.store(z_ptrs, z)` at `.real`, so the
+terminal store has no quantization event). The kernel uses only
+`program_id(0)`: the `(m, n)` tile coordinate is the linear split
+`pid₀ / num_n_blocks` × `pid₀ % num_n_blocks` (with
+`num_n_blocks = cdiv n_size n_block_size = numNBlocks NS N`), so all three
+windows read `pid₀` only. They transcribe the kernel's pointer arithmetic
+exactly:
+
+* `read1` lane `l = (i, e)` (row-major over `[M, BLOCK_K]`), step `t`:
+  `(pid₀/num_n_blocks·M + i) · k_size + (t·BLOCK_K + e)` with
+  `k_size = BLOCK_K · numKBlocks` — the invariant's `x_ptrs` cell
+  `rowIndex(i)·k_size + e + t·BLOCK_K` after `t` advances.
+* `read2` lane `l = (e, j)` (row-major over `[BLOCK_K, N]`), step `t`:
+  `(t·BLOCK_K + e) · n_size + (pid₀%num_n_blocks·N + j)` — the `y_ptrs`
+  cell after `t` advances of `BLOCK_K·n_size`.
+* `write` lane `l = (i, j)`:
+  `(pid₀/num_n_blocks·M + i) · n_size + (pid₀%num_n_blocks·N + j)` — the
+  kernel's `z_ptrs` (= `zOffset` in pid form).
+
+The kernel has no masks: all windows are `True`. -/
+def matmulTriton1IO (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat) :
+    StreamMasked2DKernelIO₂ where
+  kernel := matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N
+  inp1 := X
+  inp2 := Y
+  out := Z
+  T := numKBlocks
+  B1 := M * BLOCK_K
+  B2 := BLOCK_K * N
+  C := M * N
+  read1 := fun p₀ _ t l =>
+    (p₀ / numNBlocks NS N * M + l.val / BLOCK_K) * (BLOCK_K * numKBlocks)
+      + (t.val * BLOCK_K + l.val % BLOCK_K)
+  read2 := fun p₀ _ t l =>
+    (t.val * BLOCK_K + l.val / N) * NS + (p₀ % numNBlocks NS N * N + l.val % N)
+  write := fun p₀ _ l =>
+    (p₀ / numNBlocks NS N * M + l.val / N) * NS + (p₀ % numNBlocks NS N * N + l.val % N)
+  mask1 := fun _ _ _ _ => True
+  mask2 := fun _ _ _ _ => True
+  writeMask := fun _ _ _ => True
+
+/-- Under the two stream pins, `matmulSpec` at the decoded output lane **is**
+the skin-level double fold `∑ t, ∑ e, xs · ys` (`gemmSum_blocks` +
+address-identity of the windows with the invariant's pointer shapes). -/
+private theorem matmulSpec_eq_streamSum (X Y : RegionName) (s₀ : BlockState)
+    (NS M BLOCK_K N numKBlocks : Nat)
+    (xs : Fin numKBlocks → Fin (M * BLOCK_K) → ℝ)
+    (ys : Fin numKBlocks → Fin (BLOCK_K * N) → ℝ)
+    (hx : ∀ (t : Fin numKBlocks) (j : Fin (M * BLOCK_K)),
+      s₀.readMem X ((s₀.pids 0 / numNBlocks NS N * M + j.val / BLOCK_K) * (BLOCK_K * numKBlocks)
+          + (t.val * BLOCK_K + j.val % BLOCK_K))
+        = xs t j)
+    (hy : ∀ (t : Fin numKBlocks) (j : Fin (BLOCK_K * N)),
+      s₀.readMem Y ((t.val * BLOCK_K + j.val / N) * NS
+          + (s₀.pids 0 % numNBlocks NS N * N + j.val % N))
+        = ys t j)
+    (l : Fin (M * N)) :
+    matmulSpec s₀ X Y (BLOCK_K * numKBlocks) NS N M N BLOCK_K numKBlocks
+        (Lane2D.decode l).1 (Lane2D.decode l).2.1
+      = ∑ t : Fin numKBlocks, ∑ e : Fin BLOCK_K,
+          xs t (aLane M N BLOCK_K l e) * ys t (bLane M N BLOCK_K l e) := by
+  unfold matmulSpec
+  rw [Nat.mul_comm BLOCK_K numKBlocks, gemmSum_blocks]
+  refine Finset.sum_congr rfl fun t _ => Finset.sum_congr rfl fun e _ => ?_
+  have hxa : xElem s₀ X (numKBlocks * BLOCK_K) NS N M (Lane2D.decode l).1 (t.val * BLOCK_K + e.val)
+      = xs t (aLane M N BLOCK_K l e) := by
+    rw [← hx t (aLane M N BLOCK_K l e)]
+    simp only [aLane, Lane2D.encode_div, Lane2D.encode_mod]
+    unfold xElem rowIndex
+    congr 1
+    ring
+  have hyb : yElem s₀ Y NS N N (Lane2D.decode l).2.1 (t.val * BLOCK_K + e.val)
+      = ys t (bLane M N BLOCK_K l e) := by
+    rw [← hy t (bLane M N BLOCK_K l e)]
+    simp only [bLane, Lane2D.encode_div, Lane2D.encode_mod]
+    rfl
+  rw [hxa, hyb]
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 2000000 in
+/-- **The `⊨[R]` streaming headline (wave-5 S1 fold genre).** For every
+rounding model `R`, the faithful `matmul_triton1` surface implements, on its
+`StreamMasked2DKernelIO₂` signature, the **ideal ℝ GEMM fold** over the
+streamed tiles: output lane `l = (i, j)` holds
+`∑ t, ∑ e, X-tile[t](i,e) · Y-tile[t](e,j)` — the spec `f` is exact real
+arithmetic. The kernel has **no rounding events** (loads, dot and store are
+all at `.real`), so the skin's boundary quantization degenerates: the
+readback contract's `R.round .real` is the identity by the model's defining
+`round_real`, and the `.real` terminal store is exact under `execR R`
+(`stepStmtR` delegates `.real` writes to the exact `writeMemTyped`;
+`RoundingModel.storeValue_real`).
+
+Layer map: the prologue and the whole K-loop are cast-free, so under
+`execR R` they collapse verbatim onto the exact stepper and the proven
+`preLoop` / `matmul_step` / `forRange_inv` stack above is reused unchanged;
+only the terminal store is re-proved on the `R` side (`matmul_postLoopR`).
+
+Both hypotheses are truth-forced:
+
+* `hBK : 0 < BLOCK_K` — the surface's K-loop steps by `BLOCK_K`
+  (`range(0, k_size, k_block_size)`); at `BLOCK_K = 0` the loop never
+  advances, `execR` diverges from the invariant stack (`forRange_inv`
+  requires a nonzero step), and the block-index arithmetic `i / BLOCK_K` is
+  meaningless. It holds for every real launch (`tl.arange(0, 0)` is not a
+  tile).
+* `hN : N ≤ NS` — the output window `row·n_size + col` is injective only
+  when the tile width `n_block_size` fits the row stride `n_size`
+  (`zOffset_injective_of_le` / `rowMajor2D_inj`, exactly the exact
+  headline's precondition); with colliding output lanes the per-lane
+  readback would be last-writer-wins and the statement false. It holds for
+  every valid tiling.
+
+Relation to the exact surface: the exact headline
+`matmul_triton1_closed_form_correct` (`Realizes_without_Rounding`) above is
+retained unchanged; this `⊨[R]` face restates the same GEMM content on the
+streaming skin, for every `R` at once (at the `.real` grid the two faces
+carry the same exact cell). Both faces are kept per the rounding-as-default
+doctrine. -/
+specification matmul_triton1_io_correctness (R : RoundingModel)
+    (X Y Z : RegionName) (NS M BLOCK_K N numKBlocks : Nat)
+    (hBK : 0 < BLOCK_K) (hN : N ≤ NS) :
+    matmulTriton1IO X Y Z NS M BLOCK_K N numKBlocks ⊨[R] fun _ _ xs ys l =>
+      ∑ t : Fin numKBlocks, ∑ e : Fin BLOCK_K,
+        xs t (aLane M N BLOCK_K l e) * ys t (bLane M N BLOCK_K l e) := by
+  refine StreamMasked2DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact matmul_triton1_flattenOk X Y Z NS M BLOCK_K N numKBlocks
+  · -- safety walk
+    intro bounds s xs ys _hx _hy hbr1 hbr2 hbw
+    simp only [matmulTriton1IO] at hbr1 hbr2 hbw ⊢
+    exact matmul_triton1_traceSafeR R bounds X Y Z NS M BLOCK_K N numKBlocks hBK s
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
+      (fun j => hbw j trivial)
+  · -- the rounded Hoare triple
+    intro s₀ xs ys hundef hx hy
+    simp only [matmulTriton1IO] at hx hy ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hundef]
+    have hInj : Function.Injective (zOffset s₀ NS N M) :=
+      zOffset_injective_of_le s₀ NS N M hN
+    -- exact preLoop + K-loop (cast-free, so they are the `execR` run too)
+    obtain ⟨s1, hpre, hP0⟩ := preLoop X Y Z s₀ NS M BLOCK_K N numKBlocks hundef'
+    obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+      forRange_inv (idx := "kk") (start := 0) (stop := BLOCK_K * numKBlocks) (step := BLOCK_K)
+        (by omega) hP0
+        (fun i st hlt hinv => matmul_step X Y Z s₀ NS M BLOCK_K N numKBlocks hBK i st hlt hinv)
+    have hfinalEq : final = BLOCK_K * numKBlocks := by
+      have hle : final ≤ BLOCK_K * numKBlocks := by
+        simp only [matmulInvariant] at hPLoop
+        obtain ⟨_, hieq, hcle, _⟩ := hPLoop
+        calc final = final / BLOCK_K * BLOCK_K := hieq
+          _ ≤ numKBlocks * BLOCK_K := Nat.mul_le_mul_right _ hcle
+          _ = BLOCK_K * numKBlocks := Nat.mul_comm _ _
+      exact le_antisymm hle hfinal
+    subst hfinalEq
+    have hmem0 : sLoop.mem = s₀.mem := by
+      have h := hPLoop
+      simp only [matmulInvariant] at h
+      exact h.2.2.2.2.2.2.2.2.2.2.2
+    -- R-side tail
+    obtain ⟨sfin, hTailR, hval, hframe⟩ :=
+      matmul_postLoopR R X Y Z s₀ NS M BLOCK_K N numKBlocks hBK hInj sLoop hPLoop
+    have hLoopR : stepStmtR R (Stmt.forRange "kk" 0 (BLOCK_K * numKBlocks) BLOCK_K
+        (matmulLoopBody M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K)) s1 = some sLoop := by
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _ (matmulBody_castFree R M BLOCK_K N (BLOCK_K * numKBlocks) NS BLOCK_K) "kk",
+        ← stepForRangeAux.forRange_unfold]
+      exact hLoopStmt
+    have hpre' : stepStmts (matmulPrologue X Y Z NS M BLOCK_K N numKBlocks) s₀ = some s1 := by
+      rw [← matmul_take11_eq X Y Z NS M BLOCK_K N numKBlocks]
+      exact hpre
+    refine ⟨sfin, ?_, ?_, ?_⟩
+    · show execR R (matmul_triton1_surface X Y Z 0 (BLOCK_K * numKBlocks) NS M BLOCK_K N).toAlgKernel s₀
+          = some sfin
+      unfold execR
+      rw [matmul_body_split' X Y Z NS M BLOCK_K N numKBlocks, stepStmtsR_append,
+        matmulPrologue_castFree R X Y Z NS M BLOCK_K N numKBlocks s₀, hpre', Option.bind_some,
+        stepStmtsR_cons_some hLoopR]
+      exact hTailR
+    · intro l _
+      have hcell := hval (Lane2D.decode l)
+      have haddr : (s₀.pids 0 / numNBlocks NS N * M + l.val / N) * NS
+            + (s₀.pids 0 % numNBlocks NS N * N + l.val % N)
+          = zOffset s₀ NS N M (Lane2D.decode l) := rfl
+      rw [haddr, readMemAs_real_of_cell hcell, R.round_real_apply,
+        matmulSpec_eq_streamSum X Y s₀ NS M BLOCK_K N numKBlocks xs ys
+          (fun t j => hx t j trivial) (fun t j => hy t j trivial) l]
+    · intro r o hcond
+      have hcond' : r ≠ Z ∨ ∀ idx : TileIndex [M, N], o ≠ zOffset s₀ NS N M idx := by
+        rcases hcond with hne | hno
+        · exact Or.inl hne
+        · refine Or.inr fun idx => ?_
+          have h := hno (Lane2D.encode idx) trivial
+          simpa [Lane2D.encode_div, Lane2D.encode_mod, zOffset, rowIndex, colIndex] using h
+      rw [hframe r o hcond', hmem0]
+
 end VeriTile.Bench.TritonBenchG.MatmulTriton1

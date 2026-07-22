@@ -756,118 +756,6 @@ boundary `R.round .fp16` the skin's readback contract states. -/
 
 open scoped VeriTile.Triton.StreamMasked2DKernelIO₂
 
-/-! ### R-stepper glue
-
-Small general helpers, local for now (library candidates: the `stepStmtsR`
-list lemmas and `stepStmtR_assign_inv` belong in `Float.StepR`; the
-`TraceSafeListR` append/of-forall principles and the unmasked scatter/readback
-lemmas in `Memory.FlattenR` / `Float.StepR`). -/
-
-/-- `stepStmtsR` on `[]` (R-mirror of `stepStmts.nil`). -/
-private theorem stepStmtsR_nil' (R : RoundingModel) (s : BlockState) :
-    stepStmtsR R [] s = some s := by
-  simp only [stepStmtsR]
-
-/-- `stepStmtsR` cons chaining (R-mirror of `stepStmts.cons_some`). -/
-private theorem stepStmtsR_cons_some {R : RoundingModel} {st : Stmt} {rest : List Stmt}
-    {s s' : BlockState} (h : stepStmtR R st s = some s') :
-    stepStmtsR R (st :: rest) s = stepStmtsR R rest s' := by
-  simp only [stepStmtsR, h]
-
-/-- R-mirror of `stepStmt_assign_eq_some`. -/
-private theorem stepStmtR_assign_someR {R : RoundingModel} {dtype : TileDType}
-    {shape : TileShape} {name : RegName} {e : Op dtype shape} {s : BlockState}
-    {v : Tile dtype shape} (h : evalOpR R e s = some v) :
-    stepStmtR R (.assign dtype shape name e) s = some (s.setReg name dtype shape v) := by
-  simp [stepStmtR, h]
-
-/-- Inversion of a successful R-step of an assign: the successor is a
-`setReg` of the evaluated value. Lets a `TraceSafeListR` walk thread successor
-states of register-only statements without computing their values. -/
-private theorem stepStmtR_assign_inv {R : RoundingModel} {dtype : TileDType}
-    {shape : TileShape} {name : RegName} {e : Op dtype shape} {s s' : BlockState}
-    (h : stepStmtR R (.assign dtype shape name e) s = some s') :
-    ∃ v, evalOpR R e s = some v ∧ s' = s.setReg name dtype shape v := by
-  cases hv : evalOpR R e s with
-  | none => simp [stepStmtR, hv] at h
-  | some v =>
-      simp [stepStmtR, hv] at h
-      exact ⟨v, rfl, h.symm⟩
-
-/-- `evalOpR` on a register reference is the register file (R-independent). -/
-private theorem evalOpR_ref' (R : RoundingModel) {dtype : TileDType} {shape : TileShape}
-    (name : RegName) (s : BlockState) :
-    evalOpR R (Op.ref dtype shape name) s = s.regs dtype shape name := by
-  simp only [evalOpR]
-
-/-- `stepStmtR` on a static `forRange` is the R loop auxiliary. -/
-private theorem stepStmtR_forRange' (R : RoundingModel) (idx : RegName)
-    (start stop step : Nat) (body : List Stmt) (s : BlockState) :
-    stepStmtR R (.forRange idx start stop step body) s
-      = stepForRangeAuxR R idx start stop step body s := by
-  simp only [stepStmtR]
-
-/-- `TraceSafeListR` append principle: a concatenation is trace-safe when the
-first part is and every successor it actually reaches makes the second part
-trace-safe. -/
-private theorem traceSafeListR_append {R : RoundingModel} {bounds : RegionBounds} :
-    ∀ (l1 : List Stmt) {l2 : List Stmt} (s : BlockState),
-      Stmt.TraceSafeListR R bounds l1 s →
-      (∀ s', stepStmtsR R l1 s = some s' → Stmt.TraceSafeListR R bounds l2 s') →
-      Stmt.TraceSafeListR R bounds (l1 ++ l2) s
-  | [], _, s, _, h2 => h2 s (by simp only [stepStmtsR])
-  | st :: rest, l2, s, h1, h2 => by
-      rw [Stmt.TraceSafeListR] at h1
-      refine Stmt.TraceSafeListR.cons_intro h1.1 (fun s' hs' => ?_)
-      have htl := h1.2
-      rw [hs'] at htl
-      exact traceSafeListR_append rest s' htl
-        (fun s'' hs'' => h2 s'' ((stepStmtsR_cons_some hs').trans hs''))
-
-/-- Statements safe at *every* state are trace-safe as a list from any state
-(covers register-only assign runs, where no successor computation is needed). -/
-private theorem traceSafeListR_of_forall {R : RoundingModel} {bounds : RegionBounds} :
-    ∀ (l : List Stmt) (s : BlockState),
-      (∀ st ∈ l, ∀ s', Stmt.TraceSafeR R bounds st s') →
-      Stmt.TraceSafeListR R bounds l s
-  | [], _, _ => Stmt.TraceSafeListR.nil_intro
-  | st :: rest, s, h => by
-      refine Stmt.TraceSafeListR.cons_intro (h st List.mem_cons_self s) (fun s' _ => ?_)
-      exact traceSafeListR_of_forall rest s'
-        (fun st' hst' => h st' (List.mem_cons_of_mem st hst'))
-
-/-- Unmasked `writeMemAsR` scatter readback (the mask-free specialization of
-`scatter_memcell_R_prop_masked_nd`). -/
-private theorem scatter_memcell_R_nd (R : RoundingModel) (dtype : FloatDType)
-    {region : RegionName} {shape : TileShape} (s : BlockState)
-    (offsetFn : TileIndex shape → Nat)
-    (valueFn : TileIndex shape → TileCarrier dtype.toTileDType)
-    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
-    ((TileShape.allIndices shape).foldl
-       (fun acc k => acc.writeMemAsR R dtype region (offsetFn k) (valueFn k)) s).mem
-      region (offsetFn i)
-    = MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype (valueFn i))) := by
-  have h := BlockState.scatter_memcell_R_prop_masked_nd R dtype (region := region)
-    s offsetFn valueFn (fun _ => True) h_inj i
-  simpa using h
-
-/-- Tag-exact readback of a stored fp16 cell through `readMemAs .fp16` (the
-`readMemAs` sibling of `readMemValue_bf16_of_cell`): the `storeValue ∘ ofReal`
-round trip is the identity on a defined real. -/
-private theorem readMemAs_fp16_of_cell {s : BlockState} {region : RegionName}
-    {offset : Nat} {x : ℝ}
-    (h : s.mem region offset
-      = MemCell.of FloatDType.fp16.toTileDType (FloatDType.fp16.ofReal x)) :
-    s.readMemAs .fp16 region offset = FloatDType.fp16.ofReal x := by
-  simp [BlockState.readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
-
-/-- The tail's two rounding events collapse to one boundary round:
-`R.storeValue .fp16` after `R.cast .real .fp16` is a single `R.round .fp16`
-(by the defining `round_idem`, same recipe as the quantize family). -/
-private theorem R_storeValue_cast_fp16 (R : RoundingModel) (v : ℝ) :
-    R.storeValue .fp16 (RoundingModel.cast R .real .fp16 (some v)) = R.round .fp16 v := by
-  simp [RoundingModel.storeValue, RoundingModel.cast, FloatDType.storeValue, R.round_idem]
-
 /-! ### Body decomposition names and cast-free collapses -/
 
 /-- The 8-statement prologue (statements 0–7) as an explicit list. -/
@@ -1008,17 +896,17 @@ private theorem matmul_postLoopR (R : RoundingModel) (C A B : RegionName) (s0 : 
     ⟨fun idx : TileIndex [BM, BN] => (C.cast, cOffset s0 BM BN idx)⟩ with hcpT
   unfold matmulStoreTail
   -- c = cast(accumulator, fp16): rounding-event site 1 (`R.cast`)
-  erw [stepStmtsR_cons_some (stepStmtR_assign_someR
+  erw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
         (show evalOpR R (Op.castFloat FloatDType.real FloatDType.fp16
               (Op.ref .real [BM, BN] "accumulator")) st = some cT
           from castAcc_evalR R BM BN st zT hz))]
   -- offs_cm / offs_cn (cast-free)
-  rw [stepStmtsR_cons_some (stepStmtR_assign_someR
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
         (offscm_evalR R _ BM BM (s0.pids 0) "pid_m" (by simp [hpm])))]
-  rw [stepStmtsR_cons_some (stepStmtR_assign_someR
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
         (offscm_evalR R _ BN BN (s0.pids 1) "pid_n" (by simp [hpn])))]
   -- c_ptrs (cast-free)
-  rw [stepStmtsR_cons_some (stepStmtR_assign_someR
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
         (show evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase C)
             (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
               (Op.mul .nat Broadcast.scalarL (Op.constNat 4096) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
@@ -1044,18 +932,18 @@ private theorem matmul_postLoopR (R : RoundingModel) (C A B : RegionName) (s0 : 
       = some ((TileShape.allIndices [BM, BN]).foldl
           (fun acc i => acc.writeMemAsR R .fp16 C (cOffset s0 BM BN i) (cT.data i)) st4) := by
     simp only [stepStmtR]
-    rw [show evalOpR R (Op.ref .fp16 [BM, BN] "c") st4 = some cT from by rw [evalOpR_ref', hc4]]
-    rw [show evalOpR R (Op.ref .ptr [BM, BN] "c_ptrs") st4 = some cpT from by rw [evalOpR_ref', hcp4]]
+    rw [show evalOpR R (Op.ref .fp16 [BM, BN] "c") st4 = some cT from by rw [evalOpR_ref, hc4]]
+    rw [show evalOpR R (Op.ref .ptr [BM, BN] "c_ptrs") st4 = some cpT from by rw [evalOpR_ref, hcp4]]
     simp only [bind, Option.bind_some]
     refine congrArg some (List.foldl_ext _ _ _ (fun acc i _ => ?_))
     simp only [if_true, BlockState.writeMemTypedR_fp16, hcpT, Region.cast_id]
-  rw [stepStmtsR_cons_some hstore, stepStmtsR_nil']
+  rw [stepStmtsR_cons_some hstore, stepStmtsR_nil]
   refine ⟨_, rfl, ?_, ?_⟩
   · intro idx
-    rw [scatter_memcell_R_nd R .fp16 st4 (cOffset s0 BM BN) (fun i => cT.data i) hInj idx]
+    rw [BlockState.scatter_memcell_R_nd R .fp16 st4 (cOffset s0 BM BN) (fun i => cT.data i) hInj idx]
     have hdata : cT.data idx = RoundingModel.cast R FloatDType.real FloatDType.fp16
         (some (accPartial s0 A B BM BN BLOCK_K idx.1 idx.2.1 numKBlocks)) := rfl
-    rw [hdata, R_storeValue_cast_fp16]
+    rw [hdata, RoundingModel.storeValue_cast]
     have hspec : matmulSpec s0 A B BM BN BLOCK_K numKBlocks idx.1 idx.2.1
         = accPartial s0 A B BM BN BLOCK_K idx.1 idx.2.1 numKBlocks := by
       unfold matmulSpec accPartial
@@ -1234,7 +1122,7 @@ private theorem matmul_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
       memAccessActiveAddressSafeR]
     refine ⟨trivial, trivial, ?_⟩
     intro ptrs hptrs i _
-    rw [evalOpR_ref', hap] at hptrs
+    rw [evalOpR_ref, hap] at hptrs
     obtain rfl := Option.some.inj hptrs
     show rowIndex s0 BM i.1 * 4096 + i.2.1.val * 1 + c * BLOCK_K < bounds (Region.cast A)
     have h' : ((s0.pids 0 * BM + i.1.val) % 4096) * 4096 + (c * BLOCK_K + i.2.1.val)
@@ -1253,7 +1141,7 @@ private theorem matmul_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
         memAccessActiveAddressSafeR]
       refine ⟨trivial, trivial, ?_⟩
       intro ptrs hptrs i _
-      rw [evalOpR_ref'] at hptrs
+      rw [evalOpR_ref] at hptrs
       rw [show (sk.setReg "a" .real [BM, BLOCK_K] v1).regs .ptr [BLOCK_K, BN] "b_ptrs"
           = some (⟨fun idx : TileIndex [BLOCK_K, BN] =>
             (B.cast, idx.1.val * 4096 + colIndex s0 BN idx.2.1 * 1 + c * BLOCK_K * 4096)⟩ :
@@ -1270,7 +1158,7 @@ private theorem matmul_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
         _ < bounds B := h'
     · intro s2 h2
       obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
-      refine traceSafeListR_of_forall _ _ ?_
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
       intro st hst s'
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
       rcases hst with rfl | rfl | rfl <;>
@@ -1320,7 +1208,7 @@ private theorem matmul_tailSafeR (R : RoundingModel) (bounds : RegionBounds)
     MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
   refine ⟨trivial, trivial, trivial, ?_⟩
   intro ptrs hptrs i _
-  rw [evalOpR_ref'] at hptrs
+  rw [evalOpR_ref] at hptrs
   simp only [BlockState.setReg_same] at hptrs
   obtain rfl := Option.some.inj hptrs
   show 4096 * (s0.pids 0 * BM + i.1.val) + 1 * (s0.pids 1 * BN + i.2.1.val)
@@ -1360,9 +1248,9 @@ private theorem matmul_kernel_traceSafeR (R : RoundingModel) (bounds : RegionBou
     obtain ⟨s'', hs'', hP''⟩ :=
       matmul_stepW A B s BM BN BLOCK_K T c s' hc ⟨hcle, hpm, hpn, hzE, hap, hbp⟩
     exact ⟨s'', by rw [matmulBody_castFree]; exact hs'', hP''⟩
-  refine traceSafeListR_append _ _ ?_ ?_
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
   · -- prologue: register-only assigns, safe at every state
-    refine traceSafeListR_of_forall _ _ ?_
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
     intro st hst s'
     simp only [matmulPrologue, List.mem_cons, List.not_mem_nil, or_false] at hst
     rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
@@ -1382,7 +1270,7 @@ private theorem matmul_kernel_traceSafeR (R : RoundingModel) (bounds : RegionBou
           (body := matmulLoopBody BM BN BLOCK_K)
           (by omega) hP0
           (fun c st hlt hinv => matmul_stepW A B s BM BN BLOCK_K T c st hlt hinv)
-      rw [stepStmtR_forRange',
+      rw [stepStmtR_forRange,
         stepForRangeAuxR_castFree R _ (matmulBody_castFree R BM BN BLOCK_K) "k",
         ← stepForRangeAux.forRange_unfold, hLoopStmt] at hs2
       obtain rfl := Option.some.inj hs2
@@ -1547,7 +1435,7 @@ specification matmul_kernel_io_correctness (R : RoundingModel)
       matmul_postLoopR R C A B s₀ BM BN BK T hInj sLoop hPLoop
     have hLoopR : stepStmtR R (Stmt.forRange "k" 0 T 1 (matmulLoopBody BM BN BK)) s1
         = some sLoop := by
-      rw [stepStmtR_forRange',
+      rw [stepStmtR_forRange,
         stepForRangeAuxR_castFree R _ (matmulBody_castFree R BM BN BK) "k",
         ← stepForRangeAux.forRange_unfold]
       exact hLoopStmt
@@ -1565,7 +1453,7 @@ specification matmul_kernel_io_correctness (R : RoundingModel)
       have hcell := hval (Lane2D.decode l)
       have haddr : 4096 * (s₀.pids 0 * BM + l.val / BN) + 1 * (s₀.pids 1 * BN + l.val % BN)
           = cOffset s₀ BM BN (Lane2D.decode l) := rfl
-      rw [haddr, readMemAs_fp16_of_cell hcell,
+      rw [haddr, BlockState.readMemAs_fp16_of_cell hcell,
         matmulSpec_eq_streamSum A B s₀ BM BN BK T xs ys
           (fun t j => hx t j trivial) (fun t j => hy t j trivial) l]
     · intro r o hcond
