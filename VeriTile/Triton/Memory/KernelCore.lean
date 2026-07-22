@@ -135,22 +135,22 @@ structure UKernelIO where
   /-- Input channel `i`'s per-lane read address — may depend on the pinned
   values of every channel (the data-dependent genre). -/
   iwin : (i : Fin nIn) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (iarity i) → Nat
+    Nat → Nat → Nat → Fin (iarity i) → Nat
   /-- Input channel `i`'s read-active lanes. -/
   imask : (i : Fin nIn) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (iarity i) → Prop
+    Nat → Nat → Nat → Fin (iarity i) → Prop
   /-- Output channel `o`'s per-lane write address. -/
   owin : (o : Fin nOut) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (oarity o) → Nat
+    Nat → Nat → Nat → Fin (oarity o) → Nat
   /-- Output channel `o`'s write-active lanes. -/
   omask : (o : Fin nOut) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (oarity o) → Prop
+    Nat → Nat → Nat → Fin (oarity o) → Prop
   /-- Scratch channel `t`'s per-lane write address. -/
   swin : (t : Fin nScr) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (sarity t) → Nat
+    Nat → Nat → Nat → Fin (sarity t) → Nat
   /-- Scratch channel `t`'s write-active lanes. -/
   smask : (t : Fin nScr) → (∀ k, Fin (iarity k) → (ity k).carrier) →
-    Nat → Nat → Fin (sarity t) → Prop
+    Nat → Nat → Nat → Fin (sarity t) → Prop
 
 namespace UKernelIO
 
@@ -171,35 +171,36 @@ def Implements (io : UKernelIO)
     A.Disjoint →
     A.regions = io.bufs →
     (∀ r, r ∉ A.regions → A.extent r = 0) →
-  ∀ pid₀ pid₁ : Nat,
+  ∀ pid₀ pid₁ pid₂ : Nat,
   ∀ (vals : io.Ctx) (s₀ : BlockState),
     s₀.pids 0 = pid₀ →
     s₀.pids 1 = pid₁ →
+    s₀.pids 2 = pid₂ →
     s₀.undef = (fun _ _ => 0) →
-    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals pid₀ pid₁ j →
-      io.iwin i vals pid₀ pid₁ j < A.extent (io.ibuf i)) →
-    (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)), io.omask o vals pid₀ pid₁ j →
-      io.owin o vals pid₀ pid₁ j < A.extent (io.obuf o)) →
-    (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)), io.smask t vals pid₀ pid₁ j →
-      io.swin t vals pid₀ pid₁ j < A.extent (io.sbuf t)) →
-    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals pid₀ pid₁ j →
-      (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals pid₀ pid₁ j) = vals i j) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals pid₀ pid₁ pid₂ j →
+      io.iwin i vals pid₀ pid₁ pid₂ j < A.extent (io.ibuf i)) →
+    (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)), io.omask o vals pid₀ pid₁ pid₂ j →
+      io.owin o vals pid₀ pid₁ pid₂ j < A.extent (io.obuf o)) →
+    (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)), io.smask t vals pid₀ pid₁ pid₂ j →
+      io.swin t vals pid₀ pid₁ pid₂ j < A.extent (io.sbuf t)) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals pid₀ pid₁ pid₂ j →
+      (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals pid₀ pid₁ pid₂ j) = vals i j) →
     ∃ s',
       exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
         = some s'
       ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
-          io.omask o vals pid₀ pid₁ j →
+          io.omask o vals pid₀ pid₁ pid₂ j →
           (io.oty o).read s' A.flat
-              (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ j))
+              (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ pid₂ j))
             = f pid₀ pid₁ vals o j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
             ((∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
-                io.omask o vals pid₀ pid₁ j →
-                o' ≠ A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ j)) ∧
+                io.omask o vals pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ pid₂ j)) ∧
              (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
-                io.smask t vals pid₀ pid₁ j →
-                o' ≠ A.addr (io.sbuf t) (io.swin t vals pid₀ pid₁ j)))) →
+                io.smask t vals pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr (io.sbuf t) (io.swin t vals pid₀ pid₁ pid₂ j)))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
 @[inherit_doc] scoped infix:25 " ⊨ᵤ " => UKernelIO.Implements
@@ -222,43 +223,44 @@ theorem Implements.intro (io : UKernelIO)
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
-        io.imask i vals (s.pids 0) (s.pids 1) j →
-        (io.ity i).read s (io.ibuf i) (io.iwin i vals (s.pids 0) (s.pids 1) j)
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        (io.ity i).read s (io.ibuf i) (io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j)
           = vals i j) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
-        io.imask i vals (s.pids 0) (s.pids 1) j →
-        io.iwin i vals (s.pids 0) (s.pids 1) j < bounds (io.ibuf i)) →
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.ibuf i)) →
       (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
-        io.omask o vals (s.pids 0) (s.pids 1) j →
-        io.owin o vals (s.pids 0) (s.pids 1) j < bounds (io.obuf o)) →
+        io.omask o vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.owin o vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.obuf o)) →
       (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
-        io.smask t vals (s.pids 0) (s.pids 1) j →
-        io.swin t vals (s.pids 0) (s.pids 1) j < bounds (io.sbuf t)) →
+        io.smask t vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.swin t vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.sbuf t)) →
       Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
     (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
       s₀.undef = (fun _ _ => 0) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
-        io.imask i vals (s₀.pids 0) (s₀.pids 1) j →
-        (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) j)
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
           = vals i j) →
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
-            io.omask o vals (s₀.pids 0) (s₀.pids 1) j →
+            io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
             (io.oty o).read s1 (io.obuf o)
-                (io.owin o vals (s₀.pids 0) (s₀.pids 1) j)
+                (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
               = f (s₀.pids 0) (s₀.pids 1) vals o j)
         ∧ (∀ r o',
             (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
-              io.omask oc vals (s₀.pids 0) (s₀.pids 1) j →
-              r ≠ io.obuf oc ∨ o' ≠ io.owin oc vals (s₀.pids 0) (s₀.pids 1) j) →
+              io.omask oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.obuf oc ∨ o' ≠ io.owin oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
             (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
-              io.smask t vals (s₀.pids 0) (s₀.pids 1) j →
-              r ≠ io.sbuf t ∨ o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) j) →
+              io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.sbuf t ∨ o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
             s1.mem r o' = s₀.mem r o')) :
     io.Implements f := by
-  intro A hd hregs hcov pid₀ pid₁ vals s₀ hpid₀ hpid₁ hu hib hob hsb hpins
+  intro A hd hregs hcov pid₀ pid₁ pid₂ vals s₀ hpid₀ hpid₁ hpid₂ hu hib hob hsb hpins
   subst hpid₀
   subst hpid₁
+  subst hpid₂
   obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ vals hu hpins
   have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
     hts A.extent s₀ vals hpins hib hob hsb
@@ -268,7 +270,7 @@ theorem Implements.intro (io : UKernelIO)
   · intro o j hj
     have hmem : io.obuf o ∈ A.regions := by
       rw [hregs]; exact io.obuf_mem o
-    have hlt : io.owin o vals (s₀.pids 0) (s₀.pids 1) j
+    have hlt : io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j
         < A.extent (io.obuf o) := hob o j hj
     rw [(io.oty o).read_flattenState A hd s1 hmem hlt]
     exact hval o j hj

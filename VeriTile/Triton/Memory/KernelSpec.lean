@@ -168,20 +168,20 @@ private def toU (io : KernelIO₂) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
     | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
     | ⟨2, _⟩ => fun _ => io.read1 p₀ + io.B - 1
     | ⟨3, _⟩ => fun _ => io.read2 p₀ + io.B - 1
     | _ => fun _ => io.write p₀ + io.B - 1
-  imask := fun i _ p₀ _ => match i with
+  imask := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun _ => 0 < io.read1 p₀ + io.B
     | ⟨3, _⟩ => fun _ => 0 < io.read2 p₀ + io.B
     | _ => fun _ => 0 < io.write p₀ + io.B
-  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
-  omask := fun _ _ _ _ _ => True
+  owin := fun _ _ p₀ _ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ _ => True
   swin := fun t => t.elim0
   smask := fun t => t.elim0
 
@@ -255,14 +255,14 @@ theorem Implements.intro (io : KernelIO₂)
       · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 xs ys s₀ hpid hu hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
         | ⟨2, _⟩ => fun _ => ChanTy.read .nat s₀ io.in1 (io.read1 pid + io.B - 1)
         | ⟨3, _⟩ => fun _ => ChanTy.read .nat s₀ io.in2 (io.read2 pid + io.B - 1)
         | ⟨_+4, _⟩ => fun _ => ChanTy.read .nat s₀ io.out (io.write pid + io.B - 1))
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j _ => by
             have hj : j.val < io.B := j.isLt
@@ -515,14 +515,14 @@ private def toU (io : MaskedKernelIO₂) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun t => (io.scratch.get t).1
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
     | _ => fun j => io.read2 p₀ + j.val
-  imask := fun _ _ p₀ _ j => io.mask p₀ j
-  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
-  omask := fun _ _ p₀ _ j => io.mask p₀ j
-  swin := fun t _ p₀ _ j => (io.scratch.get t).2 p₀ + j.val
-  smask := fun _ _ p₀ _ j => io.mask p₀ j
+  imask := fun _ _ p₀ _ _ j => io.mask p₀ j
+  owin := fun _ _ p₀ _ _ j => io.write p₀ + j.val
+  omask := fun _ _ p₀ _ _ j => io.mask p₀ j
+  swin := fun t _ p₀ _ _ j => (io.scratch.get t).2 p₀ + j.val
+  smask := fun _ _ p₀ _ _ j => io.mask p₀ j
 
 /-- Assembly lemma — masked sibling of `KernelIO₂.Implements.intro`. The
 three per-kernel obligations take the **lane-wise** contracts: `hts` gets the
@@ -605,11 +605,11 @@ theorem Implements.intro (io : MaskedKernelIO₂)
         · exact hno
   intro A hd hregs hcov pid h1 h2 h3 hsc xs ys s₀ hpid hu hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | _ => ys)
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨_+1, _⟩ => fun j hj => h2 j hj)
@@ -909,12 +909,12 @@ private def toU (io : MaskedKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun t => (io.scratch.get t).1
-  iwin := fun _ _ p₀ _ j => io.read p₀ + j.val
-  imask := fun _ _ p₀ _ j => io.mask p₀ j
-  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
-  omask := fun _ _ p₀ _ j => io.writeMask p₀ j
-  swin := fun t _ p₀ _ j => (io.scratch.get t).2 p₀ + j.val
-  smask := fun _ _ p₀ _ j => io.writeMask p₀ j
+  iwin := fun _ _ p₀ _ _ j => io.read p₀ + j.val
+  imask := fun _ _ p₀ _ _ j => io.mask p₀ j
+  owin := fun _ _ p₀ _ _ j => io.write p₀ + j.val
+  omask := fun _ _ p₀ _ _ j => io.writeMask p₀ j
+  swin := fun t _ p₀ _ _ j => (io.scratch.get t).2 p₀ + j.val
+  smask := fun _ _ p₀ _ _ j => io.writeMask p₀ j
 
 /-- Assembly lemma — one-input sibling of `MaskedKernelIO₂.Implements.intro`;
 see there for the reading of the lane-wise obligations. -/
@@ -985,7 +985,7 @@ theorem Implements.intro (io : MaskedKernelIO₁)
         · exact hno
   intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1) (fun _ => xs) s₀ hpid rfl hu
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2) (fun _ => xs) s₀ hpid rfl rfl hu
       (fun _i j hj => h1 j hj) (fun _o j hj => h2 j hj)
       (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
       (fun _i j hj => hx j hj)
@@ -1096,12 +1096,12 @@ private def toU (io : Masked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun t => (io.scratch.get t).1
-  iwin := fun _ _ p₀ p₁ j => io.read p₀ p₁ j
-  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
-  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
-  omask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
-  swin := fun t _ p₀ p₁ j => (io.scratch.get t).2 p₀ p₁ j
-  smask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
+  iwin := fun _ _ p₀ p₁ _ j => io.read p₀ p₁ j
+  imask := fun _ _ p₀ p₁ _ j => io.mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ _ j => io.write p₀ p₁ j
+  omask := fun _ _ p₀ p₁ _ j => io.writeMask p₀ p₁ j
+  swin := fun t _ p₀ p₁ _ j => (io.scratch.get t).2 p₀ p₁ j
+  smask := fun _ _ p₀ p₁ _ j => io.writeMask p₀ p₁ j
 
 /-- Assembly lemma — two-axis sibling of `MaskedKernelIO₁.Implements.intro`;
 the obligations' lane hypotheses are indexed by `(s.pids 0, s.pids 1)`. -/
@@ -1172,7 +1172,7 @@ theorem Implements.intro (io : Masked2DKernelIO₁)
         · exact hno
   intro A hd hregs hcov pid₀ pid₁ h1 h2 hsc xs s₀ hpid₀ hpid₁ hu hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁ (fun _ => xs) s₀ hpid₀ hpid₁ hu
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2) (fun _ => xs) s₀ hpid₀ hpid₁ rfl hu
       (fun _i j hj => h1 j hj) (fun _o j hj => h2 j hj)
       (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
       (fun _i j hj => hx j hj)
@@ -1282,16 +1282,16 @@ private def toU (io : Masked2DKernelIO₂) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun t => (io.scratch.get t).1
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
     | _ => fun j => io.read2 p₀ p₁ j
-  imask := fun i _ p₀ p₁ => match i with
+  imask := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
     | _ => fun j => io.read2Mask p₀ p₁ j
-  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
-  omask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
-  swin := fun t _ p₀ p₁ j => (io.scratch.get t).2 p₀ p₁ j
-  smask := fun _ _ p₀ p₁ j => io.writeMask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ _ j => io.write p₀ p₁ j
+  omask := fun _ _ p₀ p₁ _ j => io.writeMask p₀ p₁ j
+  swin := fun t _ p₀ p₁ _ j => (io.scratch.get t).2 p₀ p₁ j
+  smask := fun _ _ p₀ p₁ _ j => io.writeMask p₀ p₁ j
 
 /-- Assembly lemma — two-input sibling of
 `Masked2DKernelIO₁.Implements.intro`. -/
@@ -1371,11 +1371,11 @@ theorem Implements.intro (io : Masked2DKernelIO₂)
         · exact hno
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 hsc xs ys s₀ hpid₀ hpid₁ hu hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | _ => ys)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨_+1, _⟩ => fun j hj => h2 j hj)
@@ -1479,11 +1479,11 @@ theorem Implements.intro_undef (io : Masked2DKernelIO₂)
         · exact hno
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 hsc xs ys s₀ hpid₀ hpid₁ hu hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | _ => ys)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨_+1, _⟩ => fun j hj => h2 j hj)
@@ -1612,16 +1612,16 @@ private def toU (io : Masked2DKernelIO₂ₓ₂) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
     | _ => fun j => io.read2 p₀ p₁ j
-  imask := fun i _ p₀ p₁ => match i with
+  imask := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
     | _ => fun j => io.read2Mask p₀ p₁ j
-  owin := fun o _ p₀ p₁ => match o with
+  owin := fun o _ p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁ j
     | _ => fun j => io.write2 p₀ p₁ j
-  omask := fun o _ p₀ p₁ => match o with
+  omask := fun o _ p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁ j
     | _ => fun j => io.writeMask2 p₀ p₁ j
   swin := fun t => t.elim0
@@ -1709,11 +1709,11 @@ theorem Implements.intro (io : Masked2DKernelIO₂ₓ₂)
         · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 xs ys s₀ hpid₀ hpid₁ hu hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | _ => ys)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨_+1, _⟩ => fun j hj => h2 j hj)
@@ -1875,19 +1875,19 @@ private def toU (io : Masked2DKernelIO₃ₓ₃) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.read2 p₀ p₁ j
     | _ => fun j => io.read3 p₀ p₁ j
-  imask := fun i _ p₀ p₁ => match i with
+  imask := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.read2Mask p₀ p₁ j
     | _ => fun j => io.read3Mask p₀ p₁ j
-  owin := fun o _ p₀ p₁ => match o with
+  owin := fun o _ p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.write2 p₀ p₁ j
     | _ => fun j => io.write3 p₀ p₁ j
-  omask := fun o _ p₀ p₁ => match o with
+  omask := fun o _ p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.writeMask2 p₀ p₁ j
     | _ => fun j => io.writeMask3 p₀ p₁ j
@@ -2007,12 +2007,12 @@ theorem Implements.intro (io : Masked2DKernelIO₃ₓ₃)
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 h5 h6 xs ys zs s₀ hpid₀ hpid₁
     hu hx hy hz
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
         | _ => zs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨1, _⟩ => fun j hj => h2 j hj
@@ -2150,13 +2150,13 @@ private def toU (io : BoolMasked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.readm p₀ p₁ j
     | _ => fun j => io.write p₀ p₁ j
-  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
-  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
-  omask := fun _ vals p₀ p₁ j =>
+  imask := fun _ _ p₀ p₁ _ j => io.mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ _ j => io.write p₀ p₁ j
+  omask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j') j
   swin := fun t => t.elim0
   smask := fun t => t.elim0
@@ -2226,13 +2226,13 @@ theorem Implements.intro (io : BoolMasked2DKernelIO₁)
       · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 bs xs s₀ hpid₀ hpid₁ hu hx hb
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => bs
         | ⟨_+2, _⟩ => fun j =>
             ChanTy.read .nat s₀ io.out (io.write pid₀ pid₁ j))
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨1, _⟩ => fun j hj => h2 j hj
@@ -2359,14 +2359,14 @@ private def toU (io : BoolMasked2DKernelIO₂) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.read2 p₀ p₁ j
     | ⟨2, _⟩ => fun j => io.readm p₀ p₁ j
     | _ => fun j => io.write p₀ p₁ j
-  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
-  owin := fun _ _ p₀ p₁ j => io.write p₀ p₁ j
-  omask := fun _ vals p₀ p₁ j =>
+  imask := fun _ _ p₀ p₁ _ j => io.mask p₀ p₁ j
+  owin := fun _ _ p₀ p₁ _ j => io.write p₀ p₁ j
+  omask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨2, by decide⟩ : Fin 4) j') j
   swin := fun t => t.elim0
   smask := fun t => t.elim0
@@ -2443,14 +2443,14 @@ theorem Implements.intro (io : BoolMasked2DKernelIO₂)
   intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 h4 bs xs ys s₀ hpid₀ hpid₁ hu
     hx hy hb
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
         | ⟨2, _⟩ => bs
         | ⟨_+3, _⟩ => fun j =>
             ChanTy.read .nat s₀ io.out (io.write pid₀ pid₁ j))
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨1, _⟩ => fun j hj => h2 j hj
@@ -2574,24 +2574,24 @@ private def toU (io : KernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => (io.scratch.get t).len
   sbuf := fun t => (io.scratch.get t).buf
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read p₀ + j.val
     | ⟨1, _⟩ => fun _ => io.read p₀ + io.Bin - 1
     | ⟨2, _⟩ => fun _ => io.write p₀ + io.Bout - 1
     | ⟨k+3, h⟩ => fun _ =>
         (io.scratch.get ⟨k, by omega⟩).win p₀
           + (io.scratch.get ⟨k, by omega⟩).len - 1
-  imask := fun i _ p₀ _ => match i with
+  imask := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => 0 < io.read p₀ + io.Bin
     | ⟨2, _⟩ => fun _ => 0 < io.write p₀ + io.Bout
     | ⟨k+3, h⟩ => fun _ =>
         0 < (io.scratch.get ⟨k, by omega⟩).win p₀
           + (io.scratch.get ⟨k, by omega⟩).len
-  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
-  omask := fun _ _ _ _ _ => True
-  swin := fun t _ p₀ _ k => (io.scratch.get t).win p₀ + k.val
-  smask := fun _ _ _ _ _ => True
+  owin := fun _ _ p₀ _ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ _ => True
+  swin := fun t _ p₀ _ _ k => (io.scratch.get t).win p₀ + k.val
+  smask := fun _ _ _ _ _ _ => True
 
 /-- Assembly lemma — one-input sibling of `KernelIO₂.Implements.intro`. -/
 theorem Implements.intro (io : KernelIO₁)
@@ -2673,7 +2673,7 @@ theorem Implements.intro (io : KernelIO₁)
         · exact hno
   intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => fun _ => ChanTy.read .nat s₀ io.inp (io.read pid + io.Bin - 1)
@@ -2685,7 +2685,7 @@ theorem Implements.intro (io : KernelIO₁)
             ChanTy.read .nat s₀ (io.scratch.get ⟨k, hk⟩).buf
               ((io.scratch.get ⟨k, hk⟩).win pid
                 + (io.scratch.get ⟨k, hk⟩).len - 1))
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j _ => by
             have hj : j.val < io.Bin := j.isLt
@@ -3010,7 +3010,7 @@ private def toU (io : KernelIO₃) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => (io.scratch.get t).len
   sbuf := fun t => (io.scratch.get t).buf
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
     | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
     | ⟨2, _⟩ => fun j => io.read3 p₀ + j.val
@@ -3021,7 +3021,7 @@ private def toU (io : KernelIO₃) : UKernelIO where
     | ⟨k+7, h⟩ => fun _ =>
         (io.scratch.get ⟨k, by omega⟩).win p₀
           + (io.scratch.get ⟨k, by omega⟩).len - 1
-  imask := fun i _ p₀ _ => match i with
+  imask := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun _ => True
@@ -3032,10 +3032,10 @@ private def toU (io : KernelIO₃) : UKernelIO where
     | ⟨k+7, h⟩ => fun _ =>
         0 < (io.scratch.get ⟨k, by omega⟩).win p₀
           + (io.scratch.get ⟨k, by omega⟩).len
-  owin := fun _ _ p₀ _ j => io.write p₀ + j.val
-  omask := fun _ _ _ _ _ => True
-  swin := fun t _ p₀ _ k => (io.scratch.get t).win p₀ + k.val
-  smask := fun _ _ _ _ _ => True
+  owin := fun _ _ p₀ _ _ j => io.write p₀ + j.val
+  omask := fun _ _ _ _ _ _ => True
+  swin := fun t _ p₀ _ _ k => (io.scratch.get t).win p₀ + k.val
+  smask := fun _ _ _ _ _ _ => True
 
 /-- Assembly lemma — three-input sibling of `KernelIO₂.Implements.intro`. -/
 theorem Implements.intro (io : KernelIO₃)
@@ -3147,7 +3147,7 @@ theorem Implements.intro (io : KernelIO₃)
         · exact hno
   intro A hd hregs hcov pid h1 h2 h3 h4 hsc xs ys zs s₀ hpid hu hx hy hz
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
@@ -3163,7 +3163,7 @@ theorem Implements.intro (io : KernelIO₃)
             ChanTy.read .nat s₀ (io.scratch.get ⟨k, hk⟩).buf
               ((io.scratch.get ⟨k, hk⟩).win pid
                 + (io.scratch.get ⟨k, hk⟩).len - 1))
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j _ => by
             have hj : j.val < io.B1 := j.isLt
@@ -3519,7 +3519,7 @@ private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
     | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
     | ⟨2, _⟩ => fun j => io.read3 p₀ + j.val
@@ -3528,7 +3528,7 @@ private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
     | ⟨5, _⟩ => fun _ => io.read3 p₀ + io.B3 - 1
     | ⟨6, _⟩ => fun _ => io.write1 p₀ + io.Bout1 - 1
     | _ => fun _ => io.write2 p₀ + io.Bout2 - 1
-  imask := fun i _ p₀ _ => match i with
+  imask := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun _ => True
@@ -3537,10 +3537,10 @@ private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
     | ⟨5, _⟩ => fun _ => 0 < io.read3 p₀ + io.B3
     | ⟨6, _⟩ => fun _ => 0 < io.write1 p₀ + io.Bout1
     | _ => fun _ => 0 < io.write2 p₀ + io.Bout2
-  owin := fun o _ p₀ _ => match o with
+  owin := fun o _ p₀ _ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ + j.val
     | _ => fun j => io.write2 p₀ + j.val
-  omask := fun _ _ _ _ _ => True
+  omask := fun _ _ _ _ _ _ => True
   swin := fun t => t.elim0
   smask := fun t => t.elim0
 
@@ -3651,7 +3651,7 @@ theorem Implements.intro (io : KernelIO₃ₓ₂)
         · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 h4 h5 xs ys zs s₀ hpid hu hx hy hz
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
@@ -3663,7 +3663,7 @@ theorem Implements.intro (io : KernelIO₃ₓ₂)
             ChanTy.read .nat s₀ io.out1 (io.write1 pid + io.Bout1 - 1)
         | ⟨_+7, _⟩ => fun _ =>
             ChanTy.read .nat s₀ io.out2 (io.write2 pid + io.Bout2 - 1))
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j _ => by
             have hj : j.val < io.B1 := j.isLt
@@ -3848,15 +3848,15 @@ private def toU (io : MaskedKernelIO₃ₓ₂)
     | ⟨_+1, _⟩ => hout2
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ _ => match i with
+  iwin := fun i _ p₀ _ _ => match i with
     | ⟨0, _⟩ => fun j => io.read1 p₀ + j.val
     | ⟨1, _⟩ => fun j => io.read2 p₀ + j.val
     | _ => fun j => io.read3 p₀ + j.val
-  imask := fun _ _ p₀ _ j => io.mask p₀ j
-  owin := fun o _ p₀ _ => match o with
+  imask := fun _ _ p₀ _ _ j => io.mask p₀ j
+  owin := fun o _ p₀ _ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ + j.val
     | _ => fun j => io.write2 p₀ + j.val
-  omask := fun _ _ p₀ _ j => io.mask p₀ j
+  omask := fun _ _ p₀ _ _ j => io.mask p₀ j
   swin := fun t => t.elim0
   smask := fun t => t.elim0
 
@@ -3950,12 +3950,12 @@ theorem Implements.intro (io : MaskedKernelIO₃ₓ₂)
         · exact Or.inl hro
   intro A hd hregs hcov pid h1 h2 h3 h4 h5 xs ys zs s₀ hpid hu hx hy hz
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid (s₀.pids 1)
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => ys
         | _ => zs)
-      s₀ hpid rfl hu
+      s₀ hpid rfl rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => h1 j hj
         | ⟨1, _⟩ => fun j hj => h2 j hj
@@ -4315,22 +4315,22 @@ private def toU (io : MetaMasked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨1, _⟩ => fun _ => io.mwin2 p₀ p₁
     | ⟨2, _⟩ => fun j => io.read p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun j => io.mask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  owin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun _ vals p₀ p₁ j => io.writeMask p₀ p₁
+  omask := fun _ vals p₀ p₁ _ j => io.writeMask p₀ p₁
     (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     (vals (⟨1, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
   swin := fun t => t.elim0
@@ -4404,12 +4404,12 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁)
   intro A hd hregs hcov pid₀ pid₁ m₁ m₂ xs s₀ hpid₀ hpid₁ hu hb1 hb2 hbr
     hbw hm1 hm2 hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => m₁
         | ⟨1, _⟩ => fun _ => m₂
         | ⟨2, _⟩ => xs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨1, _⟩ => fun _ _ => hb2
@@ -4559,24 +4559,24 @@ private def toU (io : MetaGatherMasked2DKernelIO₂ₓ₂) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwinL p₀ p₁
     | ⟨1, _⟩ => fun j => io.read p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun _ => io.gwin p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun j => io.mask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun _ => io.gmask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun _ => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     | _ => fun _ => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun _ => io.writeMask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     | _ => fun _ => io.writeMask2 p₀ p₁
@@ -4676,12 +4676,12 @@ theorem Implements.intro (io : MetaGatherMasked2DKernelIO₂ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ lab xs g s₀ hpid₀ hpid₁ hu hbL hbr hbg
     hbw1 hbw2 hmL hx hg
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => lab
         | ⟨1, _⟩ => xs
         | ⟨2, _⟩ => fun _ => g)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hbL
         | ⟨1, _⟩ => fun j hj => hbr j hj
@@ -4859,21 +4859,21 @@ private def toU (io : BoolScatterMasked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun _ => io.out
-  iwin := fun i _ p₀ p₁ => match i with
+  iwin := fun i _ p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.read p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.readm p₀ p₁ j
     | ⟨2, _⟩ => fun j => io.readx p₀ p₁ j
-  imask := fun _ _ p₀ p₁ j => io.mask p₀ p₁ j
-  owin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  imask := fun _ _ p₀ p₁ _ j => io.mask p₀ p₁ j
+  owin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (fun j' => vals (⟨2, by decide⟩ : Fin 3) j') j
-  omask := fun _ vals p₀ p₁ j =>
+  omask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
       (fun j' => vals (⟨2, by decide⟩ : Fin 3) j') j
     ∧ io.WriteInj p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
         (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')
-  swin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  swin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (fun j' => vals (⟨2, by decide⟩ : Fin 3) j') j
-  smask := fun _ vals p₀ p₁ j =>
+  smask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
       (fun j' => vals (⟨2, by decide⟩ : Fin 3) j') j
 
@@ -4964,12 +4964,12 @@ theorem Implements.intro (io : BoolScatterMasked2DKernelIO₁)
   intro A hd hregs hcov pid₀ pid₁ bs ids xs s₀ hpid₀ hpid₁ hu hbr hbm hbx
     hbw hx hb hi
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => xs
         | ⟨1, _⟩ => bs
         | ⟨2, _⟩ => ids)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => hbr j hj
         | ⟨1, _⟩ => fun j hj => hbm j hj
@@ -5183,7 +5183,7 @@ private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun _ => io.out
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.fwin1 p₀ p₁
     | ⟨1, _⟩ => fun _ => io.fwin2 p₀ p₁
     | ⟨2, _⟩ => fun _ => io.fwin3 p₀ p₁
@@ -5199,7 +5199,7 @@ private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
         (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (fun j' => vals (⟨5, by decide⟩ : Fin 8) j') j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun _ => True
@@ -5214,11 +5214,11 @@ private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
     | ⟨7, _⟩ => fun j => io.mask p₀ p₁
         (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  owin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
     (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
     (fun j' => vals (⟨5, by decide⟩ : Fin 8) j') j
-  omask := fun _ vals p₀ p₁ j =>
+  omask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁
       (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
@@ -5227,11 +5227,11 @@ private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
         (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
         (fun j' => vals (⟨5, by decide⟩ : Fin 8) j')
-  swin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  swin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
     (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
     (fun j' => vals (⟨5, by decide⟩ : Fin 8) j') j
-  smask := fun _ vals p₀ p₁ j =>
+  smask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁
       (vals (⟨3, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨4, by decide⟩ : Fin 8) (⟨0, by decide⟩ : Fin 1))
@@ -5362,7 +5362,7 @@ theorem Implements.intro (io : MetaScatterMasked2DKernelIO₁)
     hu hbf1 hbf2 hbf3 hbm1 hbm2 hbi hbc hbr hbw hg1 hg2 hg3 hm1 hm2 hid
     hcnt hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => g₁
         | ⟨1, _⟩ => fun _ => g₂
@@ -5372,7 +5372,7 @@ theorem Implements.intro (io : MetaScatterMasked2DKernelIO₁)
         | ⟨5, _⟩ => ids
         | ⟨6, _⟩ => cnts
         | ⟨7, _⟩ => xs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hbf1
         | ⟨1, _⟩ => fun _ _ => hbf2
@@ -5593,7 +5593,7 @@ private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
   sbuf := fun t => match t with
     | ⟨0, _⟩ => io.out1
     | ⟨_+1, _⟩ => io.out2
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨1, _⟩ => fun _ => io.mwin2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
@@ -5603,7 +5603,7 @@ private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
     | ⟨3, _⟩ => fun j => io.read2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨2, _⟩ => fun j => io.mask1 p₀ p₁
@@ -5612,14 +5612,14 @@ private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
     | ⟨3, _⟩ => fun j => io.mask2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j =>
         io.writeMask1 p₀ p₁
           (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
@@ -5634,14 +5634,14 @@ private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
         ∧ io.WriteInj₂ p₀ p₁
             (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
             (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
-  swin := fun t vals p₀ p₁ => match t with
+  swin := fun t vals p₀ p₁ _ => match t with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
-  smask := fun t vals p₀ p₁ => match t with
+  smask := fun t vals p₀ p₁ _ => match t with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by decide⟩ : Fin 4) (⟨0, by decide⟩ : Fin 1)) j
@@ -5765,13 +5765,13 @@ theorem Implements.intro (io : ChainMetaMasked2DKernelIO₂ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ m₁ m₂ xs ys s₀ hpid₀ hpid₁ hu hb1 hb2
     hbr1 hbr2 hbw1 hbw2 hm1 hm2 hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => m₁
         | ⟨1, _⟩ => fun _ => m₂
         | ⟨2, _⟩ => xs
         | ⟨3, _⟩ => ys)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨1, _⟩ => fun _ _ => hb2
@@ -5959,26 +5959,26 @@ private def toU (io : MetaMasked2DKernelIO₂ₓ₃) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwinL p₀ p₁
     | ⟨1, _⟩ => fun j => io.read p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun _ => io.gwin p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun j => io.mask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun _ => io.gmask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun _ => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     | ⟨1, _⟩ => fun _ => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     | _ => fun _ => io.write3 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun _ => io.writeMask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1))
     | ⟨1, _⟩ => fun _ => io.writeMask2 p₀ p₁
@@ -6101,12 +6101,12 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₂ₓ₃)
   intro A hd hregs hcov pid₀ pid₁ lab xs g s₀ hpid₀ hpid₁ hu hbL hbr hbg
     hbw1 hbw2 hbw3 hmL hx hg
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => lab
         | ⟨1, _⟩ => xs
         | ⟨2, _⟩ => fun _ => g)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hbL
         | ⟨1, _⟩ => fun j hj => hbr j hj
@@ -6265,10 +6265,10 @@ private def toU (io : GroupedMasked2DKernelIO)
   obuf_mem := hout
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i _ p₀ p₁ j => io.read i p₀ p₁ j
-  imask := fun i _ p₀ p₁ j => io.readMask i p₀ p₁ j
-  owin := fun o _ p₀ p₁ j => io.write o p₀ p₁ j
-  omask := fun o _ p₀ p₁ j => io.writeMask o p₀ p₁ j
+  iwin := fun i _ p₀ p₁ _ j => io.read i p₀ p₁ j
+  imask := fun i _ p₀ p₁ _ j => io.readMask i p₀ p₁ j
+  owin := fun o _ p₀ p₁ _ j => io.write o p₀ p₁ j
+  omask := fun o _ p₀ p₁ _ j => io.writeMask o p₀ p₁ j
   swin := fun t => t.elim0
   smask := fun t => t.elim0
 
@@ -6325,7 +6325,7 @@ theorem Implements.intro (io : GroupedMasked2DKernelIO)
       exact hframe r o' (fun oc j hj => hoc oc j hj)
   intro A hd hregs hcov pid₀ pid₁ hbr hbw xs s₀ hpid₀ hpid₁ hu hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁ (fun i j => xs i j) s₀ hpid₀ hpid₁ hu
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2) (fun i j => xs i j) s₀ hpid₀ hpid₁ rfl hu
       (fun i j hj => hbr i j hj)
       (fun o j hj => hbw o j hj)
       (fun t => t.elim0)
@@ -6495,20 +6495,20 @@ private def toU (io : MetaMasked2DKernelIO₁ₓ₂) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨_+1, _⟩ => fun j => io.read p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨_+1, _⟩ => fun j => io.mask p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 2) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.writeMask2 p₀ p₁
@@ -6602,11 +6602,11 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₁ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ m1 xs s₀ hpid₀ hpid₁ hu hb1 hbr hbw1 hbw2
     hm1 hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => m1
         | ⟨_+1, _⟩ => xs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨_+1, _⟩ => fun j hj => hbr j hj)
@@ -6716,11 +6716,11 @@ theorem Implements.intro_undef (io : MetaMasked2DKernelIO₁ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ m1 xs s₀ hpid₀ hpid₁ hu hb1 hbr hbw1 hbw2
     hm1 hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => m1
         | ⟨_+1, _⟩ => xs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨_+1, _⟩ => fun j hj => hbr j hj)
@@ -6894,24 +6894,24 @@ private def toU (io : MetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
   obuf_mem := fun o => by fin_cases o <;> simp
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨1, _⟩ => fun j => io.read1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun j => io.read2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun j => io.mask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨2, _⟩ => fun j => io.mask2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁
         (vals (⟨0, by decide⟩ : Fin 3) (⟨0, by decide⟩ : Fin 1)) j
     | ⟨_+1, _⟩ => fun j => io.writeMask2 p₀ p₁
@@ -7012,12 +7012,12 @@ theorem Implements.intro (io : MetaMasked2DKernelIO₂ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ m1 xs1 xs2 s₀ hpid₀ hpid₁ hu hb1 hbr1 hbr2
     hbw1 hbw2 hm1 hx1 hx2
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => m1
         | ⟨1, _⟩ => xs1
         | ⟨2, _⟩ => xs2)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨1, _⟩ => fun j hj => hbr1 j hj
@@ -7177,22 +7177,22 @@ private def toU (io : MetaGroupedMasked2DKernelIO)
   obuf_mem := hout
   sarity := fun t => t.elim0
   sbuf := fun t => t.elim0
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨1, _⟩ => fun _ => io.mwin2 p₀ p₁
     | ⟨k+2, h⟩ => fun j => io.read ⟨k, by omega⟩ p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨k+2, h⟩ => fun j => io.readMask ⟨k, by omega⟩ p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun o vals p₀ p₁ j => io.write o p₀ p₁
+  owin := fun o vals p₀ p₁ _ j => io.write o p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun o vals p₀ p₁ j => io.writeMask o p₀ p₁
+  omask := fun o vals p₀ p₁ _ j => io.writeMask o p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
   swin := fun t => t.elim0
@@ -7268,12 +7268,12 @@ theorem Implements.intro (io : MetaGroupedMasked2DKernelIO)
   intro A hd hregs hcov pid₀ pid₁ s1 s2 xs s₀ hpid₀ hpid₁ hu hb1 hb2 hbr hbw
     hm1 hm2 hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => s1
         | ⟨1, _⟩ => fun _ => s2
         | ⟨k+2, h⟩ => xs ⟨k, by have h2 : k + 2 < io.nIn + 2 := h; omega⟩)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨1, _⟩ => fun _ _ => hb2
@@ -7444,22 +7444,22 @@ private def toU (io : GatherMasked2DKernelIO₁) : UKernelIO where
   obuf_mem := fun _ => by simp
   sarity := fun _ => io.B
   sbuf := fun _ => io.out
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.readx p₀ p₁ j
     | ⟨_+1, _⟩ => fun j => io.read p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
     | ⟨_+1, _⟩ => fun j => io.readMask p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
-  owin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  owin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
-  omask := fun _ vals p₀ p₁ j =>
+  omask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
     ∧ io.WriteInj p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
-  swin := fun _ vals p₀ p₁ j => io.write p₀ p₁
+  swin := fun _ vals p₀ p₁ _ j => io.write p₀ p₁
     (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
-  smask := fun _ vals p₀ p₁ j =>
+  smask := fun _ vals p₀ p₁ _ j =>
     io.writeMask p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j') j
 
 /-- Assembly lemma: obligations in the skin's named vocabulary — the index
@@ -7533,11 +7533,11 @@ theorem Implements.intro (io : GatherMasked2DKernelIO₁)
       · exact Or.inl hro
   intro A hd hregs hcov pid₀ pid₁ ids xs s₀ hpid₀ hpid₁ hu hbx hbr hbw hi hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => ids
         | ⟨_+1, _⟩ => xs)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => hbx j hj
         | ⟨_+1, _⟩ => fun j hj => hbr j hj)
@@ -7737,36 +7737,36 @@ private def toU (io : GatherMasked2DKernelIO₂ₓ₂) : UKernelIO where
   sbuf := fun t => match t with
     | ⟨0, _⟩ => io.out1
     | ⟨_+1, _⟩ => io.out2
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.readx p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.read p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
     | ⟨_+2, _⟩ => fun j => io.read p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
     | ⟨1, _⟩ => fun j => io.readMask p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
     | ⟨_+2, _⟩ => fun j => io.readMask p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
-  owin := fun o vals p₀ p₁ => match o with
+  owin := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
-  omask := fun o vals p₀ p₁ => match o with
+  omask := fun o vals p₀ p₁ _ => match o with
     | ⟨0, _⟩ => fun j =>
         io.writeMask1 p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
         ∧ io.WriteInj₁ p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
     | ⟨_+1, _⟩ => fun j =>
         io.writeMask2 p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
         ∧ io.WriteInj₂ p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
-  swin := fun t vals p₀ p₁ => match t with
+  swin := fun t vals p₀ p₁ _ => match t with
     | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
     | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
-  smask := fun t vals p₀ p₁ => match t with
+  smask := fun t vals p₀ p₁ _ => match t with
     | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁
         (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
     | ⟨_+1, _⟩ => fun j => io.writeMask2 p₀ p₁
@@ -7876,12 +7876,12 @@ theorem Implements.intro (io : GatherMasked2DKernelIO₂ₓ₂)
   intro A hd hregs hcov pid₀ pid₁ ids xs ys s₀ hpid₀ hpid₁ hu hbx hbr1 hbr2
     hbw1 hbw2 hi hx hy
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => ids
         | ⟨1, _⟩ => xs
         | ⟨_+2, _⟩ => ys)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun j hj => hbx j hj
         | ⟨1, _⟩ => fun j hj => hbr1 j hj
@@ -8071,33 +8071,33 @@ private def toU (io : ChainMetaGroupedMasked2DKernelIO)
   obuf_mem := hout
   sarity := fun _ => io.B
   sbuf := io.out
-  iwin := fun i vals p₀ p₁ => match i with
+  iwin := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
     | ⟨1, _⟩ => fun _ => io.mwin2 p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
     | ⟨k+2, h⟩ => fun j => io.read ⟨k, by omega⟩ p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  imask := fun i vals p₀ p₁ => match i with
+  imask := fun i vals p₀ p₁ _ => match i with
     | ⟨0, _⟩ => fun _ => True
     | ⟨1, _⟩ => fun _ => True
     | ⟨k+2, h⟩ => fun j => io.readMask ⟨k, by omega⟩ p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  owin := fun o vals p₀ p₁ j => io.write o p₀ p₁
+  owin := fun o vals p₀ p₁ _ j => io.write o p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  omask := fun o vals p₀ p₁ j =>
+  omask := fun o vals p₀ p₁ _ j =>
     io.writeMask o p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
     ∧ io.WriteInj p₀ p₁
         (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
         (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) o
-  swin := fun t vals p₀ p₁ j => io.write t p₀ p₁
+  swin := fun t vals p₀ p₁ _ j => io.write t p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
-  smask := fun t vals p₀ p₁ j => io.writeMask t p₀ p₁
+  smask := fun t vals p₀ p₁ _ j => io.writeMask t p₀ p₁
       (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
       (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
 
@@ -8173,12 +8173,12 @@ theorem Implements.intro (io : ChainMetaGroupedMasked2DKernelIO)
   intro A hd hregs hcov pid₀ pid₁ s1 s2 xs s₀ hpid₀ hpid₁ hu hb1 hb2 hbr hbw
     hm1 hm2 hx
   obtain ⟨s', hexec, hval, hframe⟩ :=
-    hcore A hd hregs hcov pid₀ pid₁
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
       (fun i => match i with
         | ⟨0, _⟩ => fun _ => s1
         | ⟨1, _⟩ => fun _ => s2
         | ⟨k+2, h⟩ => xs ⟨k, by have h2 : k + 2 < io.nIn + 2 := h; omega⟩)
-      s₀ hpid₀ hpid₁ hu
+      s₀ hpid₀ hpid₁ rfl hu
       (fun i => match i with
         | ⟨0, _⟩ => fun _ _ => hb1
         | ⟨1, _⟩ => fun _ _ => hb2
