@@ -2045,4 +2045,1196 @@ specification rmsnorm_implementation_output_summary
       stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
       s hBlockPos hStrideOutKPos hXOutNe hWOutNe
 
+/-! ## The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre)
+
+Everything below is purely additive; the exact surface above is untouched.
+This kernel is the near-twin of `rmsnorm_triton` and rides the same skin,
+`StreamEmitMasked2DKernelIO₂` (streaming genre, style S3): the store sits
+**inside** the second pass, so the output is a per-step `BLOCK_N_SIZE`-lane
+window family rather than one terminal tile, and the kernel's spec `f t j`
+is the genre's *two-pass* shape — the step-`t` tile combined with a fold
+over the entire stream. Unlike the reciprocal-`rstd` twin, this kernel
+computes `std = sqrt(var + eps)` and **divides** (`x / std`), so the stream
+spec is stated in division form.
+
+Structure of the `execR R` story: this kernel has **zero rounding events**.
+Every load and store is at `.real`, and the only `castFloat` is the erased
+`.to(tl.float32)` on `xf`, i.e. `.real → .real` — exact under every `R` by
+the model's defining `round_real` (`Rcast_real_real` below). Both passes
+therefore collapse verbatim onto the exact stepper
+(`stepForRangeAuxR_castFree`), and the whole proven
+`rmsVarPreLoop` / `rmsVarLoopContextInvariant` / `rmsStdPostLoop` /
+`rmsOutLoopContextInvariant` invariant stack above is reused unchanged; the
+`⊨[R]` face adds only the `TraceSafeR` walk, the per-cell memory frame, and
+the stream-lane spec bridge. The skin's readback contract at the default
+`outDType := .real` grid carries `R.round .real`, the identity by
+`round_real` — the ∀-`R` face is the exact streaming contract via the
+model's `.real` identity fields, not a `.triv` special case. -/
+
+section IOFace
+
+open Finset
+open scoped VeriTile.Triton.StreamEmitMasked2DKernelIO₂
+
+set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
+
+/-! ### Stream geometry: trip count and windows -/
+
+/-- Trip count of both `for block_n_strart_ptr in range(0, N_SIZE,
+BLOCK_N_SIZE)` passes: `⌈N_SIZE / BLOCK_N_SIZE⌉`. -/
+def rmsNumSteps (N B : Nat) : Nat := (N + B - 1) / B
+
+private theorem rmsNumSteps_mul_ge (N B : Nat) (hB : 0 < B) :
+    N ≤ rmsNumSteps N B * B := by
+  rcases Nat.eq_zero_or_pos N with rfl | hN
+  · exact Nat.zero_le _
+  · unfold rmsNumSteps
+    have heq : N + B - 1 = (N - 1) + B := by omega
+    rw [heq, Nat.add_div_right _ hB]
+    have h2 : (N - 1) % B + 1 ≤ B := Nat.mod_lt _ hB
+    calc N = (N - 1) + 1 := by omega
+      _ = (N - 1) / B * B + ((N - 1) % B + 1) := by
+          rw [← Nat.add_assoc, Nat.div_add_mod']
+      _ ≤ (N - 1) / B * B + B := Nat.add_le_add_left h2 _
+      _ = ((N - 1) / B + 1) * B := (Nat.succ_mul _ _).symm
+
+private theorem rmsStep_lt_numSteps (N B i : Nat) (hB : 0 < B) (hi : i < N) :
+    i / B < rmsNumSteps N B := by
+  have h2 : i / B * B < rmsNumSteps N B * B :=
+    Nat.lt_of_le_of_lt (Nat.div_mul_le_self i B)
+      (Nat.lt_of_lt_of_le hi (rmsNumSteps_mul_ge N B hB))
+  exact Nat.lt_of_mul_lt_mul_right h2
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of `rmsnorm_implementation` on the two-stream
+per-step emit skin (S3: in-loop store). Step `t` of either pass (at
+`block_n_strart_ptr = t·BLOCK_N_SIZE`) reads the `BLOCK_N_SIZE`-lane `x`
+tile (`read1`, both passes read the same addresses) and the `rms_w` tile
+(`read2`, pass 2 only); step `t` of pass 2 stores the `BLOCK_N_SIZE`-lane
+output window (`write`) at the **`.real`** grid (`outDType` default — the
+kernel's store is untyped `tl.store(out_ptr + out_offset, out)` at `.real`,
+so the per-step stores have no quantization event). The windows transcribe
+the kernel's pointer arithmetic verbatim
+(`offset_n = t·BLOCK_N_SIZE + j`):
+
+* `read1` step `t`, lane `j`:
+  `pid₀·stride_x_batch + pid₁·stride_x_m + (t·BLOCK_N_SIZE + j)·stride_x_k`
+  — the kernel's `x_ptr + offset_m + offset_n * stride_x_k`.
+* `read2` step `t`, lane `j`: `(t·BLOCK_N_SIZE + j)·stride_rms_w` — the
+  kernel's `rms_w_ptr + offset_n * stride_rms_w`.
+* `write` step `t`, lane `j`:
+  `pid₀·stride_out_batch + pid₁·stride_out_m + (t·BLOCK_N_SIZE + j)·stride_out_k`
+  — the kernel's `out_offset`.
+
+All three masks are the kernel's single `x_ptr_mask`:
+`t·BLOCK_N_SIZE + j < N_SIZE`. -/
+def rmsnormImplementationKernelIO (x w o : RegionName)
+    (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ) :
+    StreamEmitMasked2DKernelIO₂ where
+  kernel := rmsnorm_implementation x w o sxb sxm sxk srw sob som sok N B eps
+  inp1 := x
+  inp2 := w
+  out := o
+  T := rmsNumSteps N B
+  B1 := B
+  B2 := B
+  C := B
+  read1 := fun p₀ p₁ t j => p₀ * sxb + p₁ * sxm + (t.val * B + j.val) * sxk
+  read2 := fun _ _ t j => (t.val * B + j.val) * srw
+  write := fun p₀ p₁ t j => p₀ * sob + p₁ * som + (t.val * B + j.val) * sok
+  mask1 := fun _ _ t j => t.val * B + j.val < N
+  mask2 := fun _ _ t j => t.val * B + j.val < N
+  writeMask := fun _ _ t j => t.val * B + j.val < N
+
+/-! ### The stream-level spec -/
+
+/-- The guarded stream-level sum of squares: the pass-1 fold `var += xf*xf`
+over the whole curried `x` stream, guarded by the kernel's window
+(`t·B + e < N`) — the contract only pins `xs` on masked lanes, so the spec
+must not read unmasked lanes. -/
+noncomputable def rmsImplStreamSumSq (N B : Nat)
+    (xs : Fin (rmsNumSteps N B) → Fin B → ℝ) : ℝ :=
+  ∑ u : Fin (rmsNumSteps N B), ∑ e : Fin B,
+    if u.val * B + e.val < N then xs u e ^ 2 else 0
+
+/-- The stream-level RMS-norm spec (the genre's two-pass shape, in this
+kernel's **division** spelling): output window `(t, j)` holds the step-`t`
+`x` value divided by `std = √(Σ x²/N_SIZE + eps)` — the fold over the
+*entire* stream — times the step-`t` `rms_w` value. Algebraically
+`rmsnormWeightedYFullNSpec` with the `Fin N_SIZE` sum re-blocked to the
+guarded stream double sum. -/
+noncomputable def rmsImplStreamSpec (N B : Nat) (eps : ℝ)
+    (xs ws : Fin (rmsNumSteps N B) → Fin B → ℝ)
+    (t : Fin (rmsNumSteps N B)) (j : Fin B) : ℝ :=
+  xs t j / Real.sqrt (rmsImplStreamSumSq N B xs / (N : ℝ) + eps) * ws t j
+
+/-! ### The stream-lane spec bridge -/
+
+private theorem rmsImpl_sum_blocks_lanes (BLOCK c : Nat) (hBLOCK : 0 < BLOCK)
+    (H : Nat → ℝ) :
+    (∑ b : Fin c, ∑ j : Fin BLOCK, H (b.val * BLOCK + j.val))
+      = ∑ k : Fin (c * BLOCK), H k.val := by
+  rw [← Fintype.sum_prod_type']
+  apply Finset.sum_nbij' (i := fun p : Fin c × Fin BLOCK => (⟨p.1.val * BLOCK + p.2.val, by
+        have h1 := p.1.isLt; have h2 := p.2.isLt
+        calc p.1.val * BLOCK + p.2.val < p.1.val * BLOCK + BLOCK := by omega
+          _ = (p.1.val + 1) * BLOCK := by ring
+          _ ≤ c * BLOCK := Nat.mul_le_mul_right _ (by omega)⟩ : Fin (c*BLOCK)))
+    (j := fun k : Fin (c*BLOCK) => (⟨k.val / BLOCK,
+        (Nat.div_lt_iff_lt_mul hBLOCK).mpr (by have := k.isLt; omega)⟩, ⟨k.val % BLOCK, Nat.mod_lt _ hBLOCK⟩))
+  · intro p _; simp
+  · intro k _; simp
+  · intro p _
+    apply Prod.ext
+    · apply Fin.ext; show (p.1.val * BLOCK + p.2.val) / BLOCK = p.1.val
+      rw [Nat.mul_comm p.1.val BLOCK, Nat.mul_add_div hBLOCK, Nat.div_eq_of_lt p.2.isLt, Nat.add_zero]
+    · apply Fin.ext; show (p.1.val * BLOCK + p.2.val) % BLOCK = p.2.val
+      rw [Nat.mul_comm p.1.val BLOCK, Nat.mul_add_mod, Nat.mod_eq_of_lt p.2.isLt]
+  · intro k _; apply Fin.ext; show (k.val / BLOCK) * BLOCK + k.val % BLOCK = k.val
+    rw [Nat.mul_comm (k.val / BLOCK) BLOCK]; exact Nat.div_add_mod k.val BLOCK
+  · intro p _; rfl
+
+private theorem rmsImpl_sum_fin_extend (N M : Nat) (hNM : N ≤ M) (f : Nat → ℝ) :
+    (∑ k : Fin M, (if k.val < N then f k.val else 0)) = ∑ k : Fin N, f k.val := by
+  rw [Fin.sum_univ_eq_sum_range (fun k => if k < N then f k else 0) M,
+      Fin.sum_univ_eq_sum_range (fun k => f k) N]
+  rw [← Finset.sum_subset (s₁ := range N) (s₂ := range M)
+        (fun x hx => Finset.mem_range.mpr (lt_of_lt_of_le (Finset.mem_range.mp hx) hNM))
+        (by intro k hk hknotN; simp only [Finset.mem_range] at hk hknotN; simp [Nat.not_lt.mp hknotN])]
+  apply Finset.sum_congr rfl
+  intro k hk; simp only [Finset.mem_range] at hk; simp [hk]
+
+private theorem rmsImpl_sum_sq_mean (BLOCK c N : Nat) (hBLOCK : 0 < BLOCK)
+    (hge : N ≤ c * BLOCK) (f : Nat → ℝ) :
+    (∑ j : Fin BLOCK, ∑ b : Fin c, (if (b.val * BLOCK + j.val) < N then f (b.val * BLOCK + j.val) else 0))
+      = ∑ k : Fin N, f k.val := by
+  rw [Finset.sum_comm]
+  rw [rmsImpl_sum_blocks_lanes BLOCK c hBLOCK (fun m => if m < N then f m else 0)]
+  exact rmsImpl_sum_fin_extend N (c*BLOCK) hge f
+
+/-- Under the stream pin, the guarded stream double sum **is** the exact
+stack's `rmsVarFullNCarrier` (`Σ_{k<N} x[k]²`), re-blocking
+`k ↔ (k/B, k%B)` via `rmsImpl_sum_sq_mean`. -/
+private theorem rmsImplStreamSumSq_eq_carrier (x : RegionName) (s₀ : BlockState)
+    (sxb sxm sxk N B : Nat) (hB : 0 < B)
+    (xs : Fin (rmsNumSteps N B) → Fin B → ℝ)
+    (hx : ∀ (t : Fin (rmsNumSteps N B)) (e : Fin B), t.val * B + e.val < N →
+      s₀.readMem x (s₀.pids 0 * sxb + s₀.pids 1 * sxm + (t.val * B + e.val) * sxk)
+        = xs t e) :
+    rmsImplStreamSumSq N B xs
+      = rmsVarFullNCarrier s₀ x sxb sxm sxk N B := by
+  unfold rmsImplStreamSumSq rmsVarFullNCarrier
+  rw [Finset.sum_comm,
+    ← rmsImpl_sum_sq_mean B (rmsNumSteps N B) N hB (rmsNumSteps_mul_ge N B hB)
+      (fun k => (s₀.readMem x (xColOffset s₀ sxb sxm sxk k)) ^ 2)]
+  refine Finset.sum_congr rfl fun e _ => Finset.sum_congr rfl fun t _ => ?_
+  by_cases h : t.val * B + e.val < N
+  · rw [if_pos h, if_pos h, ← hx t e h]
+    rfl
+  · rw [if_neg h, if_neg h]
+
+/-- Per-lane spec bridge: at a masked window `(t, j)` the stream spec **is**
+the exact stack's `rmsnormWeightedYFullNSpec` at global lane `t·B + j`
+(division form: `x / √(…)` matches the spec's `x · (1/√(…))` via
+`div_eq_mul_inv` / `one_div`). -/
+private theorem rmsImplStreamSpec_eq_fullNSpec (x w : RegionName)
+    (s₀ : BlockState) (sxb sxm sxk srw N B : Nat) (eps : ℝ) (hB : 0 < B)
+    (xs ws : Fin (rmsNumSteps N B) → Fin B → ℝ)
+    (hx : ∀ (t : Fin (rmsNumSteps N B)) (e : Fin B), t.val * B + e.val < N →
+      s₀.readMem x (s₀.pids 0 * sxb + s₀.pids 1 * sxm + (t.val * B + e.val) * sxk)
+        = xs t e)
+    (hw : ∀ (t : Fin (rmsNumSteps N B)) (e : Fin B), t.val * B + e.val < N →
+      s₀.readMem w ((t.val * B + e.val) * srw) = ws t e)
+    (t : Fin (rmsNumSteps N B)) (j : Fin B) (hj : t.val * B + j.val < N) :
+    rmsImplStreamSpec N B eps xs ws t j
+      = rmsnormWeightedYFullNSpec s₀ x w sxb sxm sxk srw N B eps
+          ⟨t.val * B + j.val, hj⟩ := by
+  unfold rmsImplStreamSpec rmsnormWeightedYFullNSpec rmsnormYFullNSpec rmsInvVarFullN
+  rw [rmsImplStreamSumSq_eq_carrier x s₀ sxb sxm sxk N B hB xs hx,
+    ← hx t j hj, ← hw t j hj, div_eq_mul_inv, one_div]
+
+/-! ### Cast-free collapses and the covered fragment -/
+
+/-- The erased `.to(tl.float32)` on `xf` is a `.real → .real` cast: exact
+under every `R` — `R.cast .real .real` is the exact cast by the model's
+defining `round_real`. The kernel's only `castFloat` is of this shape, so
+the collapse lemmas below rewrite it to the exact cast. -/
+private theorem Rcast_real_real (R : RoundingModel) :
+    R.cast .real .real = FloatDType.cast .real .real := by
+  funext v
+  simp [RoundingModel.cast, FloatDType.cast]
+
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem rmsImplPre_castFree (R : RoundingModel) (sxb sxm B : Nat)
+    (t : BlockState) :
+    stepStmtsR R (rmsVarPreLoop sxb sxm B) t
+      = stepStmts (rmsVarPreLoop sxb sxm B) t := by
+  simp only [rmsVarPreLoop, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The pass-1 body is cast-free (masked `.real` load, the `.real → .real`
+`xf` cast, a real multiply-add): it steps identically under `stepStmtsR R`,
+so the exact var-loop invariant stack transports to `execR`. -/
+private theorem rmsImplVarBody_castFree (R : RoundingModel) (x : RegionName)
+    (sxk N B : Nat) (t : BlockState) :
+    stepStmtsR R (rmsVarLoopBody x sxk N B) t
+      = stepStmts (rmsVarLoopBody x sxk N B) t := by
+  simp only [rmsVarLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def, Rcast_real_real]
+  rfl
+
+/-- The reduce/sqrt tail is cast-free. -/
+private theorem rmsImplPost_castFree (R : RoundingModel) (N B : Nat) (eps : ℝ)
+    (t : BlockState) :
+    stepStmtsR R (rmsStdPostLoop N B eps) t
+      = stepStmts (rmsStdPostLoop N B eps) t := by
+  simp only [rmsStdPostLoop, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The pass-2 body is cast-free **including its in-loop masked `.real`
+store**: `stepStmtR` delegates a `.real`-typed store to the exact
+`writeMemTyped` (`writeMemTypedR R .real` is definitionally the exact
+write), so the whole storing loop steps identically under `stepStmtsR R`
+and the exact output-loop invariant stack transports to `execR`. -/
+private theorem rmsImplOutBody_castFree (R : RoundingModel) (x w o : RegionName)
+    (sxk srw sob som sok N B : Nat) (t : BlockState) :
+    stepStmtsR R (rmsOutLoopBody x w o sxk srw sob som sok N B) t
+      = stepStmts (rmsOutLoopBody x w o sxk srw sob som sok N B) t := by
+  simp only [rmsOutLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def, Rcast_real_real, BlockState.writeMemTypedR]
+  rfl
+
+/-- The full two-pass surface sits inside the flat-memory bridge's covered
+fragment (`FlattenOk`; the two `forRange` clauses recurse into the
+cast-free bodies). -/
+theorem rmsnorm_implementation_flattenOk (x w o : RegionName)
+    (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ) :
+    ((rmsnorm_implementation x w o sxb sxm sxk srw sob som sok N B eps).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [rmsnorm_implementation_toAlg_body]
+  simp [rmsVarPreLoop, rmsVarLoopBody, rmsStdPostLoop, rmsOutLoopBody,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### Cell-level memory frames
+
+The exact stack proves per-lane `readMem` values; the `⊨[R]` Hoare triple
+additionally needs a per-**cell** (`BlockState.mem`) frame, so the
+register-only segments get a generic assigns-don't-touch-memory lemma and
+the storing pass-2 body gets a cell-level frame twin of
+`rmsOutLoopBody_step_preserves_old_output`. -/
+
+/-- A run of `assign` statements never touches memory. -/
+private theorem stepStmts_assigns_mem :
+    ∀ (l : List Stmt),
+      (∀ stmt ∈ l, ∃ dt sh nm, ∃ e : Op dt sh, stmt = Stmt.assign dt sh nm e) →
+      ∀ {s s' : BlockState}, stepStmts l s = some s' → s'.mem = s.mem
+  | [], _, s, s', h => by
+      rw [stepStmts.nil] at h
+      obtain rfl := Option.some.inj h
+      rfl
+  | stmt :: rest, hall, s, s', h => by
+      obtain ⟨dt, sh, nm, e, rfl⟩ := hall _ List.mem_cons_self
+      cases hv : evalOp e s with
+      | none => simp [stepStmts, stepStmt, hv] at h
+      | some v =>
+          rw [stepStmts.cons_some (stepStmt_assign_eq_some hv)] at h
+          rw [stepStmts_assigns_mem rest
+            (fun st' hst' => hall st' (List.mem_cons_of_mem _ hst')) h]
+          rfl
+
+/-- Cell-level frame of a `Prop`-masked exact `writeMem` scatter `foldl`:
+every cell not hit by an active lane is untouched (the cell-level sibling
+of the library's `scatter_prop_masked_preserves_other_offset`, phrased at
+`BlockState.mem` instead of `readMem`). -/
+private theorem foldl_writeMem_prop_preserve_cell {α : Type}
+    (region : RegionName) (ofn : α → Nat) (vfn : α → ℝ) (P : α → Prop)
+    [DecidablePred P] (r : RegionName) (oo : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(r = region ∧ oo = ofn k)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (ofn k) (vfn k) else acc) s).mem r oo
+      = s.mem r oo := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk hPk => hnot k (List.mem_cons_of_mem hd hk) hPk),
+          BlockState.writeMem_mem]
+        exact if_neg (hnot hd List.mem_cons_self hP)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk hPk => hnot k (List.mem_cons_of_mem hd hk) hPk)
+
+set_option maxHeartbeats 8000000 in
+/-- **Cell-level frame of one pass-2 iteration** (the `mem` twin of
+`rmsOutLoopBody_step_preserves_old_output`, same mega-`simp` walk): from
+the output-loop invariant register pins, one storing body iteration leaves
+every memory **cell** off the `{(out, outColOffset s0 col) : col < N_SIZE}`
+write window untouched — the masked scatter store only hits active lanes
+`i + j < N_SIZE`, whose offsets are `outColOffset s0 (i + j)`. -/
+private theorem rmsImplOutBody_step_frame
+    (s0 st st' : BlockState) (x w o : RegionName)
+    (sxb sxm sxk srw sob som sok N B i : Nat) (eps : ℝ)
+    (hPidBatch : st.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)))
+    (hPidM : st.regs .nat [] "pid_m" = some (Tile.scalar (s0.pids 1)))
+    (hOffsetM : st.regs .nat [] "offset_m" =
+      some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)))
+    (hBlockN : st.regs .nat [B] "block_n_size" =
+      some { data := fun idx : TileIndex [B] => idx.1.val })
+    (hStd : st.regs .real [] "std" =
+      some (Tile.scalar (rmsStdFullNSpec s0 x sxb sxm sxk N B eps)))
+    (hReadX : ∀ offset, st.readMem x offset = s0.readMem x offset)
+    (hReadW : ∀ offset, st.readMem w offset = s0.readMem w offset)
+    (hStep : stepStmts (rmsOutLoopBody x w o sxk srw sob som sok N B)
+        (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)) = some st')
+    (r : RegionName) (oo : Nat)
+    (hcond : r ≠ o ∨ ∀ col : Fin N, oo ≠ outColOffset s0 sob som sok col.val) :
+    st'.mem r oo = st.mem r oo := by
+  unfold rmsOutLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM,
+    hBlockN, hStd, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, NumericDType.div, ComparableDType.lt, Option.bind,
+    FloatDType.cast, hReadX, hReadW, outColOffset, rmsStdFullNSpec] at hStep
+  subst st'
+  refine Eq.trans (foldl_writeMem_prop_preserve_cell o _ _ _ r oo _ _ ?_) rfl
+  intro lane _ hActive hbad
+  rcases hcond with hne | hno
+  · exact hne hbad.1
+  · exact hno ⟨i + lane.1.val, hActive⟩ hbad.2
+
+/-! ### Segment termination from an arbitrary launch state
+
+The exact headline consumes an `exec = some` hypothesis; the `⊨[R]` Hoare
+triple must *prove* termination, so the two straight-line segments get
+none-case-refuting existence lemmas (the loops terminate through
+`forRange_inv`). -/
+
+/-- The prologue always steps (register-only assigns of total ops). -/
+private theorem rmsImplPre_exists (sxb sxm B : Nat) (s : BlockState) :
+    ∃ st, stepStmts (rmsVarPreLoop sxb sxm B) s = some st := by
+  cases hStep : stepStmts (rmsVarPreLoop sxb sxm B) s with
+  | none =>
+      exfalso
+      unfold rmsVarPreLoop at hStep
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop,
+        NumericDType.add, NumericDType.mul, BlockState.setReg, Option.bind] at hStep
+  | some st => exact ⟨st, rfl⟩
+
+/-- The reduce/sqrt tail always steps once the `var` register holds a tile. -/
+private theorem rmsImplPost_exists (N B : Nat) (eps : ℝ) (stVar : BlockState)
+    (acc : Tile .real [B])
+    (hVarReg : stVar.regs .real [B] "var" = some acc) :
+    ∃ st, stepStmts (rmsStdPostLoop N B eps) stVar = some st := by
+  cases hStep : stepStmts (rmsStdPostLoop N B eps) stVar with
+  | none =>
+      exfalso
+      unfold rmsStdPostLoop at hStep
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hVarReg, Tile.bop,
+        Tile.uop, NumericDType.add, NumericDType.div, Option.bind,
+        WithBot.realSqrt] at hStep
+  | some st => exact ⟨st, rfl⟩
+
+/-! ### The `TraceSafeR` walk: cast-free index ops -/
+
+/-- `evalOpR` = `evalOp` on the cast-free nat/bool index ops of the two
+passes (register refs and nat arithmetic — `R` never enters). -/
+private theorem rmsImpl_offsnR_eq (R : RoundingModel) (B : Nat) (s : BlockState) :
+    evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "block_n_strart_ptr") (Op.ref .nat [B] "block_n_size")) s
+      = evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "block_n_strart_ptr") (Op.ref .nat [B] "block_n_size")) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+private theorem rmsImpl_maskR_eq (R : RoundingModel) (N B : Nat) (s : BlockState) :
+    evalOpR R (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat N)) s
+      = evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat N)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+private theorem rmsImpl_xaddrR_eq (R : RoundingModel) (sxk B : Nat) (s : BlockState) :
+    evalOpR R (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "offset_m")
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sxk))) s
+      = evalOp (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "offset_m")
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sxk))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+private theorem rmsImpl_waddrR_eq (R : RoundingModel) (srw B : Nat) (s : BlockState) :
+    evalOpR R (Op.mul NumericDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat srw)) s
+      = evalOp (Op.mul NumericDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat srw)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+private theorem rmsImpl_outoffR_eq (R : RoundingModel) (sob som sok B : Nat) (s : BlockState) :
+    evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_batch") (Op.constNat sob))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat som)))
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sok))) s
+      = evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_batch") (Op.constNat sob))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat som)))
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sok))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-! ### The `TraceSafeR` walk: per-lane index-op values -/
+
+/-- The `offset_n` tile at raw counter `i`: `i + j` per lane. -/
+private theorem rmsImpl_offsn_eval (B i : Nat) (s : BlockState)
+    (hbN : s.regs .nat [B] "block_n_size" = some (Tile.vec (fun j : Fin B => j.val))) :
+    evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "block_n_strart_ptr") (Op.ref .nat [B] "block_n_size"))
+        (s.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i))
+      = some (Tile.vec (fun j : Fin B => i + j.val)) := by
+  rw [evalOp_add, evalOp_ref_setReg_same,
+    evalOp_ref_setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("block_n_size":RegName) ≠ "block_n_strart_ptr" by decide),
+    evalOp_ref, hbN]
+  apply congrArg some
+  ext j
+  simp only [Tile.bop_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+    Tile.scalar, Tile.vec, NumericDType.add]
+
+/-- The `x_ptr_mask` tile at raw counter `i`: `decide (i + j < N)` per lane. -/
+private theorem rmsImpl_mask_eval (N B i : Nat) (s : BlockState)
+    (hoffsn : s.regs .nat [B] "offset_n" = some (Tile.vec (fun j : Fin B => i + j.val))) :
+    evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat N)) s
+      = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+  rw [evalOp_lt, evalOp_ref, hoffsn, evalOp_constNat]
+  apply congrArg some
+  ext j
+  simp only [Tile.cop_data, Tile.vec_data, Tile.scalar_data, Broadcast.leftIndex_scalarR,
+    Broadcast.rightIndex_scalarR, ComparableDType.lt, decide_eq_decide]
+
+/-- The per-lane value of the `x` load's address op (`offset_m + offset_n * sxk`). -/
+private theorem rmsImpl_xaddr_eval (sxk B base i : Nat) (s : BlockState)
+    (hom : s.regs .nat [] "offset_m" = some (Tile.scalar base))
+    (hoffsn : s.regs .nat [B] "offset_n" = some (Tile.vec (fun j : Fin B => i + j.val))) :
+    evalOp (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "offset_m")
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sxk))) s
+      = some (Tile.vec (fun j : Fin B => base + (i + j.val) * sxk)) := by
+  rw [evalOp_add, evalOp_ref, hom, evalOp_mul, evalOp_ref, hoffsn, evalOp_constNat]
+  apply congrArg some
+  ext j
+  simp only [Tile.bop_data, Tile.vec, Tile.scalar, Broadcast.leftIndex_scalarL,
+    Broadcast.rightIndex_scalarL, Broadcast.leftIndex_scalarR,
+    Broadcast.rightIndex_scalarR, NumericDType.add, NumericDType.mul]
+
+/-- The per-lane value of the `rms_w` load's address op (`offset_n * srw`). -/
+private theorem rmsImpl_waddr_eval (srw B i : Nat) (s : BlockState)
+    (hoffsn : s.regs .nat [B] "offset_n" = some (Tile.vec (fun j : Fin B => i + j.val))) :
+    evalOp (Op.mul NumericDType.nat Broadcast.scalarR
+        (Op.ref .nat [B] "offset_n") (Op.constNat srw)) s
+      = some (Tile.vec (fun j : Fin B => (i + j.val) * srw)) := by
+  rw [evalOp_mul, evalOp_ref, hoffsn, evalOp_constNat]
+  apply congrArg some
+  ext j
+  simp only [Tile.bop_data, Tile.vec, Tile.scalar, Broadcast.leftIndex_scalarR,
+    Broadcast.rightIndex_scalarR, NumericDType.mul]
+
+/-- The per-lane value of the store's `out_offset` op, directly in launch
+(`s0`)-anchored form via the invariant's `pid_batch` / `pid_m` pins. -/
+private theorem rmsImpl_outoff_eval (sob som sok B i : Nat) (s0 s : BlockState)
+    (hpb : s.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)))
+    (hpm : s.regs .nat [] "pid_m" = some (Tile.scalar (s0.pids 1)))
+    (hoffsn : s.regs .nat [B] "offset_n" = some (Tile.vec (fun j : Fin B => i + j.val))) :
+    evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_batch") (Op.constNat sob))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat som)))
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.ref .nat [B] "offset_n") (Op.constNat sok))) s
+      = some (Tile.vec (fun j : Fin B => outColOffset s0 sob som sok (i + j.val))) := by
+  rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_ref, hpb, evalOp_constNat,
+    evalOp_mul, evalOp_ref, hpm, evalOp_constNat, evalOp_mul, evalOp_ref,
+    hoffsn, evalOp_constNat]
+  apply congrArg some
+  ext j
+  simp only [Tile.bop_data, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul, outColOffset]
+
+set_option maxHeartbeats 4000000 in
+/-- Per-iteration `TraceSafeListR` for the pass-1 body: the index/mask
+assigns, the `xf` cast and the multiply-add are register-only; the masked
+`x` load's **active** lanes are exactly the skin's `mask1` window at step
+`i / B`, in bounds by the `read1` window bound (instantiated at raw counter
+`i`). -/
+private theorem rmsImplVarBodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (x : RegionName) (sxb sxm sxk N B : Nat)
+    (s0 st : BlockState) (i : Nat)
+    (hbN : st.regs .nat [B] "block_n_size" = some (Tile.vec (fun j : Fin B => j.val)))
+    (hom : st.regs .nat [] "offset_m" = some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)))
+    (hbx : ∀ j : Fin B, i + j.val < N →
+      s0.pids 0 * sxb + s0.pids 1 * sxm + (i + j.val) * sxk < bounds x) :
+    Stmt.TraceSafeListR R bounds (rmsVarLoopBody x sxk N B)
+      (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)) := by
+  unfold rmsVarLoopBody
+  -- offset_n
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some
+    ((rmsImpl_offsnR_eq R B _).trans (rmsImpl_offsn_eval B i st hbN))] at ht1
+  obtain rfl := Option.some.inj ht1
+  set q1 := (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)).setReg
+    "offset_n" .nat [B] (Tile.vec (fun j : Fin B => i + j.val)) with hq1
+  have hoffsn1 : q1.regs .nat [B] "offset_n"
+      = some (Tile.vec (fun j : Fin B => i + j.val)) := by simp [hq1]
+  -- x_ptr_mask
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some
+    ((rmsImpl_maskR_eq R N B _).trans (rmsImpl_mask_eval N B i q1 hoffsn1))] at ht2
+  obtain rfl := Option.some.inj ht2
+  set q2 := q1.setReg "x_ptr_mask" .bool [B]
+    (Tile.vec (fun j : Fin B => decide (i + j.val < N))) with hq2
+  have hoffsn2 : q2.regs .nat [B] "offset_n"
+      = some (Tile.vec (fun j : Fin B => i + j.val)) := by
+    rw [hq2]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("offset_n":RegName) ≠ "x_ptr_mask" by decide)]
+    exact hoffsn1
+  have hmask2 : q2.regs .bool [B] "x_ptr_mask"
+      = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+    rw [hq2]; simp
+  have hom2 : q2.regs .nat [] "offset_m"
+      = some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)) := by
+    rw [hq2, hq1]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "x_ptr_mask" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "offset_n" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "block_n_strart_ptr" by decide)]
+    exact hom
+  -- the masked x load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t3 ht3 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [rmsImpl_xaddrR_eq,
+      rmsImpl_xaddr_eval sxk B (s0.pids 0 * sxb + s0.pids 1 * sxm) i q2 hom2 hoffsn2] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask2] at hm
+    obtain rfl := Option.some.inj hm
+    have hlt : i + idx.1.val < N := by simpa [Tile.vec] using hmi
+    simpa [Region.cast_id, Tile.vec] using hbx idx.1 hlt
+  · obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv ht3
+    -- xf cast: register-only
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t4 ht4 => ?_)
+    obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+    -- var accumulate: register-only
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 8000000 in
+/-- Per-iteration `TraceSafeListR` for the pass-2 body: the index/mask/
+scaling assigns are register-only; the masked `rms_w_offset` / `x` loads'
+and the masked store's **active** lanes are the skin's `mask2` / `mask1` /
+`writeMask` windows at step `i / B`, in bounds by the corresponding window
+bounds (instantiated at raw counter `i`). -/
+private theorem rmsImplOutBodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat)
+    (s0 st : BlockState) (i : Nat)
+    (hpb : st.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)))
+    (hpm : st.regs .nat [] "pid_m" = some (Tile.scalar (s0.pids 1)))
+    (hbN : st.regs .nat [B] "block_n_size" = some (Tile.vec (fun j : Fin B => j.val)))
+    (hom : st.regs .nat [] "offset_m" = some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)))
+    (hbx : ∀ j : Fin B, i + j.val < N →
+      s0.pids 0 * sxb + s0.pids 1 * sxm + (i + j.val) * sxk < bounds x)
+    (hbw : ∀ j : Fin B, i + j.val < N → (i + j.val) * srw < bounds w)
+    (hbo : ∀ j : Fin B, i + j.val < N →
+      s0.pids 0 * sob + s0.pids 1 * som + (i + j.val) * sok < bounds o) :
+    Stmt.TraceSafeListR R bounds (rmsOutLoopBody x w o sxk srw sob som sok N B)
+      (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)) := by
+  unfold rmsOutLoopBody
+  -- offset_n
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some
+    ((rmsImpl_offsnR_eq R B _).trans (rmsImpl_offsn_eval B i st hbN))] at ht1
+  obtain rfl := Option.some.inj ht1
+  set q1 := (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)).setReg
+    "offset_n" .nat [B] (Tile.vec (fun j : Fin B => i + j.val)) with hq1
+  have hoffsn1 : q1.regs .nat [B] "offset_n"
+      = some (Tile.vec (fun j : Fin B => i + j.val)) := by simp [hq1]
+  -- x_ptr_mask
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some
+    ((rmsImpl_maskR_eq R N B _).trans (rmsImpl_mask_eval N B i q1 hoffsn1))] at ht2
+  obtain rfl := Option.some.inj ht2
+  set q2 := q1.setReg "x_ptr_mask" .bool [B]
+    (Tile.vec (fun j : Fin B => decide (i + j.val < N))) with hq2
+  have hoffsn2 : q2.regs .nat [B] "offset_n"
+      = some (Tile.vec (fun j : Fin B => i + j.val)) := by
+    rw [hq2]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("offset_n":RegName) ≠ "x_ptr_mask" by decide)]
+    exact hoffsn1
+  have hmask2 : q2.regs .bool [B] "x_ptr_mask"
+      = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+    rw [hq2]; simp
+  have hom2 : q2.regs .nat [] "offset_m"
+      = some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)) := by
+    rw [hq2, hq1]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "x_ptr_mask" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "offset_n" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "block_n_strart_ptr" by decide)]
+    exact hom
+  have hpb2 : q2.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)) := by
+    rw [hq2, hq1]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_batch":RegName) ≠ "x_ptr_mask" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_batch":RegName) ≠ "offset_n" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_batch":RegName) ≠ "block_n_strart_ptr" by decide)]
+    exact hpb
+  have hpm2 : q2.regs .nat [] "pid_m" = some (Tile.scalar (s0.pids 1)) := by
+    rw [hq2, hq1]
+    simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_m":RegName) ≠ "x_ptr_mask" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_m":RegName) ≠ "offset_n" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("pid_m":RegName) ≠ "block_n_strart_ptr" by decide)]
+    exact hpm
+  -- the masked rms_w_offset load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t3 ht3 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [rmsImpl_waddrR_eq, rmsImpl_waddr_eval srw B i q2 hoffsn2] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask2] at hm
+    obtain rfl := Option.some.inj hm
+    have hlt : i + idx.1.val < N := by simpa [Tile.vec] using hmi
+    simpa [Region.cast_id, Tile.vec] using hbw idx.1 hlt
+  · obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv ht3
+    set q3 := q2.setReg "rms_w_offset" .real [B] v3 with hq3
+    have hoffsn3 : q3.regs .nat [B] "offset_n"
+        = some (Tile.vec (fun j : Fin B => i + j.val)) := by
+      rw [hq3]
+      simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_n":RegName) ≠ "rms_w_offset" by decide)]
+      exact hoffsn2
+    have hmask3 : q3.regs .bool [B] "x_ptr_mask"
+        = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+      rw [hq3]
+      simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("x_ptr_mask":RegName) ≠ "rms_w_offset" by decide)]
+      exact hmask2
+    have hom3 : q3.regs .nat [] "offset_m"
+        = some (Tile.scalar (s0.pids 0 * sxb + s0.pids 1 * sxm)) := by
+      rw [hq3]
+      simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("offset_m":RegName) ≠ "rms_w_offset" by decide)]
+      exact hom2
+    -- the masked x load
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun t4 ht4 => ?_)
+    · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+        and_true, true_and, and_self]
+      intro offsets hoffsets idx hactive
+      rw [rmsImpl_xaddrR_eq,
+        rmsImpl_xaddr_eval sxk B (s0.pids 0 * sxb + s0.pids 1 * sxm) i q3 hom3 hoffsn3] at hoffsets
+      obtain rfl := Option.some.inj hoffsets
+      obtain ⟨masks, hm, hmi⟩ := hactive
+      rw [evalOpR_ref, hmask3] at hm
+      obtain rfl := Option.some.inj hm
+      have hlt : i + idx.1.val < N := by simpa [Tile.vec] using hmi
+      simpa [Region.cast_id, Tile.vec] using hbx idx.1 hlt
+    · obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+      set q4 := q3.setReg "x" .real [B] v4 with hq4
+      -- x_new (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t5 ht5 => ?_)
+      obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv ht5
+      set q5 := q4.setReg "x_new" .real [B] v5 with hq5
+      -- out (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t6 ht6 => ?_)
+      obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv ht6
+      set q6 := q5.setReg "out" .real [B] v6 with hq6
+      -- out_offset
+      have hpb6 : q6.regs .nat [] "pid_batch" = some (Tile.scalar (s0.pids 0)) := by
+        rw [hq6, hq5, hq4, hq3]
+        simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_batch":RegName) ≠ "out" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_batch":RegName) ≠ "x_new" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_batch":RegName) ≠ "x" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_batch":RegName) ≠ "rms_w_offset" by decide)]
+        exact hpb2
+      have hpm6 : q6.regs .nat [] "pid_m" = some (Tile.scalar (s0.pids 1)) := by
+        rw [hq6, hq5, hq4, hq3]
+        simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_m":RegName) ≠ "out" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_m":RegName) ≠ "x_new" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_m":RegName) ≠ "x" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("pid_m":RegName) ≠ "rms_w_offset" by decide)]
+        exact hpm2
+      have hoffsn6 : q6.regs .nat [B] "offset_n"
+          = some (Tile.vec (fun j : Fin B => i + j.val)) := by
+        rw [hq6, hq5, hq4]
+        simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("offset_n":RegName) ≠ "out" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("offset_n":RegName) ≠ "x_new" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("offset_n":RegName) ≠ "x" by decide)]
+        exact hoffsn3
+      have hmask6 : q6.regs .bool [B] "x_ptr_mask"
+          = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+        rw [hq6, hq5, hq4]
+        simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("x_ptr_mask":RegName) ≠ "out" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("x_ptr_mask":RegName) ≠ "x_new" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("x_ptr_mask":RegName) ≠ "x" by decide)]
+        exact hmask3
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t7 ht7 => ?_)
+      rw [stepStmtR_assign_eq_some ((rmsImpl_outoffR_eq R sob som sok B q6).trans
+        (rmsImpl_outoff_eval sob som sok B i s0 q6 hpb6 hpm6 hoffsn6))] at ht7
+      obtain rfl := Option.some.inj ht7
+      set q7 := q6.setReg "out_offset" .nat [B]
+        (Tile.vec (fun j : Fin B => outColOffset s0 sob som sok (i + j.val))) with hq7
+      have houtoff7 : q7.regs .nat [B] "out_offset"
+          = some (Tile.vec (fun j : Fin B => outColOffset s0 sob som sok (i + j.val))) := by
+        rw [hq7]; simp
+      have hmask7 : q7.regs .bool [B] "x_ptr_mask"
+          = some (Tile.vec (fun j : Fin B => decide (i + j.val < N))) := by
+        rw [hq7]
+        simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("x_ptr_mask":RegName) ≠ "out_offset" by decide)]
+        exact hmask6
+      -- the masked store
+      refine Stmt.TraceSafeListR.cons_intro ?_
+        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MemAccess.SafeAtR,
+        MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+        memAccessActiveAddressSafeR, and_true, true_and, and_self]
+      intro offsets hoffsets idx hactive
+      rw [evalOpR_ref, houtoff7] at hoffsets
+      obtain rfl := Option.some.inj hoffsets
+      obtain ⟨masks, hm, hmi⟩ := hactive
+      rw [evalOpR_ref, hmask7] at hm
+      obtain rfl := Option.some.inj hm
+      have hlt : i + idx.1.val < N := by simpa [Tile.vec] using hmi
+      simpa [Region.cast_id, Tile.vec, outColOffset] using hbo idx.1 hlt
+
+set_option maxHeartbeats 8000000 in
+/-- **The `TraceSafeR` walk for the whole two-pass kernel** — driven by
+`Stmt.forRangeTraceSafeR_inv` over the proven `rmsVarLoopContextInvariant`
+for pass 1 and `rmsOutLoopContextInvariant` (enriched with the counter
+alignment `off % B = 0`) for pass 2, with the counter advancing by the
+loops' stride `BLOCK_N_SIZE`. The three bound groups are the skin's
+`read1`/`read2`/`write` windows; the alignment converts the raw counter
+into the step index `i / B < ⌈N/B⌉` the windows are phrased over, and
+`hxo`/`hwo`/`hsok` feed the output-loop step (its readback clause needs the
+store not to clobber the streamed inputs and the write window to be
+injective). -/
+private theorem rmsImpl_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (x w o : RegionName) (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
+    (hB : 0 < B) (hxo : x ≠ o) (hwo : w ≠ o) (hsok : 0 < sok)
+    (s : BlockState)
+    (hbx : ∀ (t : Fin (rmsNumSteps N B)) (j : Fin B), t.val * B + j.val < N →
+      s.pids 0 * sxb + s.pids 1 * sxm + (t.val * B + j.val) * sxk < bounds x)
+    (hbw : ∀ (t : Fin (rmsNumSteps N B)) (j : Fin B), t.val * B + j.val < N →
+      (t.val * B + j.val) * srw < bounds w)
+    (hbo : ∀ (t : Fin (rmsNumSteps N B)) (j : Fin B), t.val * B + j.val < N →
+      s.pids 0 * sob + s.pids 1 * som + (t.val * B + j.val) * sok < bounds o) :
+    ((rmsnorm_implementation x w o sxb sxm sxk srw sob som sok N B eps).toAlgKernel).TraceSafeR R bounds s := by
+  have hStepNe : B ≠ 0 := Nat.ne_of_gt hB
+  -- window instantiators at a raw in-range counter
+  have hstepT : ∀ i, B ∣ i → ∀ j : Fin B, i + j.val < N →
+      ∃ t : Fin (rmsNumSteps N B), t.val * B + j.val = i + j.val := by
+    intro i hiB j hij
+    have hiN : i < N := Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hij
+    refine ⟨⟨i / B, rmsStep_lt_numSteps N B i hB hiN⟩, ?_⟩
+    simp [Nat.div_mul_cancel hiB]
+  have hbx' : ∀ i, B ∣ i → ∀ j : Fin B, i + j.val < N →
+      s.pids 0 * sxb + s.pids 1 * sxm + (i + j.val) * sxk < bounds x := by
+    intro i hiB j hij
+    obtain ⟨t, ht⟩ := hstepT i hiB j hij
+    have h := hbx t j (by rw [ht]; exact hij)
+    rwa [ht] at h
+  have hbw' : ∀ i, B ∣ i → ∀ j : Fin B, i + j.val < N →
+      (i + j.val) * srw < bounds w := by
+    intro i hiB j hij
+    obtain ⟨t, ht⟩ := hstepT i hiB j hij
+    have h := hbw t j (by rw [ht]; exact hij)
+    rwa [ht] at h
+  have hbo' : ∀ i, B ∣ i → ∀ j : Fin B, i + j.val < N →
+      s.pids 0 * sob + s.pids 1 * som + (i + j.val) * sok < bounds o := by
+    intro i hiB j hij
+    obtain ⟨t, ht⟩ := hstepT i hiB j hij
+    have h := hbo t j (by rw [ht]; exact hij)
+    rwa [ht] at h
+  unfold Kernel.TraceSafeR
+  rw [rmsnorm_implementation_toAlg_body]
+  simp only [List.append_assoc, List.singleton_append]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro stmt hst s'
+    simp only [rmsVarPreLoop, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    rw [rmsImplPre_castFree R sxb sxm B s] at hs1
+    have hCtx0 :=
+      rmsVarLoopContextInvariant_init_of_preloop s s1 x sxb sxm sxk N B hs1
+    obtain ⟨hPids0, hPb0, hPm0, hRw0⟩ :=
+      rmsVarPreLoop_step_preserves_pids_read s s1 w sxb sxm B hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- pass 1 (invariant principle over `rmsVarLoopContextInvariant`)
+      simp only [Stmt.TraceSafeR]
+      refine Stmt.forRangeTraceSafeR_inv R bounds "block_n_strart_ptr" N B
+        (rmsVarLoopBody x sxk N B)
+        (fun off st => rmsVarLoopContextInvariant s x sxb sxm sxk N B off st)
+        ?_ 0 s1 hCtx0
+      intro i stt hi hP
+      have hbN' : stt.regs .nat [B] "block_n_size"
+          = some (Tile.vec (fun j : Fin B => j.val)) := hP.2.2.1
+      refine ⟨rmsImplVarBodySafeR R bounds x sxb sxm sxk N B s stt i hbN' hP.2.1
+        (fun j hj => hbx' i (Nat.dvd_of_mod_eq_zero hP.1.1) j hj), ?_⟩
+      obtain ⟨st', hstep, hCtx'⟩ :=
+        rmsVarLoopContextInvariant_body_step_exists s stt x sxb sxm sxk N B i hP
+      exact ⟨st', by rw [rmsImplVarBody_castFree]; exact hstep, hCtx'⟩
+    · intro s2 hs2
+      -- identify the pass-1 exit state via the exact loop run
+      obtain ⟨finalV, sv, hsv, hVarFinal, hPV⟩ :=
+        forRange_inv (idx := "block_n_strart_ptr") (start := 0) (stop := N) (step := B)
+          (body := rmsVarLoopBody x sxk N B)
+          (P := fun off st =>
+            rmsVarLoopContextInvariant s x sxb sxm sxk N B off st ∧
+            st.pids = s.pids ∧
+            st.regs .nat [] "pid_batch" = some (Tile.scalar (s.pids 0)) ∧
+            st.regs .nat [] "pid_m" = some (Tile.scalar (s.pids 1)) ∧
+            (∀ offset, st.readMem w offset = s.readMem w offset))
+          hStepNe ⟨hCtx0, hPids0, hPb0, hPm0, hRw0⟩
+          (fun i stt hlt hP => by
+            obtain ⟨st', hstep, hCtx'⟩ :=
+              rmsVarLoopContextInvariant_body_step_exists s stt x sxb sxm sxk N B i hP.1
+            obtain ⟨hPidsS, hPbS, hPmS, hRwS⟩ :=
+              rmsVarLoopBody_step_preserves_pids_read s stt st' x w sxb sxm sxk N B i hP.1 hstep
+            refine ⟨st', hstep, hCtx', ?_, ?_, ?_, ?_⟩
+            · rw [hPidsS]; exact hP.2.1
+            · rw [hPbS]; exact hP.2.2.1
+            · rw [hPmS]; exact hP.2.2.2.1
+            · intro offset; rw [hRwS offset]; exact hP.2.2.2.2 offset)
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _ (rmsImplVarBody_castFree R x sxk N B) "block_n_strart_ptr",
+        ← stepForRangeAux.forRange_unfold, hsv] at hs2
+      obtain rfl := Option.some.inj hs2
+      obtain ⟨hVarCtx, hVarPids, hVarPb, hVarPm, hVarRw⟩ := hPV
+      refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+      · -- reduce/sqrt tail: register-only assigns
+        refine Stmt.TraceSafeListR.of_forall _ _ ?_
+        intro stmt hst s'
+        simp only [rmsStdPostLoop, List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl <;> simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+      · intro s3 hs3
+        rw [rmsImplPost_castFree R N B eps sv] at hs3
+        have hOutBase :=
+          rmsStdPostLoop_step_to_out_init s sv s3 x w o sxb sxm sxk srw sob som sok
+            N B finalV eps hVarCtx hVarFinal hB hVarPids hVarPb hVarPm hVarRw hs3
+        -- pass 2 (invariant principle over `rmsOutLoopContextInvariant` + alignment)
+        refine Stmt.TraceSafeListR.cons_intro ?_ (fun s4 _ => Stmt.TraceSafeListR.nil_intro)
+        simp only [Stmt.TraceSafeR]
+        refine Stmt.forRangeTraceSafeR_inv R bounds "block_n_strart_ptr" N B
+          (rmsOutLoopBody x w o sxk srw sob som sok N B)
+          (fun off st => off % B = 0 ∧
+            rmsOutLoopContextInvariant s x w o sxb sxm sxk srw sob som sok N B off eps st)
+          ?_ 0 s3 ⟨Nat.zero_mod B, hOutBase⟩
+        intro i stt hi hQ
+        obtain ⟨hMod, hCtx⟩ := hQ
+        have hQd := hCtx
+        obtain ⟨hOutInv, hPidsQ, hPbQ, hPmQ, hOmQ, hBnQ, hStdQ, hRXQ, hRWQ⟩ := hQd
+        have hbN' : stt.regs .nat [B] "block_n_size"
+            = some (Tile.vec (fun j : Fin B => j.val)) := hBnQ
+        refine ⟨rmsImplOutBodySafeR R bounds x w o sxb sxm sxk srw sob som sok N B s stt i
+            hPbQ hPmQ hbN' hOmQ
+            (fun j hj => hbx' i (Nat.dvd_of_mod_eq_zero hMod) j hj)
+            (fun j hj => hbw' i (Nat.dvd_of_mod_eq_zero hMod) j hj)
+            (fun j hj => hbo' i (Nat.dvd_of_mod_eq_zero hMod) j hj), ?_⟩
+        obtain ⟨st', hstep, hCtx'⟩ :=
+          rmsOutLoopContextInvariant_body_step_exists s stt x w o sxb sxm sxk srw
+            sob som sok N B i eps hCtx hxo hwo
+            (outColOffset_fin_injective_of_stride_out_k_pos s sob som sok N hsok)
+            (outColOffset_chunk_injective_of_stride_out_k_pos s sob som sok B i hsok)
+        exact ⟨st', by rw [rmsImplOutBody_castFree]; exact hstep,
+          rmsVarLoopOffset_mod_step i B hMod, hCtx'⟩
+
+/-! ### The rounded Hoare triple (`hrun`) -/
+
+set_option maxHeartbeats 8000000 in
+/-- Termination, per-lane values and the per-cell frame of the whole
+two-pass kernel under `execR R`, from an **arbitrary** launch state: the
+exact `rmsVarPreLoop` / `rmsVarLoopContextInvariant` / `rmsStdPostLoop` /
+`rmsOutLoopContextInvariant` stack runs verbatim (both passes are
+cast-free, so `execR R` collapses onto the exact stepper), extended with
+the per-segment memory frames. -/
+private theorem rmsImpl_runR (R : RoundingModel) (x w o : RegionName)
+    (sxb sxm sxk srw sob som sok N B : Nat) (eps : ℝ)
+    (hB : 0 < B) (hxo : x ≠ o) (hwo : w ≠ o) (hsok : 0 < sok)
+    (s₀ : BlockState) :
+    ∃ sfin,
+      execR R (rmsnorm_implementation x w o sxb sxm sxk srw sob som sok N B eps).toAlgKernel s₀
+        = some sfin
+      ∧ (∀ i : Fin N, sfin.readMem o (outColOffset s₀ sob som sok i.val)
+          = rmsnormWeightedYFullNSpec s₀ x w sxb sxm sxk srw N B eps i)
+      ∧ (∀ r oo, (r ≠ o ∨ ∀ i : Fin N, oo ≠ outColOffset s₀ sob som sok i.val) →
+          sfin.mem r oo = s₀.mem r oo) := by
+  have hStepNe : B ≠ 0 := Nat.ne_of_gt hB
+  -- prologue
+  obtain ⟨stPre, hPre⟩ := rmsImplPre_exists sxb sxm B s₀
+  have hPreCtx :=
+    rmsVarLoopContextInvariant_init_of_preloop s₀ stPre x sxb sxm sxk N B hPre
+  obtain ⟨hPrePids, hPrePb, hPrePm, hPreRw⟩ :=
+    rmsVarPreLoop_step_preserves_pids_read s₀ stPre w sxb sxm B hPre
+  have hPreMem : stPre.mem = s₀.mem :=
+    stepStmts_assigns_mem (rmsVarPreLoop sxb sxm B)
+      (by
+        intro stmt hst
+        simp only [rmsVarPreLoop, List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, _, _, _, rfl⟩)
+      hPre
+  -- pass 1 with the memory frame carried alongside the context invariant
+  obtain ⟨finalV, stVar, hVarFor, hVarFinal, hVarP⟩ :=
+    forRange_inv (idx := "block_n_strart_ptr") (start := 0) (stop := N) (step := B)
+      (body := rmsVarLoopBody x sxk N B)
+      (P := fun off st =>
+        rmsVarLoopContextInvariant s₀ x sxb sxm sxk N B off st ∧
+        st.pids = s₀.pids ∧
+        st.regs .nat [] "pid_batch" = some (Tile.scalar (s₀.pids 0)) ∧
+        st.regs .nat [] "pid_m" = some (Tile.scalar (s₀.pids 1)) ∧
+        (∀ offset, st.readMem w offset = s₀.readMem w offset) ∧
+        st.mem = s₀.mem)
+      hStepNe
+      ⟨hPreCtx, hPrePids, hPrePb, hPrePm, hPreRw, hPreMem⟩
+      (fun i stt hlt hP => by
+        obtain ⟨st', hstep, hCtx'⟩ :=
+          rmsVarLoopContextInvariant_body_step_exists s₀ stt x sxb sxm sxk N B i hP.1
+        obtain ⟨hPidsS, hPbS, hPmS, hRwS⟩ :=
+          rmsVarLoopBody_step_preserves_pids_read s₀ stt st' x w sxb sxm sxk N B i hP.1 hstep
+        have hMemS : st'.mem
+            = (stt.setReg "block_n_strart_ptr" .nat [] (Tile.scalar i)).mem :=
+          stepStmts_assigns_mem (rmsVarLoopBody x sxk N B)
+            (by
+              intro stmt hst
+              simp only [rmsVarLoopBody, List.mem_cons, List.not_mem_nil, or_false] at hst
+              rcases hst with rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, _, _, _, rfl⟩)
+            hstep
+        refine ⟨st', hstep, hCtx', ?_, ?_, ?_, ?_, ?_⟩
+        · rw [hPidsS]; exact hP.2.1
+        · rw [hPbS]; exact hP.2.2.1
+        · rw [hPmS]; exact hP.2.2.2.1
+        · intro offset; rw [hRwS offset]; exact hP.2.2.2.2.1 offset
+        · rw [hMemS]; exact hP.2.2.2.2.2)
+  obtain ⟨hVarCtx, hVarPids, hVarPb, hVarPm, hVarRw, hVarMem⟩ := hVarP
+  -- reduce/sqrt tail
+  obtain ⟨stStd, hStd⟩ := rmsImplPost_exists N B eps stVar _ hVarCtx.1.2
+  have hOutBase :=
+    rmsStdPostLoop_step_to_out_init s₀ stVar stStd x w o sxb sxm sxk srw sob som sok
+      N B finalV eps hVarCtx hVarFinal hB hVarPids hVarPb hVarPm hVarRw hStd
+  have hStdMem : stStd.mem = s₀.mem := by
+    rw [stepStmts_assigns_mem (rmsStdPostLoop N B eps)
+      (by
+        intro stmt hst
+        simp only [rmsStdPostLoop, List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl <;> exact ⟨_, _, _, _, rfl⟩)
+      hStd]
+    exact hVarMem
+  -- pass 2 with the conditional cell frame carried alongside the invariant
+  have hOutInj := outColOffset_fin_injective_of_stride_out_k_pos s₀ sob som sok N hsok
+  obtain ⟨finalO, stOut, hOutFor, hOutFinal, hOutP⟩ :=
+    forRange_inv (idx := "block_n_strart_ptr") (start := 0) (stop := N) (step := B)
+      (body := rmsOutLoopBody x w o sxk srw sob som sok N B)
+      (P := fun off st =>
+        rmsOutLoopContextInvariant s₀ x w o sxb sxm sxk srw sob som sok N B off eps st ∧
+        ∀ r oo, (r ≠ o ∨ ∀ i : Fin N, oo ≠ outColOffset s₀ sob som sok i.val) →
+          st.mem r oo = s₀.mem r oo)
+      hStepNe
+      ⟨hOutBase, fun r oo _ => by rw [hStdMem]⟩
+      (fun i stt hlt hQ => by
+        obtain ⟨st', hstep, hQ'⟩ :=
+          rmsOutLoopContextInvariant_body_step_exists s₀ stt x w o sxb sxm sxk srw
+            sob som sok N B i eps hQ.1 hxo hwo hOutInj
+            (outColOffset_chunk_injective_of_stride_out_k_pos s₀ sob som sok B i hsok)
+        refine ⟨st', hstep, hQ', ?_⟩
+        intro r oo hcond
+        obtain ⟨hOutInv, hPidsQ, hPbQ, hPmQ, hOmQ, hBnQ, hStdQ, hRXQ, hRWQ⟩ := hQ.1
+        rw [rmsImplOutBody_step_frame s₀ stt st' x w o sxb sxm sxk srw sob som sok N B i eps
+          hPbQ hPmQ hOmQ hBnQ hStdQ hRXQ hRWQ hstep r oo hcond]
+        exact hQ.2 r oo hcond)
+  -- assemble the `execR` run through the cast-free collapses
+  have hVarR : stepStmtR R (Stmt.forRange "block_n_strart_ptr" 0 N B
+      (rmsVarLoopBody x sxk N B)) stPre = some stVar := by
+    rw [stepStmtR_forRange,
+      stepForRangeAuxR_castFree R _ (rmsImplVarBody_castFree R x sxk N B) "block_n_strart_ptr",
+      ← stepForRangeAux.forRange_unfold]
+    exact hVarFor
+  have hOutR : stepStmtR R (Stmt.forRange "block_n_strart_ptr" 0 N B
+      (rmsOutLoopBody x w o sxk srw sob som sok N B)) stStd = some stOut := by
+    rw [stepStmtR_forRange,
+      stepForRangeAuxR_castFree R _ (rmsImplOutBody_castFree R x w o sxk srw sob som sok N B) "block_n_strart_ptr",
+      ← stepForRangeAux.forRange_unfold]
+    exact hOutFor
+  refine ⟨stOut, ?_, ?_, ?_⟩
+  · show execR R (rmsnorm_implementation x w o sxb sxm sxk srw sob som sok N B eps).toAlgKernel s₀
+        = some stOut
+    unfold execR
+    rw [rmsnorm_implementation_toAlg_body]
+    simp only [List.append_assoc, List.singleton_append, List.cons_append,
+      List.nil_append]
+    rw [stepStmtsR_append R (rmsVarPreLoop sxb sxm B) _ s₀,
+      rmsImplPre_castFree R sxb sxm B s₀, hPre, Option.bind_some,
+      stepStmtsR_cons_some hVarR,
+      stepStmtsR_append R (rmsStdPostLoop N B eps)
+        [Stmt.forRange "block_n_strart_ptr" 0 N B (rmsOutLoopBody x w o sxk srw sob som sok N B)] stVar,
+      rmsImplPost_castFree R N B eps stVar, hStd, Option.bind_some,
+      stepStmtsR_cons_some hOutR, stepStmtsR_nil]
+  · intro i
+    exact hOutP.1.1 i (Nat.lt_of_lt_of_le i.isLt hOutFinal)
+  · exact hOutP.2
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 4000000 in
+/-- **The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre).** For
+every rounding model `R`, the faithful `rmsnorm_implementation` surface
+implements, on its `StreamEmitMasked2DKernelIO₂` signature, the **ideal ℝ
+two-pass RMS-norm** over the streamed tiles: emitted window `(t, j)` holds
+`x[t,j] / √(Σ_guarded x²/N_SIZE + eps) · w[t,j]`, where the guarded double
+sum folds the *entire* `x` stream — the spec `f` is exact real arithmetic
+in the kernel's own division spelling. The kernel has **zero rounding
+events** (loads, both passes' arithmetic and the per-step stores are all at
+`.real`; the erased `.to(tl.float32)` is `.real → .real`), so the skin's
+boundary quantization degenerates: the readback contract's `R.round .real`
+is the identity by the model's defining `round_real`, and the `.real`
+in-loop stores are exact under `execR R` — the ∀-`R` face holds via the
+`RoundingModel` `.real` identity fields, not as a `.triv` special case.
+
+Layer map: both passes are cast-free, so under `execR R` they collapse
+verbatim onto the exact stepper and the proven
+`rmsVarLoopContextInvariant` / `rmsStdPostLoop_step_to_out_init` /
+`rmsOutLoopContextInvariant` invariant stack above is reused unchanged; the
+`⊨[R]` face adds the `TraceSafeR` walk, the per-cell memory frame
+(`rmsImplOutBody_step_frame`, the `mem` twin of
+`rmsOutLoopBody_step_preserves_old_output`), and the stream-lane spec
+bridge (`rmsImpl_sum_sq_mean` re-blocking `k ↔ (k/B, k%B)`).
+
+All four hypotheses are truth-forced (exactly the exact headline
+`rmsnorm_implementation_output_summary`'s side conditions):
+
+* `hBlockPos : 0 < BLOCK_N_SIZE` — both loops step by `BLOCK_N_SIZE`
+  (`range(0, N_SIZE, BLOCK_N_SIZE)`); at `BLOCK_N_SIZE = 0` and
+  `N_SIZE > 0` neither `forRange` advances, `execR` cannot terminate the
+  way the invariant stack requires, and the step index `i / B` is
+  meaningless. It holds for every real launch.
+* `hXOutNe : x_ptr ≠ out_ptr`, `hWOutNe : rms_w_ptr ≠ out_ptr` — pass 2
+  stores into `out` **between** its re-reads of `x` and `rms_w`; if `out`
+  aliased either input, later blocks would re-read already-overwritten
+  values and the closed form would be false.
+* `hStrideOutKPos : 0 < stride_out_k` — the per-lane write window
+  `pid₀·sob + pid₁·som + k·sok` is injective over global lanes only when
+  the output column stride is nonzero
+  (`outColOffset_fin_injective_of_stride_out_k_pos`); with
+  `stride_out_k = 0` all lanes collide and the per-lane readback would be
+  last-writer-wins. Always true for a real tensor.
+
+Relation to the exact surface: the exact headline
+`rmsnorm_implementation_output_summary` (`Realizes_without_Rounding`) above
+is retained unchanged; this `⊨[R]` face restates the same RMS-norm content
+on the streaming emit skin, for every `R` at once (at the `.real` grid the
+two faces carry the same exact cell). Both faces are kept per the
+rounding-as-default doctrine. -/
+specification rmsnorm_implementation_io_correctness (R : RoundingModel)
+    (x_ptr rms_w_ptr out_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k stride_rms_w
+      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
+    (eps : ℝ)
+    (hBlockPos : 0 < BLOCK_N_SIZE)
+    (hXOutNe : x_ptr ≠ out_ptr) (hWOutNe : rms_w_ptr ≠ out_ptr)
+    (hStrideOutKPos : 0 < stride_out_k) :
+    rmsnormImplementationKernelIO x_ptr rms_w_ptr out_ptr stride_x_batch
+        stride_x_m stride_x_k stride_rms_w stride_out_batch stride_out_m
+        stride_out_k N_SIZE BLOCK_N_SIZE eps ⊨[R]
+      fun _ _ xs ws t j =>
+        rmsImplStreamSpec N_SIZE BLOCK_N_SIZE eps xs ws t j := by
+  refine StreamEmitMasked2DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact rmsnorm_implementation_flattenOk x_ptr rms_w_ptr out_ptr
+      stride_x_batch stride_x_m stride_x_k stride_rms_w stride_out_batch
+      stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
+  · -- safety walk
+    intro bounds s xs ws _hx _hw hbr1 hbr2 hbw
+    simp only [rmsnormImplementationKernelIO] at hbr1 hbr2 hbw ⊢
+    exact rmsImpl_traceSafeR R bounds x_ptr rms_w_ptr out_ptr stride_x_batch
+      stride_x_m stride_x_k stride_rms_w stride_out_batch stride_out_m
+      stride_out_k N_SIZE BLOCK_N_SIZE eps hBlockPos hXOutNe hWOutNe
+      hStrideOutKPos s hbr1 hbr2 hbw
+  · -- the rounded Hoare triple
+    intro s₀ xs ws _hundef hx hw
+    simp only [rmsnormImplementationKernelIO] at hx hw ⊢
+    obtain ⟨sfin, hexec, hval, hframe⟩ :=
+      rmsImpl_runR R x_ptr rms_w_ptr out_ptr stride_x_batch stride_x_m
+        stride_x_k stride_rms_w stride_out_batch stride_out_m stride_out_k
+        N_SIZE BLOCK_N_SIZE eps hBlockPos hXOutNe hWOutNe hStrideOutKPos s₀
+    refine ⟨sfin, hexec, ?_, ?_⟩
+    · intro t j hj
+      have hk : t.val * BLOCK_N_SIZE + j.val < N_SIZE := hj
+      have hval' : sfin.readMem out_ptr
+          (s₀.pids 0 * stride_out_batch + s₀.pids 1 * stride_out_m
+            + (t.val * BLOCK_N_SIZE + j.val) * stride_out_k)
+          = rmsnormWeightedYFullNSpec s₀ x_ptr rms_w_ptr stride_x_batch
+              stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps
+              ⟨t.val * BLOCK_N_SIZE + j.val, hk⟩ :=
+        hval ⟨t.val * BLOCK_N_SIZE + j.val, hk⟩
+      rw [BlockState.readMemAs_real, hval',
+        ← rmsImplStreamSpec_eq_fullNSpec x_ptr rms_w_ptr s₀ stride_x_batch
+            stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps
+            hBlockPos xs ws hx hw t j hj]
+      simp [FloatDType.ofReal]
+    · intro r oo hcond
+      refine hframe r oo ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr fun k => ?_
+        have hdm : k.val / BLOCK_N_SIZE * BLOCK_N_SIZE + k.val % BLOCK_N_SIZE
+            = k.val := by
+          rw [Nat.mul_comm]
+          exact Nat.div_add_mod k.val BLOCK_N_SIZE
+        have h := hno
+          ⟨k.val / BLOCK_N_SIZE,
+            rmsStep_lt_numSteps N_SIZE BLOCK_N_SIZE k.val hBlockPos k.isLt⟩
+          ⟨k.val % BLOCK_N_SIZE, Nat.mod_lt _ hBlockPos⟩
+          (by simp [hdm, k.isLt])
+        simpa [hdm, outColOffset] using h
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.RmsnormImplementation
