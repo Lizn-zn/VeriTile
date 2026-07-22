@@ -374,6 +374,64 @@ theorem stepForRangeAuxR_castFree (R : RoundingModel) (body : List Stmt)
   termination_by cur stop _ _ => stop - cur
   decreasing_by omega
 
+/-! ## Stepping walk basics
+
+The R-mirrors of the exact-side walk primitives (`stepStmts.nil`,
+`stepStmts.cons_some`, `stepStmt_assign_eq_some`): the small lemmas a
+statement-by-statement `execR` walk chains through, plus the assign
+inversion and the `forRange` unfolding that `TraceSafeListR` walks over
+loop-bearing kernels thread successor states with. -/
+
+/-- `stepStmtsR` on the empty list succeeds with the state unchanged (the
+R-mirror of `stepStmts.nil`). -/
+theorem stepStmtsR_nil (R : RoundingModel) (s : BlockState) :
+    stepStmtsR R [] s = some s := by
+  simp only [stepStmtsR]
+
+/-- `stepStmtsR` cons chaining: once the head statement steps, the walk
+continues on the tail from its successor (the R-mirror of
+`stepStmts.cons_some`). -/
+theorem stepStmtsR_cons_some {R : RoundingModel} {st : Stmt} {rest : List Stmt}
+    {s s' : BlockState} (h : stepStmtR R st s = some s') :
+    stepStmtsR R (st :: rest) s = stepStmtsR R rest s' := by
+  simp only [stepStmtsR, h]
+
+/-- A successful `evalOpR` steps the corresponding assign to its `setReg`
+successor (the R-mirror of `stepStmt_assign_eq_some`). -/
+theorem stepStmtR_assign_eq_some {R : RoundingModel} {dtype : TileDType}
+    {shape : TileShape} {name : RegName} {e : Op dtype shape} {s : BlockState}
+    {v : Tile dtype shape} (h : evalOpR R e s = some v) :
+    stepStmtR R (.assign dtype shape name e) s = some (s.setReg name dtype shape v) := by
+  simp [stepStmtR, h]
+
+/-- Inversion of a successful R-step of an assign: the successor is a
+`setReg` of the evaluated value. Lets a `TraceSafeListR` walk thread successor
+states of register-only statements without computing their values. -/
+theorem stepStmtR_assign_inv {R : RoundingModel} {dtype : TileDType}
+    {shape : TileShape} {name : RegName} {e : Op dtype shape} {s s' : BlockState}
+    (h : stepStmtR R (.assign dtype shape name e) s = some s') :
+    ∃ v, evalOpR R e s = some v ∧ s' = s.setReg name dtype shape v := by
+  cases hv : evalOpR R e s with
+  | none => simp [stepStmtR, hv] at h
+  | some v =>
+      simp [stepStmtR, hv] at h
+      exact ⟨v, rfl, h.symm⟩
+
+/-- `evalOpR` on a register reference is the register file (R-independent). -/
+theorem evalOpR_ref (R : RoundingModel) {dtype : TileDType} {shape : TileShape}
+    (name : RegName) (s : BlockState) :
+    evalOpR R (Op.ref dtype shape name) s = s.regs dtype shape name := by
+  simp only [evalOpR]
+
+/-- `stepStmtR` on a static `forRange` is the R loop auxiliary (pair with
+`stepForRangeAuxR_castFree` to transport an exact loop-invariant stack to
+`execR`). -/
+theorem stepStmtR_forRange (R : RoundingModel) (idx : RegName)
+    (start stop step : Nat) (body : List Stmt) (s : BlockState) :
+    stepStmtR R (.forRange idx start stop step body) s
+      = stepForRangeAuxR R idx start stop step body s := by
+  simp only [stepStmtR]
+
 /-! ## R-scatter readback (#447 Phase C)
 
 The `writeMemAsR` mirror of the fp16 `MemCell` scatter-readback family in
@@ -523,6 +581,22 @@ theorem scatter_memcell_R_prop_masked_nd (R : RoundingModel)
     rw [foldl_writeMemAsR_preserve_masked R dtype offsetFn valueFn (fun k => decide (P k))
       (offsetFn i) l₁ _ h_l1_not_in]
 
+/-- Unmasked `writeMemAsR` scatter readback: the mask-free specialization of
+`scatter_memcell_R_prop_masked_nd` — with injective offsets, every lane of an
+unmasked rounded scatter store reads back its own `R`-rounded cell. -/
+theorem scatter_memcell_R_nd (R : RoundingModel) (dtype : FloatDType)
+    {region : RegionName} {shape : TileShape} (s : BlockState)
+    (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier dtype.toTileDType)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => acc.writeMemAsR R dtype region (offsetFn k) (valueFn k)) s).mem
+      region (offsetFn i)
+    = MemCell.of dtype.toTileDType (dtype.ofReal (R.storeValue dtype (valueFn i))) := by
+  have h := scatter_memcell_R_prop_masked_nd R dtype (region := region)
+    s offsetFn valueFn (fun _ => True) h_inj i
+  simpa using h
+
 /-- The R-write leaves the program ids untouched. -/
 @[simp] theorem writeMemAsR_pids (R : RoundingModel) (dtype : FloatDType)
     (s : BlockState) (region : RegionName) (offset : Nat)
@@ -580,6 +654,32 @@ theorem readMemValue_bf16_of_cell {s : BlockState} {region : RegionName}
     (h : s.mem region offset = MemCell.of .bf16 (some z : WithBot ℝ)) :
     s.readMemValue .bf16 region offset = (some z : WithBot ℝ) := by
   simp [readMemValue, readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-- Tag-exact readback of a stored fp16 cell through `readMemAs .fp16` (the
+`readMemAs` sibling of `readMemValue_bf16_of_cell`): the `storeValue ∘ ofReal`
+round trip is the identity on a defined real. -/
+theorem readMemAs_fp16_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.fp16.toTileDType (FloatDType.fp16.ofReal x)) :
+    s.readMemAs .fp16 region offset = FloatDType.fp16.ofReal x := by
+  simp [readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-- bf16 sibling of `readMemAs_fp16_of_cell` (verbatim-isomorphic proof). -/
+theorem readMemAs_bf16_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.bf16.toTileDType (FloatDType.bf16.ofReal x)) :
+    s.readMemAs .bf16 region offset = FloatDType.bf16.ofReal x := by
+  simp [readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-- fp32 sibling of `readMemAs_fp16_of_cell` (verbatim-isomorphic proof). -/
+theorem readMemAs_fp32_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.fp32.toTileDType (FloatDType.fp32.ofReal x)) :
+    s.readMemAs .fp32 region offset = FloatDType.fp32.ofReal x := by
+  simp [readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
 
 /-- A `P`-masked `writeMemAsR` scatter preserves every same-region offset not
 hit by an active lane (the `Prop`-mask twin of

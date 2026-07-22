@@ -107,6 +107,18 @@ def storeValue (R : RoundingModel) (dtype : FloatDType)
     R.storeValue .real x = FloatDType.real.storeValue x := by
   simp [storeValue]
 
+/-- An `R`-cast from the ℝ channel followed by a store demotion at the same
+dtype collapses to a **single** round at that dtype: the cast lands the value
+on the `dtype` grid, and re-rounding a grid point is the identity (the
+defining `round_idem`). This is the "two rounding events, one boundary round"
+collapse every narrow-float store tail chains through (cast site + store
+site = one `R.round`). -/
+theorem storeValue_cast (R : RoundingModel) (dtype : FloatDType) (v : ℝ) :
+    R.storeValue dtype (R.cast .real dtype (some v)) = R.round dtype v := by
+  have hunbot : ∀ x : ℝ, WithBot.unbotD 0 (some x) = x := fun _ => rfl
+  cases dtype <;>
+    simp [storeValue, cast, FloatDType.storeValue, hunbot, R.round_idem]
+
 /-- ℝ-level quantization to the `dtype` grid: the numerical core shared by the
 typed cast (`RoundingModel.cast`) and the store demotion (`storeValue`). Both a
 `.to(dtype)` cast and a store into a `dtype` buffer quantize a real to the
