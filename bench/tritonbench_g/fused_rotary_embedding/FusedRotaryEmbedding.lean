@@ -25,11 +25,14 @@ instance performs — ∀ disjoint base-pointer placements of `q`/`cos`/`sin`, �
 program ids whose windows are in bounds, ∀ launch states whose four input
 windows hold `q0`/`q1`/`cos`/`sin`, the translated pointer kernel terminates,
 both Q half-windows hold their rotary closed forms, and every other flat cell
-is untouched. The `handle_kv`-guarded K rotary and paged K/V cache faces stay
-on the `Realizes` surface (see the second ★ theorem): their addressing is
-driven by *chained* `context_lengths`/`BLOCK_TABLES` nat loads, which the plain
-grouped skin does not carry — a combined grouped-plus-chained-metadata skin is
-a known follow-up.
+is untouched. The paged K/V cache faces now have **honest `⊨` headlines**
+(`decoding_fused_rotary_embedding_kcache_chain_correctness` /
+`..._vcache_chain_correctness`) on the `ChainMetaGroupedMasked2DKernelIO` skin:
+their in-kernel `context_lengths → BLOCK_TABLES` chained loads are modelled as
+two chained `.nat` slots, so the store cell's block id is *loaded*, not pinned.
+The older `*_store_slice` faces (which pin `block_id` as a host `Nat` and read a
+pre-rotated scratch value) are kept as independently audited `Realizes` slices,
+but the cache headlines no longer NEED the pin.
 
 ## Proof architecture
 
@@ -76,7 +79,10 @@ open scoped VeriTile.Triton.GroupedMasked2DKernelIO
 set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorems:** `decoding_fused_rotary_embedding_q_correctness` (top
-`⊨` specification), `decoding_fused_rotary_embedding_all_outputs_compute_correct_general` -/
+`⊨` Q rotary specification), `decoding_fused_rotary_embedding_kcache_chain_correctness`
+and `decoding_fused_rotary_embedding_vcache_chain_correctness` (the honest chained
+`⊨` cache headlines that redeem the pinned `block_id`), and
+`decoding_fused_rotary_embedding_all_outputs_compute_correct_general` -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -2274,6 +2280,784 @@ specification decoding_fused_rotary_embedding_q_correctness
           · exact absurd hr h
           · exact h
         · exact Or.inl hr
+
+
+
+/-! ## ════════ ★ Honest chained-metadata cache faces (block_id redeemed) ★ ════════
+
+The K-cache and V-cache paged stores below are stated on the brand-new
+`ChainMetaGroupedMasked2DKernelIO` skin (two chained `.nat` slots: slot 1 =
+`context_lengths[cur_token_idx]`, slot 2 = the `BLOCK_TABLES` cell whose address
+eats slot 1's loaded value). Unlike the `*_store_slice` faces above — which pin
+`block_id` as a host `Nat` and read a pre-rotated value from a scratch buffer —
+these kernels perform the genuine in-kernel `context_lengths → BLOCK_TABLES`
+chained loads and the genuine rotary combination, so the headlines below no
+longer NEED the pinned `block_id` parameter. The `handle_kv` guard lives in every
+window/mask; block-id aliasing enters only through the skin's per-context
+`WriteInj` readback gates (never as a `∀` hypothesis), plus — for the two K-cache
+half stores sharing `k_cache` — a `hCross` half-window disjointness side
+condition (the honest analogue of `kv_cache_copy`'s `KCache ≠ VCache`). -/
+
+set_option maxHeartbeats 5000000
+
+/-- Honest chained-metadata K-cache slice: unconditional metadata + data loads,
+in-kernel rotation, both K-cache half stores, all guarded by `handle_kv`. -/
+def decoding_fused_rotary_embedding_kcache_chain
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
+  handle_kv = cur_head_idx % $(KV_GROUP_NUM) == $(0)
+  if handle_kv {
+    cur_k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
+    dim_range0 = tl.arange(0, $(HALF_DIM))
+    dim_range1 = tl.arange(0, $(HALF_DIM)) + $(HALF_DIM)
+    off_kv = cur_token_idx * $(k_token_stride) + cur_k_head_idx * $(k_head_stride)
+    loaded_k0 = tl.load(k + off_kv + dim_range0 * $(head_dim_stride))
+    loaded_k1 = tl.load(k + off_kv + dim_range1 * $(head_dim_stride))
+    off_cos_sin = cur_token_idx * $(cos_token_stride) + dim_range0 * $(cos_stride)
+    loaded_cos = tl.load(cos + off_cos_sin)
+    loaded_sin = tl.load(sin + off_cos_sin)
+    out_k0 = loaded_k0 * loaded_cos - loaded_k1 * loaded_sin
+    out_k1 = loaded_k0 * loaded_sin + loaded_k1 * loaded_cos
+    past_kv_seq_len = tl.load(context_lengths + cur_token_idx) - $(1)
+    last_block_idx = past_kv_seq_len // $(block_size)
+    block_ids = tl.load(BLOCK_TABLES + cur_token_idx * $(bts_stride) +
+      last_block_idx * $(btb_stride))
+    offsets_in_last_block = past_kv_seq_len % $(block_size)
+    offsets_cache_base = block_ids * $(kcb_stride) + cur_k_head_idx * $(kch_stride)
+    k_range0 = offsets_cache_base + offsets_in_last_block * $(kcs_stride) +
+      (dim_range0 // $(x)) * $(kcsplit_x_stride) + (dim_range0 % $(x)) * $(kcd_stride)
+    k_range1 = offsets_cache_base + offsets_in_last_block * $(kcs_stride) +
+      (dim_range1 // $(x)) * $(kcsplit_x_stride) + (dim_range1 % $(x)) * $(kcd_stride)
+    tl.store(k_cache + k_range0, out_k0)
+    tl.store(k_cache + k_range1, out_k1)
+  }
+}
+
+theorem decoding_fused_rotary_embedding_kcache_chain_flattenOk
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat) :
+    ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x
+      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride
+      btb_stride block_size HALF_DIM).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Unmasked intra-region disjoint-offset frame (companion for seeing a cell
+through a later same-region store whose offsets all differ). -/
+private theorem foldl_writeMem_readMem_disjoint {shape : TileShape}
+    (region : RegionName) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (l : List (TileIndex shape)) (s : BlockState)
+    (o : Nat) (h : ∀ k ∈ l, offsetFn k ≠ o) :
+    (l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem
+        region o = s.readMem region o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih _ (fun k hk => h k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_readMem, if_neg]
+      rintro ⟨_, hoff⟩
+      exact (h hd List.mem_cons_self) hoff.symm
+
+private theorem foldl_writeMem_mem_disjoint {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (r : RegionName) (o : Nat)
+    (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem r o
+      = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+        BlockState.writeMem_mem, if_neg]
+      exact fun hc => hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩
+
+theorem decoding_fused_rotary_embedding_kcache_chain_traceSafe
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hb₁ : s.pids 1 < bounds context_lengths)
+    (hb₂ : s.pids 1 * bts_stride +
+      ((s.readMemValue .nat context_lengths (s.pids 1) - 1) / block_size) *
+        btb_stride < bounds BLOCK_TABLES)
+    (hrk0 : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.pids 1 * k_token_stride + (s.pids 0 / KV_GROUP_NUM) * k_head_stride +
+        j.val * head_dim_stride < bounds k)
+    (hrk1 : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.pids 1 * k_token_stride + (s.pids 0 / KV_GROUP_NUM) * k_head_stride +
+        (j.val + HALF_DIM) * head_dim_stride < bounds k)
+    (hrcos : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.pids 1 * cos_token_stride + j.val * cos_stride < bounds cos)
+    (hrsin : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.pids 1 * cos_token_stride + j.val * cos_stride < bounds sin)
+    (hwk0 : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.readMemValue .nat BLOCK_TABLES
+          (s.pids 1 * bts_stride +
+            ((s.readMemValue .nat context_lengths (s.pids 1) - 1) / block_size) *
+              btb_stride) * kcb_stride +
+        (s.pids 0 / KV_GROUP_NUM) * kch_stride +
+        ((s.readMemValue .nat context_lengths (s.pids 1) - 1) % block_size) *
+          kcs_stride +
+        (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride < bounds k_cache)
+    (hwk1 : ∀ j : Fin HALF_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.readMemValue .nat BLOCK_TABLES
+          (s.pids 1 * bts_stride +
+            ((s.readMemValue .nat context_lengths (s.pids 1) - 1) / block_size) *
+              btb_stride) * kcb_stride +
+        (s.pids 0 / KV_GROUP_NUM) * kch_stride +
+        ((s.readMemValue .nat context_lengths (s.pids 1) - 1) % block_size) *
+          kcs_stride +
+        ((j.val + HALF_DIM) / x) * kcsplit_x_stride +
+        ((j.val + HALF_DIM) % x) * kcd_stride < bounds k_cache) :
+    Kernel.TraceSafe bounds
+      ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride
+        btb_stride block_size HALF_DIM).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  by_cases hHandle : s.pids 0 % KV_GROUP_NUM = 0
+  · simp [decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmts, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      tile_elementwise, Bool.and_eq_true,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+      ComparableDType.eq, BlockState.readMemValue, hHandle, hb₁]
+    refine ⟨fun a => hrk0 a hHandle, fun a => hrk1 a hHandle, fun a => hrcos a hHandle,
+      fun a => hrsin a hHandle, ?_, fun a => ?_, fun a => ?_⟩
+    · simpa only [BlockState.readMemValue] using hb₂
+    · simpa only [BlockState.readMemValue] using hwk0 a hHandle
+    · simpa only [BlockState.readMemValue] using hwk1 a hHandle
+  · simp [decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      tile_elementwise, Bool.and_eq_true,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+      ComparableDType.eq, BlockState.readMemValue, hHandle]
+
+/-- Prototype: existence of exec (guard handling). -/
+theorem decoding_fused_rotary_embedding_kcache_chain_exec_exists
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat)
+    (s₀ : BlockState) :
+    ∃ s1, exec ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES context_lengths
+      KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+      cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+      bts_stride btb_stride block_size HALF_DIM).toAlgKernel) s₀ = some s1 := by
+  by_cases hHandle : s₀.pids 0 % KV_GROUP_NUM = 0 <;>
+  simp [exec, decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+    BlockState.readMemValue, hHandle]
+
+set_option maxHeartbeats 20000000 in
+theorem decoding_fused_rotary_embedding_kcache_chain_region_run
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat)
+    (s₀ : BlockState) (m₁ m₂ : Nat) (xs : Fin 4 → Fin HALF_DIM → ℝ)
+    (hCross : ∀ j l : Fin HALF_DIM,
+      m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+          ((m₁ - 1) % block_size) * kcs_stride +
+          (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride
+        ≠ m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+          ((m₁ - 1) % block_size) * kcs_stride +
+          ((l.val + HALF_DIM) / x) * kcsplit_x_stride +
+          ((l.val + HALF_DIM) % x) * kcd_stride)
+    (hm₁ : s₀.readMemValue .nat context_lengths (s₀.pids 1) = m₁)
+    (hm₂ : s₀.readMemValue .nat BLOCK_TABLES
+      (s₀.pids 1 * bts_stride + ((m₁ - 1) / block_size) * btb_stride) = m₂)
+    (hk0 : ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+      s₀.readMem k (s₀.pids 1 * k_token_stride +
+        (s₀.pids 0 / KV_GROUP_NUM) * k_head_stride + j.val * head_dim_stride)
+        = xs 0 j)
+    (hk1 : ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+      s₀.readMem k (s₀.pids 1 * k_token_stride +
+        (s₀.pids 0 / KV_GROUP_NUM) * k_head_stride + (j.val + HALF_DIM) * head_dim_stride)
+        = xs 1 j)
+    (hcos : ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+      s₀.readMem cos (s₀.pids 1 * cos_token_stride + j.val * cos_stride) = xs 2 j)
+    (hsin : ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+      s₀.readMem sin (s₀.pids 1 * cos_token_stride + j.val * cos_stride) = xs 3 j) :
+    ∃ s1, exec ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES context_lengths
+        KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+        bts_stride btb_stride block_size HALF_DIM).toAlgKernel) s₀ = some s1
+      ∧ ((∀ j l : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s₀.pids 0 % KV_GROUP_NUM = 0 →
+            m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride
+              = m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                (l.val / x) * kcsplit_x_stride + (l.val % x) * kcd_stride → j = l) →
+          ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s1.readMem k_cache
+              (m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride)
+              = xs 0 j * xs 2 j - xs 1 j * xs 3 j)
+      ∧ ((∀ j l : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s₀.pids 0 % KV_GROUP_NUM = 0 →
+            m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                ((j.val + HALF_DIM) / x) * kcsplit_x_stride +
+                ((j.val + HALF_DIM) % x) * kcd_stride
+              = m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                ((l.val + HALF_DIM) / x) * kcsplit_x_stride +
+                ((l.val + HALF_DIM) % x) * kcd_stride → j = l) →
+          ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s1.readMem k_cache
+              (m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+                ((m₁ - 1) % block_size) * kcs_stride +
+                ((j.val + HALF_DIM) / x) * kcsplit_x_stride +
+                ((j.val + HALF_DIM) % x) * kcd_stride)
+              = xs 0 j * xs 3 j + xs 1 j * xs 2 j)
+      ∧ (∀ r o,
+          (r ≠ k_cache ∨ ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            o ≠ m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+              ((m₁ - 1) % block_size) * kcs_stride +
+              (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride) →
+          (r ≠ k_cache ∨ ∀ j : Fin HALF_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            o ≠ m₂ * kcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * kch_stride +
+              ((m₁ - 1) % block_size) * kcs_stride +
+              ((j.val + HALF_DIM) / x) * kcsplit_x_stride +
+              ((j.val + HALF_DIM) % x) * kcd_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  subst hm₂; subst hm₁
+  by_cases hHandle : s₀.pids 0 % KV_GROUP_NUM = 0
+  · -- handle_kv true: full content
+    obtain ⟨s1, hs1⟩ : ∃ s1, exec ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES
+        context_lengths KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+        cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride
+        kcd_stride bts_stride btb_stride block_size HALF_DIM).toAlgKernel) s₀ = some s1 :=
+      decoding_fused_rotary_embedding_kcache_chain_exec_exists k cos sin k_cache BLOCK_TABLES context_lengths
+        KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+        bts_stride btb_stride block_size HALF_DIM s₀
+    have hs1' := hs1
+    simp [exec, decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+      BlockState.readMemValue, hHandle] at hs1'
+    refine ⟨s1, hs1, ?_, ?_, ?_⟩
+    · -- first-half readback (see through the later second-half store)
+      intro hInj j _
+      rw [← hs1']
+      simp only [BlockState.readMemValue]
+      rw [foldl_writeMem_readMem_disjoint (shape := [HALF_DIM]) k_cache _ _ _ _ _
+        (fun kidx _ => by
+          simpa only [BlockState.readMemValue] using
+            (hCross j ⟨kidx.1.val, kidx.1.isLt⟩).symm)]
+      rw [BlockState.scatter_readback_nd (shape := [HALF_DIM]) _ _ _ ?_ (j, PUnit.unit)]
+      · simp only [BlockState.readMemValue]
+        rw [hk0 j hHandle, hk1 j hHandle, hcos j hHandle, hsin j hHandle]
+      · rintro ⟨a, ua⟩ ⟨b, ub⟩ hab
+        cases ua; cases ub
+        simp only [BlockState.readMemValue] at hab
+        have := hInj ⟨a.val, a.isLt⟩ ⟨b.val, b.isLt⟩ hHandle hHandle (by simpa using hab)
+        simpa using this
+    · -- second-half readback (outer store, direct)
+      intro hInj j _
+      rw [← hs1']
+      simp only [BlockState.readMemValue]
+      rw [BlockState.scatter_readback_nd (shape := [HALF_DIM]) _ _ _ ?_ (j, PUnit.unit)]
+      · simp only [BlockState.readMemValue]
+        rw [hk0 j hHandle, hk1 j hHandle, hcos j hHandle, hsin j hHandle]
+      · rintro ⟨a, ua⟩ ⟨b, ub⟩ hab
+        cases ua; cases ub
+        simp only [BlockState.readMemValue] at hab
+        have := hInj ⟨a.val, a.isLt⟩ ⟨b.val, b.isLt⟩ hHandle hHandle (by simpa using hab)
+        simpa using this
+    · -- frame
+      intro r o hc1 hc2
+      rw [← hs1']
+      rw [foldl_writeMem_mem_disjoint (region := k_cache) _ _ r o _ _ (fun kidx _ hc => ?_)]
+      rw [foldl_writeMem_mem_disjoint (region := k_cache) _ _ r o _ _ (fun kidx _ hc => ?_)]
+      · rfl
+      · -- inner (first-half) store misses (r,o)
+        rcases hc1 with hne | hno
+        · exact hne hc.1.symm
+        · exact hno ⟨kidx.1.val, kidx.1.isLt⟩ hHandle
+            (by simpa only [BlockState.readMemValue] using hc.2.symm)
+      · -- outer (second-half) store misses (r,o)
+        rcases hc2 with hne | hno
+        · exact hne hc.1.symm
+        · exact hno ⟨kidx.1.val, kidx.1.isLt⟩ hHandle
+            (by simpa only [BlockState.readMemValue] using hc.2.symm)
+  · -- handle_kv false: stores skipped, value legs vacuous, frame trivial
+    obtain ⟨s1, hs1⟩ : ∃ s1, exec ((decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES
+        context_lengths KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+        cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride
+        kcd_stride bts_stride btb_stride block_size HALF_DIM).toAlgKernel) s₀ = some s1 :=
+      decoding_fused_rotary_embedding_kcache_chain_exec_exists k cos sin k_cache BLOCK_TABLES context_lengths
+        KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+        bts_stride btb_stride block_size HALF_DIM s₀
+    have hs1' := hs1
+    simp [exec, decoding_fused_rotary_embedding_kcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+      BlockState.readMemValue, hHandle] at hs1'
+    refine ⟨s1, hs1, ?_, ?_, ?_⟩
+    · exact fun _ j hj => absurd hj hHandle
+    · exact fun _ j hj => absurd hj hHandle
+    · intro r o _ _
+      rw [← hs1']
+      rfl
+
+/-- Factored value function: the two rotary K-cache half closed forms over the
+loaded input channels (0=k0, 1=k1, 2=cos, 3=sin; output 0=first half, 1=second). -/
+def decodingKCacheChainSpec : Nat → Nat → Nat → Nat → (Fin 4 → Fin HALF_DIM → ℝ) → Fin 2 →
+    Fin HALF_DIM → ℝ :=
+  fun _ _ _ _ xs o j =>
+    match o with
+    | ⟨0, _⟩ => xs 0 j * xs 2 j - xs 1 j * xs 3 j
+    | ⟨_ + 1, _⟩ => xs 0 j * xs 3 j + xs 1 j * xs 2 j
+
+/-- The chained-metadata grouped IO signature for the honest K-cache slice. -/
+def decodingKCacheChainIO
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat) :
+    ChainMetaGroupedMasked2DKernelIO where
+  kernel := decoding_fused_rotary_embedding_kcache_chain k cos sin k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+    x k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+    kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride
+    btb_stride block_size HALF_DIM
+  nIn := 4
+  nOut := 2
+  bufs := [k, cos, sin, k_cache, context_lengths, BLOCK_TABLES]
+  mbuf1 := context_lengths
+  mbuf2 := BLOCK_TABLES
+  inp := fun i => match i with
+    | ⟨0, _⟩ => k
+    | ⟨1, _⟩ => k
+    | ⟨2, _⟩ => cos
+    | ⟨_ + 3, _⟩ => sin
+  out := fun _ => k_cache
+  B := HALF_DIM
+  mwin1 := fun _ pid₁ => pid₁
+  mwin2 := fun _ pid₁ m₁ => pid₁ * bts_stride + ((m₁ - 1) / block_size) * btb_stride
+  read := fun i pid₀ pid₁ _ _ j => match i with
+    | ⟨0, _⟩ => pid₁ * k_token_stride + (pid₀ / KV_GROUP_NUM) * k_head_stride +
+        j.val * head_dim_stride
+    | ⟨1, _⟩ => pid₁ * k_token_stride + (pid₀ / KV_GROUP_NUM) * k_head_stride +
+        (j.val + HALF_DIM) * head_dim_stride
+    | ⟨2, _⟩ => pid₁ * cos_token_stride + j.val * cos_stride
+    | ⟨_ + 3, _⟩ => pid₁ * cos_token_stride + j.val * cos_stride
+  readMask := fun _ pid₀ _ _ _ _ => pid₀ % KV_GROUP_NUM = 0
+  write := fun o pid₀ _ m₁ m₂ j => match o with
+    | ⟨0, _⟩ => m₂ * kcb_stride + (pid₀ / KV_GROUP_NUM) * kch_stride +
+        ((m₁ - 1) % block_size) * kcs_stride +
+        (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride
+    | ⟨_ + 1, _⟩ => m₂ * kcb_stride + (pid₀ / KV_GROUP_NUM) * kch_stride +
+        ((m₁ - 1) % block_size) * kcs_stride +
+        ((j.val + HALF_DIM) / x) * kcsplit_x_stride +
+        ((j.val + HALF_DIM) % x) * kcd_stride
+  writeMask := fun _ pid₀ _ _ _ _ => pid₀ % KV_GROUP_NUM = 0
+
+open scoped VeriTile.Triton.ChainMetaGroupedMasked2DKernelIO in
+theorem decoding_fused_rotary_embedding_kcache_chain_correctness
+    (k cos sin k_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride kcb_stride kch_stride kcsplit_x_stride
+      kcs_stride kcd_stride bts_stride btb_stride block_size HALF_DIM : Nat)
+    (hCross : ∀ (pid₀ _pid₁ m₁ m₂ : Nat) (j l : Fin HALF_DIM),
+      m₂ * kcb_stride + (pid₀ / KV_GROUP_NUM) * kch_stride +
+          ((m₁ - 1) % block_size) * kcs_stride +
+          (j.val / x) * kcsplit_x_stride + (j.val % x) * kcd_stride
+        ≠ m₂ * kcb_stride + (pid₀ / KV_GROUP_NUM) * kch_stride +
+          ((m₁ - 1) % block_size) * kcs_stride +
+          ((l.val + HALF_DIM) / x) * kcsplit_x_stride +
+          ((l.val + HALF_DIM) % x) * kcd_stride) :
+    decodingKCacheChainIO k cos sin k_cache BLOCK_TABLES context_lengths KV_GROUP_NUM x
+        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+        kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride bts_stride
+        btb_stride block_size HALF_DIM
+      ⊨ decodingKCacheChainSpec := by
+  refine ChainMetaGroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · -- hout
+    intro o
+    simp only [decodingKCacheChainIO, List.mem_cons]
+    tauto
+  · -- hok
+    exact decoding_fused_rotary_embedding_kcache_chain_flattenOk k cos sin k_cache BLOCK_TABLES context_lengths
+      KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+      cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+      bts_stride btb_stride block_size HALF_DIM
+  · -- hts
+    intro bounds s s1 s2 hm₁ hm₂ hb1 hb2 hbr hbw
+    simp only [decodingKCacheChainIO] at hm₁ hm₂ hb1 hb2 hbr hbw
+    refine decoding_fused_rotary_embedding_kcache_chain_traceSafe k cos sin k_cache BLOCK_TABLES context_lengths
+      KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+      cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+      bts_stride btb_stride block_size HALF_DIM bounds s hb1 ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    · rw [← hm₁] at hb2; exact hb2
+    · exact fun j hj => hbr ⟨0, by omega⟩ j hj
+    · exact fun j hj => hbr ⟨1, by omega⟩ j hj
+    · exact fun j hj => hbr ⟨2, by omega⟩ j hj
+    · exact fun j hj => hbr ⟨3, by omega⟩ j hj
+    · intro j hj
+      have h := hbw ⟨0, by omega⟩ j hj
+      rw [← hm₂, ← hm₁] at h; exact h
+    · intro j hj
+      have h := hbw ⟨1, by omega⟩ j hj
+      rw [← hm₂, ← hm₁] at h; exact h
+  · -- hrun
+    intro s₀ s1 s2 xs hm₁ hm₂ hx
+    simp only [decodingKCacheChainIO] at hm₁ hm₂ hx
+    obtain ⟨s1', hexec, hval0, hval1, hframe⟩ :=
+      decoding_fused_rotary_embedding_kcache_chain_region_run k cos sin k_cache BLOCK_TABLES context_lengths
+        KV_GROUP_NUM x k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride kcb_stride kch_stride kcsplit_x_stride kcs_stride kcd_stride
+        bts_stride btb_stride block_size HALF_DIM s₀ s1 s2 xs
+        (fun j l => hCross (s₀.pids 0) (s₀.pids 1) s1 s2 j l)
+        hm₁ hm₂
+        (fun j hj => hx ⟨0, by omega⟩ j hj)
+        (fun j hj => hx ⟨1, by omega⟩ j hj)
+        (fun j hj => hx ⟨2, by omega⟩ j hj)
+        (fun j hj => hx ⟨3, by omega⟩ j hj)
+    refine ⟨s1', hexec, ?_, ?_⟩
+    · intro o hInj j hmask
+      simp only [decodingKCacheChainIO, decodingKCacheChainSpec] at hInj hmask ⊢
+      match o with
+      | ⟨0, _⟩ => exact hval0 hInj j hmask
+      | ⟨1, _⟩ => exact hval1 hInj j hmask
+    · intro r o' hc
+      simp only [decodingKCacheChainIO] at hc
+      refine hframe r o' ?_ ?_
+      · by_cases hr : r = k_cache
+        · right; intro j hjh
+          rcases hc ⟨0, by omega⟩ j hjh with h | h
+          · exact absurd hr h
+          · exact h
+        · left; exact hr
+      · by_cases hr : r = k_cache
+        · right; intro j hjh
+          rcases hc ⟨1, by omega⟩ j hjh with h | h
+          · exact absurd hr h
+          · exact h
+        · left; exact hr
+
+/-! ## V-cache honest chained face (single store, copy, B = HEAD_DIM) -/
+
+def decoding_fused_rotary_embedding_vcache_chain
+    (v v_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
+  handle_kv = cur_head_idx % $(KV_GROUP_NUM) == $(0)
+  if handle_kv {
+    cur_k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
+    dim_range = tl.arange(0, $(HEAD_DIM))
+    off_kv = cur_token_idx * $(k_token_stride) + cur_k_head_idx * $(k_head_stride)
+    loaded_v = tl.load(v + off_kv + dim_range * $(head_dim_stride))
+    past_kv_seq_len = tl.load(context_lengths + cur_token_idx) - $(1)
+    last_block_idx = past_kv_seq_len // $(block_size)
+    block_ids = tl.load(BLOCK_TABLES + cur_token_idx * $(bts_stride) +
+      last_block_idx * $(btb_stride))
+    offsets_in_last_block = past_kv_seq_len % $(block_size)
+    v_range = block_ids * $(vcb_stride) + cur_k_head_idx * $(vch_stride) +
+      offsets_in_last_block * $(vcs_stride) + dim_range * $(vcd_stride)
+    tl.store(v_cache + v_range, loaded_v)
+  }
+}
+
+theorem decoding_fused_rotary_embedding_vcache_chain_flattenOk
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat) :
+    ((decoding_fused_rotary_embedding_vcache_chain v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+      k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size HEAD_DIM).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+theorem decoding_fused_rotary_embedding_vcache_chain_exec_exists
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat) (s₀ : BlockState) :
+    ∃ s1, exec ((decoding_fused_rotary_embedding_vcache_chain v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+      k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size HEAD_DIM).toAlgKernel) s₀
+      = some s1 := by
+  by_cases hHandle : s₀.pids 0 % KV_GROUP_NUM = 0 <;>
+  simp [exec, decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+    BlockState.readMemValue, hHandle]
+
+theorem decoding_fused_rotary_embedding_vcache_chain_traceSafe
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hb₁ : s.pids 1 < bounds context_lengths)
+    (hb₂ : s.pids 1 * bts_stride +
+      ((s.readMemValue .nat context_lengths (s.pids 1) - 1) / block_size) *
+        btb_stride < bounds BLOCK_TABLES)
+    (hrv : ∀ j : Fin HEAD_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.pids 1 * k_token_stride + (s.pids 0 / KV_GROUP_NUM) * k_head_stride +
+        j.val * head_dim_stride < bounds v)
+    (hwv : ∀ j : Fin HEAD_DIM, s.pids 0 % KV_GROUP_NUM = 0 →
+      s.readMemValue .nat BLOCK_TABLES
+          (s.pids 1 * bts_stride +
+            ((s.readMemValue .nat context_lengths (s.pids 1) - 1) / block_size) *
+              btb_stride) * vcb_stride +
+        (s.pids 0 / KV_GROUP_NUM) * vch_stride +
+        ((s.readMemValue .nat context_lengths (s.pids 1) - 1) % block_size) *
+          vcs_stride + j.val * vcd_stride < bounds v_cache) :
+    Kernel.TraceSafe bounds
+      ((decoding_fused_rotary_embedding_vcache_chain v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+        k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+        vcd_stride bts_stride btb_stride block_size HEAD_DIM).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  by_cases hHandle : s.pids 0 % KV_GROUP_NUM = 0
+  · simp [decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmts, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      tile_elementwise, Bool.and_eq_true,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+      ComparableDType.eq, BlockState.readMemValue, hHandle, hb₁]
+    refine ⟨fun a => hrv a hHandle, ?_, fun a => ?_⟩
+    · simpa only [BlockState.readMemValue] using hb₂
+    · simpa only [BlockState.readMemValue] using hwv a hHandle
+  · simp [decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmts, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      tile_elementwise, Bool.and_eq_true,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+      ComparableDType.eq, BlockState.readMemValue, hHandle]
+
+set_option maxHeartbeats 20000000 in
+theorem decoding_fused_rotary_embedding_vcache_chain_region_run
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat)
+    (s₀ : BlockState) (m₁ m₂ : Nat) (xs : Fin 1 → Fin HEAD_DIM → ℝ)
+    (hm₁ : s₀.readMemValue .nat context_lengths (s₀.pids 1) = m₁)
+    (hm₂ : s₀.readMemValue .nat BLOCK_TABLES
+      (s₀.pids 1 * bts_stride + ((m₁ - 1) / block_size) * btb_stride) = m₂)
+    (hv : ∀ j : Fin HEAD_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+      s₀.readMem v (s₀.pids 1 * k_token_stride +
+        (s₀.pids 0 / KV_GROUP_NUM) * k_head_stride + j.val * head_dim_stride)
+        = xs 0 j) :
+    ∃ s1, exec ((decoding_fused_rotary_embedding_vcache_chain v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+        k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+        vcd_stride bts_stride btb_stride block_size HEAD_DIM).toAlgKernel) s₀
+        = some s1
+      ∧ ((∀ j l : Fin HEAD_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s₀.pids 0 % KV_GROUP_NUM = 0 →
+            m₂ * vcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * vch_stride +
+                ((m₁ - 1) % block_size) * vcs_stride + j.val * vcd_stride
+              = m₂ * vcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * vch_stride +
+                ((m₁ - 1) % block_size) * vcs_stride + l.val * vcd_stride → j = l) →
+          ∀ j : Fin HEAD_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            s1.readMem v_cache
+              (m₂ * vcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * vch_stride +
+                ((m₁ - 1) % block_size) * vcs_stride + j.val * vcd_stride)
+              = xs 0 j)
+      ∧ (∀ r o,
+          (r ≠ v_cache ∨ ∀ j : Fin HEAD_DIM, s₀.pids 0 % KV_GROUP_NUM = 0 →
+            o ≠ m₂ * vcb_stride + (s₀.pids 0 / KV_GROUP_NUM) * vch_stride +
+              ((m₁ - 1) % block_size) * vcs_stride + j.val * vcd_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  subst hm₂; subst hm₁
+  by_cases hHandle : s₀.pids 0 % KV_GROUP_NUM = 0
+  · obtain ⟨s1, hs1⟩ := decoding_fused_rotary_embedding_vcache_chain_exec_exists v v_cache BLOCK_TABLES
+      context_lengths KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride block_size
+      HEAD_DIM s₀
+    have hs1' := hs1
+    simp [exec, decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+      BlockState.readMemValue, hHandle] at hs1'
+    refine ⟨s1, hs1, ?_, ?_⟩
+    · intro hInj j _
+      rw [← hs1']
+      simp only [BlockState.readMemValue]
+      rw [BlockState.scatter_readback_nd (shape := [HEAD_DIM]) _ _ _ ?_ (j, PUnit.unit)]
+      · simp only [BlockState.readMemValue]
+        rw [hv j hHandle]
+      · rintro ⟨a, ua⟩ ⟨b, ub⟩ hab
+        cases ua; cases ub
+        simp only [BlockState.readMemValue] at hab
+        have := hInj ⟨a.val, a.isLt⟩ ⟨b.val, b.isLt⟩ hHandle hHandle (by simpa using hab)
+        simpa using this
+    · intro r o hc
+      rw [← hs1']
+      rw [foldl_writeMem_mem_disjoint (region := v_cache) _ _ r o _ _ (fun kidx _ hcc => ?_)]
+      · rfl
+      · rcases hc with hne | hno
+        · exact hne hcc.1.symm
+        · exact hno ⟨kidx.1.val, kidx.1.isLt⟩ hHandle
+            (by simpa only [BlockState.readMemValue] using hcc.2.symm)
+  · obtain ⟨s1, hs1⟩ := decoding_fused_rotary_embedding_vcache_chain_exec_exists v v_cache BLOCK_TABLES
+      context_lengths KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride block_size
+      HEAD_DIM s₀
+    have hs1' := hs1
+    simp [exec, decoding_fused_rotary_embedding_vcache_chain, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.eq,
+      BlockState.readMemValue, hHandle] at hs1'
+    refine ⟨s1, hs1, ?_, ?_⟩
+    · exact fun _ j hj => absurd hj hHandle
+    · intro r o _
+      rw [← hs1']; rfl
+
+def decodingVCacheChainSpec : Nat → Nat → Nat → Nat → (Fin 1 → Fin HEAD_DIM → ℝ) → Fin 1 →
+    Fin HEAD_DIM → ℝ :=
+  fun _ _ _ _ xs _ j => xs 0 j
+
+def decodingVCacheChainIO
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat) :
+    ChainMetaGroupedMasked2DKernelIO where
+  kernel := decoding_fused_rotary_embedding_vcache_chain v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+    k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+    vcd_stride bts_stride btb_stride block_size HEAD_DIM
+  nIn := 1
+  nOut := 1
+  bufs := [v, v_cache, context_lengths, BLOCK_TABLES]
+  mbuf1 := context_lengths
+  mbuf2 := BLOCK_TABLES
+  inp := fun _ => v
+  out := fun _ => v_cache
+  B := HEAD_DIM
+  mwin1 := fun _ pid₁ => pid₁
+  mwin2 := fun _ pid₁ m₁ => pid₁ * bts_stride + ((m₁ - 1) / block_size) * btb_stride
+  read := fun _ pid₀ pid₁ _ _ j =>
+    pid₁ * k_token_stride + (pid₀ / KV_GROUP_NUM) * k_head_stride +
+      j.val * head_dim_stride
+  readMask := fun _ pid₀ _ _ _ _ => pid₀ % KV_GROUP_NUM = 0
+  write := fun _ pid₀ _ m₁ m₂ j =>
+    m₂ * vcb_stride + (pid₀ / KV_GROUP_NUM) * vch_stride +
+      ((m₁ - 1) % block_size) * vcs_stride + j.val * vcd_stride
+  writeMask := fun _ pid₀ _ _ _ _ => pid₀ % KV_GROUP_NUM = 0
+
+open scoped VeriTile.Triton.ChainMetaGroupedMasked2DKernelIO in
+theorem decoding_fused_rotary_embedding_vcache_chain_correctness
+    (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
+    (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
+      vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride
+      block_size HEAD_DIM : Nat) :
+    decodingVCacheChainIO v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+        k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+        vcd_stride bts_stride btb_stride block_size HEAD_DIM
+      ⊨ decodingVCacheChainSpec := by
+  refine ChainMetaGroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · intro o
+    simp only [decodingVCacheChainIO, List.mem_cons]
+    tauto
+  · exact decoding_fused_rotary_embedding_vcache_chain_flattenOk v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+      k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size HEAD_DIM
+  · intro bounds s s1 s2 hm₁ hm₂ hb1 hb2 hbr hbw
+    simp only [decodingVCacheChainIO] at hm₁ hm₂ hb1 hb2 hbr hbw
+    refine decoding_fused_rotary_embedding_vcache_chain_traceSafe v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+      k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size HEAD_DIM bounds s hb1 ?_ ?_ ?_
+    · rw [← hm₁] at hb2; exact hb2
+    · exact fun j hj => hbr ⟨0, by omega⟩ j hj
+    · intro j hj
+      have h := hbw ⟨0, by omega⟩ j hj
+      rw [← hm₂, ← hm₁] at h; exact h
+  · intro s₀ s1 s2 xs hm₁ hm₂ hx
+    simp only [decodingVCacheChainIO] at hm₁ hm₂ hx
+    obtain ⟨s1', hexec, hval, hframe⟩ :=
+      decoding_fused_rotary_embedding_vcache_chain_region_run v v_cache BLOCK_TABLES context_lengths KV_GROUP_NUM
+        k_token_stride k_head_stride head_dim_stride vcb_stride vch_stride vcs_stride
+        vcd_stride bts_stride btb_stride block_size HEAD_DIM s₀ s1 s2 xs hm₁ hm₂
+        (fun j hj => hx ⟨0, by omega⟩ j hj)
+    refine ⟨s1', hexec, ?_, ?_⟩
+    · intro o hInj j hmask
+      simp only [decodingVCacheChainIO, decodingVCacheChainSpec] at hInj hmask ⊢
+      exact hval hInj j hmask
+    · intro r o' hc
+      simp only [decodingVCacheChainIO] at hc
+      refine hframe r o' ?_
+      by_cases hr : r = v_cache
+      · right; intro j hjh
+        rcases hc ⟨0, by omega⟩ j hjh with h | h
+        · exact absurd hr h
+        · exact h
+      · left; exact hr
+
 
 
 end Correct_without_Rounding

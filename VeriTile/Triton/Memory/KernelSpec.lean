@@ -7556,6 +7556,650 @@ theorem Implements.intro (io : GatherMasked2DKernelIO₁)
 
 end GatherMasked2DKernelIO₁
 
+/-- IO signature of the **paired index-tile gather** shape: one `.nat`
+metadata/index vector (`idxbuf`, static window `readx`, read gate `mask`)
+whose loaded values `ids` drive one **shared** data read window `read`, two
+per-output write windows (`write1`/`write2`) and the spec `f`, over **two
+float input buffers** (`in1`/`in2`) read at that one window and **two float
+outputs** (`out1`/`out2`). The index vector's cell count `N` is its **own
+field**, decoupled from the data/output lane count `B`: the metadata vector
+that a consumer folds over (the LightLLM cos/sin rotary cache transform's
+`cumsum_lengths` of length `N_ELEMENTS`) is a different length from the copied
+`HIDDEN_DIM` cache row, so a single-`B` gather cannot express it.
+
+**Subscript.** Plain arity — **two data inputs × two outputs**, per the
+house rule (subscripts carry data-input × output counts only). That both
+input buffers happen to be read at the *one* shared `read` window driven by
+the *one* index vector is a design property of this skin, not a naming axis;
+the index vector is capability (the `Gather` prefix), not arity.
+Intended consumers: the TritonBench-G `cache_transform_triton` pair —
+`decoding_cache_kernel` (per-row `ori_seq_idx = tl.load(lengths + idx)` gathers
+`cos_cache`/`sin_cache` rows into `cos_output`/`sin_output`) and
+`prefill_cache_kernel` (the same dual gather, but the source row is
+`idx − max(where(cumsum_lens ≤ idx, cumsum_lens, 0))`, a fold over the *entire*
+`N_ELEMENTS`-cell `cumsum_lengths` vector — the fold sits inside the `read`
+window, which eats the full pinned `ids : Fin N → Nat`, so the decoupled `N` is
+all the skin needs). Both consumers' cos/sin rows are the same `HIDDEN_DIM`
+width, so a single `B` with two write windows suffices. Following the family
+precedent there is no `scratch` field until a consumer needs one.
+
+**Injectivity design.** Because the write windows may eat `ids` (a scatter),
+each output's readback leg is guarded by its *per-pinned-context* `WriteInj`
+antecedent, exactly as in `GatherMasked2DKernelIO₁`/`ChainMetaMasked2DKernelIO₂ₓ₂`
+— never an `Implements.intro` hypothesis, which would demand injectivity for
+arbitrary index-buffer contents. In the core embedding two scratch channels
+shadow the raw (ungated) write cells on the same buffers, carrying the
+unconditional frame exclusions and trace-safety write bounds. The two
+consumers' writes are static (`idx`-affine, not `ids`-dependent), so a
+pure-gather consumer discharges both `WriteInj`s from its window geometry. -/
+structure GatherMasked2DKernelIO₂ₓ₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First input buffer (ℝ channel — e.g. `cos_cache`). -/
+  in1 : RegionName
+  /-- Second input buffer (ℝ channel — e.g. `sin_cache`). -/
+  in2 : RegionName
+  /-- Index buffer (`.nat` channel — the metadata vector). -/
+  idxbuf : RegionName
+  /-- First output buffer (e.g. `cos_output`). -/
+  out1 : RegionName
+  /-- Second output buffer (e.g. `sin_output`). -/
+  out2 : RegionName
+  /-- Data/output tile length: each program instance owns `B`-lane data read,
+  `out1` write and `out2` write windows. -/
+  B : Nat
+  /-- **Index vector cell count** — its OWN field, decoupled from `B` (the
+  fold's metadata vector `cumsum_lengths` has length `N_ELEMENTS ≠ HIDDEN_DIM`). -/
+  N : Nat
+  /-- Cell `j`'s `idxbuf` read address (the metadata vector's window — static,
+  so the context stays causal). -/
+  readx : Nat → Nat → Fin N → Nat
+  /-- Lane `j`'s **shared** `in1`/`in2` read address given the loaded index
+  vector — the data-dependent gather source (both caches read here). The whole
+  `Fin N → Nat` context is available, so a fold over the entire vector fits. -/
+  read : Nat → Nat → (Fin N → Nat) → Fin B → Nat
+  /-- Lane `j`'s `out1` write address given the loaded index vector. -/
+  write1 : Nat → Nat → (Fin N → Nat) → Fin B → Nat
+  /-- Lane `j`'s `out2` write address given the loaded index vector. -/
+  write2 : Nat → Nat → (Fin N → Nat) → Fin B → Nat
+  /-- Program `(pid₀, pid₁)`'s **index-vector read-active** cells. -/
+  mask : Nat → Nat → Fin N → Prop
+  /-- **Data read-active** lanes given the loaded index vector. No default:
+  its `Fin B` arity is decoupled from the index `mask`'s `Fin N` arity. -/
+  readMask : Nat → Nat → (Fin N → Nat) → Fin B → Prop
+  /-- `out1`'s write-active lanes; defaults to `readMask` (the gather stores
+  each read lane exactly once). -/
+  writeMask1 : Nat → Nat → (Fin N → Nat) → Fin B → Prop := readMask
+  /-- `out2`'s write-active lanes; defaults to `readMask`. -/
+  writeMask2 : Nat → Nat → (Fin N → Nat) → Fin B → Prop := readMask
+
+namespace GatherMasked2DKernelIO₂ₓ₂
+
+/-- No two `out1`-write-active lanes share a destination — the per-pinned-context
+injectivity that scatter readback needs (the consumers' `hOutInj`). A pure
+gather (static `write1`) discharges it from its window. -/
+def WriteInj₁ (io : GatherMasked2DKernelIO₂ₓ₂) (p₀ p₁ : Nat)
+    (ids : Fin io.N → Nat) : Prop :=
+  ∀ j k : Fin io.B, io.writeMask1 p₀ p₁ ids j → io.writeMask1 p₀ p₁ ids k →
+    io.write1 p₀ p₁ ids j = io.write1 p₀ p₁ ids k → j = k
+
+/-- No two `out2`-write-active lanes share a destination. -/
+def WriteInj₂ (io : GatherMasked2DKernelIO₂ₓ₂) (p₀ p₁ : Nat)
+    (ids : Fin io.N → Nat) : Prop :=
+  ∀ j k : Fin io.B, io.writeMask2 p₀ p₁ ids j → io.writeMask2 p₀ p₁ ids k →
+    io.write2 p₀ p₁ ids j = io.write2 p₀ p₁ ids k → j = k
+
+/-- `io.Implements f` — the paired index-tile masked Hoare triple. The index
+vector `ids` is quantified alongside the two data tiles `xs`/`ys` and pinned on
+the index-read-active cells; the shared data read window and both write windows
+eat the *loaded* `ids`. The spec `f` returns the pair of the two outputs' value
+functions (`.1` for `out1`, `.2` for `out2`); each readback leg is guarded by
+its `WriteInj`; the frame excludes the two ungated write windows. -/
+def Implements (io : GatherMasked2DKernelIO₂ₓ₂)
+    (f : Nat → Nat → (Fin io.N → Nat) → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
+      (Fin io.B → ℝ) × (Fin io.B → ℝ)) :
+    Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.idxbuf, io.out1, io.out2] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+  ∀ (ids : Fin io.N → Nat) (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.N, io.mask pid₀ pid₁ j →
+      io.readx pid₀ pid₁ j < A.extent io.idxbuf) →
+    (∀ j : Fin io.B, io.readMask pid₀ pid₁ ids j →
+      io.read pid₀ pid₁ ids j < A.extent io.in1) →
+    (∀ j : Fin io.B, io.readMask pid₀ pid₁ ids j →
+      io.read pid₀ pid₁ ids j < A.extent io.in2) →
+    (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ ids j →
+      io.write1 pid₀ pid₁ ids j < A.extent io.out1) →
+    (∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ ids j →
+      io.write2 pid₀ pid₁ ids j < A.extent io.out2) →
+    (∀ j : Fin io.N, io.mask pid₀ pid₁ j →
+      s₀.readMemValue .nat io.idxbuf (io.readx pid₀ pid₁ j) = ids j) →
+    (∀ j : Fin io.B, io.readMask pid₀ pid₁ ids j →
+      s₀.readMem io.in1 (io.read pid₀ pid₁ ids j) = xs j) →
+    (∀ j : Fin io.B, io.readMask pid₀ pid₁ ids j →
+      s₀.readMem io.in2 (io.read pid₀ pid₁ ids j) = ys j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (io.WriteInj₁ pid₀ pid₁ ids →
+          ∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ ids j →
+            s'.readMem A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ ids j))
+              = (f pid₀ pid₁ ids xs ys).1 j)
+      ∧ (io.WriteInj₂ pid₀ pid₁ ids →
+          ∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ ids j →
+            s'.readMem A.flat (A.addr io.out2 (io.write2 pid₀ pid₁ ids j))
+              = (f pid₀ pid₁ ids xs ys).2 j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ ids j →
+                o' ≠ A.addr io.out1 (io.write1 pid₀ pid₁ ids j)) ∧
+             (∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ ids j →
+                o' ≠ A.addr io.out2 (io.write2 pid₀ pid₁ ids j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => GatherMasked2DKernelIO₂ₓ₂.Implements
+
+/-- Embed into the unified core: channel 0 is the `.nat` index vector of arity
+`N` (static window, so the context is causal), channels 1/2 the two float data
+tiles whose *shared* window and read gate eat channel 0's pinned values. Each
+output's window eats the same values and its mask is the write gate **conjoined
+with `WriteInj`**; two scratch channels shadow the same cells with the ungated
+gates, carrying the unconditional frame exclusions and write bounds. -/
+private def toU (io : GatherMasked2DKernelIO₂ₓ₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 3
+  nOut := 2
+  nScr := 2
+  bufs := [io.in1, io.in2, io.idxbuf, io.out1, io.out2]
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .nat
+    | ⟨_+1, _⟩ => .float
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => io.N
+    | ⟨_+1, _⟩ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.idxbuf
+    | ⟨1, _⟩ => io.in1
+    | ⟨_+2, _⟩ => io.in2
+  oty := fun _ => .float
+  oarity := fun _ => io.B
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | ⟨_+1, _⟩ => io.out2
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun _ => io.B
+  sbuf := fun t => match t with
+    | ⟨0, _⟩ => io.out1
+    | ⟨_+1, _⟩ => io.out2
+  iwin := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.readx p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.read p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+    | ⟨_+2, _⟩ => fun j => io.read p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+  imask := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ j
+    | ⟨1, _⟩ => fun j => io.readMask p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+    | ⟨_+2, _⟩ => fun j => io.readMask p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+  owin := fun o vals p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+    | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+  omask := fun o vals p₀ p₁ => match o with
+    | ⟨0, _⟩ => fun j =>
+        io.writeMask1 p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+        ∧ io.WriteInj₁ p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+    | ⟨_+1, _⟩ => fun j =>
+        io.writeMask2 p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+        ∧ io.WriteInj₂ p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+  swin := fun t vals p₀ p₁ => match t with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+    | ⟨_+1, _⟩ => fun j => io.write2 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+  smask := fun t vals p₀ p₁ => match t with
+    | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+    | ⟨_+1, _⟩ => fun j => io.writeMask2 p₀ p₁
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j') j
+
+/-- Assembly lemma: obligations in the skin's named vocabulary — the index
+vector enters `hts`/`hrun` as a pinned tile (gated by `mask`), the two shared
+read pins feed `xs`/`ys`, each value leg receives its per-context `WriteInj`
+antecedent (a pure-gather consumer discharges it from its static window), and
+`hrun`'s frame and the write bounds are at the ungated `writeMask` lanes. -/
+theorem Implements.intro (io : GatherMasked2DKernelIO₂ₓ₂)
+    {f : Nat → Nat → (Fin io.N → Nat) → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
+      (Fin io.B → ℝ) × (Fin io.B → ℝ)}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (ids : Fin io.N → Nat),
+      (∀ j : Fin io.N, io.mask (s.pids 0) (s.pids 1) j →
+        s.readMemValue .nat io.idxbuf (io.readx (s.pids 0) (s.pids 1) j)
+          = ids j) →
+      (∀ j : Fin io.N, io.mask (s.pids 0) (s.pids 1) j →
+        io.readx (s.pids 0) (s.pids 1) j < bounds io.idxbuf) →
+      (∀ j : Fin io.B, io.readMask (s.pids 0) (s.pids 1) ids j →
+        io.read (s.pids 0) (s.pids 1) ids j < bounds io.in1) →
+      (∀ j : Fin io.B, io.readMask (s.pids 0) (s.pids 1) ids j →
+        io.read (s.pids 0) (s.pids 1) ids j < bounds io.in2) →
+      (∀ j : Fin io.B, io.writeMask1 (s.pids 0) (s.pids 1) ids j →
+        io.write1 (s.pids 0) (s.pids 1) ids j < bounds io.out1) →
+      (∀ j : Fin io.B, io.writeMask2 (s.pids 0) (s.pids 1) ids j →
+        io.write2 (s.pids 0) (s.pids 1) ids j < bounds io.out2) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (ids : Fin io.N → Nat)
+        (xs ys : Fin io.B → ℝ),
+      (∀ j : Fin io.N, io.mask (s₀.pids 0) (s₀.pids 1) j →
+        s₀.readMemValue .nat io.idxbuf (io.readx (s₀.pids 0) (s₀.pids 1) j)
+          = ids j) →
+      (∀ j : Fin io.B, io.readMask (s₀.pids 0) (s₀.pids 1) ids j →
+        s₀.readMem io.in1 (io.read (s₀.pids 0) (s₀.pids 1) ids j) = xs j) →
+      (∀ j : Fin io.B, io.readMask (s₀.pids 0) (s₀.pids 1) ids j →
+        s₀.readMem io.in2 (io.read (s₀.pids 0) (s₀.pids 1) ids j) = ys j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (io.WriteInj₁ (s₀.pids 0) (s₀.pids 1) ids →
+            ∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) ids j →
+              s1.readMem io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) ids j)
+                = (f (s₀.pids 0) (s₀.pids 1) ids xs ys).1 j)
+        ∧ (io.WriteInj₂ (s₀.pids 0) (s₀.pids 1) ids →
+            ∀ j : Fin io.B, io.writeMask2 (s₀.pids 0) (s₀.pids 1) ids j →
+              s1.readMem io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) ids j)
+                = (f (s₀.pids 0) (s₀.pids 1) ids xs ys).2 j)
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨
+              ∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) ids j →
+                o ≠ io.write1 (s₀.pids 0) (s₀.pids 1) ids j) →
+            (r ≠ io.out2 ∨
+              ∀ j : Fin io.B, io.writeMask2 (s₀.pids 0) (s₀.pids 1) ids j →
+                o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) ids j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the flattening bridge lives in
+  -- `UKernelIO.Implements.intro`
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 3) j')
+              (fun j' => vals (⟨2, by decide⟩ : Fin 3) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals hpins hib _hob hsb
+      exact hts bounds s
+        (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+        (fun j hj => hpins (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨0, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hib (⟨2, by decide⟩ : Fin 3) j hj)
+        (fun j hj => hsb (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hsb (⟨1, by decide⟩ : Fin 2) j hj)
+    · intro s₀ vals _hundef hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (fun j' => vals (⟨0, by decide⟩ : Fin 3) j')
+          (fun j => vals (⟨1, by decide⟩ : Fin 3) j)
+          (fun j => vals (⟨2, by decide⟩ : Fin 3) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 3) j hj)
+          (fun j hj => hpins (⟨2, by decide⟩ : Fin 3) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 hj.2 j hj.1
+        | ⟨_+1, _⟩ => fun j hj => hval2 hj.2 j hj.1, ?_⟩
+      intro r o' _hoc hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hsc (⟨0, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hsc (⟨1, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ ids xs ys s₀ hpid₀ hpid₁ hu hbx hbr1 hbr2
+    hbw1 hbw2 hi hx hy
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => ids
+        | ⟨1, _⟩ => xs
+        | ⟨_+2, _⟩ => ys)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hbx j hj
+        | ⟨1, _⟩ => fun j hj => hbr1 j hj
+        | ⟨_+2, _⟩ => fun j hj => hbr2 j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hbw1 j hj.1
+        | ⟨_+1, _⟩ => fun j hj => hbw2 j hj.1)
+      (fun t => match t with
+        | ⟨0, _⟩ => fun j hj => hbw1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hbw2 j hj)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hi j hj
+        | ⟨1, _⟩ => fun j hj => hx j hj
+        | ⟨_+2, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec,
+    fun hinj j hj => hval (⟨0, by decide⟩ : Fin 2) j ⟨hj, hinj⟩,
+    fun hinj j hj => hval (⟨1, by decide⟩ : Fin 2) j ⟨hj, hinj⟩, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj.1
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj.1,
+      fun t => match t with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj⟩
+
+end GatherMasked2DKernelIO₂ₓ₂
+
+/-- IO signature of the **chained-metadata grouped multi-store shape**: the
+vectorized `MetaGroupedMasked2DKernelIO` channel structure (`nIn` input / `nOut`
+output channels are *fields*, every channel a `B`-lane window with its own
+per-lane addresses and active-lane gate, over the decoupled allocation list
+`bufs`, plus two per-program `.nat` scalar slots feeding *every* window, *every*
+mask, and the spec `f`) with **one change**: the two slots are **chained** —
+the second slot's cell address `mwin2 : Nat → Nat → Nat → Nat` eats the first
+slot's loaded value `m₁` (exactly `ChainMetaMasked2DKernelIO₂ₓ₂`'s chaining).
+The grouped sibling of the `ChainMeta*` genre: `MetaGroupedMasked2DKernelIO` has
+vector channels but *independent* slots; this skin has vector channels and the
+paged-KV `block_table[f(context_length)]` chain.
+
+Intended consumers: the TritonBench-G paged-KV rotary caches whose store cell is
+gathered through a two-hop `context_lengths → BLOCK_TABLES` load. In
+`rotary_emb_nopad`'s `fused_rotary_embedding_kernel_v2` cache face the chain is
+`m₁ = context_lengths[token]` then `m₂ = BLOCK_TABLES[token·bts_stride +
+((m₁−1)/block_size)·btb_stride]`; four float channels (`k0`/`k1`/`cos`/`sin`)
+feed two chained KV-cache stores whose windows eat both `m₁` (the
+`(m₁−1) % block_size` in-block offset) and `m₂` (the block id). It also redeems
+`fused_rotary_embedding`'s store slices, which currently pin `block_id` as a host
+`Nat` — this skin loads it in-kernel through the chained second slot. Following
+the family precedent there is no `scratch` field until a consumer needs one.
+
+**Injectivity design.** Because the block-id-dependent cache windows may alias
+(different tokens sharing a block), each output channel's readback leg is guarded
+by its *per-pinned-context* `WriteInj o` antecedent (the consumers' cache
+`hOutInj` side conditions), exactly as in `ChainMetaMasked2DKernelIO₂ₓ₂` — never
+an `Implements.intro` hypothesis, which would demand no-aliasing for arbitrary
+block-table contents. In the core embedding `nOut` scratch channels shadow the
+raw (ungated) write cells, carrying the unconditional frame exclusions and
+trace-safety write bounds. -/
+structure ChainMetaGroupedMasked2DKernelIO where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Number of input channels (a field, never a name subscript). -/
+  nIn : Nat
+  /-- Number of output channels. -/
+  nOut : Nat
+  /-- The allocation list: every buffer the kernel touches, each exactly once.
+  The channel buffers below point into this list; for an in-place kernel an
+  output channel names the same buffer as an input channel. -/
+  bufs : List RegionName
+  /-- First slot's buffer (one `.nat` cell per program — the context-length
+  array). -/
+  mbuf1 : RegionName
+  /-- Second slot's buffer (one `.nat` cell per program — the block table); its
+  cell address depends on the first slot's loaded value. -/
+  mbuf2 : RegionName
+  /-- Input channel `i`'s buffer (channels may share a buffer). -/
+  inp : Fin nIn → RegionName
+  /-- Output channel `o`'s buffer (channels may share a buffer — an in-place
+  channel names an input's buffer). -/
+  out : Fin nOut → RegionName
+  /-- Tile length: every channel owns `B`-lane windows. -/
+  B : Nat
+  /-- First slot's cell address for program `(pid₀, pid₁)`. -/
+  mwin1 : Nat → Nat → Nat
+  /-- Second slot's cell address at `(pid₀, pid₁, m₁)` — **chained**: it eats
+  the first slot's loaded value. -/
+  mwin2 : Nat → Nat → Nat → Nat
+  /-- Input channel `i`'s lane-`j` read address at `(pid₀, pid₁, m₁, m₂, j)` —
+  the two loaded slots are ordinary named arguments. -/
+  read : Fin nIn → Nat → Nat → Nat → Nat → Fin B → Nat
+  /-- Input channel `i`'s read-active lanes, given the loaded slots. -/
+  readMask : Fin nIn → Nat → Nat → Nat → Nat → Fin B → Prop
+  /-- Output channel `o`'s lane-`j` write address, given the loaded slots (the
+  block-id-dependent cache cell). -/
+  write : Fin nOut → Nat → Nat → Nat → Nat → Fin B → Nat
+  /-- Output channel `o`'s write-active lanes, given the loaded slots. -/
+  writeMask : Fin nOut → Nat → Nat → Nat → Nat → Fin B → Prop
+
+namespace ChainMetaGroupedMasked2DKernelIO
+
+/-- No two `out o`-write-active lanes share a destination cell — the
+per-pinned-context injectivity that the slot-dependent cache readback needs
+(the consumers' per-channel `hOutInj`). A static-window consumer discharges it
+from its geometry. -/
+def WriteInj (io : ChainMetaGroupedMasked2DKernelIO) (p₀ p₁ s1 s2 : Nat)
+    (o : Fin io.nOut) : Prop :=
+  ∀ j k : Fin io.B, io.writeMask o p₀ p₁ s1 s2 j → io.writeMask o p₀ p₁ s1 s2 k →
+    io.write o p₀ p₁ s1 s2 j = io.write o p₀ p₁ s1 s2 k → j = k
+
+/-- `io.Implements f` — the chained-metadata grouped masked Hoare triple. The
+two slot values `s1`/`s2` are universally quantified and pinned to their slot
+cells — `s2`'s pin reads `mbuf2` at the `s1`-dependent cell `mwin2 pid₀ pid₁ s1`,
+so the chain is stated on the *loaded* first slot. The grouped inputs are one
+function `xs : Fin nIn → Fin B → ℝ`, pinned per channel on its read-active lanes
+(windows/masks all eating the loaded slots). The spec `f` takes the two slots
+and the output channel; each output channel's readback leg is guarded by its
+`WriteInj`; the frame excludes every ungated write window. -/
+def Implements (io : ChainMetaGroupedMasked2DKernelIO)
+    (f : Nat → Nat → Nat → Nat → (Fin io.nIn → Fin io.B → ℝ) → Fin io.nOut →
+      Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = io.bufs →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+  ∀ (s1 s2 : Nat) (xs : Fin io.nIn → Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    io.mwin1 pid₀ pid₁ < A.extent io.mbuf1 →
+    io.mwin2 pid₀ pid₁ s1 < A.extent io.mbuf2 →
+    (∀ (i : Fin io.nIn) (j : Fin io.B), io.readMask i pid₀ pid₁ s1 s2 j →
+      io.read i pid₀ pid₁ s1 s2 j < A.extent (io.inp i)) →
+    (∀ (o : Fin io.nOut) (j : Fin io.B), io.writeMask o pid₀ pid₁ s1 s2 j →
+      io.write o pid₀ pid₁ s1 s2 j < A.extent (io.out o)) →
+    s₀.readMemValue .nat io.mbuf1 (io.mwin1 pid₀ pid₁) = s1 →
+    s₀.readMemValue .nat io.mbuf2 (io.mwin2 pid₀ pid₁ s1) = s2 →
+    (∀ (i : Fin io.nIn) (j : Fin io.B), io.readMask i pid₀ pid₁ s1 s2 j →
+      s₀.readMem (io.inp i) (io.read i pid₀ pid₁ s1 s2 j) = xs i j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ o : Fin io.nOut, io.WriteInj pid₀ pid₁ s1 s2 o →
+          ∀ j : Fin io.B, io.writeMask o pid₀ pid₁ s1 s2 j →
+            s'.readMem A.flat (A.addr (io.out o) (io.write o pid₀ pid₁ s1 s2 j))
+              = f pid₀ pid₁ s1 s2 xs o j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            (∀ (o : Fin io.nOut) (j : Fin io.B), io.writeMask o pid₀ pid₁ s1 s2 j →
+              o' ≠ A.addr (io.out o) (io.write o pid₀ pid₁ s1 s2 j))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => ChainMetaGroupedMasked2DKernelIO.Implements
+
+/-- Embed into the unified core: channels 0/1 are the two 1-lane `.nat` slots
+(always read) — channel 1's window reads channel 0's pinned value, the chain
+the core supports natively — and channels `k+2` the `nIn` float grouped data
+channels whose windows/masks read both slots. Each output's mask is its write
+gate conjoined with its `WriteInj`; `nOut` scratch channels shadow the same
+cells with the ungated gates. `hout` ties every output channel's buffer into
+the declared allocation list. -/
+private def toU (io : ChainMetaGroupedMasked2DKernelIO)
+    (hout : ∀ o, io.out o ∈ io.bufs) : UKernelIO where
+  kernel := io.kernel
+  nIn := io.nIn + 2
+  nOut := io.nOut
+  nScr := io.nOut
+  bufs := io.bufs
+  ity := fun i => match i with
+    | ⟨0, _⟩ => .nat
+    | ⟨1, _⟩ => .nat
+    | ⟨_+2, _⟩ => .float
+  iarity := fun i => match i with
+    | ⟨0, _⟩ => 1
+    | ⟨1, _⟩ => 1
+    | ⟨_+2, _⟩ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.mbuf1
+    | ⟨1, _⟩ => io.mbuf2
+    | ⟨k+2, h⟩ => io.inp ⟨k, by omega⟩
+  oty := fun _ => .float
+  oarity := fun _ => io.B
+  obuf := io.out
+  obuf_mem := hout
+  sarity := fun _ => io.B
+  sbuf := io.out
+  iwin := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => io.mwin1 p₀ p₁
+    | ⟨1, _⟩ => fun _ => io.mwin2 p₀ p₁
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+    | ⟨k+2, h⟩ => fun j => io.read ⟨k, by omega⟩ p₀ p₁
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+  imask := fun i vals p₀ p₁ => match i with
+    | ⟨0, _⟩ => fun _ => True
+    | ⟨1, _⟩ => fun _ => True
+    | ⟨k+2, h⟩ => fun j => io.readMask ⟨k, by omega⟩ p₀ p₁
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+  owin := fun o vals p₀ p₁ j => io.write o p₀ p₁
+      (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+      (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+  omask := fun o vals p₀ p₁ j =>
+    io.writeMask o p₀ p₁
+      (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+      (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+    ∧ io.WriteInj p₀ p₁
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) o
+  swin := fun t vals p₀ p₁ j => io.write t p₀ p₁
+      (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+      (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+  smask := fun t vals p₀ p₁ j => io.writeMask t p₀ p₁
+      (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+      (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1)) j
+
+/-- Assembly lemma — chained-slot sibling of
+`MetaGroupedMasked2DKernelIO.Implements.intro`: the two slots enter `hts`/`hrun`
+as pinned named `.nat` scalars, `s2`'s pin at the `s1`-dependent cell; each
+output channel's value leg receives its per-context `WriteInj o` antecedent (the
+consumers thread their cache `hOutInj` there); `hrun`'s frame takes one ungated
+exclusion condition quantified over all output channels; `hout` ties the output
+buffers into `bufs`. -/
+theorem Implements.intro (io : ChainMetaGroupedMasked2DKernelIO)
+    {f : Nat → Nat → Nat → Nat → (Fin io.nIn → Fin io.B → ℝ) → Fin io.nOut →
+      Fin io.B → ℝ}
+    (hout : ∀ o, io.out o ∈ io.bufs)
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (s1 s2 : Nat),
+      s.readMemValue .nat io.mbuf1 (io.mwin1 (s.pids 0) (s.pids 1)) = s1 →
+      s.readMemValue .nat io.mbuf2 (io.mwin2 (s.pids 0) (s.pids 1) s1) = s2 →
+      io.mwin1 (s.pids 0) (s.pids 1) < bounds io.mbuf1 →
+      io.mwin2 (s.pids 0) (s.pids 1) s1 < bounds io.mbuf2 →
+      (∀ (i : Fin io.nIn) (j : Fin io.B),
+        io.readMask i (s.pids 0) (s.pids 1) s1 s2 j →
+        io.read i (s.pids 0) (s.pids 1) s1 s2 j < bounds (io.inp i)) →
+      (∀ (o : Fin io.nOut) (j : Fin io.B),
+        io.writeMask o (s.pids 0) (s.pids 1) s1 s2 j →
+        io.write o (s.pids 0) (s.pids 1) s1 s2 j < bounds (io.out o)) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (s1 s2 : Nat) (xs : Fin io.nIn → Fin io.B → ℝ),
+      s₀.readMemValue .nat io.mbuf1 (io.mwin1 (s₀.pids 0) (s₀.pids 1)) = s1 →
+      s₀.readMemValue .nat io.mbuf2 (io.mwin2 (s₀.pids 0) (s₀.pids 1) s1) = s2 →
+      (∀ (i : Fin io.nIn) (j : Fin io.B),
+        io.readMask i (s₀.pids 0) (s₀.pids 1) s1 s2 j →
+        s₀.readMem (io.inp i) (io.read i (s₀.pids 0) (s₀.pids 1) s1 s2 j)
+          = xs i j) →
+      ∃ s1', exec (io.kernel.toAlgKernel) s₀ = some s1'
+        ∧ (∀ o : Fin io.nOut, io.WriteInj (s₀.pids 0) (s₀.pids 1) s1 s2 o →
+            ∀ j : Fin io.B, io.writeMask o (s₀.pids 0) (s₀.pids 1) s1 s2 j →
+              s1'.readMem (io.out o) (io.write o (s₀.pids 0) (s₀.pids 1) s1 s2 j)
+                = f (s₀.pids 0) (s₀.pids 1) s1 s2 xs o j)
+        ∧ (∀ r o',
+            (∀ (oc : Fin io.nOut) (j : Fin io.B),
+              io.writeMask oc (s₀.pids 0) (s₀.pids 1) s1 s2 j →
+              r ≠ io.out oc ∨ o' ≠ io.write oc (s₀.pids 0) (s₀.pids 1) s1 s2 j) →
+            s1'.mem r o' = s₀.mem r o')) :
+    io.Implements f := by
+  have hcore : (io.toU hout).Implements
+      (fun p₀ p₁ vals o j => f p₀ p₁
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (fun i j' => vals (⟨i.val + 2, by omega⟩ : Fin (io.nIn+2)) j') o j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals hpins hib _hob hsb
+      exact hts bounds s
+        (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+        (hpins (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hpins (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+        (hib (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+        (fun i j hj => hib (⟨i.val + 2, by omega⟩ : Fin (io.nIn+2)) j hj)
+        (fun o j hj => hsb o j hj)
+    · intro s₀ vals _hundef hpins
+      obtain ⟨s1', hexec, hval, hframe⟩ :=
+        hrun s₀ (vals (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+          (vals (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1))
+          (fun i j' => vals (⟨i.val + 2, by omega⟩ : Fin (io.nIn+2)) j')
+          (hpins (⟨0, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+          (hpins (⟨1, by omega⟩ : Fin (io.nIn+2)) (⟨0, by decide⟩ : Fin 1) trivial)
+          (fun i j hj => hpins (⟨i.val + 2, by omega⟩ : Fin (io.nIn+2)) j hj)
+      refine ⟨s1', hexec, fun o j hj => hval o hj.2 j hj.1, ?_⟩
+      intro r o' _hoc hsc
+      exact hframe r o' (fun oc j hj => hsc oc j hj)
+  intro A hd hregs hcov pid₀ pid₁ s1 s2 xs s₀ hpid₀ hpid₁ hu hb1 hb2 hbr hbw
+    hm1 hm2 hx
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ => s1
+        | ⟨1, _⟩ => fun _ => s2
+        | ⟨k+2, h⟩ => xs ⟨k, by have h2 : k + 2 < io.nIn + 2 := h; omega⟩)
+      s₀ hpid₀ hpid₁ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hb1
+        | ⟨1, _⟩ => fun _ _ => hb2
+        | ⟨k+2, h⟩ => fun j hj =>
+            hbr ⟨k, by have h2 : k + 2 < io.nIn + 2 := h; omega⟩ j hj)
+      (fun o j hj => hbw o j hj.1)
+      (fun t j hj => hbw t j hj)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun _ _ => hm1
+        | ⟨1, _⟩ => fun _ _ => hm2
+        | ⟨k+2, h⟩ => fun j hj =>
+            hx ⟨k, by have h2 : k + 2 < io.nIn + 2 := h; omega⟩ j hj)
+  refine ⟨s', hexec, fun o hinj j hj => hval o j ⟨hj, hinj⟩, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | hn
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun o j hj => hn o j hj.1, fun t j hj => hn t j hj⟩
+
+end ChainMetaGroupedMasked2DKernelIO
+
 
 
 end VeriTile.Triton
