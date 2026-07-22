@@ -18,6 +18,7 @@ bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_output_su
 bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_kernel_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -160,6 +161,7 @@ bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_pytho
 bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rowwise_quantization_triton/RowwiseQuantizationTriton.lean	quantize_rowwise_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_one_row_block_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/sin_computation/SinComputation.lean	sin_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/sin_kernel/SinKernel.lean	kernel_function_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_inner_one_tile_compute_correct	full_value_candidate	none		no proof-gap marker in summary context

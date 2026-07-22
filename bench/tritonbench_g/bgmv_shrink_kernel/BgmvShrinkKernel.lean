@@ -1926,4 +1926,1155 @@ specification bgmv_shrink_kernel_output_summary_general
       xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
       BLOCK_N BLOCK_K SPLIT_K s (Nat.mul_pos hBK hSK) hcn⟩
 
+/-! ## The `⊨[R]` streaming metadata headline (store face)
+
+Everything below is purely additive; the exact surfaces and the main theorem
+above are untouched. The `SPLIT_K = 1` store face is restated on the
+metadata-slot streaming skin `StreamMetaMasked3DKernelIO₂`: one `.nat` slot
+(`lora_indices[cur_batch]`, read at the pid-only cell `cur_batch`), two
+masked streamed inputs with `other=0` (the `tiled_a` row tile and the
+`tiled_b` weight tile, both gated by the genuine `current_k < K` tail mask),
+and one masked terminal `.real` store. This kernel has **zero rounding
+events** — every load, the whole K-loop arithmetic and the terminal store
+are at `.real` — so under `execR R` the prologue, the loop and the common
+tail collapse verbatim onto the exact stepper and the proven
+`shrink_preLoop` / `shrink_step` / `forRange_inv` / `tail_common_steps`
+stack is reused unchanged; only the single masked store statement is
+re-proved on the `R` side, where the `.real` write coincides with the
+`writeMemAsR R .real` rounded write (`RoundingModel.storeValue_real`) and
+the readback contract's `R.round .real` is the identity (`round_real`) —
+the `⊨[R]` face at the `.real` grid is the exact streaming contract, stated
+once for every `R`.
+
+The **atomic face** (`SPLIT_K > 1`, `tl.atomic_add`) is a read-modify-write,
+not a terminal single-store fold, so it is *not* expressible in this skin's
+S1 genre; its per-program `out-before + contribution` obligation stays with
+the existing five-conjunct exact summary
+`bgmv_shrink_kernel_output_summary_general` above (conjunct (5)). Likewise
+the `-1` skip sentinel lives on the faithful `.int` surface
+(`bgmv_shrink_sentinel_skip_no_write`, conjunct (3)); the store face below
+follows the store proof surface's `Region .nat` metadata convention, the
+sentinel skip being the trusted host boundary. -/
+
+open scoped VeriTile.Triton.StreamMetaMasked3DKernelIO₂
+
+/-! ### Cast-free collapses -/
+
+/-- The 8-statement prologue is cast-free (register assigns and one `.nat`
+metadata load — loads are not rounding events): it steps identically under
+`stepStmtsR R`. -/
+private theorem shrinkPrologue_castFree (R : RoundingModel)
+    (input_ptr lora_ptr : RegionName) (lora_indices : Region .nat)
+    (xm_stride l0_stride BLOCK_N BLOCK_K : Nat) (t : BlockState) :
+    stepStmtsR R (shrinkPrologue input_ptr lora_ptr lora_indices xm_stride
+        l0_stride BLOCK_N BLOCK_K) t
+      = stepStmts (shrinkPrologue input_ptr lora_ptr lora_indices xm_stride
+          l0_stride BLOCK_N BLOCK_K) t := by
+  simp only [shrinkPrologue, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The K-loop body is cast-free (two masked `.real` loads with `other=0`,
+`tl.sum` + add, nat index arithmetic — no `castFloat`, no store): it steps
+identically under `stepStmtsR R`, so the exact invariant stack transports to
+`execR`. -/
+private theorem shrinkBody_castFree (R : RoundingModel)
+    (N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K : Nat) (t : BlockState) :
+    stepStmtsR R (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N
+        BLOCK_K) t
+      = stepStmts (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N
+          BLOCK_K) t := by
+  simp only [shrinkLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The 4-statement common tail (`accumulator *= scaling`, `offset_cn`,
+`c_ptr`, `c_mask`) is cast-free. -/
+private theorem shrinkTailCommon_castFree (R : RoundingModel)
+    (out_ptr : RegionName) (N cm_stride cn_stride BLOCK_N : Nat) (scaling : ℝ)
+    (t : BlockState) :
+    stepStmtsR R (shrinkTailCommon out_ptr N cm_stride cn_stride BLOCK_N
+        scaling) t
+      = stepStmts (shrinkTailCommon out_ptr N cm_stride cn_stride BLOCK_N
+          scaling) t := by
+  simp only [shrinkTailCommon, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-! ### `evalOpR` collapses and eval helpers for the safety walk
+
+The safety walk (`hts`) quantifies over arbitrary launch states, so it
+re-evaluates the address/mask registers under `evalOpR R`. Every such op is
+`R`-free (pure nat/bool/pointer arithmetic), so each collapses onto `evalOp`
+and reuses the exact eval lemmas above. -/
+
+private theorem evalOpR_programId (R : RoundingModel) (ax : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.programId ax) s = some (Tile.scalar (s.pids ax)) := by
+  simp only [evalOpR]
+
+private theorem evalOpR_arange (R : RoundingModel) (n : Nat) (s : BlockState) :
+    evalOpR R (Op.arange n) s
+      = some (Tile.vec (fun j : Fin n => j.val)) := by
+  simp only [evalOpR, Tile.vec]
+
+/-- `current_k = k + offset_k` is `R`-free. -/
+private theorem evalR_currentK (R : RoundingModel) (BLOCK_K : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "k")
+        (Op.ref .nat [BLOCK_K] "offset_k")) s
+      = evalOp (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "k")
+          (Op.ref .nat [BLOCK_K] "offset_k")) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `tiled_a` load mask `current_k < K` is `R`-free. -/
+private theorem evalR_maskA (R : RoundingModel) (K BLOCK_K : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BLOCK_K] "current_k")
+        (Op.constNat K)) s
+      = evalOp (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BLOCK_K] "current_k")
+          (Op.constNat K)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `tiled_a` pointer `a_ptr + current_k_c` is `R`-free. -/
+private theorem evalR_aTilePtr (R : RoundingModel) (BLOCK_K : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "a_ptr")
+        (Op.ref .nat [BLOCK_K] "current_k_c")) s
+      = evalOp (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "a_ptr")
+          (Op.ref .nat [BLOCK_K] "current_k_c")) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `b_ptr_mask` op is `R`-free. -/
+private theorem evalR_bmask (R : RoundingModel) (N K BLOCK_N BLOCK_K : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offset_n"))
+          (Op.constNat N))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "current_k"))
+          (Op.constNat K))) s
+      = evalOp (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offset_n"))
+            (Op.constNat N))
+          (Op.lt .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "current_k"))
+            (Op.constNat K))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `tiled_b` pointer op is `R`-free. -/
+private theorem evalR_bTilePtr (R : RoundingModel)
+    (lora_k_stride lora_n_stride BLOCK_N BLOCK_K : Nat) (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "b_ptr")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offset_n"))
+            (Op.constNat lora_k_stride)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "current_k"))
+          (Op.constNat lora_n_stride))) s
+      = evalOp (Op.ptrAdd Broadcast.nil.consL.consR
+          (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "b_ptr")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offset_n"))
+              (Op.constNat lora_k_stride)))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "current_k"))
+            (Op.constNat lora_n_stride))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `c_ptr` tail op is `R`-free. -/
+private theorem evalR_cptr (R : RoundingModel) (out_ptr : RegionName)
+    (cm_stride cn_stride BLOCK_N : Nat) (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase out_ptr)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch")
+            (Op.constNat cm_stride))
+          (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "offset_cn")
+            (Op.constNat cn_stride)))) s
+      = evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase out_ptr)
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch")
+              (Op.constNat cm_stride))
+            (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "offset_cn")
+              (Op.constNat cn_stride)))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `c_mask` tail op is `R`-free. -/
+private theorem evalR_cmask (R : RoundingModel) (N BLOCK_N : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "offset_cn")
+        (Op.constNat N)) s
+      = evalOp (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "offset_cn")
+          (Op.constNat N)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- `current_k < K` mask eval (the 1-D sibling of `cmask_eval`). -/
+private theorem maskA_eval (K BLOCK_K : Nat) (ck : Fin BLOCK_K → Nat)
+    (s : BlockState)
+    (hck : s.regs .nat [BLOCK_K] "current_k" = some (Tile.vec ck)) :
+    evalOp (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BLOCK_K] "current_k")
+        (Op.constNat K)) s
+      = some (⟨fun e : TileIndex [BLOCK_K] => decide (ck e.1 < K)⟩
+          : Tile .bool [BLOCK_K]) := by
+  simp only [evalOp, evalOp_ref, evalOp_constNat, hck, Option.bind_some, bind,
+    Option.bind_eq_bind, Option.bind]
+  apply congrArg some
+  apply Tile.ext
+  intro e
+  simp only [Tile.cop, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.lt]
+  rfl
+
+/-- `a_ptr + current_k_c` pointer-tile eval. -/
+private theorem aTilePtr_eval (input_ptr : RegionName) (BLOCK_K apo : Nat)
+    (ck : Fin BLOCK_K → Nat) (s : BlockState)
+    (hap : s.regs .ptr [] "a_ptr"
+      = some (Tile.scalar ((input_ptr, apo) : RegionName × Nat)))
+    (hckc : s.regs .nat [BLOCK_K] "current_k_c" = some (Tile.vec ck)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "a_ptr")
+        (Op.ref .nat [BLOCK_K] "current_k_c")) s
+      = some (⟨fun e : TileIndex [BLOCK_K] =>
+          ((input_ptr, apo + ck e.1) : RegionName × Nat)⟩
+            : Tile .ptr [BLOCK_K]) := by
+  rw [evalOp_ptrAdd']
+  simp only [evalOp_ref, hap, hckc, Option.bind_some, bind, Option.bind_eq_bind]
+  apply congrArg some
+  apply Tile.ext
+  intro e
+  simp only [Tile.ptrAdd, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add]
+
+/-- `tiled_b` pointer-tile eval: cell `(n, e)` addresses
+`bpo + n·lora_k_stride + ck e·lora_n_stride` in the LoRA buffer. -/
+private theorem bTilePtr_eval (lora_ptr : RegionName)
+    (lora_k_stride lora_n_stride BLOCK_N BLOCK_K bpo : Nat)
+    (ck : Fin BLOCK_K → Nat) (s : BlockState)
+    (hbp : s.regs .ptr [] "b_ptr"
+      = some (Tile.scalar ((lora_ptr, bpo) : RegionName × Nat)))
+    (hon : s.regs .nat [BLOCK_N] "offset_n"
+      = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hck : s.regs .nat [BLOCK_K] "current_k" = some (Tile.vec ck)) :
+    evalOp (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "b_ptr")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offset_n"))
+            (Op.constNat lora_k_stride)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "current_k"))
+          (Op.constNat lora_n_stride))) s
+      = some (⟨fun idx : TileIndex [BLOCK_N, BLOCK_K] =>
+          ((lora_ptr, bpo + idx.1.val * lora_k_stride
+              + ck idx.2.1 * lora_n_stride) : RegionName × Nat)⟩
+            : Tile .ptr [BLOCK_N, BLOCK_K]) := by
+  simp only [evalOp, evalOp.eq_def, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, evalOp_ref, evalOp_constNat, hbp, hon, hck,
+    Option.bind, Option.map, Option.bind_some, bind, Option.bind_eq_bind]
+  apply congrArg some
+  apply Tile.ext
+  intro idx
+  simp only [Tile.ptrAdd, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.mul, NumericDType.add]
+  rfl
+
+/-! ### The masked `.real` store under `execR R` -/
+
+/-- A `.real`-typed rounded write **is** the `writeMemAsR R .real` write
+(`writeMemTypedR` delegates `.real` to the exact `writeMemTyped`, and
+`RoundingModel.storeValue_real` says `R.storeValue .real` is exactly the
+finite-fallback demotion). Lets the `.real` masked store reuse the
+`writeMemAsR` scatter readback/frame family. -/
+private theorem writeMemTypedR_real_eq (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.real) :
+    s.writeMemTypedR R .real region offset v
+      = s.writeMemAsR R .real region offset v := by
+  show s.writeMemTyped .real region offset v = _
+  simp only [BlockState.writeMemTyped, BlockState.writeMemAs,
+    BlockState.writeMemAsR, RoundingModel.storeValue_real]
+
+/-- Tag-exact readback of a stored `.real` cell through `readMemAs .real`:
+the `storeValue ∘ ofReal` round trip is the identity on a defined real. -/
+private theorem readMemAs_real_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.real.toTileDType (FloatDType.real.ofReal x)) :
+    s.readMemAs .real region offset = FloatDType.real.ofReal x := by
+  simp [BlockState.readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-- The masked store tail under `stepStmtR R` reduces to a masked
+`writeMemAsR R .real` scatter `foldl` (the `R`-mirror of
+`store_tail_step`; the `.real` write carries no rounding event). -/
+private theorem store_tail_stepR (R : RoundingModel) (out_ptr : RegionName)
+    (N BLOCK_N : Nat) (offF : Fin BLOCK_N → Nat) (vals : Fin BLOCK_N → ℝ)
+    (s : BlockState)
+    (hcp : s.regs .ptr [BLOCK_N] "c_ptr"
+      = some (⟨fun idx : TileIndex [BLOCK_N] =>
+          ((out_ptr, offF idx.1) : RegionName × Nat)⟩ : Tile .ptr [BLOCK_N]))
+    (hcm : s.regs .bool [BLOCK_N] "c_mask"
+      = some (⟨fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N)⟩
+          : Tile .bool [BLOCK_N]))
+    (hacc : s.regs .real [BLOCK_N] "accumulator"
+      = some ⟨fun idx : TileIndex [BLOCK_N] => some (vals idx.1)⟩) :
+    stepStmtR R (shrinkStoreStmt BLOCK_N) s
+      = some ((TileShape.allIndices [BLOCK_N]).foldl
+          (fun acc (idx : TileIndex [BLOCK_N]) =>
+            if decide (idx.1.val < N) then
+              acc.writeMemAsR R .real out_ptr (offF idx.1)
+                (some (vals idx.1))
+            else acc) s) := by
+  unfold shrinkStoreStmt
+  simp only [stepStmtR]
+  rw [show evalOpR R (Op.ref .real [BLOCK_N] "accumulator") s
+      = some (⟨fun idx : TileIndex [BLOCK_N] => some (vals idx.1)⟩
+          : Tile .real [BLOCK_N]) from by rw [evalOpR_ref, hacc]]
+  rw [show evalOpR R (Op.ref .bool [BLOCK_N] "c_mask") s
+      = some (⟨fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N)⟩
+          : Tile .bool [BLOCK_N]) from by rw [evalOpR_ref, hcm]]
+  rw [show evalOpR R (Op.ref .ptr [BLOCK_N] "c_ptr") s
+      = some (⟨fun idx : TileIndex [BLOCK_N] =>
+          ((out_ptr, offF idx.1) : RegionName × Nat)⟩ : Tile .ptr [BLOCK_N])
+        from by rw [evalOpR_ref, hcp]]
+  simp only [bind, Option.map_some, Option.bind_some]
+  refine congrArg some (List.foldl_ext _ _ _ (fun acc i _ => ?_))
+  by_cases hmask : (decide (i.1.val < N) : Bool)
+  · simp only [hmask, if_true, writeMemTypedR_real_eq]
+  · simp only [hmask, Bool.false_eq_true, if_false]
+
+/-- The output-window scatter offsets are injective over the whole lane tile
+(from `0 < cn_stride`, via `affine1D_inj`). -/
+private theorem outOff_tileInj (s : BlockState) (cm_stride cn_stride : Nat)
+    (hcn : 0 < cn_stride) {BLOCK_N : Nat} :
+    Function.Injective (fun idx : TileIndex [BLOCK_N] =>
+      outOff s cm_stride cn_stride idx.1.val) := by
+  intro a b hab
+  have h1 : a.1 = b.1 :=
+    affine1D_inj (s.pids 1 * cm_stride) cn_stride hcn
+      (show (fun k : Fin BLOCK_N => s.pids 1 * cm_stride + k.val * cn_stride) a.1
+          = (fun k : Fin BLOCK_N => s.pids 1 * cm_stride + k.val * cn_stride) b.1
+        from hab)
+  exact Prod.ext h1 rfl
+
+/-- **R-postLoop (store face)**: from the exact invariant at loop exit, the
+`execR R` common tail + masked store terminate and leave, at every active
+output lane `n < N`, the exact-ℝ cell
+`MemCell.of .real (real.ofReal (accPartial (i/S) n · scaling))` — the `.real`
+store has no rounding event — with a per-cell frame outside the write-active
+window (stated against the pristine pre-launch memory `s0.mem`; the loop and
+tail never write). -/
+private theorem shrink_postLoopR (R : RoundingModel)
+    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
+    (scaling : ℝ)
+    (N K xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) (hcn : 0 < cn_stride)
+    (s0 st : BlockState) (i : Nat)
+    (hinv : shrinkInv input_ptr lora_ptr lora_indices N K xm_stride l0_stride
+        lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K s0 i st) :
+    ∃ sfin, stepStmtsR R (shrinkTailCommon out_ptr N cm_stride cn_stride
+          BLOCK_N scaling ++ [shrinkStoreStmt BLOCK_N]) st = some sfin
+      ∧ (∀ n : Fin BLOCK_N, n.val < N →
+          sfin.mem out_ptr (outOff s0 cm_stride cn_stride n.val)
+            = MemCell.of FloatDType.real.toTileDType
+                (FloatDType.real.ofReal
+                  (accPartial s0 input_ptr lora_ptr lora_indices K xm_stride
+                      l0_stride lora_k_stride lora_n_stride BLOCK_K SPLIT_K
+                      (i / (BLOCK_K * SPLIT_K)) n.val * scaling)))
+      ∧ (∀ r o, (r ≠ out_ptr ∨ ∀ n : Fin BLOCK_N, n.val < N →
+            o ≠ outOff s0 cm_stride cn_stride n.val) →
+          sfin.mem r o = s0.mem r o) := by
+  obtain ⟨st', hTail, hcp', hcm', hacc', hmem'⟩ := tail_common_steps input_ptr
+    lora_ptr out_ptr lora_indices scaling N K xm_stride l0_stride lora_k_stride
+    lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K s0 st i hinv
+  set vals : Fin BLOCK_N → ℝ := fun n =>
+    (if n.val < N then
+      accPartial s0 input_ptr lora_ptr lora_indices K xm_stride l0_stride
+        lora_k_stride lora_n_stride BLOCK_K SPLIT_K
+        (i / (BLOCK_K * SPLIT_K)) n.val
+    else 0) * scaling with hvals
+  have hStoreR := store_tail_stepR R out_ptr N BLOCK_N
+    (fun n : Fin BLOCK_N => outOff s0 cm_stride cn_stride n.val) vals st'
+    hcp' hcm' (by rw [hacc'])
+  refine ⟨(TileShape.allIndices [BLOCK_N]).foldl
+      (fun acc (idx : TileIndex [BLOCK_N]) =>
+        if decide (idx.1.val < N) then
+          acc.writeMemAsR R .real out_ptr (outOff s0 cm_stride cn_stride idx.1.val)
+            (some (vals idx.1))
+        else acc) st', ?_, ?_, ?_⟩
+  · rw [stepStmtsR_append, shrinkTailCommon_castFree, hTail, Option.bind_some,
+      stepStmtsR_cons_some hStoreR, stepStmtsR_nil]
+  · intro n hn
+    rw [BlockState.scatter_memcell_R_prop_masked_nd R .real st'
+        (fun idx : TileIndex [BLOCK_N] => outOff s0 cm_stride cn_stride idx.1.val)
+        (fun idx : TileIndex [BLOCK_N] => some (vals idx.1))
+        (fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N) = Bool.true)
+        (outOff_tileInj s0 cm_stride cn_stride hcn) (n, PUnit.unit)]
+    rw [if_pos (decide_eq_true hn)]
+    simp only [hvals, RoundingModel.storeValue_real, FloatDType.real_storeValue,
+      WithBot.unbotD_some, if_pos hn]
+  · intro r o hcond
+    by_cases hr : r = out_ptr
+    · subst hr
+      have hno : ∀ n : Fin BLOCK_N, n.val < N →
+          o ≠ outOff s0 cm_stride cn_stride n.val := by
+        rcases hcond with h | h
+        · exact absurd rfl h
+        · exact h
+      rw [BlockState.foldl_writeMemAsR_preserve_masked_prop R .real
+            (fun idx : TileIndex [BLOCK_N] => outOff s0 cm_stride cn_stride idx.1.val)
+            (fun idx : TileIndex [BLOCK_N] => some (vals idx.1))
+            (fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N) = Bool.true)
+            o (TileShape.allIndices [BLOCK_N])
+            (fun k _ hk => fun heq =>
+              hno k.1 (of_decide_eq_true hk) heq.symm) st', hmem']
+    · rw [BlockState.foldl_writeMemAsR_preserve_other_region R .real
+            (fun idx : TileIndex [BLOCK_N] => outOff s0 cm_stride cn_stride idx.1.val)
+            (fun idx : TileIndex [BLOCK_N] => some (vals idx.1))
+            (fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N) = Bool.true)
+            r hr o (TileShape.allIndices [BLOCK_N]) st', hmem']
+
+/-! ### The `TraceSafeR` safety walk -/
+
+/-- The loop counter of an in-range iteration sits below the ceil trip count:
+`i < K` with `i = (i/S)·S` forces `i/S < ⌈K/S⌉`. -/
+private theorem kloop_counter_lt (K S i : Nat) (hS : 0 < S) (hilt : i < K)
+    (hi : i = i / S * S) : i / S < numKIters K S := by
+  by_contra h
+  have h1 : numKIters K S * S ≤ i / S * S :=
+    Nat.mul_le_mul_right S (Nat.le_of_not_lt h)
+  have h2 : K ≤ i / S * S := le_trans (numKIters_bounds K S hS).1 h1
+  rw [← hi] at h2
+  exact absurd hilt (Nat.not_lt.mpr h2)
+
+set_option maxHeartbeats 2000000 in
+/-- Per-iteration `TraceSafeListR` for the K-loop body: the two **masked**
+loads' active lanes are exactly the kernel's `current_k < K` (and, for
+`tiled_b`, `offset_n < N`) windows, so their addresses are covered by the
+mask-gated `read1`/`read2` bound groups; the four remaining assigns are
+register-only. -/
+private theorem shrink_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (input_ptr lora_ptr : RegionName) (lora_indices : Region .nat)
+    (N K xm_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) (s0 : BlockState)
+    (hS : 0 < BLOCK_K * SPLIT_K) (i : Nat) (hilt : i < K)
+    (hi : i = i / (BLOCK_K * SPLIT_K) * (BLOCK_K * SPLIT_K))
+    (sk : BlockState)
+    (hk : sk.regs .nat [] "k" = some (Tile.scalar i))
+    (hon : sk.regs .nat [BLOCK_N] "offset_n"
+      = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hok : sk.regs .nat [BLOCK_K] "offset_k"
+      = some (Tile.vec (fun e : Fin BLOCK_K => e.val + s0.pids 0 * BLOCK_K)))
+    (hap : sk.regs .ptr [] "a_ptr"
+      = some (Tile.scalar ((input_ptr, s0.pids 1 * xm_stride) : RegionName × Nat)))
+    (hbp : sk.regs .ptr [] "b_ptr"
+      = some (Tile.scalar
+          ((lora_ptr, l0_stride * loraIdx s0 lora_indices) : RegionName × Nat)))
+    (hbA : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K))) (e : Fin BLOCK_K),
+      t.val * (BLOCK_K * SPLIT_K) + (e.val + s0.pids 0 * BLOCK_K) < K →
+      s0.pids 1 * xm_stride
+          + (t.val * (BLOCK_K * SPLIT_K) + (e.val + s0.pids 0 * BLOCK_K))
+        < bounds input_ptr)
+    (hbB : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K)))
+        (l : Fin (BLOCK_N * BLOCK_K)),
+      l.val / BLOCK_K < N ∧
+        t.val * (BLOCK_K * SPLIT_K) + (l.val % BLOCK_K + s0.pids 0 * BLOCK_K) < K →
+      l0_stride * loraIdx s0 lora_indices + l.val / BLOCK_K * lora_k_stride
+          + (t.val * (BLOCK_K * SPLIT_K)
+              + (l.val % BLOCK_K + s0.pids 0 * BLOCK_K)) * lora_n_stride
+        < bounds lora_ptr) :
+    Stmt.TraceSafeListR R bounds
+      (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K) sk := by
+  have hcT : i / (BLOCK_K * SPLIT_K) < numKIters K (BLOCK_K * SPLIT_K) :=
+    kloop_counter_lt K (BLOCK_K * SPLIT_K) i hS hilt hi
+  set ckF : Fin BLOCK_K → Nat :=
+    fun e => i + (e.val + s0.pids 0 * BLOCK_K) with hckF
+  have hck_eq : ∀ e : Fin BLOCK_K,
+      ckF e = i / (BLOCK_K * SPLIT_K) * (BLOCK_K * SPLIT_K)
+        + (e.val + s0.pids 0 * BLOCK_K) := by
+    intro e
+    rw [hckF, ← hi]
+  unfold shrinkLoopBody
+  -- 1. current_k (register-only)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s1 h1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv h1
+  rw [evalR_currentK,
+    currentK_eval BLOCK_K i (fun e : Fin BLOCK_K => e.val + s0.pids 0 * BLOCK_K)
+      sk hk hok] at hv1
+  obtain rfl := Option.some.inj hv1
+  -- 2. current_k_c (register-only)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s2 h2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+  rw [evalOpR_ref, BlockState.setReg_same] at hv2
+  obtain rfl := Option.some.inj hv2
+  have hck2 : ((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+      "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).regs .nat [BLOCK_K]
+      "current_k" = some (Tile.vec ckF) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("current_k" : RegName) ≠ "current_k_c" by decide),
+      BlockState.setReg_same]
+  have hckc2 : ((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+      "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).regs .nat [BLOCK_K]
+      "current_k_c" = some (Tile.vec ckF) := by
+    rw [BlockState.setReg_same]
+  have hap2 : ((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+      "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).regs .ptr [] "a_ptr"
+      = some (Tile.scalar ((input_ptr, s0.pids 1 * xm_stride) : RegionName × Nat)) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("a_ptr" : RegName) ≠ "current_k_c" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("a_ptr" : RegName) ≠ "current_k" by decide)]
+    exact hap
+  -- 3. tiled_a (masked load, mask-gated bound group)
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp, by simp, ?_⟩
+    intro ptrs hptrs e hactive
+    rw [evalR_aTilePtr,
+      aTilePtr_eval input_ptr BLOCK_K (s0.pids 1 * xm_stride) ckF _
+        hap2 hckc2] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmasks, hme⟩ := hactive
+    rw [evalR_maskA, maskA_eval K BLOCK_K ckF _ hck2] at hmasks
+    obtain rfl := Option.some.inj hmasks
+    have hkK : ckF e.1 < K := of_decide_eq_true hme
+    show s0.pids 1 * xm_stride + ckF e.1 < bounds input_ptr
+    have h' := hbA ⟨i / (BLOCK_K * SPLIT_K), hcT⟩ e.1
+      (by rw [← hck_eq e.1]; exact hkK)
+    rw [← hck_eq e.1] at h'
+    exact h'
+  · intro s3 h3
+    obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+    -- 4. b_ptr_mask (register-only)
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+    intro s4 h4
+    obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv h4
+    have hon3 : (((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+        "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).setReg "tiled_a" .real
+        [BLOCK_K] v3).regs .nat [BLOCK_N] "offset_n"
+        = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) := by
+      rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_n" : RegName) ≠ "tiled_a" by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_n" : RegName) ≠ "current_k_c" by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_n" : RegName) ≠ "current_k" by decide)]
+      exact hon
+    have hck3 : (((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+        "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).setReg "tiled_a" .real
+        [BLOCK_K] v3).regs .nat [BLOCK_K] "current_k"
+        = some (Tile.vec ckF) := by
+      rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("current_k" : RegName) ≠ "tiled_a" by decide)]
+      exact hck2
+    rw [evalR_bmask, bmask_eval N K BLOCK_N BLOCK_K ckF _ hon3 hck3] at hv4
+    obtain rfl := Option.some.inj hv4
+    -- 5. tiled_b (masked load, mask-gated bound group)
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨by simp, by simp, ?_⟩
+      intro ptrs hptrs idx hactive
+      have hbp4 : ((((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+          "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).setReg "tiled_a" .real
+          [BLOCK_K] v3).setReg "b_ptr_mask" .bool [BLOCK_N, BLOCK_K]
+          (⟨fun idx : TileIndex [BLOCK_N, BLOCK_K] =>
+            decide (idx.1.val < N) && decide (ckF idx.2.1 < K)⟩
+              : Tile .bool [BLOCK_N, BLOCK_K])).regs .ptr [] "b_ptr"
+          = some (Tile.scalar
+              ((lora_ptr, l0_stride * loraIdx s0 lora_indices) : RegionName × Nat)) := by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("b_ptr" : RegName) ≠ "b_ptr_mask" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("b_ptr" : RegName) ≠ "tiled_a" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("b_ptr" : RegName) ≠ "current_k_c" by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+            (show ("b_ptr" : RegName) ≠ "current_k" by decide)]
+        exact hbp
+      have hon4 : ((((sk.setReg "current_k" .nat [BLOCK_K]
+          (Tile.vec ckF)).setReg "current_k_c" .nat [BLOCK_K]
+          (Tile.vec ckF)).setReg "tiled_a" .real [BLOCK_K] v3).setReg
+          "b_ptr_mask" .bool [BLOCK_N, BLOCK_K]
+          (⟨fun idx : TileIndex [BLOCK_N, BLOCK_K] =>
+            decide (idx.1.val < N) && decide (ckF idx.2.1 < K)⟩
+              : Tile .bool [BLOCK_N, BLOCK_K])).regs .nat [BLOCK_N] "offset_n"
+          = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) := by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_n" : RegName) ≠ "b_ptr_mask" by decide)]
+        exact hon3
+      have hck4 : ((((sk.setReg "current_k" .nat [BLOCK_K] (Tile.vec ckF)).setReg
+          "current_k_c" .nat [BLOCK_K] (Tile.vec ckF)).setReg "tiled_a" .real
+          [BLOCK_K] v3).setReg "b_ptr_mask" .bool [BLOCK_N, BLOCK_K]
+          (⟨fun idx : TileIndex [BLOCK_N, BLOCK_K] =>
+            decide (idx.1.val < N) && decide (ckF idx.2.1 < K)⟩
+              : Tile .bool [BLOCK_N, BLOCK_K])).regs .nat [BLOCK_K] "current_k"
+          = some (Tile.vec ckF) := by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("current_k" : RegName) ≠ "b_ptr_mask" by decide)]
+        exact hck3
+      rw [evalR_bTilePtr,
+        bTilePtr_eval lora_ptr lora_k_stride lora_n_stride BLOCK_N BLOCK_K
+          (l0_stride * loraIdx s0 lora_indices) ckF _ hbp4 hon4 hck4] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      obtain ⟨masks, hmasks, hmi⟩ := hactive
+      rw [evalOpR_ref, BlockState.setReg_same] at hmasks
+      obtain rfl := Option.some.inj hmasks
+      have hmi' : idx.1.val < N ∧ ckF idx.2.1 < K := by
+        have := hmi
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at this
+        exact this
+      show l0_stride * loraIdx s0 lora_indices + idx.1.val * lora_k_stride
+          + ckF idx.2.1 * lora_n_stride < bounds lora_ptr
+      have h' := hbB ⟨i / (BLOCK_K * SPLIT_K), hcT⟩
+        (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+        (by
+          rw [Lane2D.encode_div, Lane2D.encode_mod, ← hck_eq idx.2.1]
+          exact hmi')
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hck_eq idx.2.1] at h'
+      exact h'
+    · intro s5 h5
+      obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv h5
+      -- 6. accumulator (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+        (fun s6 _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 2000000 in
+/-- `TraceSafeListR` for the common tail + masked store: the four assigns are
+register-only, and the masked `.real` store's active lanes are exactly the
+`offset_cn < N` window, so their addresses are the `writeMask`-gated `write`
+bounds. -/
+private theorem shrink_tailSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (out_ptr : RegionName) (N cm_stride cn_stride BLOCK_N : Nat) (scaling : ℝ)
+    (cb : Nat) (st : BlockState)
+    (hcb : st.regs .nat [] "cur_batch" = some (Tile.scalar cb))
+    (hbC : ∀ j : Fin BLOCK_N, j.val < N →
+      cb * cm_stride + j.val * cn_stride < bounds out_ptr) :
+    Stmt.TraceSafeListR R bounds
+      (shrinkTailCommon out_ptr N cm_stride cn_stride BLOCK_N scaling
+        ++ [shrinkStoreStmt BLOCK_N]) st := by
+  simp only [shrinkTailCommon, shrinkStoreStmt, List.cons_append,
+    List.nil_append]
+  -- 1. accumulator *= scaling
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s1 h1
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- 2. offset_cn
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s2 h2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+  rw [evalOpR_arange] at hv2
+  obtain rfl := Option.some.inj hv2
+  -- 3. c_ptr
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s3 h3
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv h3
+  have hcb2 : ((st.setReg "accumulator" .real [BLOCK_N] v1).setReg "offset_cn"
+      .nat [BLOCK_N] (Tile.vec (fun j : Fin BLOCK_N => j.val))).regs .nat []
+      "cur_batch" = some (Tile.scalar cb) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("cur_batch" : RegName) ≠ "offset_cn" by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("cur_batch" : RegName) ≠ "accumulator" by decide)]
+    exact hcb
+  have hocn2 : ((st.setReg "accumulator" .real [BLOCK_N] v1).setReg "offset_cn"
+      .nat [BLOCK_N] (Tile.vec (fun j : Fin BLOCK_N => j.val))).regs .nat
+      [BLOCK_N] "offset_cn"
+      = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) := by
+    rw [BlockState.setReg_same]
+  rw [evalR_cptr,
+    cptr_tail_eval out_ptr cm_stride cn_stride BLOCK_N cb _ hcb2 hocn2] at hv3
+  obtain rfl := Option.some.inj hv3
+  -- 4. c_mask
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s4 h4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv h4
+  have hocn3 : (((st.setReg "accumulator" .real [BLOCK_N] v1).setReg "offset_cn"
+      .nat [BLOCK_N] (Tile.vec (fun j : Fin BLOCK_N => j.val))).setReg "c_ptr"
+      .ptr [BLOCK_N]
+      (⟨fun idx : TileIndex [BLOCK_N] =>
+        ((out_ptr, cb * cm_stride + idx.1.val * cn_stride) : RegionName × Nat)⟩
+          : Tile .ptr [BLOCK_N])).regs .nat [BLOCK_N] "offset_cn"
+      = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("offset_cn" : RegName) ≠ "c_ptr" by decide)]
+    exact hocn2
+  rw [evalR_cmask, cmask_eval N BLOCK_N _ hocn3] at hv4
+  obtain rfl := Option.some.inj hv4
+  -- 5. the masked store
+  refine Stmt.TraceSafeListR.cons_intro ?_
+    (fun s5 _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR,
+    Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, trivial, ?_⟩
+  intro ptrs hptrs idx hactive
+  rw [evalOpR_ref] at hptrs
+  rw [show ((((st.setReg "accumulator" .real [BLOCK_N] v1).setReg "offset_cn"
+      .nat [BLOCK_N] (Tile.vec (fun j : Fin BLOCK_N => j.val))).setReg "c_ptr"
+      .ptr [BLOCK_N]
+      (⟨fun idx : TileIndex [BLOCK_N] =>
+        ((out_ptr, cb * cm_stride + idx.1.val * cn_stride) : RegionName × Nat)⟩
+          : Tile .ptr [BLOCK_N])).setReg "c_mask" .bool [BLOCK_N]
+      (⟨fun idx : TileIndex [BLOCK_N] => decide (idx.1.val < N)⟩
+        : Tile .bool [BLOCK_N])).regs .ptr [BLOCK_N] "c_ptr"
+      = some (⟨fun idx : TileIndex [BLOCK_N] =>
+          ((out_ptr, cb * cm_stride + idx.1.val * cn_stride) : RegionName × Nat)⟩
+            : Tile .ptr [BLOCK_N]) from by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("c_ptr" : RegName) ≠ "c_mask" by decide),
+      BlockState.setReg_same]] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  obtain ⟨masks, hmasks, hmi⟩ := hactive
+  rw [evalOpR_ref, BlockState.setReg_same] at hmasks
+  obtain rfl := Option.some.inj hmasks
+  have hn : idx.1.val < N := of_decide_eq_true hmi
+  show cb * cm_stride + idx.1.val * cn_stride < bounds out_ptr
+  exact hbC idx.1 hn
+
+set_option maxHeartbeats 2000000 in
+/-- **The `TraceSafeR` walk for the whole store surface**, driven by
+`Stmt.forRangeTraceSafeR_inv` over the full exact invariant `shrinkInv`
+(usable from arbitrary launch states — bgmv's stack needs no clean-`undef`
+precondition, both loop loads carry `other=0`). The four bound groups are the
+skin's slot window (`hbM`), the two mask-gated streamed read windows
+(`hbA`/`hbB`, stated on the *loaded* `loraIdx`) and the `writeMask`-gated
+write window (`hbC`). -/
+private theorem shrink_store_traceSafeR (R : RoundingModel)
+    (bounds : RegionBounds) (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .nat) (scaling : ℝ)
+    (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) (s : BlockState)
+    (hS : 0 < BLOCK_K * SPLIT_K)
+    (hbM : s.pids 1 < bounds (Region.cast lora_indices))
+    (hbA : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K))) (e : Fin BLOCK_K),
+      t.val * (BLOCK_K * SPLIT_K) + (e.val + s.pids 0 * BLOCK_K) < K →
+      s.pids 1 * xm_stride
+          + (t.val * (BLOCK_K * SPLIT_K) + (e.val + s.pids 0 * BLOCK_K))
+        < bounds input_ptr)
+    (hbB : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K)))
+        (l : Fin (BLOCK_N * BLOCK_K)),
+      l.val / BLOCK_K < N ∧
+        t.val * (BLOCK_K * SPLIT_K) + (l.val % BLOCK_K + s.pids 0 * BLOCK_K) < K →
+      l0_stride * loraIdx s lora_indices + l.val / BLOCK_K * lora_k_stride
+          + (t.val * (BLOCK_K * SPLIT_K)
+              + (l.val % BLOCK_K + s.pids 0 * BLOCK_K)) * lora_n_stride
+        < bounds lora_ptr)
+    (hbC : ∀ j : Fin BLOCK_N, j.val < N →
+      s.pids 1 * cm_stride + j.val * cn_stride < bounds out_ptr) :
+    ((bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K lora_indices
+        scaling xm_stride l0_stride lora_k_stride lora_n_stride cm_stride
+        cn_stride BLOCK_N BLOCK_K SPLIT_K).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [store_body_split input_ptr lora_ptr out_ptr N K lora_indices scaling
+      xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K,
+    store_prologue_split input_ptr lora_ptr out_ptr N K lora_indices scaling
+      xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K]
+  have hstep : ∀ c s', c < K →
+      shrinkInv input_ptr lora_ptr lora_indices N K xm_stride l0_stride
+        lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K s c s' →
+      Stmt.TraceSafeListR R bounds
+        (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K)
+        (s'.setReg "k" .nat [] (Tile.scalar c)) ∧
+      ∃ s'', stepStmtsR R
+          (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K)
+          (s'.setReg "k" .nat [] (Tile.scalar c)) = some s'' ∧
+        shrinkInv input_ptr lora_ptr lora_indices N K xm_stride l0_stride
+          lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K s
+          (c + BLOCK_K * SPLIT_K) s'' := by
+    intro c s' hc hP
+    obtain ⟨hpids, hi, hbound, hcb, hon, hok, hap, hbp, hacc, hmem⟩ := hP
+    constructor
+    · refine shrink_bodySafeR R bounds input_ptr lora_ptr lora_indices N K
+        xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K
+        s hS c hc hi _ (by rw [BlockState.setReg_same]) ?_ ?_ ?_ ?_ hbA hbB
+      · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_n" : RegName) ≠ "k" by decide)]
+        exact hon
+      · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offset_k" : RegName) ≠ "k" by decide)]
+        exact hok
+      · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("a_ptr" : RegName) ≠ "k" by decide)]
+        exact hap
+      · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("b_ptr" : RegName) ≠ "k" by decide)]
+        exact hbp
+    · obtain ⟨s'', hs'', hP''⟩ := shrink_step input_ptr lora_ptr lora_indices
+        N K xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K
+        SPLIT_K s hS c s' hc
+        ⟨hpids, hi, hbound, hcb, hon, hok, hap, hbp, hacc, hmem⟩
+      exact ⟨s'', by
+        rw [shrinkBody_castFree]
+        exact hs'', hP''⟩
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the prologue: seven register-only assigns around one `.nat` slot load
+    unfold shrinkPrologue
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+    intro s1 h1
+    obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+    intro s2 h2
+    obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+    rw [evalOpR_programId] at hv2
+    obtain rfl := Option.some.inj hv2
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- the lora_indices slot load: address = cur_batch = pids 1
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro offsets hoffs i _
+      rw [evalOpR_ref, BlockState.setReg_same] at hoffs
+      obtain rfl := Option.some.inj hoffs
+      show ((s.setReg "pid_sk" .nat [] v1).pids 1) < bounds (Region.cast lora_indices)
+      exact hbM
+    · intro s3 h3
+      obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst s'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    obtain ⟨sp, hsp, hP0⟩ := shrink_preLoop input_ptr lora_ptr lora_indices
+      N K xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K
+      SPLIT_K s hS
+    rw [shrinkPrologue_castFree, hsp] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- the K-loop is trace-safe (invariant principle over `shrinkInv`)
+      simp only [Stmt.TraceSafeR]
+      exact Stmt.forRangeTraceSafeR_inv R bounds "k" K (BLOCK_K * SPLIT_K)
+        (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K)
+        (shrinkInv input_ptr lora_ptr lora_indices N K xm_stride l0_stride
+          lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K s)
+        hstep 0 sp hP0
+    · intro s2 hs2
+      obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+        forRange_inv (idx := "k") (start := 0) (stop := K)
+          (step := BLOCK_K * SPLIT_K)
+          (Nat.pos_iff_ne_zero.mp hS) hP0
+          (fun i st hlt hinv => shrink_step input_ptr lora_ptr lora_indices
+            N K xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N
+            BLOCK_K SPLIT_K s hS i st hlt hinv)
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _
+          (shrinkBody_castFree R N K lora_k_stride lora_n_stride BLOCK_N
+            BLOCK_K) "k",
+        ← stepForRangeAux.forRange_unfold, hLoopStmt] at hs2
+      obtain rfl := Option.some.inj hs2
+      obtain ⟨-, -, -, hcbL, -, -, -, -, -, -⟩ := hPLoop
+      exact shrink_tailSafeR R bounds out_ptr N cm_stride cn_stride BLOCK_N
+        scaling (s.pids 1) sLoop hcbL hbC
+
+/-- The store surface sits inside the flat-memory bridge's covered fragment. -/
+private theorem shrink_store_flattenOk
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .nat) (scaling : ℝ)
+    (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) :
+    ((bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K lora_indices
+        scaling xm_stride l0_stride lora_k_stride lora_n_stride cm_stride
+        cn_stride BLOCK_N BLOCK_K SPLIT_K).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [store_body_split input_ptr lora_ptr out_ptr N K lora_indices scaling
+      xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K,
+    store_prologue_split input_ptr lora_ptr out_ptr N K lora_indices scaling
+      xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K]
+  simp [shrinkPrologue, shrinkLoopBody, shrinkTailCommon, shrinkStoreStmt,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### IO signature, lane bridge, spec bridge -/
+
+/-- The `tiled_b`-stream lane feeding output lane `j` at rank key `e`: `(j, e)`
+row-major over the `[BLOCK_N, BLOCK_K]` per-step weight tile, via the shared
+`Lane2D` bridge. -/
+def bStreamLane (BLOCK_N BLOCK_K : Nat) (j : Fin BLOCK_N) (e : Fin BLOCK_K) :
+    Fin (BLOCK_N * BLOCK_K) :=
+  Lane2D.encode (j, e, PUnit.unit)
+
+/-- **Streaming metadata IO signature** of the `SPLIT_K = 1` store face on the
+metadata-slot two-stream fold skin (S1: fold + terminal store). One `.nat`
+slot: `lora_indices[cur_batch]`, read at the pid-only cell `pid₁`
+(`mwin`; the store surface's `Region .nat` metadata convention — the `-1`
+skip sentinel is the faithful `.int` surface's separate obligation). Step `t`
+of the K-loop reads the `[BLOCK_K]` input row tile and the
+`[BLOCK_N, BLOCK_K]` LoRA-A weight tile; after the loop one `[BLOCK_N]`
+output tile is masked-stored at the exact `.real` grid (`outDType := .real` —
+the kernel's store is untyped/fp32-register, no rounding event). The windows
+transcribe the kernel's pointer arithmetic verbatim:
+
+* `read1` step `t`, lane `e`: `cur_batch·xm_stride + current_k` with
+  `current_k = t·(BLOCK_K·SPLIT_K) + (e + pid_sk·BLOCK_K)` — the running
+  `a_ptr + current_k_c` cell (`tl.max_contiguous` erased).
+* `read2` step `t`, lane `l = (n, e)` (row-major over `[BLOCK_N, BLOCK_K]`):
+  `l0_stride·slot + n·lora_k_stride + current_k·lora_n_stride` — the
+  `b_ptr` cell; **the slot value enters this base address** (the loaded
+  adapter index selects the LoRA-A matrix).
+* `write` lane `j`: `cur_batch·cm_stride + j·cn_stride` — the `c_ptr` cell
+  (pure pid geometry; the slot never reaches the write address).
+* `mask1`/`mask2` transcribe the loads' genuine `current_k < K` K-tail
+  windows (`mask2` also the `offset_n < N` leg); `writeMask` transcribes
+  the store's `offset_cn < N` boundary mask verbatim.
+
+The kernel launches on a 2-D grid `(pid_sk, cur_batch)`; the skin's `pid₂`
+slot is unused — every window is constant in it, and the headline still
+quantifies over all three pids. -/
+def bgmvShrinkStoreIO (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .nat) (scaling : ℝ)
+    (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) : StreamMetaMasked3DKernelIO₂ where
+  kernel := bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K
+    lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
+    cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K
+  inp1 := input_ptr
+  inp2 := lora_ptr
+  out := out_ptr
+  nMeta := 1
+  sty := fun _ => .nat
+  mbuf := fun _ => Region.cast lora_indices
+  mwin := fun _ _ pid₁ _ => pid₁
+  T := numKIters K (BLOCK_K * SPLIT_K)
+  B1 := BLOCK_K
+  B2 := BLOCK_N * BLOCK_K
+  C := BLOCK_N
+  outDType := .real
+  read1 := fun pid₀ pid₁ _ _ t e =>
+    pid₁ * xm_stride + (t.val * (BLOCK_K * SPLIT_K) + (e.val + pid₀ * BLOCK_K))
+  read2 := fun pid₀ _ _ m t l =>
+    l0_stride * m 0 + l.val / BLOCK_K * lora_k_stride
+      + (t.val * (BLOCK_K * SPLIT_K) + (l.val % BLOCK_K + pid₀ * BLOCK_K))
+        * lora_n_stride
+  write := fun _ pid₁ _ _ j => pid₁ * cm_stride + j.val * cn_stride
+  mask1 := fun pid₀ _ _ _ t e =>
+    t.val * (BLOCK_K * SPLIT_K) + (e.val + pid₀ * BLOCK_K) < K
+  mask2 := fun pid₀ _ _ _ t l =>
+    l.val / BLOCK_K < N ∧
+      t.val * (BLOCK_K * SPLIT_K) + (l.val % BLOCK_K + pid₀ * BLOCK_K) < K
+  writeMask := fun _ _ _ _ j => j.val < N
+
+/-- Under the slot pin and the two stream pins, the exact stack's
+`accPartial` at the full trip count **is** the skin-level masked double fold
+`∑ t, ∑ e, [current_k < K] · xs·ys` (per write-active lane `j < N`; the
+`tiled_b` pins are addressed through the loaded slot value `m0`). -/
+private theorem shrinkSpec_eq_streamSum
+    (input_ptr lora_ptr : RegionName) (lora_indices : Region .nat)
+    (N K xm_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat) (s₀ : BlockState) (m0 : Nat)
+    (hli : loraIdx s₀ lora_indices = m0)
+    (xs : Fin (numKIters K (BLOCK_K * SPLIT_K)) → Fin BLOCK_K → ℝ)
+    (ys : Fin (numKIters K (BLOCK_K * SPLIT_K)) → Fin (BLOCK_N * BLOCK_K) → ℝ)
+    (hx : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K))) (e : Fin BLOCK_K),
+      t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K) < K →
+      s₀.readMem input_ptr (s₀.pids 1 * xm_stride
+          + (t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K)))
+        = xs t e)
+    (hy : ∀ (t : Fin (numKIters K (BLOCK_K * SPLIT_K)))
+        (l : Fin (BLOCK_N * BLOCK_K)),
+      l.val / BLOCK_K < N ∧
+        t.val * (BLOCK_K * SPLIT_K) + (l.val % BLOCK_K + s₀.pids 0 * BLOCK_K) < K →
+      s₀.readMem lora_ptr (l0_stride * m0 + l.val / BLOCK_K * lora_k_stride
+          + (t.val * (BLOCK_K * SPLIT_K)
+              + (l.val % BLOCK_K + s₀.pids 0 * BLOCK_K)) * lora_n_stride)
+        = ys t l)
+    (j : Fin BLOCK_N) (hj : j.val < N) :
+    accPartial s₀ input_ptr lora_ptr lora_indices K xm_stride l0_stride
+        lora_k_stride lora_n_stride BLOCK_K SPLIT_K
+        (numKIters K (BLOCK_K * SPLIT_K)) j.val
+      = ∑ t : Fin (numKIters K (BLOCK_K * SPLIT_K)), ∑ e : Fin BLOCK_K,
+          if t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K) < K
+          then xs t e * ys t (bStreamLane BLOCK_N BLOCK_K j e)
+          else 0 := by
+  unfold accPartial
+  rw [← Fin.sum_univ_eq_sum_range]
+  refine Finset.sum_congr rfl fun t _ => ?_
+  unfold blockTerm
+  refine Finset.sum_congr rfl fun e _ => ?_
+  have hkidx : kIdx s₀ BLOCK_K SPLIT_K t.val e.val
+      = t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K) := rfl
+  rw [hkidx]
+  by_cases hkK : t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K) < K
+  · rw [if_pos hkK, if_pos hkK]
+    have hxa : aElem s₀ input_ptr xm_stride
+        (t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K))
+        = xs t e := hx t e hkK
+    have hyb : bElem s₀ lora_ptr lora_indices l0_stride lora_k_stride
+        lora_n_stride j.val
+        (t.val * (BLOCK_K * SPLIT_K) + (e.val + s₀.pids 0 * BLOCK_K))
+        = ys t (bStreamLane BLOCK_N BLOCK_K j e) := by
+      rw [← hy t (bStreamLane BLOCK_N BLOCK_K j e)
+          (by
+            unfold bStreamLane
+            rw [Lane2D.encode_div, Lane2D.encode_mod]
+            exact ⟨hj, hkK⟩)]
+      unfold bElem bStreamLane
+      rw [Lane2D.encode_div, Lane2D.encode_mod, hli]
+    rw [hxa, hyb]
+  · rw [if_neg hkK, if_neg hkK]
+
+/-! ### ════════ ★ STREAMING METADATA HEADLINE (store face) ★ ════════ -/
+
+set_option maxHeartbeats 4000000 in
+/-- **The `⊨[R]` streaming metadata headline (wave-5, store face;
+`SPLIT_K = 1` branch).** For every rounding model `R`, the store proof
+surface implements, on its `StreamMetaMasked3DKernelIO₂` signature, the
+**ideal ℝ scaled rank-slice fold** over the streamed tiles: for every
+write-active output lane `j < N`,
+
+```
+out[cur_batch·cm_stride + j·cn_stride] =
+  scaling · Σ_{t<⌈K/(BLOCK_K·SPLIT_K)⌉} Σ_{e<BLOCK_K}
+    [current_k(t,e) < K] · x-tile[t](e) · loraA-tile[t](j,e)
+```
+
+with `current_k(t,e) = t·BLOCK_K·SPLIT_K + (e + pid_sk·BLOCK_K)` — the spec
+`f` is exact real arithmetic over the pinned streams; the loaded metadata
+slot `lora_indices[cur_batch]` enters only the `read2` base-address geometry
+(the adapter-matrix select), never the value contract. The K-tail is genuine:
+the streamed masks reproduce the kernel's `current_k < K` windows verbatim,
+so `K` need not be a multiple of the split stride, and the masked spec sum
+runs exactly over the kernel's live lanes.
+
+This kernel has **zero rounding events** (every load, the K-loop and the
+terminal masked store are `.real`), so with `outDType := .real` the readback
+contract's `R.round .real` is the identity — the `⊨[R]` face at the `.real`
+grid is the exact streaming contract stated once for every `R` (`R := .triv`
+is the literal exact degeneration). Layer map: the prologue, K-loop and
+common tail are cast-free and collapse onto the proven exact
+`shrink_preLoop` / `shrink_step` / `forRange_inv` / `tail_common_steps`
+stack; only the masked store statement is re-proved on the `R` side
+(`shrink_postLoopR`).
+
+Both hypotheses are truth-forced, inherited verbatim from
+`store_exec_correct`:
+
+* `hS : 0 < BLOCK_K * SPLIT_K` — the K-loop stride is positive (a launched
+  constexpr tile is nonempty; at stride `0` the trip-count closed form
+  `⌈K/(BLOCK_K·SPLIT_K)⌉` is meaningless and the loop would not advance).
+* `hcn : 0 < cn_stride` — output-lane footprint injectivity
+  (`affine1D_inj`): with `cn_stride = 0` all output lanes collide on one
+  cell, the per-lane readback would be last-writer-wins and the statement
+  false. Torch strides of a non-degenerate output are ≥ 1.
+
+Division of labor: the `SPLIT_K > 1` **atomic face** is a read-modify-write
+(`tl.atomic_add`), not a terminal single-store fold, hence outside this
+skin's S1 genre — its per-program `out-before + contribution` obligation
+remains conjunct (5) of the exact five-way summary
+`bgmv_shrink_kernel_output_summary_general`, which is retained unchanged
+(as are the faithful `.int` sentinel surface and its write-free skip path,
+conjuncts (1)–(4)). -/
+specification bgmv_shrink_store_io_correctness (R : RoundingModel)
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .nat) (scaling : ℝ)
+    (xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+      BLOCK_N BLOCK_K SPLIT_K : Nat)
+    (hS : 0 < BLOCK_K * SPLIT_K) (hcn : 0 < cn_stride) :
+    bgmvShrinkStoreIO input_ptr lora_ptr out_ptr N K lora_indices scaling
+        xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+        BLOCK_N BLOCK_K SPLIT_K
+      ⊨[R] fun pid₀ _ _ _ xs ys j =>
+        scaling * ∑ t : Fin (numKIters K (BLOCK_K * SPLIT_K)),
+          ∑ e : Fin BLOCK_K,
+            if t.val * (BLOCK_K * SPLIT_K) + (e.val + pid₀ * BLOCK_K) < K
+            then xs t e * ys t (bStreamLane BLOCK_N BLOCK_K j e)
+            else 0 := by
+  refine StreamMetaMasked3DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact shrink_store_flattenOk input_ptr lora_ptr out_ptr N K lora_indices
+      scaling xm_stride l0_stride lora_k_stride lora_n_stride cm_stride
+      cn_stride BLOCK_N BLOCK_K SPLIT_K
+  · -- safety walk
+    intro bounds s m xs ys hm _hx _hy hbm hbr1 hbr2 hbw
+    simp only [bgmvShrinkStoreIO] at hm hbm hbr1 hbr2 hbw ⊢
+    have hli : loraIdx s lora_indices = m ⟨0, Nat.one_pos⟩ :=
+      hm ⟨0, Nat.one_pos⟩
+    refine shrink_store_traceSafeR R bounds input_ptr lora_ptr out_ptr N K
+      lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
+      cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K s hS (hbm ⟨0, Nat.one_pos⟩)
+      hbr1 ?_ hbw
+    intro t l hmask
+    rw [hli]
+    exact hbr2 t l hmask
+  · -- the rounded Hoare triple
+    intro s₀ m xs ys _hundef hm hx hy
+    simp only [bgmvShrinkStoreIO] at hm hx hy ⊢
+    have hli : loraIdx s₀ lora_indices = m ⟨0, Nat.one_pos⟩ :=
+      hm ⟨0, Nat.one_pos⟩
+    obtain ⟨sp, hsp, hP0⟩ := shrink_preLoop input_ptr lora_ptr lora_indices
+      N K xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K
+      SPLIT_K s₀ hS
+    obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+      forRange_inv (idx := "k") (start := 0) (stop := K)
+        (step := BLOCK_K * SPLIT_K)
+        (Nat.pos_iff_ne_zero.mp hS) hP0
+        (fun i st hlt hinv => shrink_step input_ptr lora_ptr lora_indices
+          N K xm_stride l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K
+          SPLIT_K s₀ hS i st hlt hinv)
+    have hiF := hPLoop.2.1
+    have hboundF := hPLoop.2.2.1
+    have hcF : final / (BLOCK_K * SPLIT_K) = numKIters K (BLOCK_K * SPLIT_K) := by
+      apply kloop_final_iters K (BLOCK_K * SPLIT_K) _ hS
+      · rw [← hiF]; exact hfinal
+      · rw [← hiF]; exact hboundF
+    obtain ⟨sfin, hTailR, hval, hframe⟩ := shrink_postLoopR R input_ptr
+      lora_ptr out_ptr lora_indices scaling N K xm_stride l0_stride
+      lora_k_stride lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K
+      hcn s₀ sLoop final hPLoop
+    have hLoopR : stepStmtR R (Stmt.forRange "k" 0 K (BLOCK_K * SPLIT_K)
+          (shrinkLoopBody N K lora_k_stride lora_n_stride BLOCK_N BLOCK_K)) sp
+        = some sLoop := by
+      rw [stepStmtR_forRange,
+        stepForRangeAuxR_castFree R _
+          (shrinkBody_castFree R N K lora_k_stride lora_n_stride BLOCK_N
+            BLOCK_K) "k",
+        ← stepForRangeAux.forRange_unfold]
+      exact hLoopStmt
+    refine ⟨sfin, ?_, ?_, ?_⟩
+    · show execR R (bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K
+          lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
+          cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K).toAlgKernel s₀
+        = some sfin
+      unfold execR
+      rw [store_body_split input_ptr lora_ptr out_ptr N K lora_indices scaling
+          xm_stride l0_stride lora_k_stride lora_n_stride cm_stride cn_stride
+          BLOCK_N BLOCK_K SPLIT_K,
+        store_prologue_split input_ptr lora_ptr out_ptr N K lora_indices
+          scaling xm_stride l0_stride lora_k_stride lora_n_stride cm_stride
+          cn_stride BLOCK_N BLOCK_K SPLIT_K,
+        stepStmtsR_append, shrinkPrologue_castFree, hsp, Option.bind_some,
+        stepStmtsR_cons_some hLoopR]
+      exact hTailR
+    · intro j hj
+      have hcell := hval j hj
+      rw [hcF] at hcell
+      show sfin.readMemAs .real out_ptr
+          (s₀.pids 1 * cm_stride + j.val * cn_stride) = _
+      rw [show s₀.pids 1 * cm_stride + j.val * cn_stride
+          = outOff s₀ cm_stride cn_stride j.val from rfl,
+        readMemAs_real_of_cell hcell, R.round_real_apply,
+        shrinkSpec_eq_streamSum input_ptr lora_ptr lora_indices N K xm_stride
+          l0_stride lora_k_stride lora_n_stride BLOCK_N BLOCK_K SPLIT_K s₀
+          (m ⟨0, Nat.one_pos⟩) hli xs ys hx hy j hj]
+      exact congrArg _ (mul_comm _ _)
+    · intro r o hcond
+      refine hframe r o ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · exact Or.inr fun n hn => hno n hn
+
 end VeriTile.Bench.TritonBenchG.BgmvShrinkKernel
