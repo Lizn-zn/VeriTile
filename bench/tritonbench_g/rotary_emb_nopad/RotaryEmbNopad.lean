@@ -64,6 +64,7 @@ modeled.
 namespace VeriTile.Bench.TritonBenchG.RotaryEmbNopad
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.GroupedMasked2DKernelIO
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -2096,26 +2097,811 @@ theorem rotary_embedding_k_surface_k1_compute_correct
     hOutDisjoint hExec idx
   simpa [hActive] using h
 
+/-! ## The `⊨` specification surface (`GroupedMasked2DKernelIO`)
+
+`rotary_embedding_kernel` is exposed as two grouped-masked Hoare triples, one
+per data buffer. The Q face reads two Q half-windows plus `Cos`/`Sin` and writes
+two Q half-windows in place (`nIn = 4`, `nOut = 2`); the K face is the GQA analog
+whose two stores fire only on the group leader (`cur_head_idx % KV_GROUP_NUM = 0`),
+that runtime predicate living entirely inside each channel's `writeMask`/`readMask`.
+
+The kernels store a genuinely three-dimensional `[BLOCK_TOKENS, 1, HEAD_HALF]`
+token/head/dim tile; the singleton head axis is inert, so the flat `⊨` lane space
+`Fin (BLOCK_TOKENS * HEAD_HALF)` identifies with it row-major via the shared
+`Lane2D` bridge (token = row, dim = column) lifted through the singleton with
+`lane3`. -/
+
+/-- Lift a flat lane `j` to the 3-D tile index `[BLOCK_TOKENS, 1, HEAD_HALF]`
+via the row-major `Lane2D` decode (token = `j / HEAD_HALF`, dim = `j % HEAD_HALF`),
+the inert head axis pinned to its sole inhabitant. -/
+def lane3 (BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] :=
+  ((Lane2D.decode j).1, ⟨0, Nat.one_pos⟩, (Lane2D.decode j).2.1, PUnit.unit)
+
+/-- The rotary output of output channel `o` from the four loaded lane values
+`(dataFirst, dataSecond, cos, sin) = (a, b, c, d)`: first half `a·c − b·d`,
+second half `a·d + b·c`. Factored into one definition so both `⊨` faces and the
+two headline conjuncts share a single matcher (a bare inline `match o` generates
+a fresh per-site matcher that blocks the cross-declaration `exact`). -/
+def rotaryPair (a b c d : ℝ) (o : Fin 2) : ℝ :=
+  match o with
+  | ⟨0, _⟩ => a * c - b * d
+  | ⟨_ + 1, _⟩ => a * d + b * c
+
+/-- Q/K first-half output/read address of flat lane `j` for program
+`(pid₀, pid₁)`. -/
+def dataFirstP (pid₀ pid₁ token_stride head_stride head_dim_stride
+    BLOCK_TOKENS HEAD_HALF : Nat) (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Nat :=
+  (pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val) * token_stride +
+    pid₀ * head_stride + (Lane2D.decode j).2.1.val * head_dim_stride
+
+/-- Q/K second-half output/read address of flat lane `j`. -/
+def dataSecondP (pid₀ pid₁ token_stride head_stride head_dim_stride
+    BLOCK_TOKENS HEAD_HALF : Nat) (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Nat :=
+  (pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val) * token_stride +
+    pid₀ * head_stride + ((Lane2D.decode j).2.1.val + HEAD_HALF) * head_dim_stride
+
+/-- Cos/Sin read address of flat lane `j` (the trig tile broadcasts along the
+inert head axis). -/
+def cosP (pid₁ cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Nat :=
+  (pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val) * cos_token_stride +
+    (Lane2D.decode j).2.1.val * cos_stride
+
+/-- Token-in-range predicate of flat lane `j` (the `Cos`/`Sin` load mask). -/
+def tokP (pid₁ q_total_tokens BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Prop :=
+  pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val < q_total_tokens
+
+/-- Q active predicate of flat lane `j`: head in range and token in range. -/
+def activeQP (pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Prop :=
+  pid₀ < Q_HEAD_NUM ∧ pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val < q_total_tokens
+
+/-- K active predicate of flat lane `j`: the GQA-leader modular gate fires and
+the token is in range. -/
+def activeKP (pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) : Prop :=
+  pid₀ % KV_GROUP_NUM = 0 ∧
+    pid₁ * BLOCK_TOKENS + (Lane2D.decode j).1.val < q_total_tokens
+
+instance activeQPDecidable
+    (pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    Decidable (activeQP pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j) := by
+  unfold activeQP; infer_instance
+
+instance activeKPDecidable
+    (pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    Decidable (activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j) := by
+  unfold activeKP; infer_instance
+
+instance tokPDecidable (pid₁ q_total_tokens BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    Decidable (tokP pid₁ q_total_tokens BLOCK_TOKENS HEAD_HALF j) := by
+  unfold tokP; infer_instance
+
+/-- A masked scatter-store `foldl` leaves every memory cell it does not
+actively hit unchanged (cell-level frame for one masked store). -/
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (st : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st).mem r o = st.mem r o := by
+  induction l generalizing st with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-! ### Pid-indexed ↔ state-indexed bridges (`rfl`)
+
+The grouped skin's windows/masks are functions of the program ids and the flat
+lane; the sections above phrased everything over a `BlockState` and a 3-D
+`TileIndex`. These record that the two agree definitionally under
+`pid := s.pids` and `idx := lane3 j`. -/
+
+theorem dataFirstP_eq (s : BlockState)
+    (token_stride head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    dataFirstP (s.pids 0) (s.pids 1) token_stride head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+      = qFullFirstOffset s token_stride head_stride head_dim_stride BLOCK_TOKENS
+          (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem dataSecondP_eq (s : BlockState)
+    (token_stride head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    dataSecondP (s.pids 0) (s.pids 1) token_stride head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+      = qFullSecondOffset s token_stride head_stride head_dim_stride BLOCK_TOKENS
+          HEAD_HALF (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem cosP_eq (s : BlockState) (cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    cosP (s.pids 1) cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF j
+      = cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS
+          (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem kFirstP_eq (s : BlockState)
+    (k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    dataFirstP (s.pids 0 / KV_GROUP_NUM) (s.pids 1) k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+      = kFullFirstOffset s k_token_stride k_head_stride head_dim_stride
+          KV_GROUP_NUM BLOCK_TOKENS (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem kSecondP_eq (s : BlockState)
+    (k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    dataSecondP (s.pids 0 / KV_GROUP_NUM) (s.pids 1) k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+      = kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
+          KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem activeQP_eq (s : BlockState)
+    (q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    activeQP (s.pids 0) (s.pids 1) q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j
+      = activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS
+          (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+theorem activeKP_eq (s : BlockState)
+    (q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (j : Fin (BLOCK_TOKENS * HEAD_HALF)) :
+    activeKP (s.pids 0) (s.pids 1) q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+      = activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS
+          (lane3 BLOCK_TOKENS HEAD_HALF j) := rfl
+
+/-- The flat lane of a 3-D tile index (inverse of `lane3` up to the inert head
+axis): the row-major encode of the `(token, dim)` projection. -/
+def encode3 (BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : Fin (BLOCK_TOKENS * HEAD_HALF) :=
+  Lane2D.encode (idx.1, idx.2.2.1, PUnit.unit)
+
+@[simp] theorem decode_encode3 (BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    Lane2D.decode (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (idx.1, idx.2.2.1, PUnit.unit) := by
+  simp [encode3, Lane2D.decode_encode]
+
+theorem dataFirstP_encode3 (p q token_stride head_stride head_dim_stride
+    BLOCK_TOKENS HEAD_HALF : Nat) (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    dataFirstP p q token_stride head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF
+        (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (q * BLOCK_TOKENS + idx.1.val) * token_stride + p * head_stride +
+          idx.2.2.1.val * head_dim_stride := by
+  simp [dataFirstP]
+
+theorem dataSecondP_encode3 (p q token_stride head_stride head_dim_stride
+    BLOCK_TOKENS HEAD_HALF : Nat) (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    dataSecondP p q token_stride head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF
+        (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (q * BLOCK_TOKENS + idx.1.val) * token_stride + p * head_stride +
+          (idx.2.2.1.val + HEAD_HALF) * head_dim_stride := by
+  simp [dataSecondP]
+
+theorem cosP_encode3 (q cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    cosP q cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF
+        (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (q * BLOCK_TOKENS + idx.1.val) * cos_token_stride +
+          idx.2.2.1.val * cos_stride := by
+  simp [cosP]
+
+theorem activeQP_encode3 (p q q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    activeQP p q q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF
+        (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (p < Q_HEAD_NUM ∧ q * BLOCK_TOKENS + idx.1.val < q_total_tokens) := by
+  simp [activeQP]
+
+theorem activeKP_encode3 (p q q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    activeKP p q q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF
+        (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (p % KV_GROUP_NUM = 0 ∧ q * BLOCK_TOKENS + idx.1.val < q_total_tokens) := by
+  simp [activeKP]
+
+theorem tokP_encode3 (q q_total_tokens BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    tokP q q_total_tokens BLOCK_TOKENS HEAD_HALF (encode3 BLOCK_TOKENS HEAD_HALF idx)
+      = (q * BLOCK_TOKENS + idx.1.val < q_total_tokens) := by
+  simp [tokP]
+
+/-! ### Q face -/
+
+/-- Termination: the full Q rotary surface executes to completion from any state. -/
+private theorem rotary_embedding_q_surface_exec_isSome
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) (s : BlockState) :
+    ∃ s1, exec ((rotary_embedding_q_surface Q Cos Sin q_token_stride q_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s = some s1 := by
+  simp [exec, rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
+        Tile.expandDim, TileShape.insertAxis, TileShape.dropInsertedIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+
+/-- The full Q rotary surface sits inside the flat-memory bridge's covered
+fragment. -/
+private theorem rotary_embedding_q_surface_flattenOk
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    ((rotary_embedding_q_surface Q Cos Sin q_token_stride q_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Frame half: every memory cell outside the two masked Q output windows (the
+first-half `off_q0` scatter and the second-half `off_q1` scatter) is preserved. -/
+private theorem rotary_embedding_q_surface_frame
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) (s s1 : BlockState)
+    (hExec : exec ((rotary_embedding_q_surface Q Cos Sin q_token_stride q_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmissFirst : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx →
+      ¬(Q = r ∧ qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+          BLOCK_TOKENS idx = o))
+    (hmissSecond : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx →
+      ¬(Q = r ∧ qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
+          BLOCK_TOKENS HEAD_HALF idx = o)) :
+    s1.mem r o = s.mem r o := by
+  simp only [activeFull, qFullFirstOffset, qFullSecondOffset] at hmissFirst hmissSecond
+  simp [exec, rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
+        Tile.expandDim, TileShape.insertAxis, TileShape.dropInsertedIndex,
+        TileShape.dropInsertedIndex_two_pair, TileShape.dropInsertedIndex_zero_pair,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) ?_
+  · intro k _ hmk hc
+    exact hmissSecond k hmk hc
+  · simp only [BlockState.setReg]
+    refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+    intro k _ hmk hc
+    exact hmissFirst k hmk hc
+
+private theorem rotary_embedding_q_surface_traceSafe
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hcos : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      s.pids 1 * BLOCK_TOKENS + idx.1.val < q_total_tokens →
+      cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx < bounds Cos)
+    (hsin : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      s.pids 1 * BLOCK_TOKENS + idx.1.val < q_total_tokens →
+      cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx < bounds Sin)
+    (hq0 : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx →
+      qFullFirstOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS idx
+        < bounds Q)
+    (hq1 : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx →
+      qFullSecondOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS
+        HEAD_HALF idx < bounds Q) :
+    Kernel.TraceSafe bounds
+      ((rotary_embedding_q_surface Q Cos Sin q_token_stride q_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s := by
+  simp only [activeFull, qFullFirstOffset, qFullSecondOffset, cosFullOffset] at hcos hsin hq0 hq1
+  unfold Kernel.TraceSafe
+  simp [rotary_embedding_q_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd, Tile.remap, Tile.expandDim,
+    TileShape.insertAxis, TileShape.dropInsertedIndex,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+  exact ⟨fun a a_1 ht => hcos (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ht,
+    fun a a_1 ht => hsin (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ht,
+    fun a a_1 hh ht => hq0 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hh, ht⟩,
+    fun a a_1 hh ht => hq1 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hh, ht⟩,
+    fun a a_1 hh ht => hq0 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hh, ht⟩,
+    fun a a_1 hh ht => hq1 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hh, ht⟩⟩
+
+/-- The **IO signature** of the Q face of `rotary_embedding_kernel` — four read
+windows (`q0`/`q1` half-tiles + `Cos`/`Sin`) and two in-place Q half-stores over
+the flat `Fin (BLOCK_TOKENS * HEAD_HALF)` lane space. -/
+def rotaryNopadQIO (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    GroupedMasked2DKernelIO where
+  kernel := rotary_embedding_q_surface Q Cos Sin q_token_stride q_head_stride
+    head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF
+    BLOCK_TOKENS
+  nIn := 4
+  nOut := 2
+  bufs := [Q, Cos, Sin]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => Q | ⟨1, _⟩ => Q | ⟨2, _⟩ => Cos | ⟨_ + 3, _⟩ => Sin
+  out := fun _ => Q
+  B := BLOCK_TOKENS * HEAD_HALF
+  read := fun i _pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => dataFirstP _pid₀ pid₁ q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+    | ⟨1, _⟩ => dataSecondP _pid₀ pid₁ q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+    | ⟨2, _⟩ => cosP pid₁ cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 3, _⟩ => cosP pid₁ cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF j
+  readMask := fun i pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => activeQP pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨1, _⟩ => activeQP pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨2, _⟩ => tokP pid₁ q_total_tokens BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 3, _⟩ => tokP pid₁ q_total_tokens BLOCK_TOKENS HEAD_HALF j
+  write := fun o pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => dataFirstP pid₀ pid₁ q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 1, _⟩ => dataSecondP pid₀ pid₁ q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF j
+  writeMask := fun o pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => activeQP pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 1, _⟩ => activeQP pid₀ pid₁ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS HEAD_HALF j
+
+/-- **`rotaryNopadQIO ⊨ rotary`** — the Q face of `rotary_embedding_kernel` as one
+grouped masked Hoare triple: every `activeFull`-active lane of the first Q half
+ends up holding `q0·cos − q1·sin` and of the second half `q0·sin + q1·cos`,
+computed from the **old** window contents, with every other flat cell untouched.
+The three `∀ s` side conditions (first-half injective, second-half injective,
+first-vs-second disjoint) are the honest layout collision-freedom the value legs
+require; universal in the launch state because `⊨` ranges over every program. -/
+theorem rotary_embedding_q_surface_implements
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat)
+    (hInjFirst : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+        qFullFirstOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS idx))
+    (hInjSecond : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+        qFullSecondOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS
+          HEAD_HALF idx))
+    (hDisjoint : ∀ (s : BlockState) (idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]),
+      qFullFirstOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS idx ≠
+        qFullSecondOffset s q_token_stride q_head_stride head_dim_stride BLOCK_TOKENS
+          HEAD_HALF idx') :
+    rotaryNopadQIO Q Cos Sin q_token_stride q_head_stride head_dim_stride
+        cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS
+      ⊨ fun _pid₀ _pid₁ xs o j =>
+          rotaryPair (xs (⟨0, by decide⟩ : Fin 4) j) (xs (⟨1, by decide⟩ : Fin 4) j)
+            (xs (⟨2, by decide⟩ : Fin 4) j) (xs (⟨3, by decide⟩ : Fin 4) j) o := by
+  refine GroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · intro o
+    simp [rotaryNopadQIO]
+  · exact rotary_embedding_q_surface_flattenOk Q Cos Sin q_token_stride q_head_stride
+      head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF
+      BLOCK_TOKENS
+  · intro bounds s hib hob
+    simp only [rotaryNopadQIO] at hib hob
+    refine rotary_embedding_q_surface_traceSafe Q Cos Sin q_token_stride q_head_stride
+      head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF
+      BLOCK_TOKENS bounds s ?_ ?_ ?_ ?_
+    · intro idx htok
+      have h := hib (⟨2, by decide⟩ : Fin 4) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [tokP_encode3]; exact htok)
+      rw [cosP_encode3] at h
+      simpa [cosFullOffset] using h
+    · intro idx htok
+      have h := hib (⟨3, by decide⟩ : Fin 4) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [tokP_encode3]; exact htok)
+      rw [cosP_encode3] at h
+      simpa [cosFullOffset] using h
+    · intro idx hact
+      have h := hob (⟨0, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeQP_encode3]; exact hact)
+      rw [dataFirstP_encode3] at h
+      simpa [qFullFirstOffset] using h
+    · intro idx hact
+      have h := hob (⟨1, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeQP_encode3]; exact hact)
+      rw [dataSecondP_encode3] at h
+      simpa [qFullSecondOffset] using h
+  · intro s₀ xs hx
+    simp only [rotaryNopadQIO] at hx
+    obtain ⟨s1, hs1⟩ := rotary_embedding_q_surface_exec_isSome Q Cos Sin q_token_stride
+      q_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM
+      HEAD_HALF BLOCK_TOKENS s₀
+    refine ⟨s1, hs1, ?_, ?_⟩
+    · rintro ⟨o, ho⟩ j hj
+      match o, ho with
+      | 0, _ =>
+          have hact : activeFull s₀ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS
+            (lane3 BLOCK_TOKENS HEAD_HALF j) := hj
+          have htok : tokP (s₀.pids 1) q_total_tokens BLOCK_TOKENS HEAD_HALF j := hact.2
+          have h := rotary_embedding_q_surface_q0_correct Q Cos Sin q_token_stride
+            q_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens
+            Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS s₀ s1 (hInjFirst s₀) (hDisjoint s₀) hs1
+            (lane3 BLOCK_TOKENS HEAD_HALF j)
+          rw [if_pos hact] at h
+          show s1.readMem Q (dataFirstP (s₀.pids 0) (s₀.pids 1) q_token_stride
+            q_head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF j) = _
+          rw [dataFirstP_eq, h]
+          simp only [rotaryNopadQ0FullSpec, ← dataFirstP_eq, ← dataSecondP_eq, ← cosP_eq]
+          rw [hx (⟨0, by decide⟩ : Fin 4) j hact, hx (⟨1, by decide⟩ : Fin 4) j hact,
+            hx (⟨2, by decide⟩ : Fin 4) j htok, hx (⟨3, by decide⟩ : Fin 4) j htok]
+          rfl
+      | _ + 1, _ =>
+          have hact : activeFull s₀ q_total_tokens Q_HEAD_NUM BLOCK_TOKENS
+            (lane3 BLOCK_TOKENS HEAD_HALF j) := hj
+          have htok : tokP (s₀.pids 1) q_total_tokens BLOCK_TOKENS HEAD_HALF j := hact.2
+          have h := rotary_embedding_q_surface_q1_correct Q Cos Sin q_token_stride
+            q_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens
+            Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS s₀ s1 (hInjSecond s₀) (hDisjoint s₀) hs1
+            (lane3 BLOCK_TOKENS HEAD_HALF j)
+          rw [if_pos hact] at h
+          show s1.readMem Q (dataSecondP (s₀.pids 0) (s₀.pids 1) q_token_stride
+            q_head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF j) = _
+          rw [dataSecondP_eq, h]
+          simp only [rotaryNopadQ1FullSpec, ← dataFirstP_eq, ← dataSecondP_eq, ← cosP_eq]
+          rw [hx (⟨0, by decide⟩ : Fin 4) j hact, hx (⟨1, by decide⟩ : Fin 4) j hact,
+            hx (⟨2, by decide⟩ : Fin 4) j htok, hx (⟨3, by decide⟩ : Fin 4) j htok]
+          rfl
+    · intro r o' hcond
+      simp only [rotaryNopadQIO] at hcond
+      refine rotary_embedding_q_surface_frame Q Cos Sin q_token_stride q_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF
+        BLOCK_TOKENS s₀ s1 hs1 r o' ?_ ?_
+      · intro idx hact hc
+        have h := hcond (⟨0, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+          (by rw [activeQP_encode3]; exact hact)
+        rw [dataFirstP_encode3] at h
+        exact h.elim (fun hne => hne hc.1.symm)
+          (fun hne => hne (by rw [← qFullFirstOffset]; exact hc.2.symm))
+      · intro idx hact hc
+        have h := hcond (⟨1, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+          (by rw [activeQP_encode3]; exact hact)
+        rw [dataSecondP_encode3] at h
+        exact h.elim (fun hne => hne hc.1.symm)
+          (fun hne => hne (by rw [← qFullSecondOffset]; exact hc.2.symm))
+
+/-! ### K face
+
+The GQA-leader predicate `cur_head_idx % KV_GROUP_NUM = 0` gates the whole store
+body (`if handle_kv`), so every K support lemma below splits on it: on the group
+leader the two half-stores fire (their in-branch masks are token-only, the head
+gate having already been consumed by `handle_kv`), otherwise the kernel is a
+register-only no-op leaving memory untouched. The K head index the stores address
+is `cur_head_idx / KV_GROUP_NUM`, entering the windows as `dataFirstP (pid₀ /
+KV_GROUP_NUM) …`. -/
+
+/-- Termination: the full K rotary surface executes to completion from any state. -/
+private theorem rotary_embedding_k_surface_exec_isSome
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) (s : BlockState) :
+    ∃ s1, exec ((rotary_embedding_k_surface K Cos Sin k_token_stride k_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s = some s1 := by
+  by_cases hGroup : s.pids 0 % KV_GROUP_NUM = 0
+  · simp [exec, rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepStmts, stepStmt, evalOp, evalOp.eq_def,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
+          Tile.expandDim, TileShape.insertAxis, TileShape.dropInsertedIndex,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+          ComparableDType.eq, hGroup]
+  · simp [exec, rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+          Tile.bop, IntegralDType.mod, ComparableDType.eq, hGroup]
+
+/-- The full K rotary surface sits inside the flat-memory bridge's covered fragment. -/
+private theorem rotary_embedding_k_surface_flattenOk
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    ((rotary_embedding_k_surface K Cos Sin k_token_stride k_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-- Frame half for the K face: every cell outside the two masked K windows is
+preserved (vacuously on a non-leader program, where nothing is stored). -/
+private theorem rotary_embedding_k_surface_frame
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) (s s1 : BlockState)
+    (hExec : exec ((rotary_embedding_k_surface K Cos Sin k_token_stride k_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmissFirst : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      ¬(K = r ∧ kFullFirstOffset s k_token_stride k_head_stride head_dim_stride
+          KV_GROUP_NUM BLOCK_TOKENS idx = o))
+    (hmissSecond : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      ¬(K = r ∧ kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
+          KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF idx = o)) :
+    s1.mem r o = s.mem r o := by
+  simp only [activeKFull, kFullFirstOffset, kFullSecondOffset] at hmissFirst hmissSecond
+  by_cases hGroup : s.pids 0 % KV_GROUP_NUM = 0
+  · simp [exec, rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepStmts, stepStmt, evalOp, evalOp.eq_def,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
+          Tile.expandDim, TileShape.insertAxis, TileShape.dropInsertedIndex,
+          TileShape.dropInsertedIndex_two_pair, TileShape.dropInsertedIndex_zero_pair,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+          ComparableDType.eq, hGroup] at hExec
+    subst hExec
+    refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) ?_
+    · intro k _ hmk hc
+      exact hmissSecond k ⟨hGroup, hmk⟩ hc
+    · simp only [BlockState.setReg]
+      refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+      intro k _ hmk hc
+      exact hmissFirst k ⟨hGroup, hmk⟩ hc
+  · simp [exec, rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+          Tile.bop, IntegralDType.mod, ComparableDType.eq, hGroup] at hExec
+    subst hExec
+    simp only [BlockState.setReg]
+
+private theorem rotary_embedding_k_surface_traceSafe
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hcos : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx < bounds Cos)
+    (hsin : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx < bounds Sin)
+    (hk0 : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      kFullFirstOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+        BLOCK_TOKENS idx < bounds K)
+    (hk1 : ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      activeKFull s q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx →
+      kFullSecondOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+        BLOCK_TOKENS HEAD_HALF idx < bounds K) :
+    Kernel.TraceSafe bounds
+      ((rotary_embedding_k_surface K Cos Sin k_token_stride k_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM
+        HEAD_HALF BLOCK_TOKENS).toAlgKernel) s := by
+  simp only [activeKFull, kFullFirstOffset, kFullSecondOffset, cosFullOffset]
+    at hcos hsin hk0 hk1
+  unfold Kernel.TraceSafe
+  by_cases hGroup : s.pids 0 % KV_GROUP_NUM = 0
+  · simp [rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+      BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+      Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd, Tile.remap, Tile.expandDim,
+      TileShape.insertAxis, TileShape.dropInsertedIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+      ComparableDType.eq, hGroup]
+    refine ⟨⟨fun a a_1 ht => hcos (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩,
+      fun a a_1 ht => hsin (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩,
+      fun a a_1 ht => hk0 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩,
+      fun a a_1 ht => hk1 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩,
+      fun a a_1 ht => hk0 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩,
+      fun a a_1 ht => hk1 (a, ⟨0, Nat.one_pos⟩, a_1, PUnit.unit) ⟨hGroup, ht⟩⟩, ?_⟩
+    cases stepStmts _ _ <;> simp [Stmt.TraceSafeList]
+  · simp [rotary_embedding_k_surface, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+      MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      MaskOpt.Active, BlockState.setReg,
+      Tile.bop, IntegralDType.mod, ComparableDType.eq, hGroup]
+
+/-- The **IO signature** of the K face of `rotary_embedding_kernel` — four read
+windows (`k0`/`k1` half-tiles + `Cos`/`Sin`) and two in-place K half-stores over
+the flat `Fin (BLOCK_TOKENS * HEAD_HALF)` lane space, every channel gated by the
+GQA-leader predicate `pid₀ % KV_GROUP_NUM = 0` and addressed at K head
+`pid₀ / KV_GROUP_NUM`. -/
+def rotaryNopadKIO (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    GroupedMasked2DKernelIO where
+  kernel := rotary_embedding_k_surface K Cos Sin k_token_stride k_head_stride
+    head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM HEAD_HALF
+    BLOCK_TOKENS
+  nIn := 4
+  nOut := 2
+  bufs := [K, Cos, Sin]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => K | ⟨1, _⟩ => K | ⟨2, _⟩ => Cos | ⟨_ + 3, _⟩ => Sin
+  out := fun _ => K
+  B := BLOCK_TOKENS * HEAD_HALF
+  read := fun i pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => dataFirstP (pid₀ / KV_GROUP_NUM) pid₁ k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+    | ⟨1, _⟩ => dataSecondP (pid₀ / KV_GROUP_NUM) pid₁ k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+    | ⟨2, _⟩ => cosP pid₁ cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 3, _⟩ => cosP pid₁ cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF j
+  readMask := fun i pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨1, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨2, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 3, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+  write := fun o pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => dataFirstP (pid₀ / KV_GROUP_NUM) pid₁ k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 1, _⟩ => dataSecondP (pid₀ / KV_GROUP_NUM) pid₁ k_token_stride k_head_stride
+        head_dim_stride BLOCK_TOKENS HEAD_HALF j
+  writeMask := fun o pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+    | ⟨_ + 1, _⟩ => activeKP pid₀ pid₁ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF j
+
+/-- **`rotaryNopadKIO ⊨ rotary`** — the K face of `rotary_embedding_kernel` as one
+grouped masked Hoare triple. On every GQA-leader lane (`pid₀ % KV_GROUP_NUM = 0`
+and token in range) the two K halves end up holding `k0·cos − k1·sin` and
+`k0·sin + k1·cos` from the old contents; on a non-leader program nothing is
+written and the frame is vacuous. The three `∀ s` side conditions are the honest
+layout collision-freedom the value legs require. -/
+theorem rotary_embedding_k_surface_implements
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat)
+    (hInjFirst : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+        kFullFirstOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+          BLOCK_TOKENS idx))
+    (hInjSecond : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+        kFullSecondOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+          BLOCK_TOKENS HEAD_HALF idx))
+    (hDisjoint : ∀ (s : BlockState) (idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]),
+      kFullFirstOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+          BLOCK_TOKENS idx ≠
+        kFullSecondOffset s k_token_stride k_head_stride head_dim_stride KV_GROUP_NUM
+          BLOCK_TOKENS HEAD_HALF idx') :
+    rotaryNopadKIO K Cos Sin k_token_stride k_head_stride head_dim_stride
+        cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS
+      ⊨ fun _pid₀ _pid₁ xs o j =>
+          rotaryPair (xs (⟨0, by decide⟩ : Fin 4) j) (xs (⟨1, by decide⟩ : Fin 4) j)
+            (xs (⟨2, by decide⟩ : Fin 4) j) (xs (⟨3, by decide⟩ : Fin 4) j) o := by
+  refine GroupedMasked2DKernelIO.Implements.intro _ ?_ ?_ ?_ ?_
+  · intro o
+    simp [rotaryNopadKIO]
+  · exact rotary_embedding_k_surface_flattenOk K Cos Sin k_token_stride k_head_stride
+      head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM HEAD_HALF
+      BLOCK_TOKENS
+  · intro bounds s hib hob
+    simp only [rotaryNopadKIO] at hib hob
+    refine rotary_embedding_k_surface_traceSafe K Cos Sin k_token_stride k_head_stride
+      head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM HEAD_HALF
+      BLOCK_TOKENS bounds s ?_ ?_ ?_ ?_
+    · intro idx hact
+      have h := hib (⟨2, by decide⟩ : Fin 4) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeKP_encode3]; exact hact)
+      rw [cosP_encode3] at h
+      simpa [cosFullOffset] using h
+    · intro idx hact
+      have h := hib (⟨3, by decide⟩ : Fin 4) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeKP_encode3]; exact hact)
+      rw [cosP_encode3] at h
+      simpa [cosFullOffset] using h
+    · intro idx hact
+      have h := hob (⟨0, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeKP_encode3]; exact hact)
+      rw [dataFirstP_encode3] at h
+      simpa [kFullFirstOffset] using h
+    · intro idx hact
+      have h := hob (⟨1, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+        (by rw [activeKP_encode3]; exact hact)
+      rw [dataSecondP_encode3] at h
+      simpa [kFullSecondOffset] using h
+  · intro s₀ xs hx
+    simp only [rotaryNopadKIO] at hx
+    obtain ⟨s1, hs1⟩ := rotary_embedding_k_surface_exec_isSome K Cos Sin k_token_stride
+      k_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM
+      HEAD_HALF BLOCK_TOKENS s₀
+    refine ⟨s1, hs1, ?_, ?_⟩
+    · rintro ⟨o, ho⟩ j hj
+      match o, ho with
+      | 0, _ =>
+          have hact : activeKFull s₀ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS
+            (lane3 BLOCK_TOKENS HEAD_HALF j) := hj
+          have h := rotary_embedding_k_surface_k0_correct K Cos Sin k_token_stride
+            k_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens
+            KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS s₀ s1 (hInjFirst s₀) (hDisjoint s₀) hs1
+            (lane3 BLOCK_TOKENS HEAD_HALF j)
+          rw [if_pos hact] at h
+          show s1.readMem K (dataFirstP (s₀.pids 0 / KV_GROUP_NUM) (s₀.pids 1)
+            k_token_stride k_head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF j) = _
+          rw [kFirstP_eq, h]
+          simp only [rotaryNopadK0FullSpec, ← kFirstP_eq, ← kSecondP_eq, ← cosP_eq]
+          rw [hx (⟨0, by decide⟩ : Fin 4) j hact, hx (⟨1, by decide⟩ : Fin 4) j hact,
+            hx (⟨2, by decide⟩ : Fin 4) j hact, hx (⟨3, by decide⟩ : Fin 4) j hact]
+          rfl
+      | _ + 1, _ =>
+          have hact : activeKFull s₀ q_total_tokens KV_GROUP_NUM BLOCK_TOKENS
+            (lane3 BLOCK_TOKENS HEAD_HALF j) := hj
+          have h := rotary_embedding_k_surface_k1_correct K Cos Sin k_token_stride
+            k_head_stride head_dim_stride cos_token_stride cos_stride q_total_tokens
+            KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS s₀ s1 (hInjSecond s₀) (hDisjoint s₀) hs1
+            (lane3 BLOCK_TOKENS HEAD_HALF j)
+          rw [if_pos hact] at h
+          show s1.readMem K (dataSecondP (s₀.pids 0 / KV_GROUP_NUM) (s₀.pids 1)
+            k_token_stride k_head_stride head_dim_stride BLOCK_TOKENS HEAD_HALF j) = _
+          rw [kSecondP_eq, h]
+          simp only [rotaryNopadK1FullSpec, ← kFirstP_eq, ← kSecondP_eq, ← cosP_eq]
+          rw [hx (⟨0, by decide⟩ : Fin 4) j hact, hx (⟨1, by decide⟩ : Fin 4) j hact,
+            hx (⟨2, by decide⟩ : Fin 4) j hact, hx (⟨3, by decide⟩ : Fin 4) j hact]
+          rfl
+    · intro r o' hcond
+      simp only [rotaryNopadKIO] at hcond
+      refine rotary_embedding_k_surface_frame K Cos Sin k_token_stride k_head_stride
+        head_dim_stride cos_token_stride cos_stride q_total_tokens KV_GROUP_NUM HEAD_HALF
+        BLOCK_TOKENS s₀ s1 hs1 r o' ?_ ?_
+      · intro idx hact hc
+        have h := hcond (⟨0, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+          (by rw [activeKP_encode3]; exact hact)
+        rw [dataFirstP_encode3] at h
+        exact h.elim (fun hne => hne hc.1.symm)
+          (fun hne => hne (by rw [← kFullFirstOffset]; exact hc.2.symm))
+      · intro idx hact hc
+        have h := hcond (⟨1, by decide⟩ : Fin 2) (encode3 BLOCK_TOKENS HEAD_HALF idx)
+          (by rw [activeKP_encode3]; exact hact)
+        rw [dataSecondP_encode3] at h
+        exact h.elim (fun hne => hne hc.1.symm)
+          (fun hne => hne (by rw [← kFullSecondOffset]; exact hc.2.symm))
+
 /-- **Dimension-general public output summary for `rotary_emb_nopad.py`**
-(genuine, not self-referential).
+(genuine, not self-referential), on the `⊨` (`GroupedMasked2DKernelIO`) surface.
 
 Every token count, head count, KV-group count, head-dim half, block size, and
-stride is a `Nat` parameter rather than a pinned Python literal, and the per-lane
-output-offset injectivity / first-vs-second-half disjointness side-conditions
-are taken as hypotheses of the main theorem.
+stride is a `Nat` parameter rather than a pinned Python literal. The per-lane
+output-offset injectivity / first-vs-second-half disjointness side-conditions are
+taken as hypotheses, now universal over the launch state because the `⊨` face
+ranges over every program (`(pid₀, pid₁)`) rather than a single initial state.
 
-For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus
-the conditional GQA-leader K stores) lowers to the algorithm layer, and all
-four half-output stores realize the genuine rotary closed forms: Q first half
-`q0·cos − q1·sin` (`rotaryNopadQ0FullSpec`), Q second half `q0·sin + q1·cos`
-(`rotaryNopadQ1FullSpec`), and the K analogues
-(`rotaryNopadK0FullSpec`/`rotaryNopadK1FullSpec`) over the active GQA-leader
-lanes — the actual embedding read from the precomputed `cos`/`sin` cache, NOT
-the kernel's own re-executed value.
+For ANY shape, the full `rotary_embedding_kernel_surface` (both Q stores plus the
+conditional GQA-leader K stores) lowers to the algorithm layer, and each data
+buffer implements its grouped masked rotary Hoare triple: `rotaryNopadQIO` writes
+`q0·cos − q1·sin` / `q0·sin + q1·cos` on every `activeFull` Q lane, and
+`rotaryNopadKIO` the K analogues on every GQA-leader lane
+(`cur_head_idx % KV_GROUP_NUM = 0`, that runtime predicate living entirely inside
+each channel's `writeMask`) — both from the **old** window contents, the actual
+embedding read from the precomputed `cos`/`sin` cache, with every other flat cell
+untouched.
 
 The host launch remains the trusted boundary. -/
 specification rotary_emb_nopad_output_summary_general
-    (Q K Cos Sin : RegionName) (s : BlockState)
+    (Q K Cos Sin : RegionName)
     (surf_q_token_stride surf_q_head_stride surf_k_token_stride surf_k_head_stride
       surf_head_dim_stride surf_cos_token_stride surf_cos_stride
       surf_q_total_tokens surf_Q_HEAD_NUM surf_KV_GROUP_NUM surf_HEAD_DIM
@@ -2123,30 +2909,30 @@ specification rotary_emb_nopad_output_summary_general
     (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
       q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat)
     (k_token_stride k_head_stride k_q_total_tokens KV_GROUP_NUM : Nat)
-    (hQ0Inj : Function.Injective
+    (hQInjFirst : ∀ s : BlockState, Function.Injective
       (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
         qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
           BLOCK_TOKENS idx))
-    (hQ1Inj : Function.Injective
+    (hQInjSecond : ∀ s : BlockState, Function.Injective
       (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
         qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
           BLOCK_TOKENS HEAD_HALF idx))
-    (hQDisjoint :
-      ∀ idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+    (hQDisjoint : ∀ (s : BlockState)
+        (idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]),
         qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
             BLOCK_TOKENS idx ≠
           qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
             BLOCK_TOKENS HEAD_HALF idx')
-    (hK0Inj : Function.Injective
+    (hKInjFirst : ∀ s : BlockState, Function.Injective
       (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
         kFullFirstOffset s k_token_stride k_head_stride head_dim_stride
           KV_GROUP_NUM BLOCK_TOKENS idx))
-    (hK1Inj : Function.Injective
+    (hKInjSecond : ∀ s : BlockState, Function.Injective
       (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
         kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
           KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF idx))
-    (hKDisjoint :
-      ∀ idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+    (hKDisjoint : ∀ (s : BlockState)
+        (idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]),
         kFullFirstOffset s k_token_stride k_head_stride head_dim_stride
             KV_GROUP_NUM BLOCK_TOKENS idx ≠
           kFullSecondOffset s k_token_stride k_head_stride head_dim_stride
@@ -2156,76 +2942,26 @@ specification rotary_emb_nopad_output_summary_general
       surf_k_head_stride surf_head_dim_stride surf_cos_token_stride
       surf_cos_stride surf_q_total_tokens surf_Q_HEAD_NUM surf_KV_GROUP_NUM
       surf_HEAD_DIM surf_BLOCK_TOKENS).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rotary_embedding_q_surface Q Cos Sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
-          activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx)
-        (fun idx => (Q, qFullFirstOffset s q_token_stride q_head_stride
-          head_dim_stride BLOCK_TOKENS idx)))
-      (expected := fun idx =>
-        rotaryNopadQ0FullSpec s Q Cos Sin q_token_stride q_head_stride
-          head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rotary_embedding_q_surface Q Cos Sin
-        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-        q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
-          activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx)
-        (fun idx => (Q, qFullSecondOffset s q_token_stride q_head_stride
-          head_dim_stride BLOCK_TOKENS HEAD_HALF idx)))
-      (expected := fun idx =>
-        rotaryNopadQ1FullSpec s Q Cos Sin q_token_stride q_head_stride
-          head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rotary_embedding_k_surface K Cos Sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
-          activeKFull s k_q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx)
-        (fun idx => (K, kFullFirstOffset s k_token_stride k_head_stride
-          head_dim_stride KV_GROUP_NUM BLOCK_TOKENS idx)))
-      (expected := fun idx =>
-        rotaryNopadK0FullSpec s K Cos Sin k_token_stride k_head_stride
-          head_dim_stride cos_token_stride cos_stride KV_GROUP_NUM
-          BLOCK_TOKENS HEAD_HALF idx)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rotary_embedding_k_surface K Cos Sin
-        k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-        k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
-          activeKFull s k_q_total_tokens KV_GROUP_NUM BLOCK_TOKENS idx)
-        (fun idx => (K, kFullSecondOffset s k_token_stride k_head_stride
-          head_dim_stride KV_GROUP_NUM BLOCK_TOKENS HEAD_HALF idx)))
-      (expected := fun idx =>
-        rotaryNopadK1FullSpec s K Cos Sin k_token_stride k_head_stride
-          head_dim_stride cos_token_stride cos_stride KV_GROUP_NUM
-          BLOCK_TOKENS HEAD_HALF idx)) := by
+    (rotaryNopadQIO Q Cos Sin q_token_stride q_head_stride head_dim_stride
+        cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS
+      ⊨ fun _pid₀ _pid₁ xs o j =>
+          rotaryPair (xs (⟨0, by decide⟩ : Fin 4) j) (xs (⟨1, by decide⟩ : Fin 4) j)
+            (xs (⟨2, by decide⟩ : Fin 4) j) (xs (⟨3, by decide⟩ : Fin 4) j) o) ∧
+    (rotaryNopadKIO K Cos Sin k_token_stride k_head_stride head_dim_stride
+        cos_token_stride cos_stride k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS
+      ⊨ fun _pid₀ _pid₁ xs o j =>
+          rotaryPair (xs (⟨0, by decide⟩ : Fin 4) j) (xs (⟨1, by decide⟩ : Fin 4) j)
+            (xs (⟨2, by decide⟩ : Fin 4) j) (xs (⟨3, by decide⟩ : Fin 4) j) o) := by
   refine ⟨rotary_embedding_kernel_surface_toAlgorithm_supported Q K Cos Sin
       surf_q_token_stride surf_q_head_stride surf_k_token_stride
       surf_k_head_stride surf_head_dim_stride surf_cos_token_stride
       surf_cos_stride surf_q_total_tokens surf_Q_HEAD_NUM surf_KV_GROUP_NUM
-      surf_HEAD_DIM surf_BLOCK_TOKENS, ?_, ?_, ?_, ?_⟩
-  · exact rotary_embedding_q_surface_q0_compute_correct Q Cos Sin
+      surf_HEAD_DIM surf_BLOCK_TOKENS, ?_, ?_⟩
+  · exact rotary_embedding_q_surface_implements Q Cos Sin
       q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS s hQ0Inj hQDisjoint
-  · exact rotary_embedding_q_surface_q1_compute_correct Q Cos Sin
-      q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
-      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS s hQ1Inj hQDisjoint
-  · exact rotary_embedding_k_surface_k0_compute_correct K Cos Sin
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS hQInjFirst hQInjSecond hQDisjoint
+  · exact rotary_embedding_k_surface_implements K Cos Sin
       k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-      k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS s hK0Inj hKDisjoint
-  · exact rotary_embedding_k_surface_k1_compute_correct K Cos Sin
-      k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
-      k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS s hK1Inj hKDisjoint
+      k_q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS hKInjFirst hKInjSecond hKDisjoint
 
 end VeriTile.Bench.TritonBenchG.RotaryEmbNopad
