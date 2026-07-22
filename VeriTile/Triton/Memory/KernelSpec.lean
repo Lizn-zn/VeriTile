@@ -6610,10 +6610,15 @@ family precedent there is no `scratch` field until a consumer needs one.
 (float / bool / nat / int) — the *value* readback view. A store whose
 value is genuinely at reduced float precision (`.to(tl.float16)`) reads back
 through `readMemValue .fp16` at a `TileCarrier .fp16`, which is **not** a
-`ChanTy` carrier; that is the `ImplementsR`/`outDType : FloatDType` rounding
-axis and cannot be expressed by `oty` alone. This skin therefore types the
-`.int` quantized tile and any `.float`/`.nat`/`.bool`/`.int` scale column,
-but not an fp16 scale column. -/
+`ChanTy` carrier; that is the rounding axis and cannot be expressed by `oty`
+alone. On the **exact** relation `⊨` (`Implements`), this skin therefore
+types the `.int` quantized tile and any `.float`/`.nat`/`.bool`/`.int` scale
+column, but not an fp16 scale column. The **rounding** relation `⊨[R]`
+(`ImplementsR`) closes exactly that gap: `out1` keeps its `oty1` `ChanTy`
+readback (e.g. the `.int` quantized tile), while `out2` becomes an
+fp-typed rounding channel at the declared grid `out2DType : FloatDType`,
+read back through `readMemAs out2DType` as `out2DType.ofReal (R.round
+out2DType (f …))`. `quantize_copy_kv`'s fp16 scale store lives there. -/
 structure MetaMasked2DKernelIO₁ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
@@ -6637,6 +6642,15 @@ structure MetaMasked2DKernelIO₁ₓ₂ where
   of the `element_ty`-cast quantizers stays here (that cast is the ℝ
   identity). -/
   oty2 : ChanTy := .float
+  /-- `out2`'s floating dtype — the quantization grid of the second output's
+  boundary store, used only by the **rounding**-correctness relation `⊨[R]`
+  (`ImplementsR`). Its postcondition reads `out2` back as `out2DType`-typed
+  cells holding `out2DType.ofReal (R.round out2DType (f …))`, i.e. the
+  reduced-precision-float scale column that `oty2 : ChanTy` cannot type (a
+  `TileCarrier .fp16` is not a `ChanTy` carrier). `.real` (the default) is an
+  unrounded store — the exact relation `⊨` ignores this field, so every
+  existing consumer's `Implements` statement is unchanged. -/
+  out2DType : FloatDType := .real
   /-- Slot's cell address for program `(pid₀, pid₁)`. -/
   mwin1 : Nat → Nat → Nat
   /-- Data read window at `(pid₀, pid₁, m1, j)` — the loaded scalar is an
@@ -6984,6 +6998,170 @@ theorem Implements.intro_undef (io : MetaMasked2DKernelIO₁ₓ₂)
       | ⟨0, _⟩ => fun j hj => hn1 j hj
       | ⟨_+1, _⟩ => fun j hj => hn2 j hj,
       fun t => t.elim0⟩
+
+/-- `io.ImplementsR R f` — the **mixed-dtype rounding-correctness** relation
+`io ⊨[R] f` for the two-output, unequal-length quantize skin. Same full Hoare
+triple as `Implements` (∀ disjoint allocation, ∀ pids, ∀ launch state with the
+slot pinned and the masked input tile loaded exact-ℝ), but the execution is
+`execR R` and the two outputs split along the two axes:
+
+* **`out1` — the `ChanTy` value axis.** Read back exactly through its channel
+  view `io.oty1.read` (for the quantized tile, `oty1 := .int` ↦
+  `readMemValue .int`). No rounding is applied to this readback: an `.int`
+  store is exact even under `execR R`, so the honest contract is the *exact*
+  carrier value `(f …).1 j`. Any `R`-dependence of that value (e.g. dividing
+  by the fp16-rounded scale) lives inside the consumer's `f`, faithfully.
+* **`out2` — the fp rounding axis.** A genuine reduced-precision-float store
+  (`.to(tl.float16)` ↦ `writeMemAsR R .fp16`). Read back through
+  `readMemAs io.out2DType` as the typed cell
+  `io.out2DType.ofReal (R.round io.out2DType ((f …).2 j))` — the ideal real
+  value `(f …).2 j : ℝ` quantized once at the declared grid. This is the
+  channel `oty2 : ChanTy` cannot type; it is exactly the `KernelIO₂.ImplementsR`
+  contract, per output lane.
+
+At `R := .triv` and `out2DType := .real` the store is exact and this
+degenerates to the exact `⊨` surface's second conjunct. -/
+def ImplementsR (io : MetaMasked2DKernelIO₁ₓ₂) (R : RoundingModel)
+    (f : Nat → Nat → Nat → (Fin io.B → ℝ) →
+      (Fin io.B → io.oty1.carrier) × (Fin io.C → ℝ)) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.mbuf1, io.inp, io.out1, io.out2] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+  ∀ (m1 : Nat) (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    io.mwin1 pid₀ pid₁ < A.extent io.mbuf1 →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ m1 j →
+      io.read pid₀ pid₁ m1 j < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ m1 j →
+      io.write1 pid₀ pid₁ m1 j < A.extent io.out1) →
+    (∀ j : Fin io.C, io.writeMask2 pid₀ pid₁ m1 j →
+      io.write2 pid₀ pid₁ m1 j < A.extent io.out2) →
+    s₀.readMemValue .nat io.mbuf1 (io.mwin1 pid₀ pid₁) = m1 →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ m1 j →
+      s₀.readMem io.inp (io.read pid₀ pid₁ m1 j) = xs j) →
+    ∃ s',
+      execR R (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ m1 j →
+          io.oty1.read s' A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ m1 j))
+            = (f pid₀ pid₁ m1 xs).1 j)
+      ∧ (∀ j : Fin io.C, io.writeMask2 pid₀ pid₁ m1 j →
+          s'.readMemAs io.out2DType A.flat
+              (A.addr io.out2 (io.write2 pid₀ pid₁ m1 j))
+            = io.out2DType.ofReal
+                (R.round io.out2DType ((f pid₀ pid₁ m1 xs).2 j)))
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ m1 j →
+                o' ≠ A.addr io.out1 (io.write1 pid₀ pid₁ m1 j)) ∧
+             (∀ j : Fin io.C, io.writeMask2 pid₀ pid₁ m1 j →
+                o' ≠ A.addr io.out2 (io.write2 pid₀ pid₁ m1 j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped notation:25 io " ⊨[" R "] " f =>
+  MetaMasked2DKernelIO₁ₓ₂.ImplementsR io R f
+
+/-- Assembly lemma for `⊨[R]` — the rounding sibling of `Implements.intro_undef`
+(the fp16-scale quantizers reduce across the loaded tile, so the `undef` pin is
+threaded into `hrun`). `FlattenOk`, the `TraceSafeR R` safety walk, and the
+region-model rounded Hoare triple `hrun` (termination under `execR R`, the exact
+`oty1` value readback of `out1`, the `readMemAs out2DType` rounded readback of
+`out2`, and the two-output frame). The flat transport is `execR_flatten` plus
+`ChanTy.read_flattenState` (for `out1`) and `flattenState_readMemAs` (for
+`out2`) — no core embedding: the core's typed-output list is `ChanTy`-only and
+`exec`-based, so a reduced-precision-float output on the rounding axis is
+transported here directly. -/
+theorem ImplementsR.intro (io : MetaMasked2DKernelIO₁ₓ₂) {R : RoundingModel}
+    {f : Nat → Nat → Nat → (Fin io.B → ℝ) →
+      (Fin io.B → io.oty1.carrier) × (Fin io.C → ℝ)}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (m1 : Nat),
+      s.readMemValue .nat io.mbuf1 (io.mwin1 (s.pids 0) (s.pids 1)) = m1 →
+      io.mwin1 (s.pids 0) (s.pids 1) < bounds io.mbuf1 →
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) m1 j →
+        io.read (s.pids 0) (s.pids 1) m1 j < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask1 (s.pids 0) (s.pids 1) m1 j →
+        io.write1 (s.pids 0) (s.pids 1) m1 j < bounds io.out1) →
+      (∀ j : Fin io.C, io.writeMask2 (s.pids 0) (s.pids 1) m1 j →
+        io.write2 (s.pids 0) (s.pids 1) m1 j < bounds io.out2) →
+      (io.kernel.toAlgKernel).TraceSafeR R bounds s)
+    (hrun : ∀ (s₀ : BlockState) (m1 : Nat) (xs : Fin io.B → ℝ),
+      s₀.undef = (fun _ _ => 0) →
+      s₀.readMemValue .nat io.mbuf1 (io.mwin1 (s₀.pids 0) (s₀.pids 1)) = m1 →
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) m1 j →
+        s₀.readMem io.inp (io.read (s₀.pids 0) (s₀.pids 1) m1 j) = xs j) →
+      ∃ s1, execR R (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) m1 j →
+            io.oty1.read s1 io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) m1 j)
+              = (f (s₀.pids 0) (s₀.pids 1) m1 xs).1 j)
+        ∧ (∀ j : Fin io.C, io.writeMask2 (s₀.pids 0) (s₀.pids 1) m1 j →
+            s1.readMemAs io.out2DType io.out2
+                (io.write2 (s₀.pids 0) (s₀.pids 1) m1 j)
+              = io.out2DType.ofReal
+                  (R.round io.out2DType ((f (s₀.pids 0) (s₀.pids 1) m1 xs).2 j)))
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨
+              ∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) m1 j →
+                o ≠ io.write1 (s₀.pids 0) (s₀.pids 1) m1 j) →
+            (r ≠ io.out2 ∨
+              ∀ j : Fin io.C, io.writeMask2 (s₀.pids 0) (s₀.pids 1) m1 j →
+                o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) m1 j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.ImplementsR R f := by
+  intro A hd hregs hcov pid₀ pid₁ m1 xs s₀ hpid₀ hpid₁ hu hb1 hbr hbw1 hbw2 hm1 hx
+  subst hpid₀
+  subst hpid₁
+  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ m1 xs hu hm1 hx
+  have hts' : (io.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
+    hts A.extent s₀ m1 hm1 hb1 hbr hbw1 hbw2
+  have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
+  have hmem1 : io.out1 ∈ A.regions := by rw [hregs]; simp
+  have hmem2 : io.out2 ∈ A.regions := by rw [hregs]; simp
+  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro j hj
+    have hlt : io.write1 (s₀.pids 0) (s₀.pids 1) m1 j < A.extent io.out1 := hbw1 j hj
+    rw [(io.oty1).read_flattenState A hd s1 hmem1 hlt]
+    exact hval1 j hj
+  · intro j hj
+    have hlt : io.write2 (s₀.pids 0) (s₀.pids 1) m1 j < A.extent io.out2 := hbw2 j hj
+    rw [A.flattenState_readMemAs hd s1 hmem2 hlt io.out2DType]
+    exact hval2 j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_)
+          · by_cases hro : r = io.out1
+            · subst hro
+              refine Or.inr fun j hj => ?_
+              rcases hcond with hflat | ⟨hn1, _⟩
+              · exact absurd rfl hflat
+              · intro hoj
+                exact hn1 j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · by_cases hro : r = io.out2
+            · subst hro
+              refine Or.inr fun j hj => ?_
+              rcases hcond with hflat | ⟨_, hn2⟩
+              · exact absurd rfl hflat
+              · intro hoj
+                exact hn2 j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+    · simp only [FlatAlloc.flattenState, if_neg hr]
 
 end MetaMasked2DKernelIO₁ₓ₂
 

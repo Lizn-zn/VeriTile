@@ -131,6 +131,7 @@ bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_o
 bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
 bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	quantize_copy_kv_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize_kv_group_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	quantize_kv_copy_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
