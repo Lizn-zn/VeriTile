@@ -1736,8 +1736,251 @@ theorem Implements.intro (io : Masked2DKernelIO₂ₓ₂)
       fun t => t.elim0⟩
 end Masked2DKernelIO₂ₓ₂
 
+/-- IO signature of a **3D-grid, general-window** masked two-input /
+two-output kernel — the three-program-id sibling of `Masked2DKernelIO₂ₓ₂`.
+Every window and mask takes **three** program ids `(pid₀, pid₁, pid₂)`, so a
+kernel whose per-lane addressing genuinely reads `tl.program_id(2)` (a 3-D
+launch grid, e.g. Mamba chunked-cumsum's `(batch, nchunk, head)` grid) can
+state its true, pid₂-dependent windows. The `⊨` spec `f` still takes only the
+two leading pids — the unified core supplies `f pid₀ pid₁` in its
+postcondition — which is sufficient whenever the third axis enters solely
+through the read/write windows and masks (the pid₂-selected head/row is pinned
+into the input context, so the output value is pid₂-free). Each input carries
+its own read gate and each output its own write gate, all defaulting to
+`mask`. No `scratch` field yet: it will be added when a consumer appears. -/
+structure Masked3DKernelIO₂ₓ₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First input buffer. -/
+  in1 : RegionName
+  /-- Second input buffer. -/
+  in2 : RegionName
+  /-- First output buffer. -/
+  out1 : RegionName
+  /-- Second output buffer. -/
+  out2 : RegionName
+  /-- Tile length: each program instance owns `B`-lane windows. -/
+  B : Nat
+  /-- Lane `j`'s `in1` read address for program `(pid₀, pid₁, pid₂)`. -/
+  read1 : Nat → Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s `in2` read address. -/
+  read2 : Nat → Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s `out1` write address. -/
+  write1 : Nat → Nat → Nat → Fin B → Nat
+  /-- Lane `j`'s `out2` write address. -/
+  write2 : Nat → Nat → Nat → Fin B → Nat
+  /-- Program `(pid₀, pid₁, pid₂)`'s **read-active** lanes (`in1`). -/
+  mask : Nat → Nat → Nat → Fin B → Prop
+  /-- Program `(pid₀, pid₁, pid₂)`'s **`in2` read-active** lanes; defaults to
+  `mask` (see `Masked2DKernelIO₂.read2Mask`). -/
+  read2Mask : Nat → Nat → Nat → Fin B → Prop := mask
+  /-- Program `(pid₀, pid₁, pid₂)`'s **`out1` write-active** lanes; defaults to
+  `mask`. -/
+  writeMask1 : Nat → Nat → Nat → Fin B → Prop := mask
+  /-- Program `(pid₀, pid₁, pid₂)`'s **`out2` write-active** lanes; defaults to
+  `mask`. -/
+  writeMask2 : Nat → Nat → Nat → Fin B → Prop := mask
+
+namespace Masked3DKernelIO₂ₓ₂
+
+/-- `io.Implements f` — three-program-id sibling of
+`Masked2DKernelIO₂ₓ₂.Implements`; the spec `f` returns the pair of the two
+outputs' value functions (`.1` for `out1`, `.2` for `out2`). The bounds,
+readbacks and frame quantify over all three program ids; `f` sees only the two
+leading ids (the third enters through the windows/masks). Frame: every cell
+outside the union of the two write-active output windows is untouched. -/
+def Implements (io : Masked3DKernelIO₂ₓ₂)
+    (f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
+      (Fin io.B → ℝ) × (Fin io.B → ℝ)) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.out1, io.out2] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ pid₂ : Nat,
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ pid₂ j →
+      io.read1 pid₀ pid₁ pid₂ j < A.extent io.in1) →
+    (∀ j : Fin io.B, io.read2Mask pid₀ pid₁ pid₂ j →
+      io.read2 pid₀ pid₁ pid₂ j < A.extent io.in2) →
+    (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ pid₂ j →
+      io.write1 pid₀ pid₁ pid₂ j < A.extent io.out1) →
+    (∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ pid₂ j →
+      io.write2 pid₀ pid₁ pid₂ j < A.extent io.out2) →
+  ∀ (xs ys : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.pids 2 = pid₂ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid₀ pid₁ pid₂ j →
+      s₀.readMem io.in1 (io.read1 pid₀ pid₁ pid₂ j) = xs j) →
+    (∀ j : Fin io.B, io.read2Mask pid₀ pid₁ pid₂ j →
+      s₀.readMem io.in2 (io.read2 pid₀ pid₁ pid₂ j) = ys j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ pid₂ j →
+          s'.readMem A.flat (A.addr io.out1 (io.write1 pid₀ pid₁ pid₂ j))
+            = (f pid₀ pid₁ xs ys).1 j)
+      ∧ (∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ pid₂ j →
+          s'.readMem A.flat (A.addr io.out2 (io.write2 pid₀ pid₁ pid₂ j))
+            = (f pid₀ pid₁ xs ys).2 j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask1 pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr io.out1 (io.write1 pid₀ pid₁ pid₂ j)) ∧
+             (∀ j : Fin io.B, io.writeMask2 pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr io.out2 (io.write2 pid₀ pid₁ pid₂ j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => Masked3DKernelIO₂ₓ₂.Implements
+
+/-- Embed into the unified core — proof plumbing for `Implements.intro`
+(two float channels with per-channel read gates, two outputs with per-output
+write gates, no scratch; every window/mask threads all three program ids). -/
+private def toU (io : Masked3DKernelIO₂ₓ₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 2
+  nOut := 2
+  nScr := 0
+  bufs := [io.in1, io.in2, io.out1, io.out2]
+  ity := fun _ => .float
+  iarity := fun _ => io.B
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | _ => io.in2
+  oty := fun _ => .float
+  oarity := fun _ => io.B
+  obuf := fun o => match o with
+    | ⟨0, _⟩ => io.out1
+    | _ => io.out2
+  obuf_mem := fun o => by fin_cases o <;> simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ p₂ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ p₂ j
+    | _ => fun j => io.read2 p₀ p₁ p₂ j
+  imask := fun i _ p₀ p₁ p₂ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ p₂ j
+    | _ => fun j => io.read2Mask p₀ p₁ p₂ j
+  owin := fun o _ p₀ p₁ p₂ => match o with
+    | ⟨0, _⟩ => fun j => io.write1 p₀ p₁ p₂ j
+    | _ => fun j => io.write2 p₀ p₁ p₂ j
+  omask := fun o _ p₀ p₁ p₂ => match o with
+    | ⟨0, _⟩ => fun j => io.writeMask1 p₀ p₁ p₂ j
+    | _ => fun j => io.writeMask2 p₀ p₁ p₂ j
+  swin := fun t => t.elim0
+  smask := fun t => t.elim0
+
+/-- Assembly lemma — three-program-id sibling of
+`Masked2DKernelIO₂ₓ₂.Implements.intro`; `hts`/`hrun` reference all three
+`s.pids 0/1/2`, and `hrun`'s frame takes one exclusion condition per output
+region. -/
+theorem Implements.intro (io : Masked3DKernelIO₂ₓ₂)
+    {f : Nat → Nat → (Fin io.B → ℝ) → (Fin io.B → ℝ) →
+      (Fin io.B → ℝ) × (Fin io.B → ℝ)}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.read1 (s.pids 0) (s.pids 1) (s.pids 2) j < bounds io.in1) →
+      (∀ j : Fin io.B, io.read2Mask (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.read2 (s.pids 0) (s.pids 1) (s.pids 2) j < bounds io.in2) →
+      (∀ j : Fin io.B, io.writeMask1 (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.write1 (s.pids 0) (s.pids 1) (s.pids 2) j < bounds io.out1) →
+      (∀ j : Fin io.B, io.writeMask2 (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.write2 (s.pids 0) (s.pids 1) (s.pids 2) j < bounds io.out2) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        s₀.readMem io.in1 (io.read1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) = xs j) →
+      (∀ j : Fin io.B, io.read2Mask (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        s₀.readMem io.in2 (io.read2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) = ys j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+            s1.readMem io.out1 (io.write1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+              = (f (s₀.pids 0) (s₀.pids 1) xs ys).1 j)
+        ∧ (∀ j : Fin io.B, io.writeMask2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+            s1.readMem io.out2 (io.write2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+              = (f (s₀.pids 0) (s₀.pids 1) xs ys).2 j)
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨
+              ∀ j : Fin io.B, io.writeMask1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+                o ≠ io.write1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            (r ≠ io.out2 ∨
+              ∀ j : Fin io.B, io.writeMask2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+                o ≠ io.write2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals o => match o with
+        | ⟨0, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).1 j
+        | ⟨_+1, _⟩ => fun j =>
+            (f p₀ p₁ (fun j' => vals (⟨0, by decide⟩ : Fin 2) j')
+              (fun j' => vals (⟨1, by decide⟩ : Fin 2) j')).2 j) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      exact hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hib (⟨1, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 2) j hj)
+        (fun j hj => hob (⟨1, by decide⟩ : Fin 2) j hj)
+    · intro s₀ vals _hundef hpins
+      obtain ⟨s1, hexec, hval1, hval2, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 2) j)
+          (fun j => vals (⟨1, by decide⟩ : Fin 2) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 2) j hj)
+          (fun j hj => hpins (⟨1, by decide⟩ : Fin 2) j hj)
+      refine ⟨s1, hexec, fun o => match o with
+        | ⟨0, _⟩ => fun j hj => hval1 j hj
+        | ⟨_+1, _⟩ => fun j hj => hval2 j hj, ?_⟩
+      intro r o' hoc _hsc
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out1
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · by_cases hro : r = io.out2
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨1, by decide⟩ : Fin 2) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ pid₂ h1 h2 h3 h4 xs ys s₀ hpid₀ hpid₁ hpid₂ hu hx hy
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁ pid₂
+      (fun i => match i with
+        | ⟨0, _⟩ => xs
+        | _ => ys)
+      s₀ hpid₀ hpid₁ hpid₂ hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 j hj
+        | ⟨_+1, _⟩ => fun j hj => h2 j hj)
+      (fun o => match o with
+        | ⟨0, _⟩ => fun j hj => h3 j hj
+        | ⟨_+1, _⟩ => fun j hj => h4 j hj)
+      (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx j hj
+        | ⟨_+1, _⟩ => fun j hj => hy j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 2) j hj,
+    fun j hj => hval (⟨1, by decide⟩ : Fin 2) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hn1, hn2⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun oc => match oc with
+      | ⟨0, _⟩ => fun j hj => hn1 j hj
+      | ⟨_+1, _⟩ => fun j hj => hn2 j hj,
+      fun t => t.elim0⟩
+end Masked3DKernelIO₂ₓ₂
+
 /-- IO signature of a **2D-grid, general-window** masked three-input /
 three-output kernel — the widest member of the `Masked2DKernelIO` family
+(see `Masked2DKernelIO₁` for the two generalizations over the 1D family).
+Each input carries its own read gate and each output its own write gate,
 (see `Masked2DKernelIO₁` for the two generalizations over the 1D family).
 Each input carries its own read gate and each output its own write gate,
 all defaulting to `mask`. No `scratch` field yet: it will be added when a
