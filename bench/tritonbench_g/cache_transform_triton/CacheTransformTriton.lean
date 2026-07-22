@@ -24,30 +24,42 @@ quantified, each per-program statement covers every program of its grid.
 
 ## Proof architecture
 
+Both kernels have `⊨` headlines on the shared **gather** genre
+`GatherMasked2DKernelIO₂ₓ₂` (two float inputs read at one gather window driven
+by one pinned `.nat` index vector, two outputs with per-output `WriteInj`
+antecedents):
+
 ```
-prefill_cache_kernel_output_summary               ← TOP THEOREM (prefill)
-  ├─ (toAlgorithm? = Except.ok _)                  surface lowers (incl. where/max reduction)
-  └─ prefill_cache_kernel_compute_correct          ← ComputeCorrect over cos+sin scatter
-       └─ prefill_cache_kernel_correct             algorithm-layer readback per cell
-decoding_cache_kernel_output_summary              ← TOP THEOREM (decode)
-  ├─ (toAlgorithm? = Except.ok _)                  surface lowers
-  └─ decoding_cache_kernel_compute_correct         ← ComputeCorrect over cos+sin scatter
-       └─ decoding_cache_kernel_correct            algorithm-layer readback per cell
+prefill_cache_correctness                          ← TOP THEOREM (prefill, ⊨)
+  ├─ prefill_cache_kernel_flattenOk                 flat-memory bridge covers it
+  ├─ prefill_cache_kernel_traceSafe                 per-execution safety walk
+  └─ prefill_cache_kernel_region_run                region-model masked triple
+       └─ prefill_cache_kernel_correct              algorithm-layer readback per cell
+decoding_cache_correctness                         ← TOP THEOREM (decode slice, ⊨)
+  ├─ decoding_cache_one_seq_block_flattenOk
+  ├─ decoding_cache_one_seq_block_traceSafe
+  └─ decoding_cache_one_seq_block_region_run        region-model masked triple
 ```
-Single-store slices (`prefill_cache_{cos,sin}_store_slice_*`,
-`decoding_cache_one_seq_block_*`, `decoding_cache_kernel_sin_*`) decompose the
-two-output proofs.
+
+The `⊨` headline for prefill is over the full `prefill_cache_kernel` (one
+HIDDEN_DIM-wide token row per program `(idx0, idx1)`, index vector =
+`cumsum_lengths`, arity `N_ELEMENTS`). The `⊨` headline for decode is over the
+one-sequence slice `decoding_cache_one_seq_block` (one HIDDEN_DIM block per
+program `(seq, hid_block)`, single index cell `lengths[seq]`). The remaining
+algorithm-layer readback / `ComputeCorrect` lemmas (`decoding_cache_kernel_*`,
+`prefill_cache_{cos,sin}_store_slice_*`) are the retained value-level layer.
 
 ## Modeling boundary
 
 Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
 erased. The source row index is data-dependent: prefill derives it from a
 `max(where(cumsum_lens ≤ idx, cumsum_lens, 0))` reduction (modeled as
-`reduceMaxNatDrop`, total via a `0 < N_ELEMENTS` hypothesis), decode reads it
-from `lengths`. Both top theorems require `cos_output ≠ sin_output` (the two
-output buffers are distinct, so neither store clobbers the other) and an
-`hOutInj` injectivity side condition (no two cells of one program alias).
-`@triton.autotune` is not modeled.
+`reduceMaxNatDrop`, total via a `0 < N_ELEMENTS` hypothesis — the sole extra
+side condition on the prefill headline), decode reads it from `lengths`. Both
+headlines require `cos_output ≠ sin_output` (distinct output buffers, so neither
+store clobbers the other); the per-output no-aliasing `WriteInj` obligations are
+carried by the skin as antecedents on each value leg. `@triton.autotune` is not
+modeled.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.CacheTransformTriton
@@ -931,101 +943,528 @@ theorem prefill_cache_kernel_compute_correct
         exact hi
       · simp [hActive]
 
-/-- Per-kernel output summary for `prefill_cache_kernel`: the DSL surface lowers
-to the algorithm layer (including the `where`/`max` source-row reduction), and
-both masked cos/sin scatters are compute-correct — every active cell holds the
-matching cos/sin cache cell at the derived source row, inactive cells are
-preserved. -/
-specification prefill_cache_kernel_output_summary
+/-! ## `⊨` migration -/
+
+private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+theorem decoding_cache_one_seq_block_flattenOk
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H : Nat) :
+    ((decoding_cache_one_seq_block cos_cache sin_cache lengths cos_output
+      sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [decoding_cache_one_seq_block, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+theorem decoding_cache_one_seq_block_traceSafe
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H : Nat)
+    (bounds : RegionBounds) (s : BlockState) (src : Nat)
+    (hsrc : s.pids 0 < NUM_SEQS → s.readMemValue .nat lengths (s.pids 0) = src)
+    (hbx : s.pids 0 < NUM_SEQS → s.pids 0 < bounds lengths)
+    (hbr1 : ∀ i : Fin BLOCK_H, s.pids 0 < NUM_SEQS →
+      s.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      src * cache_stride + (s.pids 1 * BLOCK_H + i.val) * hidden_stride
+        < bounds cos_cache)
+    (hbr2 : ∀ i : Fin BLOCK_H, s.pids 0 < NUM_SEQS →
+      s.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      src * cache_stride + (s.pids 1 * BLOCK_H + i.val) * hidden_stride
+        < bounds sin_cache)
+    (hbw1 : ∀ i : Fin BLOCK_H, s.pids 0 < NUM_SEQS →
+      s.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      s.pids 0 * cache_stride + (s.pids 1 * BLOCK_H + i.val) * hidden_stride
+        < bounds cos_output)
+    (hbw2 : ∀ i : Fin BLOCK_H, s.pids 0 < NUM_SEQS →
+      s.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      s.pids 0 * cache_stride + (s.pids 1 * BLOCK_H + i.val) * hidden_stride
+        < bounds sin_output) :
+    Kernel.TraceSafe bounds
+      ((decoding_cache_one_seq_block cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [decoding_cache_one_seq_block, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, BlockState.readMemValue]
+  refine ⟨hbx, ?_, ?_, hbw1, hbw2⟩
+  · intro a hSeq hHid
+    rw [if_pos hSeq]
+    have h := hbr1 a hSeq hHid
+    rw [← hsrc hSeq] at h
+    exact h
+  · intro a hSeq hHid
+    rw [if_pos hSeq]
+    have h := hbr2 a hSeq hHid
+    rw [← hsrc hSeq] at h
+    exact h
+
+theorem decoding_cache_one_seq_block_region_run
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H : Nat)
+    (hRegion : cos_output ≠ sin_output)
+    (s₀ : BlockState) (src : Nat) (xs ys : Fin BLOCK_H → ℝ)
+    (hsrc : s₀.pids 0 < NUM_SEQS → s₀.readMemValue .nat lengths (s₀.pids 0) = src)
+    (hx : ∀ i : Fin BLOCK_H, s₀.pids 0 < NUM_SEQS →
+      s₀.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      s₀.readMem cos_cache
+        (src * cache_stride + (s₀.pids 1 * BLOCK_H + i.val) * hidden_stride) = xs i)
+    (hy : ∀ i : Fin BLOCK_H, s₀.pids 0 < NUM_SEQS →
+      s₀.pids 1 * BLOCK_H + i.val < HIDDEN_DIM →
+      s₀.readMem sin_cache
+        (src * cache_stride + (s₀.pids 1 * BLOCK_H + i.val) * hidden_stride) = ys i) :
+    ∃ s1, exec ((decoding_cache_one_seq_block cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H).toAlgKernel) s₀
+        = some s1
+      ∧ ((∀ j k : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + k.val < HIDDEN_DIM) →
+            s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride
+              = s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + k.val) * hidden_stride →
+            j = k) →
+          ∀ j : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+            s1.readMem cos_output
+              (s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride)
+              = xs j)
+      ∧ ((∀ j k : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + k.val < HIDDEN_DIM) →
+            s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride
+              = s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + k.val) * hidden_stride →
+            j = k) →
+          ∀ j : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+            s1.readMem sin_output
+              (s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride)
+              = ys j)
+      ∧ (∀ r o,
+          (r ≠ cos_output ∨ ∀ j : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+              o ≠ s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride) →
+          (r ≠ sin_output ∨ ∀ j : Fin BLOCK_H,
+            (s₀.pids 0 < NUM_SEQS ∧ s₀.pids 1 * BLOCK_H + j.val < HIDDEN_DIM) →
+              o ≠ s₀.pids 0 * cache_stride + (s₀.pids 1 * BLOCK_H + j.val) * hidden_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hs1⟩ : ∃ s1,
+      exec ((decoding_cache_one_seq_block cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H).toAlgKernel) s₀
+        = some s1 := by
+    simp [exec, decoding_cache_one_seq_block, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, BlockState.readMemValue]
+  have hs1' := hs1
+  simp [exec, decoding_cache_one_seq_block, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, BlockState.readMemValue] at hs1'
+  refine ⟨s1, hs1, ?_, ?_, ?_⟩
+  · -- cos value leg (`WriteInj₁`-gated readback).
+    intro hCosInj j hj
+    obtain ⟨hSeq, hHid⟩ := hj
+    rw [← hs1']
+    refine ((BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      sin_output _ _ _ _ _ cos_output _ hRegion).trans ?_)
+    refine ((BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := cos_output) (shape := [BLOCK_H]) _ _ _ _
+      (j, PUnit.unit) ?_ ?_).trans ?_)
+    · exact ⟨hSeq, hHid⟩
+    · rintro ⟨a, u⟩ ha heq
+      cases u
+      have hval : a = j := hCosInj a j (by simpa using ha) ⟨hSeq, hHid⟩ (by simpa using heq)
+      subst hval
+      rfl
+    · have hb := hx j hSeq hHid
+      rw [← hsrc hSeq] at hb
+      simpa [BlockState.readMemValue, hHid, hSeq] using hb
+  · -- sin value leg (`WriteInj₂`-gated readback).
+    intro hSinInj j hj
+    obtain ⟨hSeq, hHid⟩ := hj
+    rw [← hs1']
+    refine ((BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := sin_output) (shape := [BLOCK_H]) _ _ _ _
+      (j, PUnit.unit) ?_ ?_).trans ?_)
+    · exact ⟨hSeq, hHid⟩
+    · rintro ⟨a, u⟩ ha heq
+      cases u
+      have hval : a = j := hSinInj a j (by simpa using ha) ⟨hSeq, hHid⟩ (by simpa using heq)
+      subst hval
+      rfl
+    · have hb := hy j hSeq hHid
+      rw [← hsrc hSeq] at hb
+      simpa [BlockState.readMemValue, hHid, hSeq] using hb
+  · -- frame off the two active store windows.
+    intro r o hc1 hc2
+    rw [← hs1']
+    refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_)
+      (Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl)
+    · rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc2 with hne | hno
+      · exact hne hreg.symm
+      · exact (hno k.1 (by simpa using hPk)) (by simpa using hoff.symm)
+    · rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc1 with hne | hno
+      · exact hne hreg.symm
+      · exact (hno k.1 (by simpa using hPk)) (by simpa using hoff.symm)
+
+def decodingCacheIO
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H : Nat) :
+    GatherMasked2DKernelIO₂ₓ₂ where
+  kernel := decoding_cache_one_seq_block cos_cache sin_cache lengths cos_output
+    sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H
+  in1 := cos_cache
+  in2 := sin_cache
+  idxbuf := lengths
+  out1 := cos_output
+  out2 := sin_output
+  B := BLOCK_H
+  N := 1
+  readx := fun pid₀ _ _ => pid₀
+  read := fun _ pid₁ ids i =>
+    ids 0 * cache_stride + (pid₁ * BLOCK_H + i.val) * hidden_stride
+  write1 := fun pid₀ pid₁ _ i =>
+    pid₀ * cache_stride + (pid₁ * BLOCK_H + i.val) * hidden_stride
+  write2 := fun pid₀ pid₁ _ i =>
+    pid₀ * cache_stride + (pid₁ * BLOCK_H + i.val) * hidden_stride
+  mask := fun pid₀ _ _ => pid₀ < NUM_SEQS
+  readMask := fun pid₀ pid₁ _ i =>
+    pid₀ < NUM_SEQS ∧ pid₁ * BLOCK_H + i.val < HIDDEN_DIM
+
+open scoped VeriTile.Triton.GatherMasked2DKernelIO₂ₓ₂ in
+specification decoding_cache_correctness
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H : Nat)
+    (hRegion : cos_output ≠ sin_output) :
+    decodingCacheIO cos_cache sin_cache lengths cos_output sin_output
+        cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H
+      ⊨ fun _ _ _ xs ys => (xs, ys) := by
+  refine GatherMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact decoding_cache_one_seq_block_flattenOk cos_cache sin_cache lengths
+      cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H
+  · intro bounds s ids hpin hbx hbr1 hbr2 hbw1 hbw2
+    exact decoding_cache_one_seq_block_traceSafe cos_cache sin_cache lengths
+      cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H
+      bounds s (ids ⟨0, Nat.one_pos⟩)
+      (fun h => hpin ⟨0, Nat.one_pos⟩ h)
+      (fun h => hbx ⟨0, Nat.one_pos⟩ h)
+      (fun i h1 h2 => hbr1 i ⟨h1, h2⟩)
+      (fun i h1 h2 => hbr2 i ⟨h1, h2⟩)
+      (fun i h1 h2 => hbw1 i ⟨h1, h2⟩)
+      (fun i h1 h2 => hbw2 i ⟨h1, h2⟩)
+  · intro s₀ ids xs ys hpin hx hy
+    exact decoding_cache_one_seq_block_region_run cos_cache sin_cache lengths
+      cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_H
+      hRegion s₀ (ids ⟨0, Nat.one_pos⟩) xs ys
+      (fun h => hpin ⟨0, Nat.one_pos⟩ h)
+      (fun i h1 h2 => hx i ⟨h1, h2⟩)
+      (fun i h1 h2 => hy i ⟨h1, h2⟩)
+
+/-- Pure source-row index for the prefill kernel, phrased over the loaded index
+vector `ids` (rather than reading it back from memory as `prefillOriSeqIdx`).
+Mirrors `prefillOriSeqIdx`'s `reduceMaxNatDrop` reduction so the `⊨` read window
+stays total. -/
+noncomputable def prefillOriSeqIdxOfIds
+    (idx N_ELEMENTS : Nat) (ids : Fin N_ELEMENTS → Nat) : Nat :=
+  let tile : Tile .nat [N_ELEMENTS] := ⟨fun i => ids i.1⟩
+  let cond : Tile .bool [N_ELEMENTS] :=
+    ⟨fun i => decide (tile.data i ≤ idx)⟩
+  let zero : Tile .nat [N_ELEMENTS] := ⟨fun _ => 0⟩
+  let masked : Tile .nat [N_ELEMENTS] := Tile.select cond tile zero
+  let reduced : Option (Tile .nat (TileShape.eraseAxis [N_ELEMENTS] ⟨0, by simp⟩)) :=
+    Tile.reduceMaxNatDrop (shape := [N_ELEMENTS]) ⟨0, by simp⟩ masked
+  let maxv : Nat := match reduced with
+    | some t => t.data PUnit.unit
+    | none => 0
+  idx - maxv
+
+/-- Bridge: the pinned index vector `ids` makes the pure `prefillOriSeqIdxOfIds`
+coincide with the memory-reading `prefillOriSeqIdx`. -/
+theorem prefillOriSeqIdxOfIds_eq
+    (s : BlockState) (cumsum_lengths : Region .nat) (BLOCK_SIZE N_ELEMENTS : Nat)
+    (ids : Fin N_ELEMENTS → Nat)
+    (hpin : ∀ x : Fin N_ELEMENTS,
+      ids x = s.readMemValue .nat cumsum_lengths x.val) :
+    prefillOriSeqIdxOfIds (s.pids 0 * BLOCK_SIZE + s.pids 1) N_ELEMENTS ids
+      = prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS := by
+  unfold prefillOriSeqIdxOfIds prefillOriSeqIdx
+  simp only [prefillIdx, hpin]
+  rfl
+
+theorem prefill_cache_kernel_flattenOk
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat) :
+    ((prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output sin_output
+      cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+      BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [prefill_cache_kernel, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+theorem prefill_cache_kernel_traceSafe
     (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
     (cos_output sin_output : RegionName)
     (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hRegion : cos_output ≠ sin_output)
-    (hN : 0 < N_ELEMENTS)
-    (hOutInj : Function.Injective
-      (fun i : Fin HIDDEN_DIM =>
-        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
-    (∃ alg, (prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
-        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
-        BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
-        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
-        BLOCK_SIZE)
-      (initialState := s)
-      (write := fun i : Sum (Fin HIDDEN_DIM) (Fin HIDDEN_DIM) =>
-        match i with
-        | .inl idx =>
-            if prefillActive s total_length BLOCK_SIZE then
-              some (cos_output, prefillOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none
-        | .inr idx =>
-            if prefillActive s total_length BLOCK_SIZE then
-              some (sin_output, prefillOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none)
-      (expected := fun i =>
-        match i with
-        | .inl idx =>
-            s.readMem cos_cache
-              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
-                BLOCK_SIZE N_ELEMENTS idx)
-        | .inr idx =>
-            s.readMem sin_cache
-              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
-                BLOCK_SIZE N_ELEMENTS idx)) := by
-  refine ⟨?_, ?_⟩
-  · simp [prefill_cache_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  · exact prefill_cache_kernel_compute_correct cos_cache sin_cache cumsum_lengths
-      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
-      N_ELEMENTS BLOCK_SIZE s hRegion hN hOutInj
+    (bounds : RegionBounds) (s : BlockState) (hN : 0 < N_ELEMENTS)
+    (hbx : ∀ x : Fin N_ELEMENTS, x.val < bounds cumsum_lengths)
+    (hbr1 : ∀ i : Fin HIDDEN_DIM,
+      s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length →
+      prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS
+          * cache_stride + i.val * hidden_stride < bounds cos_cache)
+    (hbr2 : ∀ i : Fin HIDDEN_DIM,
+      s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length →
+      prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS
+          * cache_stride + i.val * hidden_stride < bounds sin_cache)
+    (hbw1 : ∀ i : Fin HIDDEN_DIM,
+      s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length →
+      (s.pids 0 * BLOCK_SIZE + s.pids 1) * cache_stride + i.val * hidden_stride
+        < bounds cos_output)
+    (hbw2 : ∀ i : Fin HIDDEN_DIM,
+      s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length →
+      (s.pids 0 * BLOCK_SIZE + s.pids 1) * cache_stride + i.val * hidden_stride
+        < bounds sin_output) :
+    Kernel.TraceSafe bounds
+      ((prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output sin_output
+        cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [prefill_cache_kernel, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg, tile_elementwise, Bool.and_eq_true,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd, Tile.select,
+    Tile.reduceMaxNat, Tile.reduceMaxNatDrop, TileShape.axisDim,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, ComparableDType.le, BlockState.readMemValue, hN]
+  have hOri : prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS =
+      s.pids 0 * BLOCK_SIZE + s.pids 1 -
+        Finset.univ.sup' (Finset.univ_nonempty_iff.mpr ⟨⟨0, hN⟩⟩)
+          (fun x : Fin N_ELEMENTS =>
+            if s.readMemValue TileDType.nat cumsum_lengths.cast x.val ≤
+                s.pids 0 * BLOCK_SIZE + s.pids 1 then
+              s.readMemValue TileDType.nat cumsum_lengths.cast x.val
+            else 0) := by
+    simp [prefillOriSeqIdx, prefillIdx, Tile.reduceMaxNatDrop, TileShape.axisDim, hN]
+    rfl
+  refine ⟨hbx, ?_, ?_, hbw1, hbw2⟩
+  · intro a hActive
+    have h := hbr1 a hActive
+    rw [hOri] at h
+    exact h
+  · intro a hActive
+    have h := hbr2 a hActive
+    rw [hOri] at h
+    exact h
 
-/-- Per-kernel output summary for `decoding_cache_kernel`: the DSL surface lowers
-to the algorithm layer, and both masked cos/sin scatters are compute-correct —
-every active cell holds the matching cos/sin cache cell at the `lengths`-selected
-source row, inactive cells are preserved. -/
-specification decoding_cache_kernel_output_summary
-    (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
-    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hRegion : cos_output ≠ sin_output)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
-        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
-    (∃ alg, (decoding_cache_kernel cos_cache sin_cache lengths cos_output
-        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
-        BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
-        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
-      (initialState := s)
-      (write := fun i : Sum (TileIndex [BLOCK_SIZE, HIDDEN_DIM])
-          (TileIndex [BLOCK_SIZE, HIDDEN_DIM]) =>
-        match i with
-        | .inl idx =>
-            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
-              some (cos_output, decodeOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none
-        | .inr idx =>
-            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
-              some (sin_output, decodeOutOffset s cache_stride hidden_stride
-                BLOCK_SIZE idx)
-            else none)
-      (expected := fun i =>
-        match i with
-        | .inl idx =>
-            s.readMem cos_cache
-              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
-        | .inr idx =>
-            s.readMem sin_cache
-              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)) := by
-  refine ⟨?_, ?_⟩
-  · simp [decoding_cache_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  · exact decoding_cache_kernel_compute_correct cos_cache sin_cache lengths
-      cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
-      BLOCK_SIZE s hRegion hOutInj
+theorem prefill_cache_kernel_region_run
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
+    (hRegion : cos_output ≠ sin_output) (hN : 0 < N_ELEMENTS)
+    (s₀ : BlockState) (ids : Fin N_ELEMENTS → Nat) (xs ys : Fin HIDDEN_DIM → ℝ)
+    (hpin : ∀ x : Fin N_ELEMENTS,
+      s₀.readMemValue .nat cumsum_lengths x.val = ids x)
+    (hx : ∀ i : Fin HIDDEN_DIM, s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+      s₀.readMem cos_cache
+        (prefillOriSeqIdxOfIds (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) N_ELEMENTS ids
+          * cache_stride + i.val * hidden_stride) = xs i)
+    (hy : ∀ i : Fin HIDDEN_DIM, s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+      s₀.readMem sin_cache
+        (prefillOriSeqIdxOfIds (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) N_ELEMENTS ids
+          * cache_stride + i.val * hidden_stride) = ys i) :
+    ∃ s1, exec ((prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ ((∀ j k : Fin HIDDEN_DIM,
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length) →
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length) →
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride
+              = (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + k.val * hidden_stride →
+            j = k) →
+          ∀ j : Fin HIDDEN_DIM,
+            s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+            s1.readMem cos_output
+              ((s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride)
+              = xs j)
+      ∧ ((∀ j k : Fin HIDDEN_DIM,
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length) →
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length) →
+            (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride
+              = (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + k.val * hidden_stride →
+            j = k) →
+          ∀ j : Fin HIDDEN_DIM,
+            s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+            s1.readMem sin_output
+              ((s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride)
+              = ys j)
+      ∧ (∀ r o,
+          (r ≠ cos_output ∨ ∀ j : Fin HIDDEN_DIM,
+            s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+              o ≠ (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride) →
+          (r ≠ sin_output ∨ ∀ j : Fin HIDDEN_DIM,
+            s₀.pids 0 * BLOCK_SIZE + s₀.pids 1 < total_length →
+              o ≠ (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) * cache_stride + j.val * hidden_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hs1⟩ : ∃ s1,
+      exec ((prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE).toAlgKernel) s₀ = some s1 := by
+    simp [exec, prefill_cache_kernel, ComputeKernel.toAlgKernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+      stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.select,
+      Tile.reduceMaxNat, Tile.reduceMaxNatDrop, TileShape.axisDim,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, ComparableDType.le, BlockState.readMemValue, hN]
+  have hs1' := hs1
+  simp [exec, prefill_cache_kernel, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.select,
+    Tile.reduceMaxNat, Tile.reduceMaxNatDrop, TileShape.axisDim,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, ComparableDType.le, BlockState.readMemValue, hN] at hs1'
+  have hbridge : prefillOriSeqIdx s₀ cumsum_lengths BLOCK_SIZE N_ELEMENTS
+      = prefillOriSeqIdxOfIds (s₀.pids 0 * BLOCK_SIZE + s₀.pids 1) N_ELEMENTS ids :=
+    (prefillOriSeqIdxOfIds_eq s₀ cumsum_lengths BLOCK_SIZE N_ELEMENTS ids
+      (fun x => (hpin x).symm)).symm
+  refine ⟨s1, hs1, ?_, ?_, ?_⟩
+  · -- cos value leg
+    intro hCosInj j hActive
+    have hOutInj : Function.Injective
+        (fun i : Fin HIDDEN_DIM =>
+          prefillOutOffset s₀ cache_stride hidden_stride BLOCK_SIZE i) := by
+      intro a b h
+      exact hCosInj a b hActive hActive (by simpa [prefillOutOffset, prefillIdx] using h)
+    have hc := (prefill_cache_kernel_correct cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE s₀ s1 hRegion hN hOutInj hs1).1 j
+    simp only [prefillOutOffset, prefillIdx, prefillCacheOffset, prefillActive] at hc
+    rw [if_pos hActive] at hc
+    rw [hc, hbridge]
+    exact hx j hActive
+  · -- sin value leg
+    intro hSinInj j hActive
+    have hOutInj : Function.Injective
+        (fun i : Fin HIDDEN_DIM =>
+          prefillOutOffset s₀ cache_stride hidden_stride BLOCK_SIZE i) := by
+      intro a b h
+      exact hSinInj a b hActive hActive (by simpa [prefillOutOffset, prefillIdx] using h)
+    have hc := (prefill_cache_kernel_correct cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE s₀ s1 hRegion hN hOutInj hs1).2 j
+    simp only [prefillOutOffset, prefillIdx, prefillCacheOffset, prefillActive] at hc
+    rw [if_pos hActive] at hc
+    rw [hc, hbridge]
+    exact hy j hActive
+  · -- frame off the two active store windows.
+    intro r o hc1 hc2
+    rw [← hs1']
+    refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_)
+      (Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl)
+    · rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc2 with hne | hno
+      · exact hne hreg.symm
+      · exact (hno k.1 (by simpa using hPk)) (by simpa using hoff.symm)
+    · rintro k - hPk ⟨hreg, hoff⟩
+      rcases hc1 with hne | hno
+      · exact hne hreg.symm
+      · exact (hno k.1 (by simpa using hPk)) (by simpa using hoff.symm)
+
+noncomputable def prefillCacheIO
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat) :
+    GatherMasked2DKernelIO₂ₓ₂ where
+  kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+    sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE
+  in1 := cos_cache
+  in2 := sin_cache
+  idxbuf := cumsum_lengths
+  out1 := cos_output
+  out2 := sin_output
+  B := HIDDEN_DIM
+  N := N_ELEMENTS
+  readx := fun _ _ j => j.val
+  read := fun pid₀ pid₁ ids i =>
+    prefillOriSeqIdxOfIds (pid₀ * BLOCK_SIZE + pid₁) N_ELEMENTS ids * cache_stride
+      + i.val * hidden_stride
+  write1 := fun pid₀ pid₁ _ i =>
+    (pid₀ * BLOCK_SIZE + pid₁) * cache_stride + i.val * hidden_stride
+  write2 := fun pid₀ pid₁ _ i =>
+    (pid₀ * BLOCK_SIZE + pid₁) * cache_stride + i.val * hidden_stride
+  mask := fun _ _ _ => True
+  readMask := fun pid₀ pid₁ _ _ => pid₀ * BLOCK_SIZE + pid₁ < total_length
+
+open scoped VeriTile.Triton.GatherMasked2DKernelIO₂ₓ₂ in
+specification prefill_cache_correctness
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
+    (hRegion : cos_output ≠ sin_output) (hN : 0 < N_ELEMENTS) :
+    prefillCacheIO cos_cache sin_cache cumsum_lengths cos_output sin_output
+        cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE
+      ⊨ fun _ _ _ xs ys => (xs, ys) := by
+  refine GatherMasked2DKernelIO₂ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · exact prefill_cache_kernel_flattenOk cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE
+  · intro bounds s ids hpin hbx hbr1 hbr2 hbw1 hbw2
+    have hbridge := prefillOriSeqIdxOfIds_eq s cumsum_lengths BLOCK_SIZE N_ELEMENTS
+      ids (fun x => (hpin x trivial).symm)
+    refine prefill_cache_kernel_traceSafe cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE bounds s hN
+      (fun x => hbx x trivial) ?_ ?_
+      (fun i h => hbw1 i h)
+      (fun i h => hbw2 i h)
+    · intro i h; rw [← hbridge]; exact hbr1 i h
+    · intro i h; rw [← hbridge]; exact hbr2 i h
+  · intro s₀ ids xs ys hpin hx hy
+    exact prefill_cache_kernel_region_run cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE hRegion hN s₀ ids xs ys
+      (fun x => hpin x trivial)
+      (fun i h => hx i h)
+      (fun i h => hy i h)
 
 end VeriTile.Bench.TritonBenchG.CacheTransformTriton

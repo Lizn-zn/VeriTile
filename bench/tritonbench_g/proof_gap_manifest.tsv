@@ -21,8 +21,8 @@ bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_kernel_
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_fwd_output_summary_general	full_value_candidate	none		end-to-end
