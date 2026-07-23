@@ -10126,5 +10126,298 @@ theorem ImplementsR.intro (io : StreamEmitMasked3DKernelIO₁)
 
 end StreamEmitMasked3DKernelIO₁
 
+/-! ### The metadata emit skin: `StreamMetaEmitMasked3DKernelIO₂`
+
+`Stream` + `Meta` + `Emit` + `Masked` + `3D` stack as capability prefixes:
+the `StreamMetaMasked3DKernelIO₂` slot mechanism (pre-loop scalar metadata
+vector, pid-causal slot windows, sentinel gating through `writeMask`)
+composed with the `StreamEmit*` per-step write-window family (style S3:
+the store sits inside the loop). The subscript stays pure data-input ×
+output arity. -/
+
+/-- IO signature of the **metadata-parametrized two-stream per-step emit**
+shape (streaming genre, style S3 on a **3-D pid grid**): before its
+`forRange` loop the kernel loads one scalar from each of `nMeta` metadata
+regions (an adapter index, a sequence length …), and every read window /
+mask, the **per-step** write window / mask and the spec `f` are
+parametrized by the loaded slot vector; at step `t` the program stores a
+`C`-lane tile to the `t`-indexed window `write · · · m t ·`. Intended
+consumers: the LoRA expand family (bgmv/lora expand), whose per-batch
+adapter choice is a slot and whose output-block loop emits one disjoint
+window per step. A channel whose read window ignores `t` is the genre's
+degenerate static stream (a pre-loop tile — register-cached re-use needs
+no re-read pins beyond step 0, but the uniform pin is harmless and keeps
+the contract one-shaped).
+
+**Slot causality** and **sentinel gating** are inherited verbatim from
+`StreamMetaMasked3DKernelIO₂`: slot windows `mwin` eat only the pids
+(chained indirection is out of scope), and `writeMask` eats the slot
+vector `m`, so the skip-sentinel idiom (adapter index `= -1` ⇒ the
+program stores nothing) is an empty write-active window family at the
+sentinel value — every readback leg vacuous, the frame keeping the whole
+output untouched.
+
+**Single-surface design.** As everywhere in the streaming genre the skin
+carries only `⊨[R]` (`ImplementsR`, `execR R`) with the
+`outDType := .real` default recovering the exact genre losslessly — see
+the `StreamMasked2DKernelIO₂` design note. -/
+structure StreamMetaEmitMasked3DKernelIO₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First streamed input buffer. -/
+  inp1 : RegionName
+  /-- Second streamed input buffer. -/
+  inp2 : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- Number of scalar metadata slots (a field, never a name subscript). -/
+  nMeta : Nat
+  /-- Slot `k`'s element type. Slots read back through `(sty k).read` —
+  `readMem` for `.float`, the operational `readMemValue` view for the
+  typed channels — so `.nat` sequence lengths and `.int` adapter indices
+  are both expressible. -/
+  sty : Fin nMeta → ChanTy
+  /-- Slot `k`'s region (one cell read per program; slot regions may
+  pairwise differ). -/
+  mbuf : Fin nMeta → RegionName
+  /-- Slot `k`'s cell address for program `(pid₀, pid₁, pid₂)` — a
+  function of the pids only, never of other slots' values (see the
+  slot-causality design note). -/
+  mwin : Fin nMeta → Nat → Nat → Nat → Nat
+  /-- Number of streaming steps (the `forRange` trip count). -/
+  T : Nat
+  /-- Per-step tile length of the first input channel. -/
+  B1 : Nat
+  /-- Per-step tile length of the second input channel. -/
+  B2 : Nat
+  /-- Per-step tile length of the emitted output window. -/
+  C : Nat
+  /-- The output buffer's floating dtype — the quantization grid of the
+  per-step boundary stores. `⊨[R]`'s postcondition reads every emitted
+  cell back as an `outDType`-typed cell holding
+  `outDType.ofReal (R.round outDType (f … t j))`; an fp16-emitting
+  streaming kernel sets `.fp16`. `.real` (the default) is an unrounded
+  store — exact under `execR R`, so the default recovers the exact
+  genre. -/
+  outDType : FloatDType := .real
+  /-- Step `t`, lane `j`'s `inp1` read address for program
+  `(pid₀, pid₁, pid₂)`, given the loaded slot vector. -/
+  read1 : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin B1 → Nat
+  /-- Step `t`, lane `j`'s `inp2` read address, given the loaded slot
+  vector. -/
+  read2 : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin B2 → Nat
+  /-- Step `t`, lane `j`'s write address — the per-step emit window,
+  given the loaded slot vector. -/
+  write : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin C → Nat
+  /-- `inp1`'s read-active lanes at step `t`, given the loaded slot vector
+  (a sequence-length slot bounds the live steps). -/
+  mask1 : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin B1 → Prop
+  /-- `inp2`'s read-active lanes at step `t`, given the loaded slot
+  vector. -/
+  mask2 : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin B2 → Prop
+  /-- The step-`t` store's write-active lanes, given the loaded slot
+  vector — the sentinel gate (see the sentinel-gating design note). -/
+  writeMask : Nat → Nat → Nat → (∀ k : Fin nMeta, (sty k).carrier) →
+    Fin T → Fin C → Prop
+
+namespace StreamMetaEmitMasked3DKernelIO₂
+
+/-- The pinned slot-value context: one loaded scalar per metadata slot, at
+the slot's own `ChanTy` carrier. The structure's window/mask fields spell
+this Pi type out verbatim (a field type cannot mention the abbreviation of
+the structure it lives in); consumers and the `⊨[R]` surface use the
+abbreviation. -/
+abbrev Meta (io : StreamMetaEmitMasked3DKernelIO₂) : Type :=
+  ∀ k : Fin io.nMeta, (io.sty k).carrier
+
+/-- `io.ImplementsR R f` — the **rounding-correctness** relation
+`io ⊨[R] f` for the metadata-parametrized two-stream per-step emit skin,
+the streaming genre's only surface (see the `StreamMasked2DKernelIO₂`
+structure's single-surface design note). Same full Hoare triple as
+`StreamMetaMasked3DKernelIO₂.ImplementsR` — ∀ disjoint allocation (the
+slot regions listed before the data regions), ∀ pids (three of them),
+∀ launch state, the slot vector `m` universally quantified and pinned
+cell by cell through each slot's own `ChanTy` readback **before** the
+streamed inputs are pinned — with the output readback lifted to the
+per-step family: for every step `t` and write-active lane `j` the cell at
+the step-`t` window holds the *ideal* real value
+`f pid₀ pid₁ pid₂ m xs ys t j`, quantized **once** at the declared grid
+`outDType` — read back through `readMemAs io.outDType` as
+`io.outDType.ofReal (R.round io.outDType (f …))`. Frame: every flat cell
+outside the union of the write-active per-step windows is untouched. At
+`R := .triv` and `outDType := .real` every store is exact and this is the
+exact streaming contract. -/
+def ImplementsR (io : StreamMetaEmitMasked3DKernelIO₂) (R : RoundingModel)
+    (f : Nat → Nat → Nat → io.Meta → (Fin io.T → Fin io.B1 → ℝ) →
+      (Fin io.T → Fin io.B2 → ℝ) → Fin io.T → Fin io.C → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = List.ofFn io.mbuf ++ [io.inp1, io.inp2, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ pid₂ : Nat,
+  ∀ (m : io.Meta) (xs : Fin io.T → Fin io.B1 → ℝ)
+    (ys : Fin io.T → Fin io.B2 → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.pids 2 = pid₂ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ k : Fin io.nMeta,
+      io.mwin k pid₀ pid₁ pid₂ < A.extent (io.mbuf k)) →
+    (∀ (t : Fin io.T) (j : Fin io.B1), io.mask1 pid₀ pid₁ pid₂ m t j →
+      io.read1 pid₀ pid₁ pid₂ m t j < A.extent io.inp1) →
+    (∀ (t : Fin io.T) (j : Fin io.B2), io.mask2 pid₀ pid₁ pid₂ m t j →
+      io.read2 pid₀ pid₁ pid₂ m t j < A.extent io.inp2) →
+    (∀ (t : Fin io.T) (j : Fin io.C), io.writeMask pid₀ pid₁ pid₂ m t j →
+      io.write pid₀ pid₁ pid₂ m t j < A.extent io.out) →
+    (∀ k : Fin io.nMeta,
+      (io.sty k).read s₀ (io.mbuf k) (io.mwin k pid₀ pid₁ pid₂) = m k) →
+    (∀ (t : Fin io.T) (j : Fin io.B1), io.mask1 pid₀ pid₁ pid₂ m t j →
+      s₀.readMem io.inp1 (io.read1 pid₀ pid₁ pid₂ m t j) = xs t j) →
+    (∀ (t : Fin io.T) (j : Fin io.B2), io.mask2 pid₀ pid₁ pid₂ m t j →
+      s₀.readMem io.inp2 (io.read2 pid₀ pid₁ pid₂ m t j) = ys t j) →
+    ∃ s',
+      execR R (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ (t : Fin io.T) (j : Fin io.C), io.writeMask pid₀ pid₁ pid₂ m t j →
+          s'.readMemAs io.outDType A.flat
+              (A.addr io.out (io.write pid₀ pid₁ pid₂ m t j))
+            = io.outDType.ofReal
+                (R.round io.outDType (f pid₀ pid₁ pid₂ m xs ys t j)))
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            (∀ (t : Fin io.T) (j : Fin io.C),
+              io.writeMask pid₀ pid₁ pid₂ m t j →
+              o' ≠ A.addr io.out (io.write pid₀ pid₁ pid₂ m t j))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped notation:25 io " ⊨[" R "] " f =>
+  StreamMetaEmitMasked3DKernelIO₂.ImplementsR io R f
+
+/-- Assembly lemma for `⊨[R]` — direct flat transport, the per-step-emit
+lift of `StreamMetaMasked3DKernelIO₂.ImplementsR.intro`. Obligations in
+the skin's named vocabulary: `FlattenOk`, the `TraceSafeR R` safety walk
+`hts` (fed the pinned slot vector, the two pinned input streams and the
+four window-bound groups — slots first), and the region-model rounded
+Hoare triple `hrun` (termination under `execR R`, the
+`readMemAs outDType` rounded readback of every emitted cell, and the
+per-step-window frame; the `undef` pin is threaded in for masked loads
+without an `other=` default). Both `hts` and `hrun` receive the slot
+vector `m` with its per-slot `ChanTy` pins — the slot pins are stated on
+the *region-model* state, so they pass to the obligations verbatim, no
+flattening transport needed. `hrun` is where the consumer runs its
+`forRange` invariant argument — the skin does not prove the loop. -/
+theorem ImplementsR.intro (io : StreamMetaEmitMasked3DKernelIO₂)
+    {R : RoundingModel}
+    {f : Nat → Nat → Nat → io.Meta → (Fin io.T → Fin io.B1 → ℝ) →
+      (Fin io.T → Fin io.B2 → ℝ) → Fin io.T → Fin io.C → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (m : io.Meta)
+        (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ),
+      (∀ k : Fin io.nMeta,
+        (io.sty k).read s (io.mbuf k)
+          (io.mwin k (s.pids 0) (s.pids 1) (s.pids 2)) = m k) →
+      (∀ (t : Fin io.T) (j : Fin io.B1),
+        io.mask1 (s.pids 0) (s.pids 1) (s.pids 2) m t j →
+        s.readMem io.inp1
+            (io.read1 (s.pids 0) (s.pids 1) (s.pids 2) m t j) = xs t j) →
+      (∀ (t : Fin io.T) (j : Fin io.B2),
+        io.mask2 (s.pids 0) (s.pids 1) (s.pids 2) m t j →
+        s.readMem io.inp2
+            (io.read2 (s.pids 0) (s.pids 1) (s.pids 2) m t j) = ys t j) →
+      (∀ k : Fin io.nMeta,
+        io.mwin k (s.pids 0) (s.pids 1) (s.pids 2) < bounds (io.mbuf k)) →
+      (∀ (t : Fin io.T) (j : Fin io.B1),
+        io.mask1 (s.pids 0) (s.pids 1) (s.pids 2) m t j →
+        io.read1 (s.pids 0) (s.pids 1) (s.pids 2) m t j
+          < bounds io.inp1) →
+      (∀ (t : Fin io.T) (j : Fin io.B2),
+        io.mask2 (s.pids 0) (s.pids 1) (s.pids 2) m t j →
+        io.read2 (s.pids 0) (s.pids 1) (s.pids 2) m t j
+          < bounds io.inp2) →
+      (∀ (t : Fin io.T) (j : Fin io.C),
+        io.writeMask (s.pids 0) (s.pids 1) (s.pids 2) m t j →
+        io.write (s.pids 0) (s.pids 1) (s.pids 2) m t j < bounds io.out) →
+      (io.kernel.toAlgKernel).TraceSafeR R bounds s)
+    (hrun : ∀ (s₀ : BlockState) (m : io.Meta)
+        (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ),
+      s₀.undef = (fun _ _ => 0) →
+      (∀ k : Fin io.nMeta,
+        (io.sty k).read s₀ (io.mbuf k)
+          (io.mwin k (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) = m k) →
+      (∀ (t : Fin io.T) (j : Fin io.B1),
+        io.mask1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j →
+        s₀.readMem io.inp1
+            (io.read1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j)
+          = xs t j) →
+      (∀ (t : Fin io.T) (j : Fin io.B2),
+        io.mask2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j →
+        s₀.readMem io.inp2
+            (io.read2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j)
+          = ys t j) →
+      ∃ s1, execR R (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ (t : Fin io.T) (j : Fin io.C),
+            io.writeMask (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j →
+            s1.readMemAs io.outDType io.out
+                (io.write (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j)
+              = io.outDType.ofReal
+                  (R.round io.outDType
+                    (f (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m xs ys t j)))
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ (t : Fin io.T) (j : Fin io.C),
+                io.writeMask (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j) →
+            s1.mem r o = s₀.mem r o)) :
+    io.ImplementsR R f := by
+  intro A hd hregs hcov pid₀ pid₁ pid₂ m xs ys s₀ hpid₀ hpid₁ hpid₂ hu hbm
+    hbr1 hbr2 hbw hm hx hy
+  subst hpid₀
+  subst hpid₁
+  subst hpid₂
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ m xs ys hu hm hx hy
+  have hts' : (io.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
+    hts A.extent s₀ m xs ys hm hx hy hbm hbr1 hbr2 hbw
+  have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
+  have hmem : io.out ∈ A.regions := by
+    rw [hregs]
+    exact List.mem_append_right _ (by simp)
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro t j hj
+    have hlt : io.write (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) m t j
+        < A.extent io.out := hbw t j hj
+    rw [A.flattenState_readMemAs hd s1 hmem hlt io.outDType]
+    exact hval t j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_)
+          by_cases hro : r = io.out
+          · subst hro
+            refine Or.inr fun t j hj => ?_
+            rcases hcond with hflat | hn
+            · exact absurd rfl hflat
+            · intro hoj
+              exact hn t j hj (by rw [hoeq, hoj])
+          · exact Or.inl hro
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end StreamMetaEmitMasked3DKernelIO₂
+
 
 end VeriTile.Triton

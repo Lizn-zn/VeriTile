@@ -17,6 +17,7 @@ bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_output_su
 bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_expand_slice_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_kernel_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -113,6 +114,7 @@ bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_backward_kernel_corr
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
