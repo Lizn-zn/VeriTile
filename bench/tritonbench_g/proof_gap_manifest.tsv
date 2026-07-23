@@ -45,6 +45,7 @@ bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean	cross_entropy_fwd_correctn
 bench/tritonbench_g/cross_entropy_ops/CrossEntropyOps.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	decay_cumsum_backward_closed_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	fwd_decay_cumsum_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	prepare_qg_kg_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dequantize_matmul/DequantizeMatmul.lean	dequantize_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/destindex_copy/DestindexCopy.lean	destindex_copy_correctness	full_value_candidate	none		no proof-gap marker in summary context
@@ -52,6 +53,7 @@ bench/tritonbench_g/destindex_copy_kv1/DestindexCopyKv1.lean	fwd_kernel_destinde
 bench/tritonbench_g/destindex_copy_kv2/DestindexCopyKv2.lean	fwd_kernel_destindex_copy_kv_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_backward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
