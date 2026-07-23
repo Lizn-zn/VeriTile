@@ -2819,4 +2819,930 @@ specification diag_ssm_forward_kernel_output_summary
   exact diag_ssm_forward_kernel_compute_correct s_ptr x_ptr lambda_ptr y_ptr
     length batch_size dim BLOCK_SIZE s hOutInj hXOutNe
 
+/-! ## The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre)
+
+Everything below is purely additive; the exact surface above is untouched.
+This is the first consumer of the **three-stream** per-step emit skin
+`StreamEmitMasked2DKernelIO₃` (streaming genre, style S3): the store sits
+**inside** the `tl.for t in length` scan loop, so the output is a per-step
+`BLOCK_SIZE`-lane window family, and the kernel's spec `f t j` is the
+genre's *scan* shape — a prefix fold of the streamed `x` tiles seeded by
+the initial-state tile and folded with the decay tile. The `s`/`Λ`
+channels are the skin's degenerate **static** streams: their read windows
+ignore the step index (a pre-loop tile, re-pinned at the same cell for
+every `t`), exactly the design point recorded in the skin's docstring.
+
+Structure of the `execR R` story: this kernel has **zero rounding
+events** — every load and store is at `.real` and there is no `castFloat`
+at all, so the whole surface collapses verbatim onto the exact stepper and
+the proven `preLoop` / `diagSsmForwardLoopContextInvariant` stack above is
+reused unchanged. The `⊨[R]` face adds only the `TraceSafeR` walk (the
+first over a `forLoop`, via a private `forLoopTraceSafeR` invariant
+principle mirroring the library's `forRangeTraceSafeR_inv`), the per-cell
+memory frame, and the stream-lane spec bridge. -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamEmitMasked2DKernelIO₃
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of `diag_ssm_forward_kernel` on the
+three-stream per-step emit skin (S3: in-loop store). Step `t`, lane `j`
+of program `pid₀` (the grid is 1-D; `pid₁` is unused and every window
+ignores it) transcribes the kernel's pointer arithmetic verbatim
+(`col_offsets = pid₀·BLOCK_SIZE + j`):
+
+* `read1` (the `s_ptr` initial-state tile, **static**: ignores `t`):
+  `pid₀·BLOCK_SIZE + j` — the kernel's pre-loop `s_ptr + col_offsets`.
+* `read2` (the `lambda_ptr` decay tile, **static**: ignores `t`):
+  `(pid₀·BLOCK_SIZE + j) % dim` — the kernel's pre-loop
+  `lambda_ptr + col_offsets % dim` (the `%` is just the window function;
+  reads need no injectivity).
+* `read3` (the `x_ptr` input, **streamed**):
+  `t·(batch_size·dim) + pid₀·BLOCK_SIZE + j` — the kernel's in-loop
+  `offsets = t * batch_size * dim + col_offsets`.
+* `write` (the `y_ptr` output): the same in-loop `offsets` window.
+
+All four masks are the kernel's single `mask`:
+`pid₀·BLOCK_SIZE + j < batch_size·dim` (`t`-independent). The store is the
+raw `tl.store(y_ptr + offsets, s, mask)` at `.real`, so `outDType` keeps
+the skin's `.real` default — no quantization event. -/
+def diagSsmForwardKernelIO (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    StreamEmitMasked2DKernelIO₃ where
+  kernel := diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr length
+    batch_size dim BLOCK_SIZE
+  inp1 := s_ptr
+  inp2 := lambda_ptr
+  inp3 := x_ptr
+  out := y_ptr
+  T := length
+  B1 := BLOCK_SIZE
+  B2 := BLOCK_SIZE
+  B3 := BLOCK_SIZE
+  C := BLOCK_SIZE
+  read1 := fun p₀ _ _ j => p₀ * BLOCK_SIZE + j.val
+  read2 := fun p₀ _ _ j => (p₀ * BLOCK_SIZE + j.val) % dim
+  read3 := fun p₀ _ t j => t.val * (batch_size * dim) + (p₀ * BLOCK_SIZE + j.val)
+  write := fun p₀ _ t j => t.val * (batch_size * dim) + (p₀ * BLOCK_SIZE + j.val)
+  mask1 := fun p₀ _ _ j => p₀ * BLOCK_SIZE + j.val < batch_size * dim
+  mask2 := fun p₀ _ _ j => p₀ * BLOCK_SIZE + j.val < batch_size * dim
+  mask3 := fun p₀ _ _ j => p₀ * BLOCK_SIZE + j.val < batch_size * dim
+  writeMask := fun p₀ _ _ j => p₀ * BLOCK_SIZE + j.val < batch_size * dim
+
+/-! ### The stream-level spec -/
+
+/-- The stream-side diagonal-SSM scan: state after `u` steps of
+`s ← s·lam + xs u`, seeded with `init`. The step input is guarded by the
+stream length (`u < T`); the guard is always live on the bridge below
+(only prefixes `u ≤ T` are ever evaluated). Mirrors the memory-side
+recurrence `diagSsmStateAfter` with the three memory channels replaced by
+the skin's per-lane stream values. -/
+noncomputable def diagSsmStreamState {T : Nat} (init lam : ℝ)
+    (xs : Fin T → ℝ) : Nat → ℝ
+  | 0 => init
+  | u + 1 =>
+      diagSsmStreamState init lam xs u * lam +
+        (if h : u < T then xs ⟨u, h⟩ else 0)
+
+/-! ### The stream-lane spec bridge -/
+
+/-- Per-lane spec bridge: under the skin's stream pins (the static `s`/`Λ`
+windows pinned at the same cell for every step — instantiated at the
+given `t` — and the streamed `x` window pinned per step), the stream-side
+scan **is** the memory-side recurrence `diagSsmStateAfter` on every prefix
+`u ≤ length`. The recurrence at lane `j` only touches lane `j` of all
+three streams, so no unmasked-lane values enter. -/
+private theorem dssm_streamState_eq_stateAfter
+    (s₀ : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    {length : Nat} (batch_size dim BLOCK_SIZE : Nat)
+    (xs ys zs : Fin length → Fin BLOCK_SIZE → ℝ)
+    (t : Fin length) (j : Fin BLOCK_SIZE)
+    (hss : s₀.readMem s_ptr (colOffset s₀ BLOCK_SIZE j) = xs t j)
+    (hls : s₀.readMem lambda_ptr (colOffset s₀ BLOCK_SIZE j % dim) = ys t j)
+    (hzs : ∀ u : Fin length,
+      s₀.readMem x_ptr (timeOffset s₀ batch_size dim BLOCK_SIZE u.val j)
+        = zs u j)
+    (u : Nat) :
+    u ≤ length →
+      diagSsmStreamState (xs t j) (ys t j) (fun v => zs v j) u
+        = diagSsmStateAfter s₀ s_ptr x_ptr lambda_ptr batch_size dim
+            BLOCK_SIZE j u := by
+  induction u with
+  | zero =>
+      intro _
+      simpa [diagSsmStreamState] using hss.symm
+  | succ v ih =>
+      intro hu
+      have hv : v < length := hu
+      have ihv := ih (Nat.le_of_lt hv)
+      calc diagSsmStreamState (xs t j) (ys t j) (fun w => zs w j) (v + 1)
+          = diagSsmStreamState (xs t j) (ys t j) (fun w => zs w j) v
+              * ys t j + zs ⟨v, hv⟩ j := by
+            simp [diagSsmStreamState, dif_pos hv]
+        _ = diagSsmStateAfter s₀ s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE j v * ys t j + zs ⟨v, hv⟩ j := by rw [ihv]
+        _ = diagSsmStateAfter s₀ s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE j (v + 1) := by
+            rw [diagSsmStateAfter_succ, ← hls, ← hzs ⟨v, hv⟩]
+            rfl
+
+/-! ### Window injectivity from the tiling geometry -/
+
+/-- The step-window strict growth core: with lane offsets below the
+timestep pitch `D`, an earlier step's window sits strictly below a later
+step's. -/
+private theorem dssm_window_lt (D C t t' j j' : Nat)
+    (hj : j < D) (ht : t < t') :
+    t * D + (C + j) < t' * D + (C + j') := by
+  have h2 : (t + 1) * D ≤ t' * D := Nat.mul_le_mul_right _ ht
+  have h3 : (t + 1) * D = t * D + D := by ring
+  omega
+
+/-- The full-grid output-window injectivity the exact invariant stack rides
+on (`hOutInj` of `diag_ssm_forward_kernel_output_summary`), derived from
+the tiling-geometry hypothesis `BLOCK_SIZE ≤ batch_size·dim`: distinct
+`(t, j)` windows never collide because the lane offset stays below the
+timestep pitch. -/
+private theorem dssm_outOffset_injective (st : BlockState)
+    (batch_size dim BLOCK_SIZE length : Nat)
+    (hBS : BLOCK_SIZE ≤ batch_size * dim) :
+    Function.Injective (fun idx : TileIndex [length, BLOCK_SIZE] =>
+      diagSsmForwardOutOffset st batch_size dim BLOCK_SIZE idx) := by
+  intro a b h
+  obtain ⟨ta, ja, ua⟩ := a
+  obtain ⟨tb, jb, ub⟩ := b
+  cases ua
+  cases ub
+  simp only [diagSsmForwardOutOffset, timeOffset, colOffset] at h
+  have hja : ja.val < batch_size * dim := lt_of_lt_of_le ja.isLt hBS
+  have hjb : jb.val < batch_size * dim := lt_of_lt_of_le jb.isLt hBS
+  have ht : ta.val = tb.val := by
+    rcases Nat.lt_trichotomy ta.val tb.val with hlt | heq | hgt
+    · exact absurd h (Nat.ne_of_lt (dssm_window_lt (batch_size * dim)
+        (st.pids 0 * BLOCK_SIZE) ta.val tb.val ja.val jb.val hja hlt))
+    · exact heq
+    · exact absurd h.symm (Nat.ne_of_lt (dssm_window_lt (batch_size * dim)
+        (st.pids 0 * BLOCK_SIZE) tb.val ta.val jb.val ja.val hjb hgt))
+  have hta : ta = tb := Fin.ext ht
+  subst hta
+  have hj : ja = jb := Fin.ext (by omega)
+  subst hj
+  rfl
+
+/-! ### Cast-free collapses and the covered fragment -/
+
+/-- The pre-loop is cast-free (nat index arithmetic and two masked `.real`
+loads, no `castFloat` anywhere): it steps identically under
+`stepStmtsR R`. -/
+private theorem dssm_preLoop_castFree (R : RoundingModel)
+    (s_ptr lambda_ptr : RegionName) (batch_size dim BLOCK_SIZE : Nat)
+    (t : BlockState) :
+    stepStmtsR R (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE) t
+      = stepStmts (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE) t := by
+  simp only [diagSsmForwardPreLoop, stepStmtsR, stepStmts, stepStmtR,
+    stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The loop body is cast-free **including its in-loop masked `.real`
+store** (`stepStmtR` delegates a `.real`-typed store to the exact write),
+so the whole scan loop steps identically under `stepStmtsR R` and the
+exact context-invariant stack transports to `execR`. -/
+private theorem dssm_body_castFree (R : RoundingModel)
+    (x_ptr y_ptr : RegionName) (batch_size dim BLOCK_SIZE : Nat)
+    (t : BlockState) :
+    stepStmtsR R (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim
+        BLOCK_SIZE) t
+      = stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim
+        BLOCK_SIZE) t := by
+  simp only [diagSsmForwardLoopBody, stepStmtsR, stepStmts, stepStmtR,
+    stepStmt, evalOpR.eq_def, evalOp.eq_def, BlockState.writeMemTypedR]
+  rfl
+
+/-- The forward surface sits inside the flat-memory bridge's covered
+fragment (`FlattenOk`; the `forLoop` clause recurses into the cast-free
+body). -/
+private theorem dssm_forward_flattenOk
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    ((diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr length batch_size
+      dim BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [diag_ssm_forward_kernel_toAlg_body]
+  simp [diagSsmForwardProjectedBody, diagSsmForwardPreLoop,
+    diagSsmForwardLoopBody, StmtList.FlattenOk, Stmt.FlattenOk,
+    Op.FlattenOk.eq_def]
+
+/-! ### Cell-level memory frames -/
+
+/-- A run of `assign` statements never touches memory (private copy of the
+S3 template's helper — bench files never import each other). -/
+private theorem dssm_stepStmts_assigns_mem :
+    ∀ (l : List Stmt),
+      (∀ stmt ∈ l, ∃ dt sh nm, ∃ e : Op dt sh, stmt = Stmt.assign dt sh nm e) →
+      ∀ {s s' : BlockState}, stepStmts l s = some s' → s'.mem = s.mem
+  | [], _, s, s', h => by
+      rw [stepStmts.nil] at h
+      obtain rfl := Option.some.inj h
+      rfl
+  | stmt :: rest, hall, s, s', h => by
+      obtain ⟨dt, sh, nm, e, rfl⟩ := hall _ List.mem_cons_self
+      cases hv : evalOp e s with
+      | none => simp [stepStmts, stepStmt, hv] at h
+      | some v =>
+          rw [stepStmts.cons_some (stepStmt_assign_eq_some hv)] at h
+          rw [dssm_stepStmts_assigns_mem rest
+            (fun st' hst' => hall st' (List.mem_cons_of_mem _ hst')) h]
+          rfl
+
+/-- Cell-level frame of a `Prop`-masked exact `writeMem` scatter `foldl`:
+every cell not hit by an active lane is untouched (the cell-level sibling
+of `BlockState.scatter_prop_masked_preserves_other_offset`). -/
+private theorem dssm_foldl_writeMem_preserve_cell {α : Type}
+    {region : RegionName} (ofn : α → Nat) (vfn : α → ℝ) (P : α → Prop)
+    [DecidablePred P]
+    (r : RegionName) (oo : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(r = region ∧ oo = ofn k)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (ofn k) (vfn k) else acc) s).mem r oo
+      = s.mem r oo := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hm : P hd
+      · rw [if_pos hm,
+          ih _ fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk,
+          BlockState.writeMem_mem]
+        exact if_neg (hnot hd List.mem_cons_self hm)
+      · rw [if_neg hm]
+        exact ih _ fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk
+
+/-- **Cell-level frame of one scan iteration** (the `mem` twin of the
+concrete-body step): from the context-invariant register pins, one body
+iteration leaves every cell off the step-`t` active write window
+untouched. -/
+private theorem dssm_body_step_frame {length : Nat}
+    (st0 st st' : BlockState)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) (ht : t < length)
+    (hS : st.regs .real [BLOCK_SIZE] "s" =
+      some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE t))
+    (hLambda : st.regs .real [BLOCK_SIZE] "Lambda" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        if active st0 batch_size dim BLOCK_SIZE idx.1 then
+          some (st0.readMem lambda_ptr
+            (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+        else
+          some 0 })
+    (hCol : st.regs .nat [BLOCK_SIZE] "col_offsets" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        colOffset st0 BLOCK_SIZE idx.1 })
+    (hMask : st.regs .bool [BLOCK_SIZE] "mask" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        active st0 batch_size dim BLOCK_SIZE idx.1 })
+    (hXRead : ∀ offset, st.readMem x_ptr offset = st0.readMem x_ptr offset)
+    (hStep :
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) = some st')
+    (r : RegionName) (oo : Nat)
+    (hcond : r ≠ y_ptr ∨ ∀ (tf : Fin length) (j : Fin BLOCK_SIZE),
+      active st0 batch_size dim BLOCK_SIZE j →
+      oo ≠ timeOffset st0 batch_size dim BLOCK_SIZE tf.val j) :
+    st'.mem r oo = st.mem r oo := by
+  unfold diagSsmForwardLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hS, hLambda, hCol, hMask,
+    hXRead, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+    Option.bind, timeOffset, active, colOffset, IntegralDType.mod,
+    diagSsmMaskedStateTile_succ] at hStep
+  subst st'
+  refine Eq.trans (dssm_foldl_writeMem_preserve_cell _ _ _ r oo _ _ ?_) rfl
+  intro k _ hPk hbad
+  rcases hcond with hne | hno
+  · exact hne hbad.1
+  · exact hno ⟨t, ht⟩ k.1 hPk hbad.2
+
+/-! ### The `TraceSafeR` walk
+
+The first bench `TraceSafeR` walk over a `forLoop` (the library principle
+`Stmt.forRangeTraceSafeR_inv` covers only `forRange`), so the invariant
+principle is built privately below, mirroring the library proof verbatim
+with the counter stepping by `1`. -/
+
+/-- `forLoop` mirror of `Stmt.forRangeTraceSafeR_inv`: an invariant `P`
+whose every step yields the body's `TraceSafeListR` plus a successor
+carrying `P` makes the whole loop unrolling trace-safe. -/
+private theorem dssm_forLoopTraceSafeR_inv (R : RoundingModel)
+    (bounds : RegionBounds) (idx : RegName) (n : Nat) (body : List Stmt)
+    (P : Nat → BlockState → Prop)
+    (hstep : ∀ c s, c < n → P c s →
+      Stmt.TraceSafeListR R bounds body
+        (s.setReg idx .nat [] (Tile.scalar c)) ∧
+      ∃ s', stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar c))
+          = some s' ∧
+        P (c + 1) s') :
+    ∀ cur s, P cur s → Stmt.forLoopTraceSafeR R bounds idx cur n body s
+  | cur, s, hP => by
+      rw [Stmt.forLoopTraceSafeR]
+      split
+      · obtain ⟨hsafe, s', hrun, hP'⟩ := hstep cur s ‹cur < n› hP
+        refine ⟨hsafe, ?_⟩
+        rw [hrun]
+        exact dssm_forLoopTraceSafeR_inv R bounds idx n body P hstep
+          (cur + 1) s' hP'
+      · trivial
+  termination_by cur _ _ => n - cur
+  decreasing_by omega
+
+/-- `evalOpR` = `evalOp` + concrete value of the `col_idx` op. -/
+private theorem dssm_colIdx_evalR (R : RoundingModel) (BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    evalOpR R (Op.mul NumericDType.nat Broadcast.nil (Op.programId 0)
+        (Op.constNat BLOCK_SIZE)) s
+      = some (Tile.scalar (s.pids 0 * BLOCK_SIZE)) := by
+  have h : evalOpR R (Op.mul NumericDType.nat Broadcast.nil (Op.programId 0)
+        (Op.constNat BLOCK_SIZE)) s
+      = evalOp (Op.mul NumericDType.nat Broadcast.nil (Op.programId 0)
+        (Op.constNat BLOCK_SIZE)) s := by
+    simp only [evalOpR.eq_def, evalOp.eq_def]
+  rw [h, evalOp_mul, evalOp_programId, evalOp_constNat]
+  rfl
+
+/-- `evalOpR` = `evalOp` + concrete value of the `col_offsets` op. -/
+private theorem dssm_colOffsets_evalR (R : RoundingModel) (BLOCK_SIZE : Nat)
+    (s : BlockState) (c : Nat)
+    (hci : s.regs .nat [] "col_idx" = some (Tile.scalar c)) :
+    evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "col_idx") (Op.arange BLOCK_SIZE)) s
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] => c + idx.1.val } := by
+  have h : evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "col_idx") (Op.arange BLOCK_SIZE)) s
+      = evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.ref .nat [] "col_idx") (Op.arange BLOCK_SIZE)) s := by
+    simp only [evalOpR.eq_def, evalOp.eq_def]
+  rw [h, evalOp_add, evalOp_ref, hci, evalOp_arange]
+  rfl
+
+/-- `evalOpR` = `evalOp` + concrete value of the `mask` op. -/
+private theorem dssm_mask_evalR (R : RoundingModel)
+    (batch_size dim BLOCK_SIZE : Nat) (s : BlockState)
+    (co : Fin BLOCK_SIZE → Nat)
+    (hco : s.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] => co idx.1 }) :
+    evalOpR R (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")
+        (Op.constNat (batch_size * dim))) s
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          decide (co idx.1 < batch_size * dim) } := by
+  have h : evalOpR R (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")
+        (Op.constNat (batch_size * dim))) s
+      = evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")
+        (Op.constNat (batch_size * dim))) s := by
+    simp only [evalOpR.eq_def, evalOp.eq_def]
+  rw [h, evalOp_lt, evalOp_ref, hco, evalOp_constNat]
+  rfl
+
+/-- `evalOpR` = `evalOp` + concrete value of the `Λ` load's address op. -/
+private theorem dssm_lambdaAddr_evalR (R : RoundingModel)
+    (dim BLOCK_SIZE : Nat) (s : BlockState) (co : Fin BLOCK_SIZE → Nat)
+    (hco : s.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] => co idx.1 }) :
+    evalOpR R (Op.mod IntegralDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets") (Op.constNat dim)) s
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] => co idx.1 % dim }
+      := by
+  have h : evalOpR R (Op.mod IntegralDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets") (Op.constNat dim)) s
+      = evalOp (Op.mod IntegralDType.nat Broadcast.scalarR
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets") (Op.constNat dim)) s := by
+    simp only [evalOpR.eq_def, evalOp.eq_def]
+  rw [h, evalOp_mod, evalOp_ref, hco, evalOp_constNat]
+  rfl
+
+/-- `evalOpR` = `evalOp` + concrete value of the in-loop `offsets` op. -/
+private theorem dssm_offsets_evalR (R : RoundingModel)
+    (batch_size dim BLOCK_SIZE : Nat) (s : BlockState) (t : Nat)
+    (co : Fin BLOCK_SIZE → Nat)
+    (ht : s.regs .nat [] "t" = some (Tile.scalar t))
+    (hco : s.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] => co idx.1 }) :
+    evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "t")
+          (Op.constNat (batch_size * dim)))
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")) s
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          t * (batch_size * dim) + co idx.1 } := by
+  have h : evalOpR R (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "t")
+          (Op.constNat (batch_size * dim)))
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")) s
+      = evalOp (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "t")
+          (Op.constNat (batch_size * dim)))
+        (Op.ref .nat [BLOCK_SIZE] "col_offsets")) s := by
+    simp only [evalOpR.eq_def, evalOp.eq_def]
+  rw [h, evalOp_add, evalOp_mul, evalOp_ref, ht, evalOp_constNat,
+    evalOp_ref, hco]
+  rfl
+
+/-- `TraceSafeListR` of the pre-loop: three register-only index assigns,
+then the two masked static-tile loads, whose active lanes are exactly the
+skin's (`t`-independent) `mask1`/`mask2` windows — in bounds by the
+`read1`/`read2` window bounds. -/
+private theorem dssm_preLoopSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (s_ptr lambda_ptr : RegionName) (batch_size dim BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hbs : ∀ j : Fin BLOCK_SIZE,
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      s.pids 0 * BLOCK_SIZE + j.val < bounds s_ptr)
+    (hbl : ∀ j : Fin BLOCK_SIZE,
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      (s.pids 0 * BLOCK_SIZE + j.val) % dim < bounds lambda_ptr) :
+    Stmt.TraceSafeListR R bounds
+      (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim BLOCK_SIZE) s := by
+  unfold diagSsmForwardPreLoop
+  -- col_idx
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some (dssm_colIdx_evalR R BLOCK_SIZE s)] at ht1
+  obtain rfl := Option.some.inj ht1
+  set q1 := s.setReg "col_idx" .nat [] (Tile.scalar (s.pids 0 * BLOCK_SIZE))
+    with hq1
+  have hci1 : q1.regs .nat [] "col_idx"
+      = some (Tile.scalar (s.pids 0 * BLOCK_SIZE)) := by simp [hq1]
+  -- col_offsets
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some
+    (dssm_colOffsets_evalR R BLOCK_SIZE q1 (s.pids 0 * BLOCK_SIZE) hci1)] at ht2
+  obtain rfl := Option.some.inj ht2
+  set q2 := q1.setReg "col_offsets" .nat [BLOCK_SIZE]
+    { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        s.pids 0 * BLOCK_SIZE + idx.1.val } with hq2
+  have hco2 : q2.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          s.pids 0 * BLOCK_SIZE + idx.1.val } := by simp [hq2]
+  -- mask
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t3 ht3 => ?_)
+  rw [stepStmtR_assign_eq_some (dssm_mask_evalR R batch_size dim BLOCK_SIZE q2
+    (fun i => s.pids 0 * BLOCK_SIZE + i.val) hco2)] at ht3
+  obtain rfl := Option.some.inj ht3
+  set q3 := q2.setReg "mask" .bool [BLOCK_SIZE]
+    { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        decide (s.pids 0 * BLOCK_SIZE + idx.1.val < batch_size * dim) }
+    with hq3
+  have hco3 : q3.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          s.pids 0 * BLOCK_SIZE + idx.1.val } := by
+    rw [hq3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("col_offsets" : RegName) ≠ "mask" by decide)]
+    exact hco2
+  have hmask3 : q3.regs .bool [BLOCK_SIZE] "mask"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          decide (s.pids 0 * BLOCK_SIZE + idx.1.val < batch_size * dim) } := by
+    simp [hq3]
+  -- the masked s load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t4 ht4 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [evalOpR_ref, hco3] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask3] at hm
+    obtain rfl := Option.some.inj hm
+    have hlt : s.pids 0 * BLOCK_SIZE + idx.1.val < batch_size * dim := by
+      simpa using hmi
+    simpa [Region.cast_id] using hbs idx.1 hlt
+  · obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+    set q4 := q3.setReg "s" .real [BLOCK_SIZE] v4 with hq4
+    have hco4 : q4.regs .nat [BLOCK_SIZE] "col_offsets"
+        = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+            s.pids 0 * BLOCK_SIZE + idx.1.val } := by
+      rw [hq4, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("col_offsets" : RegName) ≠ "s" by decide)]
+      exact hco3
+    have hmask4 : q4.regs .bool [BLOCK_SIZE] "mask"
+        = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+            decide (s.pids 0 * BLOCK_SIZE + idx.1.val < batch_size * dim) } := by
+      rw [hq4, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+        (show ("mask" : RegName) ≠ "s" by decide)]
+      exact hmask3
+    -- the masked Λ load
+    refine Stmt.TraceSafeListR.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [dssm_lambdaAddr_evalR R dim BLOCK_SIZE q4
+      (fun i => s.pids 0 * BLOCK_SIZE + i.val) hco4] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask4] at hm
+    obtain rfl := Option.some.inj hm
+    have hlt : s.pids 0 * BLOCK_SIZE + idx.1.val < batch_size * dim := by
+      simpa using hmi
+    simpa [Region.cast_id] using hbl idx.1 hlt
+
+/-- Per-iteration `TraceSafeListR` for the scan body: the `offsets` and
+`s`-update assigns are register-only; the masked `x` load's and the masked
+store's **active** lanes are the skin's `mask3`/`writeMask` windows at
+step `t`, in bounds by the `read3`/`write` window bounds. -/
+private theorem dssm_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (x_ptr y_ptr : RegionName) (batch_size dim BLOCK_SIZE : Nat)
+    (s0 st : BlockState) (t : Nat)
+    (hCol : st.regs .nat [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset s0 BLOCK_SIZE idx.1 })
+    (hMask : st.regs .bool [BLOCK_SIZE] "mask"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active s0 batch_size dim BLOCK_SIZE idx.1 })
+    (hbx : ∀ j : Fin BLOCK_SIZE, active s0 batch_size dim BLOCK_SIZE j →
+      t * (batch_size * dim) + colOffset s0 BLOCK_SIZE j < bounds x_ptr)
+    (hby : ∀ j : Fin BLOCK_SIZE, active s0 batch_size dim BLOCK_SIZE j →
+      t * (batch_size * dim) + colOffset s0 BLOCK_SIZE j < bounds y_ptr) :
+    Stmt.TraceSafeListR R bounds
+      (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+      (st.setReg "t" .nat [] (Tile.scalar t)) := by
+  unfold diagSsmForwardLoopBody
+  have hT0 : (st.setReg "t" .nat [] (Tile.scalar t)).regs .nat [] "t"
+      = some (Tile.scalar t) := BlockState.setReg_same _ _ _ _ _
+  have hco0 : (st.setReg "t" .nat [] (Tile.scalar t)).regs .nat
+      [BLOCK_SIZE] "col_offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset s0 BLOCK_SIZE idx.1 } := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("col_offsets" : RegName) ≠ "t" by decide)]
+    exact hCol
+  have hmask0 : (st.setReg "t" .nat [] (Tile.scalar t)).regs .bool
+      [BLOCK_SIZE] "mask"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active s0 batch_size dim BLOCK_SIZE idx.1 } := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("mask" : RegName) ≠ "t" by decide)]
+    exact hMask
+  -- offsets
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some (dssm_offsets_evalR R batch_size dim BLOCK_SIZE
+    _ t (fun i => colOffset s0 BLOCK_SIZE i) hT0 hco0)] at ht1
+  obtain rfl := Option.some.inj ht1
+  set q1 := (st.setReg "t" .nat [] (Tile.scalar t)).setReg "offsets" .nat
+    [BLOCK_SIZE]
+    { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        t * (batch_size * dim) + colOffset s0 BLOCK_SIZE idx.1 } with hq1
+  have hoffs1 : q1.regs .nat [BLOCK_SIZE] "offsets"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          t * (batch_size * dim) + colOffset s0 BLOCK_SIZE idx.1 } := by
+    simp [hq1]
+  have hmask1 : q1.regs .bool [BLOCK_SIZE] "mask"
+      = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active s0 batch_size dim BLOCK_SIZE idx.1 } := by
+    rw [hq1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+      (show ("mask" : RegName) ≠ "offsets" by decide)]
+    exact hmask0
+  -- the masked x load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t2 ht2 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [evalOpR_ref, hoffs1] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask1] at hm
+    obtain rfl := Option.some.inj hm
+    have hact : active s0 batch_size dim BLOCK_SIZE idx.1 := by
+      simpa using hmi
+    simpa [Region.cast_id] using hbx idx.1 hact
+  · obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv ht2
+    set q2 := q1.setReg "x" .real [BLOCK_SIZE] v2 with hq2
+    -- s update (register-only)
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t3 ht3 => ?_)
+    obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv ht3
+    set q3 := q2.setReg "s" .real [BLOCK_SIZE] v3 with hq3
+    have hoffs3 : q3.regs .nat [BLOCK_SIZE] "offsets"
+        = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+            t * (batch_size * dim) + colOffset s0 BLOCK_SIZE idx.1 } := by
+      rw [hq3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offsets" : RegName) ≠ "s" by decide),
+        hq2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("offsets" : RegName) ≠ "x" by decide)]
+      exact hoffs1
+    have hmask3 : q3.regs .bool [BLOCK_SIZE] "mask"
+        = some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+            active s0 batch_size dim BLOCK_SIZE idx.1 } := by
+      rw [hq3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("mask" : RegName) ≠ "s" by decide),
+        hq2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _
+          (show ("mask" : RegName) ≠ "x" by decide)]
+      exact hmask1
+    -- the masked store
+    refine Stmt.TraceSafeListR.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MemAccess.SafeAtR,
+      MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR, and_true, true_and, and_self]
+    intro offsets hoffsets idx hactive
+    rw [evalOpR_ref, hoffs3] at hoffsets
+    obtain rfl := Option.some.inj hoffsets
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask3] at hm
+    obtain rfl := Option.some.inj hm
+    have hact : active s0 batch_size dim BLOCK_SIZE idx.1 := by
+      simpa using hmi
+    simpa [Region.cast_id] using hby idx.1 hact
+
+/-- **The `TraceSafeR` walk for the whole forward kernel** — the pre-loop
+by the manual cons walk, the scan loop by the private
+`forLoopTraceSafeR` invariant principle over the proven (launch-state-
+robust) `diagSsmForwardLoopContextInvariant`, whose register pins feed the
+per-iteration body walk. The four bound groups are the skin's
+`read1`/`read2`/`read3`/`write` windows; `hT` instantiates the static
+windows' step index (a `Fin length` needs a step to exist), and
+`hBS`/`hXOutNe` feed the context-invariant step. -/
+private theorem dssm_forward_traceSafeR (R : RoundingModel)
+    (bounds : RegionBounds)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hT : 0 < length) (hBS : BLOCK_SIZE ≤ batch_size * dim)
+    (hXOutNe : x_ptr ≠ y_ptr) (s : BlockState)
+    (hbs : ∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      s.pids 0 * BLOCK_SIZE + j.val < bounds s_ptr)
+    (hbl : ∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      (s.pids 0 * BLOCK_SIZE + j.val) % dim < bounds lambda_ptr)
+    (hbx : ∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      t.val * (batch_size * dim) + (s.pids 0 * BLOCK_SIZE + j.val)
+        < bounds x_ptr)
+    (hby : ∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+      s.pids 0 * BLOCK_SIZE + j.val < batch_size * dim →
+      t.val * (batch_size * dim) + (s.pids 0 * BLOCK_SIZE + j.val)
+        < bounds y_ptr) :
+    ((diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr length batch_size
+      dim BLOCK_SIZE).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [diag_ssm_forward_kernel_toAlg_body]
+  unfold diagSsmForwardProjectedBody
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · exact dssm_preLoopSafeR R bounds s_ptr lambda_ptr batch_size dim
+      BLOCK_SIZE s (fun j hj => hbs ⟨0, hT⟩ j hj)
+      (fun j hj => hbl ⟨0, hT⟩ j hj)
+  · intro s5 hs5
+    rw [dssm_preLoop_castFree R s_ptr lambda_ptr batch_size dim BLOCK_SIZE
+      s] at hs5
+    have hCtx0 := diagSsmForwardLoopContextInvariant_init_of_preloop s s5
+      s_ptr x_ptr lambda_ptr y_ptr length batch_size dim BLOCK_SIZE hs5
+    refine Stmt.TraceSafeListR.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    refine dssm_forLoopTraceSafeR_inv R bounds "t" length
+      (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+      (diagSsmForwardLoopContextInvariant s s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE) ?_ 0 s5 hCtx0
+    intro c stt hc hP
+    obtain ⟨hInv, hLambda, hCol, hMask, hXRead⟩ := hP
+    refine ⟨dssm_bodySafeR R bounds x_ptr y_ptr batch_size dim BLOCK_SIZE s
+      stt c hCol hMask (fun j hj => hbx ⟨c, hc⟩ j hj)
+      (fun j hj => hby ⟨c, hc⟩ j hj), ?_⟩
+    obtain ⟨st', hstep, hP'⟩ :=
+      diagSsmForwardLoopContextInvariant_body_step_exists s stt s_ptr x_ptr
+        lambda_ptr y_ptr batch_size dim BLOCK_SIZE c hc
+        ⟨hInv, hLambda, hCol, hMask, hXRead⟩
+        (dssm_outOffset_injective s batch_size dim BLOCK_SIZE length hBS)
+        hXOutNe
+    exact ⟨st', by
+      rw [dssm_body_castFree R x_ptr y_ptr batch_size dim BLOCK_SIZE]
+      exact hstep, hP'⟩
+
+/-! ### The rounded Hoare triple (`hrun`) -/
+
+/-- Termination, per-window values and the per-cell frame of the whole
+scan under `execR R`, from an **arbitrary** launch state: the exact
+`diagSsmForwardLoopContextInvariant` stack runs verbatim (the surface is
+cast-free, so `execR R` collapses onto the exact stepper), extended with
+the per-segment memory frames. -/
+private theorem dssm_runR (R : RoundingModel)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hBS : BLOCK_SIZE ≤ batch_size * dim) (hXOutNe : x_ptr ≠ y_ptr)
+    (s₀ : BlockState) :
+    ∃ sfin,
+      execR R (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr length
+          batch_size dim BLOCK_SIZE).toAlgKernel s₀ = some sfin
+      ∧ (∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+          active s₀ batch_size dim BLOCK_SIZE j →
+          sfin.readMem y_ptr (timeOffset s₀ batch_size dim BLOCK_SIZE t.val j)
+            = diagSsmForwardSpec s₀ s_ptr x_ptr lambda_ptr batch_size dim
+                BLOCK_SIZE t.val j)
+      ∧ (∀ r oo,
+          (r ≠ y_ptr ∨ ∀ (t : Fin length) (j : Fin BLOCK_SIZE),
+            active s₀ batch_size dim BLOCK_SIZE j →
+            oo ≠ timeOffset s₀ batch_size dim BLOCK_SIZE t.val j) →
+          sfin.mem r oo = s₀.mem r oo) := by
+  have hInj : Function.Injective (fun idx : TileIndex [length, BLOCK_SIZE] =>
+      diagSsmForwardOutOffset s₀ batch_size dim BLOCK_SIZE idx) :=
+    dssm_outOffset_injective s₀ batch_size dim BLOCK_SIZE length hBS
+  cases hPre : stepStmts (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size
+      dim BLOCK_SIZE) s₀ with
+  | none =>
+      unfold diagSsmForwardPreLoop at hPre
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
+        NumericDType.mul, NumericDType.add, IntegralDType.mod,
+        ComparableDType.lt, Option.bind] at hPre
+  | some stPre =>
+      have hCtx0 := diagSsmForwardLoopContextInvariant_init_of_preloop s₀
+        stPre s_ptr x_ptr lambda_ptr y_ptr length batch_size dim BLOCK_SIZE
+        hPre
+      have hPreMem : stPre.mem = s₀.mem :=
+        dssm_stepStmts_assigns_mem
+          (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim BLOCK_SIZE)
+          (by
+            intro stmt hst
+            simp only [diagSsmForwardPreLoop, List.mem_cons,
+              List.not_mem_nil, or_false] at hst
+            rcases hst with rfl | rfl | rfl | rfl | rfl <;>
+              exact ⟨_, _, _, _, rfl⟩)
+          hPre
+      obtain ⟨stFin, hFor, hP⟩ :=
+        forLoop_inv (idx := "t") (n := length)
+          (body := diagSsmForwardLoopBody x_ptr y_ptr batch_size dim
+            BLOCK_SIZE)
+          (P := fun t st =>
+            diagSsmForwardLoopContextInvariant s₀ s_ptr x_ptr lambda_ptr
+              y_ptr length batch_size dim BLOCK_SIZE t st ∧
+            ∀ r oo,
+              (r ≠ y_ptr ∨ ∀ (tf : Fin length) (j : Fin BLOCK_SIZE),
+                active s₀ batch_size dim BLOCK_SIZE j →
+                oo ≠ timeOffset s₀ batch_size dim BLOCK_SIZE tf.val j) →
+              st.mem r oo = s₀.mem r oo)
+          (s_init := stPre)
+          ⟨hCtx0, fun r oo _ => by rw [hPreMem]⟩
+          (fun t st ht hP => by
+            obtain ⟨hCtx, hFrame⟩ := hP
+            obtain ⟨st', hstep, hCtx'⟩ :=
+              diagSsmForwardLoopContextInvariant_body_step_exists s₀ st
+                s_ptr x_ptr lambda_ptr y_ptr batch_size dim BLOCK_SIZE t ht
+                hCtx hInj hXOutNe
+            refine ⟨st', hstep, hCtx', ?_⟩
+            intro r oo hcond
+            obtain ⟨hInv, hLambda, hCol, hMask, hXRead⟩ := hCtx
+            rw [dssm_body_step_frame s₀ st st' s_ptr x_ptr lambda_ptr y_ptr
+              batch_size dim BLOCK_SIZE t ht hInv.1 hLambda hCol hMask hXRead
+              hstep r oo hcond]
+            exact hFrame r oo hcond)
+      obtain ⟨⟨hInvF, -, -, -, -⟩, hFrameF⟩ := hP
+      refine ⟨stFin, ?_, ?_, ?_⟩
+      · -- assemble the `execR` run through the cast-free collapses
+        have hForR : stepStmtR R (Stmt.forLoop "t" length
+            (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE))
+            stPre = some stFin := by
+          have h1 : stepStmtR R (Stmt.forLoop "t" length
+              (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE))
+              stPre
+              = stepForLoopAuxR R "t" 0 length
+                  (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim
+                    BLOCK_SIZE) stPre := by
+            simp only [stepStmtR]
+          rw [h1, stepForLoopAuxR_castFree R _
+              (dssm_body_castFree R x_ptr y_ptr batch_size dim BLOCK_SIZE)
+              "t",
+            ← stepForLoopAux.forLoop_unfold]
+          exact hFor
+        show execR R (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+          length batch_size dim BLOCK_SIZE).toAlgKernel s₀ = some stFin
+        unfold execR
+        rw [diag_ssm_forward_kernel_toAlg_body]
+        unfold diagSsmForwardProjectedBody
+        rw [stepStmtsR_append R
+            (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim BLOCK_SIZE)
+            [Stmt.forLoop "t" length
+              (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)]
+            s₀,
+          dssm_preLoop_castFree R s_ptr lambda_ptr batch_size dim BLOCK_SIZE
+            s₀,
+          hPre, Option.bind_some, stepStmtsR_cons_some hForR, stepStmtsR_nil]
+      · intro t j hact
+        exact hInvF.2 ((t, j, PUnit.unit) : TileIndex [length, BLOCK_SIZE])
+          t.isLt hact
+      · exact hFrameF
+
+/-! ### The headline -/
+
+/-- **The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre).** For
+every rounding model `R`, the faithful `diag_ssm_forward_kernel` surface
+implements, on its `StreamEmitMasked2DKernelIO₃` signature, the **ideal ℝ
+diagonal-SSM scan** over the streamed tiles: emitted window `(t, j)` holds
+the state after `t + 1` steps of `s ← s·Λ + x_u` (`u ≤ t`), seeded with
+the static initial-state tile and folded with the static decay tile —
+`diagSsmStreamState` is exact real arithmetic. The `s`/`Λ` channels are
+the skin's degenerate static streams (windows ignore `t`); the grid is
+1-D, so every window also ignores `pid₁` and the headline is ∀-`pid₁`
+(the `bgmv_shrink` precedent, one grid rank down). The kernel has **zero
+rounding events** (all loads, the scan arithmetic and the per-step raw
+stores are at `.real`; there is no `castFloat`), so the skin's boundary
+quantization degenerates: the readback's `R.round .real` is the identity
+by the model's defining `round_real` — the ∀-`R` face holds via the
+`RoundingModel` `.real` identity fields, not as a `.triv` special case.
+
+Layer map: the surface is cast-free, so under `execR R` it collapses
+verbatim onto the exact stepper and the proven
+`diagSsmForwardLoopContextInvariant` stack above is reused unchanged; the
+`⊨[R]` face adds the first bench `TraceSafeR` walk over a `forLoop` (a
+private mirror of the library's `forRangeTraceSafeR_inv`), the per-cell
+memory frame (`dssm_body_step_frame`), and the stream-lane spec bridge
+(`dssm_streamState_eq_stateAfter`).
+
+All three hypotheses are truth-forced, with provenance:
+
+* `hT : 0 < length` — the static `s`/`Λ` windows are step-indexed
+  (`Fin length`), so the skin's `read1`/`read2` bound groups are
+  non-vacuous only when a step exists; at `length = 0` the kernel still
+  issues the two pre-loop loads but the contract would supply no bounds
+  for them. A 0-step scan has an empty output anyway.
+* `hBS : BLOCK_SIZE ≤ batch_size·dim` — the tiling-geometry form of the
+  exact headline `diag_ssm_forward_kernel_output_summary`'s `hOutInj`
+  (full-grid output-window injectivity, which the loop invariant carries
+  every previously-emitted window through later scatters with): with the
+  lane offset below the timestep pitch, distinct `(t, j)` windows never
+  collide. It holds for every real launch (the grid is
+  `⌈batch_size·dim / BLOCK_SIZE⌉` programs over a `batch_size·dim`-wide
+  lane space).
+* `hXOutNe : x_ptr ≠ y_ptr` — inherited verbatim from the exact headline:
+  step `t` stores into `y_ptr` **before** step `t+1` re-reads `x_ptr`; if
+  the two aliased, later steps would stream already-overwritten inputs
+  and the closed form would be false.
+
+No `s_ptr`/`lambda_ptr` disalias is needed: both tiles are loaded into
+registers before the loop, and the spec is pinned on the initial state.
+
+Relation to the exact surface: the exact headline
+`diag_ssm_forward_kernel_output_summary` (`Realizes_without_Rounding`)
+above is retained unchanged; this `⊨[R]` face restates the same scan
+content on the streaming emit skin, for every `R` at once (at the `.real`
+grid the two faces carry the same exact cell). Both faces are kept per
+the rounding-as-default doctrine. -/
+specification diag_ssm_forward_io_correctness (R : RoundingModel)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hT : 0 < length) (hBS : BLOCK_SIZE ≤ batch_size * dim)
+    (hXOutNe : x_ptr ≠ y_ptr) :
+    diagSsmForwardKernelIO s_ptr x_ptr lambda_ptr y_ptr length batch_size dim
+        BLOCK_SIZE ⊨[R]
+      fun _ _ ss ls xs t j =>
+        diagSsmStreamState (ss t j) (ls t j) (fun u => xs u j) (t.val + 1) := by
+  refine StreamEmitMasked2DKernelIO₃.ImplementsR.intro _ ?_ ?_ ?_
+  · exact dssm_forward_flattenOk s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE
+  · -- safety walk
+    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw
+    simp only [diagSsmForwardKernelIO] at hbr1 hbr2 hbr3 hbw ⊢
+    exact dssm_forward_traceSafeR R bounds s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE hT hBS hXOutNe s hbr1 hbr2 hbr3 hbw
+  · -- the rounded Hoare triple
+    intro s₀ xs ys zs _hundef hx hy hz
+    simp only [diagSsmForwardKernelIO] at hx hy hz ⊢
+    obtain ⟨sfin, hexec, hval, hframe⟩ :=
+      dssm_runR R s_ptr x_ptr lambda_ptr y_ptr length batch_size dim
+        BLOCK_SIZE hBS hXOutNe s₀
+    refine ⟨sfin, hexec, ?_, ?_⟩
+    · intro t j hj
+      have hact : active s₀ batch_size dim BLOCK_SIZE j := hj
+      have hss : s₀.readMem s_ptr (colOffset s₀ BLOCK_SIZE j) = xs t j :=
+        hx t j hj
+      have hls : s₀.readMem lambda_ptr (colOffset s₀ BLOCK_SIZE j % dim)
+          = ys t j := hy t j hj
+      have hzs : ∀ u : Fin length,
+          s₀.readMem x_ptr (timeOffset s₀ batch_size dim BLOCK_SIZE u.val j)
+            = zs u j := fun u => hz u j hj
+      have hbridge := dssm_streamState_eq_stateAfter s₀ s_ptr x_ptr
+        lambda_ptr batch_size dim BLOCK_SIZE xs ys zs t j hss hls hzs
+        (t.val + 1) t.isLt
+      have hv' : sfin.readMem y_ptr
+          (t.val * (batch_size * dim) + (s₀.pids 0 * BLOCK_SIZE + j.val))
+          = diagSsmStateAfter s₀ s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE j (t.val + 1) := hval t j hact
+      rw [BlockState.readMemAs_real, hv', ← hbridge]
+      simp only [RoundingModel.round_real_apply, FloatDType.ofReal]
+      rfl
+    · intro r oo hcond
+      refine hframe r oo ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · exact Or.inr fun t j hact => hno t j hact
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.DiagSsmTriton

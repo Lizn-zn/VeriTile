@@ -4198,4 +4198,760 @@ end BwdAssembly
 
 end Correct_without_Rounding
 
+/-! ## The `⊨[R]` streaming headline for `fwd_decay_cumsum`
+(wave-5 S3 per-step emit genre, 3-D grid)
+
+Everything below is purely additive; the exact surfaces above (all three
+kernels) are untouched. This is the first consumer of the three-pid
+single-stream per-step emit skin `StreamEmitMasked3DKernelIO₁`: the store
+sits **inside** the `range(BT)` loop — step `t` stores the `BK`-lane
+`cum_decay` window at the `t`-th row — and the kernel's spec `f t j` is the
+genre's *scan* shape, the prefix fold
+`1.44269504 · Σ_{u ≤ t} g[u, j]` over the streamed `g` rows.
+
+Structure of the `execR R` story: this kernel has **zero rounding events**.
+The masked load and the in-loop masked store are at `.real`, and the only
+`castFloat`s are the erased `.to(tl.float32)` / `.to(p_go.dtype.element_ty)`
+casts, i.e. `.real → .real` — exact under every `R` by the model's defining
+`round_real` (`Rcast_real_real` below). The loop body therefore collapses
+verbatim onto the exact stepper (`stepForRangeAuxR_castFree`), and the whole
+proven `fwdInv` invariant stack above is reused unchanged; the `⊨[R]` face
+adds only the `TraceSafeR` walk, the per-cell memory frame, and the
+stream-lane spec bridge. The skin's readback contract at the default
+`outDType := .real` grid carries `R.round .real`, the identity by
+`round_real` — the ∀-`R` face is the exact streaming contract via the
+model's `.real` identity fields, not a `.triv` special case. -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamEmitMasked3DKernelIO₁
+
+set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
+
+/-! ### The lowered program: prologue + loop -/
+
+/-- The lowered pre-loop prologue of `fwd_decay_cumsum_surface`: the three
+program ids, the `p_g`/`p_go` row base pointers, the zeroed `cum_decay`
+accumulator and the `BK`-lane bound mask. -/
+private def fwdPrologue (G GO : RegionName) (s_qk_h BT BK DK : Nat) : List Stmt :=
+  [Stmt.assign TileDType.nat [] "i_k" (Op.programId 0),
+   Stmt.assign TileDType.nat [] "i_c" (Op.programId 1),
+   Stmt.assign TileDType.nat [] "i_bh" (Op.programId 2),
+   Stmt.assign TileDType.ptr [BK] "p_g"
+     (Op.ptrAdd Broadcast.scalarL (Op.ptrBase G)
+       (Op.add NumericDType.nat Broadcast.scalarL
+         (Op.add NumericDType.nat Broadcast.nil
+           (Op.add NumericDType.nat Broadcast.nil
+             (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+               (Op.constNat s_qk_h))
+             (Op.mul NumericDType.nat Broadcast.nil
+               (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c")
+                 (Op.constNat BT))
+               (Op.constNat DK)))
+           (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k")
+             (Op.constNat BK)))
+         (Op.arange BK))),
+   Stmt.assign TileDType.ptr [BK] "p_go"
+     (Op.ptrAdd Broadcast.scalarL (Op.ptrBase GO)
+       (Op.add NumericDType.nat Broadcast.scalarL
+         (Op.add NumericDType.nat Broadcast.nil
+           (Op.add NumericDType.nat Broadcast.nil
+             (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+               (Op.constNat s_qk_h))
+             (Op.mul NumericDType.nat Broadcast.nil
+               (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c")
+                 (Op.constNat BT))
+               (Op.constNat DK)))
+           (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k")
+             (Op.constNat BK)))
+         (Op.arange BK))),
+   Stmt.assign TileDType.real [BK] "cum_decay" (Op.full [BK] (Op.const 0)),
+   Stmt.assign TileDType.bool [BK] "mask"
+     (Op.lt ComparableDType.nat Broadcast.scalarR
+       (Op.add NumericDType.nat Broadcast.scalarL
+         (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k")
+           (Op.constNat BK))
+         (Op.arange BK))
+       (Op.constNat DK))]
+
+/-- The `toAlgKernel` body decomposes into the prologue followed by the
+single `range(BT)` storing loop (whose lowered body is the proven
+`fwdBody`). -/
+private theorem fwd_body_decomp (G GO : RegionName)
+    (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ) (BT BK DK : Nat) :
+    (fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK).toAlgKernel.body
+      = fwdPrologue G GO s_qk_h BT BK DK
+        ++ [Stmt.forRange "_i" 0 BT 1 (fwdBody G GO s_qk_h BT BK DK)] := by
+  rfl
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of `fwd_decay_cumsum` on the three-pid
+single-stream per-step emit skin (S3: in-loop store). Step `t` of the
+`range(BT)` loop reads the `BK`-lane `g` row (`read1`) and stores the
+`BK`-lane `cum_decay` window (`write`) at the **`.real`** grid (`outDType`
+default — the store's `.to(p_go.dtype.element_ty)` cast erases to `.real`,
+so the per-step stores have no quantization event). The windows transcribe
+the surface's effective addresses verbatim (the surface models the `+= DK`
+pointer advance, so row `t`'s address is the base plus `t·DK`):
+
+* `read1` step `t`, lane `j`:
+  `i_bh·s_qk_h + i_c·BT·DK + i_k·BK + j + t·DK` — the kernel's `p_g` lane
+  after `t` advances (`pid₀ = i_k`, `pid₁ = i_c`, `pid₂ = i_bh`).
+* `write` step `t`, lane `j`: the same window into `g_o` — the kernel's
+  `p_go` lane.
+
+Both masks are the kernel's single, `t`-independent bound mask
+`i_k·BK + j < DK`. -/
+def fwdDecayCumsumKernelIO (G GO : RegionName)
+    (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ) (BT BK DK : Nat) :
+    StreamEmitMasked3DKernelIO₁ where
+  kernel := fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK
+  inp1 := G
+  out := GO
+  T := BT
+  B1 := BK
+  C := BK
+  read1 := fun p₀ p₁ p₂ t j => p₂ * s_qk_h + p₁ * BT * DK + p₀ * BK + j.val + t.val * DK
+  write := fun p₀ p₁ p₂ t j => p₂ * s_qk_h + p₁ * BT * DK + p₀ * BK + j.val + t.val * DK
+  mask1 := fun p₀ _ _ _ j => p₀ * BK + j.val < DK
+  writeMask := fun p₀ _ _ _ j => p₀ * BK + j.val < DK
+
+/-! ### The stream-level spec -/
+
+/-- The stream-level decay-cumsum spec (the genre's *scan* shape): output
+window `(t, j)` holds the `inv_ln2`-scaled prefix sum of lane `j`'s streamed
+`g` values through step `t`. Since the kernel's mask is `t`-independent, the
+sum only ever touches lane `j` itself — on a write-active lane every
+summand is mask-pinned, so no guard is needed inside the sum.
+Algebraically `fwdDecayClosed` with the row reads re-indexed to the curried
+stream. -/
+noncomputable def fwdDecayStreamSpec (BT BK : Nat)
+    (gs : Fin BT → Fin BK → ℝ) (t : Fin BT) (j : Fin BK) : ℝ :=
+  1.44269504 * ∑ u : Fin (t.val + 1), gs (Fin.castLE t.isLt u) j
+
+/-- The skin's window addresses in `offset` form: the io windows above are
+the proven stack's `offset s s_qk_h DK t BT BK j` (pure `ring` on ℕ). -/
+private theorem fwd_addr_eq (s : BlockState) (s_qk_h BT BK DK m : Nat) (i : Fin BK) :
+    s.pids 2 * s_qk_h + s.pids 1 * BT * DK + s.pids 0 * BK + i.val + m * DK
+      = offset s s_qk_h DK m BT BK i := by
+  simp only [offset, baseOffset]
+  ring
+
+/-- Per-lane spec bridge: at a masked window `(t, j)` the stream spec **is**
+the exact stack's closed form `fwdDecayClosed` — the sum only involves lane
+`j`, which is mask-pinned at every row because the mask is
+`t`-independent. -/
+private theorem fwdDecayStreamSpec_eq_closed (G : RegionName) (s₀ : BlockState)
+    (s_qk_h BT BK DK : Nat) (xs : Fin BT → Fin BK → ℝ)
+    (hx : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem G
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs t j)
+    (t : Fin BT) (j : Fin BK) (hj : active s₀ DK BK j) :
+    fwdDecayStreamSpec BT BK xs t j = fwdDecayClosed s₀ G s_qk_h DK BT BK t j := by
+  unfold fwdDecayStreamSpec fwdDecayClosed
+  congr 1
+  refine Finset.sum_congr rfl fun u _ => ?_
+  rw [← hx (Fin.castLE t.isLt u) j hj]
+  congr 1
+  simp only [offset, baseOffset, Fin.val_castLE]
+  ring
+
+/-! ### Cast-free collapses and the covered fragment -/
+
+/-- The erased `.to(tl.float32)` / `.to(p_go.dtype.element_ty)` are
+`.real → .real` casts: exact under every `R` — `R.roundW .real` is the
+identity by the model's defining `round_real`. -/
+private theorem Rcast_real_real (R : RoundingModel) :
+    R.cast .real .real = FloatDType.cast .real .real := by
+  funext v
+  simp [RoundingModel.cast, FloatDType.cast]
+
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem fwdPrologue_castFree (R : RoundingModel) (G GO : RegionName)
+    (s_qk_h BT BK DK : Nat) (t : BlockState) :
+    stepStmtsR R (fwdPrologue G GO s_qk_h BT BK DK) t
+      = stepStmts (fwdPrologue G GO s_qk_h BT BK DK) t := by
+  simp only [fwdPrologue, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The loop body is cast-free **including its in-loop masked `.real`
+store**: the masked `.real` load with erased fp32 cast is exact under `R`,
+and `stepStmtR` delegates a `.real`-typed store to the exact
+`writeMemTyped`, so the whole storing loop steps identically under
+`stepStmtsR R` and the exact `fwdInv` stack transports to `execR`. -/
+private theorem fwdBody_castFree (R : RoundingModel) (G GO : RegionName)
+    (s_qk_h BT BK DK : Nat) (t : BlockState) :
+    stepStmtsR R (fwdBody G GO s_qk_h BT BK DK) t
+      = stepStmts (fwdBody G GO s_qk_h BT BK DK) t := by
+  simp only [fwdBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def, Rcast_real_real, BlockState.writeMemTypedR]
+  rfl
+
+/-- The full forward surface sits inside the flat-memory bridge's covered
+fragment (`FlattenOk`; the `forRange` clause recurses into the cast-free
+body). -/
+private theorem fwd_flattenOk (G GO : RegionName)
+    (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ) (BT BK DK : Nat) :
+    ((fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [fwd_body_decomp]
+  simp [fwdPrologue, fwdBody, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+/-! ### The prologue walk (private copy of the exact headline's inline
+prefix walk, packaged as a reusable lemma with the memory frame) -/
+
+/-- The prologue establishes `fwdInv … 0` and never touches memory. -/
+private theorem fwd_preLoop (G GO : RegionName) (s_qk_h BT BK DK : Nat)
+    (s : BlockState) :
+    ∃ s6, stepStmts (fwdPrologue G GO s_qk_h BT BK DK) s = some s6
+      ∧ fwdInv G GO s s_qk_h DK BT BK 0 s6 ∧ s6.mem = s.mem := by
+  set s_ik := s.setReg "i_k" .nat [] (Tile.scalar (s.pids 0)) with hs_ik
+  set s_ic := s_ik.setReg "i_c" .nat [] (Tile.scalar (s.pids 1)) with hs_ic
+  set s_ibh := s_ic.setReg "i_bh" .nat [] (Tile.scalar (s.pids 2)) with hs_ibh
+  have hibh : s_ibh.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by simp [hs_ibh]
+  have hic : s_ibh.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by
+    rw [hs_ibh, hs_ic]; simp
+  have hik : s_ibh.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs_ibh, hs_ic, hs_ik]; simp
+  -- p_g init eval
+  have hpgeval : evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase G)
+      (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+            (Op.mul NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+              (Op.constNat DK)))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+        (Op.arange BK))) s_ibh = some (fwdPgTile s G s_qk_h DK BT BK 0) := by
+    simp only [evalOp, Option.bind, hibh, hic, hik, evalOp_constNat, evalOp_arange,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+      Tile.bop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [Tile.ptrAdd_data, fwdPgTile, offset, baseOffset,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    refine Prod.ext rfl ?_
+    simp only [Tile.vec]
+    ring
+  set s_pg := s_ibh.setReg "p_g" .ptr [BK] (fwdPgTile s G s_qk_h DK BT BK 0) with hs_pg
+  have hpgostep_ibh : s_pg.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)) := by
+    rw [hs_pg]; simp [hibh]
+  have hpgostep_ic : s_pg.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1)) := by
+    rw [hs_pg]; simp [hic]
+  have hpgostep_ik : s_pg.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs_pg]; simp [hik]
+  -- p_go init eval
+  have hpgoeval : evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase GO)
+      (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.add NumericDType.nat Broadcast.nil
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+            (Op.mul NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+              (Op.constNat DK)))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+        (Op.arange BK))) s_pg = some (fwdPgoTile s GO s_qk_h DK BT BK 0) := by
+    simp only [evalOp, Option.bind, hpgostep_ibh, hpgostep_ic, hpgostep_ik, evalOp_constNat,
+      evalOp_arange, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+      Tile.bop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [Tile.ptrAdd_data, fwdPgoTile, offset, baseOffset,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    refine Prod.ext rfl ?_
+    simp only [Tile.vec]
+    ring
+  set s_pgo := s_pg.setReg "p_go" .ptr [BK] (fwdPgoTile s GO s_qk_h DK BT BK 0) with hs_pgo
+  -- cum_decay = zeros eval
+  have hcumeval : evalOp (Op.full [BK] (Op.const 0)) s_pgo
+      = some (fwdCumTile s G s_qk_h DK BT BK 0) := by
+    simp only [evalOp_full, evalOp_const, Option.bind]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [fwdCumTile, Tile.scalar, fwdPartial, Finset.univ_eq_empty, Finset.sum_empty,
+      mul_zero]
+    by_cases ha : active s DK BK i <;> simp [ha]
+  set s_cum := s_pgo.setReg "cum_decay" .real [BK] (fwdCumTile s G s_qk_h DK BT BK 0) with hs_cum
+  have hcum_ik : s_cum.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)) := by
+    rw [hs_cum, hs_pgo, hs_pg]; simp [hik]
+  -- mask eval
+  have hmaskeval : evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+      (Op.add NumericDType.nat Broadcast.scalarL
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK))
+        (Op.arange BK)) (Op.constNat DK)) s_cum = some (fwdMaskTile s DK BK) := by
+    simp only [evalOp, Option.bind, hcum_ik, evalOp_constNat, evalOp_arange,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Tile.bop, Tile.cop, Tile.scalar]
+    apply congrArg some
+    apply Tile.ext
+    intro idx
+    obtain ⟨i, u⟩ := idx
+    simp only [fwdMaskTile, active, elemIndex, Tile.vec,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+    rfl
+  -- chain the 7 prologue assigns
+  have hstepK : stepStmt (Stmt.assign TileDType.nat [] "i_k" (Op.programId 0)) s = some s_ik := by
+    rw [hs_ik]; exact stepStmt_assign_eq_some (by simp [evalOp])
+  have hstepC : stepStmt (Stmt.assign TileDType.nat [] "i_c" (Op.programId 1)) s_ik = some s_ic := by
+    rw [hs_ic]; exact stepStmt_assign_eq_some (show evalOp (Op.programId 1) s_ik = _ from by
+      simp [evalOp, hs_ik])
+  have hstepB : stepStmt (Stmt.assign TileDType.nat [] "i_bh" (Op.programId 2)) s_ic = some s_ibh := by
+    rw [hs_ibh]; exact stepStmt_assign_eq_some (show evalOp (Op.programId 2) s_ic = _ from by
+      simp [evalOp, hs_ic, hs_ik])
+  have hstepPg : stepStmt (Stmt.assign TileDType.ptr [BK] "p_g"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase G)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.arange BK)))) s_ibh = some s_pg := by
+    rw [hs_pg]; exact stepStmt_assign_eq_some hpgeval
+  have hstepPgo : stepStmt (Stmt.assign TileDType.ptr [BK] "p_go"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase GO)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.add NumericDType.nat Broadcast.nil
+            (Op.add NumericDType.nat Broadcast.nil
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh") (Op.constNat s_qk_h))
+              (Op.mul NumericDType.nat Broadcast.nil
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_c") (Op.constNat BT))
+                (Op.constNat DK)))
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK)))
+          (Op.arange BK)))) s_pg = some s_pgo := by
+    rw [hs_pgo]; exact stepStmt_assign_eq_some hpgoeval
+  have hstepCum : stepStmt (Stmt.assign TileDType.real [BK] "cum_decay" (Op.full [BK] (Op.const 0)))
+      s_pgo = some s_cum := by
+    rw [hs_cum]; exact stepStmt_assign_eq_some hcumeval
+  have hstepMask : stepStmt (Stmt.assign TileDType.bool [BK] "mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_k") (Op.constNat BK))
+          (Op.arange BK)) (Op.constNat DK))) s_cum
+      = some (s_cum.setReg "mask" .bool [BK] (fwdMaskTile s DK BK)) :=
+    stepStmt_assign_eq_some hmaskeval
+  unfold fwdPrologue
+  rw [stepStmts.cons_some hstepK, stepStmts.cons_some hstepC, stepStmts.cons_some hstepB,
+    stepStmts.cons_some hstepPg, stepStmts.cons_some hstepPgo, stepStmts.cons_some hstepCum,
+    stepStmts.cons_some hstepMask, stepStmts.nil]
+  refine ⟨_, rfl, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_⟩
+  · -- pids
+    rw [hs_cum, hs_pgo, hs_pg, hs_ibh, hs_ic, hs_ik]
+    simp only [BlockState.setReg_pids]
+  · -- G untouched
+    intro a
+    rw [hs_cum, hs_pgo, hs_pg, hs_ibh, hs_ic, hs_ik]
+    simp only [BlockState.setReg_readMem]
+  · -- cum_decay
+    rw [BlockState.setReg_ne_name (h := by decide), hs_cum, BlockState.setReg_same]
+  · -- p_g
+    rw [BlockState.setReg_ne_name (h := by decide), hs_cum,
+      BlockState.setReg_ne_name (h := by decide), hs_pgo,
+      BlockState.setReg_ne_name (h := by decide), hs_pg, BlockState.setReg_same]
+  · -- p_go
+    rw [BlockState.setReg_ne_name (h := by decide), hs_cum,
+      BlockState.setReg_ne_name (h := by decide), hs_pgo, BlockState.setReg_same]
+  · -- mask
+    rw [BlockState.setReg_same]
+  · -- untouched GO at rows ≥ 0
+    intro j hj i
+    rw [hs_cum, hs_pgo, hs_pg, hs_ibh, hs_ic, hs_ik]
+    simp only [BlockState.setReg_readMem]
+  · -- readback GO at rows < 0: vacuous
+    intro j hj i
+    omega
+  · -- memory frame
+    rw [hs_cum, hs_pgo, hs_pg, hs_ibh, hs_ic, hs_ik]
+    rfl
+
+/-! ### Cell-level memory frame of one loop iteration -/
+
+/-- Exact-side inversion of a leading assign in a `stepStmts` chain (the
+exact mirror of `stepStmtR_assign_inv`): threads successor states of
+register-only statements without computing their values. -/
+private theorem stepStmts_cons_assign_inv {dt : TileDType} {sh : TileShape}
+    {nm : RegName} {e : Op dt sh} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmts (Stmt.assign dt sh nm e :: rest) s = some s') :
+    ∃ v, evalOp e s = some v ∧ stepStmts rest (s.setReg nm dt sh v) = some s' := by
+  cases hv : evalOp e s with
+  | none => simp [stepStmts, stepStmt, hv] at h
+  | some v =>
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some hv)] at h
+      exact ⟨v, rfl, h⟩
+
+/-- Cell-level frame of a `Prop`-masked exact `writeMem` scatter `foldl`:
+every cell not hit by an active lane is untouched (the cell-level sibling of
+`BlockState.scatter_prop_masked_preserves_other_offset`, phrased on raw
+`mem`). -/
+private theorem foldl_writeMem_prop_preserve_cell {α : Type}
+    {region : RegionName} (ofn : α → Nat) (vfn : α → ℝ)
+    (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (oo : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(r = region ∧ oo = ofn k)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (ofn k) (vfn k) else acc) s).mem r oo
+      = s.mem r oo := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hm : P hd
+      · rw [if_pos hm,
+          ih _ (fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk),
+          BlockState.writeMem_mem]
+        exact if_neg (hnot hd List.mem_cons_self hm)
+      · rw [if_neg hm]
+        exact ih _ fun k hk hmk => hnot k (List.mem_cons_of_mem hd hk) hmk
+
+/-- **Cell-level frame of one loop iteration** (the `mem` twin of
+`fwd_decay_cumsum_step`, same walk with opaque register values): from the
+`fwdInv` `p_go`/`mask` pins, one storing body iteration leaves every cell
+off the row-`m` write window `{(GO, offset … m … i) : active i}`
+untouched. -/
+private theorem fwd_body_step_frame (G GO : RegionName) (s_qk_h BT BK DK : Nat)
+    (s sc s' : BlockState) (m : Nat)
+    (hpgo : sc.regs .ptr [BK] "p_go" = some (fwdPgoTile s GO s_qk_h DK BT BK m))
+    (hmask : sc.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK))
+    (hstep : stepStmts (fwdBody G GO s_qk_h BT BK DK)
+      (sc.setReg "_i" .nat [] (Tile.scalar m)) = some s')
+    (r : RegionName) (oo : Nat)
+    (hcond : r ≠ GO ∨ ∀ i : Fin BK, active s DK BK i →
+      oo ≠ offset s s_qk_h DK m BT BK i) :
+    s'.mem r oo = sc.mem r oo := by
+  set sloop := sc.setReg "_i" .nat [] (Tile.scalar m) with hsloop
+  unfold fwdBody at hstep
+  obtain ⟨v1, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v2, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  set s2 := (sloop.setReg "_g" .real [BK] v1).setReg "cum_decay" .real [BK] v2 with hs2
+  have hcum2 : s2.regs .real [BK] "cum_decay" = some v2 := by
+    rw [hs2]; exact BlockState.setReg_same _ _ _ _ _
+  have hpgo2 : s2.regs .ptr [BK] "p_go" = some (fwdPgoTile s GO s_qk_h DK BT BK m) := by
+    rw [hs2, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hpgo
+  have hmask2 : s2.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by
+    rw [hs2, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hmask
+  set vfun : TileIndex [BK] → ℝ := fun k => (v2.data k).unbotD 0 with hvfun
+  set sst := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem GO (offset s s_qk_h DK m BT BK k.1) (vfun k)
+      else acc) s2 with hsst
+  have hstore : stepStmt (Stmt.store TileDType.real [BK]
+      (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_go"))
+      (Op.ref TileDType.real [BK] "cum_decay")
+      (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) s2 = some sst := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hcum2, hpgo2, hmask2]
+    apply congrArg some
+    rw [hsst]
+    congr 1
+    funext acc k
+    simp only [fwdPgoTile, fwdMaskTile]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]
+      rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  rw [stepStmts.cons_some hstore] at hstep
+  obtain ⟨v4, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v5, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  rw [stepStmts.nil] at hstep
+  obtain rfl := Option.some.inj hstep
+  simp only [BlockState.setReg_mem]
+  rw [hsst]
+  refine Eq.trans (foldl_writeMem_prop_preserve_cell _ _ _ r oo _ _ ?_) ?_
+  · intro k hk hmk hbad
+    rcases hcond with hne' | hno
+    · exact hne' hbad.1
+    · exact hno k.1 hmk hbad.2
+  · rw [hs2, hsloop]
+    simp only [BlockState.setReg_mem]
+
+/-! ### The `TraceSafeR` walk -/
+
+/-- Per-iteration `TraceSafeListR` for the loop body: the accumulate and the
+two pointer advances are register-only; the masked `g` load's and the
+masked store's **active** lanes are exactly the skin's (`t`-independent)
+`mask1`/`writeMask` window, in bounds by the corresponding window bound
+(instantiated at row `m`). -/
+private theorem fwd_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (G GO : RegionName) (s_qk_h BT BK DK : Nat)
+    (s stt : BlockState) (m : Nat)
+    (hpg : stt.regs .ptr [BK] "p_g" = some (fwdPgTile s G s_qk_h DK BT BK m))
+    (hpgo : stt.regs .ptr [BK] "p_go" = some (fwdPgoTile s GO s_qk_h DK BT BK m))
+    (hmask : stt.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK))
+    (hbG : ∀ i : Fin BK, active s DK BK i → offset s s_qk_h DK m BT BK i < bounds G)
+    (hbGO : ∀ i : Fin BK, active s DK BK i → offset s s_qk_h DK m BT BK i < bounds GO) :
+    Stmt.TraceSafeListR R bounds (fwdBody G GO s_qk_h BT BK DK)
+      (stt.setReg "_i" .nat [] (Tile.scalar m)) := by
+  set sloop := stt.setReg "_i" .nat [] (Tile.scalar m) with hsloop
+  have hpg' : sloop.regs .ptr [BK] "p_g" = some (fwdPgTile s G s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpg
+  have hpgo' : sloop.regs .ptr [BK] "p_go" = some (fwdPgoTile s GO s_qk_h DK BT BK m) := by
+    rw [hsloop]; simpa using hpgo
+  have hmask' : sloop.regs .bool [BK] "mask" = some (fwdMaskTile s DK BK) := by
+    rw [hsloop]; simpa using hmask
+  unfold fwdBody
+  -- (1) the masked `_g` load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t1 ht1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def], ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [evalOpR_ref, hpg'] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask'] at hm
+    obtain rfl := Option.some.inj hm
+    have ha : active s DK BK idx.1 := by simpa [fwdMaskTile] using hmi
+    simpa [fwdPgTile] using hbG idx.1 ha
+  · obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv ht1
+    -- (2) cum_decay accumulate: register-only
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t2 ht2 => ?_)
+    obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv ht2
+    have hpgo3 : ((sloop.setReg "_g" .real [BK] v1).setReg
+        "cum_decay" .real [BK] v2).regs .ptr [BK] "p_go"
+        = some (fwdPgoTile s GO s_qk_h DK BT BK m) := by
+      rw [BlockState.setReg_ne_name (h := by decide),
+        BlockState.setReg_ne_name (h := by decide)]
+      exact hpgo'
+    have hmask3 : ((sloop.setReg "_g" .real [BK] v1).setReg
+        "cum_decay" .real [BK] v2).regs .bool [BK] "mask"
+        = some (fwdMaskTile s DK BK) := by
+      rw [BlockState.setReg_ne_name (h := by decide),
+        BlockState.setReg_ne_name (h := by decide)]
+      exact hmask'
+    -- (3) the masked store
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun t3 ht3 => ?_)
+    · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MemAccess.SafeAtR,
+        MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+        memAccessActiveAddressSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+        by simp [Op.SafeAtR.eq_def], ?_⟩
+      intro ptrs hptrs idx hactive
+      rw [evalOpR_ref, hpgo3] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      obtain ⟨masks, hm, hmi⟩ := hactive
+      rw [evalOpR_ref, hmask3] at hm
+      obtain rfl := Option.some.inj hm
+      have ha : active s DK BK idx.1 := by simpa [fwdMaskTile] using hmi
+      simpa [fwdPgoTile] using hbGO idx.1 ha
+    · -- (4)(5) pointer advances: register-only
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t4 ht4 => ?_)
+      exact Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+/-- **The `TraceSafeR` walk for the whole forward kernel** — driven by
+`Stmt.forRangeTraceSafeR_inv` over the proven `fwdInv`, with the counter
+advancing by the loop's stride `1`. The two bound groups are the skin's
+`read1`/`write` windows (identical addresses into `G`/`GO`); `hne`/`hBK`
+feed the reused `fwd_decay_cumsum_step` (see the headline's provenance
+notes). -/
+private theorem fwd_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (G GO : RegionName) (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ)
+    (BT BK DK : Nat) (hne : G ≠ GO) (hBK : BK ≤ DK) (s : BlockState)
+    (hbG : ∀ (t : Fin BT) (j : Fin BK), s.pids 0 * BK + j.val < DK →
+      s.pids 2 * s_qk_h + s.pids 1 * BT * DK + s.pids 0 * BK + j.val + t.val * DK
+        < bounds G)
+    (hbGO : ∀ (t : Fin BT) (j : Fin BK), s.pids 0 * BK + j.val < DK →
+      s.pids 2 * s_qk_h + s.pids 1 * BT * DK + s.pids 0 * BK + j.val + t.val * DK
+        < bounds GO) :
+    ((fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK).toAlgKernel).TraceSafeR R bounds s := by
+  -- window instantiators at `offset`-form addresses
+  have hbG' : ∀ m : Nat, m < BT → ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK m BT BK i < bounds G := by
+    intro m hm i ha
+    have h : s.pids 2 * s_qk_h + s.pids 1 * BT * DK + s.pids 0 * BK + i.val + m * DK
+        < bounds G := hbG ⟨m, hm⟩ i ha
+    rwa [fwd_addr_eq] at h
+  have hbGO' : ∀ m : Nat, m < BT → ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK m BT BK i < bounds GO := by
+    intro m hm i ha
+    have h : s.pids 2 * s_qk_h + s.pids 1 * BT * DK + s.pids 0 * BK + i.val + m * DK
+        < bounds GO := hbGO ⟨m, hm⟩ i ha
+    rwa [fwd_addr_eq] at h
+  unfold Kernel.TraceSafeR
+  rw [fwd_body_decomp]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro stmt hst s'
+    simp only [fwdPrologue, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    obtain ⟨s6, hsp, hP0, hmem6⟩ := fwd_preLoop G GO s_qk_h BT BK DK s
+    rw [fwdPrologue_castFree R G GO s_qk_h BT BK DK s, hsp] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    refine Stmt.forRangeTraceSafeR_inv R bounds "_i" BT 1
+      (fwdBody G GO s_qk_h BT BK DK) (fwdInv G GO s s_qk_h DK BT BK) ?_ 0 s6 hP0
+    intro c stt hc hP
+    have hPd := hP
+    obtain ⟨hpids, hG, hcum, hpg, hpgo, hmask, hUnt, hRead⟩ := hPd
+    refine ⟨fwd_bodySafeR R bounds G GO s_qk_h BT BK DK s stt c hpg hpgo hmask
+      (hbG' c hc) (hbGO' c hc), ?_⟩
+    obtain ⟨st', hstep, hP'⟩ :=
+      fwd_decay_cumsum_step G GO s s_qk_h BT BK DK hne hBK c stt hP
+    exact ⟨st', by rw [fwdBody_castFree]; exact hstep, hP'⟩
+
+/-! ### The rounded Hoare triple (`hrun`) -/
+
+/-- Termination, per-window values and the per-cell frame of the whole
+forward kernel under `execR R`, from an **arbitrary** launch state: the
+exact `fwd_preLoop` / `fwdInv` stack runs verbatim (the prologue and the
+loop body are cast-free, so `execR R` collapses onto the exact stepper),
+extended with the per-cell memory frame carried alongside `fwdInv`. -/
+private theorem fwd_runR (R : RoundingModel) (G GO : RegionName)
+    (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ) (BT BK DK : Nat)
+    (hne : G ≠ GO) (hBK : BK ≤ DK) (s₀ : BlockState) :
+    ∃ sfin,
+      execR R (fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK).toAlgKernel s₀
+        = some sfin
+      ∧ (∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+          sfin.readMem GO (offset s₀ s_qk_h DK t.val BT BK i)
+            = fwdDecayClosed s₀ G s_qk_h DK BT BK t i)
+      ∧ (∀ r oo, (r ≠ GO ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          sfin.mem r oo = s₀.mem r oo) := by
+  obtain ⟨s6, hsp, hP0, hmem6⟩ := fwd_preLoop G GO s_qk_h BT BK DK s₀
+  -- the loop with the per-cell frame carried alongside `fwdInv`
+  obtain ⟨final, sfinal, hLoop, hfinal, hPfinal⟩ :=
+    forRange_inv (idx := "_i") (start := 0) (stop := BT) (step := 1)
+      (body := fwdBody G GO s_qk_h BT BK DK)
+      (P := fun m stt => fwdInv G GO s₀ s_qk_h DK BT BK m stt
+        ∧ ∀ r oo, (r ≠ GO ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          stt.mem r oo = s₀.mem r oo)
+      Nat.one_ne_zero
+      ⟨hP0, fun r oo _ => by rw [hmem6]⟩
+      (fun m stt hm hP => by
+        obtain ⟨st', hstep, hP'⟩ :=
+          fwd_decay_cumsum_step G GO s₀ s_qk_h BT BK DK hne hBK m stt hP.1
+        refine ⟨st', hstep, hP', ?_⟩
+        intro r oo hcond
+        obtain ⟨hpids, hG, hcum, hpg, hpgo, hmask, hUnt, hRead⟩ := hP.1
+        rw [fwd_body_step_frame G GO s_qk_h BT BK DK s₀ stt st' m hpgo hmask hstep r oo ?_]
+        · exact hP.2 r oo hcond
+        · rcases hcond with hne' | hno
+          · exact Or.inl hne'
+          · exact Or.inr fun i ha => hno ⟨m, hm⟩ i ha)
+  obtain ⟨⟨_, _, _, _, _, _, _, hreadGO⟩, hframe⟩ := hPfinal
+  -- assemble the `execR` run through the cast-free collapses
+  have hLoopR : stepStmtR R (Stmt.forRange "_i" 0 BT 1 (fwdBody G GO s_qk_h BT BK DK)) s6
+      = some sfinal := by
+    rw [stepStmtR_forRange,
+      stepForRangeAuxR_castFree R _ (fwdBody_castFree R G GO s_qk_h BT BK DK) "_i",
+      ← stepForRangeAux.forRange_unfold]
+    exact hLoop
+  refine ⟨sfinal, ?_, ?_, ?_⟩
+  · unfold execR
+    rw [fwd_body_decomp,
+      stepStmtsR_append R (fwdPrologue G GO s_qk_h BT BK DK) _ s₀,
+      fwdPrologue_castFree R G GO s_qk_h BT BK DK s₀, hsp, Option.bind_some,
+      stepStmtsR_cons_some hLoopR, stepStmtsR_nil]
+  · intro t i ha
+    have ht : t.val < final := lt_of_lt_of_le t.isLt hfinal
+    rw [hreadGO t.val ht i, if_pos ha]
+    simp only [fwdDecayClosed, fwdPartial]
+  · exact hframe
+
+/-! ### The headline -/
+
+/-- **The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre, 3-D
+grid).** For every rounding model `R`, the faithful `fwd_decay_cumsum`
+surface implements, on its `StreamEmitMasked3DKernelIO₁` signature, the
+**ideal ℝ decay cumulative sum** over the streamed `g` rows: emitted window
+`(t, j)` holds the scan `1.44269504 · Σ_{u ≤ t} g[u, j]` — the spec `f` is
+exact real arithmetic. The kernel has **zero rounding events** (the masked
+load, the accumulate and the per-step masked stores are all at `.real`; the
+erased `.to(tl.float32)` / `.to(p_go.dtype.element_ty)` casts are
+`.real → .real`), so the skin's boundary quantization degenerates: the
+readback contract's `R.round .real` is the identity by the model's defining
+`round_real` — the ∀-`R` face holds via the `RoundingModel` `.real`
+identity fields, not as a `.triv` special case.
+
+Layer map: the loop body is cast-free, so under `execR R` it collapses
+verbatim onto the exact stepper and the proven `fwdInv` invariant stack
+above (`fwd_decay_cumsum_step` / `forRange_inv`) is reused unchanged; the
+`⊨[R]` face adds the `TraceSafeR` walk, the per-cell memory frame
+(`fwd_body_step_frame`, the `mem` twin of the step lemma), and the
+stream-lane spec bridge (`fwdDecayStreamSpec_eq_closed` — the mask is
+`t`-independent, so on a write-active lane every summand read is
+mask-pinned and the guarded form needs no in-sum guard).
+
+Both hypotheses are inherited from the exact headline
+`fwd_decay_cumsum_full_surface_closed_general`'s side conditions:
+
+* `hne : G ≠ GO` — the loop stores into `g_o` **between** its per-row
+  re-reads of `g`; the invariant's whole-`G` frame (and hence the closed
+  form over the *initial* `g` values) requires the output buffer not to
+  alias the input. The launch allocates `g` and `g_o` as distinct tensors.
+* `hBK : BK ≤ DK` — row separation: the row-`m` scatter must not collide
+  with other rows' windows, which needs every lane index `< BK` to stay
+  inside one `DK`-wide row. The launch sets `BK = min(DK, 64)`, so this
+  holds for every real launch.
+
+Relation to the exact surface: the exact headline
+`fwd_decay_cumsum_full_surface_closed_general` above is retained unchanged;
+this `⊨[R]` face restates the same scan content on the streaming emit skin,
+for every `R` at once (at the `.real` grid the two faces carry the same
+exact cell). Both faces are kept per the rounding-as-default doctrine. -/
+specification fwd_decay_cumsum_io_correctness (R : RoundingModel)
+    (G GO : RegionName) (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ)
+    (BT BK DK : Nat) (hne : G ≠ GO) (hBK : BK ≤ DK) :
+    fwdDecayCumsumKernelIO G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK ⊨[R]
+      fun _ _ _ gs t j => fwdDecayStreamSpec BT BK gs t j := by
+  refine StreamEmitMasked3DKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact fwd_flattenOk G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK
+  · -- safety walk
+    intro bounds s xs _hx hbr1 hbw
+    simp only [fwdDecayCumsumKernelIO] at hbr1 hbw ⊢
+    exact fwd_traceSafeR R bounds G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK
+      hne hBK s hbr1 hbw
+  · -- the rounded Hoare triple
+    intro s₀ xs _hundef hx
+    simp only [fwdDecayCumsumKernelIO] at hx ⊢
+    obtain ⟨sfin, hexec, hval, hframe⟩ :=
+      fwd_runR R G GO s_qk_h s_qk_t s_qk_d B H T scale BT BK DK hne hBK s₀
+    refine ⟨sfin, hexec, ?_, ?_⟩
+    · intro t j hj
+      have hval' : sfin.readMem GO (offset s₀ s_qk_h DK t.val BT BK j)
+          = fwdDecayClosed s₀ G s_qk_h DK BT BK t j := hval t j hj
+      rw [BlockState.readMemAs_real, fwd_addr_eq, hval',
+        ← fwdDecayStreamSpec_eq_closed G s₀ s_qk_h BT BK DK xs hx t j hj]
+      simp [FloatDType.ofReal]
+    · intro r oo hcond
+      refine hframe r oo ?_
+      rcases hcond with hne' | hno
+      · exact Or.inl hne'
+      · exact Or.inr fun t i ha hoeq =>
+          hno t i ha (hoeq.trans (fwd_addr_eq s₀ s_qk_h BT BK DK t.val i).symm)
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
