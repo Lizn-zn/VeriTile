@@ -535,6 +535,118 @@ def Op.FlattenOk : Op dtype shape → Prop
         | .maskOther m other => m.FlattenOk ∧ other.FlattenOk)
   | .natToReal a => a.FlattenOk
 
+set_option maxHeartbeats 1600000 in
+/-- The `Op` fragment covered by the **rounding-model** flat-memory bridge
+(`FlattenR`). Identical to `Op.FlattenOk` except at `.ptrSub`, which here is
+pure structural recursion (mirroring the `.ptrAdd` clause): the `∀`-state
+no-underflow conjunct is dropped. The `R`-bridge discharges underflow from
+the per-trace `Op.SafeAtR` clause instead, so the `R` fragment needs no
+`∀`-state condition — this is what admits reverse-pointer-decrement loop
+kernels. -/
+def Op.FlattenOkR : Op dtype shape → Prop
+  | .const _ => True
+  | .constFloat _ _ => True
+  | .constNat _ => True
+  | .constInt _ => True
+  | .constBool _ => True
+  | .negInf => True
+  | .programId _ => True
+  | .numPrograms _ => True
+  | .ref _ _ _ => True
+  | .arange _ => True
+  | .broadcast e _ => e.FlattenOkR
+  | .full _ e => e.FlattenOkR
+  | .castFloat _ _ e => e.FlattenOkR
+  | .castNatToInt e => e.FlattenOkR
+  | .castIntToNat e => e.FlattenOkR
+  | .castRealToInt8 e => e.FlattenOkR
+  | .add _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .sub _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .mul _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .div _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .floorDiv _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .mod _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .bitAnd _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .bitOr _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .bitXor _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .shiftLeft _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .shiftRight _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .exp a => a.FlattenOkR
+  | .exp2 a => a.FlattenOkR
+  | .log a => a.FlattenOkR
+  | .log2 a => a.FlattenOkR
+  | .sigmoid a => a.FlattenOkR
+  | .sqrt a => a.FlattenOkR
+  | .rsqrt a => a.FlattenOkR
+  | .tanh a => a.FlattenOkR
+  | .sin a => a.FlattenOkR
+  | .cos a => a.FlattenOkR
+  | .tan a => a.FlattenOkR
+  | .atan a => a.FlattenOkR
+  | .cosh a => a.FlattenOkR
+  | .sinh a => a.FlattenOkR
+  | .erf a => a.FlattenOkR
+  | .lt _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .le _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .eq _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .gt _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .ge _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .ne _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .boolAnd _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .boolOr _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .boolNot a => a.FlattenOkR
+  | .max2 _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .pow _ a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .where c a b => c.FlattenOkR ∧ a.FlattenOkR ∧ b.FlattenOkR
+  | .ite c a b => c.FlattenOkR ∧ a.FlattenOkR ∧ b.FlattenOkR
+  | .reduceMax _ _ a => a.FlattenOkR
+  | .reduceMaxNat _ _ a => a.FlattenOkR
+  | .reduceSum _ _ a => a.FlattenOkR
+  | .scan _ _ _ a => a.FlattenOkR
+  | .argMax _ a => a.FlattenOkR
+  | .argMin _ a => a.FlattenOkR
+  | .sort _ a => a.FlattenOkR
+  | .dot a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .transpose a => a.FlattenOkR
+  | .reshape _ a => (dtype ≠ .ptr ∧ dtype ≠ .blockPtr) ∧ a.FlattenOkR
+  | .remap _ _ a => a.FlattenOkR
+  | .join a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .split _ a => a.FlattenOkR
+  | .expandDim _ a => a.FlattenOkR
+  | .ptrBase _ => True
+  | .ptrAdd _ ptr off => ptr.FlattenOkR ∧ off.FlattenOkR
+  | .ptrSub _ p off => p.FlattenOkR ∧ off.FlattenOkR
+  | .makeBlockPtr _ _ _ _ _ _ => True
+  | .makeBlockPtrDyn _ base _ _ _ _ => base.FlattenOkR
+  | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
+      base.FlattenOkR ∧ ∀ off ∈ offsets, off.FlattenOkR
+  | .advanceBlockPtr ptr _ => ptr.FlattenOkR
+  | .load d mem mask =>
+      (d ≠ .ptr ∧ d ≠ .blockPtr) ∧
+      (match mem with
+        | .region _ off => off.FlattenOkR
+        | .ptr ptr => ptr.FlattenOkR
+        | .blockPtr ptr _ => ptr.FlattenOkR) ∧
+      (match mask with
+        | .none => True
+        | .mask m => m.FlattenOkR
+        | .maskOther m other => m.FlattenOkR ∧ other.FlattenOkR)
+  | .natToReal a => a.FlattenOkR
+
+set_option maxHeartbeats 1600000 in
+/-- The exact-bridge fragment sits inside the `R`-bridge fragment. -/
+theorem Op.FlattenOk.toR {dtype : TileDType} {shape : TileShape}
+    {e : Op dtype shape} : e.FlattenOk → e.FlattenOkR := by
+  induction dtype, shape, e using Op.FlattenOk.induct
+  all_goals intro h
+  all_goals try simp only [Op.FlattenOk] at h
+  all_goals try simp only [Op.FlattenOkR]
+  all_goals try first | trivial | simp_all
+  -- the `.load` arm: its nested matches on `mem`/`mask` only unfold once the
+  -- constructors are exposed
+  next sh d mem mask ih2 ih1 =>
+    cases mem <;> cases mask <;> simp_all [Op.FlattenOk, Op.FlattenOkR]
+
 /-! ## Tile-level commutation of the value translation -/
 
 namespace FlatAlloc
@@ -2703,6 +2815,127 @@ end
 
 /-- Kernels covered by the flat-memory bridge. -/
 def Kernel.FlattenOk (k : Kernel) : Prop := StmtList.FlattenOk k.body
+
+mutual
+
+/-- Statements covered by the rounding-model flat-memory bridge: identical
+to `Stmt.FlattenOk` with `Op.FlattenOkR` at every `Op` leaf. The `atomicRMW`
+clause is the exact-side one verbatim (RMW delegates to the exact
+semantics). -/
+def Stmt.FlattenOkR : Stmt → Prop
+  | .assign _ _ _ e => e.FlattenOkR
+  | .store _ _ mem val mask =>
+      (match mem with
+        | .region _ off => off.FlattenOkR
+        | .ptr p => p.FlattenOkR
+        | .blockPtr p _ => p.FlattenOkR) ∧
+      val.FlattenOkR ∧
+      (match mask with
+        | .none => True
+        | .mask m => m.FlattenOkR
+        | .maskOther m o => m.FlattenOkR ∧ o.FlattenOkR)
+  | .atomicAdd _ _ mem val mask =>
+      (match mem with
+        | .region _ off => off.FlattenOkR
+        | .ptr p => p.FlattenOkR
+        | .blockPtr p _ => p.FlattenOkR) ∧
+      val.FlattenOkR ∧
+      (match mask with
+        | .none => True
+        | .mask m => m.FlattenOkR
+        | .maskOther m o => m.FlattenOkR ∧ o.FlattenOkR)
+  | .atomicRMW _ d _ mem input extra mask _ =>
+      -- RMW delegates to the exact semantics (see `stepStmtR`), so its
+      -- fragment membership is the exact-side one, verbatim.
+      (d ≠ .ptr ∧ d ≠ .blockPtr) ∧
+      mem.FlattenOkC ∧ input.FlattenOk ∧
+      extra.elim True (·.FlattenOk) ∧ mask.FlattenOkC
+  | .forLoop _ _ body => StmtList.FlattenOkR body
+  | .forRange _ _ _ _ body => StmtList.FlattenOkR body
+  | .forRangeDyn _ start stop step body =>
+      start.FlattenOkR ∧ stop.FlattenOkR ∧ step.FlattenOkR
+        ∧ StmtList.FlattenOkR body
+  | .ifThen c body => c.FlattenOkR ∧ StmtList.FlattenOkR body
+  | .ifThenElse c tb eb =>
+      c.FlattenOkR ∧ StmtList.FlattenOkR tb ∧ StmtList.FlattenOkR eb
+
+/-- Statement lists covered by the rounding-model flat-memory bridge. -/
+def StmtList.FlattenOkR : List Stmt → Prop
+  | [] => True
+  | st :: rest => st.FlattenOkR ∧ StmtList.FlattenOkR rest
+
+end
+
+/-- Kernels covered by the rounding-model flat-memory bridge. -/
+def Kernel.FlattenOkR (k : Kernel) : Prop := StmtList.FlattenOkR k.body
+
+mutual
+
+/-- The exact-bridge statement fragment sits inside the `R`-bridge one. -/
+theorem Stmt.FlattenOk.toR : ∀ (st : Stmt), st.FlattenOk → st.FlattenOkR
+  | .assign _ _ _ e, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact h.toR
+  | .store _ _ mem val mask, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      obtain ⟨hmem, hval, hmask⟩ := h
+      refine ⟨?_, hval.toR, ?_⟩
+      · cases mem <;> exact hmem.toR
+      · cases mask with
+        | none => trivial
+        | mask m => exact hmask.toR
+        | maskOther m o => exact ⟨hmask.1.toR, hmask.2.toR⟩
+  | .atomicAdd _ _ mem val mask, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      obtain ⟨hmem, hval, hmask⟩ := h
+      refine ⟨?_, hval.toR, ?_⟩
+      · cases mem <;> exact hmem.toR
+      · cases mask with
+        | none => trivial
+        | mask m => exact hmask.toR
+        | maskOther m o => exact ⟨hmask.1.toR, hmask.2.toR⟩
+  | .atomicRMW _ _ _ _ _ _ _ _, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact h
+  | .forLoop _ _ body, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact StmtList.FlattenOk.toR body h
+  | .forRange _ _ _ _ body, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact StmtList.FlattenOk.toR body h
+  | .forRangeDyn _ start stop step body, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact ⟨h.1.toR, h.2.1.toR, h.2.2.1.toR, StmtList.FlattenOk.toR body h.2.2.2⟩
+  | .ifThen c body, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact ⟨h.1.toR, StmtList.FlattenOk.toR body h.2⟩
+  | .ifThenElse c tb eb, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact ⟨h.1.toR, StmtList.FlattenOk.toR tb h.2.1, StmtList.FlattenOk.toR eb h.2.2⟩
+
+/-- List version of `Stmt.FlattenOk.toR`. -/
+theorem StmtList.FlattenOk.toR : ∀ (l : List Stmt),
+    StmtList.FlattenOk l → StmtList.FlattenOkR l
+  | [], _ => by simp only [StmtList.FlattenOkR]
+  | st :: rest, h => by
+      simp only [StmtList.FlattenOk] at h
+      simp only [StmtList.FlattenOkR]
+      exact ⟨Stmt.FlattenOk.toR st h.1, StmtList.FlattenOk.toR rest h.2⟩
+
+end
+
+/-- Kernel version of `Stmt.FlattenOk.toR`. -/
+theorem Kernel.FlattenOk.toR {k : Kernel} (h : k.FlattenOk) : k.FlattenOkR :=
+  StmtList.FlattenOk.toR k.body h
 
 /-! ## Fold-level write commutation -/
 
