@@ -12,6 +12,7 @@ import VeriTile.Triton.Memory.Footprint
 import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.Memory.Flatten
 import VeriTile.Triton.Memory.FlattenR
+import VeriTile.Triton.Memory.FlattenTolerant
 import VeriTile.Triton.Memory.Locality
 import VeriTile.Triton.Memory.Denotation
 import VeriTile.Triton.Memory.Layout
