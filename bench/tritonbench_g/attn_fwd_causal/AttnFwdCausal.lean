@@ -4395,3 +4395,1962 @@ specification attn_fwd_causal_output_summary_general
 end General
 
 end VeriTile.Bench.TritonBenchG.AttnFwdCausal
+
+/-! # ══════════ The `⊨[R]` io headline — `StreamMasked3DKernelIO₅` exemplar ══════════
+
+The five-input skin face of `_attn_fwd`: three streamed 2-D tile channels
+(`Q` static, `K` transposed / `V` advanced `BLOCK_N` rows per step) plus two
+**scalar-width** quantization-scale channels (`Q_scale` static, `K_scale`
+advancing one slot per step) folding into the single masked terminal `Out`
+store. Everything below is purely additive; the exact surfaces above are
+untouched.
+
+Honest boundaries specific to this kernel:
+
+* **In-loop fp16 round-trip.** Loop-body statement 16 is
+  `p = (p).to(tl.float16)` — an *in-loop* rounding event, outside the skin's
+  single-boundary-round shape. The headline therefore pins
+  `R.round .fp16 = id`, exactly the file's declared fp16 modeling boundary
+  (the exact stack already treats this cast as the identity). Under that
+  hypothesis every rounding site in the kernel is the identity and the
+  lowered body is cast-free under `execR R`, so the exact
+  `afcPreLoopG_invariant → afc_attn_stepG → afcPostLoopG_eval` stack is
+  reused unchanged.
+* **`.real` terminal grid.** The lowered store is `.real`-typed (the
+  surface's `.to(Out.type.element_ty)` cast erases at translation, the same
+  boundary the exact stack draws), so `outDType := .real` — the terminal
+  cells carry the exact fold values at every `R`. (The host buffer's
+  float16-ness lives inside that erased cast, not in the algorithm-layer
+  store.)
+* **Sentinel score bound.** The kernel's causal `tl.where(mask, qk, -1e6)`
+  sentinel forces the exact stack's `afcScoreBoundG` side condition; the
+  headline restates it tile-parametrically over the streams (`hsb`, ∀-pids
+  ∀-streams form, instantiated by consumers at their loaded tiles). -/
+
+namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
+
+open VeriTile.Triton
+
+set_option linter.unusedSimpArgs false
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamMasked3DKernelIO₅
+
+/-! ## Cast-free collapse under `R.round .fp16 = id` -/
+
+/-- The `R`-cast on the `.real` channel never rounds. -/
+private theorem afcIO_Rcast_real_real (R : RoundingModel) :
+    R.cast .real .real = FloatDType.cast .real .real := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .real = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW]]
+  rfl
+
+/-- With `R.round .fp16 = id`, the `R`-cast into the fp16 grid is the exact
+cast (the in-loop rounding-event site collapses). -/
+private theorem afcIO_Rcast_real_fp16 (R : RoundingModel) (hfp16 : R.round .fp16 = id) :
+    R.cast .real .fp16 = FloatDType.cast .real .fp16 := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .fp16 = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW, hfp16]]
+  rfl
+
+/-- The `R`-cast out of the fp16 grid lands on the `.real` channel, which
+never rounds. -/
+private theorem afcIO_Rcast_fp16_real (R : RoundingModel) :
+    R.cast .fp16 .real = FloatDType.cast .fp16 .real := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .real = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW]]
+  rfl
+
+/-- `.real` stores never round: `writeMemTypedR` delegates to the exact write. -/
+private theorem afcIO_wmtR_real (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (o : Nat) (v : TileCarrier .real) :
+    s.writeMemTypedR R .real region o v = s.writeMemTyped .real region o v := rfl
+
+set_option maxHeartbeats 4000000 in
+/-- Every preLoop statement is cast-free (`.nat`/`.real`/`.ptr` register
+arithmetic and the two `.real` loads — no rounding site in sight). -/
+private theorem afcIO_preLoop_stmt_castFree (R : RoundingModel)
+    (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∀ st ∈ AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+        N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [AfcFoundation.afcPreLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 4000000 in
+/-- Every loop-body statement is cast-free **given `R.round .fp16 = id`**: the
+three `castFloat` sites (the fp32 wrapper in statement 4, statement 16's
+`p = (p).to(tl.float16)`, and the `fp16 → real` re-widening inside statement
+17's dot) collapse via the three `afcIO_Rcast_*` lemmas. -/
+private theorem afcIO_loopBody_stmt_castFree (R : RoundingModel)
+    (hfp16 : R.round .fp16 = id)
+    (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∀ st ∈ AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [AfcFoundation.afcLoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      afcIO_Rcast_real_real R, afcIO_Rcast_real_fp16 R hfp16, afcIO_Rcast_fp16_real R]
+
+set_option maxHeartbeats 4000000 in
+/-- Both postLoop statements are cast-free: the `acc /= l_i` divide is
+register arithmetic and the masked terminal store is `.real`-typed
+(`afcIO_wmtR_real`). -/
+private theorem afcIO_postLoop_stmt_castFree (R : RoundingModel)
+    (Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∀ st ∈ AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [AfcFoundation.afcPostLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl <;>
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def, afcIO_wmtR_real R]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). -/
+private theorem afcIO_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact afcIO_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+/-- The preLoop collapses onto the exact stepper. -/
+private theorem afcIO_preLoop_castFree (R : RoundingModel)
+    (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (t : BlockState) :
+    stepStmtsR R (AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H
+        HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) t
+      = stepStmts (AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H
+        HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) t :=
+  afcIO_stepStmtsR_castFree_of_stmts R _
+    (afcIO_preLoop_stmt_castFree R Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+      N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) t
+
+/-- The loop body collapses onto the exact stepper (under `hfp16`). -/
+private theorem afcIO_loopBody_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) (t : BlockState) :
+    stepStmtsR R (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE) t
+      = stepStmts (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE) t :=
+  afcIO_stepStmtsR_castFree_of_stmts R _
+    (afcIO_loopBody_stmt_castFree R hfp16 N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE) t
+
+/-- The static streaming `forRange` statement is cast-free given
+`R.round .fp16 = id` (static bounds, cast-free body through
+`stepForRangeAuxR_castFree`). -/
+private theorem afcIO_loopStmt_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∀ u, stepStmtR R
+        (Stmt.forRange "start_n" 0 N_CTX BLOCK_N
+          (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)) u
+      = stepStmt
+        (Stmt.forRange "start_n" 0 N_CTX BLOCK_N
+          (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)) u := by
+  intro u
+  rw [stepStmtR_forRange,
+    stepForRangeAuxR_castFree R _
+      (afcIO_loopBody_castFree R hfp16 N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+      "start_n",
+    ← stepForRangeAux.forRange_unfold]
+
+/-- The postLoop collapses onto the exact stepper. -/
+private theorem afcIO_postLoop_castFree (R : RoundingModel)
+    (Out : RegionName) (N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE : Nat) (t : BlockState) :
+    stepStmtsR R (AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) t
+      = stepStmts (AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) t :=
+  afcIO_stepStmtsR_castFree_of_stmts R _
+    (afcIO_postLoop_stmt_castFree R Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) t
+
+set_option maxHeartbeats 4000000 in
+/-- The causal surface sits inside the flat-memory bridge's covered fragment
+(plain `ptrAdd` walks only — no `ptrSub`, no atomics, no block pointers). -/
+private theorem afcIO_flattenOk (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
+    ((attn_fwd_causal_surface Q K V QScale KScale Out
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [afc_body_splitG, afcPreLoopG_check, afcPostLoopG_check]
+  simp [AfcFoundation.afcPreLoopG, AfcFoundation.afcLoopBodyG, AfcFoundation.afcPostLoopG,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-! ## Memory helpers (output-window injectivity) -/
+
+/-- Contiguous head-window injectivity: with row stride `HEAD_DIM`, unit
+column stride and `BLOCK_DMODEL ≤ HEAD_DIM`, distinct output-tile lanes hit
+distinct offsets. Generalizes the pinned-shape
+`afc_oBlockPtr_offset_injective` (which is `HEAD_DIM = BLOCK_DMODEL`-blind
+because both are `128` there). -/
+private theorem afcIO_outOffset_injective (base p₀ : Nat)
+    {BLOCK_M BLOCK_DMODEL HEAD_DIM : Nat}
+    (hBD : 0 < BLOCK_DMODEL) (hBDHD : BLOCK_DMODEL ≤ HEAD_DIM) :
+    Function.Injective (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      base + (p₀ * BLOCK_M + idx.1.val) * HEAD_DIM + idx.2.1.val * 1) := by
+  have hHD : 0 < HEAD_DIM := lt_of_lt_of_le hBD hBDHD
+  rintro ⟨a1, a2, _⟩ ⟨b1, b2, _⟩ h
+  simp only [Nat.mul_one] at h
+  have h2a : a2.val < HEAD_DIM := lt_of_lt_of_le a2.isLt hBDHD
+  have h2b : b2.val < HEAD_DIM := lt_of_lt_of_le b2.isLt hBDHD
+  have h' : HEAD_DIM * (p₀ * BLOCK_M + a1.val) + a2.val
+      = HEAD_DIM * (p₀ * BLOCK_M + b1.val) + b2.val := by
+    refine Nat.add_left_cancel (n := base) ?_
+    calc base + (HEAD_DIM * (p₀ * BLOCK_M + a1.val) + a2.val)
+        = base + (p₀ * BLOCK_M + a1.val) * HEAD_DIM + a2.val := by ring
+      _ = base + (p₀ * BLOCK_M + b1.val) * HEAD_DIM + b2.val := h
+      _ = base + (HEAD_DIM * (p₀ * BLOCK_M + b1.val) + b2.val) := by ring
+  have hda : (HEAD_DIM * (p₀ * BLOCK_M + a1.val) + a2.val) / HEAD_DIM
+      = p₀ * BLOCK_M + a1.val := by
+    rw [Nat.mul_add_div hHD, Nat.div_eq_of_lt h2a, Nat.add_zero]
+  have hdb : (HEAD_DIM * (p₀ * BLOCK_M + b1.val) + b2.val) / HEAD_DIM
+      = p₀ * BLOCK_M + b1.val := by
+    rw [Nat.mul_add_div hHD, Nat.div_eq_of_lt h2b, Nat.add_zero]
+  have h1 : a1.val = b1.val := by
+    have hq := congrArg (· / HEAD_DIM) h'
+    simp only [hda, hdb] at hq
+    omega
+  have h2 : a2.val = b2.val := by
+    have hx : HEAD_DIM * (p₀ * BLOCK_M + a1.val) = HEAD_DIM * (p₀ * BLOCK_M + b1.val) := by
+      rw [h1]
+    omega
+  exact Prod.ext (Fin.ext h1) (Prod.ext (Fin.ext h2) rfl)
+
+/-! ## IO signature, stream tiles, and the closed-form spec `f`
+
+Window transcription (strides pinned to the exec stack's contiguous layout
+`stride_qm = stride_kn = stride_vk = stride_om = HEAD_DIM`, unit fastest
+stride; shared plane base `p₁/H·stride_qz + p₁%H·stride_qh`):
+
+* `read1` (`Q`, static — the window ignores `t`): lane `j = (i, e)` row-major
+  over `[BLOCK_M, BLOCK_DMODEL]` reads `base + (p₀·BM + i)·HEAD_DIM + e`,
+  masked `p₀·BM + i < N_CTX ∧ e < HEAD_ACTIVE` (the kernel's `q` load mask).
+* `read2` (`K`, transposed, advanced `BLOCK_N` keys per step): lane
+  `j = (e, r)` row-major over `[BLOCK_DMODEL, BLOCK_N]` reads
+  `base + e + (t·BN + r)·HEAD_DIM`, masked `r < N_CTX ⊖ t·BN ∧
+  e < HEAD_ACTIVE` (`⊖` = the kernel's ℕ-truncated `N_CTX - start_n`,
+  transcribed verbatim).
+* `read3` (`V`, advanced `BLOCK_N` rows per step): lane `j = (r, d)` reads
+  `base + (t·BN + r)·HEAD_DIM + d`, masked `r < N_CTX ⊖ t·BN ∧
+  d < HEAD_ACTIVE`.
+* `read4` (`Q_scale`, **scalar**, static): the single lane reads
+  `p₁·⌈N_CTX/BM⌉ + p₀`, unmasked.
+* `read5` (`K_scale`, **scalar**, one slot per step): the single lane reads
+  `p₁·⌈N_CTX/BN⌉ + t`, unmasked.
+* `write` (`Out`): lane `(i, e)` writes `base + (p₀·BM + i)·HEAD_DIM + e`
+  under the genuine store mask `p₀·BM + i < N_CTX ∧ e < HEAD_ACTIVE`.
+* `outDType := .real`: the lowered terminal store is `.real`-typed (the
+  surface's `.to(Out.type.element_ty)` erases at translation — the same
+  boundary the exact stack draws), so the terminal grid is exact. -/
+
+/-- **Streaming IO signature** of `_attn_fwd` on the five-stream single-store
+attention fold skin (`T = numKVBlocks` under `N_CTX = BLOCK_N · numKVBlocks`;
+the trip count is pid-free, so there is no launch-legality `pre` analog to
+carry). -/
+def attnFwdCausalIO (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE
+      numKVBlocks : Nat) : StreamMasked3DKernelIO₅ where
+  kernel := attn_fwd_causal_surface Q K V QScale KScale Out
+    stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+    stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+    Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  inp4 := QScale
+  inp5 := KScale
+  out := Out
+  T := numKVBlocks
+  B1 := BLOCK_M * BLOCK_DMODEL
+  B2 := BLOCK_DMODEL * BLOCK_N
+  B3 := BLOCK_N * BLOCK_DMODEL
+  B4 := 1
+  B5 := 1
+  C := BLOCK_M * BLOCK_DMODEL
+  outDType := .real
+  read1 := fun p₀ p₁ _ _ j =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh
+      + (p₀ * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL
+  read2 := fun _ p₁ _ t j =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh
+      + j.val / BLOCK_N + (t.val * BLOCK_N + j.val % BLOCK_N) * HEAD_DIM
+  read3 := fun _ p₁ _ t j =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh
+      + (t.val * BLOCK_N + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL
+  read4 := fun p₀ p₁ _ _ _ => p₁ * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + p₀
+  read5 := fun _ p₁ _ t _ => p₁ * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + t.val
+  write := fun p₀ p₁ _ j =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh
+      + (p₀ * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL
+  mask1 := fun p₀ _ _ _ j =>
+    p₀ * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE
+  mask2 := fun _ _ _ t j =>
+    j.val % BLOCK_N < N_CTX - t.val * BLOCK_N ∧ j.val / BLOCK_N < HEAD_ACTIVE
+  mask3 := fun _ _ _ t j =>
+    j.val / BLOCK_DMODEL < N_CTX - t.val * BLOCK_N ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE
+  mask4 := fun _ _ _ _ _ => True
+  mask5 := fun _ _ _ _ _ => True
+  writeMask := fun p₀ _ _ j =>
+    p₀ * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE
+
+/-- The **masked query tile** read off the static first stream (the window
+ignores `t`, so the step-`0` slice carries the whole tile; masked lanes are
+`0`, mirroring the kernel's `q` load mask). -/
+noncomputable def afcIOqTm (p₀ N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun idx =>
+    if h : (p₀ * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE) ∧ 0 < T then
+      xs ⟨0, h.2⟩ (Lane2D.encode idx)
+    else 0
+
+/-- The **head-masked global key tile** read off the transposed `K` stream:
+global key `jg` lives in step `jg / BLOCK_N` at block-local column
+`jg % BLOCK_N`; head lanes `e ≥ HEAD_ACTIVE` (which the kernel never loads)
+are `0`. -/
+noncomputable def afcIOkTm (BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (ys : Fin T → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ) :
+    TileIndex [BLOCK_N * T, BLOCK_DMODEL] → ℝ :=
+  fun idx =>
+    if h : idx.2.1.val < HEAD_ACTIVE ∧ idx.1.val / BLOCK_N < T ∧ 0 < BLOCK_N then
+      ys ⟨idx.1.val / BLOCK_N, h.2.1⟩
+        (Lane2D.encode (idx.2.1, ⟨idx.1.val % BLOCK_N, Nat.mod_lt _ h.2.2⟩, PUnit.unit))
+    else 0
+
+/-- The **head-masked global value tile** read off the `V` stream (row-major
+per-step tiles; head lanes `d ≥ HEAD_ACTIVE` are `0`, mirroring the kernel's
+`v` load mask). -/
+noncomputable def afcIOvTm (BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (zs : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ) :
+    TileIndex [BLOCK_N * T, BLOCK_DMODEL] → ℝ :=
+  fun idx =>
+    if h : idx.2.1.val < HEAD_ACTIVE ∧ idx.1.val / BLOCK_N < T ∧ 0 < BLOCK_N then
+      zs ⟨idx.1.val / BLOCK_N, h.2.1⟩
+        (Lane2D.encode (⟨idx.1.val % BLOCK_N, Nat.mod_lt _ h.2.2⟩, idx.2.1, PUnit.unit))
+    else 0
+
+/-- The per-key score-scale carrier `q_scale · k_scale` read off the two
+scalar streams: the static `Q_scale` slot (step `0`) times key `j`'s
+`K_scale` slot (step `j / BLOCK_N`). -/
+noncomputable def afcIOkeyScale (BLOCK_N T : Nat) (ws vs : Fin T → Fin 1 → ℝ) :
+    Fin (BLOCK_N * T) → ℝ :=
+  fun j =>
+    (if h : 0 < T then ws ⟨0, h⟩ 0 else 0)
+      * (if h : j.val / BLOCK_N < T then vs ⟨j.val / BLOCK_N, h⟩ 0 else 0)
+
+/-- **The streamed closed-form spec `f`**: predicate-masked base-2
+per-key-scale attention with the `causalKeep (p₀·BLOCK_M)` mask
+(`attnFwdCausalOutSpecG` restated tile-parametrically over the five
+streams). -/
+noncomputable def attnFwdCausalIOOutSpec
+    (p₀ N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (ys : Fin T → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (zs : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (ws vs : Fin T → Fin 1 → ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  attentionRealBase2PerKeyScalePred
+    (afcIOqTm p₀ N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T xs)
+    (afcIOkTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T ys)
+    (afcIOvTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T zs)
+    (afcIOkeyScale BLOCK_N T ws vs)
+    (fun i j => causalKeep (p₀ * BLOCK_M) i j) idx
+
+/-- **The tile-parametric sentinel score bound** — the exact stack's
+`afcScoreBoundG` side condition restated over the five streams (∀-pids form;
+consumers instantiate it at their loaded tiles): every *causally kept* key's
+scaled score is `≥ -1e6`, so the kernel's `tl.where(mask, qk, -1e6)` sentinel
+never overtakes a genuine score. -/
+def afcIOScoreBound (p₀ N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (ys : Fin T → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (zs : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (ws vs : Fin T → Fin 1 → ℝ) : Prop :=
+  afcScoreBoundG
+    (afcIOqTm p₀ N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T xs)
+    (afcIOkTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T ys)
+    (afcIOvTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T zs)
+    (afcIOkeyScale BLOCK_N T ws vs)
+    (p₀ * BLOCK_M)
+
+/-! ### Stream-pin tile bridges: under the skin's input pins the kernel-side
+tiles/scales of the exact stack coincide with the stream-built ones (the `K`
+tile only on the head-active lanes the spec actually consumes). -/
+
+private theorem afcIOqTm_eq (s₀ : BlockState) (Q : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (hT : 0 < T) (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (hx : ∀ (t : Fin T) (j : Fin (BLOCK_M * BLOCK_DMODEL)),
+      s₀.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s₀.readMem Q (s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh
+          + (s₀.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL)
+        = xs t j) :
+    qTileAFCmG s₀ Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE
+      = afcIOqTm (s₀.pids 0) N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T xs := by
+  funext idx
+  obtain ⟨i, e, ⟨⟩⟩ := idx
+  simp only [qTileAFCmG, afcIOqTm]
+  by_cases hm : qStartAFCG s₀ BLOCK_M + i.val < N_CTX ∧ e.val < HEAD_ACTIVE
+  · rw [if_pos hm, dif_pos (And.intro hm hT :
+      (s₀.pids 0 * BLOCK_M + i.val < N_CTX ∧ e.val < HEAD_ACTIVE) ∧ 0 < T)]
+    rw [← hx ⟨0, hT⟩ (Lane2D.encode (i, e, PUnit.unit)) (by
+      simp only [Lane2D.encode_div, Lane2D.encode_mod]
+      exact hm)]
+    simp only [qTileAFCG, baseOffsetAFCG, Lane2D.encode_div, Lane2D.encode_mod]
+  · rw [if_neg hm, dif_neg (fun hc => hm hc.1)]
+
+private theorem afcIOkTm_eq_of_active (s₀ : BlockState) (K : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (hBN : 0 < BLOCK_N) (hNT : N_CTX = BLOCK_N * T)
+    (ys : Fin T → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (hy : ∀ (t : Fin T) (j : Fin (BLOCK_DMODEL * BLOCK_N)),
+      j.val % BLOCK_N < N_CTX - t.val * BLOCK_N ∧ j.val / BLOCK_N < HEAD_ACTIVE →
+      s₀.readMem K (s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh
+          + j.val / BLOCK_N + (t.val * BLOCK_N + j.val % BLOCK_N) * HEAD_DIM)
+        = ys t j) :
+    ∀ (jg : Fin (BLOCK_N * T)) (e : Fin BLOCK_DMODEL), e.val < HEAD_ACTIVE →
+      kTileAFCG s₀ K stride_qz stride_qh H HEAD_DIM (BLOCK_N * T) BLOCK_DMODEL
+          (jg, e, PUnit.unit)
+        = afcIOkTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T ys (jg, e, PUnit.unit) := by
+  intro jg e he
+  have hjT : jg.val / BLOCK_N < T :=
+    (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm T BLOCK_N]; exact jg.isLt)
+  have hsplit : jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N = jg.val := by
+    conv_rhs => rw [← Nat.div_add_mod jg.val BLOCK_N]
+    rw [Nat.mul_comm]
+  simp only [afcIOkTm]
+  rw [dif_pos (⟨he, hjT, hBN⟩ :
+    e.val < HEAD_ACTIVE ∧ jg.val / BLOCK_N < T ∧ 0 < BLOCK_N)]
+  rw [← hy ⟨jg.val / BLOCK_N, hjT⟩
+      (Lane2D.encode (e, ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩, PUnit.unit))
+      (by
+        simp only [Lane2D.encode_div, Lane2D.encode_mod]
+        refine ⟨?_, he⟩
+        have := jg.isLt
+        omega)]
+  simp only [kTileAFCG, baseOffsetAFCG, Lane2D.encode_div, Lane2D.encode_mod]
+  refine congrArg (s₀.readMem K) ?_
+  rw [hsplit]
+  ring
+
+private theorem afcIOvTm_eq (s₀ : BlockState) (V : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (hBN : 0 < BLOCK_N) (hNT : N_CTX = BLOCK_N * T)
+    (zs : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (hz : ∀ (t : Fin T) (j : Fin (BLOCK_N * BLOCK_DMODEL)),
+      j.val / BLOCK_DMODEL < N_CTX - t.val * BLOCK_N ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s₀.readMem V (s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh
+          + (t.val * BLOCK_N + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL)
+        = zs t j) :
+    vTileAFCmG s₀ V stride_qz stride_qh H HEAD_DIM (BLOCK_N * T) BLOCK_DMODEL HEAD_ACTIVE
+      = afcIOvTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE T zs := by
+  funext idx
+  obtain ⟨jg, d, ⟨⟩⟩ := idx
+  have hjT : jg.val / BLOCK_N < T :=
+    (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm T BLOCK_N]; exact jg.isLt)
+  have hsplit : jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N = jg.val := by
+    conv_rhs => rw [← Nat.div_add_mod jg.val BLOCK_N]
+    rw [Nat.mul_comm]
+  simp only [vTileAFCmG, afcIOvTm]
+  by_cases hd : d.val < HEAD_ACTIVE
+  · rw [if_pos hd, dif_pos (⟨hd, hjT, hBN⟩ :
+      d.val < HEAD_ACTIVE ∧ jg.val / BLOCK_N < T ∧ 0 < BLOCK_N)]
+    rw [← hz ⟨jg.val / BLOCK_N, hjT⟩
+        (Lane2D.encode (⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩, d, PUnit.unit))
+        (by
+          simp only [Lane2D.encode_div, Lane2D.encode_mod]
+          refine ⟨?_, hd⟩
+          have := jg.isLt
+          omega)]
+    simp only [vTileAFCG, baseOffsetAFCG, Lane2D.encode_div, Lane2D.encode_mod]
+    refine congrArg (s₀.readMem V) ?_
+    rw [hsplit]
+  · rw [if_neg hd, dif_neg (fun hc => hd hc.1)]
+
+private theorem afcIOkeyScale_eq (s₀ : BlockState) (QScale KScale : RegionName)
+    (N_CTX BLOCK_M BLOCK_N T : Nat) (hT : 0 < T) (hBN : 0 < BLOCK_N)
+    (ws vs : Fin T → Fin 1 → ℝ)
+    (hw : ∀ (t : Fin T) (j : Fin 1),
+      s₀.readMem QScale (s₀.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + s₀.pids 0) = ws t j)
+    (hv : ∀ (t : Fin T) (j : Fin 1),
+      s₀.readMem KScale (s₀.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + t.val) = vs t j) :
+    keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N T
+      = afcIOkeyScale BLOCK_N T ws vs := by
+  funext j
+  have hjT : j.val / BLOCK_N < T :=
+    (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm T BLOCK_N]; exact j.isLt)
+  simp only [keyScaleAFCG, afcIOkeyScale]
+  rw [dif_pos hT, dif_pos hjT, ← hw ⟨0, hT⟩ 0, ← hv ⟨j.val / BLOCK_N, hjT⟩ 0]
+
+/-- Raw-score congruence: with the query tile zero on head-inactive lanes,
+the raw `q·k` row sums only consume the head-active `K` lanes. -/
+private theorem afcIO_raw_sum_eq {BM S BD : Nat} (HEAD_ACTIVE : Nat)
+    (qm : TileIndex [BM, BD] → ℝ) (kfull kmasked : TileIndex [S, BD] → ℝ)
+    (hq0 : ∀ (i : Fin BM) (e : Fin BD), ¬ e.val < HEAD_ACTIVE → qm (i, e, PUnit.unit) = 0)
+    (hk : ∀ (j : Fin S) (e : Fin BD), e.val < HEAD_ACTIVE →
+      kfull (j, e, PUnit.unit) = kmasked (j, e, PUnit.unit)) :
+    ∀ (i : Fin BM) (j : Fin S),
+      Finset.univ.sum (fun e : Fin BD => qm (i, e, PUnit.unit) * kfull (j, e, PUnit.unit))
+        = Finset.univ.sum (fun e : Fin BD => qm (i, e, PUnit.unit) * kmasked (j, e, PUnit.unit)) := by
+  intro i j
+  refine Finset.sum_congr rfl (fun e _ => ?_)
+  by_cases he : e.val < HEAD_ACTIVE
+  · rw [hk j e he]
+  · rw [hq0 i e he]
+    ring
+
+/-- The masked closed form only depends on `K` through the raw `q·k` row
+sums, so equal raw sums give equal specs (the `K`-congruence that lets the
+head-masked stream tile replace the unmasked kernel-side tile). -/
+private theorem afcIO_spec_congrK {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K K' V : TileIndex [S, D] → ℝ)
+    (keyScale : Fin S → ℝ) (keep : Fin M → Fin S → Prop) [∀ i j, Decidable (keep i j)]
+    (hraw : ∀ (i : Fin M) (j : Fin S),
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+        = Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K' (j, e, PUnit.unit)))
+    (idx : TileIndex [M, D]) :
+    attentionRealBase2PerKeyScalePred Q K V keyScale keep idx
+      = attentionRealBase2PerKeyScalePred Q K' V keyScale keep idx := by
+  obtain ⟨i, d, ⟨⟩⟩ := idx
+  simp only [attentionRealBase2PerKeyScalePred]
+  refine congrArg₂ (· / ·) ?_ ?_
+  · refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hkeep : keep i j
+    · rw [if_pos hkeep, if_pos hkeep, hraw i j]
+    · rw [if_neg hkeep, if_neg hkeep]
+  · refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hkeep : keep i j
+    · rw [if_pos hkeep, if_pos hkeep, hraw i j]
+    · rw [if_neg hkeep, if_neg hkeep]
+
+/-! ## The safety walk (weak invariant)
+
+The skin's `hts` obligation quantifies over **arbitrary** launch states (no
+clean-`undef` pin), so the exact stack's `afcInvariantG` is unavailable
+there. The safety walk instead runs on the *shape* half: exact pins for the
+loop-carried pointer/index registers (whose addresses are the bound
+obligations) plus bare existence for the value registers, mirroring the
+`aft3SafeInv` precedent. -/
+
+/-- The preLoop minus its two terminal loads (the 11 head statements plus
+the 9 pointer/seed assigns of the tail). -/
+private def afcIOPre20G (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    List Stmt :=
+  AfcFoundation.afcPreLoopHeadG stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL
+    ++ List.take 9 (AfcFoundation.afcPreLoopTailG Q K V QScale KScale Out HEAD_DIM N_CTX
+        BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+
+set_option maxRecDepth 8000 in
+private theorem afcIO_preLoop_split (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX
+        BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      = afcIOPre20G Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX
+          BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+        ++ [ Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+              (Op.load .real (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"))
+                (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                  (Op.lt ComparableDType.nat Broadcast.scalarR
+                    (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+                  (Op.expandDim ⟨0, by simp⟩
+                    (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+             Stmt.assign .real [] "q_scale"
+              (Op.load .real (.ptr (.ref .ptr [] "Q_scale_ptr")) .none) ] := rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- Weak head walk (`afcPreLoopHeadG_eval` minus the clean-`undef`
+hypothesis — the stepping itself never consults `undef`). -/
+private theorem afcIO_preHeadW
+    (s : BlockState) (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL : Nat) :
+    ∃ s1, stepStmts (AfcFoundation.afcPreLoopHeadG stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL) s = some s1
+      ∧ s1.pids = s.pids ∧ s1.mem = s.mem
+      ∧ s1.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s1.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
+      ∧ s1.regs .nat [] "qvk_offset" = some (Tile.scalar (baseOffsetAFCG s stride_qz stride_qh H))
+      ∧ s1.regs .nat [] "q_scale_offset"
+          = some (Tile.scalar (s.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M)))
+      ∧ s1.regs .nat [] "k_scale_offset"
+          = some (Tile.scalar (s.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N)))
+      ∧ s1.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val))
+      ∧ s1.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s1.regs .nat [BLOCK_DMODEL] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)) := by
+  unfold AfcFoundation.afcPreLoopHeadG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)) _
+        = some (Tile.scalar (s.pids 1 / H)) from by
+      rw [evalOp]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)) _
+        = some (Tile.scalar (s.pids 1 % H)) from by
+      rw [evalOp]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh))) _
+        = some (Tile.scalar (baseOffsetAFCG s stride_qz stride_qh H)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat HEAD_DIM)) _
+        = some (Tile.scalar (baseOffsetAFCG s stride_qz stride_qh H / HEAD_DIM)) from by
+      rw [evalOp]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_M)) (Op.constNat 1))
+          (Op.constNat BLOCK_M))) _
+        = some (Tile.scalar (s.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M))) from by
+      rw [evalOp_mul, evalOp_div, evalOp_sub, evalOp_add]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.add .nat Broadcast.nil (Op.constNat N_CTX) (Op.constNat BLOCK_N)) (Op.constNat 1))
+          (Op.constNat BLOCK_N))) _
+        = some (Tile.scalar (s.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N))) from by
+      rw [evalOp_mul, evalOp_div, evalOp_sub, evalOp_add]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)) _
+        = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val)) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_arange, BlockState.setReg_same,
+        BlockState.setReg_pids, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_N) _ = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) from
+      evalOp_arange BLOCK_N _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_DMODEL) _ = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)) from
+      evalOp_arange BLOCK_DMODEL _))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- Weak 9-statement tail-prefix walk (statements 11–19 of the preLoop:
+the six pointer assigns and the three seed registers), from an arbitrary
+launch state. -/
+private theorem afcIO_preTail9W
+    (s1 : BlockState) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (hstartm : s1.regs .nat [] "start_m" = some (Tile.scalar (s1.pids 0)))
+    (hqvk : s1.regs .nat [] "qvk_offset" = some (Tile.scalar (baseOffsetAFCG s1 stride_qz stride_qh H)))
+    (hqso : s1.regs .nat [] "q_scale_offset"
+        = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M))))
+    (hkso : s1.regs .nat [] "k_scale_offset"
+        = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N))))
+    (hoffsm : s1.regs .nat [BLOCK_M] "offs_m"
+        = some (Tile.vec (fun r : Fin BLOCK_M => s1.pids 0 * BLOCK_M + r.val)))
+    (hoffsn : s1.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hoffsk : s1.regs .nat [BLOCK_DMODEL] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))) :
+    ∃ s20, stepStmts (List.take 9 (AfcFoundation.afcPreLoopTailG Q K V QScale KScale Out HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)) s1 = some s20
+      ∧ s20.pids = s1.pids ∧ s20.mem = s1.mem
+      ∧ s20.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s1.pids 0 * BLOCK_M + r.val))
+      ∧ s20.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s20.regs .real [BLOCK_M] "m_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩
+      ∧ s20.regs .real [BLOCK_M] "l_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (some (1 : ℝ) : WithBot ℝ)⟩
+      ∧ s20.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => (some (0 : ℝ) : WithBot ℝ)⟩
+      ∧ s20.regs .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs" = some (oBlockPtrAFCG s1 Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)
+      ∧ s20.regs .ptr [] "Q_scale_ptr" = some (kScalePtrAFCG s1 QScale N_CTX BLOCK_M (s1.pids 0))
+      ∧ s20.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some (kPtrsAFCG s1 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s20.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFCG s1 KScale N_CTX BLOCK_N 0)
+      ∧ s20.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some (vPtrsAFCG s1 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s20.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s1 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL) := by
+  rw [show List.take 9 (AfcFoundation.afcPreLoopTailG Q K V QScale KScale Out HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+      = (AfcFoundation.afcPreLoopTailG Q K V QScale KScale Out HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE).take 9 from rfl]
+  unfold AfcFoundation.afcPreLoopTailG
+  simp only [List.take_succ_cons, List.take_zero]
+  -- stmt 11: Q_ptrs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.scalarL (Op.ptrBase Q) _ _ _ _
+      (afc_evalOp_ptrBase Q _)
+      (show evalOp (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1))) _
+          = some _ from by
+        rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_mul]
+        erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsm,
+          evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsk]
+        rw [evalOp_ref, hqvk]
+        simp only [evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  -- stmt 12: Q_scale_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.nil (Op.ptrBase QScale) _ _ _ _
+      (afc_evalOp_ptrBase QScale _)
+      (show evalOp (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m")) _
+          = some _ from by
+        simp only [evalOp_add, evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true, hqso, hstartm, Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  -- stmt 13: K_ptrs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.scalarL (Op.ptrBase K) _ _ _ _
+      (afc_evalOp_ptrBase K _)
+      (show evalOp (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM))) _
+          = some _ from by
+        rw [evalOp_add, evalOp_add, evalOp_mul]
+        erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsk)),
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsn))]
+        rw [evalOp_ref, regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hqvk)]
+        simp only [evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  -- stmt 14: K_scale_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.nil (Op.ptrBase KScale) _ _ _ _
+      (afc_evalOp_ptrBase KScale _)
+      (show evalOp (Op.ref .nat [] "k_scale_offset") _ = some _ from by
+        simp only [evalOp_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true]
+        rw [hkso])))]
+  -- stmt 15: V_ptrs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.scalarL (Op.ptrBase V) _ _ _ _
+      (afc_evalOp_ptrBase V _)
+      (show evalOp (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1))) _
+          = some _ from by
+        rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_mul]
+        erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsn)))),
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsk))))]
+        rw [evalOp_ref, regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hqvk)))]
+        simp only [evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  -- stmt 16: O_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_ptrAdd_of Broadcast.scalarL (Op.ptrBase Out) _ _ _ _
+      (afc_evalOp_ptrBase Out _)
+      (show evalOp (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1))) _
+          = some _ from by
+        rw [evalOp_add, evalOp_add, evalOp_mul, evalOp_mul]
+        erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                  (regs_setReg_chain (by decide) hoffsm))))),
+            evalOp_expandDim_ref_of_regs _ _ _ _ _ _
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                  (regs_setReg_chain (by decide) hoffsk)))))]
+        rw [evalOp_ref, regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+              (regs_setReg_chain (by decide) (regs_setReg_chain (by decide)
+                (regs_setReg_chain (by decide) hqvk))))]
+        simp only [evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  -- stmt 17: m_i = full ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rfl))]
+  -- stmt 18: l_i = full 1.0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) (Op.const 1.0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => (some (1 : ℝ) : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      norm_num))]
+  -- stmt 19: acc = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => (some (0 : ℝ) : WithBot ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL]) from by
+      simp only [evalOp_full, evalOp_const]
+      rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, BlockState.setReg_pids, hoffsm]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same, hoffsn]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · -- Q_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [oBlockPtrAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [oBlockPtrAFCG, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, baseOffsetAFCG]
+      ring_nf
+  · -- Q_scale_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [kScalePtrAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, Region.cast]
+    · simp only [kScalePtrAFCG, Tile.ptrAdd_data, Tile.scalar, Tile.scalar_data, Tile.bop_data,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, NumericDType.add,
+        NumericDType.nat_add, Nat.zero_add]
+  · -- K_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [kPtrsAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [kPtrsAFCG, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, baseOffsetAFCG]
+      ring_nf
+  · -- K_scale_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [kScalePtrAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, Region.cast]
+    · simp only [kScalePtrAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_nil,
+        Broadcast.rightIndex_nil, Nat.zero_add, Nat.add_zero]
+  · -- V_ptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [vPtrsAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [vPtrsAFCG, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, baseOffsetAFCG]
+      ring_nf
+  · -- O_block_ptr
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    · simp only [oBlockPtrAFCG, Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex_scalarL,
+        Broadcast.rightIndex_scalarL, Region.cast]
+    · simp only [oBlockPtrAFCG, Tile.ptrAdd_data, Tile.scalar, Tile.bop_data, Tile.expandDim_data,
+        Tile.vec_data, Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL,
+        Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, NumericDType.nat_add,
+        NumericDType.nat_mul, baseOffsetAFCG]
+      ring_nf
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- Weak 20-statement preLoop-prefix walk from an arbitrary launch state:
+pins the pointer/index registers the two terminal loads and the loop safety
+walk consume. -/
+private theorem afcIO_pre20_evalW
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∃ s20, stepStmts (afcIOPre20G Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) s = some s20
+      ∧ s20.pids = s.pids ∧ s20.mem = s.mem
+      ∧ s20.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val))
+      ∧ s20.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s20.regs .real [BLOCK_M] "m_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩
+      ∧ s20.regs .real [BLOCK_M] "l_i" = some ⟨fun _ : TileIndex [BLOCK_M] => (some (1 : ℝ) : WithBot ℝ)⟩
+      ∧ s20.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => (some (0 : ℝ) : WithBot ℝ)⟩
+      ∧ s20.regs .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs" = some (oBlockPtrAFCG s Q stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)
+      ∧ s20.regs .ptr [] "Q_scale_ptr" = some (kScalePtrAFCG s QScale N_CTX BLOCK_M (s.pids 0))
+      ∧ s20.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some (kPtrsAFCG s K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s20.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFCG s KScale N_CTX BLOCK_N 0)
+      ∧ s20.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some (vPtrsAFCG s V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL 0)
+      ∧ s20.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some (oBlockPtrAFCG s Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL) := by
+  unfold afcIOPre20G
+  obtain ⟨s1, hHead, hpids1, hmem1, hstartm1, hoffhz1, hqvk1, hqso1, hkso1, hoffsm1, hoffsn1, hoffsk1⟩ :=
+    afcIO_preHeadW s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL
+  rw [stepStmts.append_some hHead]
+  have hstartm1' : s1.regs .nat [] "start_m" = some (Tile.scalar (s1.pids 0)) := by
+    rw [hpids1]; exact hstartm1
+  have hqvk1' : s1.regs .nat [] "qvk_offset" = some (Tile.scalar (baseOffsetAFCG s1 stride_qz stride_qh H)) := by
+    rw [show baseOffsetAFCG s1 stride_qz stride_qh H = baseOffsetAFCG s stride_qz stride_qh H from by
+      simp only [baseOffsetAFCG, hpids1]]; exact hqvk1
+  have hqso1' : s1.regs .nat [] "q_scale_offset"
+      = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M))) := by
+    rw [hpids1]; exact hqso1
+  have hkso1' : s1.regs .nat [] "k_scale_offset"
+      = some (Tile.scalar (s1.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N))) := by
+    rw [hpids1]; exact hkso1
+  have hoffsm1' : s1.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s1.pids 0 * BLOCK_M + r.val)) := by
+    rw [hpids1]; exact hoffsm1
+  obtain ⟨s20, hTail, hpids20, hmem20, hoffsm20, hoffsn20, hmi20, hli20, hacc20,
+    hqp20, hqsp20, hkp20, hksp20, hvp20, hop20⟩ :=
+    afcIO_preTail9W s1 Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      hstartm1' hqvk1' hqso1' hkso1' hoffsm1' hoffsn1 hoffsk1
+  have hbase : baseOffsetAFCG s1 stride_qz stride_qh H = baseOffsetAFCG s stride_qz stride_qh H := by
+    simp only [baseOffsetAFCG, hpids1]
+  refine ⟨s20, hTail, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpids20, hpids1]
+  · rw [hmem20, hmem1]
+  · rw [hoffsm20, hpids1]
+  · exact hoffsn20
+  · exact hmi20
+  · exact hli20
+  · exact hacc20
+  · rw [hqp20]
+    simp only [oBlockPtrAFCG, hbase, hpids1]
+  · rw [hqsp20]
+    simp only [kScalePtrAFCG, hpids1]
+  · rw [hkp20]
+    simp only [kPtrsAFCG, hbase]
+  · rw [hksp20]
+    simp only [kScalePtrAFCG, hpids1]
+  · rw [hvp20]
+    simp only [vPtrsAFCG, hbase]
+  · rw [hop20]
+    simp only [oBlockPtrAFCG, hbase, hpids1]
+
+/-- Safety-walk loop invariant: counter alignment/bound, exact pins for the
+index vectors, the three streamed pointers and the output pointer (whose
+addresses are the bound obligations), and bare existence for the value
+registers. -/
+private def afcIOSafeInv (K KScale V Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL : Nat)
+    (c : Nat) (s : BlockState) : Prop :=
+  c % BLOCK_N = 0 ∧ c ≤ N_CTX ∧
+  s.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)) ∧
+  s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) ∧
+  (∃ mT : Tile .real [BLOCK_M], s.regs .real [BLOCK_M] "m_i" = some mT) ∧
+  (∃ lT : Tile .real [BLOCK_M], s.regs .real [BLOCK_M] "l_i" = some lT) ∧
+  (∃ aT : Tile .real [BLOCK_M, BLOCK_DMODEL], s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some aT) ∧
+  (∃ qT : Tile .real [BLOCK_M, BLOCK_DMODEL], s.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qT) ∧
+  (∃ qscT : Tile .real [], s.regs .real [] "q_scale" = some qscT) ∧
+  s.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+    = some (kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c / BLOCK_N)) ∧
+  s.regs .ptr [] "K_scale_ptr" = some (kScalePtrAFCG s0 KScale N_CTX BLOCK_N (c / BLOCK_N)) ∧
+  s.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+    = some (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c / BLOCK_N)) ∧
+  s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+    = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL)
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Weak preLoop**: from an arbitrary launch state the full preLoop steps
+to a state satisfying `afcIOSafeInv … 0`. -/
+private theorem afcIO_preLoop_evalW
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∃ sp, stepStmts (AfcFoundation.afcPreLoopG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE) s = some sp
+      ∧ afcIOSafeInv K KScale V Out s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL 0 sp := by
+  rw [afcIO_preLoop_split]
+  obtain ⟨s20, h20, hpids20, hmem20, hoffsm, hoffsn, hmi, hli, hacc, hqp, hqsp, hkp, hksp, hvp, hop⟩ :=
+    afcIO_pre20_evalW s Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+  rw [stepStmts.append_some h20]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_load_ptr_mask_of (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs") _ _ _ _
+      (by rw [evalOp_ref]; exact hqp)
+      (show evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+          (Op.expandDim ⟨0, by simp⟩
+            (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) s20
+          = some _ from by
+        rw [afc_evalOp_boolAnd, evalOp_lt]
+        erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsm, evalOp_expandDim]
+        simp only [evalOp_lt, evalOp_arange, evalOp_constNat,
+          Option.bind_some, Option.bind_eq_bind]
+        rfl)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (afc_evalOp_load_ptr_none_of (Op.ref .ptr [] "Q_scale_ptr") _ _
+      (by rw [evalOp_ref]; exact regs_setReg_chain (by decide) hqsp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, Nat.zero_mod _, Nat.zero_le _, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsm)]
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsn)]
+  · exact ⟨_, regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hmi)⟩
+  · exact ⟨_, regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hli)⟩
+  · exact ⟨_, regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hacc)⟩
+  · exact ⟨_, regs_setReg_chain (by decide) (BlockState.setReg_same _ _ _ _ _)⟩
+  · exact ⟨_, BlockState.setReg_same _ _ _ _ _⟩
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hkp), Nat.zero_div]
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hksp), Nat.zero_div]
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hvp), Nat.zero_div]
+  · rw [regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hop)]
+
+set_option maxHeartbeats 4000000 in
+/-- The 20 load-free preLoop statements are safe at every state. -/
+private theorem afcIO_pre20_stmt_safe (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat) :
+    ∀ st ∈ afcIOPre20G Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE,
+      ∀ u : BlockState, Stmt.TraceSafeR R bounds st u := by
+  intro st hst u
+  simp only [afcIOPre20G, AfcFoundation.afcPreLoopHeadG, AfcFoundation.afcPreLoopTailG,
+    List.take_succ_cons, List.take_zero, List.append_nil, List.cons_append, List.nil_append,
+    List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+
+/-- `evalOpR` value of the shared `q`-load / terminal-store mask
+`(offs_m[:,None] < N_CTX) & (arange(BLOCK_DMODEL) < HEAD_ACTIVE)[None,:]`
+under an `offs_m` pin (the op is cast-free, so `R` is inert). -/
+private theorem afcIO_qmask_evalR (R : RoundingModel) (u : BlockState)
+    (p₀ N_CTX HEAD_ACTIVE BLOCK_M BLOCK_DMODEL : Nat)
+    (hoffsm : u.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => p₀ * BLOCK_M + r.val))) :
+    evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          (ComparableDType.nat.lt (p₀ * BLOCK_M + idx.1.val) N_CTX)
+            && (ComparableDType.nat.lt idx.2.1.val HEAD_ACTIVE)⟩ := by
+  rw [show evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      from by simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [afc_evalOp_boolAnd, evalOp_lt]
+  erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsm, evalOp_expandDim]
+  simp only [evalOp_lt, evalOp_arange, evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.vec,
+    Tile.scalar, Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex]
+
+/-- `evalOpR` value of the in-loop `v`-load mask
+`(offs_n[:,None] < N_CTX - start_n) & (arange < HEAD_ACTIVE)[None,:]` under
+`offs_n`/`start_n` pins. -/
+private theorem afcIO_vmask_evalR (R : RoundingModel) (u : BlockState)
+    (SN N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL : Nat)
+    (hoffsn : u.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+          (ComparableDType.nat.lt idx.1.val (N_CTX - SN))
+            && (ComparableDType.nat.lt idx.2.1.val HEAD_ACTIVE)⟩ := by
+  rw [show evalOpR R (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      from by simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [afc_evalOp_boolAnd, evalOp_lt]
+  erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsn, evalOp_expandDim]
+  simp only [evalOp_lt, evalOp_sub, evalOp_arange, evalOp_constNat, evalOp_ref, hsn,
+    Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.vec,
+    Tile.scalar, Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+    Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+    Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+    Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+    TileShape.dropInsertedIndex, NumericDType.sub]
+
+/-- `evalOpR` value of the in-loop `k_mask` op under `offs_n`/`start_n` pins
+(via the exact `afc_kmask_evalG` recipe — the op is cast-free). -/
+private theorem afcIO_kmask_evalR (R : RoundingModel) (u : BlockState)
+    (SN N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL : Nat)
+    (hoffsn : u.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOpR R (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = some ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+          (ComparableDType.nat.lt idx.2.1.val (N_CTX - SN))
+            && (ComparableDType.nat.lt idx.1.val HEAD_ACTIVE)⟩ := by
+  rw [show evalOpR R (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      = evalOp (Op.boolAnd (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat N_CTX) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) u
+      from by simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [afc_kmask_evalG u SN N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL
+    (Tile.vec (fun j : Fin BLOCK_N => j.val)) hoffsn hsn]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.vec_data, Tile.vec]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body safety**: from an `afcIOSafeInv` state every statement
+of the streamed body is trace-safe — the `k`/`k_scale`/`v` loads' active
+lanes are bounded by the skin's `read2`/`read5`/`read3` window bounds. -/
+private theorem afcIO_bodySafeW (R : RoundingModel) (bounds : RegionBounds)
+    (K KScale V Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (hBN : 0 < BLOCK_N) (hN : N_CTX = BLOCK_N * numKVBlocks)
+    (c : Nat) (s : BlockState) (hc : c < N_CTX)
+    (hP : afcIOSafeInv K KScale V Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL c s)
+    (hbK : ∀ (t : Fin numKVBlocks) (j : Fin (BLOCK_DMODEL * BLOCK_N)),
+      j.val % BLOCK_N < N_CTX - t.val * BLOCK_N ∧ j.val / BLOCK_N < HEAD_ACTIVE →
+      s0.pids 1 / H * stride_qz + s0.pids 1 % H * stride_qh
+        + j.val / BLOCK_N + (t.val * BLOCK_N + j.val % BLOCK_N) * HEAD_DIM < bounds K)
+    (hbKS : ∀ (t : Fin numKVBlocks) (j : Fin 1),
+      s0.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + t.val < bounds KScale)
+    (hbV : ∀ (t : Fin numKVBlocks) (j : Fin (BLOCK_N * BLOCK_DMODEL)),
+      j.val / BLOCK_DMODEL < N_CTX - t.val * BLOCK_N ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s0.pids 1 / H * stride_qz + s0.pids 1 % H * stride_qh
+        + (t.val * BLOCK_N + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL < bounds V) :
+    Stmt.TraceSafeListR R bounds (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+      (s.setReg "start_n" .nat [] (Tile.scalar c)) := by
+  obtain ⟨hmod, hle, hoffsm, hoffsn, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩, ⟨qT, hq⟩, ⟨qscT, hqs⟩,
+    hKp, hKsp, hVp, hOp⟩ := hP
+  have hcBN : c / BLOCK_N * BLOCK_N = c := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hmod)
+  have hcdivlt : c / BLOCK_N < numKVBlocks := by
+    have h1 : c / BLOCK_N * BLOCK_N < numKVBlocks * BLOCK_N := by
+      rw [hcBN, Nat.mul_comm numKVBlocks BLOCK_N, ← hN]
+      exact hc
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BLOCK_N)
+  unfold AfcFoundation.afcLoopBodyG
+  -- (0) start_n = start_n (identity)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s1 h1 => ?_)
+  obtain ⟨v0, hv0, rfl⟩ := stepStmtR_assign_inv h1
+  rw [evalOpR_ref, BlockState.setReg_same] at hv0
+  obtain rfl := Option.some.inj hv0
+  -- (1) k_mask (value computed for the k load's active lanes)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s2 h2 => ?_)
+  obtain ⟨vkm, hvkm, rfl⟩ := stepStmtR_assign_inv h2
+  rw [afcIO_kmask_evalR R _ c N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL
+    (regs_setReg_chain (by decide) (regs_setReg_chain (by decide) hoffsn))
+    (BlockState.setReg_same _ _ _ _ _)] at hvkm
+  obtain rfl := Option.some.inj hvkm
+  -- (2) k = tl.load(K_ptrs, mask=k_mask): the read2 window bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 h3 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx hact
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hKp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmasks, hidx⟩ := hact
+    rw [evalOpR_ref, BlockState.setReg_same] at hmasks
+    obtain rfl := Option.some.inj hmasks
+    have hP2 : idx.2.1.val < N_CTX - c ∧ idx.1.val < HEAD_ACTIVE := by
+      simpa using hidx
+    have hbound := hbK ⟨c / BLOCK_N, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) (by
+      simp only [Lane2D.encode_div, Lane2D.encode_mod]
+      rw [hcBN]
+      exact ⟨hP2.1, hP2.2⟩)
+    simpa [kPtrsAFCG, Lane2D.encode_div, Lane2D.encode_mod] using hbound
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- (3) k_scale = tl.load(K_scale_ptr): the read5 slot bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s4 h4 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hKsp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    have hbound := hbKS ⟨c / BLOCK_N, hcdivlt⟩ 0
+    simpa [kScalePtrAFCG] using hbound
+  obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv h4
+  -- (4)–(14): register-only assigns
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s5 h5 => ?_)
+  obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv h5
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s6 h6 => ?_)
+  obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv h6
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s7 h7 => ?_)
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv h7
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s8 h8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv h8
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s9 h9 => ?_)
+  obtain ⟨v9, -, rfl⟩ := stepStmtR_assign_inv h9
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s10 h10 => ?_)
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv h10
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s11 h11 => ?_)
+  obtain ⟨v11, -, rfl⟩ := stepStmtR_assign_inv h11
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s12 h12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv h12
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s13 h13 => ?_)
+  obtain ⟨v13, -, rfl⟩ := stepStmtR_assign_inv h13
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s14 h14 => ?_)
+  obtain ⟨v14, -, rfl⟩ := stepStmtR_assign_inv h14
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s15 h15 => ?_)
+  obtain ⟨v15, -, rfl⟩ := stepStmtR_assign_inv h15
+  -- (15) v = tl.load(V_ptrs, mask=…): the read3 window bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s16 h16 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, by simp [Op.SafeAtR.eq_def], ?_⟩
+    intro ptrs hptrs idx hact
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hVp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmasks, hidx⟩ := hact
+    rw [afcIO_vmask_evalR R _ c N_CTX HEAD_ACTIVE BLOCK_N BLOCK_DMODEL
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hoffsn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same])] at hmasks
+    obtain rfl := Option.some.inj hmasks
+    have hP2 : idx.1.val < N_CTX - c ∧ idx.2.1.val < HEAD_ACTIVE := by
+      simpa using hidx
+    have hbound := hbV ⟨c / BLOCK_N, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) (by
+      simp only [Lane2D.encode_div, Lane2D.encode_mod]
+      rw [hcBN]
+      exact ⟨hP2.1, hP2.2⟩)
+    simpa [vPtrsAFCG, Lane2D.encode_div, Lane2D.encode_mod] using hbound
+  obtain ⟨v16, -, rfl⟩ := stepStmtR_assign_inv h16
+  -- (16)–(21): register-only assigns
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s17 h17 => ?_)
+  obtain ⟨v17, -, rfl⟩ := stepStmtR_assign_inv h17
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s18 h18 => ?_)
+  obtain ⟨v18, -, rfl⟩ := stepStmtR_assign_inv h18
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s19 h19 => ?_)
+  obtain ⟨v19, -, rfl⟩ := stepStmtR_assign_inv h19
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s20 h20 => ?_)
+  obtain ⟨v20, -, rfl⟩ := stepStmtR_assign_inv h20
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s21 h21 => ?_)
+  obtain ⟨v21, -, rfl⟩ := stepStmtR_assign_inv h21
+  exact Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body step** (`afcLoopBody_stepsG` under `afcIOSafeInv`): the
+body steps successfully from register pins alone, advancing the three
+streamed pointers and preserving the shape pins. -/
+private theorem afcIO_attn_stepW (K KScale V Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks : Nat)
+    (hBN : 0 < BLOCK_N) (hN : N_CTX = BLOCK_N * numKVBlocks)
+    (c : Nat) (s : BlockState) (hc : c < N_CTX)
+    (hP : afcIOSafeInv K KScale V Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL c s) :
+    ∃ s', stepStmts (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+        (s.setReg "start_n" .nat [] (Tile.scalar c)) = some s'
+      ∧ afcIOSafeInv K KScale V Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL (c + BLOCK_N) s' := by
+  obtain ⟨hmod, hle, hoffsm, hoffsn, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩, ⟨qT, hq⟩, ⟨qscT, hqs⟩,
+    hKp, hKsp, hVp, hOp⟩ := hP
+  have hcBN : c / BLOCK_N * BLOCK_N = c := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hmod)
+  have hcdivlt : c / BLOCK_N < numKVBlocks := by
+    have h1 : c / BLOCK_N * BLOCK_N < numKVBlocks * BLOCK_N := by
+      rw [hcBN, Nat.mul_comm numKVBlocks BLOCK_N, ← hN]
+      exact hc
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BLOCK_N)
+  have hdiv : (c + BLOCK_N) / BLOCK_N = c / BLOCK_N + 1 := by
+    conv_lhs => rw [show c = c / BLOCK_N * BLOCK_N from hcBN.symm]
+    rw [Nat.add_div_right _ hBN, Nat.mul_div_cancel _ hBN]
+  have hle' : c + BLOCK_N ≤ N_CTX := by
+    have h1 : (c / BLOCK_N + 1) * BLOCK_N ≤ numKVBlocks * BLOCK_N :=
+      Nat.mul_le_mul_right BLOCK_N hcdivlt
+    calc c + BLOCK_N = c / BLOCK_N * BLOCK_N + BLOCK_N := by rw [hcBN]
+      _ = (c / BLOCK_N + 1) * BLOCK_N := by ring
+      _ ≤ numKVBlocks * BLOCK_N := h1
+      _ = N_CTX := by rw [hN, Nat.mul_comm]
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF,
+      kmaskT, ktile, kscT, qkdotT, maskT, qkSentT, rmaxT, mijT, pT, lijT, alphaT,
+      vmaskT, vtile, pf16,
+      hkmaskT, hktile, hkscT, hqkdotT, hmaskT, hqkSentT, hrm, hmijT, hpT, hlijT, halphaT,
+      hvmaskT, hvtile, hpf16, hFmi, hFli, hFacc, hFoffsm, hFoffsn, hFq, hFqsc, hFKp, hFKsp, hFVp⟩ :=
+    afcLoopBody_stepsG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE hBN
+      (s.setReg "start_n" .nat [] (Tile.scalar c)) c
+      (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val))
+      (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      (kPtrsAFCG s0 K stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c / BLOCK_N))
+      (kScalePtrAFCG s0 KScale N_CTX BLOCK_N (c / BLOCK_N))
+      (vPtrsAFCG s0 V stride_qz stride_qh H HEAD_DIM BLOCK_N BLOCK_DMODEL (c / BLOCK_N))
+      mT qT qscT lT aT
+      (BlockState.setReg_same _ _ _ _ _)
+      (regs_setReg_chain (by decide) hoffsm)
+      (regs_setReg_chain (by decide) hoffsn)
+      (regs_setReg_chain (by decide) hmi)
+      (regs_setReg_chain (by decide) hli)
+      (regs_setReg_chain (by decide) hacc)
+      (regs_setReg_chain (by decide) hq)
+      (regs_setReg_chain (by decide) hqs)
+      (regs_setReg_chain (by decide) hKp)
+      (regs_setReg_chain (by decide) hKsp)
+      (regs_setReg_chain (by decide) hVp)
+  refine ⟨sF, hchain, ?_, hle', ?_, ?_, ⟨_, hFmi⟩, ⟨_, hFli⟩, ⟨_, hFacc⟩, ⟨_, hFq⟩, ⟨_, hFqsc⟩,
+    ?_, ?_, ?_, ?_⟩
+  · rw [Nat.add_mod_right]
+    exact hmod
+  · exact hFoffsm
+  · exact hFoffsn
+  · rw [hFKp, kPtrsAFCG_succ, hdiv]
+  · rw [hFKsp, kScalePtrAFCG_succ, hdiv]
+  · rw [hFVp, vPtrsAFCG_succ, hdiv]
+  · rw [afcLoopBody_preserves_OblockPtrG hchain,
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hOp
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak postLoop safety**: the `acc /= l_i` divide is register-only and
+the masked terminal store's active lanes are bounded by the skin's `write`
+window bound. -/
+private theorem afcIO_postSafeW (R : RoundingModel) (bounds : RegionBounds)
+    (K KScale V Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (c : Nat) (s : BlockState)
+    (hP : afcIOSafeInv K KScale V Out s0 stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL c s)
+    (hbO : ∀ j : Fin (BLOCK_M * BLOCK_DMODEL),
+      s0.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s0.pids 1 / H * stride_qz + s0.pids 1 % H * stride_qh
+        + (s0.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL < bounds Out) :
+    Stmt.TraceSafeListR R bounds (AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) s := by
+  obtain ⟨hmod, hle, hoffsm, hoffsn, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩, ⟨qT, hq⟩, ⟨qscT, hqs⟩,
+    hKp, hKsp, hVp, hOp⟩ := hP
+  unfold AfcFoundation.afcPostLoopG
+  -- (1) acc /= l_i[:, None]: register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s1 h1 => ?_)
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- (2) the masked terminal store: the write window bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR.eq_def,
+    MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, by simp [Op.SafeAtR.eq_def], ?_⟩
+  intro ptrs hptrs idx hact
+  rw [evalOpR_ref] at hptrs
+  simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+  rw [hOp] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  obtain ⟨masks, hmasks, hidx⟩ := hact
+  rw [afcIO_qmask_evalR R _ (s0.pids 0) N_CTX HEAD_ACTIVE BLOCK_M BLOCK_DMODEL
+    (regs_setReg_chain (by decide) hoffsm)] at hmasks
+  obtain rfl := Option.some.inj hmasks
+  have hP2 : s0.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE := by
+    simpa using hidx
+  have hbound := hbO (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) (by
+    simp only [Lane2D.encode_div, Lane2D.encode_mod]
+    exact hP2)
+  simpa [oBlockPtrAFCG, Lane2D.encode_div, Lane2D.encode_mod] using hbound
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole causal kernel**: the 20 load-free
+preLoop assigns are safe at every state, the `q`/`q_scale` loads are bounded
+by the `read1`/`read4` windows at the walked prefix state, the KV loop runs
+`Stmt.forRangeTraceSafeR_inv` over `afcIOSafeInv`, and the terminal store is
+bounded by the `write` window. -/
+private theorem afcIO_traceSafeR (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (bounds : RegionBounds) (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE numKVBlocks : Nat)
+    (s : BlockState)
+    (hBN : 0 < BLOCK_N) (hnum : 0 < numKVBlocks) (hN : N_CTX = BLOCK_N * numKVBlocks)
+    (hbQ : ∀ (t : Fin numKVBlocks) (j : Fin (BLOCK_M * BLOCK_DMODEL)),
+      s.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh
+        + (s.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL < bounds Q)
+    (hbK : ∀ (t : Fin numKVBlocks) (j : Fin (BLOCK_DMODEL * BLOCK_N)),
+      j.val % BLOCK_N < N_CTX - t.val * BLOCK_N ∧ j.val / BLOCK_N < HEAD_ACTIVE →
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh
+        + j.val / BLOCK_N + (t.val * BLOCK_N + j.val % BLOCK_N) * HEAD_DIM < bounds K)
+    (hbV : ∀ (t : Fin numKVBlocks) (j : Fin (BLOCK_N * BLOCK_DMODEL)),
+      j.val / BLOCK_DMODEL < N_CTX - t.val * BLOCK_N ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh
+        + (t.val * BLOCK_N + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL < bounds V)
+    (hbQS : ∀ (t : Fin numKVBlocks) (j : Fin 1),
+      s.pids 1 * ((N_CTX + BLOCK_M - 1) / BLOCK_M) + s.pids 0 < bounds QScale)
+    (hbKS : ∀ (t : Fin numKVBlocks) (j : Fin 1),
+      s.pids 1 * ((N_CTX + BLOCK_N - 1) / BLOCK_N) + t.val < bounds KScale)
+    (hbO : ∀ j : Fin (BLOCK_M * BLOCK_DMODEL),
+      s.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL < N_CTX ∧ j.val % BLOCK_DMODEL < HEAD_ACTIVE →
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh
+        + (s.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL < bounds Out) :
+    ((attn_fwd_causal_surface Q K V QScale KScale Out
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [afc_body_splitG, afcPreLoopG_check, afcPostLoopG_check]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop: 20 register-only assigns then the two bounded loads
+    rw [afcIO_preLoop_split]
+    refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+    · exact Stmt.TraceSafeListR.of_forall _ _
+        (afcIO_pre20_stmt_safe R bounds Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+          N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+    · intro s2 hs2
+      obtain ⟨s20, h20, hpids20, hmem20, hoffsm, hoffsn, hmi, hli, hacc, hqp, hqsp, hkp, hksp, hvp, hop⟩ :=
+        afcIO_pre20_evalW s Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+      rw [afcIO_stepStmtsR_castFree_of_stmts R _
+          (fun st hst u => afcIO_preLoop_stmt_castFree R Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+            N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE st
+            (by rw [afcIO_preLoop_split Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+                  N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE]
+                exact List.mem_append_left _ hst) u) s, h20] at hs2
+      obtain rfl := Option.some.inj hs2
+      -- the q load: read1 window bound
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun s21 h21 => ?_)
+      · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+          MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+        refine ⟨trivial, by simp [Op.SafeAtR.eq_def], ?_⟩
+        intro ptrs hptrs idx hact
+        rw [evalOpR_ref] at hptrs
+        rw [hqp] at hptrs
+        obtain rfl := Option.some.inj hptrs
+        obtain ⟨masks, hmasks, hidx⟩ := hact
+        rw [afcIO_qmask_evalR R _ (s.pids 0) N_CTX HEAD_ACTIVE BLOCK_M BLOCK_DMODEL hoffsm] at hmasks
+        obtain rfl := Option.some.inj hmasks
+        have hP2 : s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE := by
+          simpa using hidx
+        have hbound := hbQ ⟨0, hnum⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) (by
+          simp only [Lane2D.encode_div, Lane2D.encode_mod]
+          exact hP2)
+        simpa [oBlockPtrAFCG, Lane2D.encode_div, Lane2D.encode_mod] using hbound
+      obtain ⟨vq, -, rfl⟩ := stepStmtR_assign_inv h21
+      -- the q_scale load: read4 slot bound
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs i _
+      rw [evalOpR_ref] at hptrs
+      rw [regs_setReg_chain (by decide) hqsp] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      have hbound := hbQS ⟨0, hnum⟩ 0
+      simpa [kScalePtrAFCG] using hbound
+  · -- after the preLoop: the KV loop, then the postLoop
+    intro sp hsp
+    obtain ⟨spW, hpreW, hinv0⟩ :=
+      afcIO_preLoop_evalW s Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+    rw [afcIO_preLoop_castFree R Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM
+        N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE s, hpreW] at hsp
+    obtain rfl := Option.some.inj hsp
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the KV loop is trace-safe (invariant principle over `afcIOSafeInv`)
+      show Stmt.TraceSafeR R bounds _ spW
+      simp only [Stmt.TraceSafeR]
+      refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" N_CTX BLOCK_N
+        (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+        (afcIOSafeInv K KScale V Out s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL)
+        ?_ 0 spW hinv0
+      intro c st hc hPc
+      refine ⟨afcIO_bodySafeW R bounds K KScale V Out s stride_qz stride_qh H HEAD_DIM
+        N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hN c st hc hPc hbK hbKS hbV, ?_⟩
+      obtain ⟨st', hstep, hPc'⟩ := afcIO_attn_stepW K KScale V Out s stride_qz stride_qh H HEAD_DIM
+        N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hN c st hc hPc
+      exact ⟨st', by
+        rw [afcIO_loopBody_castFree R hfp16 N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE]
+        exact hstep, hPc'⟩
+    · -- identify the post-loop state and finish on the terminal store
+      obtain ⟨final, sfin, hLoop, hfinal, hPfin⟩ :=
+        forRange_inv (idx := "start_n") (start := 0) (stop := N_CTX) (step := BLOCK_N)
+          (body := AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+          (P := afcIOSafeInv K KScale V Out s stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL)
+          (s_init := spW) hBN.ne' hinv0
+          (fun c st hc hPc => afcIO_attn_stepW K KScale V Out s stride_qz stride_qh H HEAD_DIM
+            N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hN c st hc hPc)
+      rw [show stepStmtR R (Stmt.forRange "start_n" 0 N_CTX BLOCK_N
+            (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)) spW = some sfin from by
+        rw [afcIO_loopStmt_castFree R hfp16 N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE spW]
+        exact hLoop] at hs3
+      obtain rfl := Option.some.inj hs3
+      exact afcIO_postSafeW R bounds K KScale V Out s stride_qz stride_qh H HEAD_DIM
+        N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE final sfin hPfin hbO
+
+/-! ## The postLoop frame
+
+`afcPostLoopG_eval` delivers the readback values; the skin additionally
+needs the per-cell frame (every cell outside the masked `Out` window is
+untouched). Derived from the pins + the deterministic exact walk. -/
+
+/-- Cons-level inversion for exact `stepStmts`. -/
+private theorem afcIO_stepStmts_cons_inv {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmts (st :: rest) s = some s') :
+    ∃ u, stepStmt st s = some u ∧ stepStmts rest u = some s' := by
+  rw [stepStmts] at h
+  cases hu : stepStmt st s with
+  | none => rw [hu] at h; exact absurd h (by simp)
+  | some u => rw [hu] at h; exact ⟨u, rfl, h⟩
+
+/-- Assign-step inversion for exact `stepStmt`. -/
+private theorem afcIO_stepStmt_assign_inv {dtype : TileDType} {shape : TileShape}
+    {name : RegName} {e : Op dtype shape} {s s' : BlockState}
+    (h : stepStmt (.assign dtype shape name e) s = some s') :
+    ∃ v, evalOp e s = some v ∧ s' = s.setReg name dtype shape v := by
+  cases hv : evalOp e s with
+  | none => simp [stepStmt, hv] at h
+  | some v =>
+      simp [stepStmt, hv] at h
+      exact ⟨v, rfl, h.symm⟩
+
+/-- A `P`-masked single-region `writeMem` scatter preserves every cell no
+active lane hits. -/
+private theorem afcIO_foldl_writeMem_frame_masked {α : Type} (region : RegionName)
+    (offFn : α → Nat) (valFn : α → ℝ) (P : α → Prop) [DecidablePred P] :
+    ∀ (l : List α) (s : BlockState) (r : RegionName) (o : Nat),
+      (r = region → ∀ k ∈ l, P k → offFn k ≠ o) →
+      ((l.foldl (fun acc k => if P k then acc.writeMem region (offFn k) (valFn k) else acc) s).mem r o
+        = s.mem r o)
+  | [], _, _, _, _ => rfl
+  | k :: rest, s, r, o, h => by
+      rw [List.foldl_cons]
+      by_cases hPk : P k
+      · rw [if_pos hPk,
+          afcIO_foldl_writeMem_frame_masked region offFn valFn P rest _ r o
+            (fun hr k' hk' hP' => h hr k' (List.mem_cons_of_mem _ hk') hP'),
+          BlockState.writeMem_mem]
+        rw [if_neg (fun hro => h hro.1 k List.mem_cons_self hPk hro.2.symm)]
+      · rw [if_neg hPk]
+        exact afcIO_foldl_writeMem_frame_masked region offFn valFn P rest s r o
+          (fun hr k' hk' hP' => h hr k' (List.mem_cons_of_mem _ hk') hP')
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop frame**: whatever the postLoop writes, every cell outside the
+write-active `Out` window is untouched (the `acc /= l_i` divide is
+register-only, and the masked terminal store only hits the active lanes'
+`O_block_ptr` addresses). -/
+private theorem afcIO_postLoop_frameW (Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (s sP : BlockState)
+    (hoffsm : s.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => qStartAFCG s0 BLOCK_M + r.val)))
+    (hOp : s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+      = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL))
+    (h : stepStmts (AfcFoundation.afcPostLoopG Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE) s = some sP) :
+    ∀ r o,
+      (r = Out → ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+        (qStartAFCG s0 BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE) →
+        o ≠ baseOffsetAFCG s0 stride_qz stride_qh H
+          + (s0.pids 0 * BLOCK_M + idx.1.val) * HEAD_DIM + idx.2.1.val) →
+      sP.mem r o = s.mem r o := by
+  unfold AfcFoundation.afcPostLoopG at h
+  -- (1) acc /= l_i[:, None] (register-only)
+  obtain ⟨u1, ha, h⟩ := afcIO_stepStmts_cons_inv h
+  obtain ⟨v1, -, rfl⟩ := afcIO_stepStmt_assign_inv ha
+  set s2 := s.setReg "acc" .real [BLOCK_M, BLOCK_DMODEL] v1 with hs2
+  have hacc2 : s2.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some v1 := by
+    rw [hs2]
+    simp only [BlockState.setReg_same]
+  have hOp2 : s2.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+      = some (oBlockPtrAFCG s0 Out stride_qz stride_qh H HEAD_DIM BLOCK_M BLOCK_DMODEL) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hOp
+  have hoffsm2 : s2.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => qStartAFCG s0 BLOCK_M + r.val)) := by
+    rw [hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hoffsm
+  set oOffFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
+    fun idx => baseOffsetAFCG s0 stride_qz stride_qh H
+      + (s0.pids 0 * BLOCK_M + idx.1.val) * HEAD_DIM + idx.2.1.val with hoOffFn
+  set P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
+    fun idx => qStartAFCG s0 BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE with hP
+  have hopEval : evalOp (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr") s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out.cast, oOffFn idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [evalOp_ref, hOp2]
+    refine congrArg some ?_
+    ext idx
+    · rfl
+    · simp only [oBlockPtrAFCG, hoOffFn, qStartAFCG]
+  have hmaskEval : evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) s2
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => decide (P idx)⟩ : Tile .bool [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [afc_evalOp_boolAnd, evalOp_lt]
+    erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoffsm2, evalOp_expandDim]
+    simp only [evalOp_lt, evalOp_arange, evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+    refine congrArg some ?_
+    ext idx
+    simp only [Tile.bop_data, Tile.cop_data, Tile.expandDim_data, Tile.vec_data, Tile.scalar,
+      Broadcast.leftIndex_scalarR, Broadcast.rightIndex_scalarR,
+      Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+      Broadcast.leftIndex_consR, Broadcast.rightIndex_consR,
+      Broadcast.leftIndex_nil, Broadcast.rightIndex_nil, TileShape.dropInsertedIndex]
+    rw [show (ComparableDType.nat.lt (qStartAFCG s0 BLOCK_M + idx.1.val) N_CTX
+          && ComparableDType.nat.lt idx.2.1.val HEAD_ACTIVE)
+        = decide (P idx) from by
+      rw [Bool.eq_iff_iff]
+      simp only [hP, Bool.and_eq_true, ComparableDType.nat_lt_eq_true, decide_eq_true_eq]]
+  -- (2) the masked terminal store
+  obtain ⟨u2, hst, h⟩ := afcIO_stepStmts_cons_inv h
+  rw [show stepStmt (Stmt.store .real [BLOCK_M, BLOCK_DMODEL]
+      (.ptr (.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (.mask (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")) (Op.constNat N_CTX))
+        (Op.expandDim ⟨0, by simp⟩
+          (Op.lt ComparableDType.nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))) s2
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]).foldl
+          (fun acc idx => if P idx then acc.writeMem Out (oOffFn idx) ((v1.data idx).unbotD 0) else acc) s2) from by
+    simp only [stepStmt, evalOp_ref, hacc2, hopEval, hmaskEval, Option.bind_eq_bind, Option.bind_some,
+      Option.map_some, decide_eq_true_eq]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s2 ?_
+    intro acc idx _
+    by_cases hk : P idx
+    · simp only [if_pos hk, Region.cast_id, BlockState.writeMemTyped_real, FloatDType.real_storeValue]
+    · simp only [if_neg hk]] at hst
+  obtain rfl := Option.some.inj hst
+  rw [stepStmts.nil] at h
+  obtain rfl := Option.some.inj h
+  -- the frame
+  intro r o hOguard
+  rw [afcIO_foldl_writeMem_frame_masked Out oOffFn (fun idx => (v1.data idx).unbotD 0) P
+    (TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]) s2 r o
+    (fun hr k _ hPk heq => hOguard hr k hPk heq.symm)]
+  rw [hs2]
+  simp only [BlockState.setReg_mem]
+
+/-- Head-inactive lanes of the streamed masked query tile are `0` (feeds the
+raw-score congruence). -/
+private theorem afcIOqTm_head_masked (p₀ N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T : Nat)
+    (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ) :
+    ∀ (i : Fin BLOCK_M) (e : Fin BLOCK_DMODEL), ¬ e.val < HEAD_ACTIVE →
+      afcIOqTm p₀ N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE T xs (i, e, PUnit.unit) = 0 := by
+  intro i e he
+  simp only [afcIOqTm]
+  rw [dif_neg (fun hc => he hc.1.2)]
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `⊨[R]` io headline — the `StreamMasked3DKernelIO₅` exemplar.** On
+its five-stream single-store signature, `_attn_fwd` implements the genuine
+causal closed form: output lane `j = (i, e)` of `Out` holds the
+predicate-masked base-2 per-key-scale attention
+`attnFwdCausalIOOutSpec` (= the exact stack's `attnFwdCausalOutSpecG`
+restated over the five streams, with `keyScale j = Q_scale · K_scale[j/BN]`
+assembled from the two scalar-width channels), for every rounding model that
+is trivial on the fp16 grid.
+
+**Hypothesis provenance**:
+* `hfp16` pins `R.round .fp16 = id` — loop-body statement 16
+  (`p = (p).to(tl.float16)`) is an *in-loop* rounding event outside the
+  skin's single-boundary-round shape, exactly the file's declared fp16
+  modeling boundary (the exact stack already treats this cast as the
+  identity), now explicit as a headline hypothesis.
+* `hBD`/`hBN`/`hBM` positivity and `hN`/`hnum` (`N_CTX = BLOCK_N ·
+  numKVBlocks > 0`) shape the KV walk — inherited verbatim from the exact
+  headline `attn_fwd_causal_output_summary_general`.
+* `hBDHD : BLOCK_DMODEL ≤ HEAD_DIM` — host launches use
+  `HEAD_DIM = BLOCK_DMODEL`; it makes the contiguous `Out` window injective,
+  **discharging** the exact headline's `hOutInj` hypothesis.
+* `hsb` — the exact stack's `-1e6` sentinel score bound `afcScoreBoundG`
+  restated tile-parametrically over the streams (∀-pids ∀-streams form;
+  consumers instantiate it at their loaded tiles): every causally kept key's
+  scaled score is `≥ -1e6`, so the kernel's causal `tl.where` sentinel never
+  overtakes a genuine score.
+
+The exact headline's `hundef` is **not** a hypothesis here — the skin's
+Hoare triple carries the `undef` pin itself. The output grid is the `.real`
+default (the store-side `.to(Out.type.element_ty)` cast erases at
+translation), so at every such `R` the terminal cells carry the exact fold
+values. -/
+specification attn_fwd_causal_io_correctness (R : RoundingModel)
+    (hfp16 : R.round .fp16 = id)
+    (Q K V QScale KScale Out : RegionName)
+    (stride_qz stride_qh Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE numKVBlocks : Nat)
+    (hBD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M)
+    (hN : N_CTX = BLOCK_N * numKVBlocks) (hnum : 0 < numKVBlocks)
+    (hBDHD : BLOCK_DMODEL ≤ HEAD_DIM)
+    (hsb : ∀ (p₀ : Nat) (xs : Fin numKVBlocks → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+      (ys : Fin numKVBlocks → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+      (zs : Fin numKVBlocks → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+      (ws vs : Fin numKVBlocks → Fin 1 → ℝ),
+      afcIOScoreBound p₀ N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks xs ys zs ws vs) :
+    attnFwdCausalIO Q K V QScale KScale Out stride_qz stride_qh Z H N_CTX HEAD_DIM
+        BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE numKVBlocks ⊨[R]
+      fun p₀ _ _ xs ys zs ws vs j =>
+        attnFwdCausalIOOutSpec p₀ N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks
+          xs ys zs ws vs (Lane2D.decode j) := by
+  refine StreamMasked3DKernelIO₅.ImplementsR.intro _ ?_ ?_ ?_
+  · exact afcIO_flattenOk Q K V QScale KScale Out stride_qz stride_qh Z H N_CTX HEAD_DIM
+      BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE
+  · -- the trace-safety walk
+    intro bounds st xs ys zs ws vs _hx _hy _hz _hw _hv hbr1 hbr2 hbr3 hbr4 hbr5 hbw
+    simp only [attnFwdCausalIO] at hbr1 hbr2 hbr3 hbr4 hbr5 hbw ⊢
+    exact afcIO_traceSafeR R hfp16 bounds Q K V QScale KScale Out
+      stride_qz stride_qh Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE numKVBlocks st
+      hBN hnum hN
+      (fun t j hm => hbr1 t j hm) (fun t j hm => hbr2 t j hm) (fun t j hm => hbr3 t j hm)
+      (fun t j => hbr4 t j trivial) (fun t j => hbr5 t j trivial)
+      (fun j hm => hbw j hm)
+  · -- the rounded Hoare triple: exact invariant stack + cast-free collapses
+    intro s₀ xs ys zs ws vs hu hx hy hz hw hv
+    simp only [attnFwdCausalIO] at hx hy hz hw hv ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    -- the stream-pin tile bridges
+    have hqTeq := afcIOqTm_eq s₀ Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL
+      HEAD_ACTIVE numKVBlocks hnum xs (fun t j hm => hx t j hm)
+    have hkTeq := afcIOkTm_eq_of_active s₀ K stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_N
+      BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hN ys (fun t j hm => hy t j hm)
+    have hvTeq := afcIOvTm_eq s₀ V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE numKVBlocks hBN hN zs (fun t j hm => hz t j hm)
+    have hksEq := afcIOkeyScale_eq s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks hnum hBN
+      ws vs (fun t j => hw t j trivial) (fun t j => hv t j trivial)
+    -- the sentinel bound transported onto the kernel-side tiles
+    have hsb' : afcScoreBoundG
+        (qTileAFCmG s₀ Q stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE)
+        (kTileAFCG s₀ K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+        (vTileAFCmG s₀ V stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL HEAD_ACTIVE)
+        (keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks)
+        (qStartAFCG s₀ BLOCK_M) := by
+      intro j i hj
+      have hb := hsb (s₀.pids 0) xs ys zs ws vs j i hj
+      rw [hksEq, hqTeq,
+        afcIO_raw_sum_eq HEAD_ACTIVE
+          (afcIOqTm (s₀.pids 0) N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE numKVBlocks xs)
+          (kTileAFCG s₀ K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          (afcIOkTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks ys)
+          (afcIOqTm_head_masked (s₀.pids 0) N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE numKVBlocks xs)
+          hkTeq i j]
+      exact hb
+    -- output-window injectivity from `hBDHD`
+    have hOutInj' : Function.Injective (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s₀ H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx) := by
+      have h := afcIO_outOffset_injective (BLOCK_M := BLOCK_M)
+        (s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh) (s₀.pids 0) hBD hBDHD
+      intro a b hab
+      refine h ?_
+      simpa [outOffset, offZ, offH, mIndex, kIndex] using hab
+    -- the exact run: preLoop invariant, forRange, postLoop
+    obtain ⟨sp, hpre, hinv0⟩ :=
+      afcPreLoopG_invariant s₀ Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX
+        BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hN hBN hBD
+        (keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) hundef'
+    obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+      forRange_inv (idx := "start_n") (start := 0) (stop := N_CTX) (step := BLOCK_N)
+        (body := AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)
+        (P := fun i st => afcInvariantG Q K V QScale KScale Out s₀ stride_qz stride_qh H HEAD_DIM
+          N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks
+          (keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) hBD i st)
+        (s_init := sp)
+        (by omega)
+        hinv0
+        (fun i st hi hPi =>
+          afc_attn_stepG Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX
+            BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBN hBM hBD hN s₀ i st hi
+            (by simp only [afcInvariantG] at hPi; exact hPi.2.1) hsb' hPi)
+    have hfinal : final = N_CTX := by
+      obtain ⟨_, hmod, hle, _⟩ := hinvL
+      omega
+    rw [hfinal] at hinvL
+    obtain ⟨sF, hpost, hO⟩ :=
+      afcPostLoopG_eval Q K V QScale KScale Out s₀ sL stride_qz stride_qh H HEAD_DIM N_CTX
+        BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks hBD hN hBN hnum
+        (keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) hOutInj' hinvL
+    have hinvL' := hinvL
+    simp only [afcInvariantG] at hinvL'
+    obtain ⟨hpidsL, -, -, -, -, -, hoffsmL, -, -, -, -, -, -, hOpL, -, hmemL⟩ := hinvL'
+    have hframe := afcIO_postLoop_frameW Out s₀ stride_qz stride_qh H HEAD_DIM N_CTX
+      BLOCK_M BLOCK_DMODEL HEAD_ACTIVE sL sF hoffsmL hOpL hpost
+    -- the spec bridge on every output lane
+    have hspec : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+        attnFwdCausalOutSpecG s₀ Q K V stride_qz stride_qh H HEAD_DIM N_CTX BLOCK_M BLOCK_N
+          BLOCK_DMODEL HEAD_ACTIVE numKVBlocks
+          (keyScaleAFCG s₀ QScale KScale N_CTX BLOCK_M BLOCK_N numKVBlocks) idx
+        = attnFwdCausalIOOutSpec (s₀.pids 0) N_CTX BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE
+            numKVBlocks xs ys zs ws vs idx := by
+      intro idx
+      unfold attnFwdCausalOutSpecG attnFwdCausalIOOutSpec
+      rw [hqTeq, hvTeq, hksEq]
+      simp only [qStartAFCG]
+      exact afcIO_spec_congrK _ _ _ _ _ _
+        (afcIO_raw_sum_eq HEAD_ACTIVE
+          (afcIOqTm (s₀.pids 0) N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE numKVBlocks xs)
+          (kTileAFCG s₀ K stride_qz stride_qh H HEAD_DIM (BLOCK_N * numKVBlocks) BLOCK_DMODEL)
+          (afcIOkTm BLOCK_N BLOCK_DMODEL HEAD_ACTIVE numKVBlocks ys)
+          (afcIOqTm_head_masked (s₀.pids 0) N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE numKVBlocks xs)
+          hkTeq) idx
+    refine ⟨sF, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (everything cast-free under `hfp16`)
+      show execR R _ s₀ = some sF
+      unfold execR
+      rw [afc_body_splitG, afcPreLoopG_check, afcPostLoopG_check, stepStmtsR_append,
+        afcIO_preLoop_castFree R Q K V QScale KScale Out stride_qz stride_qh H HEAD_DIM N_CTX
+          BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRange "start_n" 0 N_CTX BLOCK_N
+            (AfcFoundation.afcLoopBodyG N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE)) sp
+            = some sL from by
+          rw [afcIO_loopStmt_castFree R hfp16 N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE sp]
+          exact hloop),
+        afcIO_postLoop_castFree R Out N_CTX BLOCK_M BLOCK_DMODEL HEAD_ACTIVE sL]
+      exact hpost
+    · -- `Out` readback: the streamed causal closed form on every active lane
+      intro j hj
+      have hact : active s₀ N_CTX HEAD_ACTIVE BLOCK_M (Lane2D.decode j) := by
+        simp only [active, mIndex, kIndex, Lane2D.decode_row, Lane2D.decode_col]
+        exact hj
+      have hOj := hO (Lane2D.decode j)
+      rw [if_pos hact] at hOj
+      rw [show s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh
+            + (s₀.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL) * HEAD_DIM + j.val % BLOCK_DMODEL
+          = outOffset s₀ H stride_qz stride_qh HEAD_DIM 1 BLOCK_M (Lane2D.decode j) from by
+        simp only [outOffset, offZ, offH, mIndex, kIndex, Lane2D.decode_row, Lane2D.decode_col,
+          Nat.mul_one]]
+      rw [BlockState.readMemAs_real, hOj, hspec (Lane2D.decode j)]
+      simp [FloatDType.ofReal]
+    · -- the frame: cells outside the write-active `Out` window are untouched
+      intro r' o' hcond
+      refine (hframe r' o' ?_).trans ?_
+      · intro hr idx hPidx
+        rcases hcond with hne | hguard
+        · exact absurd hr hne
+        · intro heq
+          refine hguard (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) ?_ (heq.trans ?_)
+          · simp only [Lane2D.encode_div, Lane2D.encode_mod]
+            exact hPidx
+          · simp only [baseOffsetAFCG, Lane2D.encode_div, Lane2D.encode_mod]
+      · rw [hmemL]
+
+end IOFace
+
+end VeriTile.Bench.TritonBenchG.AttnFwdCausal
