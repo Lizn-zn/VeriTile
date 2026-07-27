@@ -1218,4 +1218,1083 @@ specification attention_fwd_triton1_output_summary_general
 end Correct_without_Rounding
 
 
+/-! # ══════════ ⊨[R] STREAMING IO HEADLINE (STORE=false, IFCOND=false) ══════════
+
+The `⊨[R]` face of the verified default configuration, on the three-stream
+per-step emit skin `StreamEmitMasked2DKernelIO₃` (streaming genre, style S3:
+in-loop store). Everything below is purely additive; the exact surfaces above
+are untouched. Per chunk `t` of the `forRangeDyn` loop the kernel streams the
+`Q`/`K`/`V` block-pointer tiles (`B1 = BT·BD`, `B2 = BD·BT`, `B3 = BT·BD`
+lanes, row-major `Lane2D` flattening) and emits the `[BT, BD]` output tile
+`b_o` through the advanced `p_o` block pointer — a per-step `C = BT·BD`-lane
+write window into `O`.
+
+Rounding structure: the default branch has **zero rounding events**. The
+`(b_q * scale).to(b_q.dtype)` and `(b_o).to(p_o.dtype.element_ty)` casts erase
+to `.real → .real` at translation (the lowered `aft1LoopBodyG` carries no cast
+op at all), the three block-pointer loads and the in-loop store are
+`.real`-typed, so the whole body collapses statement-by-statement onto the
+exact stepper and the proven `aft1InvG` carry stack
+(`aft1InvG_step` / `forRangeDyn_inv`) is reused unchanged under `execR R`. The
+`⊨[R]` face adds only the `TraceSafeR` walk (the wave's first `forRangeDyn`
+walk: the dynamic `cdiv` bound op is resolved to `NT` once, then
+`Stmt.forRangeTraceSafeR_inv` runs over `aft1InvG`), the per-cell memory
+frame, and the `Lane2D` stream-lane spec bridge. -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamEmitMasked2DKernelIO₃
+
+set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of the `STORE=false, IFCOND=false` branch of
+`attention_fwd_kernel` on the three-stream per-step emit skin. Step `t` of the
+`cdiv`-bounded chunk loop reads the `[BT, BD]` `Q` tile, the `[BD, BT]` `K`
+tile and the `[BT, BD]` `V` tile through the per-chunk `make_block_ptr`s, and
+stores the `[BT, BD]` output tile through `p_o` at the **`.real`** grid
+(`outDType` default — the store's `.to(p_o.dtype.element_ty)` cast erases, so
+the per-step stores have no quantization event). The windows transcribe the
+block pointers' effective 2-D addresses verbatim in the standard row-major
+`Lane2D` div/mod spelling (`pid₀ = i_bh`; the kernel is a 1-D grid, so `pid₁`
+is ignored):
+
+* `read1` step `t`, lane `j`: `i_bh·s_qh + (t·BT + j/BD)·BD + j%BD` — `Q` tile
+  cell `(j/BD, j%BD)` of chunk `t` (strides `(BD, 1)`).
+* `read2` step `t`, lane `j`: `i_bh·s_qh + j/BT + (t·BT + j%BT)·BD` — `K` tile
+  cell `(j/BT, j%BT)` of chunk `t` (strides `(1, BD)`).
+* `read3` / `write`: the same `(BD, 1)`-strided window into `V` / `O`.
+
+All loads and the store are unmasked with empty boundary check, so every mask
+is `True`. -/
+def attentionFwdTriton1KernelIO (Q K V H O : RegionName)
+    (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat) :
+    StreamEmitMasked2DKernelIO₃ where
+  kernel := attention_fwd_kernel_surface Q K V H O s_qh BD 1 s_hh s_ht (NT * BT)
+    scale BT BD NT Bool.false Bool.false
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out := O
+  T := NT
+  B1 := BT * BD
+  B2 := BD * BT
+  B3 := BT * BD
+  C := BT * BD
+  read1 := fun p₀ _ t j => p₀ * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD
+  read2 := fun p₀ _ t j => p₀ * s_qh + j.val / BT + (t.val * BT + j.val % BT) * BD
+  read3 := fun p₀ _ t j => p₀ * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD
+  write := fun p₀ _ t j => p₀ * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD
+  mask1 := fun _ _ _ _ => True
+  mask2 := fun _ _ _ _ => True
+  mask3 := fun _ _ _ _ => True
+  writeMask := fun _ _ _ _ => True
+
+/-! ### The stream-level spec -/
+
+/-- The stream-level linear-attention spec (the genre's *scan* shape with a
+matrix carry): output lane `j` (tile cell `(j/BD, j%BD)` by `Lane2D`) of
+chunk `c` holds the local term `((scale·Qc)·Kc·Vc)[j/BD, j%BD]` plus the
+recurrent term `((scale·Qc) · Σ_{u<c} Kᵤᵀ·Vᵤ)[j/BD, j%BD]` — the emitted
+`b_o` uses the **pre-update** carry `b_h_c = Σ_{u<c} Kᵤᵀ·Vᵤ` (the kernel adds
+`dot(b_q, b_h)` *before* `b_h += dot(b_k, b_v)`). Pure real arithmetic over
+the three streams; the algebra is `aft1OutG` restated on the curried lanes. -/
+noncomputable def aft1StreamSpec (scale : ℝ) (NT BT BD : Nat)
+    (qs : Fin NT → Fin (BT * BD) → ℝ) (ks : Fin NT → Fin (BD * BT) → ℝ)
+    (vs : Fin NT → Fin (BT * BD) → ℝ) (c : Fin NT) (j : Fin (BT * BD)) : ℝ :=
+  (∑ tk : Fin BT,
+    (∑ e : Fin BD,
+        (qs c (Lane2D.encode ((Lane2D.decode j).1, e, PUnit.unit)) * scale) *
+          ks c (Lane2D.encode (e, tk, PUnit.unit))) *
+      vs c (Lane2D.encode (tk, (Lane2D.decode j).2.1, PUnit.unit)))
+  + ∑ d' : Fin BD,
+      (qs c (Lane2D.encode ((Lane2D.decode j).1, d', PUnit.unit)) * scale) *
+        ∑ u : Fin c.val, ∑ tk : Fin BT,
+          ks (Fin.castLE (Nat.le_of_lt c.isLt) u)
+              (Lane2D.encode (d', tk, PUnit.unit)) *
+            vs (Fin.castLE (Nat.le_of_lt c.isLt) u)
+              (Lane2D.encode (tk, (Lane2D.decode j).2.1, PUnit.unit))
+
+/-! ### Cast-free collapses (the whole default branch has zero rounding
+events: no cast op survives erasure, and every load/store is `.real`) -/
+
+/-- `evalOpR` on a constexpr Bool is the constant (R-independent). -/
+private theorem aft1_evalOpR_constBool (R : RoundingModel) (b : Bool)
+    (s : BlockState) :
+    evalOpR R (Op.constBool b) s = some (Tile.scalar b) := by
+  simp only [evalOpR]
+
+/-- `stepStmtR` mirror of `aft1_ifThen_false_noop`. -/
+private theorem aft1_ifThen_falseR (R : RoundingModel) {cond : Op .bool []}
+    {body : List Stmt} {s : BlockState}
+    (hc : evalOpR R cond s = some (Tile.scalar Bool.false)) :
+    stepStmtR R (.ifThen cond body) s = some s := by
+  simp only [stepStmtR, hc, Option.bind, Tile.scalar]
+  rfl
+
+/-- `stepStmtR` mirror of `aft1_ifThenElse_false_else`. -/
+private theorem aft1_ifThenElse_falseR (R : RoundingModel) {cond : Op .bool []}
+    {tb eb : List Stmt} {s : BlockState}
+    (hc : evalOpR R cond s = some (Tile.scalar Bool.false)) :
+    stepStmtR R (.ifThenElse cond tb eb) s = stepStmtsR R eb s := by
+  simp only [stepStmtR, hc, Option.bind, Tile.scalar]
+  rfl
+
+/-- `mapM` congruence for cast-free dynamic block-pointer offset lists. -/
+private theorem aft1_evalOpR_castFree_offsets (R : RoundingModel) :
+    ∀ (offsets : List (Op .nat [])) (s : BlockState),
+      (∀ o ∈ offsets, evalOpR R o s = evalOp o s) →
+      offsets.mapM (fun off => do
+          let v ← evalOpR R off s
+          some (v.data PUnit.unit))
+        = offsets.mapM (fun off => do
+            let v ← evalOp off s
+            some (v.data PUnit.unit))
+  | [], _, _ => rfl
+  | off :: rest, s, h => by
+      simp only [List.mapM_cons, h off List.mem_cons_self,
+        aft1_evalOpR_castFree_offsets R rest s
+          (fun o ho => h o (List.mem_cons_of_mem _ ho))]
+
+/-- `evalOpR` mirror of `Op.makeBlockPtrDynOffsets` for cast-free base/offset
+ops (the `.nat` channels never round). -/
+private theorem aft1_evalOpR_mbpdo_castFree (R : RoundingModel) (region : RegionName)
+    (base : Op .nat []) (ps : List Nat) (bs : TileShape) (strides : List Nat)
+    (offs : List (Op .nat [])) (s : BlockState)
+    (hb : evalOpR R base s = evalOp base s)
+    (ho : ∀ o ∈ offs, evalOpR R o s = evalOp o s) :
+    evalOpR R (.makeBlockPtrDynOffsets region base ps bs strides offs) s
+      = evalOp (.makeBlockPtrDynOffsets region base ps bs strides offs) s := by
+  simp only [evalOpR, evalOp, hb, aft1_evalOpR_castFree_offsets R offs s ho]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). -/
+private theorem aft1_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact aft1_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+/-- The prologue (program id + `b_h` zero-init) is cast-free. -/
+private theorem aft1_prologue_castFree (R : RoundingModel) (BD : Nat)
+    (t : BlockState) :
+    stepStmtsR R (aft1PrologueG BD) t = stepStmts (aft1PrologueG BD) t := by
+  simp only [aft1PrologueG, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+set_option maxRecDepth 8000 in
+/-- Every default-branch loop-body statement is cast-free,
+statement-by-statement (the blanket list unfolding would diverge on the dead
+`STORE` branch of the constexpr `ifThen` and the dead then-branch of the
+constexpr `ifThenElse`, which are reduced to their live continuations first;
+the five `makeBlockPtrDynOffsets` assigns go through the dedicated `mapM`
+mirror). -/
+private theorem aft1_body_stmt_castFree (R : RoundingModel)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) :
+    ∀ st ∈ aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [aft1LoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl
+  · -- p_q (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      aft1_evalOpR_mbpdo_castFree R Q
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT),
+          Op.constNat 0] u
+        (by simp only [evalOpR.eq_def, evalOp.eq_def])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- p_k
+    simp only [stepStmtR, stepStmt,
+      aft1_evalOpR_mbpdo_castFree R K
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [BD, NT * BT] [BD, BT] [1, BD]
+        [Op.constNat 0,
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT)] u
+        (by simp only [evalOpR.eq_def, evalOp.eq_def])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- p_v
+    simp only [stepStmtR, stepStmt,
+      aft1_evalOpR_mbpdo_castFree R V
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT),
+          Op.constNat 0] u
+        (by simp only [evalOpR.eq_def, evalOp.eq_def])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- p_h
+    simp only [stepStmtR, stepStmt,
+      aft1_evalOpR_mbpdo_castFree R H
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_hh))
+        [NT * BD, BD] [BD, BD] [s_ht, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BD),
+          Op.constNat 0] u
+        (by simp only [evalOpR.eq_def, evalOp.eq_def])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- p_o
+    simp only [stepStmtR, stepStmt,
+      aft1_evalOpR_mbpdo_castFree R O
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+        [NT * BT, BD] [BT, BD] [BD, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT),
+          Op.constNat 0] u
+        (by simp only [evalOpR.eq_def, evalOp.eq_def])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- dead `STORE` ifThen (constexpr-false): both sides no-op
+    rw [aft1_ifThen_falseR R (aft1_evalOpR_constBool R Bool.false u),
+      aft1_ifThen_false_noop]
+  · -- b_q load
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- b_q scale
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- b_k load
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- b_v load
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- b_s dot
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- b_o dot
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- IFCOND ifThenElse (constexpr-false): collapse on the live else branch
+    rw [aft1_ifThenElse_falseR R (aft1_evalOpR_constBool R Bool.false u),
+      aft1_ifThenElse_false_else]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt,
+      evalOpR.eq_def, evalOp.eq_def]
+    rfl
+  · -- the in-loop `.real` store: `writeMemTypedR R .real` is the exact write
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      BlockState.writeMemTypedR]
+
+/-- The default-branch loop body is cast-free: it steps identically under
+`stepStmtsR R`. -/
+private theorem aft1_body_castFree (R : RoundingModel)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (t : BlockState) :
+    stepStmtsR R (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false) t
+      = stepStmts (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false) t :=
+  aft1_stepStmtsR_castFree_of_stmts R _
+    (aft1_body_stmt_castFree R Q K V H O s_qh s_hh s_ht scale BT BD NT) t
+
+/-- The dynamic `cdiv` bound op evaluates to `NT` in **any** state (extracted
+from `aft1_exec_carryG`'s inline computation). -/
+private theorem aft1_stopOp_eval (BT NT : Nat) (hBT : 0 < BT) (s : BlockState) :
+    evalOp (aft1StopOpG BT NT) s = some (Tile.scalar NT) := by
+  simp only [aft1StopOpG, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+    Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro z
+  simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.div, NumericDType.sub, NumericDType.add]
+  show (NT * BT + BT - 1) / BT = NT
+  have hcomm : NT * BT = BT * NT := Nat.mul_comm NT BT
+  have heq : NT * BT + BT - 1 = BT * NT + (BT - 1) := by rw [hcomm]; omega
+  rw [heq, Nat.mul_add_div hBT]
+  have : (BT - 1) / BT = 0 := Nat.div_eq_of_lt (by omega)
+  omega
+
+/-- The `cdiv` bound op is cast-free (pure `.nat` constant arithmetic). -/
+private theorem aft1_stopOpR_castFree (R : RoundingModel) (BT NT : Nat)
+    (t : BlockState) :
+    evalOpR R (aft1StopOpG BT NT) t = evalOp (aft1StopOpG BT NT) t := by
+  simp only [aft1StopOpG, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The whole `forRangeDyn` loop statement is cast-free: the three bound ops
+are `.nat` arithmetic and the body collapses statement-by-statement, so the
+strided fold does too (the `forRangeDyn` mirror of the wave's `forRange`
+collapses). -/
+private theorem aft1_forRangeDyn_castFree (R : RoundingModel)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (t : BlockState) :
+    stepStmtR R (Stmt.forRangeDyn "i" (Op.constNat 0) (aft1StopOpG BT NT)
+        (Op.constNat 1)
+        (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+          Bool.false Bool.false)) t
+      = stepStmt (Stmt.forRangeDyn "i" (Op.constNat 0) (aft1StopOpG BT NT)
+        (Op.constNat 1)
+        (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+          Bool.false Bool.false)) t := by
+  simp only [stepStmtR, stepStmt, aft1_stopOpR_castFree R BT NT t,
+    show evalOpR R (Op.constNat 0) t = evalOp (Op.constNat 0) t from by
+      simp only [evalOpR, evalOp],
+    show evalOpR R (Op.constNat 1) t = evalOp (Op.constNat 1) t from by
+      simp only [evalOpR, evalOp]]
+  cases evalOp (Op.constNat 0) t with
+  | none => rfl
+  | some a =>
+    cases evalOp (aft1StopOpG BT NT) t with
+    | none => rfl
+    | some b =>
+      cases evalOp (Op.constNat 1) t with
+      | none => rfl
+      | some cc =>
+        exact stepForRangeAuxR_castFree R _
+          (aft1_body_castFree R Q K V H O s_qh s_hh s_ht scale BT BD NT) "i"
+          _ _ _ t
+
+/-- The default-branch surface sits inside the flat-memory bridge's covered
+fragment (block-pointer ops are structurally covered; no `ptrSub`). -/
+private theorem aft1_flattenOk (Q K V H O : RegionName)
+    (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat) :
+    ((attention_fwd_kernel_surface Q K V H O s_qh BD 1 s_hh s_ht (NT * BT)
+        scale BT BD NT Bool.false Bool.false).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [attention_fwd_triton1_body_splitG]
+  simp [aft1PrologueG, aft1LoopBodyG, aft1StopOpG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-! ### Concrete `evalOpR` block-pointer evaluations (per-chunk pointers) -/
+
+/-- `evalOpR` of a row-advanced `make_block_ptr` (`offsets = (i·mr, 0)`)
+through the pinned `i_bh`/`i` registers: the cast-free collapse composed with
+the exact `aft1_makeBlockPtr_2d_eval`. Covers `p_q`/`p_v`/`p_h`/`p_o`. -/
+private theorem aft1_mbpdoR_eval_row (R : RoundingModel) (rg : RegionName)
+    (mb mr : Nat) (ps bs strides : List Nat) (sin : BlockState) (p₀ c : Nat)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar p₀))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c)) :
+    evalOpR R (Op.makeBlockPtrDynOffsets rg
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat mb))
+        ps bs strides
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat mr),
+          Op.constNat 0]) sin
+      = some (⟨fun _ => BlockPtr.mk rg (p₀ * mb) ps bs strides [c * mr, 0]⟩
+          : Tile .blockPtr bs) := by
+  rw [aft1_evalOpR_mbpdo_castFree R rg _ ps bs strides _ sin
+    (by simp only [evalOpR.eq_def, evalOp.eq_def])
+    (by
+      intro o ho
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+      rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  exact aft1_makeBlockPtr_2d_eval rg sin _ _ _ ps bs strides (p₀ * mb) (c * mr) 0
+    (aft1_mulConst_eval sin "i_bh" p₀ mb hibh)
+    (aft1_mulConst_eval sin "i" c mr hi) (by simp)
+
+/-- Column-advanced sibling (`offsets = (0, i·mr)`). Covers `p_k`. -/
+private theorem aft1_mbpdoR_eval_col (R : RoundingModel) (rg : RegionName)
+    (mb mr : Nat) (ps bs strides : List Nat) (sin : BlockState) (p₀ c : Nat)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar p₀))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c)) :
+    evalOpR R (Op.makeBlockPtrDynOffsets rg
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat mb))
+        ps bs strides
+        [Op.constNat 0,
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat mr)]) sin
+      = some (⟨fun _ => BlockPtr.mk rg (p₀ * mb) ps bs strides [0, c * mr]⟩
+          : Tile .blockPtr bs) := by
+  rw [aft1_evalOpR_mbpdo_castFree R rg _ ps bs strides _ sin
+    (by simp only [evalOpR.eq_def, evalOp.eq_def])
+    (by
+      intro o ho
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+      rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  exact aft1_makeBlockPtr_2d_eval rg sin _ _ _ ps bs strides (p₀ * mb) 0 (c * mr)
+    (aft1_mulConst_eval sin "i_bh" p₀ mb hibh) (by simp)
+    (aft1_mulConst_eval sin "i" c mr hi)
+
+/-! ### Walk inversion helpers -/
+
+/-- Exact-side inversion of a leading assign in a `stepStmts` chain: threads
+successor states of register-only statements without computing their values. -/
+private theorem aft1_stepStmts_cons_assign_inv {dt : TileDType} {sh : TileShape}
+    {nm : RegName} {e : Op dt sh} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmts (Stmt.assign dt sh nm e :: rest) s = some s') :
+    ∃ v, evalOp e s = some v ∧ stepStmts rest (s.setReg nm dt sh v) = some s' := by
+  cases hv : evalOp e s with
+  | none => simp [stepStmts, stepStmt, hv] at h
+  | some v =>
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some hv)] at h
+      exact ⟨v, rfl, h⟩
+
+/-- Exact-side cons inversion for arbitrary statements. -/
+private theorem aft1_stepStmts_cons_inv {st : Stmt} {rest : List Stmt}
+    {s s' : BlockState} (h : stepStmts (st :: rest) s = some s') :
+    ∃ u, stepStmt st s = some u ∧ stepStmts rest u = some s' := by
+  rw [stepStmts] at h
+  cases hu : stepStmt st s with
+  | none => rw [hu] at h; exact absurd h (by simp)
+  | some u => rw [hu] at h; exact ⟨u, rfl, h⟩
+
+/-- Cons-level inversion for `stepStmtsR` (walks a successful list run one
+statement at a time). -/
+private theorem aft1_stepStmtsR_cons_inv {R : RoundingModel} {st : Stmt}
+    {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmtsR R (st :: rest) s = some s') :
+    ∃ u, stepStmtR R st s = some u ∧ stepStmtsR R rest u = some s' := by
+  rw [stepStmtsR] at h
+  cases hu : stepStmtR R st s with
+  | none => rw [hu] at h; exact absurd h (by simp)
+  | some u => rw [hu] at h; exact ⟨u, rfl, h⟩
+
+/-- Cell-level frame of an unmasked `.real` scatter `foldl`: every cell not
+hit by a written offset is untouched (the raw-`mem` sibling of
+`aft1_foldl_writeMem_readMem_other`). -/
+private theorem aft1_foldl_writeMemTyped_mem_other {α : Type} (l : List α)
+    (wr : RegionName) (offFn : α → Nat) (valFn : α → TileCarrier .real)
+    (s0 : BlockState) (r : RegionName) (oo : Nat)
+    (hno : ∀ i ∈ l, ¬(r = wr ∧ oo = offFn i)) :
+    (l.foldl (fun acc i => acc.writeMemTyped .real wr (offFn i) (valFn i)) s0).mem
+        r oo
+      = s0.mem r oo := by
+  induction l generalizing s0 with
+  | nil => rfl
+  | cons hd tl ih =>
+      simp only [List.foldl_cons]
+      rw [ih _ (fun i hi => hno i (List.mem_cons_of_mem hd hi))]
+      simp only [BlockState.writeMemTyped_real]
+      rw [BlockState.writeMem_mem]
+      exact if_neg (hno hd List.mem_cons_self)
+
+/-- Inversion of the terminal `p_o` store step against a pinned `p_o`: the
+successor is the unmasked `[BT, BD]` scatter of whatever `b_o` holds, at the
+chunk-`c` window addresses. -/
+private theorem aft1_store_step_inv (O : RegionName)
+    (s_qh BT BD NT : Nat) (p₀ c : Nat) (X u : BlockState)
+    (hpo : X.regs .blockPtr [BT, BD] "p_o" = some
+      (⟨fun _ => BlockPtr.mk O (p₀ * s_qh) [NT * BT, BD] [BT, BD] [BD, 1]
+        [c * BT, 0]⟩ : Tile .blockPtr [BT, BD]))
+    (hstep : stepStmt (Stmt.store .real [BT, BD]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+        (Op.ref .real [BT, BD] "b_o") MaskOpt.none) X = some u) :
+    ∃ vbo : Tile .real [BT, BD],
+      u = (TileShape.allIndices [BT, BD]).foldl
+        (fun acc i => acc.writeMemTyped .real O
+          (p₀ * s_qh + (c * BT + i.1.val) * BD + (0 + i.2.1.val) * 1)
+          (vbo.data i)) X := by
+  cases hbo : X.regs .real [BT, BD] "b_o" with
+  | none =>
+      rw [show stepStmt (Stmt.store .real [BT, BD]
+          (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+          (Op.ref .real [BT, BD] "b_o") MaskOpt.none) X = none from by
+        unfold stepStmt
+        simp [evalOp_ref, hbo]] at hstep
+      exact absurd hstep (by simp)
+  | some vbo =>
+      refine ⟨vbo, ?_⟩
+      have hstep' : stepStmt (Stmt.store .real [BT, BD]
+          (MemAccess.blockPtr (Op.ref .blockPtr [BT, BD] "p_o") [])
+          (Op.ref .real [BT, BD] "b_o") MaskOpt.none) X
+          = some ((TileShape.allIndices [BT, BD]).foldl
+            (fun acc i => acc.writeMemTyped .real O
+              (p₀ * s_qh + (c * BT + i.1.val) * BD + (0 + i.2.1.val) * 1)
+              (vbo.data i)) X) := by
+        unfold stepStmt
+        simp only [evalOp_ref, hbo, hpo, Option.bind, Option.map]
+        refine congrArg some
+          (congrArg (fun f => List.foldl f X (TileShape.allIndices [BT, BD])) ?_)
+        funext acc i
+        obtain ⟨t, d, uu⟩ := i
+        simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+          BlockPtr.inBounds, List.all_nil, Bool.and_true, if_true]
+      exact (Option.some.inj (hstep'.symm.trans hstep)).symm
+
+set_option maxRecDepth 8000 in
+/-- **Cell-level frame of one loop iteration** (the raw-`mem` twin of
+`aft1_loopBody_iter_ffG`, walked with opaque register values): one
+default-branch body iteration leaves every cell off the chunk-`c` write
+window `{(O, base + (c·BT + t)·BD + d)}` untouched. -/
+private theorem aft1_body_memFrame (Q K V H O : RegionName)
+    (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat) (p₀ c : Nat)
+    (sin s' : BlockState)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar p₀))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c))
+    (hstep : stepStmts (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+      Bool.false Bool.false) sin = some s')
+    (r : RegionName) (oo : Nat)
+    (hcond : r ≠ O ∨ ∀ (t : Fin BT) (d : Fin BD),
+      oo ≠ p₀ * s_qh + (c * BT + t.val) * BD + d.val) :
+    s'.mem r oo = sin.mem r oo := by
+  unfold aft1LoopBodyG at hstep
+  obtain ⟨v1, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v2, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v3, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v4, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  -- p_o concretely (its window is the store's address set)
+  obtain ⟨v5, hv5, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  have hpoev : evalOp (Op.makeBlockPtrDynOffsets O
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qh))
+      [NT * BT, BD] [BT, BD] [BD, 1]
+      [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat BT),
+        Op.constNat 0])
+      ((((sin.setReg "p_q" .blockPtr [BT, BD] v1).setReg "p_k" .blockPtr [BD, BT]
+        v2).setReg "p_v" .blockPtr [BT, BD] v3).setReg "p_h" .blockPtr [BD, BD] v4)
+      = some (⟨fun _ => BlockPtr.mk O (p₀ * s_qh) [NT * BT, BD] [BT, BD] [BD, 1]
+          [c * BT, 0]⟩ : Tile .blockPtr [BT, BD]) :=
+    aft1_makeBlockPtr_2d_eval O _ _ _ _ [NT * BT, BD] [BT, BD] [BD, 1]
+      (p₀ * s_qh) (c * BT) 0
+      (aft1_mulConst_eval _ "i_bh" p₀ s_qh (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true]
+        exact hibh))
+      (aft1_mulConst_eval _ "i" c BT (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true]
+        exact hi)) (by simp)
+  obtain rfl := Option.some.inj (hpoev.symm.trans hv5)
+  -- dead STORE ifThen: no-op
+  rw [stepStmts.cons_some (aft1_ifThen_false_noop _ _)] at hstep
+  -- b_q load, b_q scale, b_k, b_v, b_s, b_o: register-only, opaque
+  obtain ⟨v7, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v8, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v9, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v10, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v11, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  obtain ⟨v12, -, hstep⟩ := aft1_stepStmts_cons_assign_inv hstep
+  -- IFCOND ifThenElse: the live else branch is two register-only assigns
+  obtain ⟨u13, hu13, hstep⟩ := aft1_stepStmts_cons_inv hstep
+  rw [aft1_ifThenElse_false_else] at hu13
+  obtain ⟨w1, -, hu13⟩ := aft1_stepStmts_cons_assign_inv hu13
+  obtain ⟨w2, -, hu13⟩ := aft1_stepStmts_cons_assign_inv hu13
+  rw [stepStmts.nil] at hu13
+  obtain rfl := Option.some.inj hu13
+  -- the terminal store
+  obtain ⟨u14, hu14, hstep⟩ := aft1_stepStmts_cons_inv hstep
+  rw [stepStmts.nil] at hstep
+  obtain rfl := Option.some.inj hstep
+  obtain ⟨vbo, rfl⟩ := aft1_store_step_inv O s_qh BT BD NT p₀ c _ u14
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true, BlockState.setReg_same])
+    hu14
+  rw [aft1_foldl_writeMemTyped_mem_other _ O _ _ _ r oo (by
+    intro i _ hbad
+    rcases hcond with hne | hno
+    · exact hne hbad.1
+    · obtain ⟨t, d, uu⟩ := i
+      exact hno t d (by simpa using hbad.2))]
+  simp only [BlockState.setReg_mem]
+
+/-! ### The `TraceSafeR` walk -/
+
+/-- A constexpr-false `ifThen` is trace-safe regardless of its dead body. -/
+private theorem aft1_ifThen_false_safeR (R : RoundingModel)
+    (bounds : RegionBounds) (body : List Stmt) (X : BlockState) :
+    Stmt.TraceSafeR R bounds (Stmt.ifThen (Op.constBool Bool.false) body) X := by
+  simp only [Stmt.TraceSafeR]
+  refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+  rw [aft1_evalOpR_constBool R Bool.false X]
+  exact trivial
+
+/-- A constexpr-false `ifThenElse` is trace-safe once its live else branch
+is. -/
+private theorem aft1_ifThenElse_false_safeR (R : RoundingModel)
+    (bounds : RegionBounds) (tb eb : List Stmt) (X : BlockState)
+    (he : Stmt.TraceSafeListR R bounds eb X) :
+    Stmt.TraceSafeR R bounds
+      (Stmt.ifThenElse (Op.constBool Bool.false) tb eb) X := by
+  simp only [Stmt.TraceSafeR]
+  refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+  rw [aft1_evalOpR_constBool R Bool.false X]
+  exact he
+
+set_option maxRecDepth 8000 in
+/-- **Per-iteration `TraceSafeListR` for the default-branch body**: the three
+block-ptr loads' and the terminal store's per-lane addresses are the freshly
+assigned per-chunk pointers (recomputed through the invariant's `i_bh` pin and
+the loop counter — they are not loop-carried), in bounds by the skin's
+`read1`/`read2`/`read3`/`write` windows instantiated at chunk `c` through the
+row-major `Lane2D` encode; everything else is register-only (the dead `STORE`
+ifThen and the dead `IFCOND` then-branch impose nothing). -/
+private theorem aft1_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (s stt : BlockState) (c : Nat) (hc : c < NT)
+    (hP : aft1InvG Q K V H O s_qh scale BT BD s c stt)
+    (hbQ : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds Q)
+    (hbK : ∀ (t : Fin NT) (j : Fin (BD * BT)),
+      s.pids 0 * s_qh + j.val / BT + (t.val * BT + j.val % BT) * BD < bounds K)
+    (hbV : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds V)
+    (hbO : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds O) :
+    Stmt.TraceSafeListR R bounds
+      (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false)
+      (stt.setReg "i" .nat [] (Tile.scalar c)) := by
+  obtain ⟨hpids, hibh, hbh, hQm, hKm, hVm, hHm, hOprev⟩ := hP
+  set sin := stt.setReg "i" .nat [] (Tile.scalar c) with hsin
+  have hibh0 : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)) := by
+    rw [hsin, BlockState.setReg_ne_name (h := by decide)]
+    exact hibh
+  have hi0 : sin.regs .nat [] "i" = some (Tile.scalar c) := by
+    rw [hsin]
+    exact BlockState.setReg_same _ _ _ _ _
+  unfold aft1LoopBodyG
+  -- (1) p_q
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some (aft1_mbpdoR_eval_row R Q s_qh BT
+    [NT * BT, BD] [BT, BD] [BD, 1] sin (s.pids 0) c hibh0 hi0)] at ht1
+  obtain rfl := Option.some.inj ht1
+  -- (2) p_k
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some (aft1_mbpdoR_eval_col R K s_qh BT
+    [BD, NT * BT] [BD, BT] [1, BD] _ (s.pids 0) c
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hibh0)
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hi0))] at ht2
+  obtain rfl := Option.some.inj ht2
+  -- (3) p_v
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t3 ht3 => ?_)
+  rw [stepStmtR_assign_eq_some (aft1_mbpdoR_eval_row R V s_qh BT
+    [NT * BT, BD] [BT, BD] [BD, 1] _ (s.pids 0) c
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hibh0)
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hi0))] at ht3
+  obtain rfl := Option.some.inj ht3
+  -- (4) p_h (dead channel: opaque successor)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t4 ht4 => ?_)
+  obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+  -- (5) p_o
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t5 ht5 => ?_)
+  rw [stepStmtR_assign_eq_some (aft1_mbpdoR_eval_row R O s_qh BT
+    [NT * BT, BD] [BT, BD] [BD, 1] _ (s.pids 0) c
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hibh0)
+    (by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+        not_false_eq_true]
+      exact hi0))] at ht5
+  obtain rfl := Option.some.inj ht5
+  -- (6) dead STORE ifThen
+  refine Stmt.TraceSafeListR.cons_intro
+    (aft1_ifThen_false_safeR R bounds _ _) (fun t6 ht6 => ?_)
+  rw [aft1_ifThen_falseR R (aft1_evalOpR_constBool R Bool.false _)] at ht6
+  obtain rfl := Option.some.inj ht6
+  -- (7) b_q load: the per-lane Q bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t7 ht7 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hb := hbQ ⟨c, hc⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hb
+    simpa using hb
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv ht7
+  -- (8) b_q scale: register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun t8 ht8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv ht8
+  -- (9) b_k load: the per-lane K bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t9 ht9 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hb := hbK ⟨c, hc⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hb
+    simpa using hb
+  obtain ⟨v9, -, rfl⟩ := stepStmtR_assign_inv ht9
+  -- (10) b_v load: the per-lane V bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t10 ht10 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hb := hbV ⟨c, hc⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hb
+    simpa using hb
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv ht10
+  -- (11) b_s dot: register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t11 ht11 => ?_)
+  obtain ⟨v11, -, rfl⟩ := stepStmtR_assign_inv ht11
+  -- (12) b_o dot: register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t12 ht12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv ht12
+  -- (13) IFCOND ifThenElse: live else branch is register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (aft1_ifThenElse_false_safeR R bounds _ _ _
+      (Stmt.TraceSafeListR.of_forall _ _ (by
+        intro st hst u
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl <;>
+          simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])))
+    (fun t13 ht13 => ?_)
+  rw [aft1_ifThenElse_falseR R (aft1_evalOpR_constBool R Bool.false _)] at ht13
+  obtain ⟨u1, hu1, ht13⟩ := aft1_stepStmtsR_cons_inv ht13
+  obtain ⟨w1, -, rfl⟩ := stepStmtR_assign_inv hu1
+  obtain ⟨u2, hu2, ht13⟩ := aft1_stepStmtsR_cons_inv ht13
+  obtain ⟨w2, -, rfl⟩ := stepStmtR_assign_inv hu2
+  rw [stepStmtsR_nil] at ht13
+  obtain rfl := Option.some.inj ht13
+  -- (14) the terminal store: the per-lane O bound
+  refine Stmt.TraceSafeListR.cons_intro ?_
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MemAccess.SafeAtR,
+    MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, trivial, ?_⟩
+  intro ptrs hptrs idx _
+  rw [evalOpR_ref] at hptrs
+  simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+    not_false_eq_true, BlockState.setReg_same] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  intro _
+  have hb := hbO ⟨c, hc⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+  simp only [Lane2D.encode_div, Lane2D.encode_mod] at hb
+  simpa using hb
+
+/-- **The `TraceSafeR` walk for the whole default-branch kernel** — the wave's
+first `forRangeDyn` walk: the prologue is register-only, the dynamic `cdiv`
+bound resolves to `NT` once (`aft1_stopOp_eval`), and
+`Stmt.forRangeTraceSafeR_inv` runs over the proven exact carry invariant
+`aft1InvG` (whose step existence is `aft1InvG_step` transported through the
+cast-free body collapse). -/
+private theorem aft1_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (hBT : 0 < BT)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) (s : BlockState)
+    (hbQ : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds Q)
+    (hbK : ∀ (t : Fin NT) (j : Fin (BD * BT)),
+      s.pids 0 * s_qh + j.val / BT + (t.val * BT + j.val % BT) * BD < bounds K)
+    (hbV : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds V)
+    (hbO : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD + j.val % BD < bounds O) :
+    ((attention_fwd_kernel_surface Q K V H O s_qh BD 1 s_hh s_ht (NT * BT)
+        scale BT BD NT Bool.false Bool.false).toAlgKernel).TraceSafeR R bounds
+      s := by
+  unfold Kernel.TraceSafeR
+  rw [attention_fwd_triton1_body_splitG]
+  refine Stmt.TraceSafeListR.append_intro _ s ?_ ?_
+  · -- prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro stmt hst u
+    simp only [aft1PrologueG, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl <;> simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    rw [aft1_prologue_castFree R BD s] at hs1
+    obtain ⟨s0, hpre, hP0⟩ := aft1_prologue_invG Q K V H O s_qh scale BT BD s
+    obtain rfl := Option.some.inj (hpre.symm.trans hs1)
+    refine Stmt.TraceSafeListR.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      by simp [aft1StopOpG, Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [show evalOpR R (Op.constNat 0) s0 = some (Tile.scalar 0) from by
+        simp only [evalOpR],
+      aft1_stopOpR_castFree R BT NT s0, aft1_stopOp_eval BT NT hBT s0,
+      show evalOpR R (Op.constNat 1) s0 = some (Tile.scalar 1) from by
+        simp only [evalOpR]]
+    show Stmt.forRangeTraceSafeR R bounds "i" 0 NT 1
+      (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false) s0
+    refine Stmt.forRangeTraceSafeR_inv R bounds "i" NT 1
+      (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false)
+      (fun n st => aft1InvG Q K V H O s_qh scale BT BD s n st ∧ n ≤ NT)
+      ?_ 0 s0 ⟨hP0, Nat.zero_le NT⟩
+    intro cc st hcc hPn
+    obtain ⟨hInv, hle⟩ := hPn
+    refine ⟨aft1_bodySafeR R bounds Q K V H O s_qh s_hh s_ht scale BT BD NT
+      s st cc hcc hInv hbQ hbK hbV hbO, ?_⟩
+    obtain ⟨st', hstep', hInv'⟩ :=
+      aft1InvG_step Q K V H O s_qh s_hh s_ht scale BT BD NT s
+        hOQ hOK hOV hOH cc st hInv
+    exact ⟨st', by
+      rw [aft1_body_castFree R Q K V H O s_qh s_hh s_ht scale BT BD NT]
+      exact hstep', hInv', by omega⟩
+
+/-! ### The rounded Hoare triple (`hrun`) -/
+
+set_option maxRecDepth 8000 in
+/-- Termination, per-window values and the per-cell frame of the whole
+default-branch kernel under `execR R`, from an **arbitrary** launch state:
+the exact `aft1_prologue_invG` / `aft1InvG_step` carry stack runs verbatim
+(the prologue, the dynamic bound resolution and the loop body are cast-free,
+so `execR R` collapses onto the exact stepper), extended with the per-cell
+memory frame (`aft1_body_memFrame`) carried alongside `aft1InvG` through
+`forRangeDyn_inv`. -/
+private theorem aft1_runR (R : RoundingModel) (Q K V H O : RegionName)
+    (s_qh s_hh s_ht : Nat) (scale : ℝ) (BT BD NT : Nat) (hBT : 0 < BT)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) (s₀ : BlockState) :
+    ∃ sfin,
+      execR R (attention_fwd_kernel_surface Q K V H O s_qh BD 1 s_hh s_ht
+          (NT * BT) scale BT BD NT Bool.false Bool.false).toAlgKernel s₀
+        = some sfin
+      ∧ (∀ (c : Nat), c < NT → ∀ (t : Fin BT) (d : Fin BD),
+          sfin.readMem O (s₀.pids 0 * s_qh + (c * BT + t.val) * BD + d.val)
+            = aft1OutG s₀ Q K V s_qh scale BT BD c t d)
+      ∧ (∀ r oo, (r ≠ O ∨ ∀ (cf : Fin NT) (t : Fin BT) (d : Fin BD),
+            oo ≠ s₀.pids 0 * s_qh + (cf.val * BT + t.val) * BD + d.val) →
+          sfin.mem r oo = s₀.mem r oo) := by
+  obtain ⟨s0, hpre, hP0⟩ := aft1_prologue_invG Q K V H O s_qh scale BT BD s₀
+  have hpremem : ∀ r oo, s0.mem r oo = s₀.mem r oo := by
+    have hpre' := hpre
+    unfold aft1PrologueG at hpre'
+    obtain ⟨v1, -, hpre'⟩ := aft1_stepStmts_cons_assign_inv hpre'
+    obtain ⟨v2, -, hpre'⟩ := aft1_stepStmts_cons_assign_inv hpre'
+    rw [stepStmts.nil] at hpre'
+    obtain rfl := Option.some.inj hpre'
+    intro r oo
+    simp only [BlockState.setReg_mem]
+  obtain ⟨final, sLoop, hloop, hfinal, hPfinal⟩ :=
+    forRangeDyn_inv (idx := "i") (startOp := Op.constNat 0)
+      (stopOp := aft1StopOpG BT NT) (stepOp := Op.constNat 1)
+      (start := 0) (stop := NT) (step := 1)
+      (body := aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+        Bool.false Bool.false)
+      (P := fun n st => aft1InvG Q K V H O s_qh scale BT BD s₀ n st ∧ n ≤ NT
+        ∧ ∀ r oo, (r ≠ O ∨ ∀ (cf : Fin NT) (t : Fin BT) (d : Fin BD),
+            oo ≠ s₀.pids 0 * s_qh + (cf.val * BT + t.val) * BD + d.val) →
+          st.mem r oo = s₀.mem r oo)
+      (by simp [evalOp]) (aft1_stopOp_eval BT NT hBT s0) (by simp [evalOp])
+      (by norm_num)
+      ⟨hP0, Nat.zero_le NT, fun r oo _ => hpremem r oo⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hInv, hle, hframe⟩ := hPi
+        obtain ⟨st', hstep', hInv'⟩ :=
+          aft1InvG_step Q K V H O s_qh s_hh s_ht scale BT BD NT s₀
+            hOQ hOK hOV hOH i st hInv
+        refine ⟨st', hstep', hInv', by omega, ?_⟩
+        intro r oo hcond
+        have hibh' : (st.setReg "i" .nat [] (Tile.scalar i)).regs .nat [] "i_bh"
+            = some (Tile.scalar (s₀.pids 0)) := by
+          rw [BlockState.setReg_ne_name (h := by decide)]
+          exact hInv.2.1
+        have hi' : (st.setReg "i" .nat [] (Tile.scalar i)).regs .nat [] "i"
+            = some (Tile.scalar i) := BlockState.setReg_same _ _ _ _ _
+        rw [aft1_body_memFrame Q K V H O s_qh s_hh s_ht scale BT BD NT
+          (s₀.pids 0) i _ _ hibh' hi' hstep' r oo ?_]
+        · rw [BlockState.setReg_mem]
+          exact hframe r oo hcond
+        · rcases hcond with hne | hno
+          · exact Or.inl hne
+          · exact Or.inr fun t d => hno ⟨i, hlt⟩ t d)
+  obtain ⟨hInvF, hleF, hframeF⟩ := hPfinal
+  have hfinalEq : final = NT := le_antisymm hleF hfinal
+  rw [hfinalEq] at hInvF
+  obtain ⟨-, -, -, -, -, -, -, hOF⟩ := hInvF
+  refine ⟨sLoop, ?_, hOF, hframeF⟩
+  show execR R _ s₀ = some sLoop
+  unfold execR
+  rw [attention_fwd_triton1_body_splitG,
+    stepStmtsR_append R (aft1PrologueG BD) _ s₀,
+    aft1_prologue_castFree R BD s₀, hpre, Option.bind_some,
+    stepStmtsR_cons_some (show stepStmtR R (Stmt.forRangeDyn "i"
+        (Op.constNat 0) (aft1StopOpG BT NT) (Op.constNat 1)
+        (aft1LoopBodyG Q K V H O s_qh s_hh s_ht scale BT BD NT
+          Bool.false Bool.false)) s0 = some sLoop from by
+      rw [aft1_forRangeDyn_castFree R Q K V H O s_qh s_hh s_ht scale BT BD NT]
+      exact hloop),
+    stepStmtsR_nil]
+
+/-! ### The stream-lane spec bridge -/
+
+/-- Per-lane spec bridge: on the pinned streams the stream-level
+`aft1StreamSpec` **is** the exact stack's kernel-native output `aft1OutG` at
+the `Lane2D`-decoded tile cell — every stream read is pin-transported back to
+the corresponding `Q`/`K`/`V` memory cell (the windows are the block-ptr
+addresses verbatim, so the transport is pure `encode_div`/`encode_mod`). -/
+private theorem aft1_streamSpec_eq_outG (Q K V : RegionName) (s₀ : BlockState)
+    (s_qh : Nat) (scale : ℝ) (BT BD NT : Nat)
+    (xs : Fin NT → Fin (BT * BD) → ℝ) (ys : Fin NT → Fin (BD * BT) → ℝ)
+    (zs : Fin NT → Fin (BT * BD) → ℝ)
+    (hx : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s₀.readMem Q (s₀.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD
+        + j.val % BD) = xs t j)
+    (hy : ∀ (t : Fin NT) (j : Fin (BD * BT)),
+      s₀.readMem K (s₀.pids 0 * s_qh + j.val / BT + (t.val * BT + j.val % BT)
+        * BD) = ys t j)
+    (hz : ∀ (t : Fin NT) (j : Fin (BT * BD)),
+      s₀.readMem V (s₀.pids 0 * s_qh + (t.val * BT + j.val / BD) * BD
+        + j.val % BD) = zs t j)
+    (c : Fin NT) (j : Fin (BT * BD)) :
+    aft1StreamSpec scale NT BT BD xs ys zs c j
+      = aft1OutG s₀ Q K V s_qh scale BT BD c.val (Lane2D.decode j).1
+          (Lane2D.decode j).2.1 := by
+  have hq : ∀ (t : Fin NT) (r : Fin BT) (e : Fin BD),
+      xs t (Lane2D.encode (r, e, PUnit.unit))
+        = s₀.readMem Q (s₀.pids 0 * s_qh + (t.val * BT + r.val) * BD + e.val) := by
+    intro t r e
+    rw [← hx t (Lane2D.encode (r, e, PUnit.unit))]
+    simp only [Lane2D.encode_div, Lane2D.encode_mod]
+  have hk : ∀ (t : Fin NT) (e : Fin BD) (tk : Fin BT),
+      ys t (Lane2D.encode (e, tk, PUnit.unit))
+        = s₀.readMem K (s₀.pids 0 * s_qh + e.val + (t.val * BT + tk.val) * BD) := by
+    intro t e tk
+    rw [← hy t (Lane2D.encode (e, tk, PUnit.unit))]
+    simp only [Lane2D.encode_div, Lane2D.encode_mod]
+  have hv : ∀ (t : Fin NT) (tk : Fin BT) (d : Fin BD),
+      zs t (Lane2D.encode (tk, d, PUnit.unit))
+        = s₀.readMem V (s₀.pids 0 * s_qh + (t.val * BT + tk.val) * BD + d.val) := by
+    intro t tk d
+    rw [← hz t (Lane2D.encode (tk, d, PUnit.unit))]
+    simp only [Lane2D.encode_div, Lane2D.encode_mod]
+  simp only [aft1StreamSpec, aft1OutG, aft1LocalOutG, aft1RecOutG, aft1RecStateG,
+    aft1QCellG, aft1KCellG, aft1VCellG]
+  refine congrArg₂ (· + ·) ?_ ?_
+  · refine Finset.sum_congr rfl fun tk _ => ?_
+    refine congrArg₂ (· * ·) (Finset.sum_congr rfl fun e _ => ?_)
+      (hv c tk (Lane2D.decode j).2.1)
+    exact congrArg₂ (· * ·)
+      (congrArg₂ (· * ·) (hq c (Lane2D.decode j).1 e) rfl) (hk c e tk)
+  · refine Finset.sum_congr rfl fun d' _ => ?_
+    refine congrArg₂ (· * ·)
+      (congrArg₂ (· * ·) (hq c (Lane2D.decode j).1 d') rfl) ?_
+    rw [← Fin.sum_univ_eq_sum_range (fun u => ∑ tk : Fin BT,
+      s₀.readMem K (s₀.pids 0 * s_qh + d'.val + (u * BT + tk.val) * BD)
+        * s₀.readMem V (s₀.pids 0 * s_qh + (u * BT + tk.val) * BD
+            + (Lane2D.decode j).2.1.val)) c.val]
+    refine Finset.sum_congr rfl fun u _ => Finset.sum_congr rfl fun tk _ => ?_
+    exact congrArg₂ (· * ·)
+      (hk (Fin.castLE (Nat.le_of_lt c.isLt) u) d' tk)
+      (hv (Fin.castLE (Nat.le_of_lt c.isLt) u) tk (Lane2D.decode j).2.1)
+
+/-! ### The headline -/
+
+/-- **The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre, matrix
+carry).** For every rounding model `R`, the faithful `attention_fwd_kernel`
+surface in its **verified default configuration** (`STORE=false`,
+`IFCOND=false`) implements, on its `StreamEmitMasked2DKernelIO₃` signature,
+the **ideal ℝ linear-attention forward**: emitted lane `j` of chunk `c` holds
+`((scale·Qc)·Kc·Vc + (scale·Qc)·Σ_{u<c} Kᵤᵀ·Vᵤ)[j/BD, j%BD]` — the spec `f`
+is exact real arithmetic (no softmax; the carry is the `[BD, BD]` matrix
+state, and the emitted value uses the **pre-update** carry). The kernel has
+**zero rounding events** (the erased `(b_q·scale).to(...)` /
+`(b_o).to(...)` casts are `.real → .real`, all loads and the in-loop store
+are `.real`), so the skin's boundary quantization degenerates: the readback
+contract's `R.round .real` is the identity by the model's defining
+`round_real` — the ∀-`R` face holds via the `RoundingModel` `.real` identity
+fields, not as a `.triv` special case.
+
+Layer map: the loop body is cast-free, so under `execR R` it collapses
+statement-by-statement onto the exact stepper and the proven `aft1InvG` carry
+stack above (`aft1_prologue_invG` / `aft1InvG_step` / `forRangeDyn_inv`) is
+reused unchanged; the `⊨[R]` face adds the `TraceSafeR` walk (the wave's
+first over a `forRangeDyn` loop — `aft1_stopOp_eval` resolves the dynamic
+`cdiv` bound to `NT` once, then `Stmt.forRangeTraceSafeR_inv` runs over
+`aft1InvG` with the per-chunk block pointers recomputed through the `i_bh`
+pin), the per-cell memory frame (`aft1_body_memFrame`, the raw-`mem` twin of
+the iteration lemma), and the `Lane2D` stream-lane spec bridge
+(`aft1_streamSpec_eq_outG`).
+
+All hypotheses are inherited from the exact headline
+`attention_fwd_triton1_output_summary_general`'s side conditions: `hBT` pins
+the `cdiv(NT·BT, BT) = NT` bound resolution, and the four region-distinctness
+hypotheses keep the per-chunk `O` stores from clobbering the streamed inputs
+(and the dead `h` buffer) between iterations. The skin quantifies a 2-D pid
+grid; the kernel is a 1-D grid (`i_bh = pid₀`), so every window ignores
+`pid₁`.
+
+Configuration scope: this io face covers exactly the branch the exact
+closed-form stack verifies. The `STORE=true` / `IFCOND=true` configurations
+stay on the existing coverage — conjunct (1) of
+`attention_fwd_triton1_output_summary_general` (all four `STORE`/`IFCOND`
+surfaces lower faithfully to the algorithm layer); their `⊨[R]` faces are
+future work, not regressions.
+
+Relation to the exact surface: the exact headline above is retained
+unchanged; this `⊨[R]` face restates the same linear-attention content on the
+streaming emit skin, for every `R` at once (at the `.real` grid the two faces
+carry the same exact cell). Both faces are kept per the rounding-as-default
+doctrine. -/
+specification attention_fwd_triton1_io_correctness (R : RoundingModel)
+    (Q K V H O : RegionName) (s_qh s_hh s_ht : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (hBT : 0 < BT)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    attentionFwdTriton1KernelIO Q K V H O s_qh s_hh s_ht scale BT BD NT ⊨[R]
+      fun _ _ qs ks vs t j => aft1StreamSpec scale NT BT BD qs ks vs t j := by
+  refine StreamEmitMasked2DKernelIO₃.ImplementsR.intro _ ?_ ?_ ?_
+  · exact aft1_flattenOk Q K V H O s_qh s_hh s_ht scale BT BD NT
+  · -- the safety walk
+    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw
+    simp only [attentionFwdTriton1KernelIO] at hbr1 hbr2 hbr3 hbw ⊢
+    exact aft1_traceSafeR R bounds Q K V H O s_qh s_hh s_ht scale BT BD NT hBT
+      hOQ hOK hOV hOH s (fun t j => hbr1 t j trivial)
+      (fun t j => hbr2 t j trivial) (fun t j => hbr3 t j trivial)
+      (fun t j => hbw t j trivial)
+  · -- the rounded Hoare triple
+    intro s₀ xs ys zs _hundef hx hy hz
+    simp only [attentionFwdTriton1KernelIO] at hx hy hz ⊢
+    obtain ⟨sfin, hexec, hval, hframe⟩ :=
+      aft1_runR R Q K V H O s_qh s_hh s_ht scale BT BD NT hBT
+        hOQ hOK hOV hOH s₀
+    refine ⟨sfin, hexec, ?_, ?_⟩
+    · intro c j _
+      have hval' := hval c.val c.isLt (Lane2D.decode j).1 (Lane2D.decode j).2.1
+      rw [BlockState.readMemAs_real]
+      rw [show s₀.pids 0 * s_qh + (c.val * BT + j.val / BD) * BD + j.val % BD
+          = s₀.pids 0 * s_qh + (c.val * BT + (Lane2D.decode j).1.val) * BD
+            + (Lane2D.decode j).2.1.val from rfl]
+      rw [hval', ← aft1_streamSpec_eq_outG Q K V s₀ s_qh scale BT BD NT xs ys zs
+        (fun t jj => hx t jj trivial) (fun t jj => hy t jj trivial)
+        (fun t jj => hz t jj trivial) c j]
+      simp [FloatDType.ofReal]
+    · intro r oo hcond
+      refine hframe r oo ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr fun cf t d => ?_
+        have hj := hno cf (Lane2D.encode (t, d, PUnit.unit)) trivial
+        simpa [Lane2D.encode_div, Lane2D.encode_mod] using hj
+
+end IOFace
+
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1

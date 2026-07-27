@@ -5,12 +5,15 @@ bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_correctness	full_valu
 bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case3_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case4_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case3_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -206,6 +209,7 @@ bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_dim_single_blo
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
