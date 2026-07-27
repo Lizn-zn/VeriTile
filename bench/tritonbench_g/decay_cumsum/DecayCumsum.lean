@@ -6303,4 +6303,2000 @@ specification prepare_qg_kg_io_correctness (R : RoundingModel)
 
 end PrepareIOFace
 
+/-! ## The `⊨[R]` streaming headline for `bwd_decay_global_cumsum`
+(wave-6 S3 grouped per-step emit genre, 3-D grid — **first consumer of the
+dead-write-tolerant flat bridge**)
+
+Everything below is purely additive; the exact surfaces above (all three
+kernels) and the `fwd_decay_cumsum` / `prepare_qg_kg` io sections are
+untouched. This is the second consumer of the grouped multi-channel
+per-step emit skin `StreamGroupedEmitMasked3DKernelIO`: seven input
+streams over the shared row addressing (`g`/`dq_inner`/`dq_inter`/
+`dk_inner`/`dk_inter`/`q`/`k` as channels `0`–`6`), three per-step emit
+windows (`dq_inter`/`dk_inter`/`dg` as output channels `0`–`2`, the first
+two **in place** over their input channels), all three stores inside the
+reverse `range(BT-1,-1,-1)` loop.
+
+**Why this headline cannot use the skin's `ImplementsR.intro`**: the loop
+body ends in 8 `Op.ptrSub` self-decrements (`p_x -= DK`), and in the
+*final* iteration the pointers sit at row `0` — at `pid = (0,·,0)` the
+lane addresses are `< BK ≤ DK`, so the truncated `Nat` subtraction
+genuinely underflows and `Stmt.TraceSafeR`'s per-state no-underflow
+`ptrSub` clause is falsifiable: the kernel-wide `TraceSafeR` walk that
+`ImplementsR.intro` demands is **unprovable**. Those 8 writes are dead
+(the loop is the kernel's last statement and the registers are never read
+again), so the `⊨[R]` triple is proved **directly**, mirroring `intro`'s
+assembly but routing the flat leg through the dead-write-tolerant bridge
+`FlatAlloc.execR_flatten_deadPtrTail` (strict commutation for the
+prologue, the loop core and every non-final tail; observational agreement
+`ObsAgree` instead of state equality across the final, underflowing
+tail — which is all the memory-level readback and frame legs consume).
+
+Rounding structure: as in the sibling sections this surface has **zero
+rounding events** — every load, `exp2` combination and per-step masked
+store is at `.real` (the `.to(tl.float32)` / `.to(*.dtype.element_ty)`
+casts erase to `.real → .real`), so the body collapses verbatim onto the
+exact stepper (`Rcast_real_real`) and the whole proven `bwdInvG`
+invariant stack above (`bwd_decay_cumsum_step_general` /
+`forRangeDyn_inv`) is reused unchanged. -/
+
+section BwdIOFace
+
+open scoped VeriTile.Triton.StreamGroupedEmitMasked3DKernelIO
+
+set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
+
+/-! ### The lowered program: 15-stmt prologue + reverse loop = core ++ dead pointer tail -/
+
+/-- The lowered reverse loop's stop bound `(BT-1)/1 + 1` (= `BT`), as one
+named op (the raw tree of `bwd_body_decomp_general`). -/
+private def bwdStopOp (BT : Nat) : Op TileDType.nat [] :=
+  Op.add .nat Broadcast.nil
+    (Op.div .nat Broadcast.nil
+      (Op.sub .nat Broadcast.nil (Op.constNat BT) (Op.constNat 1)) (Op.constNat 1))
+    (Op.constNat 1)
+
+/-- The reverse loop body's 18-statement **core**: everything up to and
+including the third masked store (`p_dg`). All memory traffic of an
+iteration lives here; the core never touches a pointer register. -/
+private def bwdCoreG (DK BT BK : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "t"
+      (Op.sub .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil (Op.constNat BT) (Op.constNat 1))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "__rev_t") (Op.constNat 1))),
+    Stmt.assign .real [BK] "g_val"
+      (Op.load ComputeDType.fp32.eraseDType (MemAccess.ptr (Op.ref .ptr [BK] "p_g"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.ifThen
+      (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+        (Op.sub .nat Broadcast.nil (Op.constNat BT) (Op.constNat 1)))
+      [Stmt.assign .real [BK] "last_g" (Op.ref .real [BK] "g_val")],
+    Stmt.assign .real [BK] "dq1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_dq_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "dq2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_dq_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "dq2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BK] "dq2")
+        (Op.ref .real [BK] "g_val").exp2),
+    Stmt.assign .real [BK] "dq"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [BK] "dq1")
+        (Op.ref .real [BK] "dq2")),
+    Stmt.store .real [BK] (MemAccess.ptr (Op.ref .ptr [BK] "p_dq_inter"))
+      (Op.ref .real [BK] "dq") (MaskOpt.mask (Op.ref .bool [BK] "mask")),
+    Stmt.assign .real [BK] "dk1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_dk_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "dk2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_dk_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "dk2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BK] "dk2")
+        (Op.sub .real Broadcast.nil.consSame (Op.ref .real [BK] "last_g")
+            (Op.ref .real [BK] "g_val")).exp2),
+    Stmt.assign .real [BK] "dk"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [BK] "dk1")
+        (Op.ref .real [BK] "dk2")),
+    Stmt.store .real [BK] (MemAccess.ptr (Op.ref .ptr [BK] "p_dk_inter"))
+      (Op.ref .real [BK] "dk") (MaskOpt.mask (Op.ref .bool [BK] "mask")),
+    Stmt.assign .real [BK] "q_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_q"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "k_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BK] "p_k"))
+        (MaskOpt.maskOther (Op.ref .bool [BK] "mask") ((Op.const 0).broadcast [BK]))),
+    Stmt.assign .real [BK] "dg_val"
+      (Op.sub .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BK] "dq")
+          (Op.ref .real [BK] "q_val"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BK] "dk")
+          (Op.ref .real [BK] "k_val"))),
+    Stmt.assign .real [BK] "cum_grad_dg"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [BK] "cum_grad_dg")
+        (Op.ref .real [BK] "dg_val")),
+    Stmt.store .real [BK] (MemAccess.ptr (Op.ref .ptr [BK] "p_dg"))
+      (Op.ref .real [BK] "cum_grad_dg") (MaskOpt.mask (Op.ref .bool [BK] "mask")) ]
+
+/-- The reverse loop body's 8-statement **dead pointer tail**: the eight
+`p_x -= DK` self-decrements, register-only, never read after the final
+iteration — exactly the `StmtList.PtrDecTail` shape the tolerant bridge
+absorbs. -/
+private def bwdTailG (DK BK : Nat) : List Stmt :=
+  [ Stmt.assign .ptr [BK] "p_g"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_g") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_k"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_k") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_q"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_q") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_dq_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_dq_inner") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_dk_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_dk_inner") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_dq_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_dq_inter") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_dk_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_dk_inter") (Op.constNat DK)),
+    Stmt.assign .ptr [BK] "p_dg"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] "p_dg") (Op.constNat DK)) ]
+
+/-- The proven loop body **is** core ++ tail. -/
+private theorem bwdIterBodyG_decomp (DK BT BK : Nat) :
+    bwdIterBodyG DK BT BK = bwdCoreG DK BT BK ++ bwdTailG DK BK := rfl
+
+/-- The lowered backward body in the tolerant bridge's shape:
+`prologue ++ [forRangeDyn … (core ++ tail)]` — the loop is the kernel's
+last statement, so the final iteration's underflowing tail is dead. -/
+private theorem bwd_body_decomp_io
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat) :
+    (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK).toAlgKernel.body
+      = bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK
+        ++ [Stmt.forRangeDyn "__rev_t" (Op.constNat 0) (bwdStopOp BT)
+              (Op.constNat 1) (bwdCoreG DK BT BK ++ bwdTailG DK BK)] := by
+  rw [bwd_body_decomp_general, bwd_prologue_take_general, ← bwdIterBodyG_decomp]
+  rfl
+
+/-- The tail is a `PtrDecTail`: every statement is a pointer
+self-decrement by the constant `DK`. -/
+private theorem bwdTailG_ptrDecTail (DK BK : Nat) :
+    StmtList.PtrDecTail (bwdTailG DK BK) := by
+  intro st hst
+  simp only [bwdTailG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    exact ⟨[BK], _, Broadcast.scalarR, DK, rfl⟩
+
+/-! ### Covered-fragment membership (`FlattenOkR`) and cast-free collapses -/
+
+/-- The 15-statement prologue sits in the `R`-bridge fragment. -/
+private theorem bwd_prologue_flattenOkR
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat) :
+    StmtList.FlattenOkR
+      (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK) := by
+  simp [bwdPrologueG, StmtList.FlattenOkR, Stmt.FlattenOkR, Op.FlattenOkR.eq_def]
+
+/-- The 18-statement core sits in the `R`-bridge fragment. -/
+private theorem bwd_core_flattenOkR (DK BT BK : Nat) :
+    StmtList.FlattenOkR (bwdCoreG DK BT BK) := by
+  simp [bwdCoreG, StmtList.FlattenOkR, Stmt.FlattenOkR, Op.FlattenOkR.eq_def]
+
+/-- The stop bound op sits in the `R`-bridge fragment. -/
+private theorem bwd_stopOp_flattenOkR (BT : Nat) : (bwdStopOp BT).FlattenOkR := by
+  simp [bwdStopOp, Op.FlattenOkR.eq_def]
+
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem bwdPrologue_castFree (R : RoundingModel)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat) (t : BlockState) :
+    stepStmtsR R (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK) t
+      = stepStmts (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK) t := by
+  simp only [bwdPrologueG, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The whole loop body (core ++ tail) is cast-free **including its three
+in-loop masked `.real` stores and the `last_g` conditional capture**: the
+masked `.real` loads with erased fp32 casts are exact under every `R`, the
+`exp2` combinations are real arithmetic, `stepStmtR` delegates
+`.real`-typed stores to the exact `writeMemTyped`, and the `ifThen` guard
+is nat arithmetic — so the body steps identically under `stepStmtsR R`
+and the exact `bwdInvG` stack transports to `execR`. -/
+private theorem bwdIterBody_castFree (R : RoundingModel) (DK BT BK : Nat)
+    (t : BlockState) :
+    stepStmtsR R (bwdIterBodyG DK BT BK) t = stepStmts (bwdIterBodyG DK BT BK) t := by
+  simp only [bwdIterBodyG, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def, Rcast_real_real, BlockState.writeMemTypedR]
+  rfl
+
+/-- The core alone is cast-free (the mid-body state of the tolerant
+bridge's tail obligation is reached under `stepStmtsR R`; the pin walk
+below rides the exact stepper through this collapse). -/
+private theorem bwdCore_castFree (R : RoundingModel) (DK BT BK : Nat)
+    (t : BlockState) :
+    stepStmtsR R (bwdCoreG DK BT BK) t = stepStmts (bwdCoreG DK BT BK) t := by
+  simp only [bwdCoreG, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def, Rcast_real_real, BlockState.writeMemTypedR]
+  rfl
+
+/-- `evalOpR` of the stop bound: `(BT-1)/1 + 1 = BT` (nat arithmetic —
+`R` never enters; needs `0 < BT`). -/
+private theorem bwd_stopOpR_eval (R : RoundingModel) (c : BlockState)
+    (BT : Nat) (hBT : 0 < BT) :
+    evalOpR R (bwdStopOp BT) c = some (Tile.scalar BT) := by
+  have h : evalOpR R (bwdStopOp BT) c = evalOp (bwdStopOp BT) c := by
+    simp only [bwdStopOp, evalOpR.eq_def, evalOp.eq_def]
+  rw [h]
+  exact bwd_stopOp_eval c BT hBT
+
+/-- `evalOpR` of a `constNat` (R-independent). -/
+private theorem bwd_evalOpR_constNat (R : RoundingModel) (n : Nat) (s : BlockState) :
+    evalOpR R (Op.constNat n) s = some (Tile.scalar n) := by
+  simp [evalOpR]
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of `bwd_decay_global_cumsum` on the grouped
+multi-channel per-step emit skin (S3: three in-loop stores, two of them
+**in place**). Loop counter `m` processes PYTHON row `t = BT − 1 − m`;
+the io is indexed by the *row* `t`, so step `t` of the signature is the
+`(BT − 1 − t)`-th executed iteration. Step `t` reads the `BK`-lane rows
+of the seven input channels (`0` = `g`, `1` = `dq_inner`, `2` =
+`dq_inter` (old contents), `3` = `dk_inner`, `4` = `dk_inter` (old
+contents), `5` = `q`, `6` = `k`) and stores the `BK`-lane
+`dq_inter`/`dk_inter`/`dg` windows (output channels `0`/`1`/`2`) at the
+**`.real`** grid (`outDType` default — the store's
+`.to(p_dg.dtype.element_ty)` cast erases to `.real`).
+
+**In-place channels**: output channels `0`/`1` name the same buffers as
+input channels `2`/`4` — the skin's decoupled `bufs` allocation list
+carries each region exactly once. Pinning the *old* contents on the
+launch state is sound because the reverse loop visits each row exactly
+once and reads its `dq_inter`/`dk_inter` cells *before* rewriting them in
+the same iteration, so every read of those channels observes the launch
+value (the invariant's untouched-rows conjunct `hDQIunt`/`hDKIunt` is
+precisely this argument).
+
+All ten windows share the surface's effective row address, transcribed
+verbatim (`pid₀ = i_k`, `pid₁ = i_c`, `pid₂ = i_bh`; the surface's
+pointers start at row `BT−1` and step `-DK`, so row `t`'s address is the
+base plus `t·DK`):
+
+`i_bh·s_qk_h + i_c·BT·DK + i_k·BK + j + t·DK`.
+
+All masks are the kernel's single, `t`-independent bound mask
+`i_k·BK + j < DK` — the `last_g` capture needs **no widening**: it is the
+`g` stream's own step-`BT−1` row, loaded (masked, like every `g` row) in
+the first executed iteration. -/
+def bwdDecayCumsumKernelIO
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat) : StreamGroupedEmitMasked3DKernelIO where
+  kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+    s_qk_h DK BT BK
+  nIn := 7
+  nOut := 3
+  bufs := [DQInner, DQInter, DKInner, DKInter, Q, K, G, DG]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => G
+    | ⟨1, _⟩ => DQInner
+    | ⟨2, _⟩ => DQInter
+    | ⟨3, _⟩ => DKInner
+    | ⟨4, _⟩ => DKInter
+    | ⟨5, _⟩ => Q
+    | ⟨6, _⟩ => K
+    | ⟨n + 7, h⟩ => absurd h (by omega)
+  out := fun o => match o with
+    | ⟨0, _⟩ => DQInter
+    | ⟨1, _⟩ => DKInter
+    | ⟨2, _⟩ => DG
+    | ⟨n + 3, h⟩ => absurd h (by omega)
+  T := BT
+  B := BK
+  read := fun _ p₀ p₁ p₂ t j =>
+    p₂ * s_qk_h + p₁ * BT * DK + p₀ * BK + j.val + t.val * DK
+  readMask := fun _ p₀ _ _ _ j => p₀ * BK + j.val < DK
+  write := fun _ p₀ p₁ p₂ t j =>
+    p₂ * s_qk_h + p₁ * BT * DK + p₀ * BK + j.val + t.val * DK
+  writeMask := fun _ p₀ _ _ _ j => p₀ * BK + j.val < DK
+
+/-! ### The stream-level spec -/
+
+/-- Per-row `dq` stream value: `dq_inner + dq_inter_old · exp2(g)` (with
+`exp2(x) = exp(x·log 2)`) — channel `0`'s clause and the `dg` summand's
+first factor. -/
+private noncomputable def bwdDqStream (BT BK : Nat)
+    (xs : Fin 7 → Fin BT → Fin BK → ℝ) (t : Fin BT) (j : Fin BK) : ℝ :=
+  xs (⟨1, by omega⟩ : Fin 7) t j
+    + xs (⟨2, by omega⟩ : Fin 7) t j
+      * Real.exp (xs (⟨0, by omega⟩ : Fin 7) t j * Real.log 2)
+
+/-- Per-row `dk` stream value:
+`dk_inner + dk_inter_old · exp2(last_g − g)` where `last_g` is the `g`
+stream's step-`BT−1` row (the first processed row — no extra channel).
+The `dite` keeps the definition total in `BT`; its `else` branch is
+unreachable under the headline's `hBT : 0 < BT`. -/
+private noncomputable def bwdDkStream (BT BK : Nat)
+    (xs : Fin 7 → Fin BT → Fin BK → ℝ) (t : Fin BT) (j : Fin BK) : ℝ :=
+  if h : 0 < BT then
+    xs (⟨3, by omega⟩ : Fin 7) t j
+      + xs (⟨4, by omega⟩ : Fin 7) t j
+        * Real.exp
+            ((xs (⟨0, by omega⟩ : Fin 7) ⟨BT - 1, Nat.sub_lt h Nat.one_pos⟩ j
+                - xs (⟨0, by omega⟩ : Fin 7) t j) * Real.log 2)
+  else 0
+
+/-- Per-row `dg` stream value: the reverse cumulative sum written at row
+`t` is the **suffix sum** `Σ_{u = t}^{BT−1} (dq[u]·q[u] − dk[u]·k[u])`
+over the per-row `dq`/`dk` values above (the executed loop folds rows
+`BT−1, …, t` before storing row `t`). -/
+private noncomputable def bwdDgStream (BT BK : Nat)
+    (xs : Fin 7 → Fin BT → Fin BK → ℝ) (t : Fin BT) (j : Fin BK) : ℝ :=
+  ∑ d : Fin (BT - t.val),
+    (bwdDqStream BT BK xs ⟨t.val + d.val, by omega⟩ j
+        * xs (⟨5, by omega⟩ : Fin 7) ⟨t.val + d.val, by omega⟩ j
+      - bwdDkStream BT BK xs ⟨t.val + d.val, by omega⟩ j
+        * xs (⟨6, by omega⟩ : Fin 7) ⟨t.val + d.val, by omega⟩ j)
+
+/-- The stream-level `bwd_decay_global_cumsum` spec (the genre's *emit* +
+*suffix-scan* shape, one clause per output channel): window `(t, j)` of
+channel `0` (`dq_inter`) holds `dq_inner + dq_inter_old·exp2(g)`, of
+channel `1` (`dk_inter`) holds `dk_inner + dk_inter_old·exp2(last_g − g)`
+(with `last_g = g[BT−1]`, the `g` stream's own last row), of channel `2`
+(`dg`) holds the suffix sum `Σ_{u ≥ t} (dq[u]·q[u] − dk[u]·k[u])` — the
+exact spellings of the proven closed forms `bwdDQInterClosed` /
+`bwdDKInterClosed` / `bwdDGClosed`, re-indexed to the curried streams.
+The channel `match` lives in this single shared def (inline per-site
+matchers block cross-declaration `exact`). -/
+noncomputable def bwdDecayStreamSpec (BT BK : Nat)
+    (xs : Fin 7 → Fin BT → Fin BK → ℝ) (o : Fin 3) (t : Fin BT) (j : Fin BK) : ℝ :=
+  match o with
+  | ⟨0, _⟩ => bwdDqStream BT BK xs t j
+  | ⟨1, _⟩ => bwdDkStream BT BK xs t j
+  | ⟨2, _⟩ => bwdDgStream BT BK xs t j
+  | ⟨n + 3, h3⟩ => absurd h3 (by omega)
+
+/-- Per-lane `dq_inter` spec bridge: at a write-active window `(t, j)`
+the stream `dq` value **is** the exact stack's closed form
+`bwdDQInterClosed` — every stream cell it mentions is mask-pinned (the
+masks are `t`-independent and lane `j` is active). -/
+private theorem bwdDqStream_eq_closed (DQInner DQInter G : RegionName)
+    (s₀ : BlockState) (s_qk_h DK BT BK : Nat) (xs : Fin 7 → Fin BT → Fin BK → ℝ)
+    (hxG : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem G
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨0, by omega⟩ : Fin 7) t j)
+    (hxDQi : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DQInner
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨1, by omega⟩ : Fin 7) t j)
+    (hxDQt : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DQInter
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨2, by omega⟩ : Fin 7) t j)
+    (t : Fin BT) (j : Fin BK) (hj : active s₀ DK BK j) :
+    bwdDqStream BT BK xs t j
+      = bwdDQInterClosed s₀ DQInner DQInter G s_qk_h DK BT BK t j := by
+  have hg := hxG t j hj
+  have h1 := hxDQi t j hj
+  have h2 := hxDQt t j hj
+  rw [fwd_addr_eq] at hg h1 h2
+  show xs (⟨1, by omega⟩ : Fin 7) t j
+      + xs (⟨2, by omega⟩ : Fin 7) t j
+        * Real.exp (xs (⟨0, by omega⟩ : Fin 7) t j * Real.log 2) = _
+  rw [← hg, ← h1, ← h2]
+  simp only [bwdDQInterClosed]
+
+/-- Per-lane `dk_inter` spec bridge: at a write-active window `(t, j)`
+the stream `dk` value **is** `bwdDKInterClosed` — the `last_g` cell
+`xs 0 ⟨BT−1, _⟩ j` is the `g` stream's own last row, pinned at the active
+lane because the `g` read mask is `t`-independent. -/
+private theorem bwdDkStream_eq_closed (DKInner DKInter G : RegionName)
+    (s₀ : BlockState) (s_qk_h DK BT BK : Nat) (xs : Fin 7 → Fin BT → Fin BK → ℝ)
+    (hBT : 0 < BT)
+    (hxG : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem G
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨0, by omega⟩ : Fin 7) t j)
+    (hxDKi : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DKInner
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨3, by omega⟩ : Fin 7) t j)
+    (hxDKt : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DKInter
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨4, by omega⟩ : Fin 7) t j)
+    (t : Fin BT) (j : Fin BK) (hj : active s₀ DK BK j) :
+    bwdDkStream BT BK xs t j
+      = bwdDKInterClosed s₀ DKInner DKInter G s_qk_h DK BT BK t j := by
+  have hg := hxG t j hj
+  have h3 := hxDKi t j hj
+  have h4 := hxDKt t j hj
+  have hglast := hxG ⟨BT - 1, Nat.sub_lt hBT Nat.one_pos⟩ j hj
+  rw [fwd_addr_eq] at hg h3 h4 hglast
+  show (if h : 0 < BT then
+      xs (⟨3, by omega⟩ : Fin 7) t j
+        + xs (⟨4, by omega⟩ : Fin 7) t j
+          * Real.exp
+              ((xs (⟨0, by omega⟩ : Fin 7) ⟨BT - 1, Nat.sub_lt h Nat.one_pos⟩ j
+                  - xs (⟨0, by omega⟩ : Fin 7) t j) * Real.log 2)
+    else 0) = _
+  rw [dif_pos hBT, ← hg, ← h3, ← h4, ← hglast]
+  simp only [bwdDKInterClosed]
+
+/-- Per-lane `dg` spec bridge: at a write-active window `(t, j)` the
+stream suffix sum **is** `bwdDGClosed` — every summand row `t + d` reads
+mask-pinned cells (`t`-independent masks), and the per-row `dq`/`dk`
+factors bridge by the two lemmas above. -/
+private theorem bwdDgStream_eq_closed
+    (DQInner DQInter DKInner DKInter Q K G : RegionName)
+    (s₀ : BlockState) (s_qk_h DK BT BK : Nat) (xs : Fin 7 → Fin BT → Fin BK → ℝ)
+    (hBT : 0 < BT)
+    (hxG : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem G
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨0, by omega⟩ : Fin 7) t j)
+    (hxDQi : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DQInner
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨1, by omega⟩ : Fin 7) t j)
+    (hxDQt : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DQInter
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨2, by omega⟩ : Fin 7) t j)
+    (hxDKi : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DKInner
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨3, by omega⟩ : Fin 7) t j)
+    (hxDKt : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem DKInter
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨4, by omega⟩ : Fin 7) t j)
+    (hxQ : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem Q
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨5, by omega⟩ : Fin 7) t j)
+    (hxK : ∀ (t : Fin BT) (j : Fin BK), s₀.pids 0 * BK + j.val < DK →
+      s₀.readMem K
+          (s₀.pids 2 * s_qk_h + s₀.pids 1 * BT * DK + s₀.pids 0 * BK + j.val + t.val * DK)
+        = xs (⟨6, by omega⟩ : Fin 7) t j)
+    (t : Fin BT) (j : Fin BK) (hj : active s₀ DK BK j) :
+    bwdDgStream BT BK xs t j
+      = bwdDGClosed s₀ DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t j := by
+  simp only [bwdDgStream, bwdDGClosed]
+  refine Finset.sum_congr rfl fun d _ => ?_
+  have hq := hxQ ⟨t.val + d.val, by omega⟩ j hj
+  have hk := hxK ⟨t.val + d.val, by omega⟩ j hj
+  rw [fwd_addr_eq] at hq hk
+  simp only [bwdDGSummand]
+  rw [bwdDqStream_eq_closed DQInner DQInter G s₀ s_qk_h DK BT BK xs hxG hxDQi hxDQt
+      ⟨t.val + d.val, by omega⟩ j hj,
+    bwdDkStream_eq_closed DKInner DKInter G s₀ s_qk_h DK BT BK xs hBT hxG hxDKi hxDKt
+      ⟨t.val + d.val, by omega⟩ j hj,
+    ← hq, ← hk]
+
+/-! ### Stepping inversions (exact and `R`-side)
+
+The walks below thread successor states through the 26-statement body.
+Assigns invert to `setReg`s with opaque values (`stepStmts_cons_assign_inv`
+above / its `R` mirror here), `.real` masked stores preserve the register
+file (`stepStmtR_store_real_regs` above), and the `last_g` `ifThen` gets a
+dedicated single-assign inversion on both sides. -/
+
+/-- Exact-side inversion of a leading `ifThen [assign]` in a `stepStmts`
+chain: whatever the guard decides, memory survives and every register
+except the assign target survives. -/
+private theorem stepStmts_cons_ifThen_assign_inv {cond : Op TileDType.bool []}
+    {dt : TileDType} {sh : TileShape} {nm : RegName} {e : Op dt sh}
+    {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmts (Stmt.ifThen cond [Stmt.assign dt sh nm e] :: rest) s = some s') :
+    ∃ s₂, stepStmts rest s₂ = some s' ∧ s₂.mem = s.mem ∧
+      ∀ (d' : TileDType) (sh' : TileShape) (n' : RegName), n' ≠ nm →
+        s₂.regs d' sh' n' = s.regs d' sh' n' := by
+  cases hst : stepStmt (Stmt.ifThen cond [Stmt.assign dt sh nm e]) s with
+  | none => simp [stepStmts, hst] at h
+  | some s₂ =>
+      rw [stepStmts.cons_some hst] at h
+      refine ⟨s₂, h, ?_⟩
+      simp only [stepStmt] at hst
+      cases hc : evalOp cond s with
+      | none => rw [hc] at hst; exact absurd hst (by simp)
+      | some vc =>
+          rw [hc] at hst
+          replace hst : (if vc.data PUnit.unit = Bool.true then
+              stepStmts [Stmt.assign dt sh nm e] s else some s) = some s₂ := hst
+          by_cases hb : vc.data PUnit.unit = Bool.true
+          · rw [if_pos hb] at hst
+            obtain ⟨v, hv, hnil⟩ := stepStmts_cons_assign_inv hst
+            rw [stepStmts.nil] at hnil
+            obtain rfl := Option.some.inj hnil
+            exact ⟨rfl, fun d' sh' n' hne => by
+              rw [BlockState.setReg_ne_name (h := hne)]⟩
+          · rw [if_neg hb] at hst
+            obtain rfl := Option.some.inj hst
+            exact ⟨rfl, fun _ _ _ _ => rfl⟩
+
+/-- `R`-side cons inversion: a successful list step factors through a
+successful head step. -/
+private theorem stepStmtsR_cons_inv {R : RoundingModel} {st : Stmt}
+    {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmtsR R (st :: rest) s = some s') :
+    ∃ s₂, stepStmtR R st s = some s₂ ∧ stepStmtsR R rest s₂ = some s' := by
+  simp only [stepStmtsR] at h
+  cases hst : stepStmtR R st s with
+  | none => rw [hst] at h; exact absurd h (by simp)
+  | some s₂ =>
+      rw [hst] at h
+      exact ⟨s₂, rfl, h⟩
+
+/-- `R`-side mirror of `stepStmts_cons_assign_inv`. -/
+private theorem stepStmtsR_cons_assign_inv {R : RoundingModel} {dt : TileDType}
+    {sh : TileShape} {nm : RegName} {e : Op dt sh} {rest : List Stmt}
+    {s s' : BlockState}
+    (h : stepStmtsR R (Stmt.assign dt sh nm e :: rest) s = some s') :
+    ∃ v, evalOpR R e s = some v ∧
+      stepStmtsR R rest (s.setReg nm dt sh v) = some s' := by
+  obtain ⟨s₂, hst, h⟩ := stepStmtsR_cons_inv h
+  obtain ⟨v, hv, rfl⟩ := stepStmtR_assign_inv hst
+  exact ⟨v, hv, h⟩
+
+/-- `R`-side cons inversion of a `.real` masked ptr store: the successor
+carries the same register file. -/
+private theorem stepStmtsR_cons_store_regs {R : RoundingModel} {sh : TileShape}
+    {pe : Op TileDType.ptr sh} {ve : Op TileDType.real sh}
+    {me : Op TileDType.bool sh} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmtsR R (Stmt.store TileDType.real sh (MemAccess.ptr pe) ve
+        (MaskOpt.mask me) :: rest) s = some s') :
+    ∃ s₂, stepStmtsR R rest s₂ = some s' ∧ s₂.regs = s.regs := by
+  obtain ⟨s₂, hst, h⟩ := stepStmtsR_cons_inv h
+  exact ⟨s₂, h, stepStmtR_store_real_regs hst⟩
+
+/-- `R`-side register effect of the `last_g` `ifThen`: every register
+except the assign target survives. -/
+private theorem stepStmtR_ifThen_assign_regs {R : RoundingModel}
+    {cond : Op TileDType.bool []} {dt : TileDType} {sh : TileShape}
+    {nm : RegName} {e : Op dt sh} {s s' : BlockState}
+    (h : stepStmtR R (Stmt.ifThen cond [Stmt.assign dt sh nm e]) s = some s') :
+    ∀ (d' : TileDType) (sh' : TileShape) (n' : RegName), n' ≠ nm →
+      s'.regs d' sh' n' = s.regs d' sh' n' := by
+  simp only [stepStmtR] at h
+  cases hc : evalOpR R cond s with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some vc =>
+      rw [hc] at h
+      replace h : (if vc.data PUnit.unit = Bool.true then
+          stepStmtsR R [Stmt.assign dt sh nm e] s else some s) = some s' := h
+      by_cases hb : vc.data PUnit.unit = Bool.true
+      · rw [if_pos hb] at h
+        obtain ⟨v, hv, hnil⟩ := stepStmtsR_cons_assign_inv h
+        rw [stepStmtsR_nil] at hnil
+        obtain rfl := Option.some.inj hnil
+        exact fun d' sh' n' hne => by rw [BlockState.setReg_ne_name (h := hne)]
+      · rw [if_neg hb] at h
+        obtain rfl := Option.some.inj h
+        exact fun _ _ _ _ => rfl
+
+/-! ### Cell-level memory frame of one loop iteration -/
+
+set_option maxHeartbeats 8000000 in
+/-- **Cell-level frame of one reverse-loop iteration** (the `mem` twin of
+`bwd_decay_cumsum_step_general`, same walk with opaque register values):
+from the `bwdInvG` `p_dq_inter`/`p_dk_inter`/`p_dg`/`mask` pins (row-`rr`
+form), one three-store body iteration leaves every cell off the row-`rr`
+write windows of **all three** output buffers untouched. The 8-statement
+pointer tail is register-only. -/
+private theorem bwd_body_step_frame
+    (DQInter DKInter DG : RegionName) (s sc s' : BlockState)
+    (s_qk_h DK BT BK rr m : Nat)
+    (hpdqt : sc.regs .ptr [BK] "p_dq_inter"
+      = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr))
+    (hpdkt : sc.regs .ptr [BK] "p_dk_inter"
+      = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr))
+    (hpdg : sc.regs .ptr [BK] "p_dg"
+      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr))
+    (hmask : sc.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK))
+    (hstep : stepStmts (bwdIterBodyG DK BT BK)
+      (sc.setReg "__rev_t" .nat [] (Tile.scalar m)) = some s')
+    (r : RegionName) (oo : Nat)
+    (hcDQ : r ≠ DQInter ∨ ∀ i : Fin BK, active s DK BK i →
+      oo ≠ offset s s_qk_h DK rr BT BK i)
+    (hcDK : r ≠ DKInter ∨ ∀ i : Fin BK, active s DK BK i →
+      oo ≠ offset s s_qk_h DK rr BT BK i)
+    (hcDG : r ≠ DG ∨ ∀ i : Fin BK, active s DK BK i →
+      oo ≠ offset s s_qk_h DK rr BT BK i) :
+    s'.mem r oo = sc.mem r oo := by
+  set sloop := sc.setReg "__rev_t" .nat [] (Tile.scalar m) with hsloop
+  unfold bwdIterBodyG at hstep
+  -- 0: `t` assign, 1: `g_val` load
+  obtain ⟨v0, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v1, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  -- 2: the `last_g` capture (memory and non-`last_g` registers survive)
+  obtain ⟨s₂, hstep, hmem₂, hregs₂⟩ := stepStmts_cons_ifThen_assign_inv hstep
+  -- 3–6: `dq1`/`dq2`/`dq2`/`dq` assigns
+  obtain ⟨v3, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v4, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v5, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨v6, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  set s6 := (((s₂.setReg "dq1" .real [BK] v3).setReg "dq2" .real [BK] v4).setReg
+    "dq2" .real [BK] v5).setReg "dq" .real [BK] v6 with hs6
+  have hdq6 : s6.regs .real [BK] "dq" = some v6 := by
+    rw [hs6]; exact BlockState.setReg_same _ _ _ _ _
+  have hpdqt6 : s6.regs .ptr [BK] "p_dq_inter"
+      = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr) := by
+    rw [hs6, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hregs₂ _ _ _ (by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hpdqt
+  have hmask6 : s6.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+    rw [hs6, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hregs₂ _ _ _ (by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hmask
+  -- 7: the `dq_inter` store
+  set vfun1 : TileIndex [BK] → ℝ := fun k => (v6.data k).unbotD 0 with hvfun1
+  set sst1 := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem DQInter (offset s s_qk_h DK rr BT BK k.1) (vfun1 k)
+      else acc) s6 with hsst1
+  have hstore1 : stepStmt (Stmt.store TileDType.real [BK]
+      (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_dq_inter"))
+      (Op.ref TileDType.real [BK] "dq")
+      (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) s6 = some sst1 := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hdq6, hpdqt6, hmask6]
+    apply congrArg some
+    rw [hsst1]
+    congr 1
+    funext acc k
+    simp only [bwdPtrTileG, bwdMaskTileG]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]
+      rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  rw [stepStmts.cons_some hstore1] at hstep
+  -- 8–11: `dk1`/`dk2`/`dk2`/`dk` assigns
+  obtain ⟨w1, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨w2, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨w3, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨w4, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  set s11 := (((sst1.setReg "dk1" .real [BK] w1).setReg "dk2" .real [BK] w2).setReg
+    "dk2" .real [BK] w3).setReg "dk" .real [BK] w4 with hs11
+  have hdk11 : s11.regs .real [BK] "dk" = some w4 := by
+    rw [hs11]; exact BlockState.setReg_same _ _ _ _ _
+  have hpdkt11 : s11.regs .ptr [BK] "p_dk_inter"
+      = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+    rw [hs11, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hsst1, BlockState.foldl_writeMem_prop_masked_regs,
+      hs6, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hregs₂ _ _ _ (by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hpdkt
+  have hmask11 : s11.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+    rw [hs11, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hsst1, BlockState.foldl_writeMem_prop_masked_regs]
+    exact hmask6
+  -- 12: the `dk_inter` store
+  set vfun2 : TileIndex [BK] → ℝ := fun k => (w4.data k).unbotD 0 with hvfun2
+  set sst2 := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem DKInter (offset s s_qk_h DK rr BT BK k.1) (vfun2 k)
+      else acc) s11 with hsst2
+  have hstore2 : stepStmt (Stmt.store TileDType.real [BK]
+      (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_dk_inter"))
+      (Op.ref TileDType.real [BK] "dk")
+      (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) s11 = some sst2 := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hdk11, hpdkt11, hmask11]
+    apply congrArg some
+    rw [hsst2]
+    congr 1
+    funext acc k
+    simp only [bwdPtrTileG, bwdMaskTileG]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]
+      rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  rw [stepStmts.cons_some hstore2] at hstep
+  -- 13–16: `q_val`/`k_val`/`dg_val`/`cum_grad_dg` assigns
+  obtain ⟨x1, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨x2, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨x3, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨x4, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  set s16 := (((sst2.setReg "q_val" .real [BK] x1).setReg "k_val" .real [BK] x2).setReg
+    "dg_val" .real [BK] x3).setReg "cum_grad_dg" .real [BK] x4 with hs16
+  have hcum16 : s16.regs .real [BK] "cum_grad_dg" = some x4 := by
+    rw [hs16]; exact BlockState.setReg_same _ _ _ _ _
+  have hpdg16 : s16.regs .ptr [BK] "p_dg"
+      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+    rw [hs16, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hsst2, BlockState.foldl_writeMem_prop_masked_regs,
+      hs11, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hsst1, BlockState.foldl_writeMem_prop_masked_regs,
+      hs6, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hregs₂ _ _ _ (by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide), hsloop,
+      BlockState.setReg_ne_name (h := by decide)]
+    exact hpdg
+  have hmask16 : s16.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+    rw [hs16, BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      hsst2, BlockState.foldl_writeMem_prop_masked_regs]
+    exact hmask11
+  -- 17: the `dg` store
+  set vfun3 : TileIndex [BK] → ℝ := fun k => (x4.data k).unbotD 0 with hvfun3
+  set sst3 := (TileShape.allIndices [BK]).foldl
+    (fun (acc : BlockState) k =>
+      if active s DK BK k.1 then
+        acc.writeMem DG (offset s s_qk_h DK rr BT BK k.1) (vfun3 k)
+      else acc) s16 with hsst3
+  have hstore3 : stepStmt (Stmt.store TileDType.real [BK]
+      (MemAccess.ptr (Op.ref TileDType.ptr [BK] "p_dg"))
+      (Op.ref TileDType.real [BK] "cum_grad_dg")
+      (MaskOpt.mask (Op.ref TileDType.bool [BK] "mask"))) s16 = some sst3 := by
+    simp only [stepStmt, evalOp, Option.bind, Option.map, hcum16, hpdg16, hmask16]
+    apply congrArg some
+    rw [hsst3]
+    congr 1
+    funext acc k
+    simp only [bwdPtrTileG, bwdMaskTileG]
+    by_cases ha : active s DK BK k.1
+    · rw [if_pos (by simpa using ha), if_pos ha, BlockState.writeMemTyped_real]
+      rfl
+    · rw [if_neg (by simpa using ha), if_neg ha]
+  rw [stepStmts.cons_some hstore3] at hstep
+  -- 18–25: the register-only pointer tail
+  obtain ⟨u1, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u2, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u3, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u4, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u5, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u6, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u7, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  obtain ⟨u8, -, hstep⟩ := stepStmts_cons_assign_inv hstep
+  rw [stepStmts.nil] at hstep
+  obtain rfl := Option.some.inj hstep
+  simp only [BlockState.setReg_mem]
+  rw [hsst3]
+  refine Eq.trans (foldl_writeMem_prop_preserve_cell _ _ _ r oo _ _ ?_) ?_
+  · intro k hk hmk hbad
+    rcases hcDG with hne' | hno
+    · exact hne' hbad.1
+    · exact hno k.1 hmk hbad.2
+  · rw [hs16]
+    simp only [BlockState.setReg_mem]
+    rw [hsst2]
+    refine Eq.trans (foldl_writeMem_prop_preserve_cell _ _ _ r oo _ _ ?_) ?_
+    · intro k hk hmk hbad
+      rcases hcDK with hne' | hno
+      · exact hne' hbad.1
+      · exact hno k.1 hmk hbad.2
+    · rw [hs11]
+      simp only [BlockState.setReg_mem]
+      rw [hsst1]
+      refine Eq.trans (foldl_writeMem_prop_preserve_cell _ _ _ r oo _ _ ?_) ?_
+      · intro k hk hmk hbad
+        rcases hcDQ with hne' | hno
+        · exact hne' hbad.1
+        · exact hno k.1 hmk hbad.2
+      · rw [hs6]
+        simp only [BlockState.setReg_mem]
+        have h₂ : s₂.mem r oo = sloop.mem r oo := by
+          rw [hmem₂]
+          simp only [BlockState.setReg_mem]
+        rw [h₂, hsloop]
+        simp only [BlockState.setReg_mem]
+
+/-! ### The core's register-pin walk (`R`-side)
+
+The tolerant bridge's tail-safety obligation runs from *whatever* state
+the core reaches (`sMid`). The core never assigns a pointer register (its
+targets are `t`/`g_val`/`last_g`/`dq*`/`dk*`/`q_val`/`k_val`/`dg_val`/
+`cum_grad_dg`, and its stores are register-transparent), so every pointer
+pin survives verbatim. -/
+
+/-- Registers off the core's 13 assign targets pass through a successful
+core run unchanged. -/
+private theorem bwd_core_regsR (R : RoundingModel) (DK BT BK : Nat)
+    (sin sMid : BlockState)
+    (h : stepStmtsR R (bwdCoreG DK BT BK) sin = some sMid)
+    (dt : TileDType) (sh : TileShape) (nm : RegName)
+    (h1 : nm ≠ "t") (h2 : nm ≠ "g_val") (h3 : nm ≠ "last_g") (h4 : nm ≠ "dq1")
+    (h5 : nm ≠ "dq2") (h6 : nm ≠ "dq") (h7 : nm ≠ "dk1") (h8 : nm ≠ "dk2")
+    (h9 : nm ≠ "dk") (h10 : nm ≠ "q_val") (h11 : nm ≠ "k_val")
+    (h12 : nm ≠ "dg_val") (h13 : nm ≠ "cum_grad_dg") :
+    sMid.regs dt sh nm = sin.regs dt sh nm := by
+  unfold bwdCoreG at h
+  obtain ⟨v0, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨v1, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨s₂, hif, h⟩ := stepStmtsR_cons_inv h
+  have hregs₂ := stepStmtR_ifThen_assign_regs hif
+  obtain ⟨v3, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨v4, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨v5, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨v6, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨s7, h, hregs7⟩ := stepStmtsR_cons_store_regs h
+  obtain ⟨w1, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨w2, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨w3, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨w4, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨s12, h, hregs12⟩ := stepStmtsR_cons_store_regs h
+  obtain ⟨x1, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨x2, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨x3, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨x4, -, h⟩ := stepStmtsR_cons_assign_inv h
+  obtain ⟨s17, h, hregs17⟩ := stepStmtsR_cons_store_regs h
+  rw [stepStmtsR_nil] at h
+  obtain rfl := Option.some.inj h
+  rw [hregs17, BlockState.setReg_ne_name (h := h13),
+    BlockState.setReg_ne_name (h := h12), BlockState.setReg_ne_name (h := h11),
+    BlockState.setReg_ne_name (h := h10), hregs12,
+    BlockState.setReg_ne_name (h := h9), BlockState.setReg_ne_name (h := h8),
+    BlockState.setReg_ne_name (h := h8), BlockState.setReg_ne_name (h := h7),
+    hregs7, BlockState.setReg_ne_name (h := h6),
+    BlockState.setReg_ne_name (h := h5), BlockState.setReg_ne_name (h := h5),
+    BlockState.setReg_ne_name (h := h4), hregs₂ _ _ _ h3,
+    BlockState.setReg_ne_name (h := h2), BlockState.setReg_ne_name (h := h1)]
+
+/-! ### The dead tail's `TraceSafeR` walk (non-final iterations only) -/
+
+/-- **Tail safety at a non-final iteration.** With the pointers pinned at
+row `rr ≥ 1`, every lane address is `≥ DK`, so the eight `-= DK`
+self-decrements satisfy `Op.SafeAtR`'s per-state no-underflow clause. (In
+the *final* iteration `rr = 0` this is false at `pid₀ = pid₂ = 0` — that
+is precisely the underflow the tolerant bridge absorbs instead.) -/
+private theorem bwd_tailSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s sMid : BlockState) (s_qk_h DK BT BK rr : Nat) (hrr : 1 ≤ rr)
+    (hpg : sMid.regs .ptr [BK] "p_g" = some (bwdPtrTileG s G s_qk_h DK BT BK rr))
+    (hpk : sMid.regs .ptr [BK] "p_k" = some (bwdPtrTileG s K s_qk_h DK BT BK rr))
+    (hpq : sMid.regs .ptr [BK] "p_q" = some (bwdPtrTileG s Q s_qk_h DK BT BK rr))
+    (hpdqi : sMid.regs .ptr [BK] "p_dq_inner"
+      = some (bwdPtrTileG s DQInner s_qk_h DK BT BK rr))
+    (hpdki : sMid.regs .ptr [BK] "p_dk_inner"
+      = some (bwdPtrTileG s DKInner s_qk_h DK BT BK rr))
+    (hpdqt : sMid.regs .ptr [BK] "p_dq_inter"
+      = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr))
+    (hpdkt : sMid.regs .ptr [BK] "p_dk_inter"
+      = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr))
+    (hpdg : sMid.regs .ptr [BK] "p_dg"
+      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr)) :
+    Stmt.TraceSafeListR R bounds (bwdTailG DK BK) sMid := by
+  have hDKle : ∀ i : Fin BK, DK ≤ offset s s_qk_h DK rr BT BK i := by
+    intro i
+    have h1 : DK ≤ (s.pids 1 * BT + rr) * DK :=
+      Nat.le_mul_of_pos_left DK (by omega)
+    simp only [offset, baseOffset]
+    omega
+  have hsafe : ∀ (pname : RegName) (reg : RegionName) (st : BlockState),
+      st.regs .ptr [BK] pname = some (bwdPtrTileG s reg s_qk_h DK BT BK rr) →
+      Stmt.TraceSafeR R bounds (Stmt.assign .ptr [BK] pname
+        (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] pname)
+          (Op.constNat DK))) st := by
+    intro pname reg st hpin
+    simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs offs hp ho i
+    rw [evalOpR_ref, hpin] at hp
+    obtain rfl := Option.some.inj hp
+    rw [bwd_evalOpR_constNat] at ho
+    obtain rfl := Option.some.inj ho
+    exact hDKle (Broadcast.scalarR.leftIndex i).1
+  unfold bwdTailG
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_g" G sMid hpg)
+    (fun t1 ht1 => ?_)
+  obtain ⟨q1, -, rfl⟩ := stepStmtR_assign_inv ht1
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_k" K _ (by
+    rw [BlockState.setReg_ne_name (h := by decide)]; exact hpk))
+    (fun t2 ht2 => ?_)
+  obtain ⟨q2, -, rfl⟩ := stepStmtR_assign_inv ht2
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_q" Q _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpq))
+    (fun t3 ht3 => ?_)
+  obtain ⟨q3, -, rfl⟩ := stepStmtR_assign_inv ht3
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_dq_inner" DQInner _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpdqi))
+    (fun t4 ht4 => ?_)
+  obtain ⟨q4, -, rfl⟩ := stepStmtR_assign_inv ht4
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_dk_inner" DKInner _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpdki))
+    (fun t5 ht5 => ?_)
+  obtain ⟨q5, -, rfl⟩ := stepStmtR_assign_inv ht5
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_dq_inter" DQInter _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpdqt))
+    (fun t6 ht6 => ?_)
+  obtain ⟨q6, -, rfl⟩ := stepStmtR_assign_inv ht6
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_dk_inter" DKInter _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpdkt))
+    (fun t7 ht7 => ?_)
+  obtain ⟨q7, -, rfl⟩ := stepStmtR_assign_inv ht7
+  refine Stmt.TraceSafeListR.cons_intro (hsafe "p_dg" DG _ (by
+    rw [BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide),
+      BlockState.setReg_ne_name (h := by decide)]; exact hpdg))
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+/-! ### The core's `TraceSafeR` walk -/
+
+set_option maxHeartbeats 8000000 in
+/-- Per-iteration `TraceSafeListR` for the reverse-loop **core**: the
+seven masked loads' and three masked stores' active lanes are exactly the
+skin's (`t`-independent) masked windows at row `rr`, in bounds by the
+corresponding window bound; the `t` recompute, the `last_g` capture and
+the `exp2` combinations are register-only. Pins thread across the two
+mid-body stores via `stepStmtR_store_real_regs` and across the capture
+via `stepStmtR_ifThen_assign_regs`. -/
+private theorem bwd_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s stt : BlockState) (s_qk_h DK BT BK rr m : Nat)
+    (hpg : stt.regs .ptr [BK] "p_g" = some (bwdPtrTileG s G s_qk_h DK BT BK rr))
+    (hpk : stt.regs .ptr [BK] "p_k" = some (bwdPtrTileG s K s_qk_h DK BT BK rr))
+    (hpq : stt.regs .ptr [BK] "p_q" = some (bwdPtrTileG s Q s_qk_h DK BT BK rr))
+    (hpdqi : stt.regs .ptr [BK] "p_dq_inner"
+      = some (bwdPtrTileG s DQInner s_qk_h DK BT BK rr))
+    (hpdki : stt.regs .ptr [BK] "p_dk_inner"
+      = some (bwdPtrTileG s DKInner s_qk_h DK BT BK rr))
+    (hpdqt : stt.regs .ptr [BK] "p_dq_inter"
+      = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr))
+    (hpdkt : stt.regs .ptr [BK] "p_dk_inter"
+      = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr))
+    (hpdg : stt.regs .ptr [BK] "p_dg"
+      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr))
+    (hmask : stt.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK))
+    (hbG : ∀ i : Fin BK, active s DK BK i → offset s s_qk_h DK rr BT BK i < bounds G)
+    (hbQ : ∀ i : Fin BK, active s DK BK i → offset s s_qk_h DK rr BT BK i < bounds Q)
+    (hbK : ∀ i : Fin BK, active s DK BK i → offset s s_qk_h DK rr BT BK i < bounds K)
+    (hbDQi : ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK rr BT BK i < bounds DQInner)
+    (hbDKi : ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK rr BT BK i < bounds DKInner)
+    (hbDQt : ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK rr BT BK i < bounds DQInter)
+    (hbDKt : ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK rr BT BK i < bounds DKInter)
+    (hbDG : ∀ i : Fin BK, active s DK BK i →
+      offset s s_qk_h DK rr BT BK i < bounds DG) :
+    Stmt.TraceSafeListR R bounds (bwdCoreG DK BT BK)
+      (stt.setReg "__rev_t" .nat [] (Tile.scalar m)) := by
+  set sloop := stt.setReg "__rev_t" .nat [] (Tile.scalar m) with hsloop
+  have hpg' : sloop.regs .ptr [BK] "p_g"
+      = some (bwdPtrTileG s G s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpg
+  have hpk' : sloop.regs .ptr [BK] "p_k"
+      = some (bwdPtrTileG s K s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpk
+  have hpq' : sloop.regs .ptr [BK] "p_q"
+      = some (bwdPtrTileG s Q s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpq
+  have hpdqi' : sloop.regs .ptr [BK] "p_dq_inner"
+      = some (bwdPtrTileG s DQInner s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpdqi
+  have hpdki' : sloop.regs .ptr [BK] "p_dk_inner"
+      = some (bwdPtrTileG s DKInner s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpdki
+  have hpdqt' : sloop.regs .ptr [BK] "p_dq_inter"
+      = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpdqt
+  have hpdkt' : sloop.regs .ptr [BK] "p_dk_inter"
+      = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpdkt
+  have hpdg' : sloop.regs .ptr [BK] "p_dg"
+      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+    rw [hsloop]; simpa using hpdg
+  have hmask' : sloop.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+    rw [hsloop]; simpa using hmask
+  unfold bwdCoreG
+  -- (0) the `t` recompute: register-only
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t0 ht0 => ?_)
+  obtain ⟨v0, -, rfl⟩ := stepStmtR_assign_inv ht0
+  have hpg0 : (sloop.setReg "t" .nat [] v0).regs .ptr [BK] "p_g"
+      = some (bwdPtrTileG s G s_qk_h DK BT BK rr) := by
+    rw [BlockState.setReg_ne_name (h := by decide)]; exact hpg'
+  have hmask0 : (sloop.setReg "t" .nat [] v0).regs .bool [BK] "mask"
+      = some (bwdMaskTileG s DK BK) := by
+    rw [BlockState.setReg_ne_name (h := by decide)]; exact hmask'
+  -- (1) the masked `g_val` load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t1 ht1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def], ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [evalOpR_ref, hpg0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hm, hmi⟩ := hactive
+    rw [evalOpR_ref, hmask0] at hm
+    obtain rfl := Option.some.inj hm
+    have ha : active s DK BK idx.1 := by simpa [bwdMaskTileG] using hmi
+    simpa [bwdPtrTileG] using hbG idx.1 ha
+  · obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv ht1
+    -- (2) the `last_g` capture: guard is nat arithmetic, body register-only
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun t2 ht2 => ?_)
+    · simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      split
+      · split
+        · refine Stmt.TraceSafeListR.of_forall _ _ ?_
+          intro st hst s'
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+          subst hst
+          simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+        · trivial
+      · trivial
+    · have hregs₂ := stepStmtR_ifThen_assign_regs ht2
+      -- pins at the post-capture state
+      have h2pdqi : t2.regs .ptr [BK] "p_dq_inner"
+          = some (bwdPtrTileG s DQInner s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdqi'
+      have h2pdqt : t2.regs .ptr [BK] "p_dq_inter"
+          = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdqt'
+      have h2pdki : t2.regs .ptr [BK] "p_dk_inner"
+          = some (bwdPtrTileG s DKInner s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdki'
+      have h2pdkt : t2.regs .ptr [BK] "p_dk_inter"
+          = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdkt'
+      have h2pq : t2.regs .ptr [BK] "p_q"
+          = some (bwdPtrTileG s Q s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpq'
+      have h2pk : t2.regs .ptr [BK] "p_k"
+          = some (bwdPtrTileG s K s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpk'
+      have h2pdg : t2.regs .ptr [BK] "p_dg"
+          = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdg'
+      have h2mask : t2.regs .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+        rw [hregs₂ _ _ _ (by decide), BlockState.setReg_ne_name (h := by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hmask'
+      -- (3) the masked `dq1` load
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun t3 ht3 => ?_)
+      · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+          MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+        refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def], ?_⟩
+        intro ptrs hptrs idx hactive
+        rw [evalOpR_ref, h2pdqi] at hptrs
+        obtain rfl := Option.some.inj hptrs
+        obtain ⟨masks, hm, hmi⟩ := hactive
+        rw [evalOpR_ref, h2mask] at hm
+        obtain rfl := Option.some.inj hm
+        have ha : active s DK BK idx.1 := by simpa [bwdMaskTileG] using hmi
+        simpa [bwdPtrTileG] using hbDQi idx.1 ha
+      · obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv ht3
+        have h3pdqt : (t2.setReg "dq1" .real [BK] v3).regs .ptr [BK] "p_dq_inter"
+            = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr) := by
+          rw [BlockState.setReg_ne_name (h := by decide)]; exact h2pdqt
+        have h3mask : (t2.setReg "dq1" .real [BK] v3).regs .bool [BK] "mask"
+            = some (bwdMaskTileG s DK BK) := by
+          rw [BlockState.setReg_ne_name (h := by decide)]; exact h2mask
+        -- (4) the masked `dq2` load (in-place input channel)
+        refine Stmt.TraceSafeListR.cons_intro ?_ (fun t4 ht4 => ?_)
+        · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+            MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+          refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def], ?_⟩
+          intro ptrs hptrs idx hactive
+          rw [evalOpR_ref, h3pdqt] at hptrs
+          obtain rfl := Option.some.inj hptrs
+          obtain ⟨masks, hm, hmi⟩ := hactive
+          rw [evalOpR_ref, h3mask] at hm
+          obtain rfl := Option.some.inj hm
+          have ha : active s DK BK idx.1 := by simpa [bwdMaskTileG] using hmi
+          simpa [bwdPtrTileG] using hbDQt idx.1 ha
+        · obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+          -- (5)(6) `dq2` scaling and `dq` sum: register-only
+          refine Stmt.TraceSafeListR.cons_intro
+            (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t5 ht5 => ?_)
+          obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv ht5
+          refine Stmt.TraceSafeListR.cons_intro
+            (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun t6 ht6 => ?_)
+          obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv ht6
+          have h6pdqt : ((((t2.setReg "dq1" .real [BK] v3).setReg
+              "dq2" .real [BK] v4).setReg "dq2" .real [BK] v5).setReg
+              "dq" .real [BK] v6).regs .ptr [BK] "p_dq_inter"
+              = some (bwdPtrTileG s DQInter s_qk_h DK BT BK rr) := by
+            rw [BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide)]
+            exact h2pdqt
+          have h6mask : ((((t2.setReg "dq1" .real [BK] v3).setReg
+              "dq2" .real [BK] v4).setReg "dq2" .real [BK] v5).setReg
+              "dq" .real [BK] v6).regs .bool [BK] "mask"
+              = some (bwdMaskTileG s DK BK) := by
+            rw [BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide),
+              BlockState.setReg_ne_name (h := by decide)]
+            exact h2mask
+          -- (7) the masked `dq_inter` store
+          refine Stmt.TraceSafeListR.cons_intro ?_ (fun t7 ht7 => ?_)
+          · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MemAccess.SafeAtR,
+              MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+              memAccessActiveAddressSafeR]
+            refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+              by simp [Op.SafeAtR.eq_def], ?_⟩
+            intro ptrs hptrs idx hactive
+            rw [evalOpR_ref, h6pdqt] at hptrs
+            obtain rfl := Option.some.inj hptrs
+            obtain ⟨masks, hm, hmi⟩ := hactive
+            rw [evalOpR_ref, h6mask] at hm
+            obtain rfl := Option.some.inj hm
+            have ha : active s DK BK idx.1 := by simpa [bwdMaskTileG] using hmi
+            simpa [bwdPtrTileG] using hbDQt idx.1 ha
+          · have hregs7 := stepStmtR_store_real_regs ht7
+            have h7pdki : t7.regs .ptr [BK] "p_dk_inner"
+                = some (bwdPtrTileG s DKInner s_qk_h DK BT BK rr) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2pdki
+            have h7pdkt : t7.regs .ptr [BK] "p_dk_inter"
+                = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2pdkt
+            have h7pq : t7.regs .ptr [BK] "p_q"
+                = some (bwdPtrTileG s Q s_qk_h DK BT BK rr) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2pq
+            have h7pk : t7.regs .ptr [BK] "p_k"
+                = some (bwdPtrTileG s K s_qk_h DK BT BK rr) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2pk
+            have h7pdg : t7.regs .ptr [BK] "p_dg"
+                = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2pdg
+            have h7mask : t7.regs .bool [BK] "mask"
+                = some (bwdMaskTileG s DK BK) := by
+              rw [hregs7, BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide),
+                BlockState.setReg_ne_name (h := by decide)]
+              exact h2mask
+            -- (8) the masked `dk1` load
+            refine Stmt.TraceSafeListR.cons_intro ?_ (fun t8 ht8 => ?_)
+            · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+                MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+              refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def], ?_⟩
+              intro ptrs hptrs idx hactive
+              rw [evalOpR_ref, h7pdki] at hptrs
+              obtain rfl := Option.some.inj hptrs
+              obtain ⟨masks, hm, hmi⟩ := hactive
+              rw [evalOpR_ref, h7mask] at hm
+              obtain rfl := Option.some.inj hm
+              have ha : active s DK BK idx.1 := by simpa [bwdMaskTileG] using hmi
+              simpa [bwdPtrTileG] using hbDKi idx.1 ha
+            · obtain ⟨w1, -, rfl⟩ := stepStmtR_assign_inv ht8
+              have h8pdkt : (t7.setReg "dk1" .real [BK] w1).regs .ptr [BK]
+                  "p_dk_inter"
+                  = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+                rw [BlockState.setReg_ne_name (h := by decide)]; exact h7pdkt
+              have h8mask : (t7.setReg "dk1" .real [BK] w1).regs .bool [BK] "mask"
+                  = some (bwdMaskTileG s DK BK) := by
+                rw [BlockState.setReg_ne_name (h := by decide)]; exact h7mask
+              -- (9) the masked `dk2` load (in-place input channel)
+              refine Stmt.TraceSafeListR.cons_intro ?_ (fun t9 ht9 => ?_)
+              · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+                  MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+                refine ⟨by simp [Op.SafeAtR.eq_def],
+                  by simp [Op.SafeAtR.eq_def], ?_⟩
+                intro ptrs hptrs idx hactive
+                rw [evalOpR_ref, h8pdkt] at hptrs
+                obtain rfl := Option.some.inj hptrs
+                obtain ⟨masks, hm, hmi⟩ := hactive
+                rw [evalOpR_ref, h8mask] at hm
+                obtain rfl := Option.some.inj hm
+                have ha : active s DK BK idx.1 := by
+                  simpa [bwdMaskTileG] using hmi
+                simpa [bwdPtrTileG] using hbDKt idx.1 ha
+              · obtain ⟨w2, -, rfl⟩ := stepStmtR_assign_inv ht9
+                -- (10)(11) `dk2` scaling and `dk` sum: register-only
+                refine Stmt.TraceSafeListR.cons_intro
+                  (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+                  (fun t10 ht10 => ?_)
+                obtain ⟨w3, -, rfl⟩ := stepStmtR_assign_inv ht10
+                refine Stmt.TraceSafeListR.cons_intro
+                  (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+                  (fun t11 ht11 => ?_)
+                obtain ⟨w4, -, rfl⟩ := stepStmtR_assign_inv ht11
+                have h11pdkt : ((((t7.setReg "dk1" .real [BK] w1).setReg
+                    "dk2" .real [BK] w2).setReg "dk2" .real [BK] w3).setReg
+                    "dk" .real [BK] w4).regs .ptr [BK] "p_dk_inter"
+                    = some (bwdPtrTileG s DKInter s_qk_h DK BT BK rr) := by
+                  rw [BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide)]
+                  exact h7pdkt
+                have h11mask : ((((t7.setReg "dk1" .real [BK] w1).setReg
+                    "dk2" .real [BK] w2).setReg "dk2" .real [BK] w3).setReg
+                    "dk" .real [BK] w4).regs .bool [BK] "mask"
+                    = some (bwdMaskTileG s DK BK) := by
+                  rw [BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide),
+                    BlockState.setReg_ne_name (h := by decide)]
+                  exact h7mask
+                -- (12) the masked `dk_inter` store
+                refine Stmt.TraceSafeListR.cons_intro ?_ (fun t12 ht12 => ?_)
+                · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+                    MemAccess.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+                    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+                  refine ⟨by simp [Op.SafeAtR.eq_def],
+                    by simp [Op.SafeAtR.eq_def],
+                    by simp [Op.SafeAtR.eq_def], ?_⟩
+                  intro ptrs hptrs idx hactive
+                  rw [evalOpR_ref, h11pdkt] at hptrs
+                  obtain rfl := Option.some.inj hptrs
+                  obtain ⟨masks, hm, hmi⟩ := hactive
+                  rw [evalOpR_ref, h11mask] at hm
+                  obtain rfl := Option.some.inj hm
+                  have ha : active s DK BK idx.1 := by
+                    simpa [bwdMaskTileG] using hmi
+                  simpa [bwdPtrTileG] using hbDKt idx.1 ha
+                · have hregs12 := stepStmtR_store_real_regs ht12
+                  have h12pq : t12.regs .ptr [BK] "p_q"
+                      = some (bwdPtrTileG s Q s_qk_h DK BT BK rr) := by
+                    rw [hregs12, BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide)]
+                    exact h7pq
+                  have h12pk : t12.regs .ptr [BK] "p_k"
+                      = some (bwdPtrTileG s K s_qk_h DK BT BK rr) := by
+                    rw [hregs12, BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide)]
+                    exact h7pk
+                  have h12pdg : t12.regs .ptr [BK] "p_dg"
+                      = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+                    rw [hregs12, BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide)]
+                    exact h7pdg
+                  have h12mask : t12.regs .bool [BK] "mask"
+                      = some (bwdMaskTileG s DK BK) := by
+                    rw [hregs12, BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide),
+                      BlockState.setReg_ne_name (h := by decide)]
+                    exact h7mask
+                  -- (13) the masked `q_val` load
+                  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t13 ht13 => ?_)
+                  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+                      MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+                      memAccessActiveAddressSafeR]
+                    refine ⟨by simp [Op.SafeAtR.eq_def],
+                      by simp [Op.SafeAtR.eq_def], ?_⟩
+                    intro ptrs hptrs idx hactive
+                    rw [evalOpR_ref, h12pq] at hptrs
+                    obtain rfl := Option.some.inj hptrs
+                    obtain ⟨masks, hm, hmi⟩ := hactive
+                    rw [evalOpR_ref, h12mask] at hm
+                    obtain rfl := Option.some.inj hm
+                    have ha : active s DK BK idx.1 := by
+                      simpa [bwdMaskTileG] using hmi
+                    simpa [bwdPtrTileG] using hbQ idx.1 ha
+                  · obtain ⟨x1, -, rfl⟩ := stepStmtR_assign_inv ht13
+                    have h13pk : (t12.setReg "q_val" .real [BK] x1).regs
+                        .ptr [BK] "p_k"
+                        = some (bwdPtrTileG s K s_qk_h DK BT BK rr) := by
+                      rw [BlockState.setReg_ne_name (h := by decide)]
+                      exact h12pk
+                    have h13mask : (t12.setReg "q_val" .real [BK] x1).regs
+                        .bool [BK] "mask" = some (bwdMaskTileG s DK BK) := by
+                      rw [BlockState.setReg_ne_name (h := by decide)]
+                      exact h12mask
+                    -- (14) the masked `k_val` load
+                    refine Stmt.TraceSafeListR.cons_intro ?_
+                      (fun t14 ht14 => ?_)
+                    · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+                        MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+                        memAccessActiveAddressSafeR]
+                      refine ⟨by simp [Op.SafeAtR.eq_def],
+                        by simp [Op.SafeAtR.eq_def], ?_⟩
+                      intro ptrs hptrs idx hactive
+                      rw [evalOpR_ref, h13pk] at hptrs
+                      obtain rfl := Option.some.inj hptrs
+                      obtain ⟨masks, hm, hmi⟩ := hactive
+                      rw [evalOpR_ref, h13mask] at hm
+                      obtain rfl := Option.some.inj hm
+                      have ha : active s DK BK idx.1 := by
+                        simpa [bwdMaskTileG] using hmi
+                      simpa [bwdPtrTileG] using hbK idx.1 ha
+                    · obtain ⟨x2, -, rfl⟩ := stepStmtR_assign_inv ht14
+                      -- (15)(16) `dg_val` and `cum_grad_dg`: register-only
+                      refine Stmt.TraceSafeListR.cons_intro
+                        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+                        (fun t15 ht15 => ?_)
+                      obtain ⟨x3, -, rfl⟩ := stepStmtR_assign_inv ht15
+                      refine Stmt.TraceSafeListR.cons_intro
+                        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+                        (fun t16 ht16 => ?_)
+                      obtain ⟨x4, -, rfl⟩ := stepStmtR_assign_inv ht16
+                      have h16pdg : ((((t12.setReg "q_val" .real [BK] x1).setReg
+                          "k_val" .real [BK] x2).setReg
+                          "dg_val" .real [BK] x3).setReg
+                          "cum_grad_dg" .real [BK] x4).regs .ptr [BK] "p_dg"
+                          = some (bwdPtrTileG s DG s_qk_h DK BT BK rr) := by
+                        rw [BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide)]
+                        exact h12pdg
+                      have h16mask : ((((t12.setReg
+                          "q_val" .real [BK] x1).setReg
+                          "k_val" .real [BK] x2).setReg
+                          "dg_val" .real [BK] x3).setReg
+                          "cum_grad_dg" .real [BK] x4).regs .bool [BK] "mask"
+                          = some (bwdMaskTileG s DK BK) := by
+                        rw [BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide),
+                          BlockState.setReg_ne_name (h := by decide)]
+                        exact h12mask
+                      -- (17) the masked `dg` store
+                      refine Stmt.TraceSafeListR.cons_intro ?_
+                        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+                      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def,
+                        MemAccess.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+                        MemAccess.ActiveAddressSafeR,
+                        memAccessActiveAddressSafeR]
+                      refine ⟨by simp [Op.SafeAtR.eq_def],
+                        by simp [Op.SafeAtR.eq_def],
+                        by simp [Op.SafeAtR.eq_def], ?_⟩
+                      intro ptrs hptrs idx hactive
+                      rw [evalOpR_ref, h16pdg] at hptrs
+                      obtain rfl := Option.some.inj hptrs
+                      obtain ⟨masks, hm, hmi⟩ := hactive
+                      rw [evalOpR_ref, h16mask] at hm
+                      obtain rfl := Option.some.inj hm
+                      have ha : active s DK BK idx.1 := by
+                        simpa [bwdMaskTileG] using hmi
+                      simpa [bwdPtrTileG] using hbDG idx.1 ha
+
+/-! ### The rounded Hoare triple (region-model `execR` run) -/
+
+set_option maxHeartbeats 8000000 in
+/-- Termination, per-window values and the per-cell frame of the whole
+backward kernel under `execR R`, from an **arbitrary** launch state: the
+exact `bwd_prologue_eval_general` / `bwdInvG` stack runs verbatim (the
+prologue and the loop body — pointer tail included — are cast-free, so
+`execR R` collapses onto the exact stepper; the exact stepper's truncated
+`ptrSub` is total, so the final iteration's underflow is harmless *here*
+— only the flat bridge needs the tolerant treatment), extended with the
+per-cell memory frame carried alongside `bwdInvG`
+(`bwd_body_step_frame`). -/
+private theorem bwd_runR (R : RoundingModel)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat) (hBT : 0 < BT) (hBK : BK ≤ DK)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
+    (hDQInter_DKInter : DQInter ≠ DKInter)
+    (hDQInter_DG : DQInter ≠ DG) (hDKInter_DG : DKInter ≠ DG)
+    (hG_DQInter : G ≠ DQInter) (hG_DKInter : G ≠ DKInter) (hG_DG : G ≠ DG)
+    (hQ_DG : Q ≠ DG) (hK_DG : K ≠ DG)
+    (hDQInner_DQInter : DQInner ≠ DQInter) (hDQInner_DKInter : DQInner ≠ DKInter)
+    (hDQInner_DG : DQInner ≠ DG)
+    (hDKInner_DKInter : DKInner ≠ DKInter) (hDKInner_DG : DKInner ≠ DG)
+    (s₀ : BlockState) :
+    ∃ sfin,
+      execR R (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG s_qk_h DK BT BK).toAlgKernel s₀ = some sfin
+      ∧ (∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+          sfin.readMem DQInter (offset s₀ s_qk_h DK t.val BT BK i)
+            = bwdDQInterClosed s₀ DQInner DQInter G s_qk_h DK BT BK t i)
+      ∧ (∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+          sfin.readMem DKInter (offset s₀ s_qk_h DK t.val BT BK i)
+            = bwdDKInterClosed s₀ DKInner DKInter G s_qk_h DK BT BK t i)
+      ∧ (∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+          sfin.readMem DG (offset s₀ s_qk_h DK t.val BT BK i)
+            = bwdDGClosed s₀ DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t i)
+      ∧ (∀ r oo,
+          (r ≠ DQInter ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          (r ≠ DKInter ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          (r ≠ DG ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          sfin.mem r oo = s₀.mem r oo) := by
+  obtain ⟨s0, hpro, hsh⟩ :=
+    bwd_prologue_eval_general DQInner DQInter DKInner DKInter Q K G DG
+      s_qk_h DK BT BK hBT s₀
+  have hP0 : bwdInvG DQInner DQInter DKInner DKInter Q K G DG s₀ s_qk_h DK BT BK 0 s0 :=
+    bwdInvG_entry DQInner DQInter DKInner DKInter Q K G DG s₀ s0 s_qk_h DK BT BK hsh
+  -- the reverse loop with the per-cell frame carried alongside `bwdInvG`
+  obtain ⟨final, sfinal, haux, hge, hPfinal⟩ :=
+    forRangeAux_inv (idx := "__rev_t") (stop := BT) (step := 1)
+      (body := bwdIterBodyG DK BT BK)
+      (P := fun m sc =>
+        bwdInvG DQInner DQInter DKInner DKInter Q K G DG s₀ s_qk_h DK BT BK m sc
+        ∧ ∀ r oo,
+          (r ≠ DQInter ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          (r ≠ DKInter ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          (r ≠ DG ∨ ∀ (t : Fin BT) (i : Fin BK), active s₀ DK BK i →
+            oo ≠ offset s₀ s_qk_h DK t.val BT BK i) →
+          sc.mem r oo = s₀.mem r oo)
+      one_ne_zero
+      (fun m sc hm hP => by
+        obtain ⟨s', hstep, hP'⟩ :=
+          bwd_decay_cumsum_step_general DQInner DQInter DKInner DKInter Q K G DG s₀
+            s_qk_h DK BT BK hBK hDKInner_DQInter hDKInter_DQInter hQ_DQInter
+            hQ_DKInter hK_DQInter hK_DKInter hDQInter_DKInter hDQInter_DG
+            hDKInter_DG hG_DQInter hG_DKInter hG_DG hQ_DG hK_DG hDQInner_DQInter
+            hDQInner_DKInter hDQInner_DG hDKInner_DKInter hDKInner_DG m hm sc hP.1
+        refine ⟨s', hstep, hP', ?_⟩
+        intro r oo hcDQ hcDK hcDG
+        obtain ⟨hpid, hGrd, hQrd, hKrd, hDQird, hDKird, hmaskP, hcumP, hlastgP,
+          hpgP, hpkP, hpqP, hpdqiP, hpdkiP, hpdqtP, hpdktP, hpdgP,
+          hDQIunt, hDKIunt, hDGunt, hDQIwr, hDKIwr, hDGwr⟩ := hP.1
+        rw [bwdPtrDecTileG_row s₀ DQInter s_qk_h DK BT BK m hm] at hpdqtP
+        rw [bwdPtrDecTileG_row s₀ DKInter s_qk_h DK BT BK m hm] at hpdktP
+        rw [bwdPtrDecTileG_row s₀ DG s_qk_h DK BT BK m hm] at hpdgP
+        rw [bwd_body_step_frame DQInter DKInter DG s₀ sc s' s_qk_h DK BT BK
+          (BT - 1 - m) m hpdqtP hpdktP hpdgP hmaskP hstep r oo ?_ ?_ ?_]
+        · exact hP.2 r oo hcDQ hcDK hcDG
+        · rcases hcDQ with hne' | hno
+          · exact Or.inl hne'
+          · exact Or.inr fun i ha => hno ⟨BT - 1 - m, by omega⟩ i ha
+        · rcases hcDK with hne' | hno
+          · exact Or.inl hne'
+          · exact Or.inr fun i ha => hno ⟨BT - 1 - m, by omega⟩ i ha
+        · rcases hcDG with hne' | hno
+          · exact Or.inl hne'
+          · exact Or.inr fun i ha => hno ⟨BT - 1 - m, by omega⟩ i ha)
+      0 s0 ⟨hP0, fun r oo _ _ _ => by rw [hsh.mem]⟩
+  obtain ⟨⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+    hDQIwr, hDKIwr, hDGwr⟩, hframe⟩ := hPfinal
+  -- assemble the `execR` run through the cast-free collapses
+  have hLoopR : stepStmtR R (Stmt.forRangeDyn "__rev_t" (Op.constNat 0)
+      (bwdStopOp BT) (Op.constNat 1) (bwdIterBodyG DK BT BK)) s0
+      = some sfinal := by
+    have h1 : stepStmtR R (Stmt.forRangeDyn "__rev_t" (Op.constNat 0)
+        (bwdStopOp BT) (Op.constNat 1) (bwdIterBodyG DK BT BK)) s0
+        = stepForRangeAuxR R "__rev_t" 0 BT 1 (bwdIterBodyG DK BT BK) s0 := by
+      simp only [stepStmtR, bwd_evalOpR_constNat R 0 s0,
+        bwd_stopOpR_eval R s0 BT hBT, bwd_evalOpR_constNat R 1 s0,
+        Option.bind_some]
+      rfl
+    rw [h1, stepForRangeAuxR_castFree R _ (bwdIterBody_castFree R DK BT BK)
+      "__rev_t"]
+    exact haux
+  have hproG : stepStmts (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG
+      s_qk_h DK BT BK) s₀ = some s0 := by
+    rw [← bwd_prologue_take_general]
+    exact hpro
+  refine ⟨sfinal, ?_, ?_, ?_, ?_, ?_⟩
+  · unfold execR
+    rw [bwd_body_decomp_io DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK,
+      stepStmtsR_append R
+        (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK) _ s₀,
+      bwdPrologue_castFree R DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK s₀,
+      hproG, Option.bind_some,
+      stepStmtsR_cons_some (show stepStmtR R (Stmt.forRangeDyn "__rev_t"
+        (Op.constNat 0) (bwdStopOp BT) (Op.constNat 1)
+        (bwdCoreG DK BT BK ++ bwdTailG DK BK)) s0 = some sfinal from by
+          rw [← bwdIterBodyG_decomp]; exact hLoopR),
+      stepStmtsR_nil]
+  · intro t i ha
+    rw [hDQIwr t.val (by omega) t.isLt i, if_pos ha]
+    exact bwdDqOutG_eq_closed s₀ DQInner DQInter G s_qk_h DK BT BK t i
+  · intro t i ha
+    rw [hDKIwr t.val (by omega) t.isLt i, if_pos ha]
+    exact bwdDkOutG_eq_closed s₀ DKInner DKInter G s_qk_h DK BT BK t i
+  · intro t i ha
+    rw [hDGwr t.val (by omega) t.isLt i, if_pos ha]
+    exact bwdCumPartialG_eq_DGClosed s₀ DQInner DQInter DKInner DKInter Q K G
+      s_qk_h DK BT BK t i
+  · exact hframe
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 8000000 in
+/-- **The `⊨[R]` streaming headline (wave-6 S3 grouped per-step emit
+genre, 3-D grid) — the first consumer of the dead-write-tolerant flat
+bridge.** For every rounding model `R`, the faithful
+`bwd_decay_global_cumsum` surface implements, on its grouped
+`StreamGroupedEmitMasked3DKernelIO` signature, the **ideal ℝ backward
+decay combination** of the seven streamed rows: emitted window `(t, j)`
+of channel `dq_inter` holds `dq_inner + dq_inter_old·exp2(g)`, of channel
+`dk_inter` holds `dk_inner + dk_inter_old·exp2(g[BT−1] − g)`, and of
+channel `dg` the reverse-scan suffix sum
+`Σ_{u ≥ t} (dq[u]·q[u] − dk[u]·k[u])` — the spec `f` is exact real
+arithmetic, `last_g` is the `g` stream's own step-`BT−1` row (no extra
+channel, no mask widening), and the `dq_inter`/`dk_inter` channels are
+**in place** (the pinned inputs are the launch-state contents; sound
+because each row is read before it is rewritten, once). The kernel has
+**zero rounding events** (all loads, `exp2` combinations and the three
+per-step masked stores are at `.real`), so the skin's boundary
+quantization degenerates: the readback contract's `R.round .real` is the
+identity by the model's defining `round_real`.
+
+**Why this is a direct `ImplementsR` proof and not
+`ImplementsR.intro`**: the loop body's 8 trailing `p_x -= DK`
+self-decrements genuinely underflow in the final iteration (row 0,
+`pid₀ = pid₂ = 0` lanes have addresses `< DK`), so the kernel-wide
+`TraceSafeR` walk that `intro` requires is **falsifiable** — machine
+checked, not a proof gap. The flat leg instead goes through
+`FlatAlloc.execR_flatten_deadPtrTail`: strict commutation for the
+prologue + loop core + every non-final tail (`bwd_bodySafeR` /
+`bwd_tailSafeR` at rows `≥ 1`), and observational agreement (`ObsAgree`)
+across the final, dead, underflowing tail — the readback leg transports
+along `ObsAgree.readMemAs_eq` and the frame leg along `ObsAgree.mem`, so
+both reduce to the strict case after one rewrite.
+
+Layer map: the region-model triple rides the exact `bwdInvG` stack
+verbatim (`bwd_runR`: cast-free collapses + `forRangeAux_inv` +
+`bwd_decay_cumsum_step_general`, with the per-cell frame
+`bwd_body_step_frame` carried alongside); the flat leg is the tolerant
+bridge fed the `bwdInvG` invariant itself as `P` (its pointer pins give
+core-load/store bounds at row `BT−1−c` and tail no-underflow at rows
+`≥ 1` via `bwd_core_regsR`); the spec legs are the per-channel stream
+bridges (`bwdDqStream_eq_closed` / `bwdDkStream_eq_closed` /
+`bwdDgStream_eq_closed`).
+
+All hypotheses are truth-forced:
+
+* the 19 region-distinctness hypotheses are **exactly** the exact step
+  lemma `bwd_decay_cumsum_step_general`'s side-condition set (the loop
+  stores into `dq_inter`/`dk_inter`/`dg` *between* its per-row re-reads
+  of `g`/`q`/`k`/`dq_inner`/`dk_inner` and its own earlier outputs, so
+  the invariant's whole-input frames and untouched-row conjuncts require
+  the three output buffers not to alias any other buffer or each other;
+  the launch allocates all eight tensors separately). The
+  `dq_inter`-with-`dq_inter` / `dk_inter`-with-`dk_inter` *self*-aliasing
+  is the in-place design, **not** a hypothesis.
+* `hBK : BK ≤ DK` — row separation, as in the exact stack: the row-`m`
+  scatters must not collide with other rows' windows, which needs every
+  lane index `< BK` to stay inside one `DK`-wide row. The launch sets
+  `BK = min(DK, 64)`.
+* `hBT : 0 < BT` — the reverse loop's designated first row `BT − 1`
+  (the `last_g` capture and the spec's `⟨BT − 1, _⟩ : Fin BT` index)
+  needs a nonempty stream; the exact stack carries the same constraint
+  (`bwd_prologue_eval_general`'s `hBT`), and the launch sets `BT = 16`.
+
+Relation to the exact surface: the exact headline
+`decay_cumsum_backward_closed_output_summary_general` above is retained
+unchanged; this `⊨[R]` face restates all three closed forms at once on
+the grouped streaming emit skin, for every `R` (at the `.real` grid the
+two faces carry the same exact cells). Both faces are kept per the
+rounding-as-default doctrine. -/
+specification bwd_decay_global_cumsum_io_correctness (R : RoundingModel)
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
+    (s_qk_h DK BT BK : Nat)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter)
+    (hDQInter_DKInter : DQInter ≠ DKInter)
+    (hDQInter_DG : DQInter ≠ DG) (hDKInter_DG : DKInter ≠ DG)
+    (hG_DQInter : G ≠ DQInter) (hG_DKInter : G ≠ DKInter) (hG_DG : G ≠ DG)
+    (hQ_DG : Q ≠ DG) (hK_DG : K ≠ DG)
+    (hDQInner_DQInter : DQInner ≠ DQInter) (hDQInner_DKInter : DQInner ≠ DKInter)
+    (hDQInner_DG : DQInner ≠ DG)
+    (hDKInner_DKInter : DKInner ≠ DKInter) (hDKInner_DG : DKInner ≠ DG)
+    (hBK : BK ≤ DK) (hBT : 0 < BT) :
+    bwdDecayCumsumKernelIO DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK ⊨[R]
+      fun _ _ _ xs o t j => bwdDecayStreamSpec BT BK xs o t j := by
+  intro A hd hregs hcov pid₀ pid₁ pid₂ xs s₀ hpid₀ hpid₁ hpid₂ hu hbr hbw hx
+  subst hpid₀
+  subst hpid₁
+  subst hpid₂
+  simp only [bwdDecayCumsumKernelIO] at hbr hbw hx ⊢
+  -- the region-model run (exact stack ridden under `execR R`)
+  obtain ⟨s1, hexec, hdqv, hdkv, hdgv, hframe⟩ :=
+    bwd_runR R DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK hBT hBK
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter
+      hK_DKInter hDQInter_DKInter hDQInter_DG hDKInter_DG hG_DQInter hG_DKInter
+      hG_DG hQ_DG hK_DG hDQInner_DQInter hDQInner_DKInter hDQInner_DG
+      hDKInner_DKInter hDKInner_DG s₀
+  -- prologue trace safety (register-only assigns)
+  have hmsPre : Stmt.TraceSafeListR R A.extent
+      (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK)
+      s₀ := by
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro stmt hst s'
+    simp only [bwdPrologueG, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+      rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  -- the tolerant bridge's loop obligations, driven by `bwdInvG` itself
+  have hloopOb : ∀ sP, stepStmtsR R
+      (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK) s₀
+        = some sP →
+      ((Op.constNat 0).SafeAtR R A.extent sP ∧
+        (bwdStopOp BT).SafeAtR R A.extent sP ∧
+        (Op.constNat 1).SafeAtR R A.extent sP) ∧
+      ∀ bv ev sv, evalOpR R (Op.constNat 0) sP = some bv →
+        evalOpR R (bwdStopOp BT) sP = some ev →
+        evalOpR R (Op.constNat 1) sP = some sv →
+        bwdInvG DQInner DQInter DKInner DKInter Q K G DG s₀ s_qk_h DK BT BK
+          (bv.data PUnit.unit) sP ∧
+        ∀ (c : Nat) (s' : BlockState), c < ev.data PUnit.unit →
+          bwdInvG DQInner DQInter DKInner DKInter Q K G DG s₀ s_qk_h DK BT BK c s' →
+          Stmt.TraceSafeListR R A.extent (bwdCoreG DK BT BK)
+            (s'.setReg "__rev_t" .nat [] (Tile.scalar c)) ∧
+          (∃ s'', stepStmtsR R (bwdCoreG DK BT BK ++ bwdTailG DK BK)
+              (s'.setReg "__rev_t" .nat [] (Tile.scalar c)) = some s'' ∧
+            bwdInvG DQInner DQInter DKInner DKInter Q K G DG s₀ s_qk_h DK BT BK
+              (c + sv.data PUnit.unit) s'') ∧
+          (c + sv.data PUnit.unit < ev.data PUnit.unit → ∀ sMid,
+            stepStmtsR R (bwdCoreG DK BT BK)
+              (s'.setReg "__rev_t" .nat [] (Tile.scalar c)) = some sMid →
+            Stmt.TraceSafeListR R A.extent (bwdTailG DK BK) sMid) := by
+    intro sP hsP
+    refine ⟨⟨by simp [Op.SafeAtR.eq_def], by simp [bwdStopOp, Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro bv ev sv hbv hev hsv
+    rw [bwd_evalOpR_constNat] at hbv
+    obtain rfl := Option.some.inj hbv
+    rw [bwd_stopOpR_eval R sP BT hBT] at hev
+    obtain rfl := Option.some.inj hev
+    rw [bwd_evalOpR_constNat] at hsv
+    obtain rfl := Option.some.inj hsv
+    obtain ⟨s0, hpro, hsh⟩ :=
+      bwd_prologue_eval_general DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK hBT s₀
+    rw [bwdPrologue_castFree R DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK s₀,
+      ← bwd_prologue_take_general, hpro] at hsP
+    obtain rfl := Option.some.inj hsP
+    refine ⟨bwdInvG_entry DQInner DQInter DKInner DKInter Q K G DG s₀ s0
+      s_qk_h DK BT BK hsh, ?_⟩
+    intro c s' hc hP
+    have hcBT : c < BT := hc
+    have hPd := hP
+    obtain ⟨hpid, hGrd, hQrd, hKrd, hDQird, hDKird, hmaskP, hcumP, hlastgP,
+      hpgP, hpkP, hpqP, hpdqiP, hpdkiP, hpdqtP, hpdktP, hpdgP,
+      hDQIunt, hDKIunt, hDGunt, hDQIwr, hDKIwr, hDGwr⟩ := hPd
+    rw [bwdPtrDecTileG_row s₀ G s_qk_h DK BT BK c hcBT] at hpgP
+    rw [bwdPtrDecTileG_row s₀ K s_qk_h DK BT BK c hcBT] at hpkP
+    rw [bwdPtrDecTileG_row s₀ Q s_qk_h DK BT BK c hcBT] at hpqP
+    rw [bwdPtrDecTileG_row s₀ DQInner s_qk_h DK BT BK c hcBT] at hpdqiP
+    rw [bwdPtrDecTileG_row s₀ DKInner s_qk_h DK BT BK c hcBT] at hpdkiP
+    rw [bwdPtrDecTileG_row s₀ DQInter s_qk_h DK BT BK c hcBT] at hpdqtP
+    rw [bwdPtrDecTileG_row s₀ DKInter s_qk_h DK BT BK c hcBT] at hpdktP
+    rw [bwdPtrDecTileG_row s₀ DG s_qk_h DK BT BK c hcBT] at hpdgP
+    have hrow : BT - 1 - c < BT := by omega
+    -- window bounds at row `BT-1-c` from the skin's read/write bounds
+    have hbG' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent G := by
+      intro i ha
+      have h := hbr ⟨0, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbDQi' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent DQInner := by
+      intro i ha
+      have h := hbr ⟨1, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbDQt' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent DQInter := by
+      intro i ha
+      have h := hbr ⟨2, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbDKi' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent DKInner := by
+      intro i ha
+      have h := hbr ⟨3, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbDKt' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent DKInter := by
+      intro i ha
+      have h := hbr ⟨4, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbQ' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent Q := by
+      intro i ha
+      have h := hbr ⟨5, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbK' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent K := by
+      intro i ha
+      have h := hbr ⟨6, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    have hbDG' : ∀ i : Fin BK, active s₀ DK BK i →
+        offset s₀ s_qk_h DK (BT - 1 - c) BT BK i < A.extent DG := by
+      intro i ha
+      have h := hbw ⟨2, by omega⟩ ⟨BT - 1 - c, hrow⟩ i ha
+      rw [fwd_addr_eq] at h
+      exact h
+    refine ⟨?_, ?_, ?_⟩
+    · exact bwd_bodySafeR R A.extent DQInner DQInter DKInner DKInter Q K G DG
+        s₀ s' s_qk_h DK BT BK (BT - 1 - c) c
+        hpgP hpkP hpqP hpdqiP hpdkiP hpdqtP hpdktP hpdgP hmaskP
+        hbG' hbQ' hbK' hbDQi' hbDKi' hbDQt' hbDKt' hbDG'
+    · obtain ⟨s'', hstep, hP'⟩ :=
+        bwd_decay_cumsum_step_general DQInner DQInter DKInner DKInter Q K G DG s₀
+          s_qk_h DK BT BK hBK hDKInner_DQInter hDKInter_DQInter hQ_DQInter
+          hQ_DKInter hK_DQInter hK_DKInter hDQInter_DKInter hDQInter_DG
+          hDKInter_DG hG_DQInter hG_DKInter hG_DG hQ_DG hK_DG hDQInner_DQInter
+          hDQInner_DKInter hDQInner_DG hDKInner_DKInter hDKInner_DG c hcBT s' hP
+      refine ⟨s'', ?_, hP'⟩
+      rw [← bwdIterBodyG_decomp, bwdIterBody_castFree]
+      exact hstep
+    · intro hfin sMid hsMid
+      have hfin' : c + 1 < BT := hfin
+      have hrr : 1 ≤ BT - 1 - c := by omega
+      have hMg : sMid.regs .ptr [BK] "p_g"
+          = some (bwdPtrTileG s₀ G s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_g"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpgP
+      have hMk : sMid.regs .ptr [BK] "p_k"
+          = some (bwdPtrTileG s₀ K s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_k"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpkP
+      have hMq : sMid.regs .ptr [BK] "p_q"
+          = some (bwdPtrTileG s₀ Q s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_q"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpqP
+      have hMdqi : sMid.regs .ptr [BK] "p_dq_inner"
+          = some (bwdPtrTileG s₀ DQInner s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_dq_inner"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdqiP
+      have hMdki : sMid.regs .ptr [BK] "p_dk_inner"
+          = some (bwdPtrTileG s₀ DKInner s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_dk_inner"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdkiP
+      have hMdqt : sMid.regs .ptr [BK] "p_dq_inter"
+          = some (bwdPtrTileG s₀ DQInter s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_dq_inter"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdqtP
+      have hMdkt : sMid.regs .ptr [BK] "p_dk_inter"
+          = some (bwdPtrTileG s₀ DKInter s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_dk_inter"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdktP
+      have hMdg : sMid.regs .ptr [BK] "p_dg"
+          = some (bwdPtrTileG s₀ DG s_qk_h DK BT BK (BT - 1 - c)) := by
+        rw [bwd_core_regsR R DK BT BK _ sMid hsMid .ptr [BK] "p_dg"
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide),
+          BlockState.setReg_ne_name (h := by decide)]
+        exact hpdgP
+      exact bwd_tailSafeR R A.extent DQInner DQInter DKInner DKInter Q K G DG
+        s₀ sMid s_qk_h DK BT BK (BT - 1 - c) hrr
+        hMg hMk hMq hMdqi hMdki hMdqt hMdkt hMdg
+  -- the dead-write-tolerant flat bridge
+  obtain ⟨s', hexecF, hobs⟩ :=
+    A.execR_flatten_deadPtrTail hd hcov R
+      (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+        s_qk_h DK BT BK).toAlgKernel
+      (bwdPrologueG DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK)
+      "__rev_t" (Op.constNat 0) (bwdStopOp BT) (Op.constNat 1)
+      (bwdCoreG DK BT BK) (bwdTailG DK BK)
+      (bwd_body_decomp_io DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK)
+      (bwdTailG_ptrDecTail DK BK)
+      (bwd_prologue_flattenOkR DQInner DQInter DKInner DKInter Q K G DG s_qk_h DK BT BK)
+      (bwd_core_flattenOkR DK BT BK)
+      (by simp [Op.FlattenOkR.eq_def]) (bwd_stopOp_flattenOkR BT)
+      (by simp [Op.FlattenOkR.eq_def])
+      s₀ hu hmsPre _ hloopOb s1 hexec
+  have hmem0 : DQInter ∈ A.regions := by
+    rw [hregs]
+    show DQInter ∈ [DQInner, DQInter, DKInner, DKInter, Q, K, G, DG]
+    simp
+  have hmem1 : DKInter ∈ A.regions := by
+    rw [hregs]
+    show DKInter ∈ [DQInner, DQInter, DKInner, DKInter, Q, K, G, DG]
+    simp
+  have hmem2 : DG ∈ A.regions := by
+    rw [hregs]
+    show DG ∈ [DQInner, DQInter, DKInner, DKInter, Q, K, G, DG]
+    simp
+  refine ⟨s', hexecF, ?_, ?_⟩
+  · -- readback leg: `ObsAgree.readMemAs_eq` → strict flat readback →
+    -- region readback → per-channel stream bridge
+    intro o t j hj
+    have hlt := hbw o t j hj
+    match o with
+    | ⟨0, h0⟩ =>
+        rw [hobs.readMemAs_eq, A.flattenState_readMemAs hd s1 hmem0 hlt .real,
+          BlockState.readMemAs_real, fwd_addr_eq]
+        have hval : s1.readMem DQInter (offset s₀ s_qk_h DK t.val BT BK j)
+            = bwdDecayStreamSpec BT BK xs ⟨0, h0⟩ t j := by
+          rw [hdqv t j hj]
+          show bwdDQInterClosed s₀ DQInner DQInter G s_qk_h DK BT BK t j
+            = bwdDqStream BT BK xs t j
+          exact (bwdDqStream_eq_closed DQInner DQInter G s₀ s_qk_h DK BT BK xs
+            (fun t' j' hj' => hx ⟨0, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨1, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨2, by omega⟩ t' j' hj') t j hj).symm
+        simp only [RoundingModel.round_real_apply]
+        exact congrArg some hval
+    | ⟨1, h1⟩ =>
+        rw [hobs.readMemAs_eq, A.flattenState_readMemAs hd s1 hmem1 hlt .real,
+          BlockState.readMemAs_real, fwd_addr_eq]
+        have hval : s1.readMem DKInter (offset s₀ s_qk_h DK t.val BT BK j)
+            = bwdDecayStreamSpec BT BK xs ⟨1, h1⟩ t j := by
+          rw [hdkv t j hj]
+          show bwdDKInterClosed s₀ DKInner DKInter G s_qk_h DK BT BK t j
+            = bwdDkStream BT BK xs t j
+          exact (bwdDkStream_eq_closed DKInner DKInter G s₀ s_qk_h DK BT BK xs hBT
+            (fun t' j' hj' => hx ⟨0, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨3, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨4, by omega⟩ t' j' hj') t j hj).symm
+        simp only [RoundingModel.round_real_apply]
+        exact congrArg some hval
+    | ⟨2, h2⟩ =>
+        rw [hobs.readMemAs_eq, A.flattenState_readMemAs hd s1 hmem2 hlt .real,
+          BlockState.readMemAs_real, fwd_addr_eq]
+        have hval : s1.readMem DG (offset s₀ s_qk_h DK t.val BT BK j)
+            = bwdDecayStreamSpec BT BK xs ⟨2, h2⟩ t j := by
+          rw [hdgv t j hj]
+          show bwdDGClosed s₀ DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK t j
+            = bwdDgStream BT BK xs t j
+          exact (bwdDgStream_eq_closed DQInner DQInter DKInner DKInter Q K G s₀
+            s_qk_h DK BT BK xs hBT
+            (fun t' j' hj' => hx ⟨0, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨1, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨2, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨3, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨4, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨5, by omega⟩ t' j' hj')
+            (fun t' j' hj' => hx ⟨6, by omega⟩ t' j' hj') t j hj).symm
+        simp only [RoundingModel.round_real_apply]
+        exact congrArg some hval
+    | ⟨n + 3, h3⟩ => exact absurd h3 (show ¬(n + 3 < 3) by omega)
+  · -- frame leg: `ObsAgree.mem` → the strict flattenState mem analysis
+    intro r' o' hcond
+    rw [hobs.mem]
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hframe r o ?_ ?_ ?_)
+          · by_cases hrX : r = DQInter
+            · refine Or.inr fun t i ha hoo => ?_
+              rcases hcond with hflat | hn
+              · exact absurd rfl hflat
+              · exact hn ⟨0, by omega⟩ t i ha
+                  (by rw [hoeq, hrX, hoo, fwd_addr_eq])
+            · exact Or.inl hrX
+          · by_cases hrX : r = DKInter
+            · refine Or.inr fun t i ha hoo => ?_
+              rcases hcond with hflat | hn
+              · exact absurd rfl hflat
+              · exact hn ⟨1, by omega⟩ t i ha
+                  (by rw [hoeq, hrX, hoo, fwd_addr_eq])
+            · exact Or.inl hrX
+          · by_cases hrX : r = DG
+            · refine Or.inr fun t i ha hoo => ?_
+              rcases hcond with hflat | hn
+              · exact absurd rfl hflat
+              · exact hn ⟨2, by omega⟩ t i ha
+                  (by rw [hoeq, hrX, hoo, fwd_addr_eq])
+            · exact Or.inl hrX
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end BwdIOFace
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
